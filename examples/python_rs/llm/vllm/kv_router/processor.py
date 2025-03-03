@@ -21,7 +21,7 @@ from typing import AsyncIterator, Tuple, Union
 import uvloop
 from common.chat_processor import ChatProcessor, CompletionsProcessor, ProcessMixIn
 from common.parser import parse_vllm_args
-from common.protocol import MyRequestOutput, Tokens, vLLMGenerateRequest
+from common.protocol import MyRequestOutput, Tokens, vLLMGenerateRequest, RequestType
 from transformers import AutoTokenizer
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.entrypoints.openai.protocol import (
@@ -35,11 +35,6 @@ from vllm.outputs import RequestOutput
 from vllm.transformers_utils.tokenizer import AnyTokenizer
 
 from dynemo.runtime import Client, DistributedRuntime, dynemo_endpoint, dynemo_worker
-
-
-class RequestType(Enum):
-    CHAT = "chat"
-    COMPLETION = "completion"
 
 
 class Processor(ProcessMixIn):
