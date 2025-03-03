@@ -18,14 +18,10 @@ pub mod reuse;
 pub mod sequence;
 
 use reserved::*;
-use reuse::*;
 
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
-    sync::{
-        atomic::{AtomicU64, AtomicU8},
-        Arc, RwLock,
-    },
+    sync::{atomic::AtomicU64, Arc, RwLock},
 };
 
 use async_trait::async_trait;
@@ -33,11 +29,11 @@ use derive_getters::Dissolve;
 use tokio::time::Instant;
 use triton_distributed_runtime::{
     raise,
-    utils::pool::{Pool, PoolExt, PoolItem, PoolValue, Returnable, SharedPoolItem},
+    utils::pool::{PoolExt, PoolItem, PoolValue, Returnable, SharedPoolItem},
     Result,
 };
 
-use crate::tokens::{PartialTokenBlock, SequenceHash, TokenBlock, TokenSequence, Tokens};
+use crate::tokens::{PartialTokenBlock, SequenceHash, TokenBlock, Tokens};
 
 use tracing as log;
 

@@ -13,6 +13,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! # KV Block Available Pool
+//!
+//! The Available Pool manages KV blocks that are not actively in use but retain their previous state.
+//!
+//! ## Key Features:
+//!
+//! - **State Preservation**: Blocks in the pool maintain their previous state and can be reused.
+//!
+//! - **Priority-Based FIFO**: Blocks are returned in first-in, first-out order within their priority levels.
+//!   Lower priority values are processed first, allowing important blocks to be retained longer.
+//!
+//! - **State Matching**: Blocks can be matched against their previous state instead of being taken randomly,
+//!   enabling efficient reuse of blocks with specific sequence hashes.
+//!
+//! - **Priority Management**: Priorities can be applied to blocks based on their sequence hash,
+//!   requiring some external knowledge of the block's characteristics.
+//!
+//! - **State Management**: Blocks can have their states wiped clean/reset individually or in groups.
+//!   The entire pool can also be reset as needed.
+//!
+//! - **Synchronization**: Fence operations ensure all higher priority operations have completed
+//!   before proceeding. Note that this is not a true fence - higher priority operations issued
+//!   after the fence will still be processed before the fence completes.
+
 use std::sync::atomic::Ordering;
 
 use tokio::{
@@ -27,10 +51,10 @@ pub struct AvailableBlocks {
     match_tx: mpsc::UnboundedSender<MatchRequest>,
     control_tx: mpsc::UnboundedSender<ControlRequest>,
     fence_tx: mpsc::UnboundedSender<oneshot::Sender<()>>,
-    join_handle: JoinHandle<()>,
     return_handle: Arc<ReturnHandleImpl>,
     total_blocks: Arc<AtomicU64>,
     available_blocks: Arc<AtomicU64>,
+    join_handle: JoinHandle<()>,
 }
 
 impl AvailableBlocks {
@@ -40,6 +64,10 @@ impl AvailableBlocks {
 
     pub fn available_blocks(&self) -> u64 {
         self.available_blocks.load(Ordering::SeqCst)
+    }
+
+    pub fn is_active(&self) -> bool {
+        !self.join_handle.is_finished()
     }
 
     pub async fn match_blocks(&self, hashes: Vec<SequenceHash>) -> Result<Vec<PoolItem<KvBlock>>> {
@@ -202,10 +230,10 @@ impl AvailableBlocks {
             match_tx,
             control_tx,
             fence_tx,
-            join_handle,
             return_handle,
             total_blocks,
             available_blocks,
+            join_handle,
         }
     }
 }
