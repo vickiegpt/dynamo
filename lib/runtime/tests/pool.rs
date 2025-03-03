@@ -13,7 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 use triton_distributed_runtime::utils::pool::{
