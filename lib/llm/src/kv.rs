@@ -26,7 +26,6 @@ use std::{
 
 use async_trait::async_trait;
 use derive_getters::Dissolve;
-use tokio::time::Instant;
 use triton_distributed_runtime::{
     raise,
     utils::pool::{PoolExt, PoolItem, PoolValue, Returnable, SharedPoolItem},
@@ -41,20 +40,18 @@ pub trait Storage {}
 
 pub type UniqueBlock = PoolItem<KvBlock>;
 pub type SharedBlock = SharedPoolItem<KvBlock>;
-pub enum StorageState {
-    Present = 0,
-    Pending = 1,
-    Absent = 2,
-}
 
 #[derive(Default)]
 pub struct KvBlock {
     pub token_block: TokenBlock,
-    // pub device_state: Arc<AtomicU8>,
-    // pub host_state: Arc<AtomicU8>,
-    // pub storage_state: Arc<AtomicU8>,
     pub priority: u32,
     pub return_tick: u64,
+}
+
+pub enum StorageState {
+    Present = 0,
+    Pending = 1,
+    Absent = 2,
 }
 
 impl StorageState {

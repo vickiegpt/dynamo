@@ -173,7 +173,7 @@ impl TokenSequence {
         &self.current_block
     }
 
-    pub(crate) fn into_parts(self) -> (Vec<TokenBlock>, PartialTokenBlock) {
+    pub fn into_parts(self) -> (Vec<TokenBlock>, PartialTokenBlock) {
         (self.blocks, self.current_block)
     }
 
