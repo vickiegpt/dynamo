@@ -588,7 +588,6 @@ pub enum MatchRequest {
 pub struct UpdateBlock {
     hash: SequenceHash,
     priority: Option<u32>,
-    deadline: Option<Instant>,
 }
 
 #[derive(Dissolve)]
@@ -670,7 +669,7 @@ pub async fn progress_engine(
 
 #[cfg(test)]
 mod tests {
-    use crate::tokens::{Token, TokenSequence};
+    use crate::tokens::Token;
 
     use super::*;
 
