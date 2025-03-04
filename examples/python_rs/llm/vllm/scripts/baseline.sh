@@ -62,7 +62,7 @@ else
 fi
 
 # Create logs directory if it doesn't exist
-LOGS_DIR="/workspace/logs/$LOG_DIR_NAME"
+LOGS_DIR="/logs/$LOG_DIR_NAME"
 mkdir -p $LOGS_DIR
 chmod -R 775 $LOGS_DIR
 
