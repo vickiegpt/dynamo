@@ -72,7 +72,7 @@ jobs:
         fi
         curl --fail-with-body \
           --request POST \
-          --form token=${{ secrets.PIPELINE_TOKEN }} \
+          --form token=${{ secrets.TOKEN }} \
           --form ref=${REF} \
           $ci_args \
           "${{ secrets.PIPELINE_URL }}"
