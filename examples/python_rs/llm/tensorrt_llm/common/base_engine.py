@@ -26,11 +26,10 @@ from tensorrt_llm.logger import logger
 from transformers import AutoTokenizer
 
 
-class BaseTensorrtLLMEngine:
+class ChatProcessorMixin:
     def __init__(self, engine_config: LLMAPIConfig):
         self._engine_config = engine_config
         logger.info(f"Using LLM API config: {self._engine_config}")
-
         # model name for chat processor
         self._model_name = self._engine_config.model_name
         logger.info(f"Set model name: {self._model_name}")
@@ -58,6 +57,13 @@ class BaseTensorrtLLMEngine:
 
         self.chat_processor = ChatProcessor(self._model_name, self._tokenizer)
         self.completions_processor = CompletionsProcessor(self._model_name)
+
+
+class BaseTensorrtLLMEngine(ChatProcessorMixin):
+    def __init__(self, engine_config: LLMAPIConfig):
+        super().__init__(engine_config)
+        logger.info(f"Using LLM API config: {self.engine_config}")
+        self._init_engine()
 
     def _init_engine(self):
         logger.info("Initializing engine")
