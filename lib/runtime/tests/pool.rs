@@ -13,11 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use dynemo_runtime::utils::pool::{PoolExt, PoolItem, PoolValue, ReturnHandle, Returnable};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
-use triton_distributed_runtime::utils::pool::{
-    PoolExt, PoolItem, PoolValue, ReturnHandle, Returnable,
-};
 
 pub struct IndexedPoolState<T: Returnable + Ord + Eq + PartialEq> {
     pool: Arc<Mutex<Vec<PoolValue<T>>>>,

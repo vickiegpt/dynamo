@@ -27,7 +27,7 @@ use std::{
 
 use async_trait::async_trait;
 use derive_getters::Dissolve;
-use triton_distributed_runtime::{
+use dynemo_runtime::{
     raise,
     utils::pool::{PoolExt, PoolItem, PoolValue, Returnable, SharedPoolItem},
     Result,
