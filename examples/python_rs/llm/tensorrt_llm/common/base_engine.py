@@ -15,8 +15,10 @@
 
 
 import asyncio
+import ctypes
 import threading
 from contextlib import asynccontextmanager
+from ctypes import c_char_p, c_int64, c_uint32
 from typing import Any, Optional
 
 from common.parser import LLMAPIConfig
@@ -24,6 +26,13 @@ from common.processor import ChatProcessor, CompletionsProcessor
 from tensorrt_llm._torch import LLM
 from tensorrt_llm.logger import logger
 from transformers import AutoTokenizer
+
+from triton_distributed.llm import KvMetricsPublisher
+
+
+class TritonResult:
+    OK = 0
+    ERR = 1
 
 
 class ChatProcessorMixin:
@@ -59,11 +68,76 @@ class ChatProcessorMixin:
         self.completions_processor = CompletionsProcessor(self._model_name)
 
 
-class BaseTensorrtLLMEngine(ChatProcessorMixin):
-    def __init__(self, engine_config: LLMAPIConfig):
+class WorkerId:
+    def __init__(self, completions_lease_id: str, chat_lease_id: str):
+        self.completions_lease_id = completions_lease_id
+        self.chat_lease_id = chat_lease_id
+
+    def id(self):
+        return "%s^%s" % (self.completions_lease_id, self.chat_lease_id)
+
+
+class BaseTensorrtLLMEngine(ChatProcessorMixin, WorkerId):
+    def __init__(
+        self,
+        engine_config: LLMAPIConfig,
+        metrics_publisher: KvMetricsPublisher,
+        worker_id: WorkerId,
+    ):
         super().__init__(engine_config)
         logger.info(f"Using LLM API config: {self.engine_config}")
         self._init_engine()
+        self.worker_id = worker_id
+        self.metrics_publisher = metrics_publisher
+        if metrics_publisher is not None:
+            self.lib = ctypes.CDLL("/opt/triton/llm_binding/lib/libtriton_llm_capi.so")
+            self.lib.triton_llm_init.argtypes = [c_char_p, c_char_p, c_int64]
+            self.lib.triton_llm_init.restype = c_uint32
+            result = self.lib.triton_llm_init(
+                "triton-init".encode(), "tensorrt-llm-ctx".encode(), worker_id.id()
+            )
+            if result == TritonResult.OK:
+                logger.info(
+                    "KVCacheEventManager initialized successfully. Ready to publish KV Cache Events"
+                )
+            else:
+                logger.error("KVCacheEventManager initialization failed!")
+
+            self.lib.triton_kv_event_publish_stored.argtypes = [
+                ctypes.c_uint64,  # event_id
+                ctypes.POINTER(ctypes.c_uint32),  # token_ids
+                ctypes.POINTER(ctypes.c_size_t),  # num_block_tokens
+                ctypes.POINTER(ctypes.c_uint64),  # block_ids
+                ctypes.c_size_t,  # num_blocks
+                ctypes.POINTER(ctypes.c_uint64),  # parent_hash
+                ctypes.c_uint64,  # lora_id
+            ]
+            self.lib.triton_kv_event_publish_stored.restype = (
+                ctypes.c_uint32
+            )  # triton_llm_result_t
+
+            self.lib.triton_kv_event_publish_removed.argtypes = [
+                ctypes.c_uint64,  # event_id
+                ctypes.POINTER(ctypes.c_uint64),  # block_ids
+                ctypes.c_size_t,  # num_blocks
+            ]
+            self.lib.triton_kv_event_publish_removed.restype = (
+                ctypes.c_uint32
+            )  # triton_llm_result_t
+
+            # TODO: Tanmay Get these from the engine config
+            self.request_active_slots = 0
+            self.request_total_slots = 4
+            self.kv_active_block = 0
+            self.kv_total_blocks = 4
+            # [NOTE] Now that the component must has proper metrics reported
+            # to be properly selected by the router
+            self.metrics_publisher.publish(
+                self.request_active_slots,
+                self.request_total_slots,
+                self.kv_active_block,
+                self.kv_total_blocks,
+            )
 
     def _init_engine(self):
         logger.info("Initializing engine")
@@ -149,3 +223,15 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
 
         self._llm_engine = None
         logger.info("Shutdown complete")
+
+    async def cooldown(self):
+        while True:
+            await asyncio.sleep(5)
+            self.request_active_slots = max(0, self.request_active_slots - 1)
+            self.kv_active_block = max(0, self.kv_active_block - 1)
+            self.metrics_publisher.publish(
+                self.request_active_slots,
+                self.request_total_slots,
+                self.kv_active_block,
+                self.kv_total_blocks,
+            )

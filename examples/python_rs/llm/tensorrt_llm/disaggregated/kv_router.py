@@ -99,6 +99,7 @@ class Router(ChatProcessorMixin):
             Tokens(tokens=token_ids).model_dump_json()
         )
 
+        # TODO: Tanmay: Get the lease id from the worker id.
         worker_id = (
             await worker_id_generator.__anext__()
         )  # only one worker id is returned

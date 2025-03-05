@@ -20,7 +20,7 @@ import os
 import signal
 
 import uvloop
-from common.base_engine import BaseTensorrtLLMEngine
+from common.base_engine import BaseTensorrtLLMEngine, WorkerId
 from common.disagg_processor import ChatProcessor, parse_chat_message_content
 from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
 from common.processor import merge_promises
@@ -70,6 +70,8 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         disagg_config: DisaggServerConfig,
         instance_idx: int,
         sub_comm,
+        metrics_publisher: KvMetricsPublisher,
+        worker_id: WorkerId,
     ):
         self.disagg_config = disagg_config
         self.instance_idx = instance_idx
@@ -83,7 +85,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         # needed for disagg
         self._mpi_session = MpiCommSession(sub_comm, n_workers=sub_comm.Get_size())
         engine_config.extra_args["_mpi_session"] = self._mpi_session
-        super().__init__(engine_config)
+        super().__init__(engine_config, metrics_publisher, worker_id)
 
     @dynamo_endpoint(DisaggChatCompletionRequest, DisaggChatCompletionStreamResponse)
     async def generate_chat(self, request):
@@ -140,6 +142,10 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
                             result.outputs[0].disaggregated_params
                         )
                     )
+                    if self.metrics_publisher is not None:
+                        # TODO:Tanmay: Asynchronously publish KV events for ctx server
+                        # and publish metrics.
+                        pass
                     yield disaggregated_response.model_dump_json()
                 else:
                     yield chat_processor.get_chat_stream_response(
@@ -204,6 +210,10 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
                 request, generator, num_choices
             )
             async for response in response_generator:
+                if self.metrics_publisher is not None:
+                    # TODO:Tanmay: Asynchronously publish KV events for ctx server
+                    # and publish metrics.
+                    pass
                 yield json.loads(response)
         else:
             raise RuntimeError("Non-streaming is not supported")
@@ -218,6 +228,7 @@ async def worker(
     disagg_config: DisaggServerConfig,
     instance_idx: int,
     sub_comm,
+    publish_kv_events: bool,
 ):
     """
     Instantiate a `backend` component and serve the `generate` endpoint
@@ -231,10 +242,28 @@ async def worker(
 
     completions_endpoint = component.endpoint("completions")
     chat_endpoint = component.endpoint("chat/completions")
-    engine = TensorrtLLMEngine(engine_config, disagg_config, instance_idx, sub_comm)
+
+    # Only publish events for ctx server.
+    metrics_publisher = None
+    if publish_kv_events:
+        if server_type == "ctx":
+            metrics_publisher = KvMetricsPublisher()
+        else:
+            raise ValueError("KV events can only be published for ctx server")
+
+    worker_id = WorkerId(completions_endpoint.lease_id(), chat_endpoint.lease_id())
+    engine = TensorrtLLMEngine(
+        engine_config,
+        disagg_config,
+        instance_idx,
+        sub_comm,
+        metrics_publisher,
+        worker_id,
+    )
     await asyncio.gather(
         completions_endpoint.serve_endpoint(engine.generate_completions),
         chat_endpoint.serve_endpoint(engine.generate_chat),
+        engine.cooldown(),
     )
 
 
@@ -262,7 +291,15 @@ if __name__ == "__main__":
     logger.info(f"is_leader: {is_leader}, instance_idx: {instance_idx}")
 
     if is_leader:
-        asyncio.run(worker(engine_config, disagg_config, instance_idx, sub_comm))
+        asyncio.run(
+            worker(
+                engine_config,
+                disagg_config,
+                instance_idx,
+                sub_comm,
+                args.publish_kv_events,
+            )
+        )
     else:
         with MPICommExecutor(sub_comm) as executor:
             if not is_leader and executor is not None:

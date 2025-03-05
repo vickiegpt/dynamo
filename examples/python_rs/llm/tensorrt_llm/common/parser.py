@@ -126,5 +126,11 @@ def parse_tensorrt_llm_args() -> Tuple[Any, Tuple[Dict[str, Any], Dict[str, Any]
         choices=list(RoutingStrategy),
         help="Routing strategy to use",
     )
+    parser.add_argument(
+        "--publish-kv-events",
+        type=bool,
+        default=False,
+        help="Publish KV events",
+    )
     args = parser.parse_args()
     return (args, _init_engine_args(args.engine_args))
