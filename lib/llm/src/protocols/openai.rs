@@ -13,7 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-/// Forward openai_api_rs::v1 to triton_distributed_llm::protocols::openai::v1
 pub mod chat_completions;
 pub mod completions;
 pub mod models;
@@ -22,11 +21,9 @@ pub mod nvext;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
     fmt::Display,
     ops::{Add, Div, Mul, Sub},
 };
-use validator::ValidationError;
 
 use super::{
     common::{self, SamplingOptionsProvider, StopConditionsProvider},
@@ -261,17 +258,6 @@ pub struct GenericCompletionResponse<C>
     /// The optional nature of this field will be relaxed when it is supported.
     pub system_fingerprint: Option<String>,
     // TODO() - add NvResponseExtention
-}
-
-fn validate_logit_bias(logit_bias: &HashMap<String, i32>) -> Result<(), ValidationError> {
-    for key in logit_bias.keys() {
-        if key.parse::<i32>().is_err() {
-            return Err(
-                ValidationError::new("logit_bias").with_message("Keys must be integers".into())
-            );
-        }
-    }
-    Ok(())
 }
 
 // todo - move to common location

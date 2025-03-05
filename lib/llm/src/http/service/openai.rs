@@ -41,14 +41,14 @@ use super::{
 };
 
 use crate::protocols::openai::{
-    chat_completions::ChatCompletionResponse, completions::CompletionResponse,
+    chat_completions::NvCreateChatCompletionResponse, completions::CompletionResponse,
 };
 use crate::types::{
-    openai::{chat_completions::ChatCompletionRequest, completions::CompletionRequest},
+    openai::{chat_completions::NvCreateChatCompletionRequest, completions::CompletionRequest},
     Annotated,
 };
 
-use triton_distributed_runtime::pipeline::{AsyncEngineContext, Context};
+use dynemo_runtime::pipeline::{AsyncEngineContext, Context};
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ErrorResponse {
@@ -91,7 +91,7 @@ impl ErrorResponse {
         )
     }
 
-    /// The OAI endpoints call an [`triton_distributed_runtime::engine::AsyncEngine`] which are specialized to return
+    /// The OAI endpoints call an [`dynemo_runtime::engine::AsyncEngine`] which are specialized to return
     /// an [`anyhow::Error`]. This method will convert the [`anyhow::Error`] into an [`HttpError`].
     /// If successful, it will return the [`HttpError`] as an [`ErrorResponse::internal_server_error`]
     /// with the details of the error.
@@ -140,17 +140,19 @@ async fn completions(
     let request_id = uuid::Uuid::new_v4().to_string();
 
     // todo - decide on default
-    let streaming = request.stream.unwrap_or(false);
+    let streaming = request.inner.stream.unwrap_or(false);
 
     // update the request to always stream
-    let request = CompletionRequest {
+    let inner = async_openai::types::CreateCompletionRequest {
         stream: Some(true),
-        ..request
+        ..request.inner
     };
+
+    let request = CompletionRequest { inner, nvext: None };
 
     // todo - make the protocols be optional for model name
     // todo - when optional, if none, apply a default
-    let model = &request.model;
+    let model = &request.inner.model;
 
     // todo - error handling should be more robust
     let engine = state
@@ -211,7 +213,7 @@ async fn completions(
 #[tracing::instrument(skip_all)]
 async fn chat_completions(
     State(state): State<Arc<DeploymentState>>,
-    Json(request): Json<ChatCompletionRequest>,
+    Json(request): Json<NvCreateChatCompletionRequest>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
     // return a 503 if the service is not ready
     check_ready(&state)?;
@@ -227,7 +229,7 @@ async fn chat_completions(
         stream: Some(true),
         ..request.inner
     };
-    let request = ChatCompletionRequest {
+    let request = NvCreateChatCompletionRequest {
         inner: inner_request,
         nvext: None,
     };
@@ -272,7 +274,7 @@ async fn chat_completions(
             .keep_alive(KeepAlive::default())
             .into_response())
     } else {
-        let response = ChatCompletionResponse::from_annotated_stream(stream.into())
+        let response = NvCreateChatCompletionResponse::from_annotated_stream(stream.into())
             .await
             .map_err(|e| {
                 tracing::error!(
@@ -514,7 +516,7 @@ pub fn list_models_router(
     path: Option<String>,
 ) -> (Vec<RouteDoc>, Router) {
     // TODO: Why do we have this endpoint?
-    let custom_path = path.unwrap_or("/triton/alpha/list-models".to_string());
+    let custom_path = path.unwrap_or("/dynemo/alpha/list-models".to_string());
     let doc_for_custom = RouteDoc::new(axum::http::Method::GET, &custom_path);
 
     // Standard OpenAI compatible list models endpoint

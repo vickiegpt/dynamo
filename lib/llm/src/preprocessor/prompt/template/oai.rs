@@ -18,11 +18,11 @@ use super::*;
 use minijinja::{context, value::Value};
 
 use crate::protocols::openai::{
-    chat_completions::ChatCompletionRequest, completions::CompletionRequest,
+    chat_completions::NvCreateChatCompletionRequest, completions::CompletionRequest,
 };
 use tracing;
 
-impl OAIChatLikeRequest for ChatCompletionRequest {
+impl OAIChatLikeRequest for NvCreateChatCompletionRequest {
     fn messages(&self) -> Value {
         Value::from_serialize(&self.inner.messages)
     }
@@ -60,7 +60,7 @@ impl OAIChatLikeRequest for CompletionRequest {
         let message = async_openai::types::ChatCompletionRequestMessage::User(
             async_openai::types::ChatCompletionRequestUserMessage {
                 content: async_openai::types::ChatCompletionRequestUserMessageContent::Text(
-                    self.prompt.clone(),
+                    crate::protocols::openai::completions::prompt_to_string(&self.inner.prompt),
                 ),
                 name: None,
             },

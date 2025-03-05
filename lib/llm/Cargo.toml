@@ -14,15 +14,15 @@
 # limitations under the License.
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["NVIDIA"]
 license = "Apache-2.0"
-homepage = "https://github.com/triton-inference-server/triton_distributed"
-repository = "https://github.com/triton-inference-server/triton_distributed"
+homepage = "https://github.com/dynemo-ai/dynemo"
+repository = "https://github.com/dynemo-ai/dynemo.git"
 
 [package]
-name = "triton-distributed-llm"
+name = "dynemo-llm"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -32,14 +32,19 @@ homepage.workspace = true
 [features]
 default = []
 mistralrs = ["dep:mistralrs"]
-metal = ["mistralrs/metal"]
-cuda = ["mistralrs/cuda"]
-sentencepiece = ["dep:sentencepiece"]
+llamacpp = ["dep:llama-cpp-2"]
 sglang = ["dep:async_zmq"]
+sentencepiece = ["dep:sentencepiece"]
+vllm = ["dep:async_zmq"]
+trtllm = []
+
+cuda = ["mistralrs/cuda", "llama-cpp-2/cuda"]
+metal = ["mistralrs/metal", "llama-cpp-2/metal"]
+vulkan = ["llama-cpp-2/vulkan"]
 
 [workspace.dependencies]
 # local or crates.io
-triton-distributed-runtime = { version = "0.2.0", path = "../runtime" }
+dynemo-runtime = { version = "0.2.0", path = "../runtime" }
 
 # crates.io
 anyhow = { version = "1" }
@@ -64,7 +69,7 @@ strum = { version = "0.27", features = ["derive"] }
 [dependencies]
 
 # repo
-triton-distributed-runtime = { workspace = true }
+dynemo-runtime = { workspace = true }
 
 # workspace
 anyhow = { workspace = true }
@@ -123,6 +128,9 @@ pyo3 = { version = "0.23.3", default-features = false, features = [
 ] }
 serde-pickle = "1.2.0"
 
+# llamacpp
+llama-cpp-2 = { version = "0.1.86", optional = true }
+
 # tokenizers
 tokenizers = { version = "0.21.0", default-features = false, features = [
   "onig",
@@ -143,6 +151,9 @@ minijinja = { version = "2.3.1", features = ["loader"] }
 minijinja-contrib = { version = "2.3.1", features = ["pycompat"] }
 semver = { version = "1", features = ["serde"] }
 
+# trtllm
+serde_repr = "0.1"
+
 [dev-dependencies]
 proptest = "1.5.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
@@ -155,6 +166,10 @@ insta = { version = "1.41", features = [
   "redactions",
   "filters",
 ] }
+
+[build-dependencies]
+bindgen = "0.70"
+cmake = "0.1"
 
 [profile.dev.package]
 insta.opt-level = 3

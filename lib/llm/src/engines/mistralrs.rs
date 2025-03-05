@@ -28,13 +28,13 @@ use mistralrs::{
 };
 use tokio::sync::mpsc::channel;
 
-use triton_distributed_runtime::engine::{AsyncEngine, AsyncEngineContextProvider, ResponseStream};
-use triton_distributed_runtime::pipeline::error as pipeline_error;
-use triton_distributed_runtime::pipeline::{Error, ManyOut, SingleIn};
-use triton_distributed_runtime::protocols::annotated::Annotated;
+use dynemo_runtime::engine::{AsyncEngine, AsyncEngineContextProvider, ResponseStream};
+use dynemo_runtime::pipeline::error as pipeline_error;
+use dynemo_runtime::pipeline::{Error, ManyOut, SingleIn};
+use dynemo_runtime::protocols::annotated::Annotated;
 
 use crate::protocols::openai::chat_completions::{
-    ChatCompletionRequest, ChatCompletionResponseDelta,
+    NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse,
 };
 use crate::types::openai::chat_completions::OpenAIChatCompletionsStreamingEngine;
 
@@ -160,15 +160,15 @@ impl MistralRsEngine {
 #[async_trait]
 impl
     AsyncEngine<
-        SingleIn<ChatCompletionRequest>,
-        ManyOut<Annotated<ChatCompletionResponseDelta>>,
+        SingleIn<NvCreateChatCompletionRequest>,
+        ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>,
         Error,
     > for MistralRsEngine
 {
     async fn generate(
         &self,
-        request: SingleIn<ChatCompletionRequest>,
-    ) -> Result<ManyOut<Annotated<ChatCompletionResponseDelta>>, Error> {
+        request: SingleIn<NvCreateChatCompletionRequest>,
+    ) -> Result<ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>, Error> {
         let (request, context) = request.transfer(());
         let ctx = context.context();
         let (tx, mut rx) = channel(10_000);
@@ -286,7 +286,7 @@ impl
                             system_fingerprint: Some(c.system_fingerprint),
                             service_tier: None,
                         };
-                        let delta = ChatCompletionResponseDelta{inner};
+                        let delta = NvCreateChatCompletionStreamResponse{inner};
                         let ann = Annotated{
                             id: None,
                             data: Some(delta),

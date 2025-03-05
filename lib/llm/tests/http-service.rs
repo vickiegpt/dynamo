@@ -15,28 +15,28 @@
 
 use anyhow::Error;
 use async_stream::stream;
-use prometheus::{proto::MetricType, Registry};
-use reqwest::StatusCode;
-use std::sync::Arc;
-use triton_distributed_llm::http::service::{
+use dynemo_llm::http::service::{
     error::HttpError,
     metrics::{Endpoint, RequestType, Status},
     service_v2::HttpService,
     Metrics,
 };
-use triton_distributed_llm::protocols::{
+use dynemo_llm::protocols::{
     openai::{
-        chat_completions::{ChatCompletionRequest, ChatCompletionResponseDelta},
+        chat_completions::{NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse},
         completions::{CompletionRequest, CompletionResponse},
     },
     Annotated,
 };
-use triton_distributed_runtime::{
+use dynemo_runtime::{
     pipeline::{
         async_trait, AsyncEngine, AsyncEngineContextProvider, ManyOut, ResponseStream, SingleIn,
     },
     CancellationToken,
 };
+use prometheus::{proto::MetricType, Registry};
+use reqwest::StatusCode;
+use std::sync::Arc;
 
 struct CounterEngine {}
 
@@ -44,22 +44,22 @@ struct CounterEngine {}
 #[async_trait]
 impl
     AsyncEngine<
-        SingleIn<ChatCompletionRequest>,
-        ManyOut<Annotated<ChatCompletionResponseDelta>>,
+        SingleIn<NvCreateChatCompletionRequest>,
+        ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>,
         Error,
     > for CounterEngine
 {
     async fn generate(
         &self,
-        request: SingleIn<ChatCompletionRequest>,
-    ) -> Result<ManyOut<Annotated<ChatCompletionResponseDelta>>, Error> {
+        request: SingleIn<NvCreateChatCompletionRequest>,
+    ) -> Result<ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>, Error> {
         let (request, context) = request.transfer(());
         let ctx = context.context();
 
         // ALLOW: max_tokens is deprecated in favor of completion_usage_tokens
         let max_tokens = request.inner.max_tokens.unwrap_or(0) as u64;
 
-        // let generator = ChatCompletionResponseDelta::generator(request.model.clone());
+        // let generator = NvCreateChatCompletionStreamResponse::generator(request.model.clone());
         let generator = request.response_generator();
 
         let stream = stream! {
@@ -67,7 +67,7 @@ impl
             for i in 0..10 {
                 let inner = generator.create_choice(i,Some(format!("choice {i}")), None, None);
 
-                let output = ChatCompletionResponseDelta {
+                let output = NvCreateChatCompletionStreamResponse {
                     inner,
                 };
 
@@ -84,15 +84,15 @@ struct AlwaysFailEngine {}
 #[async_trait]
 impl
     AsyncEngine<
-        SingleIn<ChatCompletionRequest>,
-        ManyOut<Annotated<ChatCompletionResponseDelta>>,
+        SingleIn<NvCreateChatCompletionRequest>,
+        ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>,
         Error,
     > for AlwaysFailEngine
 {
     async fn generate(
         &self,
-        _request: SingleIn<ChatCompletionRequest>,
-    ) -> Result<ManyOut<Annotated<ChatCompletionResponseDelta>>, Error> {
+        _request: SingleIn<NvCreateChatCompletionRequest>,
+    ) -> Result<ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>, Error> {
         Err(HttpError {
             code: 403,
             message: "Always fail".to_string(),
@@ -387,7 +387,7 @@ async fn test_http_service() {
     // ==== ChatCompletions / Unary / Error ====
 
     // ==== Completions / Unary / Error ====
-    let mut request = CompletionRequest::builder()
+    let mut request = async_openai::types::CreateCompletionRequestArgs::default()
         .model("bar")
         .prompt("hi")
         .build()

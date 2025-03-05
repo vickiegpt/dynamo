@@ -23,9 +23,9 @@ This example demonstrates how to use Triton Distributed to serve large language 
 
 Start required services (etcd and NATS):
 
-   Option A: Using [Docker Compose](/runtime/rust/docker-compose.yml) (Recommended)
+   Option A: Using [Docker Compose](/deploy/docker-compose.yml) (Recommended)
    ```bash
-   docker-compose up -d
+   docker compose -f ./deploy/docker-compose.yml up -d
    ```
 
    Option B: Manual Setup
@@ -53,17 +53,26 @@ The example is designed to run in a containerized environment using Triton Distr
 
 ## Deployment
 
-#### 1. HTTP Server
+### 1. HTTP Server
 
 Run the server logging (with debug level logging):
 ```bash
-TRD_LOG=DEBUG http
+DYN_LOG=DEBUG http
 ```
 By default the server will run on port 8080.
 
 Add model to the server:
 ```bash
-llmctl http add chat-models deepseek-ai/DeepSeek-R1-Distill-Llama-8B triton-init.vllm.generate
+llmctl http add chat-models deepseek-ai/DeepSeek-R1-Distill-Llama-8B dynemo.vllm.generate
+```
+
+##### Example Output
+```
++------------+------------------------------------------+-----------+-----------+----------+
+| MODEL TYPE | MODEL NAME                               | NAMESPACE | COMPONENT | ENDPOINT |
++------------+------------------------------------------+-----------+-----------+----------+
+| chat       | deepseek-ai/DeepSeek-R1-Distill-Llama-8B | dynemo | vllm      | generate |
++------------+------------------------------------------+-----------+-----------+----------+
 ```
 
 ### 2. Workers
@@ -73,11 +82,31 @@ llmctl http add chat-models deepseek-ai/DeepSeek-R1-Distill-Llama-8B triton-init
 In a separate terminal run the vllm worker:
 
 ```bash
+# Activate virtual environment
+source /opt/dynemo/venv/bin/activate
+
 # Launch worker
 cd /workspace/examples/python_rs/llm/vllm
 python3 -m monolith.worker \
     --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B \
     --enforce-eager
+```
+
+##### Example Output
+
+```
+INFO 03-02 05:30:36 __init__.py:190] Automatically detected platform cuda.
+WARNING 03-02 05:30:36 nixl.py:43] NIXL is not available
+
+INFO 03-02 05:30:43 config.py:542] This model supports multiple tasks: {'embed', 'score', 'generate', 'classify', 'reward'}. Defaulting to 'generate'.
+INFO 03-02 05:30:43 base_engine.py:43] Initializing engine client
+INFO 03-02 05:30:43 api_server.py:206] Started engine process with PID 1151
+INFO 03-02 05:30:44 config.py:542] This model supports multiple tasks: {'embed', 'score', 'generate', 'classify', 'reward'}. Defaulting to 'generate'.
+
+<SNIP>
+
+INFO 03-02 05:32:20 llm_engine.py:476] init engine (profile, create kv cache, warmup model) took 4.22 seconds
+
 ```
 
 #### 2.2. Disaggregated Deployment
@@ -86,6 +115,9 @@ This deployment option splits the model serving across prefill and decode worker
 
 **Terminal 1 - Prefill Worker:**
 ```bash
+# Activate virtual environment
+source /opt/dynemo/venv/bin/activate
+
 # Launch prefill worker
 cd /workspace/examples/python_rs/llm/vllm
 VLLM_WORKER_MULTIPROC_METHOD=spawn CUDA_VISIBLE_DEVICES=0 python3 -m disaggregated.prefill_worker \
@@ -94,11 +126,24 @@ VLLM_WORKER_MULTIPROC_METHOD=spawn CUDA_VISIBLE_DEVICES=0 python3 -m disaggregat
     --enforce-eager \
     --tensor-parallel-size 1 \
     --kv-transfer-config \
-    '{"kv_connector":"TritonNcclConnector","kv_role":"kv_producer","kv_rank":0,"kv_parallel_size":2}'
+    '{"kv_connector":"DynemoNcclConnector","kv_role":"kv_producer","kv_rank":0,"kv_parallel_size":2}'
+```
+
+##### Example Output
+
+```
+INFO 03-02 05:59:44 worker.py:269] the current vLLM instance can use total_gpu_memory (47.54GiB) x gpu_memory_utilization (0.40) = 19.01GiB
+INFO 03-02 05:59:44 worker.py:269] model weights take 14.99GiB; non_torch_memory takes 0.06GiB; PyTorch activation peak memory takes 1.19GiB; the rest of the memory reserved for KV Cache is 2.78GiB.
+INFO 03-02 05:59:44 executor_base.py:110] # CUDA blocks: 1423, # CPU blocks: 2048
+INFO 03-02 05:59:44 executor_base.py:115] Maximum concurrency for 10 tokens per request: 2276.80x
+INFO 03-02 05:59:47 llm_engine.py:476] init engine (profile, create kv cache, warmup model) took 3.41 seconds
 ```
 
 **Terminal 2 - Decode Worker:**
 ```bash
+# Activate virtual environment
+source /opt/dynemo/venv/bin/activate
+
 # Launch decode worker
 cd /workspace/examples/python_rs/llm/vllm
 VLLM_WORKER_MULTIPROC_METHOD=spawn CUDA_VISIBLE_DEVICES=1,2 python3 -m disaggregated.decode_worker \
@@ -107,10 +152,20 @@ VLLM_WORKER_MULTIPROC_METHOD=spawn CUDA_VISIBLE_DEVICES=1,2 python3 -m disaggreg
     --enforce-eager \
     --tensor-parallel-size 2 \
     --kv-transfer-config \
-    '{"kv_connector":"TritonNcclConnector","kv_role":"kv_consumer","kv_rank":1,"kv_parallel_size":2}'
+    '{"kv_connector":"DynemoNcclConnector","kv_role":"kv_consumer","kv_rank":1,"kv_parallel_size":2}'
 ```
 
 The disaggregated deployment utilizes separate GPUs for prefill and decode operations, allowing for optimized resource allocation and improved performance. For more details on the disaggregated deployment, please refer to the [vLLM documentation](https://docs.vllm.ai/en/latest/features/disagg_prefill.html).
+
+##### Example Output
+
+```
+INFO 03-02 05:59:44 worker.py:269] the current vLLM instance can use total_gpu_memory (47.54GiB) x gpu_memory_utilization (0.40) = 19.01GiB
+INFO 03-02 05:59:44 worker.py:269] model weights take 14.99GiB; non_torch_memory takes 0.06GiB; PyTorch activation peak memory takes 1.19GiB; the rest of the memory reserved for KV Cache is 2.78GiB.
+INFO 03-02 05:59:44 executor_base.py:110] # CUDA blocks: 1423, # CPU blocks: 2048
+INFO 03-02 05:59:44 executor_base.py:115] Maximum concurrency for 10 tokens per request: 2276.80x
+INFO 03-02 05:59:47 llm_engine.py:476] init engine (profile, create kv cache, warmup model) took 3.41 seconds
+```
 
 
 ### 3. Client
@@ -126,7 +181,8 @@ curl localhost:8080/v1/chat/completions \
   }'
 ```
 
-Expected output:
+##### Example Output
+
 ```json
 {
     "id": "5b04e7b0-0dcd-4c45-baa0-1d03d924010c",
@@ -198,7 +254,7 @@ tmux ls | grep 'v-' | cut -d: -f1 | xargs -I{} tmux kill-session -t {}
 **Terminal 1 - Router:**
 ```bash
 # Activate virtual environment
-source /opt/triton/venv/bin/activate
+source /opt/dynemo/venv/bin/activate
 
 # Launch prefill worker
 cd /workspace/examples/python_rs/llm/vllm
@@ -214,7 +270,7 @@ You can choose only the prefix strategy for now:
 **Terminal 2 - Processor:**
 ```bash
 # Activate virtual environment
-source /opt/triton/venv/bin/activate
+source /opt/dynemo/venv/bin/activate
 
 # Processor must take the same args as the worker
 # This is temporary until we communicate the ModelDeploymentCard over etcd
@@ -230,7 +286,7 @@ RUST_LOG=info python3 -m kv_router.processor \
 **Terminal 3 and 4 - Workers:**
 ```bash
 # Activate virtual environment
-source /opt/triton/venv/bin/activate
+source /opt/dynemo/venv/bin/activate
 
 # Launch Worker 1 and Worker 2 with same command
 cd /workspace/examples/python_rs/llm/vllm
@@ -248,7 +304,7 @@ Note: block-size must be 64, otherwise Router won't work (accepts only 64 tokens
 **Terminal 5 - Client:**
 Don't forget to add the model to the server:
 ```bash
-llmctl http add chat-models deepseek-ai/DeepSeek-R1-Distill-Llama-8B triton-init.process.chat/completions
+llmctl http add chat-models deepseek-ai/DeepSeek-R1-Distill-Llama-8B dynemo.process.chat/completions
 ```
 
 ```bash
@@ -264,7 +320,8 @@ curl localhost:8080/v1/chat/completions   -H "Content-Type: application/json"   
     "max_tokens": 30
   }'
 ```
-Expected output:
+##### Example Output
+
 ```json
 {
     "id": "f435d1aa-d423-40a0-a616-00bc428a3e32",
@@ -285,8 +342,59 @@ Expected output:
     "system_fingerprint": null
 }
 ```
+### 6. Preprocessor and backend
 
-### 6. Known Issues and Limitations
+This deployment splits the pre-processing and backend for model serving.
+
+Run following commands in 4 terminals:
+
+**Terminal 1 - vLLM Worker:**
+```bash
+# Activate virtual environment
+source /opt/dynemo/venv/bin/activate
+cd /workspace/examples/python_rs/llm/vllm
+
+RUST_LOG=info python3 -m preprocessor.worker --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+```
+
+**Terminal 2 - preprocessor:**
+
+```bash
+# Activate virtual environment
+source /opt/dynemo/venv/bin/activate
+cd /workspace/examples/python_rs/llm/vllm
+
+RUST_LOG=info python3 -m preprocessor.processor --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+```
+
+**Terminal 3 - HTTP Server**
+
+Run the server logging (with debug level logging):
+```bash
+DYN_LOG=DEBUG http
+```
+By default the server will run on port 8080.
+
+Add model to the server:
+```bash
+llmctl http add chat-models deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B dynemo.preprocessor.generate
+```
+
+**Terminal 4 - client**
+
+```bash
+
+curl localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    "messages": [
+      {"role": "user", "content": "What is the capital of France?"}
+    ]
+  }'
+```
+
+### 7. Known Issues and Limitations
 
 - vLLM is not working well with the `fork` method for multiprocessing and TP > 1. This is a known issue and a workaround is to use the `spawn` method instead. See [vLLM issue](https://github.com/vllm-project/vllm/issues/6152).
 - `kv_rank` of `kv_producer` must be smaller than of `kv_consumer`.
