@@ -16,6 +16,7 @@
 import asyncio
 import copy
 import json
+from enum import Enum
 from typing import AsyncIterator
 
 import uvloop
@@ -40,6 +41,11 @@ from triton_distributed.runtime import (
 )
 
 logger.set_level("debug")
+
+
+class EndpointType(Enum):
+    COMPLETIONS = "completions"
+    CHAT = "chat"
 
 
 class KVRouterWrapper:
@@ -68,6 +74,16 @@ class KVRouterWrapper:
             )
 
 
+def get_worker_id(encoded_worker_id, type):
+    """
+    encoded_worker_id is a string of the form "completions_lease_id^chat_lease_id"
+    This function returns the worker id based on the type of the endpoint.
+    """
+    return (encoded_worker_id.data()).split("^")[
+        0 if type == EndpointType.COMPLETIONS else 1
+    ]
+
+
 class Router(ChatProcessorMixin):
     def __init__(
         self,
@@ -88,7 +104,7 @@ class Router(ChatProcessorMixin):
         # allows to use tokenizer
         super().__init__(engine_config)
 
-    async def _get_ctx_resp(self, request, ctx_client):
+    async def _get_ctx_resp(self, request, ctx_client, type):
         logger.debug(f"Received request {request}")
 
         # NOTE: this will increase TTFT since we are encoding the prompt here
@@ -100,10 +116,10 @@ class Router(ChatProcessorMixin):
         )
 
         # TODO: Tanmay: Get the lease id from the worker id.
-        worker_id = (
+        encoded_worker_id = (
             await worker_id_generator.__anext__()
         )  # only one worker id is returned
-        worker_id = worker_id.data()
+        worker_id = get_worker_id(encoded_worker_id.data(), type)
 
         request.max_tokens = 1
         request.disaggregated_params = DisaggregatedParams(request_type="context_only")
@@ -145,7 +161,9 @@ class Router(ChatProcessorMixin):
 
         gen_req = copy.deepcopy(request)
 
-        ctx_resp = await self._get_ctx_resp(request, self.ctx_completion_client)
+        ctx_resp = await self._get_ctx_resp(
+            request, self.ctx_completion_client, EndpointType.COMPLETIONS
+        )
         ctx_resp_obj = DisaggCompletionStreamResponse.model_validate(ctx_resp)
 
         gen_req.disaggregated_params = DisaggregatedParams.model_validate(
@@ -178,7 +196,9 @@ class Router(ChatProcessorMixin):
 
         gen_req = copy.deepcopy(request)
 
-        ctx_resp = await self._get_ctx_resp(request, self.ctx_chat_client)
+        ctx_resp = await self._get_ctx_resp(
+            request, self.ctx_chat_client, EndpointType.CHAT
+        )
         ctx_resp_obj = DisaggChatCompletionStreamResponse.model_validate_json(ctx_resp)
 
         gen_req.disaggregated_params = DisaggregatedParams.model_validate(
