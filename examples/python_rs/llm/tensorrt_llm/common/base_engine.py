@@ -29,7 +29,7 @@ from transformers import AutoTokenizer
 class BaseTensorrtLLMEngine:
     def __init__(self, engine_config: LLMAPIConfig):
         self._engine_config = engine_config
-        logger.info(f"Using LLM API config: {self._engine_config}")
+        logger.info(f"Using LLM API config: {self._engine_config.to_dict()}")
 
         # model name for chat processor
         self._model_name = self._engine_config.model_name
