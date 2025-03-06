@@ -46,7 +46,7 @@ from tensorrt_llm.serve.openai_protocol import CompletionRequest
 
 from dynemo.runtime import DistributedRuntime, dynemo_endpoint, dynemo_worker
 
-logger.set_level("debug")
+logger.set_level("info")
 
 
 def update_args_from_disagg_config(

@@ -33,3 +33,7 @@ kv_cache_config:
 pytorch_backend_config:
   enable_overlap_scheduler: false
   use_cuda_graph: false
+
+# uncomment the following for MTP
+# mtp_config:
+#   num_nextn_predict_layers: 2
