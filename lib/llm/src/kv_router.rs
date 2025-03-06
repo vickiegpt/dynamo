@@ -153,7 +153,7 @@ async fn collect_endpoints(
         }
 
         let values = match nats_client
-            .get_endpoints(&service_name, Duration::from_secs(1))
+            .get_endpoints(&service_name, Duration::from_millis(100))
             .await
         {
             Ok(v) => v,
