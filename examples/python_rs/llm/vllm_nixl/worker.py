@@ -32,6 +32,7 @@ from vllm.entrypoints.openai.protocol import (
 from vllm.entrypoints.openai.serving_chat import OpenAIServingChat
 from vllm.entrypoints.openai.serving_models import BaseModelPath, OpenAIServingModels
 from vllm.remote_prefill import RemotePrefillParams, RemotePrefillRequest
+from vllm.logger import logger as vllm_logger
 
 from dynemo.runtime import DistributedRuntime, dynemo_endpoint, dynemo_worker
 
@@ -52,7 +53,7 @@ class RequestHandler:
         self.do_remote_prefill = (
             do_remote_prefill  # TODO: this should be decided by the algorithm
         )
-        print("RequestHandler initialized")
+        vllm_logger.info("RequestHandler initialized")
 
     async def init(self):
         models = OpenAIServingModels(
@@ -123,31 +124,40 @@ async def worker(runtime: DistributedRuntime, engine_args: AsyncEngineArgs):
         .client()
     )
 
+    vllm_logger.info("Building engine client")
     async with build_async_engine_client_from_engine_args(engine_args) as engine_client:
+        vllm_logger.info("Engine client built")
         # This should be replaced with etcd
 
         if engine_args.remote_prefill:
+            vllm_logger.info("Getting metadata")
             metadata = engine_client.nixl_metadata
+            vllm_logger.info("Metadata got")
             metadata_store = NixlMetadataStore("test-nixl", runtime)
+            vllm_logger.info("Storing metadata")
             await metadata_store.put(metadata.engine_id, metadata)
+            vllm_logger.info("Metadata stored")
 
-            await endpoint.serve_endpoint(
-                RequestHandler(
-                    model_name="vllm",
-                    engine_client=engine_client,
-                    prefill_client=prefill_client,
-                    do_remote_prefill=True,
-                ).generate
+            vllm_logger.info("Creating request handler")
+            request_handler = RequestHandler(
+                model_name="vllm",
+                engine_client=engine_client,
+                prefill_client=prefill_client,
+                do_remote_prefill=True,
             )
+            vllm_logger.info("Request handler created")
         else:
-            await endpoint.serve_endpoint(
-                RequestHandler(
-                    model_name="vllm",
-                    engine_client=engine_client,
-                    prefill_client=prefill_client,
-                    do_remote_prefill=False,
-                ).generate
+            vllm_logger.info("Creating request handler")
+            request_handler = RequestHandler(
+                model_name="vllm",
+                engine_client=engine_client,
+                prefill_client=prefill_client,
+                do_remote_prefill=False,
             )
+            vllm_logger.info("Request handler created")
+
+        vllm_logger.info("Serving endpoint")
+        await endpoint.serve_endpoint(request_handler.generate)
 
 
 if __name__ == "__main__":

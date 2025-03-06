@@ -35,7 +35,7 @@ class RequestHandler:
         self.engine_client = engine_client
         self._metadata_store = metadata_store
         self._loaded_metadata = set()
-        print("RequestHandler initialized")
+        vllm_logger.info("RequestHandler initialized")
 
     async def generate(self, raw_request: str):
         request: RemotePrefillRequest = msgspec.json.decode(
