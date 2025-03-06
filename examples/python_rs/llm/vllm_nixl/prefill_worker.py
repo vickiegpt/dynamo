@@ -25,6 +25,7 @@ from vllm.entrypoints.openai.api_server import (
 )
 from vllm.inputs.data import TokensPrompt
 from vllm.remote_prefill import RemotePrefillParams, RemotePrefillRequest
+from vllm.logger import logger as vllm_logger
 
 from dynemo.runtime import DistributedRuntime, dynemo_worker
 
@@ -54,20 +55,44 @@ class RequestHandler:
         # TODO check if metadata has changed
         # and reload - currently only loading once
 
+        vllm_logger.info(
+            "Got prefill request from decode engine %s", request.engine_id
+        )
         if request.engine_id not in self._loaded_metadata:
+            vllm_logger.info(
+                "Loading nixl metadata from engine %s", request.engine_id
+            )
             remote_metadata = await self._metadata_store.get(request.engine_id)
+            vllm_logger.info(
+                "Got nixl metadata from store for engine %s", request.engine_id
+            )
             await self.engine_client.add_remote_nixl_metadata(remote_metadata)
-            print(
-                f"Loaded nixl metadata from engine {request.engine_id} into engine {self.engine_client.nixl_metadata.engine_id}"
+            vllm_logger.info(
+                "Loaded nixl metadata from engine %s into engine %s",
+                request.engine_id,
+                self.engine_client.nixl_metadata.engine_id,
             )
             self._loaded_metadata.add(request.engine_id)
+            vllm_logger.info(
+                "Added to _loaded_metadata: %s", request.engine_id
+            )
+        else:
+            vllm_logger.info(
+                "Nixl metadata already loaded for engine %s", request.engine_id
+            )
 
+        vllm_logger.info(
+            "Generating prefill for engine %s", request.engine_id
+        )
         async for _ in self.engine_client.generate(
             request_id=request.request_id,
             prompt=TokensPrompt(prompt_token_ids=request.prompt_token_ids),
             sampling_params=sampling_params,
             remote_prefill_params=remote_prefill_params,
         ):
+            vllm_logger.info(
+                "Generated prefill for engine %s", request.engine_id
+            )
             yield
 
 
@@ -78,14 +103,17 @@ async def worker(runtime: DistributedRuntime, engine_args: AsyncEngineArgs):
 
     endpoint = component.endpoint("generate")
 
+    vllm_logger.info("Building engine client")
     async with build_async_engine_client_from_engine_args(engine_args) as engine_client:
+        vllm_logger.info("Engine client built")
         metadata = engine_client.nixl_metadata
         metadata_store = NixlMetadataStore("test-nixl", runtime)
+        vllm_logger.info("Storing metadata")
         await metadata_store.put(metadata.engine_id, metadata)
-
-        await endpoint.serve_endpoint(
-            RequestHandler(engine_client, metadata_store).generate
-        )
+        vllm_logger.info("Metadata stored")
+        request_handler = RequestHandler(engine_client, metadata_store)
+        vllm_logger.info("Serving endpoint")
+        await endpoint.serve_endpoint(request_handler.generate)
 
 
 if __name__ == "__main__":
