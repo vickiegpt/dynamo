@@ -22,7 +22,7 @@ from typing import AsyncIterator
 import uvloop
 from common.protocol import Tokens
 from vllm.logger import logger as vllm_logger
-
+import random
 from dynemo.llm import KvIndexer, KvMetricsAggregator, KvRouter
 from dynemo.runtime import DistributedRuntime, dynemo_endpoint, dynemo_worker
 
@@ -103,76 +103,89 @@ class CustomRouter:
 
     def __init__(
         self,
+        workers_client,
         indexer: KvIndexer,
         metrics_aggregator: KvMetricsAggregator,
     ):
         vllm_logger.info("Initializing Custom Router")
         self.indexer = indexer
         self.metrics_aggregator = metrics_aggregator
+        self.workers_client = workers_client
 
     def _cost_function(self, scores, metrics):
-        # Get worker IDs and their corresponding scores
-        worker_ids = list(scores.scores.keys())
-        
-        # Normalize scores (higher is better)
+        # Normalize scores (higher is better) into a dict
         max_score = max(scores.scores.values()) if scores.scores else 1.0
-        normalized_scores = [
-            score / max_score if max_score > 0 else 0.0
-            for _, score in scores.scores.items()
-        ]
-
-        # Initialize lists to store metrics
-        kv_usages = []
-        waiting_requests = []
-        cache_metrics = []
-
-        # Collect metrics in a single loop
-        for endpoint in metrics.endpoints:
-            if endpoint.worker_id in worker_ids:
-                kv_usages.append(endpoint.gpu_cache_usage_perc if hasattr(endpoint, 'gpu_cache_usage_perc') else 0.0)
-                waiting_requests.append(endpoint.num_requests_waiting if hasattr(endpoint, 'num_requests_waiting') else 0.0)
-                cache_metrics.append(endpoint.gpu_prefix_cache_hit_rate if hasattr(endpoint, 'gpu_prefix_cache_hit_rate') else 0.0)
-
-        normalized_waiting_requests = normalize_values(waiting_requests) #, transform=lambda x: x**2
-
-        # Calculate logits using the formula:
-        # 2 * overlap - 4 * cache_len - kv - waiting
-        worker_logits = {
-            worker_id: (
-                2.0 * overlap - 
-                4.0 * cache_len -  # seems a bit high, lets see
-                kv - 
-                waiting
-            )
-            for worker_id, overlap, kv, waiting, cache_len in zip(
-                worker_ids, normalized_scores, kv_usages, normalized_waiting_requests, cache_metrics
-            )
+        worker_scores = {
+            worker_id: (score / max_score if max_score > 0 else 0.0)
+            for worker_id, score in scores.scores.items()
         }
+
+        # Initialize metrics dictionary
+        worker_metrics = {}
+        for endpoint in metrics.endpoints:
+            worker_id = endpoint.worker_id
+            worker_metrics[worker_id] = {
+                'gpu_cache_usage_perc': endpoint.gpu_cache_usage_perc if hasattr(endpoint, 'gpu_cache_usage_perc') else 0.0,
+                'num_requests_waiting': endpoint.num_requests_waiting if hasattr(endpoint, 'num_requests_waiting') else 0.0,
+                'gpu_prefix_cache_hit_rate': endpoint.gpu_prefix_cache_hit_rate if hasattr(endpoint, 'gpu_prefix_cache_hit_rate') else 0.0
+            }
+
+        # Get all worker IDs from the client
+        worker_ids = self.workers_client.endpoint_ids()
+
+        max_waiting = max([worker_metrics.get(worker_id, {}).get('num_requests_waiting', 0.0) for worker_id in worker_ids], default=1.0)
+
+        
+        # Calculate logits for each worker
+        worker_logits = {}
+        for worker_id in worker_ids:
+            # Use default values if worker not in scores or metrics
+            score = worker_scores.get(worker_id, 0.0)
+            metrics_dict = worker_metrics.get(worker_id, {
+                'gpu_cache_usage_perc': 0.0,
+                'num_requests_waiting': 0.0,
+                'gpu_prefix_cache_hit_rate': 0.0
+            })
+
+            normalized_waiting = metrics_dict['num_requests_waiting'] / max_waiting if max_waiting > 0 else 0.0
+
+            # Calculate logit using the metrics
+            worker_logits[worker_id] = (
+                2.0 * score - 
+                metrics_dict['gpu_cache_usage_perc'] - 
+                normalized_waiting -
+                2 * metrics_dict['gpu_prefix_cache_hit_rate'] * normalized_waiting
+            )
+
+            # Print out the formula for each worker
+            vllm_logger.info(f"Formula for {worker_id}: {worker_logits[worker_id]:.4f} = 2.0 * {score:.4f} - 4.0 * {metrics_dict['gpu_prefix_cache_hit_rate']:.4f} - {metrics_dict['gpu_cache_usage_perc']:.4f} - {normalized_waiting:.4f}")
+
+        
+        if not worker_logits or all(logit == 0 for logit in worker_logits.values()):
+            return ""
+            
+        vllm_logger.info(f"Logit Length: {len(worker_logits)}")
         
         # Select the worker with the highest logit
-        best_worker_id = max(worker_logits.items(), key=lambda x: x[1])[0] if worker_logits else ""
+        if worker_logits:
+            max_logit = max(worker_logits.values())
+            # Get all workers that have the max logit value
+            best_workers = [wid for wid, logit in worker_logits.items() if logit == max_logit]
+            # Randomly select one of the workers with max logit
+            best_worker_id = random.choice(best_workers)
+        else:
+            best_worker_id = ""
         
         # Log the metrics for the selected worker
         if best_worker_id:
             vllm_logger.info(f"Selected worker: {best_worker_id}, logit: {worker_logits[best_worker_id]:.4f}")
             vllm_logger.info(f"Score: {scores.scores.get(best_worker_id, 0.0):.4f}")
-            for endpoint in metrics.endpoints:
-                if endpoint.worker_id == best_worker_id:
-                    # Log all relevant metrics
-                    vllm_logger.info(f"Overlap score: {normalized_scores[worker_ids.index(best_worker_id)]:.4f}")
-                    
-                    if hasattr(endpoint, 'num_requests_waiting'):
-                        vllm_logger.info(f"Waiting requests: {endpoint.num_requests_waiting}")
-                    
-                    if hasattr(endpoint, 'gpu_cache_usage_perc'):
-                        vllm_logger.info(f"GPU cache usage: {endpoint.gpu_cache_usage_perc:.2f}%")
-                    
-                    if hasattr(endpoint, 'gpu_prefix_cache_hit_rate'):
-                        vllm_logger.info(f"GPU prefix cache hit rate: {endpoint.gpu_prefix_cache_hit_rate:.2f}")
-                    
-                    # Also log the original metrics for reference
-                    vllm_logger.info(f"Request slot usage: {endpoint.request_active_slots} / {endpoint.request_total_slots}")
-                    vllm_logger.info(f"KV block usage: {endpoint.kv_active_blocks} / {endpoint.kv_total_blocks}")
+            
+            metrics_dict = worker_metrics.get(best_worker_id, {})
+            vllm_logger.info(f"overlap: {worker_scores.get(best_worker_id, 0.0):.4f}")
+            vllm_logger.info(f"cache_len: {metrics_dict.get('gpu_prefix_cache_hit_rate', 0.0):.4f}")
+            vllm_logger.info(f"kv: {metrics_dict.get('gpu_cache_usage_perc', 0.0):.4f}")
+            vllm_logger.info(f"waiting: {metrics_dict.get('num_requests_waiting', 0.0) / max_waiting if max_waiting > 0 else 0.0:.4f}")
         
         return best_worker_id
 
@@ -196,6 +209,7 @@ class CustomRouter:
             vllm_logger.exception(f"Error during worker selection: {e}")
 
         vllm_logger.info(f"Scheduling to worker_id: {worker_id}")
+        vllm_logger.info("########")
 
         yield str(worker_id)
 
@@ -236,7 +250,7 @@ async def worker(runtime: DistributedRuntime, args: Namespace):
         indexer = KvIndexer(kv_listener)
         metrics_aggregator = KvMetricsAggregator(kv_listener)
         await endpoint.serve_endpoint(
-            CustomRouter(indexer, metrics_aggregator).generate
+            CustomRouter(workers_client, indexer, metrics_aggregator).generate
         )
     else:
         router = KvRouter(runtime, kv_listener)

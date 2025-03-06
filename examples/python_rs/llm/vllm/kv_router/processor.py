@@ -103,7 +103,8 @@ class Processor(ProcessMixIn):
         vllm_logger.info(f"Worker ID: {worker_id}")
 
         if worker_id == "":
-            engine_generator = await self.workers_client.random(
+            vllm_logger.info("No worker id returned, using round robin")
+            engine_generator = await self.workers_client.round_robin(
                 vLLMGenerateRequest(
                     engine_prompt=engine_prompt,
                     sampling_params=sampling_params,
