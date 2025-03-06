@@ -60,7 +60,7 @@ class VllmEngine:
             request_logger=None,
         )
 
-    @triton_endpoint(ChatCompletionRequest, ChatCompletionStreamResponse)
+    @dynemo_endpoint(ChatCompletionRequest, ChatCompletionStreamResponse)
     async def generate_chat(self, request):
         result = await self.chat_serving.create_chat_completion(request)
 
@@ -85,7 +85,7 @@ class VllmEngine:
         else:
             raise TypeError(f"Unexpected response type: {type(result)}")
 
-    @triton_endpoint(CompletionRequest, CompletionStreamResponse)
+    @dynemo_endpoint(CompletionRequest, CompletionStreamResponse)
     async def generate_completions(self, request):
         result = await self.completion_serving.create_completion(request)
 

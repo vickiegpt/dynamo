@@ -18,6 +18,8 @@
 # - Must use a single GPU for workers as CUDA_VISIBLE_DEVICES is set to a fixed value
 # - Must use a single node
 
+set -xe
+
 if [ $# -lt 3 ]; then
     echo "Usage: $0 <number_of_workers> <routing_strategy> <log_dir_name> [model_name] [model_args] [chat_endpoint_name] [completions_endpoint_name]"
     echo "Error: Must specify at least number of workers, routing strategy, and log_dir_name"
@@ -29,11 +31,12 @@ if [ $# -lt 3 ]; then
 fi
 
 # If using Cache, can set this to not check HF
-# export HF_HUB_OFFLINE=1
+export HF_HUB_OFFLINE=1
+export GLOO_SOCKET_IFNAME=lo
 
 # Required for Qwen2.5 R1 Distilled in order to set --block-size 64 and --kv-cache-dtype fp8
-# uv pip install flashinfer-python -i https://flashinfer.ai/whl/cu124/torch2.5/
-# export VLLM_ATTENTION_BACKEND=FLASHINFER
+uv pip install flashinfer-python -i https://flashinfer.ai/whl/cu124/torch2.5/
+export VLLM_ATTENTION_BACKEND=FLASHINFER
 
 NUM_WORKERS=$1
 ROUTING_STRATEGY=$2
