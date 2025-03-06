@@ -104,7 +104,8 @@ tmux send-keys -t "$SESSION_NAME-processor" "$INIT_CMD && $PROCESSOR_CMD" C-m
 ROUTER_CMD="RUST_LOG=info python3 -m kv_router.router \
     --model $MODEL_NAME \
     --routing-strategy $ROUTING_STRATEGY \
-    --min-workers $NUM_WORKERS |& tee $LOGS_DIR/router.log"
+    --min-workers $NUM_WORKERS \
+    --custom-router |& tee $LOGS_DIR/router.log"
 
 tmux new-session -d -s "$SESSION_NAME-router"
 tmux send-keys -t "$SESSION_NAME-router" "$INIT_CMD && $ROUTER_CMD" C-m

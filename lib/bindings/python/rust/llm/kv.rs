@@ -96,6 +96,9 @@ impl KvMetricsPublisher {
         request_total_slots: u64,
         kv_active_blocks: u64,
         kv_total_blocks: u64,
+        num_requests_waiting: u64,
+        gpu_cache_usage_perc: f32,
+        gpu_prefix_cache_hit_rate: f32
     ) -> PyResult<()> {
         self.inner
             .publish(
@@ -104,6 +107,9 @@ impl KvMetricsPublisher {
                     request_total_slots,
                     kv_active_blocks,
                     kv_total_blocks,
+                    num_requests_waiting,
+                    gpu_cache_usage_perc,
+                    gpu_prefix_cache_hit_rate
                 }
                 .into(),
             )
@@ -210,6 +216,12 @@ pub(crate) struct EndpointKvMetrics {
     pub kv_active_blocks: u64,
     #[pyo3(get, set)]
     pub kv_total_blocks: u64,
+    #[pyo3(get, set)]
+    pub num_requests_waiting: u64,
+    #[pyo3(get, set)]
+    pub gpu_cache_usage_perc: f32,
+    #[pyo3(get, set)]
+    pub gpu_prefix_cache_hit_rate: f32
 }
 
 #[pyclass]
@@ -256,6 +268,9 @@ impl KvMetricsAggregator {
                 request_total_slots: x.data.request_total_slots,
                 kv_active_blocks: x.data.kv_active_blocks,
                 kv_total_blocks: x.data.kv_total_blocks,
+                num_requests_waiting: x.data.num_requests_waiting,
+                gpu_cache_usage_perc: x.data.gpu_cache_usage_perc,
+                gpu_prefix_cache_hit_rate: x.data.gpu_prefix_cache_hit_rate
             })
             .collect();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {

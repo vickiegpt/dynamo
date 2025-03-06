@@ -88,6 +88,7 @@ class CustomRouter:
         indexer: KvIndexer,
         metrics_aggregator: KvMetricsAggregator,
     ):
+        vllm_logger.info("Initializing Custom Router")
         self.indexer = indexer
         self.metrics_aggregator = metrics_aggregator
 
@@ -98,14 +99,22 @@ class CustomRouter:
             if score > current_best[1]:
                 current_best = (worker_id, score)
         for endpoint in metrics.endpoints:
-            if endpoint.worker_id == current_best[0]:
-                print(f"Metrics of endpoint: {endpoint.worker_id}")
-                print(
-                    f"request slot usage: {endpoint.request_active_slots} / {endpoint.request_total_slots}"
-                )
-                print(
-                    f"KV block usage: {endpoint.kv_active_blocks} / {endpoint.kv_total_blocks}"
-                )
+            vllm_logger.info(f"Metrics of endpoint: {endpoint.worker_id}")
+            vllm_logger.info(
+                f"request slot usage: {endpoint.request_active_slots} / {endpoint.request_total_slots}"
+            )
+            vllm_logger.info(
+                f"KV block usage: {endpoint.kv_active_blocks} / {endpoint.kv_total_blocks}"
+            )
+            vllm_logger.info(
+                f"GPU cache usage: {endpoint.gpu_cache_usage_perc}%"
+            )
+            vllm_logger.info(
+                f"GPU prefix cache hit rate: {endpoint.gpu_prefix_cache_hit_rate}%"
+            )
+            vllm_logger.info(
+                f"Number of requests waiting: {endpoint.num_requests_waiting}"
+            )
         return current_best[0]
 
     @dynemo_endpoint(Tokens, WorkerId)
@@ -202,8 +211,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--custom-router",
-        type=bool,
-        default=False,
+        action="store_true",
         help="Whether to use custom router or not",
     )
     args = parser.parse_args()
