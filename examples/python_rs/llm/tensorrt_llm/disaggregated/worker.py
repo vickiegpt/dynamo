@@ -201,7 +201,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         num_choices = 1 if request.n is None else request.n
 
         response_generator = self.completions_processor.create_completion_generator(
-            request, generator, num_choices
+            request, generator, num_choices, self.server_config.type
         )
         async for response in response_generator:
             yield json.loads(response)

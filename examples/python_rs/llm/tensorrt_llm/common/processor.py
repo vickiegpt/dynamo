@@ -400,6 +400,7 @@ class CompletionsProcessor:
         request: CompletionRequest,
         generator: AsyncIterator[Tuple[int, RequestOutput]],
         num_choices: int,
+        server_type: str,
     ):
         final_response = None
         async for prompt_idx, requst_output in generator:
@@ -408,7 +409,10 @@ class CompletionsProcessor:
             for _p in pp_res:
                 yield _p
 
-        yield self.create_final_completion_response(final_response).model_dump_json()
+        if server_type == "gen":
+            yield self.create_final_completion_response(
+                final_response
+            ).model_dump_json()
 
     def create_final_completion_response(self, response):
         prompt_tokens = len(response.prompt_token_ids)
