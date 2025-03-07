@@ -206,12 +206,6 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         async for response in response_generator:
             yield json.loads(response)
 
-        if self.server_config.type == "gen":
-            final_response = (
-                await self.completions_processor.create_final_completion_response()
-            )
-            yield json.loads(final_response)
-
         self._ongoing_request_count -= 1
 
 

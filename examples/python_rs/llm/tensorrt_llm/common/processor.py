@@ -365,13 +365,11 @@ def merge_promises(
 class CompletionsProcessor:
     def __init__(self, model: str):
         self.model = model
-        self.final_output = None
 
     def _post_process(self, request, prompt_idx, num_choices, requst_output):
         res = []
         echoed = [False] * num_choices
         num_repsonse_per_request = 1 if request.n is None else request.n
-        self.final_output = requst_output
         for gen_idx, output in enumerate(requst_output.outputs):
             response_idx = prompt_idx * num_repsonse_per_request + gen_idx
             delta_text = output.text_diff
@@ -403,16 +401,18 @@ class CompletionsProcessor:
         generator: AsyncIterator[Tuple[int, RequestOutput]],
         num_choices: int,
     ):
+        final_response = None
         async for prompt_idx, requst_output in generator:
+            final_response = requst_output
             pp_res = self._post_process(request, prompt_idx, num_choices, requst_output)
             for _p in pp_res:
                 yield _p
 
-    async def create_final_completion_response(self):
-        prompt_tokens = len(self.final_output.prompt_token_ids)
-        completion_tokens = sum(
-            len(output.token_ids) for output in self.final_output.outputs
-        )
+        yield self.create_final_completion_response(final_response).model_dump_json()
+
+    def create_final_completion_response(self, response):
+        prompt_tokens = len(response.prompt_token_ids)
+        completion_tokens = sum(len(output.token_ids) for output in response.outputs)
         final_usage = UsageInfo(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -423,7 +423,7 @@ class CompletionsProcessor:
             choices=[],
             usage=final_usage,
         )
-        return chunk.model_dump_json()
+        return chunk
 
     async def create_completion_response(
         self,

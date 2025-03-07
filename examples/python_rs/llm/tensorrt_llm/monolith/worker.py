@@ -132,11 +132,6 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
             async for response in response_generator:
                 yield json.loads(response)
 
-            final_response = (
-                await self.completions_processor.create_final_completion_response()
-            )
-            yield json.loads(final_response)
-
             self._ongoing_request_count -= 1
         except CppExecutorError:
             # If internal executor error is raised, shutdown the server
