@@ -199,14 +199,18 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         )
         generator = merge_promises([promise])
         num_choices = 1 if request.n is None else request.n
-        if request.stream:
-            response_generator = self.completions_processor.create_completion_generator(
-                request, generator, num_choices
+
+        response_generator = self.completions_processor.create_completion_generator(
+            request, generator, num_choices
+        )
+        async for response in response_generator:
+            yield json.loads(response)
+
+        if self.server_config.type == "gen":
+            final_response = (
+                await self.completions_processor.create_final_completion_response()
             )
-            async for response in response_generator:
-                yield json.loads(response)
-        else:
-            raise RuntimeError("Non-streaming is not supported")
+            yield json.loads(final_response)
 
         self._ongoing_request_count -= 1
 
