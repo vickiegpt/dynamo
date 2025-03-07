@@ -112,16 +112,25 @@ class CustomRouter:
         self.metrics_aggregator = metrics_aggregator
         self.workers_client = workers_client
 
-    def _cost_function(self, scores, metrics):
+    def _cost_function(self, scores, metrics, token_length):
         # Normalize scores (higher is better) into a dict
-        max_score = max(scores.scores.values()) if scores.scores else 1.0
-        worker_scores = {
-            worker_id: (score / max_score if max_score > 0 else 0.0)
-            for worker_id, score in scores.scores.items()
-        }
+        # max_score = max(scores.scores.values()) if scores.scores else 1.0
+        # worker_scores = {
+        #     worker_id: (score / max_score if max_score > 0 else 0.0)
+        #     for worker_id, score in scores.scores.items()
+        # }
 
-        # Initialize metrics dictionary
+        worker_scores = {}
+        for worker_id, score in scores.scores.items():
+            # score is number of matching blocks we multiply by 64 to get tokens
+            # and compare to token_length. The larger the cache hit the better
+            worker_scores[worker_id] = score * 64 / token_length
+
+        normalized_token_length = token_length / 30000
+
         worker_metrics = {}
+        # pull metrics for each worker
+        max_waiting = 0.0
         for endpoint in metrics.endpoints:
             worker_id = endpoint.worker_id
             worker_metrics[worker_id] = {
@@ -129,14 +138,12 @@ class CustomRouter:
                 'num_requests_waiting': endpoint.num_requests_waiting if hasattr(endpoint, 'num_requests_waiting') else 0.0,
                 'gpu_prefix_cache_hit_rate': endpoint.gpu_prefix_cache_hit_rate if hasattr(endpoint, 'gpu_prefix_cache_hit_rate') else 0.0
             }
+            max_waiting = max(max_waiting, worker_metrics[worker_id]['num_requests_waiting'])
 
-        # Get all worker IDs from the client
+        # Get all worker IDs from the client. This is needed because scores / metrics may not have values for all workers
+        # and we want all workers to be considered in the logit calculation
         worker_ids = self.workers_client.endpoint_ids()
-
-        max_waiting = max([worker_metrics.get(worker_id, {}).get('num_requests_waiting', 0.0) for worker_id in worker_ids], default=1.0)
-
         
-        # Calculate logits for each worker
         worker_logits = {}
         for worker_id in worker_ids:
             # Use default values if worker not in scores or metrics
@@ -149,16 +156,14 @@ class CustomRouter:
 
             normalized_waiting = metrics_dict['num_requests_waiting'] / max_waiting if max_waiting > 0 else 0.0
 
-            # Calculate logit using the metrics
+            # Have 1 metric that weights towards cache hit
+            # 2 metrics that penalize overloaded worker and queuing
             worker_logits[worker_id] = (
-                2.0 * score - 
-                metrics_dict['gpu_cache_usage_perc'] - 
-                normalized_waiting -
-                2 * metrics_dict['gpu_prefix_cache_hit_rate'] * normalized_waiting
+                2 * score -  # if cache hit is small will be close to 0. If cache hit is large will be close to 1.
+                metrics_dict['gpu_cache_usage_perc'] -
+                normalized_waiting
             )
-
-            # Print out the formula for each worker
-            vllm_logger.info(f"Formula for {worker_id}: {worker_logits[worker_id]:.4f} = 2.0 * {score:.4f} - 4.0 * {metrics_dict['gpu_prefix_cache_hit_rate']:.4f} - {metrics_dict['gpu_cache_usage_perc']:.4f} - {normalized_waiting:.4f}")
+            vllm_logger.info(f"Formula for {worker_id}: {worker_logits[worker_id]:.4f} = 2.0 * {score:.4f} - {metrics_dict['gpu_prefix_cache_hit_rate']:.4f} - {metrics_dict['gpu_cache_usage_perc']:.4f} - {normalized_waiting:.4f}")
 
         
         if not worker_logits or all(logit == 0 for logit in worker_logits.values()):
@@ -197,8 +202,9 @@ class CustomRouter:
             scores = await self.indexer.find_matches_for_request(
                 request.tokens, lora_id
             )
+            token_length = len(request.tokens)
             metrics = await self.metrics_aggregator.get_metrics()
-            worker_id = self._cost_function(scores, metrics)
+            worker_id = self._cost_function(scores, metrics, token_length)
 
         # [NOTE][TODO] Now that the scheduler may return more error messages,
         # now we are catching all exceptions and logging them. Should have
