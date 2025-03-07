@@ -13,22 +13,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
 import subprocess
+
+import pytest
 
 pytestmark = pytest.mark.gpu
 
 
 def test_detect_gpu():
     try:
-        find_cmd = ['find', '/proc/driver/nvidia/gpus', '-name', 'information', '-type', 'f', '-exec', 'cat', '{}', ';']
+        find_cmd = [
+            "find",
+            "/proc/driver/nvidia/gpus",
+            "-name",
+            "information",
+            "-type",
+            "f",
+            "-exec",
+            "cat",
+            "{}",
+            ";",
+        ]
         info_result = subprocess.run(find_cmd, capture_output=True, text=True)
         gpu_found = len(info_result.stdout.strip()) > 0
         if gpu_found:
             print(f"\nGPU information files content:\n{info_result.stdout}")
         else:
             print("No GPU information files found in /proc/driver/nvidia/gpus")
-    except:
+    except Exception as e:
+        print(f"Error checking for GPU: {e}")
         gpu_found = False
 
     assert gpu_found, "No NVIDIA GPUs detected!"
