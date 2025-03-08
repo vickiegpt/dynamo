@@ -26,7 +26,7 @@ class TritonResult:
     ERR = 1
 
 
-class KVCacheEventManager:
+class KVCacheEventPublisher:
     def __init__(self, namespace: str, component: str, worker_id: int, lib_path: str):
         self.lib = None
 
@@ -40,10 +40,10 @@ class KVCacheEventManager:
             )
             if result == TritonResult.OK:
                 logger.info(
-                    "KVCacheEventManager initialized successfully. Ready to publish KV Cache Events"
+                    "KVCacheEventPublisher initialized successfully. Ready to publish KV Cache Events"
                 )
             else:
-                logger.info("KVCacheEventManager initialization failed!")
+                logger.info("KVCacheEventPublisher initialization failed!")
 
         except Exception as e:
             print(f"Failed to load {lib_path}")

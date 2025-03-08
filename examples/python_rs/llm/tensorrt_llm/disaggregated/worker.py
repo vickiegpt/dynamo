@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import asyncio
 import json
 import os
@@ -47,9 +46,13 @@ from tensorrt_llm.serve.openai_protocol import CompletionRequest
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
 import traceback
+import weakref
+import queue
 import threading
 
 logger.set_level("debug")
+
+
 
 
 class WorkerId:
@@ -61,6 +64,8 @@ class WorkerId:
         return "%s^%s" % (self.completions_lease_id, self.chat_lease_id)
 
 
+
+
 def update_args_from_disagg_config(
     engine_config: LLMAPIConfig, server_config: CtxGenServerConfig
 ):
@@ -69,6 +74,7 @@ def update_args_from_disagg_config(
     engine_config.extra_args.update(**server_config.other_args)
     engine_config.update_sub_configs(server_config.other_args)
     return engine_config
+
 
 
 class TensorrtLLMEngine(BaseTensorrtLLMEngine):
@@ -82,8 +88,9 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         disagg_config: DisaggServerConfig,
         instance_idx: int,
         sub_comm,
-        metrics_publisher: KvMetricsPublisher,
         worker_id: WorkerId,
+        publish_stats: bool,
+        publish_kv_cache_events: bool,
     ):
         self.disagg_config = disagg_config
         self.instance_idx = instance_idx
@@ -97,56 +104,8 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         # needed for disagg
         self._mpi_session = MpiCommSession(sub_comm, n_workers=sub_comm.Get_size())
         engine_config.extra_args["_mpi_session"] = self._mpi_session
-        super().__init__(engine_config)
-
-        self.metrics_publisher = metrics_publisher
-
-        self.request_active_slots = 0
-        self.request_total_slots = 4
-        self.kv_active_block = 0
-        self.kv_total_blocks = 4
-
-        self.worker_id = worker_id
-
-        self._publishing_cv = threading.Condition()
-        self._token_generated = False
-
-        if self.metrics_publisher is not None:
-            # [NOTE] Now that the component must has proper metrics reported
-            # to be properly selected by the router
-            self.metrics_publisher.publish(
-                self.request_active_slots,
-                self.request_total_slots,
-                self.kv_active_block,
-                self.kv_total_blocks,
-            )
-
-            self._init_publishing_loop()
-            
-
-    def _init_publishing_loop(self):
-        self._publishing_thread = threading.Thread(
-            target=asyncio.run, args=(self._publishing_loop(),)
-        )
-        self._publishing_thread.start()
+        super().__init__(engine_config, worker_id, publish_stats, publish_kv_cache_events)
     
-    async def _publishing_loop(self):
-
-        # Wait for the first token to be generated to start query
-        # metrics and kv cache events from the engine.
-        with self._publishing_cv:
-            while not self._token_generated:
-                self._publishing_cv.wait()
-
-        logger.debug("TTanmay:: Start publishing loop")
-        try:
-            #stats = self._llm_engine.get_stats(timeout=5)
-            stats = "dummy"
-            logger.info(f"TTanmay:: Stats: {stats}")
-            #async for stat in stats:
-            #    logger.info(f"TTanmay:: Stats: {stat}")
-        except Exception as e:
-            logger.error(f"TTanmay:: Error in publishing loop: {traceback.format_exc()}")
 
 
 
@@ -154,6 +113,11 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
     async def generate_chat(self, request):
         if self._llm_engine is None:
             raise RuntimeError("Engine not initialized")
+
+        # Check if there are any errors in the error queue.
+        if self._error_queue.qsize() > 0:
+            error = self._error_queue.get()
+            raise error
 
         logger.debug(f"Received request: {request}")
         chat_processor = ChatProcessor(self._model, self._tokenizer, request)
@@ -231,6 +195,16 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
             signal.raise_signal(signal.SIGINT)
         except Exception as e:
             raise RuntimeError("Failed to generate: " + str(e))
+            
+        # Start the publishing threads with first request submission
+        self._stats_loop = asyncio.get_running_loop()
+        if self.publish_kv_cache_events_thread and not self.publish_kv_cache_events_thread.is_alive():
+            self.publish_kv_cache_events_thread.start()
+        
+        if self.publish_stats_thread and not self.publish_stats_thread.is_alive():
+            self.publish_stats_thread.start()
+
+
 
         self._ongoing_request_count -= 1
 
@@ -238,6 +212,11 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
     async def generate_completions(self, request):
         if self._llm_engine is None:
             raise RuntimeError("Engine not initialized")
+
+        # Check if there are any errors in the error queue.
+        if self._error_queue.qsize() > 0:
+            error = self._error_queue.get()
+            raise error
 
         self._ongoing_request_count += 1
         logger.debug(f"[worker] Received completions request: {request}")
@@ -278,31 +257,19 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         else:
             raise RuntimeError("Non-streaming is not supported")
         
-        if self.metrics_publisher is not None:
-            with self._publishing_cv:
-                if not self._token_generated:
-                    self._token_generated = True
-                    self._publishing_cv.notify_all()
-            try:
-                logger.info("DTTanmay:: Testing testing")
-                s = self._llm_engine.get_stats_async(timeout=5)
-                logger.info(f"DTTanmay:: Stats expect returned: {s}")
-                async for stat in s:
-                    logger.info(f"DTTanmay:: Stats expect generated: {stat}")
-            except Exception:
-                logger.error(f"DTTanmay:: Error in publishing loop: {traceback.format_exc()}")
+        # Start the publishing threads with first request submission
+        if self.publish_kv_cache_events_thread and not self.publish_kv_cache_events_thread.is_alive():
+            #[NOTE:] TRTLLM needs the stats to be collected on the same loop as the request handler.
+            self._stats_loop = asyncio.get_running_loop()
+            self.publish_kv_cache_events_thread.set_loop(self._stats_loop)
+            self.publish_kv_cache_events_thread.start()
+        
+        if self.publish_stats_thread and not self.publish_stats_thread.is_alive():
+            self._stats_loop = asyncio.get_running_loop()
+            self.publish_stats_thread.set_loop(self._stats_loop)
+            self.publish_stats_thread.start()
 
         self._ongoing_request_count -= 1
-
-    async def run_metrics_loop(self):
-        stats = self._llm_engine.get_stats_async(timeout=5)
-        async for stat in stats:
-            logger.info(f"Tanmay:: Stats: {stat}")
-
-    async def run_kv_cache_event_loop(self):
-        stats = self._llm_engine.get_kv_cache_events_async(timeout=5)
-        async for stat in stats:
-            logger.info(f"Tanmay:: Events: {stat}")
 
 
 @dynamo_worker()
@@ -312,7 +279,8 @@ async def worker(
     disagg_config: DisaggServerConfig,
     instance_idx: int,
     sub_comm,
-    publish_kv_events: bool,
+    publish_stats: bool,
+    publish_kv_cache_events: bool,
 ):
     """
     Instantiate a `backend` component and serve the `generate` endpoint
@@ -327,25 +295,24 @@ async def worker(
     completions_endpoint = component.endpoint("completions")
     chat_endpoint = component.endpoint("chat/completions")
 
-    # Only publish events for ctx server.
-    metrics_publisher = None
-    if publish_kv_events:
-        if server_type == "ctx":
-            metrics_publisher = KvMetricsPublisher()
-        else:
-            logger.warning("KV events can only be published for ctx server")
+    if server_type == "gen":
+       if publish_stats:
+           logger.warning("Stats can only be published for ctx server")
+           publish_stats = False
+       if publish_kv_cache_events:
+           logger.warning("KV cache events can only be published for ctx server")
+           publish_kv_cache_events = False
 
     worker_id = WorkerId(completions_endpoint.lease_id(), chat_endpoint.lease_id()).id()
-
-    logger.debug(f"Tanmay:: Worker ID: {worker_id}")
 
     engine = TensorrtLLMEngine(
         engine_config,
         disagg_config,
         instance_idx,
         sub_comm,
-        metrics_publisher,
         worker_id,
+        publish_stats,
+        publish_kv_cache_events,
     )
 
     coros = [
@@ -386,7 +353,8 @@ if __name__ == "__main__":
                 disagg_config,
                 instance_idx,
                 sub_comm,
-                args.publish_kv_events,
+                args.publish_stats,
+                args.publish_kv_cache_events,
             )
         )
     else:
