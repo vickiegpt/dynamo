@@ -66,7 +66,7 @@ CUDA_VISIBLE_DEVICES=0,1 python3 prefill_worker.py \
     --max-model-len 10000 \
     --max-num-seqs 2 \
     --block-size 128 \
-    --kv-transfer-config '{"kv_connector":"DynemoNixlConnector", "use_prepped_xfer":true}' &
+    --kv-transfer-config '{"kv_connector":"DynamoNixlConnector", "use_prepped_xfer":true}' &
 
 echo "Starting prefill worker..."
 
@@ -76,7 +76,7 @@ CUDA_VISIBLE_DEVICES=2,3 python3 prefill_worker.py \
     --max-model-len 10000 \
     --max-num-seqs 2 \
     --block-size 128 \
-    --kv-transfer-config '{"kv_connector":"DynemoNixlConnector", "use_prepped_xfer":true}' &
+    --kv-transfer-config '{"kv_connector":"DynamoNixlConnector", "use_prepped_xfer":true}' &
 
 
 echo "Starting decode worker..."
@@ -87,7 +87,7 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 python3 worker.py \
     --tensor-parallel-size 4 \
     --max-model-len 3500 \
     --block-size 128 \
-    --kv-transfer-config '{"kv_connector":"DynemoNixlConnector", "use_prepped_xfer":true}' &
+    --kv-transfer-config '{"kv_connector":"DynamoNixlConnector", "use_prepped_xfer":true}' &
 
 echo "Running benchmark..."
 

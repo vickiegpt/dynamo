@@ -62,14 +62,14 @@ echo "Starting prefill worker..."
 
 CUDA_VISIBLE_DEVICES=0 python3 prefill_worker.py \
     --model $CHAT_MODEL_NAME \
-    --kv-transfer-config '{"kv_connector":"DynemoNixlConnector", "use_prepped_xfer":true}' &
+    --kv-transfer-config '{"kv_connector":"DynamoNixlConnector", "use_prepped_xfer":true}' &
 
 echo "Starting decode worker..."
 
 CUDA_VISIBLE_DEVICES=1 python3 worker.py \
     --remote-prefill \
     --model $CHAT_MODEL_NAME \
-    --kv-transfer-config '{"kv_connector":"DynemoNixlConnector", "use_prepped_xfer":true}' &
+    --kv-transfer-config '{"kv_connector":"DynamoNixlConnector", "use_prepped_xfer":true}' &
 
 
 echo "Running benchmark..."
