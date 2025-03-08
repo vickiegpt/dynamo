@@ -143,7 +143,7 @@ This is the internal script used by the `.sh` scripts to drive concurrency- or r
 - `--osl`: Output sequence length.
 - `--model`: Model name (must match your endpoint).
 - `--tokenizer`: Tokenizer name (passed to `genai-perf`).
-- `--url`: Endpoint base URL.
+- `--url`: Endpoint base URL like ``http://localhost:8080``. The chat completions part ``v1/chat/completions`` is add inside script at the end of base URL.
 - `--artifact-dir`: Where to store the run artifacts.
 - `--load-type`: `rps` or `concurrency`.
 - `--load-value`: For concurrency, how many concurrent requests. For RPS, the request rate per second.
