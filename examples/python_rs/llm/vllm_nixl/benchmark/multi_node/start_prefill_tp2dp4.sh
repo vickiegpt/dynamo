@@ -50,7 +50,7 @@ CUDA_VISIBLE_DEVICES=0,1 python3 prefill_worker.py \
     --max-model-len $MAX_MODEL_LEN \
     --max-num-seqs $MAX_NUM_SEQS \
     --block-size $BLOCK_SIZE \
-    --kv-transfer-config '{"kv_connector":"DynamoNixlConnector"}' &
+    --kv-transfer-config '{"kv_connector":"DynemoNixlConnector", "use_prepped_xfer":true}' &
 
 echo "Starting prefill worker..."
 
@@ -60,7 +60,7 @@ CUDA_VISIBLE_DEVICES=2,3 python3 prefill_worker.py \
     --max-model-len $MAX_MODEL_LEN \
     --max-num-seqs $MAX_NUM_SEQS \
     --block-size $BLOCK_SIZE \
-    --kv-transfer-config '{"kv_connector":"DynamoNixlConnector"}' &
+    --kv-transfer-config '{"kv_connector":"DynemoNixlConnector", "use_prepped_xfer":true}' &
 
 echo "Starting prefill worker..."
 
@@ -70,7 +70,7 @@ CUDA_VISIBLE_DEVICES=4,5 python3 prefill_worker.py \
     --max-model-len $MAX_MODEL_LEN \
     --max-num-seqs $MAX_NUM_SEQS \
     --block-size $BLOCK_SIZE \
-    --kv-transfer-config '{"kv_connector":"DynamoNixlConnector"}' &
+    --kv-transfer-config '{"kv_connector":"DynemoNixlConnector", "use_prepped_xfer":true}' &
 
 
 echo "Starting prefill worker..."
@@ -81,6 +81,6 @@ CUDA_VISIBLE_DEVICES=6,7 python3 prefill_worker.py \
     --max-model-len $MAX_MODEL_LEN \
     --max-num-seqs $MAX_NUM_SEQS \
     --block-size $BLOCK_SIZE \
-    --kv-transfer-config '{"kv_connector":"DynamoNixlConnector"}'
+    --kv-transfer-config '{"kv_connector":"DynemoNixlConnector", "use_prepped_xfer":true}'
 
 

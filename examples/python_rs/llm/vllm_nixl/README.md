@@ -65,7 +65,7 @@ CUDA_VISIBLE_DEVICES=0 python prefill_worker.py \
     --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B \
     --enforce-eager \
     --kv-transfer-config \
-    '{"kv_connector":"DynamoNixlConnector"}'
+    '{"kv_connector":"DynemoNixlConnector", "use_prepped_xfer":true}'
 ```
 
 In terminal 2:
@@ -78,7 +78,7 @@ CUDA_VISIBLE_DEVICES=1,2 python3 worker.py \
     --enforce-eager \
     --tensor-parallel-size 2 \
     --kv-transfer-config \
-    '{"kv_connector":"DynamoNixlConnector"}'
+    '{"kv_connector":"DynemoNixlConnector", "use_prepped_xfer":true}'
 ```
 
 

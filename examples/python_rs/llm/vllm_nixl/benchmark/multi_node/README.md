@@ -91,22 +91,6 @@ Below are instructions on script usage, a typical sequence of operations for a m
   This stores artifacts in `./artifacts/isl_shared_0_isl_unique_3000_osl_150/<configuration-prefix>/...`.
 </details>
 
-<details>
-<summary><strong>benchmark.py</strong></summary>
-
-- **Purpose**: Internal Python script that actually runs the load test using `genai-perf profile`. Waits for readiness and then executes a concurrency or RPS-based test. Normally, you don't call this directly if you're using `benchmark_loop.sh`, but you _can_ if you want more granular control.
-</details>
-
-<details>
-<summary><strong>process_results.py</strong></summary>
-
-- **Purpose**: Gathers all JSON artifacts from the `benchmark.py` runs and produces CSV and PNG plots (throughput, latency, Pareto, etc.).
-- **Usage**:
-  ```bash
-  python3 process_results.py /path/to/artifacts "Your Title Here"
-  ```
-  The scripts like `bench_8GPUs_70B.sh` or `bench_2GPUs_8B.sh` normally invoke this automatically. For multi-node, you can do it manually once you have all concurrency results.
-</details>
 
 <details>
 <summary><strong>Other helper scripts</strong></summary>
