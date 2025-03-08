@@ -74,6 +74,8 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
 
     def __init__(
         self,
+        namespace_str: str,
+        component_str: str,
         engine_config: LLMAPIConfig,
         disagg_config: DisaggServerConfig,
         instance_idx: int,
@@ -95,7 +97,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         self._mpi_session = MpiCommSession(sub_comm, n_workers=sub_comm.Get_size())
         engine_config.extra_args["_mpi_session"] = self._mpi_session
         super().__init__(
-            engine_config, worker_id, publish_stats, publish_kv_cache_events
+            namespace_str, component_str, engine_config, worker_id, publish_stats, publish_kv_cache_events
         )
 
     @dynamo_endpoint(DisaggChatCompletionRequest, DisaggChatCompletionStreamResponse)
@@ -284,7 +286,10 @@ async def worker(
     server_type = disagg_config.server_configs[instance_idx].type
     logger.info(f"Starting {server_type} server")
 
-    component = runtime.namespace("dynamo").component(f"tensorrt-llm-{server_type}")
+    namespace_str = "dynamo"
+    component_str = f"tensorrt-llm-{server_type}"
+
+    component = runtime.namespace(namespace_str).component(component_str)
     await component.create_service()
 
     completions_endpoint = component.endpoint("completions")
@@ -298,9 +303,15 @@ async def worker(
             logger.warning("KV cache events can only be published for ctx server")
             publish_kv_cache_events = False
 
-    worker_id = WorkerId(completions_endpoint.lease_id(), chat_endpoint.lease_id()).id()
+    # NOTE: Current implementation adds two enpoints. We can refactor this code to expose only one endpoint.
+    # and handle both completions and chat in the same endpoint.
+    # Currently, we are using completions endpoint lease id as worker id. 
+    # I believe this might cause some issues using smart routing with chat completions endpoint.
+    worker_id = completions_endpoint.lease_id()
 
     engine = TensorrtLLMEngine(
+        namespace_str,
+        component_str,
         engine_config,
         disagg_config,
         instance_idx,

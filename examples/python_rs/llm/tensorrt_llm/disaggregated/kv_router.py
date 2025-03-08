@@ -28,7 +28,6 @@ from common.protocol import (
     DisaggCompletionStreamResponse,
     RoutingStrategy,
     Tokens,
-    WorkerId,
 )
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import CompletionRequest, DisaggregatedParams
@@ -53,8 +52,8 @@ class KVRouterWrapper:
         self.kv_router = kv_router
         self.routing_strategy = routing_strategy
 
-    @triton_endpoint(Tokens, WorkerId)
-    async def generate(self, request) -> AsyncIterator[WorkerId]:
+    @triton_endpoint(Tokens, str)
+    async def generate(self, request) -> AsyncIterator[str]:
         lora_id = 0
         worker_id = None
         if self.routing_strategy == RoutingStrategy.PREFIX:
@@ -72,17 +71,6 @@ class KVRouterWrapper:
             raise NotImplementedError(
                 f"Routing strategy {self.routing_strategy} not implemented"
             )
-
-
-def get_worker_id(encoded_worker_id, type):
-    """
-    encoded_worker_id is a string of the form "completions_lease_id^chat_lease_id"
-    This function returns the worker id based on the type of the endpoint.
-    """
-    return (encoded_worker_id.data()).split("^")[
-        0 if type == EndpointType.COMPLETIONS else 1
-    ]
-
 
 class Router(ChatProcessorMixin):
     def __init__(
@@ -115,11 +103,10 @@ class Router(ChatProcessorMixin):
             Tokens(tokens=token_ids).model_dump_json()
         )
 
-        # TODO: Tanmay: Get the lease id from the worker id.
-        encoded_worker_id = (
+        worker_id = (
             await worker_id_generator.__anext__()
         )  # only one worker id is returned
-        worker_id = get_worker_id(encoded_worker_id.data(), type)
+    
 
         request.max_tokens = 1
         request.disaggregated_params = DisaggregatedParams(request_type="context_only")

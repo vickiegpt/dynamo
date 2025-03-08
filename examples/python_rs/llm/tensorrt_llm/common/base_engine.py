@@ -27,6 +27,7 @@ from common.processor import ChatProcessor, CompletionsProcessor
 from tensorrt_llm._torch import LLM
 from tensorrt_llm.logger import logger
 from transformers import AutoTokenizer
+from triton_distributed.llm import KvMetricsPublisher
 
 
 class ChatProcessorMixin:
@@ -124,6 +125,8 @@ class ManagedThread(threading.Thread):
 class BaseTensorrtLLMEngine(ChatProcessorMixin):
     def __init__(
         self,
+        namespace_str: str,
+        component_str: str,
         engine_config: LLMAPIConfig,
         worker_id: str,
         publish_stats: bool = False,
@@ -131,9 +134,12 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
     ):
         super().__init__(engine_config)
         logger.info(f"Using LLM API config: {self._engine_config}")
+        self.namespace_str = namespace_str
+        self.component_str = component_str
         self._worker_id = worker_id
         self._publish_stats = publish_stats
         self._publish_kv_cache_events = publish_kv_cache_events
+
         self._init_engine()
 
     def _init_engine(self):
@@ -177,21 +183,18 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
             raise e
 
     def _init_publish_metrics_thread(self):
-        """
-        self.kv_metrics_publisher = KvMetricsPublisher()
+        self._kv_metrics_publisher = KvMetricsPublisher()
         request_active_slots = 0
         request_total_slots = 4
         kv_active_block = 0
         kv_total_blocks = 4
-        # [NOTE] Publish initial metrics to the metrics publisher
-        # so that the router can select this worker.
-        self.kv_metrics_publisher.publish(
+  
+        self._kv_metrics_publisher.publish(
             request_active_slots,
             request_total_slots,
             kv_active_block,
             kv_total_blocks,
         )
-        """
 
         # Prepare threads for publishing stats but don't start them yet.
         # TRTLLM needs to start generating tokens first before stats
@@ -207,6 +210,8 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         # Prepare threads for publishing kv cache events but don't start them yet.
         # TRTLLM needs to start generating tokens first before kv cache events
         # can be retrieved.
+        lib_path = "/opt/triton/bindings/lib/libtriton_distributed_llm_capi.so"
+        self._kv_cache_events_publisher = KVCacheEventPublisher(self.namespace_str, self.component_str, self._worker_id, lib_path)
         self.publish_kv_cache_events_thread = ManagedThread(
             self.publish_kv_cache_events_task,
             error_queue=self._error_queue,
@@ -217,12 +222,18 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         """
         Publish stats to the metrics publisher.
         """
-        logger.info("Tanmay:: Stats: Starting")
         stats = self._llm_engine.get_stats_async(timeout=5)
         async for stat in stats:
-            logger.info(f"Tanmay:: Stats: {stat}")
-
-        await asyncio.sleep(5)
+            request_active_slots = stat['numActiveRequests']
+            request_total_slots = stat['maxNumActiveRequests']
+            kv_active_block = stat['kvCacheStats']['usedNumBlocks']
+            kv_total_blocks = stat['kvCacheStats']['maxNumBlocks']
+            self._kv_metrics_publisher.publish(
+                request_active_slots,
+                request_total_slots,
+                kv_active_block,
+                kv_total_blocks,)
+            logger.debug(f"Published stats: request_active_slots: {request_active_slots}, request_total_slots: {request_total_slots}, kv_active_block: {kv_active_block}, kv_total_blocks: {kv_total_blocks}")
 
         return True
 
@@ -230,13 +241,32 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         """
         Publish kv cache events to the events publisher.
         """
-        logger.info("Tanmay:: Events: Starting")
         events = self._llm_engine.get_kv_cache_events_async(timeout=5)
-        async for event in events:
-            logger.info(f"Tanmay:: Events: {event}")
-
-        await asyncio.sleep(5)
-
+        async for event_list in events:
+            for event in event_list:
+                logger.debug(f"Debugging: Event: {event}")
+                id = event['event_id']
+                data = event['data']
+                if data['type'] == 'stored':
+                    parent_hash = data['parent_hash']
+                    token_ids = []
+                    block_hashes = []
+                    for block in data['blocks']:
+                        block_hash = block['block_hash']
+                        block_hashes.append(block_hash)
+                        for token in block['tokens']:
+                            # TODO: How to handle token_extra_id?
+                            token_ids.append(token['token_id'])
+                    # Publish the stored event
+                    self._kv_cache_events_publisher.stored_event(id, parent_hash, block_hashes, token_ids)
+                    logger.debug(f"Published stored event: {id}, parent_hash: {parent_hash}, block_hashes: {block_hashes}, token_ids: {token_ids}")
+                elif data['type'] == 'removed':
+                    # Publish the removed event
+                    block_hashes = []
+                    for block_hash in data['block_hashes']:
+                        block_hashes.append(block_hash)
+                    self._kv_cache_events_publisher.removed_event(id, block_hashes)
+                    logger.debug(f"Published removed event: {id}, block_hashes: {block_hashes}")
         return True
 
     async def _run_llm_engine(self):
