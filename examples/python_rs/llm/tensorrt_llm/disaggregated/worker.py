@@ -77,7 +77,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
             instance_idx
         ]
         engine_config = update_args_from_disagg_config(
-            engine_config, self.server_config
+            trt_llm_engine_config.engine_config, self.server_config
         )
         trt_llm_engine_config.engine_config = engine_config
 
@@ -86,7 +86,6 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         trt_llm_engine_config.extra_args["_mpi_session"] = self._mpi_session
 
         super().__init__(trt_llm_engine_config)
-
 
     @dynamo_endpoint(DisaggChatCompletionRequest, DisaggChatCompletionStreamResponse)
     async def generate_chat(self, request):
@@ -295,7 +294,7 @@ async def worker(
         component_str=component_str,
         engine_config=engine_config,
         publish_stats=publish_stats,
-        publish_kv_cache_events=publish_kv_cache_events, 
+        publish_kv_cache_events=publish_kv_cache_events,
     )
 
     # NOTE: Current implementation adds two endpoints. We can refactor this code to expose only one endpoint.
@@ -303,7 +302,7 @@ async def worker(
     # Currently, we are using completions endpoint lease id as worker id.
     # I believe this might cause some issues using smart routing with chat completions endpoint.
     trt_llm_engine_config.worker_id = completions_endpoint.lease_id()
-    
+
     if publish_stats:
         trt_llm_engine_config.kv_metrics_publisher = KvMetricsPublisher()
 
@@ -319,7 +318,9 @@ async def worker(
         chat_endpoint.serve_endpoint(engine.generate_chat),
     ]
     if publish_stats:
-        coros.append(trt_llm_engine_config.kv_metrics_publisher.create_endpoint(component))
+        coros.append(
+            trt_llm_engine_config.kv_metrics_publisher.create_endpoint(component)
+        )
 
     await asyncio.gather(*coros)
 

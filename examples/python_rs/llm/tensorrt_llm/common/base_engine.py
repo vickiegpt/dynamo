@@ -16,8 +16,8 @@
 
 import asyncio
 import threading
-
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from queue import Queue
 from typing import Any, Optional
 
@@ -28,7 +28,6 @@ from common.utils import ManagedThread
 from tensorrt_llm._torch import LLM
 from tensorrt_llm.logger import logger
 from transformers import AutoTokenizer
-from dataclasses import dataclass
 
 from dynamo.llm import KvMetricsPublisher
 

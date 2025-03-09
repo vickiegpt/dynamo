@@ -14,15 +14,15 @@
 # limitations under the License.
 
 
-
-import traceback
-import weakref
 import asyncio
 import threading
-from typing import Callable, Optional
+import traceback
+import weakref
 from queue import Queue
+from typing import Callable, Optional
 
 from tensorrt_llm.logger import logger
+
 
 class ManagedThread(threading.Thread):
     def __init__(
