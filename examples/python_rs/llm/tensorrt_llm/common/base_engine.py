@@ -130,6 +130,7 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         component_str: str,
         engine_config: LLMAPIConfig,
         worker_id: str,
+        kv_metrics_publisher: KvMetricsPublisher,
         publish_stats: bool = False,
         publish_kv_cache_events: bool = False,
     ):
@@ -138,6 +139,7 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         self.namespace_str = namespace_str
         self.component_str = component_str
         self._worker_id = worker_id
+        self._kv_metrics_publisher = kv_metrics_publisher
         self._publish_stats = publish_stats
         self._publish_kv_cache_events = publish_kv_cache_events
 
@@ -184,7 +186,6 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
             raise e
 
     def _init_publish_metrics_thread(self):
-        self._kv_metrics_publisher = KvMetricsPublisher()
         request_active_slots = 0
         request_total_slots = 4
         kv_active_block = 0

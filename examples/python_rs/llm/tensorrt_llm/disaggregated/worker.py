@@ -48,14 +48,6 @@ from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 logger.set_level("debug")
 
 
-class WorkerId:
-    def __init__(self, completions_lease_id: str, chat_lease_id: str):
-        self.completions_lease_id = completions_lease_id
-        self.chat_lease_id = chat_lease_id
-
-    def id(self):
-        return "%s^%s" % (self.completions_lease_id, self.chat_lease_id)
-
 
 def update_args_from_disagg_config(
     engine_config: LLMAPIConfig, server_config: CtxGenServerConfig
@@ -80,7 +72,8 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         disagg_config: DisaggServerConfig,
         instance_idx: int,
         sub_comm,
-        worker_id: WorkerId,
+        worker_id: str,
+        kv_metrics_publisher: KvMetricsPublisher,
         publish_stats: bool,
         publish_kv_cache_events: bool,
     ):
@@ -97,7 +90,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         self._mpi_session = MpiCommSession(sub_comm, n_workers=sub_comm.Get_size())
         engine_config.extra_args["_mpi_session"] = self._mpi_session
         super().__init__(
-            namespace_str, component_str, engine_config, worker_id, publish_stats, publish_kv_cache_events
+            namespace_str, component_str, engine_config, worker_id, kv_metrics_publisher, publish_stats, publish_kv_cache_events
         )
 
     @dynamo_endpoint(DisaggChatCompletionRequest, DisaggChatCompletionStreamResponse)
@@ -309,6 +302,10 @@ async def worker(
     # I believe this might cause some issues using smart routing with chat completions endpoint.
     worker_id = completions_endpoint.lease_id()
 
+    kv_metrics_publisher = None
+    if publish_stats:
+        kv_metrics_publisher = KvMetricsPublisher()
+
     engine = TensorrtLLMEngine(
         namespace_str,
         component_str,
@@ -317,6 +314,7 @@ async def worker(
         instance_idx,
         sub_comm,
         worker_id,
+        kv_metrics_publisher,
         publish_stats,
         publish_kv_cache_events,
     )
@@ -325,6 +323,8 @@ async def worker(
         completions_endpoint.serve_endpoint(engine.generate_completions),
         chat_endpoint.serve_endpoint(engine.generate_chat),
     ]
+    if publish_stats:
+        coros.append(kv_metrics_publisher.create_endpoint(component))
 
     await asyncio.gather(*coros)
 
