@@ -16,18 +16,19 @@
 
 import asyncio
 import threading
-import traceback
-import weakref
+
 from contextlib import asynccontextmanager
 from queue import Queue
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from common.kv_cache_event_publisher import KVCacheEventPublisher
 from common.parser import LLMAPIConfig
 from common.processor import ChatProcessor, CompletionsProcessor
+from common.utils import ManagedThread
 from tensorrt_llm._torch import LLM
 from tensorrt_llm.logger import logger
 from transformers import AutoTokenizer
+from dataclasses import dataclass
 
 from dynamo.llm import KvMetricsPublisher
 
@@ -35,7 +36,7 @@ from dynamo.llm import KvMetricsPublisher
 class ChatProcessorMixin:
     def __init__(self, engine_config: LLMAPIConfig):
         self._engine_config = engine_config
-        logger.info(f"Using LLM API config: {engine_config.to_dict()}")
+        logger.info(f"Using LLM API config: {self._engine_config.to_dict()}")
         # model name for chat processor
         self._model_name = self._engine_config.model_name
         logger.info(f"Set model name: {self._model_name}")
@@ -63,86 +64,29 @@ class ChatProcessorMixin:
         self.completions_processor = CompletionsProcessor(self._model_name)
 
 
-class ManagedThread(threading.Thread):
-    """A thread that will put exceptions into an external queue if the task fails.
-
-    There are two approaches to stop the thread:
-        1. Set stop_event to stop the loop
-        2. Let `task` return False
-
-    Args:
-        task (Callable[..., bool]): The task to run repeatedly in the thread, should return False if break the loop.
-        error_queue (Queue): The queue to put exceptions into if the task fails.
-        name (str): The name of the thread.
-        **kwargs: The arguments to pass to the task
-    """
-
-    def __init__(
-        self,
-        task: Callable[..., bool],
-        error_queue: Queue,
-        name: Optional[str] = None,
-        loop: Optional[asyncio.AbstractEventLoop] = None,
-        **kwargs,
-    ):
-        super().__init__(name=name)
-        self.task = task
-        self.error_queue = error_queue
-        self.kwargs = kwargs
-        self.loop = loop
-        self.daemon = True
-
-        self.stop_event = threading.Event()
-
-    def set_loop(self, loop: asyncio.AbstractEventLoop):
-        self.loop = loop
-
-    def run(self):
-        while not self.stop_event.is_set():
-            task = self.task
-            if isinstance(task, weakref.WeakMethod):
-                task = task()
-                if task is None:
-                    # Normally, this should not happen.
-                    logger.warning("WeakMethod is expired.")
-                    break
-
-            try:
-                future = asyncio.run_coroutine_threadsafe(
-                    task(**self.kwargs), self.loop
-                )
-                _ = future.result()
-            except Exception as e:
-                logger.error(
-                    f"Error in thread {self.name}: {e}\n{traceback.format_exc()}"
-                )
-                self.error_queue.put(e)
-
-        logger.info(f"Thread {self.name} stopped.")
-
-    def stop(self):
-        self.stop_event.set()
+@dataclass()
+class TensorrtLLMEngineConfig:
+    namespace_str: str = "dynamo"
+    component_str: str = "tensorrt-llm"
+    engine_config: LLMAPIConfig = None
+    worker_id: str = None
+    kv_metrics_publisher: KvMetricsPublisher = None
+    publish_stats: bool = False
+    publish_kv_cache_events: bool = False
 
 
 class BaseTensorrtLLMEngine(ChatProcessorMixin):
     def __init__(
         self,
-        namespace_str: str,
-        component_str: str,
-        engine_config: LLMAPIConfig,
-        worker_id: str,
-        kv_metrics_publisher: KvMetricsPublisher,
-        publish_stats: bool = False,
-        publish_kv_cache_events: bool = False,
+        trt_llm_engine_config: TensorrtLLMEngineConfig,
     ):
-        super().__init__(engine_config)
-        logger.info(f"Using LLM API config: {self._engine_config}")
-        self.namespace_str = namespace_str
-        self.component_str = component_str
-        self._worker_id = worker_id
-        self._kv_metrics_publisher = kv_metrics_publisher
-        self._publish_stats = publish_stats
-        self._publish_kv_cache_events = publish_kv_cache_events
+        super().__init__(trt_llm_engine_config.engine_config)
+        self._namespace_str = trt_llm_engine_config.namespace_str
+        self._component_str = trt_llm_engine_config.component_str
+        self._worker_id = trt_llm_engine_config.worker_id
+        self._kv_metrics_publisher = trt_llm_engine_config.kv_metrics_publisher
+        self._publish_stats = trt_llm_engine_config.publish_stats
+        self._publish_kv_cache_events = trt_llm_engine_config.publish_kv_cache_events
 
         self._init_engine()
 
@@ -187,11 +131,12 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
             raise e
 
     def _init_publish_metrics_thread(self):
+        # Need to publish stats once so that worker can be selected.
+        # Publishing some dummy values...
         request_active_slots = 0
         request_total_slots = 4
         kv_active_block = 0
         kv_total_blocks = 4
-
         self._kv_metrics_publisher.publish(
             request_active_slots,
             request_total_slots,
@@ -214,7 +159,7 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         # can be retrieved.
         lib_path = "/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
         self._kv_cache_events_publisher = KVCacheEventPublisher(
-            self.namespace_str, self.component_str, self._worker_id, lib_path
+            self._namespace_str, self._component_str, self._worker_id, lib_path
         )
         self.publish_kv_cache_events_thread = ManagedThread(
             self.publish_kv_cache_events_task,

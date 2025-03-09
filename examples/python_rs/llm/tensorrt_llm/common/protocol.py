@@ -36,9 +36,6 @@ class RoutingStrategy(Enum):
     RANDOM = "random"
 
 
-WorkerId = str
-
-
 class Tokens(BaseModel):
     tokens: list[int]
 

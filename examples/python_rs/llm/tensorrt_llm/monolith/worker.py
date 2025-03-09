@@ -132,12 +132,6 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
             async for response in response_generator:
                 yield json.loads(response)
 
-            logger.info("Dynemo:: Stats going to call")
-            stats = self._llm_engine.get_stats_async(timeout=5)
-            async for stat in stats:
-                logger.info(f"Dynemo:: Stats: {stat}")
-            logger.info("Dynemo:: Stats: Over")
-
             self._ongoing_request_count -= 1
         except CppExecutorError:
             # If internal executor error is raised, shutdown the server

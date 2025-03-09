@@ -63,7 +63,7 @@ class KVRouterWrapper:
                 )
                 worker_id = ""
 
-            logger.info(f"Scheduling to worker_id: {worker_id}")
+            logger.debug(f"Scheduling to worker_id: {worker_id}")
 
             yield str(worker_id)
 

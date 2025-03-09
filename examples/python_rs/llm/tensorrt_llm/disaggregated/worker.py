@@ -19,7 +19,7 @@ import os
 import signal
 
 import uvloop
-from common.base_engine import BaseTensorrtLLMEngine
+from common.base_engine import BaseTensorrtLLMEngine, TensorrtLLMEngineConfig
 from common.disagg_processor import ChatProcessor, parse_chat_message_content
 from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
 from common.processor import merge_promises
@@ -66,16 +66,10 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
 
     def __init__(
         self,
-        namespace_str: str,
-        component_str: str,
-        engine_config: LLMAPIConfig,
+        trt_llm_engine_config: TensorrtLLMEngineConfig,
         disagg_config: DisaggServerConfig,
         instance_idx: int,
         sub_comm,
-        worker_id: str,
-        kv_metrics_publisher: KvMetricsPublisher,
-        publish_stats: bool,
-        publish_kv_cache_events: bool,
     ):
         self.disagg_config = disagg_config
         self.instance_idx = instance_idx
@@ -85,19 +79,14 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         engine_config = update_args_from_disagg_config(
             engine_config, self.server_config
         )
+        trt_llm_engine_config.engine_config = engine_config
 
         # needed for disagg
         self._mpi_session = MpiCommSession(sub_comm, n_workers=sub_comm.Get_size())
-        engine_config.extra_args["_mpi_session"] = self._mpi_session
-        super().__init__(
-            namespace_str,
-            component_str,
-            engine_config,
-            worker_id,
-            kv_metrics_publisher,
-            publish_stats,
-            publish_kv_cache_events,
-        )
+        trt_llm_engine_config.extra_args["_mpi_session"] = self._mpi_session
+
+        super().__init__(trt_llm_engine_config)
+
 
     @dynamo_endpoint(DisaggChatCompletionRequest, DisaggChatCompletionStreamResponse)
     async def generate_chat(self, request):
@@ -301,27 +290,28 @@ async def worker(
             logger.warning("KV cache events can only be published for ctx server")
             publish_kv_cache_events = False
 
+    trt_llm_engine_config = TensorrtLLMEngineConfig(
+        namespace_str=namespace_str,
+        component_str=component_str,
+        engine_config=engine_config,
+        publish_stats=publish_stats,
+        publish_kv_cache_events=publish_kv_cache_events, 
+    )
+
     # NOTE: Current implementation adds two endpoints. We can refactor this code to expose only one endpoint.
     # and handle both completions and chat in the same endpoint.
     # Currently, we are using completions endpoint lease id as worker id.
     # I believe this might cause some issues using smart routing with chat completions endpoint.
-    worker_id = completions_endpoint.lease_id()
-
-    kv_metrics_publisher = None
+    trt_llm_engine_config.worker_id = completions_endpoint.lease_id()
+    
     if publish_stats:
-        kv_metrics_publisher = KvMetricsPublisher()
+        trt_llm_engine_config.kv_metrics_publisher = KvMetricsPublisher()
 
     engine = TensorrtLLMEngine(
-        namespace_str,
-        component_str,
-        engine_config,
+        trt_llm_engine_config,
         disagg_config,
         instance_idx,
         sub_comm,
-        worker_id,
-        kv_metrics_publisher,
-        publish_stats,
-        publish_kv_cache_events,
     )
 
     coros = [
@@ -329,7 +319,7 @@ async def worker(
         chat_endpoint.serve_endpoint(engine.generate_chat),
     ]
     if publish_stats:
-        coros.append(kv_metrics_publisher.create_endpoint(component))
+        coros.append(trt_llm_engine_config.kv_metrics_publisher.create_endpoint(component))
 
     await asyncio.gather(*coros)
 
