@@ -197,6 +197,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
 
     @dynamo_endpoint(CompletionRequest, DisaggCompletionStreamResponse)
     async def generate_completions(self, request):
+        logger.debug(f"[worker] worker_id: {self._worker_id} received request")
         if self._llm_engine is None:
             raise RuntimeError("Engine not initialized")
 
