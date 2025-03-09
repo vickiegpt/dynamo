@@ -1,33 +1,35 @@
+import asyncio
+import json
+from typing import AsyncGenerator, AsyncIterator
+
+import uvloop
+from common.parser import parse_vllm_args
+from vllm.config import ModelConfig
 from vllm.engine.arg_utils import AsyncEngineArgs
-from vllm.engine.async_llm_engine import AsyncLLMEngine
-from vllm.entrypoints.openai.serving_completion import OpenAIServingCompletion
-from vllm.entrypoints.openai.serving_chat import OpenAIServingChat
+from vllm.engine.protocol import EngineClient
 from vllm.entrypoints.openai.api_server import (
     build_async_engine_client_from_engine_args,
 )
-from vllm.entrypoints.openai.serving_models import BaseModelPath, OpenAIServingModels
-from common.parser import parse_vllm_args
-from vllm.config import ModelConfig
 from vllm.entrypoints.openai.protocol import (
     ChatCompletionRequest,
+    ChatCompletionResponse,
     ChatCompletionStreamResponse,
     CompletionRequest,
+    CompletionResponse,
     CompletionStreamResponse,
     ErrorResponse,
-    ChatCompletionResponse,
-    CompletionResponse
 )
-from vllm.logger import logger as vllm_logger
+from vllm.entrypoints.openai.serving_chat import OpenAIServingChat
+from vllm.entrypoints.openai.serving_completion import OpenAIServingCompletion
+from vllm.entrypoints.openai.serving_models import BaseModelPath, OpenAIServingModels
 
-from dynemo.runtime import DistributedRuntime, dynemo_endpoint, dynemo_worker
-import asyncio
-import uvloop
-import json
-from typing import AsyncGenerator, AsyncIterator
-from vllm.engine.protocol import EngineClient
+from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
+
 
 class VllmEngine:
-    def __init__(self, engine_client: AsyncIterator[EngineClient], model_config: ModelConfig):
+    def __init__(
+        self, engine_client: AsyncIterator[EngineClient], model_config: ModelConfig
+    ):
         self.engine_client = engine_client
         self.model_config = model_config
 
@@ -60,7 +62,7 @@ class VllmEngine:
             request_logger=None,
         )
 
-    @dynemo_endpoint(ChatCompletionRequest, ChatCompletionStreamResponse)
+    @dynamo_endpoint(ChatCompletionRequest, ChatCompletionStreamResponse)
     async def generate_chat(self, request):
         result = await self.chat_serving.create_chat_completion(request)
 
@@ -85,7 +87,7 @@ class VllmEngine:
         else:
             raise TypeError(f"Unexpected response type: {type(result)}")
 
-    @dynemo_endpoint(CompletionRequest, CompletionStreamResponse)
+    @dynamo_endpoint(CompletionRequest, CompletionStreamResponse)
     async def generate_completions(self, request):
         result = await self.completion_serving.create_completion(request)
 
@@ -111,13 +113,13 @@ class VllmEngine:
             raise TypeError(f"Unexpected response type: {type(result)}")
 
 
-@dynemo_worker()
+@dynamo_worker()
 async def worker(runtime: DistributedRuntime, engine_args: AsyncEngineArgs):
     """
     Instantiate a `backend` component and serve the `generate` endpoint
     A `Component` can serve multiple endpoints
     """
-    component = runtime.namespace("dynemo").component("vllm")
+    component = runtime.namespace("dynamo").component("vllm")
     await component.create_service()
 
     chat_endpoint = component.endpoint("chat/completions")
@@ -131,6 +133,7 @@ async def worker(runtime: DistributedRuntime, engine_args: AsyncEngineArgs):
             chat_endpoint.serve_endpoint(engine.generate_chat),
             completions_endpoint.serve_endpoint(engine.generate_completions),
         )
+
 
 if __name__ == "__main__":
     uvloop.install()

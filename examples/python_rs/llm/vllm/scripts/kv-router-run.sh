@@ -48,7 +48,7 @@ COMPLETIONS_ENDPOINT_NAME=${7:-"dynemo.process.completions"}
 VALID_STRATEGIES=("prefix")
 SESSION_NAME="v"
 WORKDIR="/workspace/examples/python_rs/llm/vllm"
-INIT_CMD="source /opt/dynemo/venv/bin/activate && cd $WORKDIR"
+INIT_CMD="cd $WORKDIR"
 
 
 # Default model args

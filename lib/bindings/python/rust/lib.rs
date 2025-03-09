@@ -25,14 +25,14 @@ use std::{fmt::Display, sync::Arc};
 use tokio::sync::Mutex;
 use tracing_subscriber::FmtSubscriber;
 
-use dynemo_runtime::{
+use dynamo_runtime::{
     self as rs,
     pipeline::{EngineStream, ManyOut, SingleIn},
     protocols::annotated::Annotated as RsAnnotated,
     traits::DistributedRuntimeProvider,
 };
 
-use dynemo_llm::{self as llm_rs};
+use dynamo_llm::{self as llm_rs};
 
 mod engine;
 mod llm;
@@ -66,6 +66,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<EtcdClient>()?;
     m.add_class::<AsyncResponseStream>()?;
     m.add_class::<llm::kv::KvRouter>()?;
+    m.add_class::<llm::disagg_router::DisaggregatedRouter>()?;
     m.add_class::<llm::kv::KvMetricsPublisher>()?;
     m.add_class::<llm::model_card::ModelDeploymentCard>()?;
     m.add_class::<llm::preprocessor::OAIChatPreprocessor>()?;
