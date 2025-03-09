@@ -43,6 +43,7 @@ from tensorrt_llm.llmapi.disagg_utils import (
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import CompletionRequest
 
+from dynamo.llm import KvMetricsPublisher
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
 logger.set_level("debug")
@@ -195,8 +196,6 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
 
         if self.publish_stats_thread and not self.publish_stats_thread.is_alive():
             self.publish_stats_thread.start()
-
-
 
         self._ongoing_request_count -= 1
 

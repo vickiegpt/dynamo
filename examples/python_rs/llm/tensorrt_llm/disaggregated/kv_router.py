@@ -35,11 +35,7 @@ from tensorrt_llm.serve.openai_protocol import CompletionRequest, DisaggregatedP
 from transformers import AutoTokenizer
 
 from dynamo.llm import KvRouter
-from dynamo.runtime import (
-    DistributedRuntime,
-    dynamo_endpoint,
-    dynamo_worker,
-)
+from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
 logger.set_level("debug")
 

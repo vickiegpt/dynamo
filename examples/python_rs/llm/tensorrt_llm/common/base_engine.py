@@ -212,7 +212,7 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         # Prepare threads for publishing kv cache events but don't start them yet.
         # TRTLLM needs to start generating tokens first before kv cache events
         # can be retrieved.
-        lib_path = "/opt/triton/bindings/lib/libdynamo_llm_capi.so"
+        lib_path = "/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
         self._kv_cache_events_publisher = KVCacheEventPublisher(
             self.namespace_str, self.component_str, self._worker_id, lib_path
         )

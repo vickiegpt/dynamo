@@ -35,8 +35,9 @@ class KVCacheEventPublisher:
             self.lib.dynamo_llm_init.argtypes = [c_char_p, c_char_p, c_int64]
             self.lib.dynamo_llm_init.restype = c_uint32
 
-            # Tanmay set worker_id to 2 for now
-            result = self.lib.dynamo_llm_init(namespace.encode(), component.encode(), 2)
+            result = self.lib.dynamo_llm_init(
+                namespace.encode(), component.encode(), worker_id
+            )
             if result == DynamoResult.OK:
                 logger.info(
                     "KVCacheEventPublisher initialized successfully. Ready to publish KV Cache Events"
