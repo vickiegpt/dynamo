@@ -83,7 +83,9 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
 
         # needed for disagg
         self._mpi_session = MpiCommSession(sub_comm, n_workers=sub_comm.Get_size())
-        trt_llm_engine_config.engine_config.extra_args["_mpi_session"] = self._mpi_session
+        trt_llm_engine_config.engine_config.extra_args[
+            "_mpi_session"
+        ] = self._mpi_session
 
         super().__init__(trt_llm_engine_config)
 
