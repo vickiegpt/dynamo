@@ -152,7 +152,7 @@ This section shows how you might run a multi-node benchmark with **prefill** wor
    ```
    **Node1**:
    ```bash
-   bash benchmark/multi_node/start_prefill_tp2dp6_generate_tp4dp1.sh node0
+   bash benchmark/multi_node/start_prefill_tp2dp2_generate_tp4dp1.sh node0
    ```
    Each script must be edited to match exactly how many prefill worker processes and how many GPUs you want on that node. Alternatively, some users place all decode workers on one node and all prefill workers on another. The scripts are a reference.
 

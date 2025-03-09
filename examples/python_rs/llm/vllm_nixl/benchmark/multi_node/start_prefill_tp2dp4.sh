@@ -34,6 +34,7 @@ export ETCD_ENDPOINTS="http://${FIRST_HOST}:2379"
 BLOCK_SIZE=128
 MAX_NUM_SEQS=2
 MAX_MODEL_LEN=10000
+MAX_NUM_SEQS=2
 
 
 CHAT_MODEL_NAME="neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic"
