@@ -71,7 +71,6 @@ class KVCacheEventPublisher:
             ctypes.c_uint32
         )  # dynamo_llm_result_t
 
-    # TODO: Tanmay: Fix the type of parent and block
     def stored_event(self, event_id, parent_hash, block_hashes, token_ids):
         logger.debug(
             f"Debugging: Stored event: {event_id}, parent_hash: {parent_hash}, block_hashes: {block_hashes}, token_ids: {token_ids}"
@@ -101,7 +100,6 @@ class KVCacheEventPublisher:
         else:
             logger.debug(f"Store - Failed to Publish KV Event: {block_hashes}")
 
-    # TODO: Tanmay: Fix the type of block_hash
     def removed_event(self, event_id, block_hashes):
         result = self.lib.dynamo_kv_event_publish_removed(
             event_id,
