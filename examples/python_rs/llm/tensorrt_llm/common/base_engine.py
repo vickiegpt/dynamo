@@ -63,7 +63,7 @@ class ChatProcessorMixin:
         self.completions_processor = CompletionsProcessor(self._model_name)
 
 
-@dataclass()
+@dataclass
 class TensorrtLLMEngineConfig:
     namespace_str: str = "dynamo"
     component_str: str = "tensorrt-llm"
