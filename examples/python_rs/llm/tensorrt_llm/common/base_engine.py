@@ -28,6 +28,7 @@ from tensorrt_llm._torch import LLM
 from tensorrt_llm.logger import logger
 from transformers import AutoTokenizer
 from triton_distributed.llm import KvMetricsPublisher
+from common.kv_cache_event_publisher import KVCacheEventPublisher
 
 
 class ChatProcessorMixin:
@@ -206,7 +207,6 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         )
 
     def _init_publish_kv_cache_events_thread(self):
-        # self.kv_cache_events_publisher = KVCacheEventPublisher()
         # Prepare threads for publishing kv cache events but don't start them yet.
         # TRTLLM needs to start generating tokens first before kv cache events
         # can be retrieved.
