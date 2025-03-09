@@ -36,9 +36,7 @@ class KVCacheEventPublisher:
             self.lib.triton_llm_init.restype = c_uint32
 
             # Tanmay set worker_id to 2 for now
-            result = self.lib.triton_llm_init(
-                namespace.encode(), component.encode(), 2
-            )
+            result = self.lib.triton_llm_init(namespace.encode(), component.encode(), 2)
             if result == TritonResult.OK:
                 logger.info(
                     "KVCacheEventPublisher initialized successfully. Ready to publish KV Cache Events"
@@ -74,15 +72,19 @@ class KVCacheEventPublisher:
 
     # TODO: Tanmay: Fix the type of parent and block
     def stored_event(self, event_id, parent_hash, block_hashes, token_ids):
-        logger.debug(f"Debugging: Stored event: {event_id}, parent_hash: {parent_hash}, block_hashes: {block_hashes}, token_ids: {token_ids}")
-        parent_hash = ((ctypes.c_uint64 * 1)(parent_hash) if parent_hash is not None else None)
+        logger.debug(
+            f"Debugging: Stored event: {event_id}, parent_hash: {parent_hash}, block_hashes: {block_hashes}, token_ids: {token_ids}"
+        )
+        parent_hash = (
+            (ctypes.c_uint64 * 1)(parent_hash) if parent_hash is not None else None
+        )
         block_hash_arr = (ctypes.c_uint64 * len(block_hashes))(*block_hashes)
-        block_hash_len = (len(block_hashes))
+        block_hash_len = len(block_hashes)
         token_ids_arr = (ctypes.c_uint32 * len(token_ids))(*token_ids)
-        num_block_tokens = (ctypes.c_size_t * 1)(len(token_ids)) 
+        num_block_tokens = (ctypes.c_size_t * 1)(len(token_ids))
 
         # Publish the event
-        # TODO: Currenlty, lora_id is not available in the stored events.
+        # TODO: Currently, lora_id is not available in the stored events.
         result = self.lib.triton_kv_event_publish_stored(
             event_id,  # uint64_t event_id
             token_ids_arr,  # const uint32_t *token_ids
@@ -98,7 +100,6 @@ class KVCacheEventPublisher:
         else:
             logger.debug(f"Store - Failed to Publish KV Event: {block_hashes}")
 
-
     # TODO: Tanmay: Fix the type of block_hash
     def removed_event(self, event_id, block_hashes):
         result = self.lib.triton_kv_event_publish_removed(
@@ -111,4 +112,3 @@ class KVCacheEventPublisher:
             logger.debug(f"Remove - Published KV Event: {block_hashes}")
         else:
             logger.debug(f"Remove - Failed to Publish KV Event: {block_hashes}")
-

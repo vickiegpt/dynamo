@@ -48,7 +48,6 @@ from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 logger.set_level("debug")
 
 
-
 def update_args_from_disagg_config(
     engine_config: LLMAPIConfig, server_config: CtxGenServerConfig
 ):
@@ -90,7 +89,13 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         self._mpi_session = MpiCommSession(sub_comm, n_workers=sub_comm.Get_size())
         engine_config.extra_args["_mpi_session"] = self._mpi_session
         super().__init__(
-            namespace_str, component_str, engine_config, worker_id, kv_metrics_publisher, publish_stats, publish_kv_cache_events
+            namespace_str,
+            component_str,
+            engine_config,
+            worker_id,
+            kv_metrics_publisher,
+            publish_stats,
+            publish_kv_cache_events,
         )
 
     @dynamo_endpoint(DisaggChatCompletionRequest, DisaggChatCompletionStreamResponse)
@@ -297,9 +302,9 @@ async def worker(
             logger.warning("KV cache events can only be published for ctx server")
             publish_kv_cache_events = False
 
-    # NOTE: Current implementation adds two enpoints. We can refactor this code to expose only one endpoint.
+    # NOTE: Current implementation adds two endpoints. We can refactor this code to expose only one endpoint.
     # and handle both completions and chat in the same endpoint.
-    # Currently, we are using completions endpoint lease id as worker id. 
+    # Currently, we are using completions endpoint lease id as worker id.
     # I believe this might cause some issues using smart routing with chat completions endpoint.
     worker_id = completions_endpoint.lease_id()
 

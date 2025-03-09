@@ -16,6 +16,7 @@
 import asyncio
 import copy
 import json
+import traceback
 from enum import Enum
 from typing import AsyncIterator
 
@@ -29,10 +30,9 @@ from common.protocol import (
     RoutingStrategy,
     Tokens,
 )
-import traceback
-from transformers import AutoTokenizer
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import CompletionRequest, DisaggregatedParams
+from transformers import AutoTokenizer
 
 from triton_distributed.llm import KvRouter
 from triton_distributed.runtime import (
@@ -61,8 +61,10 @@ class KVRouterWrapper:
         if self.routing_strategy == RoutingStrategy.PREFIX:
             try:
                 worker_id = await self.kv_router.schedule(request.tokens, lora_id)
-            except Exception as e:
-                logger.warning(f"Error during worker selection: {traceback.format_exc()}")
+            except Exception:
+                logger.warning(
+                    f"Error during worker selection: {traceback.format_exc()}"
+                )
                 worker_id = ""
 
             logger.info(f"Scheduling to worker_id: {worker_id}")
@@ -73,6 +75,7 @@ class KVRouterWrapper:
             raise NotImplementedError(
                 f"Routing strategy {self.routing_strategy} not implemented"
             )
+
 
 class Router(ChatProcessorMixin):
     def __init__(
@@ -89,7 +92,7 @@ class Router(ChatProcessorMixin):
         self.ctx_completion_client = ctx_completion_client
         self.gen_completion_client = gen_completion_client
         self.kv_router_wrapper = kv_router_wrapper
-        
+
         self.engine_config = engine_config
         if self.engine_config.model_path:
             self.model = self.engine_config.model_path
@@ -113,14 +116,13 @@ class Router(ChatProcessorMixin):
         # prompt is also encoded in the worker.
         # TODO: we need to implement our own request processing and protocols to send only token ids to llmapi worker.
         token_ids = self.tokenizer.encode(request.prompt)
-        worker_id_generator: AsyncIterator =  self.kv_router_wrapper.generate(
+        worker_id_generator: AsyncIterator = self.kv_router_wrapper.generate(
             Tokens(tokens=token_ids).model_dump_json()
         )
 
         worker_id = (
             await worker_id_generator.__anext__()
         )  # only one worker id is returned
-    
 
         request.max_tokens = 1
         request.disaggregated_params = DisaggregatedParams(request_type="context_only")
@@ -265,7 +267,7 @@ async def worker(runtime: DistributedRuntime, args, engine_config):
     kv_router = KvRouter(runtime, kv_listener)
 
     completions_endpoint = component.endpoint("completions")
-    #chat_endpoint = component.endpoint("chat/completions")
+    # chat_endpoint = component.endpoint("chat/completions")
 
     kv_router_wrapper = KVRouterWrapper(kv_router, args.routing_strategy)
     router = Router(
@@ -277,10 +279,9 @@ async def worker(runtime: DistributedRuntime, args, engine_config):
         engine_config,
     )
 
-    
     await asyncio.gather(
         completions_endpoint.serve_endpoint(router.generate_completion),
-        #chat_endpoint.serve_endpoint(router.generate_chat),
+        # chat_endpoint.serve_endpoint(router.generate_chat),
     )
 
 

@@ -22,13 +22,14 @@ from contextlib import asynccontextmanager
 from queue import Queue
 from typing import Any, Callable, Optional
 
+from common.kv_cache_event_publisher import KVCacheEventPublisher
 from common.parser import LLMAPIConfig
 from common.processor import ChatProcessor, CompletionsProcessor
 from tensorrt_llm._torch import LLM
 from tensorrt_llm.logger import logger
 from transformers import AutoTokenizer
+
 from triton_distributed.llm import KvMetricsPublisher
-from common.kv_cache_event_publisher import KVCacheEventPublisher
 
 
 class ChatProcessorMixin:
@@ -190,7 +191,7 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         request_total_slots = 4
         kv_active_block = 0
         kv_total_blocks = 4
-  
+
         self._kv_metrics_publisher.publish(
             request_active_slots,
             request_total_slots,
@@ -212,7 +213,9 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         # TRTLLM needs to start generating tokens first before kv cache events
         # can be retrieved.
         lib_path = "/opt/triton/bindings/lib/libtriton_distributed_llm_capi.so"
-        self._kv_cache_events_publisher = KVCacheEventPublisher(self.namespace_str, self.component_str, self._worker_id, lib_path)
+        self._kv_cache_events_publisher = KVCacheEventPublisher(
+            self.namespace_str, self.component_str, self._worker_id, lib_path
+        )
         self.publish_kv_cache_events_thread = ManagedThread(
             self.publish_kv_cache_events_task,
             error_queue=self._error_queue,
@@ -225,16 +228,19 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         """
         stats = self._llm_engine.get_stats_async(timeout=5)
         async for stat in stats:
-            request_active_slots = stat['numActiveRequests']
-            request_total_slots = stat['maxNumActiveRequests']
-            kv_active_block = stat['kvCacheStats']['usedNumBlocks']
-            kv_total_blocks = stat['kvCacheStats']['maxNumBlocks']
+            request_active_slots = stat["numActiveRequests"]
+            request_total_slots = stat["maxNumActiveRequests"]
+            kv_active_block = stat["kvCacheStats"]["usedNumBlocks"]
+            kv_total_blocks = stat["kvCacheStats"]["maxNumBlocks"]
             self._kv_metrics_publisher.publish(
                 request_active_slots,
                 request_total_slots,
                 kv_active_block,
-                kv_total_blocks,)
-            logger.debug(f"Published stats: request_active_slots: {request_active_slots}, request_total_slots: {request_total_slots}, kv_active_block: {kv_active_block}, kv_total_blocks: {kv_total_blocks}")
+                kv_total_blocks,
+            )
+            logger.debug(
+                f"Published stats: request_active_slots: {request_active_slots}, request_total_slots: {request_total_slots}, kv_active_block: {kv_active_block}, kv_total_blocks: {kv_total_blocks}"
+            )
 
         return True
 
@@ -246,28 +252,34 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         async for event_list in events:
             for event in event_list:
                 logger.debug(f"Debugging: Event: {event}")
-                id = event['event_id']
-                data = event['data']
-                if data['type'] == 'stored':
-                    parent_hash = data['parent_hash']
+                id = event["event_id"]
+                data = event["data"]
+                if data["type"] == "stored":
+                    parent_hash = data["parent_hash"]
                     token_ids = []
                     block_hashes = []
-                    for block in data['blocks']:
-                        block_hash = block['block_hash']
+                    for block in data["blocks"]:
+                        block_hash = block["block_hash"]
                         block_hashes.append(block_hash)
-                        for token in block['tokens']:
+                        for token in block["tokens"]:
                             # TODO: How to handle token_extra_id?
-                            token_ids.append(token['token_id'])
+                            token_ids.append(token["token_id"])
                     # Publish the stored event
-                    self._kv_cache_events_publisher.stored_event(id, parent_hash, block_hashes, token_ids)
-                    logger.debug(f"Published stored event: {id}, parent_hash: {parent_hash}, block_hashes: {block_hashes}, token_ids: {token_ids}")
-                elif data['type'] == 'removed':
+                    self._kv_cache_events_publisher.stored_event(
+                        id, parent_hash, block_hashes, token_ids
+                    )
+                    logger.debug(
+                        f"Published stored event: {id}, parent_hash: {parent_hash}, block_hashes: {block_hashes}, token_ids: {token_ids}"
+                    )
+                elif data["type"] == "removed":
                     # Publish the removed event
                     block_hashes = []
-                    for block_hash in data['block_hashes']:
+                    for block_hash in data["block_hashes"]:
                         block_hashes.append(block_hash)
                     self._kv_cache_events_publisher.removed_event(id, block_hashes)
-                    logger.debug(f"Published removed event: {id}, block_hashes: {block_hashes}")
+                    logger.debug(
+                        f"Published removed event: {id}, block_hashes: {block_hashes}"
+                    )
         return True
 
     async def _run_llm_engine(self):
