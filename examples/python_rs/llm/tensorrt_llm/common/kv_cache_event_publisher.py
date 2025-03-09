@@ -21,7 +21,7 @@ from tensorrt_llm.logger import logger
 logger.set_level("debug")
 
 
-class TritonResult:
+class DynamoResult:
     OK = 0
     ERR = 1
 
@@ -32,12 +32,12 @@ class KVCacheEventPublisher:
 
         try:
             self.lib = ctypes.CDLL(lib_path)
-            self.lib.triton_llm_init.argtypes = [c_char_p, c_char_p, c_int64]
-            self.lib.triton_llm_init.restype = c_uint32
+            self.lib.dynamo_llm_init.argtypes = [c_char_p, c_char_p, c_int64]
+            self.lib.dynamo_llm_init.restype = c_uint32
 
             # Tanmay set worker_id to 2 for now
-            result = self.lib.triton_llm_init(namespace.encode(), component.encode(), 2)
-            if result == TritonResult.OK:
+            result = self.lib.dynamo_llm_init(namespace.encode(), component.encode(), 2)
+            if result == DynamoResult.OK:
                 logger.info(
                     "KVCacheEventPublisher initialized successfully. Ready to publish KV Cache Events"
                 )
@@ -48,7 +48,7 @@ class KVCacheEventPublisher:
             print(f"Failed to load {lib_path}")
             raise e
 
-        self.lib.triton_kv_event_publish_stored.argtypes = [
+        self.lib.dynamo_kv_event_publish_stored.argtypes = [
             ctypes.c_uint64,  # event_id
             ctypes.POINTER(ctypes.c_uint32),  # token_ids
             ctypes.POINTER(ctypes.c_size_t),  # num_block_tokens
@@ -57,18 +57,18 @@ class KVCacheEventPublisher:
             ctypes.POINTER(ctypes.c_uint64),  # parent_hash
             ctypes.c_uint64,  # lora_id
         ]
-        self.lib.triton_kv_event_publish_stored.restype = (
+        self.lib.dynamo_kv_event_publish_stored.restype = (
             ctypes.c_uint32
-        )  # triton_llm_result_t
+        )  # dynamo_llm_result_t
 
-        self.lib.triton_kv_event_publish_removed.argtypes = [
+        self.lib.dynamo_kv_event_publish_removed.argtypes = [
             ctypes.c_uint64,  # event_id
             ctypes.POINTER(ctypes.c_uint64),  # block_ids
             ctypes.c_size_t,  # num_blocks
         ]
-        self.lib.triton_kv_event_publish_removed.restype = (
+        self.lib.dynamo_kv_event_publish_removed.restype = (
             ctypes.c_uint32
-        )  # triton_llm_result_t
+        )  # dynamo_llm_result_t
 
     # TODO: Tanmay: Fix the type of parent and block
     def stored_event(self, event_id, parent_hash, block_hashes, token_ids):
@@ -85,7 +85,7 @@ class KVCacheEventPublisher:
 
         # Publish the event
         # TODO: Currently, lora_id is not available in the stored events.
-        result = self.lib.triton_kv_event_publish_stored(
+        result = self.lib.dynamo_kv_event_publish_stored(
             event_id,  # uint64_t event_id
             token_ids_arr,  # const uint32_t *token_ids
             num_block_tokens,  # const uintptr_t *num_block_tokens
@@ -95,20 +95,20 @@ class KVCacheEventPublisher:
             0,  # uint64_t lora_id
         )
 
-        if result == TritonResult.OK:
+        if result == DynamoResult.OK:
             logger.debug(f"Store - Published KV Event: {block_hashes}")
         else:
             logger.debug(f"Store - Failed to Publish KV Event: {block_hashes}")
 
     # TODO: Tanmay: Fix the type of block_hash
     def removed_event(self, event_id, block_hashes):
-        result = self.lib.triton_kv_event_publish_removed(
+        result = self.lib.dynamo_kv_event_publish_removed(
             event_id,
             (ctypes.c_uint64 * len(block_hashes))(*block_hashes),
             (ctypes.c_size_t * 1)(len(block_hashes)),
         )
 
-        if result == TritonResult.OK:
+        if result == DynamoResult.OK:
             logger.debug(f"Remove - Published KV Event: {block_hashes}")
         else:
             logger.debug(f"Remove - Failed to Publish KV Event: {block_hashes}")

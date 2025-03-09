@@ -34,11 +34,11 @@ from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import CompletionRequest, DisaggregatedParams
 from transformers import AutoTokenizer
 
-from triton_distributed.llm import KvRouter
-from triton_distributed.runtime import (
+from dynamo.llm import KvRouter
+from dynamo.runtime import (
     DistributedRuntime,
-    triton_endpoint,
-    triton_worker,
+    dynamo_endpoint,
+    dynamo_worker,
 )
 
 logger.set_level("debug")
@@ -54,7 +54,7 @@ class KVRouterWrapper:
         self.kv_router = kv_router
         self.routing_strategy = routing_strategy
 
-    @triton_endpoint(Tokens, str)
+    @dynamo_endpoint(Tokens, str)
     async def generate(self, request) -> AsyncIterator[str]:
         lora_id = 0
         worker_id = None
@@ -155,7 +155,7 @@ class Router(ChatProcessorMixin):
     # Disagg params should be in under the choices field in the response object.
     # This is the case for completions but not for chat.
 
-    @triton_endpoint(CompletionRequest, DisaggCompletionStreamResponse)
+    @dynamo_endpoint(CompletionRequest, DisaggCompletionStreamResponse)
     async def generate_completion(self, request):
         # These settings are needed to satisfy request checks.
         request.skip_special_tokens = False
@@ -190,7 +190,7 @@ class Router(ChatProcessorMixin):
             )
             yield json.loads(gen_resp_obj.model_dump_json(exclude_unset=True))
 
-    @triton_endpoint(DisaggChatCompletionRequest, DisaggChatCompletionStreamResponse)
+    @dynamo_endpoint(DisaggChatCompletionRequest, DisaggChatCompletionStreamResponse)
     async def generate_chat(self, request):
         # These settings are needed to satisfy request checks.
         request.skip_special_tokens = False
@@ -226,42 +226,42 @@ class Router(ChatProcessorMixin):
             yield json.loads(gen_resp_obj.model_dump_json(exclude_unset=True))
 
 
-@triton_worker()
+@dynamo_worker()
 async def worker(runtime: DistributedRuntime, args, engine_config):
     """
     Instantiate a `backend` component and serve the `generate` endpoint
     A `Component` can serve multiple endpoints
     """
-    component = runtime.namespace("triton-init").component("router")
+    component = runtime.namespace("dynamo").component("router")
     await component.create_service()
 
     ctx_completion_client = (
-        await runtime.namespace("triton-init")
+        await runtime.namespace("dynamo")
         .component("tensorrt-llm-ctx")
         .endpoint("completions")
         .client()
     )
     gen_completion_client = (
-        await runtime.namespace("triton-init")
+        await runtime.namespace("dynamo")
         .component("tensorrt-llm-gen")
         .endpoint("completions")
         .client()
     )
     ctx_chat_client = (
-        await runtime.namespace("triton-init")
+        await runtime.namespace("dynamo")
         .component("tensorrt-llm-ctx")
         .endpoint("chat/completions")
         .client()
     )
     gen_chat_client = (
-        await runtime.namespace("triton-init")
+        await runtime.namespace("dynamo")
         .component("tensorrt-llm-gen")
         .endpoint("chat/completions")
         .client()
     )
 
     # Only listen to context server for now
-    kv_listener = runtime.namespace("triton-init").component("tensorrt-llm-ctx")
+    kv_listener = runtime.namespace("dynamo").component("tensorrt-llm-ctx")
     await kv_listener.create_service()
 
     kv_router = KvRouter(runtime, kv_listener)
