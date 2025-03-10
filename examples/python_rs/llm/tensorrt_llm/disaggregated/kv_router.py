@@ -27,7 +27,6 @@ from common.protocol import (
     DisaggChatCompletionRequest,
     DisaggChatCompletionStreamResponse,
     DisaggCompletionStreamResponse,
-    RoutingStrategy,
     Tokens,
 )
 from tensorrt_llm.logger import logger
@@ -45,32 +44,23 @@ class EndpointType(Enum):
     CHAT = "chat"
 
 
-class KVRouterWrapper:
-    def __init__(self, kv_router: KvRouter, routing_strategy: RoutingStrategy):
+class Scheduler:
+    def __init__(self, kv_router: KvRouter):
         self.kv_router = kv_router
-        self.routing_strategy = routing_strategy
 
     @dynamo_endpoint(Tokens, str)
     async def generate(self, request) -> AsyncIterator[str]:
         lora_id = 0
         worker_id = None
-        if self.routing_strategy == RoutingStrategy.PREFIX:
-            try:
-                worker_id = await self.kv_router.schedule(request.tokens, lora_id)
-            except Exception:
-                logger.warning(
-                    f"Error during worker selection: {traceback.format_exc()}"
-                )
-                worker_id = ""
+        try:
+            worker_id = await self.kv_router.schedule(request.tokens, lora_id)
+        except Exception:
+            logger.warning(f"Error during worker selection: {traceback.format_exc()}")
+            worker_id = ""
 
-            logger.debug(f"Scheduling to worker_id: {worker_id}")
+        logger.debug(f"Scheduling to worker_id: {worker_id}")
 
-            yield str(worker_id)
-
-        else:
-            raise NotImplementedError(
-                f"Routing strategy {self.routing_strategy} not implemented"
-            )
+        yield str(worker_id)
 
 
 class Router(ChatProcessorMixin):
@@ -80,14 +70,14 @@ class Router(ChatProcessorMixin):
         gen_chat_client,
         ctx_completion_client,
         gen_completion_client,
-        kv_router_wrapper: KVRouterWrapper,
+        scheduler: Scheduler,
         engine_config: LLMAPIConfig,
     ):
         self.ctx_chat_client = ctx_chat_client
         self.gen_chat_client = gen_chat_client
         self.ctx_completion_client = ctx_completion_client
         self.gen_completion_client = gen_completion_client
-        self.kv_router_wrapper = kv_router_wrapper
+        self.scheduler = scheduler
 
         self.engine_config = engine_config
         if self.engine_config.model_path:
@@ -112,7 +102,7 @@ class Router(ChatProcessorMixin):
         # prompt is also encoded in the worker.
         # TODO: we need to implement our own request processing and protocols to send only token ids to llmapi worker.
         token_ids = self.tokenizer.encode(request.prompt)
-        worker_id_generator: AsyncIterator = self.kv_router_wrapper.generate(
+        worker_id_generator: AsyncIterator = self.scheduler.generate(
             Tokens(tokens=token_ids).model_dump_json()
         )
 
@@ -263,21 +253,21 @@ async def worker(runtime: DistributedRuntime, args, engine_config):
     kv_router = KvRouter(runtime, kv_listener)
 
     completions_endpoint = component.endpoint("completions")
-    # chat_endpoint = component.endpoint("chat/completions")
+    chat_endpoint = component.endpoint("chat/completions")
 
-    kv_router_wrapper = KVRouterWrapper(kv_router, args.routing_strategy)
+    scheduler = Scheduler(kv_router)
     router = Router(
         ctx_chat_client,
         gen_chat_client,
         ctx_completion_client,
         gen_completion_client,
-        kv_router_wrapper,
+        scheduler,
         engine_config,
     )
 
     await asyncio.gather(
         completions_endpoint.serve_endpoint(router.generate_completion),
-        # chat_endpoint.serve_endpoint(router.generate_chat),
+        chat_endpoint.serve_endpoint(router.generate_chat),
     )
 
 
