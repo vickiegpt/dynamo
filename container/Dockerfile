@@ -148,14 +148,23 @@ RUN cd lib/runtime && \
 
 # Build OpenAI HTTP Service binaries
 COPY lib/llm /workspace/lib/llm
-COPY examples/rust /workspace/examples/rust
-RUN cd examples/rust && \
+COPY components /workspace/components
+RUN cd components && \
     cargo build --release && \
-    cp target/release/http /usr/local/bin/ && \
+    cp target/release/http /usr/local/bin/
+
+ARG CUDA_COMPUTE_CAP=80
+ENV CUDA_COMPUTE_CAP=${CUDA_COMPUTE_CAP}
+ARG FEATURES="cuda cudnn"
+ENV RAYON_NUM_THREADS=4
+# Build Dynamo Run binaries
+COPY launch /workspace/launch
+RUN cd launch && \
+    cargo build --release --features mistralrs,sglang,vllm,python && \
+    cp target/release/dynamo-run /usr/local/bin/ && \
     cp target/release/llmctl /usr/local/bin/
 
 COPY deploy/dynamo/sdk /workspace/deploy/dynamo/sdk
-
 
 # Generate C bindings. Note that this is required for TRTLLM backend re-build
 COPY lib/bindings /workspace/lib/bindings

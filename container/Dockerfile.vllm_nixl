@@ -116,8 +116,8 @@ ENV PATH=/usr/local/ompi/bin:$PATH
 ENV PKG_CONFIG_PATH=/usr/local/ompi/lib/pkgconfig:$PKG_CONFIG_PATH
 
 COPY --from=nixl . /opt/nixl
-
-RUN cd /opt/nixl && \
+ARG GITHUB_TOKEN
+RUN git clone https://oauth2:${GITHUB_TOKEN}@github.com/ai-dynamo/nixl.git /opt/nixl; cd /opt/nixl && git checkout 3ce6a673b266b4f293909ceb17ca7975f1ba5cd7 && \
     mkdir build && \
     meson setup build/ --prefix=/usr/local/nixl && \
     cd build/ && \
