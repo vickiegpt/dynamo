@@ -16,8 +16,6 @@
 import asyncio
 import copy
 import json
-import traceback
-from typing import AsyncIterator
 
 import uvloop
 from common.base_engine import ChatProcessorMixin
@@ -26,8 +24,8 @@ from common.protocol import (
     DisaggChatCompletionRequest,
     DisaggChatCompletionStreamResponse,
     DisaggCompletionStreamResponse,
-    Tokens,
 )
+from common.utils import Scheduler, get_worker_id
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import CompletionRequest, DisaggregatedParams
 
@@ -35,25 +33,6 @@ from dynamo.llm import KvRouter
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
 logger.set_level("debug")
-
-
-class Scheduler:
-    def __init__(self, kv_router: KvRouter):
-        self.kv_router = kv_router
-
-    @dynamo_endpoint(Tokens, str)
-    async def generate(self, request) -> AsyncIterator[str]:
-        lora_id = 0
-        worker_id = None
-        try:
-            worker_id = await self.kv_router.schedule(request.tokens, lora_id)
-        except Exception:
-            logger.warning(f"Error during worker selection: {traceback.format_exc()}")
-            worker_id = ""
-
-        logger.debug(f"Scheduling to worker_id: {worker_id}")
-
-        yield str(worker_id)
 
 
 class Router(ChatProcessorMixin):
@@ -80,18 +59,7 @@ class Router(ChatProcessorMixin):
     async def _get_ctx_resp(self, request, ctx_client):
         logger.debug(f"Received request {request}")
 
-        # NOTE: this will increase TTFT since we are encoding the prompt here
-        # prompt is also encoded in the worker.
-        # TODO: we need to implement our own request processing and protocols to send only token ids to llmapi worker.
-        token_ids = self._tokenizer.encode(request.prompt)
-        worker_id_generator: AsyncIterator = self.scheduler.generate(
-            Tokens(tokens=token_ids).model_dump_json()
-        )
-
-        worker_id = (
-            await worker_id_generator.__anext__()
-        )  # only one worker id is returned
-
+        worker_id = await get_worker_id(self.scheduler, request, self._tokenizer)
         request.max_tokens = 1
         request.disaggregated_params = DisaggregatedParams(request_type="context_only")
         logger.debug(f"[router] Sending request to context server: {request}")

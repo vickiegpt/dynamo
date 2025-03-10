@@ -200,6 +200,8 @@ Output:
 }
 ```
 
+Note: For KV cache aware routing, please refer to the [KV Aware Routing](./docs/kv_aware_routing.md) section.
+
 ### Disaggregated Deployment
 
 **Environment**
