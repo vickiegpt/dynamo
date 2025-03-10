@@ -159,17 +159,20 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         )
 
     def _init_publish_kv_cache_events_thread(self):
-        # Prepare threads for publishing kv cache events but don't start them yet.
-        # TRTLLM needs to start generating tokens first before kv cache events
-        # can be retrieved.
-        lib_path = "/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
         if self._worker_id is None:
             logger.error("Worker ID not initialized!")
             return
 
+        # TODO: Use python bindings to publish kv cache events once they
+        # are available.
+        lib_path = "/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
         self._kv_cache_events_publisher = KVCacheEventPublisher(
             self._namespace_str, self._component_str, int(self._worker_id), lib_path
         )
+
+        # Prepare threads for publishing kv cache events but don't start them yet.
+        # TRTLLM needs to start generating tokens first before kv cache events
+        # can be retrieved.
         self.publish_kv_cache_events_thread = ManagedThread(
             self.publish_kv_cache_events_task,
             error_queue=self._error_queue,

@@ -31,17 +31,11 @@ from common.protocol import (
 )
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import CompletionRequest, DisaggregatedParams
-from transformers import AutoTokenizer
 
 from dynamo.llm import KvRouter
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
 logger.set_level("debug")
-
-
-class EndpointType(Enum):
-    COMPLETIONS = "completions"
-    CHAT = "chat"
 
 
 class Scheduler:
@@ -79,29 +73,18 @@ class Router(ChatProcessorMixin):
         self.gen_completion_client = gen_completion_client
         self.scheduler = scheduler
 
-        self.engine_config = engine_config
-        if self.engine_config.model_path:
-            self.model = self.engine_config.model_path
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.engine_config.model_path
-            )
-            logger.info(f"Using model from path: {self.engine_config.model_path}")
-        else:
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.engine_config.model_name
-            )
-        logger.info("INITIALIZED ROUTER")
-
         # allows to use tokenizer
         super().__init__(engine_config)
 
-    async def _get_ctx_resp(self, request, ctx_client, type):
+        logger.info("INITIALIZED ROUTER")
+
+    async def _get_ctx_resp(self, request, ctx_client):
         logger.debug(f"Received request {request}")
 
         # NOTE: this will increase TTFT since we are encoding the prompt here
         # prompt is also encoded in the worker.
         # TODO: we need to implement our own request processing and protocols to send only token ids to llmapi worker.
-        token_ids = self.tokenizer.encode(request.prompt)
+        token_ids = self._tokenizer.encode(request.prompt)
         worker_id_generator: AsyncIterator = self.scheduler.generate(
             Tokens(tokens=token_ids).model_dump_json()
         )
@@ -151,7 +134,7 @@ class Router(ChatProcessorMixin):
         gen_req = copy.deepcopy(request)
 
         ctx_resp = await self._get_ctx_resp(
-            request, self.ctx_completion_client, EndpointType.COMPLETIONS
+            request, self.ctx_completion_client
         )
         ctx_resp_obj = DisaggCompletionStreamResponse.model_validate(ctx_resp)
 
@@ -186,7 +169,7 @@ class Router(ChatProcessorMixin):
         gen_req = copy.deepcopy(request)
 
         ctx_resp = await self._get_ctx_resp(
-            request, self.ctx_chat_client, EndpointType.CHAT
+            request, self.ctx_chat_client
         )
         ctx_resp_obj = DisaggChatCompletionStreamResponse.model_validate_json(ctx_resp)
 
