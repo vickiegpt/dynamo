@@ -51,6 +51,8 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         if self._llm_engine is None:
             raise RuntimeError("Engine not initialized")
 
+        logger.debug(f"[worker] worker_id: {self._worker_id} received request")
+
         logger.debug(f"Received chat request: {request}")
         request_id = str(uuid.uuid4())
         self._ongoing_request_count += 1
@@ -100,6 +102,8 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
     async def generate_completion(self, request):
         if self._llm_engine is None:
             raise RuntimeError("Engine not initialized")
+
+        logger.debug(f"[worker] worker_id: {self._worker_id} received request")
 
         self._ongoing_request_count += 1
         logger.debug(f"Received completion request: {request}")
