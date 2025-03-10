@@ -86,6 +86,13 @@ Note: NATS and ETCD servers should be running and accessible from the container 
 
 ### Monolithic Deployment
 
+#### Quick Start
+
+Modify the `llm_api_config.yaml` file to include the model and configuration you want to load. Use the [monolith script](scripts/monolith_single_node.sh) to launch the server and workers.
+```
+./scripts/monolith_single_node.sh TinyLlama/TinyLlama-1.1B-Chat-v1.0 1 1 1
+```
+
 #### 1. HTTP Server
 
 Run the server logging (with debug level logging):

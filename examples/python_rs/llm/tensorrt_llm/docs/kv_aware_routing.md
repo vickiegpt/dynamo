@@ -25,6 +25,13 @@ The KV Router is a component that aggregates KV Events from all the workers and 
 
 Follow the instructions in the [README](../README.md) to setup the environment for [monolithic serving](../README.md#monolithic-deployment).
 
+#### Quick Start
+
+Modify the `llm_api_config.yaml` file to include the model and configuration you want to load. Use the [monolith script](../scripts/monolith_single_node.sh) to launch the router and workers.
+```
+./scripts/monolith_single_node.sh TinyLlama/TinyLlama-1.1B-Chat-v1.0 2 2 1 --kv-aware
+```
+
 ### 1. Workers
 
 For KV aware routing to work, we need to launch multiple workers. To do this, you can use the following command for each worker:
