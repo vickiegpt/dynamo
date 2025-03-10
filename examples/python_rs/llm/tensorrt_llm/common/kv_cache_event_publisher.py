@@ -71,9 +71,13 @@ class KVCacheEventPublisher:
             ctypes.c_uint32
         )  # dynamo_llm_result_t
 
-    def stored_event(self, event_id, parent_hash, block_hashes, token_ids):
+    def stored_event(self, event_id, parent_hash, block_hashes, token_ids, lora_id):
+        if self.lib is None:
+            logger.error("KVCacheEventPublisher not initialized!")
+            return
+
         logger.debug(
-            f"Debugging: Stored event: {event_id}, parent_hash: {parent_hash}, block_hashes: {block_hashes}, token_ids: {token_ids}"
+            f"Stored event: {event_id}, parent_hash: {parent_hash}, block_hashes: {block_hashes}, token_ids: {token_ids}"
         )
         parent_hash = (
             (ctypes.c_uint64 * 1)(parent_hash) if parent_hash is not None else None
@@ -92,15 +96,19 @@ class KVCacheEventPublisher:
             block_hash_arr,  # const uint64_t *block_ids
             block_hash_len,  # uintptr_t num_blocks
             parent_hash,  # const uint64_t *parent_hash
-            0,  # uint64_t lora_id
+            lora_id,  # uint64_t lora_id
         )
 
         if result == DynamoResult.OK:
             logger.debug(f"Store - Published KV Event: {block_hashes}")
         else:
-            logger.debug(f"Store - Failed to Publish KV Event: {block_hashes}")
+            logger.error(f"Store - Failed to Publish KV Event: {block_hashes}")
 
     def removed_event(self, event_id, block_hashes):
+        if self.lib is None:
+            logger.error("KVCacheEventPublisher not initialized!")
+            return
+
         result = self.lib.dynamo_kv_event_publish_removed(
             event_id,
             (ctypes.c_uint64 * len(block_hashes))(*block_hashes),
@@ -110,4 +118,4 @@ class KVCacheEventPublisher:
         if result == DynamoResult.OK:
             logger.debug(f"Remove - Published KV Event: {block_hashes}")
         else:
-            logger.debug(f"Remove - Failed to Publish KV Event: {block_hashes}")
+            logger.error(f"Remove - Failed to Publish KV Event: {block_hashes}")

@@ -19,7 +19,7 @@ import threading
 import traceback
 import weakref
 from queue import Queue
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 from tensorrt_llm.logger import logger
 
@@ -27,8 +27,8 @@ from tensorrt_llm.logger import logger
 class ManagedThread(threading.Thread):
     def __init__(
         self,
-        task: Callable[..., bool],
-        error_queue: Queue,
+        task: Optional[Union[Callable[..., bool], weakref.WeakMethod]],
+        error_queue: Optional[Queue] = None,
         name: Optional[str] = None,
         loop: Optional[asyncio.AbstractEventLoop] = None,
         **kwargs,
@@ -47,7 +47,7 @@ class ManagedThread(threading.Thread):
 
     def run(self):
         while not self.stop_event.is_set():
-            task = self.task
+            task: Optional[Union[Callable[..., bool], weakref.WeakMethod]] = self.task
             if isinstance(task, weakref.WeakMethod):
                 task = task()
                 if task is None:
@@ -55,7 +55,13 @@ class ManagedThread(threading.Thread):
                     logger.warning("WeakMethod is expired.")
                     break
 
+            if task is None:
+                break
+
             try:
+                if self.loop is None:
+                    logger.error("[ManagedThread] Loop not initialized!")
+                    break
                 future = asyncio.run_coroutine_threadsafe(
                     task(**self.kwargs), self.loop
                 )
@@ -64,7 +70,8 @@ class ManagedThread(threading.Thread):
                 logger.error(
                     f"Error in thread {self.name}: {e}\n{traceback.format_exc()}"
                 )
-                self.error_queue.put(e)
+                if self.error_queue is not None:
+                    self.error_queue.put(e)
 
         logger.info(f"Thread {self.name} stopped.")
 

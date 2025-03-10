@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from queue import Queue
 from typing import Any, Optional
 
-from common.kv_cache_event_publisher import KVCacheEventPublisher
 from common.parser import LLMAPIConfig
 from common.processor import ChatProcessor, CompletionsProcessor
 from common.utils import ManagedThread
@@ -30,6 +29,8 @@ from tensorrt_llm.logger import logger
 from transformers import AutoTokenizer
 
 from dynamo.llm import KvMetricsPublisher
+
+from .kv_cache_event_publisher import KVCacheEventPublisher
 
 
 class ChatProcessorMixin:
@@ -68,8 +69,8 @@ class TensorrtLLMEngineConfig:
     namespace_str: str = "dynamo"
     component_str: str = "tensorrt-llm"
     engine_config: LLMAPIConfig = None
-    worker_id: str = None
-    kv_metrics_publisher: KvMetricsPublisher = None
+    worker_id: Optional[str] = None
+    kv_metrics_publisher: Optional[KvMetricsPublisher] = None
     publish_stats: bool = False
     publish_kv_cache_events: bool = False
 
@@ -86,6 +87,7 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         self._kv_metrics_publisher = trt_llm_engine_config.kv_metrics_publisher
         self._publish_stats = trt_llm_engine_config.publish_stats
         self._publish_kv_cache_events = trt_llm_engine_config.publish_kv_cache_events
+        self._error_queue: Optional[Queue] = None
 
         self._init_engine()
 
@@ -118,7 +120,6 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
             raise e
 
         self._error_queue = Queue()
-
         try:
             if self._publish_stats:
                 self._init_publish_metrics_thread()
@@ -136,6 +137,11 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         request_total_slots = 4
         kv_active_block = 0
         kv_total_blocks = 4
+
+        if self._kv_metrics_publisher is None:
+            logger.error("KV metrics publisher not initialized!")
+            return
+
         self._kv_metrics_publisher.publish(
             request_active_slots,
             request_total_slots,
@@ -157,8 +163,12 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         # TRTLLM needs to start generating tokens first before kv cache events
         # can be retrieved.
         lib_path = "/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
+        if self._worker_id is None:
+            logger.error("Worker ID not initialized!")
+            return
+
         self._kv_cache_events_publisher = KVCacheEventPublisher(
-            self._namespace_str, self._component_str, self._worker_id, lib_path
+            self._namespace_str, self._component_str, int(self._worker_id), lib_path
         )
         self.publish_kv_cache_events_thread = ManagedThread(
             self.publish_kv_cache_events_task,
@@ -170,12 +180,20 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         """
         Publish stats to the metrics publisher.
         """
+        if self._llm_engine is None:
+            logger.error("LLM engine not initialized!")
+            return
+
         stats = self._llm_engine.get_stats_async(timeout=5)
         async for stat in stats:
             request_active_slots = stat["numActiveRequests"]
             request_total_slots = stat["maxNumActiveRequests"]
             kv_active_block = stat["kvCacheStats"]["usedNumBlocks"]
             kv_total_blocks = stat["kvCacheStats"]["maxNumBlocks"]
+            if self._kv_metrics_publisher is None:
+                logger.error("KV metrics publisher not initialized!")
+                return False
+
             self._kv_metrics_publisher.publish(
                 request_active_slots,
                 request_total_slots,
@@ -192,10 +210,14 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         """
         Publish kv cache events to the events publisher.
         """
+        if self._llm_engine is None:
+            logger.error("LLM engine not initialized!")
+            return
+
         events = self._llm_engine.get_kv_cache_events_async(timeout=5)
         async for event_list in events:
             for event in event_list:
-                logger.debug(f"Debugging: Event: {event}")
+                logger.debug(f"Received event from llmapi: {event}")
                 id = event["event_id"]
                 data = event["data"]
                 if data["type"] == "stored":
@@ -208,9 +230,13 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
                         for token in block["tokens"]:
                             # TODO: How to handle token_extra_id?
                             token_ids.append(token["token_id"])
+                    # Note: Currently data does not have lora_id.
+                    # Using 0 as default value. If later data has
+                    # lora_id, we need to verify if this is correct.
+                    lora_id = data.get("lora_id", 0)
                     # Publish the stored event
                     self._kv_cache_events_publisher.stored_event(
-                        id, parent_hash, block_hashes, token_ids
+                        id, parent_hash, block_hashes, token_ids, lora_id
                     )
                     logger.debug(
                         f"Published stored event: {id}, parent_hash: {parent_hash}, block_hashes: {block_hashes}, token_ids: {token_ids}"
