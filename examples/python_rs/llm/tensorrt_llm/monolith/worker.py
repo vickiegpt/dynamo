@@ -32,6 +32,7 @@ from tensorrt_llm.serve.openai_protocol import (
     CompletionStreamResponse,
 )
 
+from dynamo.llm import KvMetricsPublisher
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
 logger.set_level("debug")
@@ -86,6 +87,8 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
             async for response in response_generator:
                 yield response
 
+            self._start_threads()
+
             self._ongoing_request_count -= 1
         except CppExecutorError:
             # If internal executor error is raised, shutdown the server
@@ -132,6 +135,9 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
             async for response in response_generator:
                 yield json.loads(response)
 
+            # Start the publishing threads with first request submission
+            self._start_threads()
+
             self._ongoing_request_count -= 1
         except CppExecutorError:
             # If internal executor error is raised, shutdown the server
@@ -141,7 +147,12 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
 
 
 @dynamo_worker()
-async def worker(runtime: DistributedRuntime, engine_config: LLMAPIConfig):
+async def worker(
+    runtime: DistributedRuntime,
+    engine_config: LLMAPIConfig,
+    publish_stats: bool,
+    publish_kv_cache_events: bool,
+):
     """
     Instantiate a `backend` component and serve the `generate` endpoint
     A `Component` can serve multiple endpoints
@@ -159,16 +170,30 @@ async def worker(runtime: DistributedRuntime, engine_config: LLMAPIConfig):
         namespace_str=namespace_str,
         component_str=component_str,
         engine_config=engine_config,
+        publish_stats=publish_stats,
+        publish_kv_cache_events=publish_kv_cache_events,
     )
+    if publish_stats:
+        trt_llm_engine_config.kv_metrics_publisher = KvMetricsPublisher()
+
+    # TODO: refactor to include both completions and chat in the same worker endpoint.
+    trt_llm_engine_config.worker_id = completions_endpoint.lease_id()
+
     engine = TensorrtLLMEngine(trt_llm_engine_config)
 
-    await asyncio.gather(
+    coros = [
         completions_endpoint.serve_endpoint(engine.generate_completion),
         chat_completions_endpoint.serve_endpoint(engine.generate_chat),
-    )
+    ]
+    if publish_stats:
+        coros.append(
+            trt_llm_engine_config.kv_metrics_publisher.create_endpoint(component)
+        )
+
+    await asyncio.gather(*coros)
 
 
 if __name__ == "__main__":
     uvloop.install()
     args, engine_config = parse_tensorrt_llm_args()
-    asyncio.run(worker(engine_config))
+    asyncio.run(worker(engine_config, args.publish_stats, args.publish_kv_cache_events))
