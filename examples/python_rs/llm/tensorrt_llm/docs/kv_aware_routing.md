@@ -23,7 +23,6 @@ The KV Router is a component that aggregates KV Events from all the workers and 
 
 ## KV Aware Routing with Monolithic Serving
 
-
 Follow the instructions in the [README](../README.md) to setup the environment for [monolithic serving](../README.md#monolithic-deployment).
 
 ### 1. Workers
