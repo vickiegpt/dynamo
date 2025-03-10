@@ -42,7 +42,7 @@ echo "Adding models to the server..."
 llmctl http remove chat $MODEL_NAME
 llmctl http remove completion $MODEL_NAME
 
-if [ "$KV_AWARE" = true ]; then
+if [ "$NUM_WORKERS" -gt 1 ]; then
   component_str="router"
 else
   component_str="tensorrt-llm"
@@ -53,7 +53,7 @@ llmctl http add completion $MODEL_NAME dynamo.$component_str.completions
 llmctl http list
 
 # Launch router
-if [ "$KV_AWARE" = true ]; then
+if [ "$NUM_WORKERS" -gt 1 ]; then
   echo "Launching router..."
   python3 -m monolith.router --min-workers $NUM_WORKERS --engine_args llm_api_config.yaml 1>router.log 2>&1 &
 fi
