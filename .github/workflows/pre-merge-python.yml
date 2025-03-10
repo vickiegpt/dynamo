@@ -63,7 +63,7 @@ jobs:
           echo "cache_from_location=--cache-from \"type=registry,ref=${{ env.IMAGE_TAG }}\"" >> $GITHUB_OUTPUT
       - name: Build image
         run: |
-          ./container/build.sh --tag ${{ env.IMAGE_TAG }} --build-arg GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }} --framework ${{ matrix.framework }} ${{ steps.which_caches.outputs.cache_from_location }} ${{ steps.which_caches.outputs.cache_to_location }}
+          ./container/build.sh --tag ${{ env.IMAGE_TAG }} --build-arg GITHUB_TOKEN=${{ secrets.CI_TOKEN }} --framework ${{ matrix.framework }} ${{ steps.which_caches.outputs.cache_from_location }} ${{ steps.which_caches.outputs.cache_to_location }}
       - name: Run pytest
         env:
           PYTEST_MARKS: "pre_merge or mypy"
