@@ -77,6 +77,9 @@ VLLM_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
 VLLM_NIXL_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
 VLLM_NIXL_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
 
+# Add this near the top of the file with other variable declarations
+BUILD_CONTEXT_ARGS=""
+
 get_options() {
     while :; do
         case $1 in
@@ -193,7 +196,8 @@ get_options() {
             ;;
         --build-context)
             if [ "$2" ]; then
-                BUILD_CONTEXT_ARG="--build-context $2"
+                # Append new build context to existing ones with a space separator
+                BUILD_CONTEXT_ARGS="${BUILD_CONTEXT_ARGS} --build-context $2"
                 shift
             else
                 missing_requirement $1
@@ -351,7 +355,7 @@ if [ -z "$RUN_PREFIX" ]; then
     set -x
 fi
 
-$RUN_PREFIX docker buildx build -f $DOCKERFILE $TARGET_STR $PLATFORM $BUILD_ARGS $CACHE_FROM $CACHE_TO --output type=docker $TAG $LATEST_TAG $BUILD_CONTEXT_ARG $BUILD_CONTEXT $NO_CACHE
+$RUN_PREFIX docker buildx build -f $DOCKERFILE $TARGET_STR $PLATFORM $BUILD_ARGS $CACHE_FROM $CACHE_TO --output type=docker $TAG $LATEST_TAG $BUILD_CONTEXT_ARGS $BUILD_CONTEXT $NO_CACHE
 
 { set +x; } 2>/dev/null
 

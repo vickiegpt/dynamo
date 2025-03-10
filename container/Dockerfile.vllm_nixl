@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-ARG BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
-ARG BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
+ARG BASE_IMAGE="gitlab-master.nvidia.com/dl/dgx/vllm"
+ARG BASE_IMAGE_TAG="25.03-py3-devel"
 
 FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS dev
 
@@ -135,6 +135,8 @@ RUN ls -l /usr/local/nixl/include/internal/
 
 RUN ls /opt/nixl
 
+### UTILITIES ###
+
 # Install utilities
 RUN apt update -y && apt install -y git wget curl nvtop tmux vim
 # nats
@@ -164,10 +166,10 @@ RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requi
 
 # Install patched vllm - keep this early in Dockerfile to avoid
 # rebuilds from unrelated source code changes
-ARG VLLM_REF="v0.7.2"
-ARG VLLM_PATCH="vllm_${VLLM_REF}-dynamo-kv-disagg-patch.patch"
-RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
-    bash /tmp/deps/vllm/install.sh --patch /tmp/deps/vllm/${VLLM_PATCH} --ref ${VLLM_REF} --install-cmd "uv pip install --editable" --use-precompiled --installation-dir /opt/vllm
+# ARG VLLM_REF="v0.7.2"
+# ARG VLLM_PATCH="vllm_${VLLM_REF}-dynamo-kv-disagg-patch.patch"
+# RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
+#     bash /tmp/deps/vllm/install.sh --patch /tmp/deps/vllm/${VLLM_PATCH} --ref ${VLLM_REF} --install-cmd "uv pip install --editable" --use-precompiled --installation-dir /opt/vllm
 
 # Install genai-perf for benchmarking
 ARG GENAI_PERF_TAG="r25.01"
@@ -176,6 +178,24 @@ RUN uv pip install "git+https://github.com/triton-inference-server/perf_analyzer
 # Install test dependencies
 RUN --mount=type=bind,source=./container/deps/requirements.test.txt,target=/tmp/requirements.txt \
     uv pip install --requirement /tmp/requirements.txt
+
+
+
+### VLLM ###
+
+
+COPY --from=vllm . /opt/vllm/vllm-my-src
+
+RUN rm -rf /usr/local/lib/python3.12/dist-packages/vllm*
+ENV PYTHONPATH=$PYTHONPATH:/usr/local/lib/python3.12/dist-packages/
+ENV CCACHE_DIR=/opt/vllm/ccache
+ENV VLLM_FLASH_ATTN_SRC_DIR=/opt/vllm/vllm-flash-attn/
+RUN apt-get update && \
+    apt-get install -y ccache && \
+    cd /opt/vllm/vllm-my-src && \
+    pip install setuptools_scm && \
+    python setup.py install
+
 
 # ### MISC UTILITY SETUP ###
 
