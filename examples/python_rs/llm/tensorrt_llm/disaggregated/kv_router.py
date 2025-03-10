@@ -17,7 +17,6 @@ import asyncio
 import copy
 import json
 import traceback
-from enum import Enum
 from typing import AsyncIterator
 
 import uvloop
@@ -133,9 +132,7 @@ class Router(ChatProcessorMixin):
 
         gen_req = copy.deepcopy(request)
 
-        ctx_resp = await self._get_ctx_resp(
-            request, self.ctx_completion_client
-        )
+        ctx_resp = await self._get_ctx_resp(request, self.ctx_completion_client)
         ctx_resp_obj = DisaggCompletionStreamResponse.model_validate(ctx_resp)
 
         gen_req.disaggregated_params = DisaggregatedParams.model_validate(
@@ -168,9 +165,7 @@ class Router(ChatProcessorMixin):
 
         gen_req = copy.deepcopy(request)
 
-        ctx_resp = await self._get_ctx_resp(
-            request, self.ctx_chat_client
-        )
+        ctx_resp = await self._get_ctx_resp(request, self.ctx_chat_client)
         ctx_resp_obj = DisaggChatCompletionStreamResponse.model_validate_json(ctx_resp)
 
         gen_req.disaggregated_params = DisaggregatedParams.model_validate(
