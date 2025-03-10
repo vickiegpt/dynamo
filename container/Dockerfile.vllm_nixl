@@ -279,12 +279,16 @@ ENV RAPIDS_LIBUCX_PREFER_SYSTEM_LIBRARY=true
 ENV VLLM_KV_CAPI_PATH="/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
 
 # Copy binaries
+COPY --from=dev /usr/local/bin/dynamo-run /usr/local/bin/
 COPY --from=dev /usr/local/bin/http /usr/local/bin/http
 COPY --from=dev /usr/local/bin/llmctl /usr/local/bin/llmctl
 COPY --from=dev /usr/local/bin/etcd/etcd /usr/local/bin/etcd
 COPY --from=dev /usr/bin/nats-server /usr/local/bin/nats-server
 COPY --from=dev /bin/uv /usr/local/bin/uv
 COPY --from=dev /bin/uvx /usr/local/bin/uvx
+
+# Copy components
+COPY --from=dev /workspace/components /workspace/components
 
 # Copy venv with installed packages
 RUN uv python install 3.12
