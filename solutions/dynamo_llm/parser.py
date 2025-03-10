@@ -6,6 +6,23 @@ def parse_known_args():
     parser = argparse.ArgumentParser(description="Run an example of the llm.")
 
     parser.add_argument(
+        "--model",
+        type=str,
+        required=False,
+        choices=[
+            "meta-llama/llama-3.1-8b-instruct",
+            "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+        ],
+        default="deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+        help="model",
+    )
+
+    parser.add_argument("--block-size", type=int, default=64, required=False)
+
+    parser.add_argument("--max-model-len", type=int, default=16384)
+
+    parser.add_argument(
         "--prefill-workers",
         type=int,
         required=False,
@@ -14,10 +31,27 @@ def parse_known_args():
     )
 
     parser.add_argument(
-        "--router",
-        type=int,
+        "--leader",
+        type=str,
         required=False,
         default=0,
+        help="Number of context workers",
+    )
+
+    parser.add_argument(
+        "--leader-address",
+        type=str,
+        required=False,
+        default=0,
+        help="Number of context workers",
+    )
+
+    parser.add_argument(
+        "--router",
+        type=str,
+        required=False,
+        default="",
+        choices=["", "prefix"],
         help="Number of context workers",
     )
 

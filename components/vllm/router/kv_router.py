@@ -173,13 +173,13 @@ async def worker(runtime: DistributedRuntime, args: Namespace):
     endpoint = router_component.endpoint("generate")
 
     if args.custom_router:
-        indexer = KvIndexer(kv_listener)
+        indexer = KvIndexer(kv_listener, args.block_size)
         metrics_aggregator = KvMetricsAggregator(kv_listener)
         await endpoint.serve_endpoint(
             CustomRouter(indexer, metrics_aggregator).generate
         )
     else:
-        router = KvRouter(runtime, kv_listener)
+        router = KvRouter(runtime, kv_listener, args.block_size)
         await endpoint.serve_endpoint(Router(router, args.routing_strategy).generate)
 
 
@@ -214,6 +214,13 @@ if __name__ == "__main__":
         default=False,
         help="Whether to use custom router or not",
     )
+
+    parser.add_argument(
+        "--block-size",
+        type=int,
+        help="KV block size",
+    )
+
     args = parser.parse_args()
 
     asyncio.run(worker(args))

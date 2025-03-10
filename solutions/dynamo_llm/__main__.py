@@ -45,15 +45,26 @@ for sig in signals:
         pass
 
 
+# llmctl http add chat-models deepseek-ai/DeepSeek-R1-Distill-Llama-8B dynamo-init.process.chat/completions
+
+
 def _configure_http(args, unknown_args):
+    command = ["llmctl", "http", "remove", "chat-models", args.model]
+
+    subprocess.call(command)
+
     command = [
         "llmctl",
         "http",
         "add",
         "chat-models",
-        "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-        "dynamo-init.vllm.generate",
+        args.model,
     ]
+
+    if args.router == "prefix":
+        command.append("dynamo-init.process.chat/completions")
+    else:
+        command.append("dynamo-init.vllm.generate")
 
     subprocess.call(command)
 
@@ -78,8 +89,18 @@ def _launch_http(args, unknown_args):
 def _launch_vllm_worker(args, unknown_args):
     global processes
 
-    command = ["python3", "/workspace/components/vllm/routerless/worker.py"]
+    command = ["python3"]
+    if not args.router:
+        command.append("/workspace/components/vllm/routerless/worker.py")
+    else:
+        command.append("/workspace/components/vllm/router/worker.py")
     command.extend(unknown_args)
+    command.append("--model")
+    command.append(args.model)
+    command.append("--block-size")
+    command.append(str(args.block_size))
+    command.append("--max-model-len")
+    command.append(str(args.max_model_len))
     processes.append(
         subprocess.Popen(
             command, stdin=subprocess.DEVNULL, cwd="/workspace/components/vllm"
@@ -87,9 +108,69 @@ def _launch_vllm_worker(args, unknown_args):
     )
 
 
+# RUST_LOG=info python3 router/processor.py \
+#   --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B \
+#  --tokenizer deepseek-ai/DeepSeek-R1-Distill-Llama-8B \
+# --enable-prefix-caching \
+# --block-size 64 \
+# --max-model-len 16384
+
+
+def _launch_processor(args, unknown_args):
+    global processes
+
+    command = ["python3", "/workspace/components/vllm/router/processor.py"]
+    command.append("--model")
+    command.append(args.model)
+    command.append("--tokenizer")
+    command.append(args.model)
+    command.append("--enable-prefix-caching")
+    command.append("--block-size")
+    command.append(str(args.block_size))
+    command.append("--max-model-len")
+    command.append(str(args.max_model_len))
+
+    processes.append(
+        subprocess.Popen(
+            command, stdin=subprocess.DEVNULL, cwd="/workspace/components/vllm"
+        )
+    )
+
+
+# RUST_LOG=info python3 router/kv_router.py \
+#     --routing-strategy prefix \
+#     --model-name deepseek-ai/DeepSeek-R1-Distill-Llama-8B \
+#     --custom-router \
+#     --min-workers 1
+
+
+def _launch_router(args, unknown_args):
+    global processes
+
+    if args.router == "prefix":
+        _launch_processor(args, unknown_args)
+
+        command = ["python3", "/workspace/components/vllm/router/kv_router.py"]
+        command.append("--model-name")
+        command.append(args.model)
+        command.append("--custom-router")
+        command.append("True")
+        command.append("--min-workers")
+        command.append("1")
+        command.append("--block-size")
+        command.append(str(args.block_size))
+
+        processes.append(
+            subprocess.Popen(
+                command, stdin=subprocess.DEVNULL, cwd="/workspace/components/vllm"
+            )
+        )
+
+
 def main(known_args, unknown_args):
     print("started", known_args, unknown_args)
     _launch_http(known_args, unknown_args)
+    _launch_router(known_args, unknown_args)
     _launch_vllm_worker(known_args, unknown_args)
     while True:
         time.sleep(10)
