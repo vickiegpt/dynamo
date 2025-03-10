@@ -21,7 +21,7 @@ import weakref
 from queue import Queue
 from typing import AsyncIterator, Callable, Optional, Union
 
-from protocol import Tokens
+from common.protocol import Tokens
 from tensorrt_llm.logger import logger
 
 from dynamo.llm import KvRouter
@@ -43,8 +43,6 @@ class Scheduler:
         except Exception:
             logger.warning(f"Error during worker selection: {traceback.format_exc()}")
             worker_id = ""
-
-        logger.debug(f"Scheduling to worker_id: {worker_id}")
 
         yield str(worker_id)
 

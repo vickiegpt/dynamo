@@ -51,6 +51,10 @@ class Router(ChatProcessorMixin):
         logger.info("INITIALIZED ROUTER")
 
     async def _generate(self, request, client):
+        request.skip_special_tokens = False
+        request.add_special_tokens = False
+        request.spaces_between_special_tokens = False
+
         logger.debug(f"[router] Received request {request}")
 
         worker_id = await get_worker_id(self.scheduler, request, self._tokenizer)
@@ -58,7 +62,7 @@ class Router(ChatProcessorMixin):
         if worker_id == "":
             async for resp in await client.random(request.model_dump_json()):
                 logger.debug(f"[router - random] received response from worker: {resp}")
-                yield resp
+                yield resp.data()
         else:
             async for resp in await client.direct(
                 request.model_dump_json(), int(worker_id)
@@ -66,15 +70,17 @@ class Router(ChatProcessorMixin):
                 logger.debug(
                     f"[router - {worker_id}] received response from worker: {resp}"
                 )
-                yield resp
+                yield resp.data()
 
     @dynamo_endpoint(CompletionRequest, CompletionStreamResponse)
     async def generate_completion(self, request):
-        await self._generate(request, self.completion_client)
+        async for response in self._generate(request, self.completion_client):
+            yield response
 
     @dynamo_endpoint(ChatCompletionRequest, ChatCompletionStreamResponse)
     async def generate_chat(self, request):
-        await self._generate(request, self.chat_client)
+        async for response in self._generate(request, self.chat_client):
+            yield response
 
 
 @dynamo_worker()
