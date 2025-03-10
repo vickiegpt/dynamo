@@ -94,6 +94,8 @@ def _launch_vllm_worker(args, unknown_args):
         command.append("/workspace/components/vllm/routerless/worker.py")
     else:
         command.append("/workspace/components/vllm/router/worker.py")
+        command.append("--enable-prefix-caching")
+
     command.extend(unknown_args)
     command.append("--model")
     command.append(args.model)
@@ -101,6 +103,7 @@ def _launch_vllm_worker(args, unknown_args):
     command.append(str(args.block_size))
     command.append("--max-model-len")
     command.append(str(args.max_model_len))
+    print(command)
     processes.append(
         subprocess.Popen(
             command, stdin=subprocess.DEVNULL, cwd="/workspace/components/vllm"

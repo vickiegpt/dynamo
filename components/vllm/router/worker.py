@@ -177,7 +177,8 @@ async def worker(runtime: DistributedRuntime, engine_args: AsyncEngineArgs):
 
         metadata = engine_client.nixl_metadata
         metadata_store = NixlMetadataStore("dynamo-init", runtime)
-        await metadata_store.put(metadata.engine_id, metadata)
+        if metadata:
+            await metadata_store.put(metadata.engine_id, metadata)
 
         await asyncio.gather(
             endpoint.serve_endpoint(

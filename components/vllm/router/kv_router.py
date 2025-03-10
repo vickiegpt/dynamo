@@ -179,6 +179,7 @@ async def worker(runtime: DistributedRuntime, args: Namespace):
             CustomRouter(indexer, metrics_aggregator).generate
         )
     else:
+        # TODO Read block_size from MDC
         router = KvRouter(runtime, kv_listener, args.block_size)
         await endpoint.serve_endpoint(Router(router, args.routing_strategy).generate)
 
@@ -209,18 +210,16 @@ if __name__ == "__main__":
         help="Model that is being served",
     )
     parser.add_argument(
+        "--block-size",
+        type=int,
+        help="KV block size",
+    )
+    parser.add_argument(
         "--custom-router",
         type=bool,
         default=False,
         help="Whether to use custom router or not",
     )
-
-    parser.add_argument(
-        "--block-size",
-        type=int,
-        help="KV block size",
-    )
-
     args = parser.parse_args()
 
     asyncio.run(worker(args))
