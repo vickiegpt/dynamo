@@ -74,8 +74,8 @@ TENSORRTLLM_SKIP_CLONE=0
 VLLM_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
 VLLM_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
 
-VLLM_NIXL_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
-VLLM_NIXL_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
+VLLM_NIXL_BASE_IMAGE="gitlab-master.nvidia.com/dl/dgx/vllm"
+VLLM_NIXL_BASE_IMAGE_TAG="25.03-py3-devel"
 
 # Add this near the top of the file with other variable declarations
 BUILD_CONTEXT_ARGS=""
