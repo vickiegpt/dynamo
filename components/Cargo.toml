@@ -17,7 +17,6 @@
 members = [
     "http",
     "metrics",
-    "service_metrics"
 ]
 resolver = "2"
 
