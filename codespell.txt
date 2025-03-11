@@ -1,2 +1,2 @@
-dynamo->dynemo
-dynmo->dynemo
+dynmo->dynamo
+dynemo->dynamo

@@ -21,12 +21,12 @@
 if [ $# -gt 2 ]; then
     echo "Usage: $0 [model_name] [endpoint_name]"
     echo "Optional: model_name (default: deepseek-ai/DeepSeek-R1-Distill-Llama-8B)"
-    echo "Optional: endpoint_name (default: dynemo.vllm.generate)"
+    echo "Optional: endpoint_name (default: dynamo.vllm.generate)"
     exit 1
 fi
 
 MODEL_NAME=${1:-"deepseek-ai/DeepSeek-R1-Distill-Llama-8B"}
-ENDPOINT_NAME=${2:-"dynemo.vllm.generate"}
+ENDPOINT_NAME=${2:-"dynamo.vllm.generate"}
 SESSION_NAME="vllm_disagg"
 WORKDIR="$(dirname $0)/.."
 INIT_CMD="cd $WORKDIR"
@@ -99,7 +99,7 @@ PREFILL_CMD="VLLM_WORKER_MULTIPROC_METHOD=spawn CUDA_VISIBLE_DEVICES=0 \
     --max-model-len 1000 \
     --tensor-parallel-size 1 \
     --kv-transfer-config \
-    '{\"kv_connector\":\"TritonNcclConnector\",\"kv_role\":\"kv_producer\",\"kv_rank\":0,\"kv_parallel_size\":2}'"
+    '{\"kv_connector\":\"DynamoNcclConnector\",\"kv_role\":\"kv_producer\",\"kv_rank\":0,\"kv_parallel_size\":2}'"
 
 tmux select-pane -t 2
 tmux send-keys "$INIT_CMD && $PREFILL_CMD" C-m
@@ -115,7 +115,7 @@ DECODE_CMD="VLLM_WORKER_MULTIPROC_METHOD=spawn CUDA_VISIBLE_DEVICES=1 \
     --max-model-len 1000 \
     --tensor-parallel-size 1 \
     --kv-transfer-config \
-    '{\"kv_connector\":\"TritonNcclConnector\",\"kv_role\":\"kv_consumer\",\"kv_rank\":1,\"kv_parallel_size\":2}'"
+    '{\"kv_connector\":\"DynamoNcclConnector\",\"kv_role\":\"kv_consumer\",\"kv_rank\":1,\"kv_parallel_size\":2}'"
 
 tmux select-pane -t 3
 tmux send-keys "$INIT_CMD && $DECODE_CMD" C-m

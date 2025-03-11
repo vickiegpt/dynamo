@@ -14,7 +14,7 @@
 // limitations under the License.
 
 use anyhow::Result;
-use dynemo_runtime::{component::Component, component::Namespace, DistributedRuntime};
+use dynamo_runtime::{component::Component, component::Namespace, DistributedRuntime};
 use futures::stream::StreamExt;
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
@@ -35,6 +35,7 @@ use crate::kv_router::{
 
 // this should be discovered from the backend
 pub const KV_EVENT_SUBJECT: &str = "kv_events";
+pub const KV_HIT_RATE_SUBJECT: &str = "kv-hit-rate";
 
 pub struct KvRouter {
     // properties of request plane
@@ -53,6 +54,7 @@ impl KvRouter {
     pub async fn from_runtime(
         runtime: DistributedRuntime,
         backend: Component,
+        kv_block_size: usize,
     ) -> Result<Arc<Self>> {
         let nats_client = runtime.nats_client();
         let service_name = backend.service_name();
@@ -62,14 +64,22 @@ impl KvRouter {
         tracing::info!("Component Namespace {}", backend.namespace());
         tracing::info!("Component Service Name {}", service_name);
         tracing::info!("KV Subject {}", kv_subject);
-        Self::new(nats_client, service_name, kv_subject, namespace).await
+        Self::new(
+            nats_client,
+            service_name,
+            kv_subject,
+            namespace,
+            kv_block_size,
+        )
+        .await
     }
 
     pub async fn new(
-        nats_client: dynemo_runtime::transports::nats::Client,
+        nats_client: dynamo_runtime::transports::nats::Client,
         service_name: String,
         kv_subject: String,
         namespace: Namespace,
+        kv_block_size: usize,
     ) -> Result<Arc<Self>> {
         let cancellation_token = CancellationToken::new();
         let (ep_tx, ep_rx) = tokio::sync::mpsc::channel(128);
@@ -81,8 +91,8 @@ impl KvRouter {
             cancellation_token.clone(),
         ));
 
-        let indexer = KvIndexer::new(cancellation_token.clone());
-        let scheduler = KvScheduler::start(ep_rx, namespace).await?;
+        let indexer = KvIndexer::new(cancellation_token.clone(), kv_block_size);
+        let scheduler = KvScheduler::start(ep_rx, namespace, kv_block_size).await?;
 
         tracing::debug!("subscribing to kv events: {}", kv_subject);
         let mut kv_events_rx = nats_client.client().subscribe(kv_subject).await?;
@@ -140,7 +150,7 @@ impl KvRouter {
 }
 
 async fn collect_endpoints(
-    nats_client: dynemo_runtime::transports::nats::Client,
+    nats_client: dynamo_runtime::transports::nats::Client,
     service_name: String,
     ep_tx: tokio::sync::mpsc::Sender<ProcessedEndpoints>,
     cancel: CancellationToken,
