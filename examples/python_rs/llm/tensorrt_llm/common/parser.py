@@ -144,9 +144,4 @@ def parse_tensorrt_llm_args() -> Tuple[Any, Tuple[Dict[str, Any], Dict[str, Any]
     )
 
     args = parser.parse_args()
-    if args.routing_strategy == RoutingStrategy.PREFIX:
-        assert (
-            args.publish_kv_cache_events and args.publish_stats
-        ), "KV cache events and stats must be published for prefix routing"
-
     return (args, _init_engine_args(args.engine_args))

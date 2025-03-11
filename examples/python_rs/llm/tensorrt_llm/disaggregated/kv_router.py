@@ -56,7 +56,7 @@ class Router(ChatProcessorMixin):
         # allows to use tokenizer
         super().__init__(engine_config)
 
-        logger.info("INITIALIZED ROUTER")
+        logger.info(f"INITIALIZED ROUTER with routing strategy: {self.routing_strategy}")
 
     async def _get_ctx_resp(self, request, ctx_client):
         logger.debug(f"Received request {request}")

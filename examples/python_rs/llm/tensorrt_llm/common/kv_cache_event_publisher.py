@@ -112,7 +112,7 @@ class KVCacheEventPublisher:
         result = self.lib.dynamo_kv_event_publish_removed(
             event_id,
             (ctypes.c_uint64 * len(block_hashes))(*block_hashes),
-            (ctypes.c_size_t * 1)(len(block_hashes)),
+            ctypes.c_size_t(len(block_hashes)),
         )
 
         if result == DynamoResult.OK:

@@ -30,7 +30,7 @@ from tensorrt_llm.serve.openai_protocol import (
 from dynamo.llm import KvRouter
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
-logger.set_level("info")
+logger.set_level("debug")
 
 
 class Router(ChatProcessorMixin):
@@ -49,7 +49,7 @@ class Router(ChatProcessorMixin):
         # allows to use tokenizer
         super().__init__(engine_config)
 
-        logger.info("INITIALIZED ROUTER")
+        logger.info(f"INITIALIZED ROUTER with routing strategy: {self.routing_strategy}")
 
     async def _generate(self, request, client):
         request.skip_special_tokens = False
@@ -65,20 +65,15 @@ class Router(ChatProcessorMixin):
         if worker_id == "":
             if self.routing_strategy == RoutingStrategy.ROUND_ROBIN:
                 async for resp in await client.round_robin(request.model_dump_json()):
-                    logger.debug(f"[router - round_robin] received response from worker: {resp}")
                     yield resp.data()
             else:
                 # fallback to random
                 async for resp in await client.random(request.model_dump_json()):
-                    logger.debug(f"[router - random] received response from worker: {resp}")
                     yield resp.data()
         else:
             async for resp in await client.direct(
                 request.model_dump_json(), int(worker_id)
             ):
-                logger.debug(
-                    f"[router - {worker_id}] received response from worker: {resp}"
-                )
                 yield resp.data()
 
     @dynamo_endpoint(CompletionRequest, CompletionStreamResponse)
