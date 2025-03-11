@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 
 import yaml
+from common.utils import RoutingStrategy
 from tensorrt_llm._torch.pyexecutor.config import PyTorchConfig
 from tensorrt_llm.llmapi import KvCacheConfig
 
@@ -134,6 +135,18 @@ def parse_tensorrt_llm_args() -> Tuple[Any, Tuple[Dict[str, Any], Dict[str, Any]
         default=1,
         help="Minimum number of workers for aggregated (monolith) server",
     )
+    parser.add_argument(
+        "--routing-strategy",
+        type=RoutingStrategy,
+        default=RoutingStrategy.RANDOM,
+        help="Routing strategy for the router",
+        choices=list(RoutingStrategy),
+    )
 
     args = parser.parse_args()
+    if args.routing_strategy == RoutingStrategy.PREFIX:
+        assert (
+            args.publish_kv_cache_events and args.publish_stats
+        ), "KV cache events and stats must be published for prefix routing"
+
     return (args, _init_engine_args(args.engine_args))

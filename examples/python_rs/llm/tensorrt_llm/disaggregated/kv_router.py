@@ -44,12 +44,14 @@ class Router(ChatProcessorMixin):
         gen_completion_client,
         scheduler: Scheduler,
         engine_config: LLMAPIConfig,
+        routing_strategy: RoutingStrategy,
     ):
         self.ctx_chat_client = ctx_chat_client
         self.gen_chat_client = gen_chat_client
         self.ctx_completion_client = ctx_completion_client
         self.gen_completion_client = gen_completion_client
         self.scheduler = scheduler
+        self.routing_strategy = routing_strategy
 
         # allows to use tokenizer
         super().__init__(engine_config)
@@ -59,16 +61,26 @@ class Router(ChatProcessorMixin):
     async def _get_ctx_resp(self, request, ctx_client):
         logger.debug(f"Received request {request}")
 
-        worker_id = await get_worker_id(self.scheduler, request, self._tokenizer)
         request.max_tokens = 1
         request.disaggregated_params = DisaggregatedParams(request_type="context_only")
         logger.debug(f"[router] Sending request to context server: {request}")
 
+        worker_id = ""
+        if self.routing_strategy == RoutingStrategy.PREFIX:
+            worker_id = await get_worker_id(self.scheduler, request, self._tokenizer)
+
         if worker_id == "":
-            ctx_resp = [
-                resp
-                async for resp in await ctx_client.random(request.model_dump_json())
-            ]
+            if self.routing_strategy == RoutingStrategy.ROUND_ROBIN:
+                ctx_resp = [
+                    resp
+                    async for resp in await ctx_client.round_robin(request.model_dump_json())
+                ]
+            else:
+                # fallback to random
+                ctx_resp = [
+                    resp
+                    async for resp in await ctx_client.random(request.model_dump_json())
+                ]
         else:
             ctx_resp = [
                 resp
@@ -193,10 +205,13 @@ async def worker(runtime: DistributedRuntime, args, engine_config):
     )
 
     # Only listen to context server for now
-    kv_listener = runtime.namespace("dynamo").component("tensorrt-llm-ctx")
-    await kv_listener.create_service()
+    if args.routing_strategy == RoutingStrategy.PREFIX:
+        kv_listener = runtime.namespace("dynamo").component("tensorrt-llm-ctx")
+        await kv_listener.create_service()
 
-    kv_router = KvRouter(runtime, kv_listener)
+        kv_router = KvRouter(runtime, kv_listener)
+    else:
+        kv_router = None
 
     completions_endpoint = component.endpoint("completions")
     chat_endpoint = component.endpoint("chat/completions")
@@ -209,6 +224,7 @@ async def worker(runtime: DistributedRuntime, args, engine_config):
         gen_completion_client,
         scheduler,
         engine_config,
+        args.routing_strategy,
     )
 
     await asyncio.gather(

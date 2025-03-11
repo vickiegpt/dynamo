@@ -15,6 +15,7 @@
 
 
 import asyncio
+import enum
 import threading
 import traceback
 import weakref
@@ -30,12 +31,21 @@ from dynamo.runtime import dynamo_endpoint
 logger.set_level("info")
 
 
+class RoutingStrategy(enum.Enum):
+    ROUND_ROBIN = "round_robin"
+    RANDOM = "random"
+    PREFIX = "prefix"
+
+
 class Scheduler:
     def __init__(self, kv_router: KvRouter):
         self.kv_router = kv_router
 
     @dynamo_endpoint(Tokens, str)
     async def generate(self, request) -> AsyncIterator[str]:
+        if self.kv_router is None:
+            yield ""
+
         lora_id = 0
         worker_id = None
         try:

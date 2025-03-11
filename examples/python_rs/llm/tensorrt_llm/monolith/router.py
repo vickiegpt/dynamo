@@ -18,7 +18,7 @@ import asyncio
 import uvloop
 from common.base_engine import ChatProcessorMixin
 from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
-from common.utils import Scheduler, get_worker_id, wait_for_workers
+from common.utils import Scheduler, get_worker_id, wait_for_workers, RoutingStrategy
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import (
     ChatCompletionRequest,
@@ -40,11 +40,12 @@ class Router(ChatProcessorMixin):
         chat_client,
         scheduler: Scheduler,
         engine_config: LLMAPIConfig,
+        routing_strategy: RoutingStrategy,
     ):
         self.completion_client = completion_client
         self.chat_client = chat_client
         self.scheduler = scheduler
-
+        self.routing_strategy = routing_strategy
         # allows to use tokenizer
         super().__init__(engine_config)
 
@@ -57,12 +58,20 @@ class Router(ChatProcessorMixin):
 
         logger.debug(f"[router] Received request {request}")
 
-        worker_id = await get_worker_id(self.scheduler, request, self._tokenizer)
+        worker_id = ""
+        if self.routing_strategy == RoutingStrategy.PREFIX:
+            worker_id = await get_worker_id(self.scheduler, request, self._tokenizer)
 
         if worker_id == "":
-            async for resp in await client.random(request.model_dump_json()):
-                logger.debug(f"[router - random] received response from worker: {resp}")
-                yield resp.data()
+            if self.routing_strategy == RoutingStrategy.ROUND_ROBIN:
+                async for resp in await client.round_robin(request.model_dump_json()):
+                    logger.debug(f"[router - round_robin] received response from worker: {resp}")
+                    yield resp.data()
+            else:
+                # fallback to random
+                async for resp in await client.random(request.model_dump_json()):
+                    logger.debug(f"[router - random] received response from worker: {resp}")
+                    yield resp.data()
         else:
             async for resp in await client.direct(
                 request.model_dump_json(), int(worker_id)
@@ -108,10 +117,13 @@ async def worker(runtime: DistributedRuntime, args, engine_config):
     await wait_for_workers(completion_client, args.min_workers)
     await wait_for_workers(chat_client, args.min_workers)
 
-    kv_listener = runtime.namespace("dynamo").component("tensorrt-llm")
-    await kv_listener.create_service()
+    if args.routing_strategy == RoutingStrategy.PREFIX:
+        kv_listener = runtime.namespace("dynamo").component("tensorrt-llm")
+        await kv_listener.create_service()
 
-    kv_router = KvRouter(runtime, kv_listener)
+        kv_router = KvRouter(runtime, kv_listener)
+    else:
+        kv_router = None
 
     completions_endpoint = component.endpoint("completions")
     chat_endpoint = component.endpoint("chat/completions")
@@ -122,6 +134,7 @@ async def worker(runtime: DistributedRuntime, args, engine_config):
         chat_client,
         scheduler,
         engine_config,
+        args.routing_strategy,
     )
 
     await asyncio.gather(
