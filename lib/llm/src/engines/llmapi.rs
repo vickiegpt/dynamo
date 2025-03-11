@@ -16,7 +16,6 @@
 use std::ffi::CStr;
 use std::{path::Path, sync::Arc};
 
-use anyhow::Context;
 use dynamo_runtime::pipeline::error as pipeline_error;
 pub use dynamo_runtime::{
     error,
@@ -43,18 +42,13 @@ use crate::types::openai::chat_completions::OpenAIChatCompletionsStreamingEngine
 const PY_IMPORT: &CStr = cr#"
 import importlib.util
 import sys
-import os
 
-module_dir = os.path.dirname(file_path)
-if module_dir not in sys.path:
-    sys.path.insert(0, module_dir)  # Add to the beginning of sys.path
-spec = importlib.util.spec_from_file_location("__main__", file_path)
-
+module_name = file_path.split("/")[-1].replace(".py", "")
+spec = importlib.util.spec_from_file_location(module_name, file_path)
 
 module = importlib.util.module_from_spec(spec)
 
-sys.argv = sys_argv
-sys.modules["__main__"] = module
+sys.modules[module_name] = module
 spec.loader.exec_module(module)
 "#;
 
@@ -62,65 +56,52 @@ spec.loader.exec_module(module)
 pub async fn make_string_engine(
     cancel_token: CancellationToken,
     py_file: &Path,
-    py_args: Vec<String>,
 ) -> pipeline_error::Result<OpenAIChatCompletionsStreamingEngine> {
     pyo3::prepare_freethreaded_python();
 
-    let engine = new_engine(cancel_token, py_file, py_args).await?;
+    let engine = new_engine(cancel_token, py_file).await?;
     let engine: OpenAIChatCompletionsStreamingEngine = Arc::new(engine);
     Ok(engine)
 }
 
 /// An engine that takes and returns tokens.
-pub async fn make_token_engine(
-    cancel_token: CancellationToken,
-    py_file: &Path,
-    py_args: Vec<String>,
-) -> pipeline_error::Result<ExecutionContext> {
-    pyo3::prepare_freethreaded_python();
-
-    let engine = new_engine(cancel_token, py_file, py_args).await?;
-    let engine: ExecutionContext = Arc::new(engine);
-    Ok(engine)
-}
+//  pub async fn make_token_engine(
+//    cancel_token: CancellationToken,
+//    py_file: &Path,
+//) -> pipeline_error::Result<ExecutionContext> {
+//    pyo3::prepare_freethreaded_python();
+//
+//  let engine = new_engine(cancel_token, py_file).await?;
+//    let engine: ExecutionContext = Arc::new(engine);
+//    Ok(engine)
+//}
 
 #[derive(Clone)]
 pub struct PythonServerStreamingEngine {
     _cancel_token: CancellationToken,
+    initialize: Arc<PyObject>,
     generator: Arc<PyObject>,
+    finalize: Arc<PyObject>,
     event_loop: Arc<PyObject>,
 }
 
 async fn new_engine(
     cancel_token: CancellationToken,
     py_file: &Path,
-    py_args: Vec<String>,
 ) -> anyhow::Result<PythonServerStreamingEngine> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::task::spawn_blocking(move || run_asyncio(tx));
     let event_loop = rx.await?;
 
-    let user_module =
-        python_file_to_module(py_file, py_args).with_context(|| py_file.display().to_string())?;
-    let generator = Python::with_gil(|py| {
-        /* Leave commented, `initialize` may be needed to match Triton
-        if let Ok(initialize) = user_module.getattr(py, "initialize") {
-            initialize
-                .call1(py, (py_args,))
-                .inspect_err(|err| {
-                    println!();
-                    err.display(py);
-                })
-                .with_context(|| "Failed calling python engine's initialize(args)")?;
-        };
-        */
-        user_module
-            .getattr(py, "generate")
-            .with_context(|| "generate")
-    })?;
+    let user_module = python_file_to_module(py_file)?;
+    let initialize = Python::with_gil(|py| user_module.getattr(py, "initialize").unwrap());
+    let generator = Python::with_gil(|py| user_module.getattr(py, "generate").unwrap());
+    let finalize = Python::with_gil(|py| user_module.getattr(py, "finalize").unwrap());
     Ok(PythonServerStreamingEngine::new(
         cancel_token,
-        Arc::new(generator),
+        initialize,
+        generator,
+        finalize,
         event_loop,
     ))
 }
@@ -128,12 +109,16 @@ async fn new_engine(
 impl PythonServerStreamingEngine {
     pub fn new(
         cancel_token: CancellationToken,
+        initialize: Arc<PyObject>,
         generator: Arc<PyObject>,
+        finalize: Arc<PyObject>,
         event_loop: Arc<PyObject>,
     ) -> Self {
         PythonServerStreamingEngine {
             _cancel_token: cancel_token,
+            initialize,
             generator,
+            finalize,
             event_loop,
         }
     }
@@ -152,25 +137,16 @@ fn run_asyncio(tx: Sender<Arc<PyObject>>) {
     });
 }
 
-fn python_file_to_module(p: &Path, mut py_args: Vec<String>) -> Result<PyObject> {
-    if let Some(filename) = p.file_name() {
-        py_args.insert(0, filename.to_string_lossy().to_string());
-    };
+fn python_file_to_module(p: &Path) -> Result<PyObject> {
     let module: PyObject = Python::with_gil(|py| {
-        let py_file_path: PyObject = p.display().to_string().into_pyobject(py).unwrap().into();
-        let py_sys_argv: PyObject = py_args.into_pyobject(py).unwrap().into();
-        let globals = [("file_path", py_file_path), ("sys_argv", py_sys_argv)]
+        let globals = [("file_path", p.display().to_string())]
             .into_py_dict(py)
-            .context("into_py_dict")?;
+            .unwrap();
         let locals = PyDict::new(py);
-        py.run(PY_IMPORT, Some(&globals), Some(&locals))
-            .context("PY_IMPORT")?;
-        let module = locals
-            .get_item("module")
-            .unwrap()
-            .context("get module after import")?;
-        module.extract().context("extract")
-    })?;
+        py.run(PY_IMPORT, Some(&globals), Some(&locals)).unwrap();
+        let module = locals.get_item("module").unwrap().unwrap();
+        module.extract().unwrap()
+    });
     Ok(module)
 }
 
@@ -268,14 +244,17 @@ where
                                 // todo: add task-local context to the python async generator
                                 ctx.stop_generating();
                                 let msg = format!("critical error: invalid response object from python async generator; application-logic-mismatch: {}", e);
+                                tracing::error!(request_id, "{}", msg);
                                 msg
                             }
                             ResponseProcessingError::PythonException(e) => {
                                 let msg = format!("a python exception was caught while processing the async generator: {}", e);
+                                tracing::warn!(request_id, "{}", msg);
                                 msg
                             }
                             ResponseProcessingError::OffloadError(e) => {
                                 let msg = format!("critical error: failed to offload the python async generator to a new thread: {}", e);
+                                tracing::error!(request_id, "{}", msg);
                                 msg
                             }
                         };
@@ -319,11 +298,8 @@ async fn process_item<Resp>(
 where
     Resp: Data + for<'de> Deserialize<'de>,
 {
-    let item = item.map_err(|e| {
-        println!();
-        Python::with_gil(|py| e.display(py));
-        ResponseProcessingError::PythonException(e.to_string())
-    })?;
+    let item = item.map_err(|e| ResponseProcessingError::PythonException(e.to_string()))?;
+
     let response = tokio::task::spawn_blocking(move || {
         Python::with_gil(|py| depythonize::<Resp>(&item.into_bound(py)))
     })
