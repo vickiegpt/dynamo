@@ -18,9 +18,28 @@ name = "ai-dynamo-sdk"
 version = "0.1.0"
 description = "Distributed Inference Framework - SDK"
 readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+license-files = ["LICENSE"]
 authors = [
     { name = "NVIDIA Inc.", email = "sw-dl-dynamo@nvidia.com" },
 ]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Machine Learning",
+    "Operating System :: POSIX :: Linux",
+]
+keywords = ["llm", "genai", "inference", "nvidia", "distributed", "dynamo"]
+
 dependencies = [
     # TODO: currently compatible with bentoml==1.4.1,
     # v1.4.2 has removed normalize_identifier which is used in dynamo
@@ -31,10 +50,6 @@ dependencies = [
 
 [project.scripts]
 dynamo-sdk = "dynamo.sdk.cli.cli:cli"
-
-[tool.setuptools]
-namespace-packages = ["dynamo"]
-package-dir = {"dynamo.sdk" = "src/dynamo/sdk"}
 
 [build-system]
 requires = ["hatchling"]
