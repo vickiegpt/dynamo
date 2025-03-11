@@ -35,7 +35,6 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    "Topic :: Scientific/Engineering :: Machine Learning",
     "Operating System :: POSIX :: Linux",
 ]
 keywords = ["llm", "genai", "inference", "nvidia", "distributed", "dynamo"]
