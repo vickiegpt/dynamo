@@ -15,7 +15,7 @@
 
 use service_metrics::{MyStats, DEFAULT_NAMESPACE};
 
-use dynamo_runtime::{
+use dynemo_runtime::{
     logging,
     pipeline::{
         async_trait, network::Ingress, AsyncEngine, AsyncEngineContextProvider, Error, ManyOut,

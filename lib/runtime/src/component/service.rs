@@ -27,7 +27,8 @@ pub type StatsHandler =
 pub type EndpointStatsHandler =
     Box<dyn FnMut(endpoint::Stats) -> serde_json::Value + Send + Sync + 'static>;
 
-pub const PROJECT_NAME: &str = "Dynamo";
+// TODO(rename) - pending rename of project
+pub const PROJECT_NAME: &str = "Triton";
 
 #[derive(Educe, Builder, Dissolve)]
 #[educe(Debug)]

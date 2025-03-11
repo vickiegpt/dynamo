@@ -19,12 +19,12 @@ import asyncio
 
 import uvloop
 
-from dynamo.runtime import DistributedRuntime, dynamo_worker
+from dynemo.runtime import DistributedRuntime, dynemo_worker
 
 from .protocol import Request
 
 
-@dynamo_worker()
+@dynemo_worker()
 async def worker(
     runtime: DistributedRuntime,
     component: str,
@@ -38,7 +38,7 @@ async def worker(
     """
     # create client
     client = (
-        await runtime.namespace("dynamo")
+        await runtime.namespace("dynemo")
         .component(component)
         .endpoint("generate")
         .client()

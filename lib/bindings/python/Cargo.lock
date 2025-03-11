@@ -957,8 +957,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-llm"
-version = "0.1.0"
+name = "dynemo-llm"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -972,7 +972,7 @@ dependencies = [
  "chrono",
  "cmake",
  "derive_builder",
- "dynamo-runtime",
+ "dynemo-runtime",
  "either",
  "erased-serde",
  "futures",
@@ -1008,11 +1008,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-py3"
-version = "0.1.0"
+name = "dynemo-py3"
+version = "0.2.1"
 dependencies = [
- "dynamo-llm",
- "dynamo-runtime",
+ "dynemo-llm",
+ "dynemo-runtime",
  "futures",
  "once_cell",
  "pyo3",
@@ -1028,8 +1028,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-runtime"
-version = "0.1.0"
+name = "dynemo-runtime"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-nats",

@@ -17,12 +17,12 @@ import asyncio
 
 import uvloop
 
-from dynamo.runtime import DistributedRuntime, dynamo_worker
+from dynemo.runtime import DistributedRuntime, dynemo_worker
 
 uvloop.install()
 
 
-@dynamo_worker()
+@dynemo_worker()
 async def worker(runtime: DistributedRuntime):
     foo = (
         await runtime.namespace("examples/bls")

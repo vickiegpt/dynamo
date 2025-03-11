@@ -18,7 +18,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Receiver;
 
-use dynamo_runtime::{
+use dynemo_runtime::{
     protocols::{self, annotated::Annotated},
     raise,
     transports::etcd::{KeyValue, WatchEvent},
@@ -55,8 +55,10 @@ pub struct ModelWatchState {
     pub drt: DistributedRuntime,
 }
 
-pub async fn model_watcher(state: Arc<ModelWatchState>, mut events_rx: Receiver<WatchEvent>) {
+pub async fn model_watcher(state: Arc<ModelWatchState>, events_rx: Receiver<WatchEvent>) {
     tracing::debug!("model watcher started");
+
+    let mut events_rx = events_rx;
 
     while let Some(event) = events_rx.recv().await {
         match event {
@@ -78,11 +80,15 @@ pub async fn model_watcher(state: Arc<ModelWatchState>, mut events_rx: Receiver<
             },
         }
     }
+
+    tracing::debug!("model watcher stopped");
 }
 
 async fn handle_delete(kv: &KeyValue, state: Arc<ModelWatchState>) -> Result<(&str, ModelType)> {
+    tracing::debug!("removing model");
+
     let key = kv.key_str()?;
-    tracing::debug!(key, "removing model");
+    tracing::debug!("key: {}", key);
 
     let model_name = key.trim_start_matches(&state.prefix);
 
@@ -98,14 +104,22 @@ async fn handle_delete(kv: &KeyValue, state: Arc<ModelWatchState>) -> Result<(&s
 // models.
 //
 // If this method errors, for the near term, we will delete the offending key.
-async fn handle_put(kv: &KeyValue, state: Arc<ModelWatchState>) -> Result<(String, ModelType)> {
+async fn handle_put(kv: &KeyValue, state: Arc<ModelWatchState>) -> Result<(&str, ModelType)> {
+    tracing::debug!("adding model");
+
     let key = kv.key_str()?;
-    tracing::debug!(key, "adding model");
+    tracing::debug!("key: {}", key);
 
-    // model_entry.name is the service name (e.g. "Llama-3.2-3B-Instruct")
+    let model_name = key.trim_start_matches(&state.prefix);
     let model_entry = serde_json::from_slice::<ModelEntry>(kv.value())?;
-    let service_name = model_entry.name.clone();
 
+    if model_entry.name != model_name {
+        raise!(
+            "model name mismatch: {} != {}",
+            model_entry.name,
+            model_name
+        );
+    }
     if model_entry.model_type != state.model_type {
         raise!(
             "model type mismatch: {} != {}",
@@ -125,7 +139,7 @@ async fn handle_put(kv: &KeyValue, state: Arc<ModelWatchState>) -> Result<(Strin
                 .await?;
             state
                 .manager
-                .add_chat_completions_model(&service_name, Arc::new(client))?;
+                .add_chat_completions_model(model_name, Arc::new(client))?;
         }
         ModelType::Completion => {
             let client = state
@@ -137,9 +151,9 @@ async fn handle_put(kv: &KeyValue, state: Arc<ModelWatchState>) -> Result<(Strin
                 .await?;
             state
                 .manager
-                .add_completions_model(&service_name, Arc::new(client))?;
+                .add_completions_model(model_name, Arc::new(client))?;
         }
     }
 
-    Ok((service_name, state.model_type))
+    Ok((model_name, state.model_type))
 }

@@ -14,15 +14,15 @@
 # limitations under the License.
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["NVIDIA"]
 license = "Apache-2.0"
-homepage = "https://github.com/ai-dynamo/dynamo"
-repository = "https://github.com/ai-dynamo/dynamo.git"
+homepage = "https://github.com/dynemo-ai/dynemo"
+repository = "https://github.com/dynemo-ai/dynemo.git"
 
 [package]
-name = "dynamo-llm"
+name = "dynemo-llm"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -44,7 +44,7 @@ vulkan = ["llama-cpp-2/vulkan"]
 
 [workspace.dependencies]
 # local or crates.io
-dynamo-runtime = { version = "0.1.0", path = "../runtime" }
+dynemo-runtime = { version = "0.2.0", path = "../runtime" }
 
 # crates.io
 anyhow = { version = "1" }
@@ -67,7 +67,7 @@ strum = { version = "0.27", features = ["derive"] }
 [dependencies]
 
 # repo
-dynamo-runtime = { workspace = true }
+dynemo-runtime = { workspace = true }
 
 # workspace
 anyhow = { workspace = true }
@@ -164,7 +164,6 @@ pythonize = { version = "0.23", optional = true }
 proptest = "1.5.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 rstest = "0.18.2"
-rstest_reuse = "0.7.0"
 tempfile = "3.17.1"
 hf-hub = "0.4.1"
 insta = { version = "1.41", features = [

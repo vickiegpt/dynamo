@@ -154,6 +154,7 @@ impl Component {
         format!("{}/{}", self.namespace, self.name)
     }
 
+    /// Returns a reference to the namespace string of this component
     pub fn namespace(&self) -> &str {
         &self.namespace
     }

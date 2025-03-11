@@ -57,9 +57,19 @@ STANDARD_BASE_IMAGE=nvcr.io/nvidia/tritonserver
 STANDARD_BASE_IMAGE_TAG=${STANDARD_BASE_VERSION}-py3
 
 TENSORRTLLM_BASE_VERSION=25.01
-TENSORRTLLM_BASE_IMAGE="gitlab-master.nvidia.com:5005/dl/dgx/tritonserver/tensorrt-llm/amd64"
-TENSORRTLLM_BASE_IMAGE_TAG=krish-fix-trtllm-build.23766174
-TENSORRTLLM_PIP_WHEEL_PATH=""
+TENSORRTLLM_BASE_IMAGE=nvcr.io/nvidia/tritonserver
+TENSORRTLLM_BASE_IMAGE_TAG=${TENSORRTLLM_BASE_VERSION}-trtllm-python-py3
+# IMPORTANT NOTE: Ensure the repo tag complies with the TRTLLM backend version
+# used in the base image above.
+TENSORRTLLM_BACKEND_REPO_TAG=triton-llm/v0.17.0
+# Set this as 1 to rebuild and replace trtllm backend bits in the container.
+# This will allow building triton distributed container image with custom
+# trt-llm backend repo branch.
+TENSORRTLLM_BACKEND_REBUILD=0
+# Set this as 1 to skip cloning the trt-llm backend repo. If cloning is skipped, trt-llm
+# backend repo tag and rebuild flag will be ignored. Use this option if you are using
+# trtllm llmapi worker.
+TENSORRTLLM_SKIP_CLONE=0
 
 VLLM_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
 VLLM_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
@@ -90,9 +100,25 @@ get_options() {
                 missing_requirement $1
             fi
             ;;
-        --tensorrtllm-pip-wheel-path)
+        --tensorrtllm-backend-repo-tag)
             if [ "$2" ]; then
-                TENSORRTLLM_PIP_WHEEL_PATH=$2
+                TRTLLM_BACKEND_COMMIT=$2
+                shift
+            else
+                missing_requirement $1
+            fi
+            ;;
+        --tensorrtllm-backend-rebuild)
+            if [ "$2" ]; then
+                TRTLLM_BACKEND_REBUILD=$2
+                shift
+            else
+                missing_requirement $1
+            fi
+            ;;
+        --skip-clone-tensorrtllm)
+            if [ "$2" ]; then
+                TENSORRTLLM_SKIP_CLONE=$2
                 shift
             else
                 missing_requirement $1
@@ -221,7 +247,7 @@ get_options() {
     fi
 
     if [ -z "$TAG" ]; then
-        TAG="--tag dynamo:${VERSION}-${FRAMEWORK,,}"
+        TAG="--tag triton-distributed:${VERSION}-${FRAMEWORK,,}"
         if [ ! -z ${TARGET} ]; then
             TAG="${TAG}-${TARGET}"
         fi
@@ -239,12 +265,14 @@ get_options() {
 
 show_image_options() {
     echo ""
-    echo "Building Dynamo Image: '${TAG}'"
+    echo "Building Triton Distributed Image: '${TAG}'"
     echo ""
     echo "   Base: '${BASE_IMAGE}'"
     echo "   Base_Image_Tag: '${BASE_IMAGE_TAG}'"
     if [[ $FRAMEWORK == "TENSORRTLLM" ]]; then
-        echo "   Tensorrtllm_Pip_Wheel_Path: '${TENSORRTLLM_PIP_WHEEL_PATH}'"
+        echo "   Tensorrtllm Backend Repo Tag: '${TENSORRTLLM_BACKEND_REPO_TAG}'"
+        echo "   Tensorrtllm Backend Rebuild: '${TENSORRTLLM_BACKEND_REBUILD}'"
+        echo "   Tensorrtllm Skip Clone: '${TENSORRTLLM_SKIP_CLONE}'"
     fi
     echo "   Build Context: '${BUILD_CONTEXT}'"
     echo "   Build Arguments: '${BUILD_ARGS}'"
@@ -258,7 +286,9 @@ show_help() {
     echo "  [--base-imge-tag base image tag]"
     echo "  [--platform platform for docker build"
     echo "  [--framework framework one of ${!FRAMEWORKS[@]}]"
-    echo "  [--tensorrtllm-pip-wheel-path path to tensorrtllm pip wheel]"
+    echo "  [--tensorrtllm-backend-repo-tag commit or tag]"
+    echo "  [--tensorrtllm-backend-rebuild whether or not to rebuild the backend]"
+    echo "  [--skip-clone-tensorrtllm whether or not to skip cloning the trt-llm backend repo]"
     echo "  [--build-arg additional build args to pass to docker build]"
     echo "  [--cache-from cache location to start from]"
     echo "  [--cache-to location where to cache the build output]"
@@ -286,8 +316,6 @@ if [[ $FRAMEWORK == "VLLM" ]]; then
     DOCKERFILE=${SOURCE_DIR}/Dockerfile.vllm
 elif [[ $FRAMEWORK == "VLLM_NIXL" ]]; then
     DOCKERFILE=${SOURCE_DIR}/Dockerfile.vllm_nixl
-elif [[ $FRAMEWORK == "TENSORRTLLM" ]]; then
-    DOCKERFILE=${SOURCE_DIR}/Dockerfile.tensorrt_llm
 fi
 
 # BUILD DEV IMAGE
@@ -302,19 +330,17 @@ if [ ! -z ${GITLAB_TOKEN} ]; then
     BUILD_ARGS+=" --build-arg GITLAB_TOKEN=${GITLAB_TOKEN} "
 fi
 
-if [[ $FRAMEWORK == "TENSORRTLLM" ]]; then
-    if [ ! -z ${TENSORRTLLM_PIP_WHEEL_PATH} ]; then
-        BUILD_ARGS+=" --build-arg TENSORRTLLM_PIP_WHEEL_PATH=${TENSORRTLLM_PIP_WHEEL_PATH} "
-    else
-        error "ERROR: --tensorrtllm-pip-wheel-path is not provided"
-    fi
+if [[ $FRAMEWORK == "TENSORRTLLM" ]] && [ ! -z ${TENSORRTLLM_BACKEND_REPO_TAG} ]; then
+    BUILD_ARGS+=" --build-arg TENSORRTLLM_BACKEND_REPO_TAG=${TENSORRTLLM_BACKEND_REPO_TAG} "
+    BUILD_ARGS+=" --build-arg TENSORRTLLM_BACKEND_REBUILD=${TENSORRTLLM_BACKEND_REBUILD} "
+    BUILD_ARGS+=" --build-arg TENSORRTLLM_SKIP_CLONE=${TENSORRTLLM_SKIP_CLONE} "
 fi
 
 if [ ! -z ${HF_TOKEN} ]; then
     BUILD_ARGS+=" --build-arg HF_TOKEN=${HF_TOKEN} "
 fi
 
-LATEST_TAG="--tag dynamo:latest-${FRAMEWORK,,}"
+LATEST_TAG="--tag triton-distributed:latest-${FRAMEWORK,,}"
 if [ ! -z ${TARGET} ]; then
     LATEST_TAG="${LATEST_TAG}-${TARGET}"
 fi

@@ -23,8 +23,8 @@ import uvloop
 from common.protocol import Tokens
 from vllm.logger import logger as vllm_logger
 
-from dynamo.llm import KvIndexer, KvMetricsAggregator, KvRouter
-from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
+from dynemo.llm import KvIndexer, KvMetricsAggregator, KvRouter
+from dynemo.runtime import DistributedRuntime, dynemo_endpoint, dynemo_worker
 
 WorkerId = str
 
@@ -51,7 +51,7 @@ class Router:
         self.router = router
         self.routing_strategy = routing_strategy
 
-    @dynamo_endpoint(Tokens, WorkerId)
+    @dynemo_endpoint(Tokens, WorkerId)
     async def generate(self, request) -> AsyncIterator[WorkerId]:
         lora_id = 0
         worker_id = None
@@ -108,7 +108,7 @@ class CustomRouter:
                 )
         return current_best[0]
 
-    @dynamo_endpoint(Tokens, WorkerId)
+    @dynemo_endpoint(Tokens, WorkerId)
     async def generate(self, request) -> AsyncIterator[WorkerId]:
         lora_id = 0
         worker_id = ""
@@ -132,14 +132,14 @@ class CustomRouter:
         yield str(worker_id)
 
 
-@dynamo_worker()
+@dynemo_worker()
 async def worker(runtime: DistributedRuntime, args: Namespace):
     """
     Set up the worker clients.
-    Serve the dynamo.router.generate endpoint.
+    Serve the dynemo.router.generate endpoint.
     """
     workers_client = (
-        await runtime.namespace("dynamo")
+        await runtime.namespace("dynemo")
         .component("vllm")
         .endpoint("generate")
         .client()
@@ -164,30 +164,22 @@ async def worker(runtime: DistributedRuntime, args: Namespace):
         + "\n".join(f"id: {id}" for id in workers_client.endpoint_ids())
     )
 
-    kv_listener = runtime.namespace("dynamo").component("vllm")
+    kv_listener = runtime.namespace("dynemo").component("vllm")
     await kv_listener.create_service()
 
-    router_component = runtime.namespace("dynamo").component("router")
+    router_component = runtime.namespace("dynemo").component("router")
     await router_component.create_service()
 
     endpoint = router_component.endpoint("generate")
 
     if args.custom_router:
-        # @REVIEWER - I'm not currently checking if block size matches that of the engine
-        # If they don't match things will silently fail
-        # The preferred solution would be for the KV Indexer to read from the MDC in etcd and not bother the user at all
-        # The second solution would be to do KvIndexer(kv_listener, MDC.block_size)
-        # as this ensures block size matches that of the engine
-        # In this case we need to do some sort of handshake or check in case a user just puts in a random block size
-
-        indexer = KvIndexer(kv_listener, args.block_size)
+        indexer = KvIndexer(kv_listener)
         metrics_aggregator = KvMetricsAggregator(kv_listener)
         await endpoint.serve_endpoint(
             CustomRouter(indexer, metrics_aggregator).generate
         )
     else:
-        # TODO Read block_size from MDC
-        router = KvRouter(runtime, kv_listener, args.block_size)
+        router = KvRouter(runtime, kv_listener)
         await endpoint.serve_endpoint(Router(router, args.routing_strategy).generate)
 
 
@@ -215,11 +207,6 @@ if __name__ == "__main__":
         type=str,
         default="deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
         help="Model that is being served",
-    )
-    parser.add_argument(
-        "--block-size",
-        type=int,
-        help="KV block size",
     )
     parser.add_argument(
         "--custom-router",

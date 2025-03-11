@@ -16,8 +16,8 @@
 use std::ffi::CStr;
 use std::{path::Path, sync::Arc};
 
-use dynamo_runtime::pipeline::error as pipeline_error;
-pub use dynamo_runtime::{
+use dynemo_runtime::pipeline::error as pipeline_error;
+pub use dynemo_runtime::{
     error,
     pipeline::{
         async_trait, AsyncEngine, AsyncEngineContextProvider, Data, ManyOut, ResponseStream,

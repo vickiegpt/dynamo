@@ -15,7 +15,7 @@
 
 use crate::kv_router::{indexer::RouterEvent, protocols::*, KV_EVENT_SUBJECT};
 use async_trait::async_trait;
-use dynamo_runtime::{
+use dynemo_runtime::{
     component::Component,
     pipeline::{
         network::Ingress, AsyncEngine, AsyncEngineContextProvider, ManyOut, ResponseStream,
@@ -31,18 +31,12 @@ use tracing as log;
 
 pub struct KvEventPublisher {
     tx: mpsc::UnboundedSender<KvCacheEvent>,
-    kv_block_size: usize,
 }
 
 impl KvEventPublisher {
-    pub fn new(
-        drt: DistributedRuntime,
-        backend: Component,
-        worker_id: i64,
-        kv_block_size: usize,
-    ) -> Result<Self> {
+    pub fn new(drt: DistributedRuntime, backend: Component, worker_id: i64) -> Result<Self> {
         let (tx, rx) = mpsc::unbounded_channel::<KvCacheEvent>();
-        let p = KvEventPublisher { tx, kv_block_size };
+        let p = KvEventPublisher { tx };
 
         start_publish_task(drt, backend, worker_id, rx);
         Ok(p)
@@ -51,10 +45,6 @@ impl KvEventPublisher {
     pub fn publish(&self, event: KvCacheEvent) -> Result<(), mpsc::error::SendError<KvCacheEvent>> {
         log::debug!("Publish event: {:?}", event);
         self.tx.send(event)
-    }
-
-    pub fn kv_block_size(&self) -> usize {
-        self.kv_block_size
     }
 }
 

@@ -23,18 +23,18 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["NVIDIA"]
 license = "Apache-2.0"
-homepage = "https://github.com/ai-dynamo/dynamo"
-repository = "https://github.com/ai-dynamo/dynamo.git"
+homepage = "https://github.com/dynemo-ai/dynemo"
+repository = "https://github.com/dynemo-ai/dynemo.git"
 
 
 [workspace.dependencies]
 # local or crates.io
-dynamo-runtime = { path = "../../lib/runtime" }
-dynamo-llm = { path = "../../lib/llm" }
+dynemo-runtime = { path = "../../lib/runtime" }
+dynemo-llm = { path = "../../lib/llm" }
 
 # crates.io
 anyhow = { version = "1" }

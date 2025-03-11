@@ -17,7 +17,7 @@ import asyncio
 
 import uvloop
 
-from dynamo.runtime import DistributedRuntime, dynamo_worker
+from dynemo.runtime import DistributedRuntime, dynemo_worker
 
 uvloop.install()
 
@@ -32,7 +32,7 @@ class RequestHandler:
             yield output.get("data")
 
 
-@dynamo_worker()
+@dynemo_worker()
 async def worker(runtime: DistributedRuntime):
     # client to the next component - in this case the middle component
     next = (

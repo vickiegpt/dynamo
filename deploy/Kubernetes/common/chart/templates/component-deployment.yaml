@@ -339,7 +339,7 @@ spec:
         args:
         - uv
         - run
-        - dynamo
+        - compoundai
         - start
         - --service-name
         -  {{ $component_name | quote }}
@@ -348,37 +348,37 @@ spec:
         - -c
         env:
 {{- if gt $parallel_world 1 }}
-        - name: DYNAMO_LLM_PP
+        - name: DYNEMO_LLM_PP
           value: {{ $parallel_pipeline }}
-        - name: DYNAMO_LLM_TP
+        - name: DYNEMO_LLM_TP
           value: {{ $parallel_tensor }}
 {{- end }}
-        - name: DYNAMO_NAME
+        - name: DYNEMO_NAME
           value: {{ $component_name | quote }}
 {{- if gt (len $component_namespace) 0 }}
-        - name: DYNAMO_NAMESPACE
+        - name: DYNEMO_NAMESPACE
           value: {{ $component_namespace | quote }}
 {{- end }}
 {{- if ne $port_health 8000 }}
-        - name: DYNAMO_PORT_HEALTH
+        - name: DYNEMO_PORT_HEALTH
           value: {{ $port_health }}
 {{- end }}
 {{- if ne $port_metrics 9347 }}
-        - name: DYNAMO_PORT_METRICS
+        - name: DYNEMO_PORT_METRICS
           value: {{ $port_metrics }}
 {{- end }}
 {{- if ne $port_request 9345 }}
-        - name: DYNAMO_PORT_REQUEST
+        - name: DYNEMO_PORT_REQUEST
           value: {{ $port_request }}
 {{- end }}
-        - name: DYNAMO_RP_ETCD_URL
+        - name: DYNEMO_RP_ETCD_URL
           value: {{ $request_plane_etcd_url }}
-        - name: DYNAMO_RP_NATS_URL
+        - name: DYNEMO_RP_NATS_URL
           value: {{ $request_plane_nats_url }}
-        - name: DYNAMO_RP_TIMEOUT
+        - name: DYNEMO_RP_TIMEOUT
           value: {{ $request_plane_timeout }}
 {{- if gt $worker_count 1 }}
-        - name: DYNAMO_WORKER_COUNT
+        - name: DYNEMO_WORKER_COUNT
           value: {{ $worker_count }}
 {{- end }}
         image: {{ $container_image_name }}

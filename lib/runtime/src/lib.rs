@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Dynamo
+//! Triton
 
 #![allow(dead_code)]
 #![allow(unused_imports)]
@@ -49,7 +49,7 @@ pub use futures::stream;
 pub use tokio_util::sync::CancellationToken;
 pub use worker::Worker;
 
-/// Types of Tokio runtimes that can be used to construct a Dynamo [Runtime].
+/// Types of Tokio runtimes that can be used to construct a Triton [Runtime].
 #[derive(Clone)]
 enum RuntimeType {
     Shared(Arc<tokio::runtime::Runtime>),

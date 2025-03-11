@@ -16,7 +16,7 @@
 ARG BASE_IMAGE="nvcr.io/nvidia/tritonserver"
 ARG BASE_IMAGE_TAG="25.01-py3"
 
-FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS dynamo
+FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS dynemo
 
 # TODO: non root user by default
 
@@ -34,7 +34,7 @@ RUN rustup toolchain install 1.85.0-x86_64-unknown-linux-gnu
 
 # Install OpenAI-compatible frontend and its dependencies from triton server
 # repository. These are used to have a consistent interface, schema, and FastAPI
-# app between Triton Core and Dynamo implementations.
+# app between Triton Core and Dynemo implementations.
 ARG OPENAI_SERVER_TAG="r25.01"
 RUN mkdir -p /opt/tritonserver/python && \
     cd /opt/tritonserver/python && \
@@ -72,9 +72,24 @@ RUN pip install "git+https://github.com/triton-inference-server/perf_analyzer.gi
 
 # Backend & Framework Specific Installation
 ARG FRAMEWORK="STANDARD"
+ARG TENSORRTLLM_BACKEND_REPO_TAG=
+ARG TENSORRTLLM_BACKEND_REBUILD=
+ARG TENSORRTLLM_SKIP_CLONE=
+ENV FRAMEWORK=${FRAMEWORK}
+RUN --mount=type=bind,source=./container/deps/requirements.tensorrtllm.txt,target=/tmp/requirements.txt \
+    --mount=type=bind,source=./container/deps/clone_tensorrtllm.sh,target=/tmp/clone_tensorrtllm.sh \
+    if [[ "$FRAMEWORK" == "TENSORRTLLM" ]] ; then pip install --timeout=2000 -r /tmp/requirements.txt; if [ ${TENSORRTLLM_SKIP_CLONE} -ne 1 ] ; then /tmp/clone_tensorrtllm.sh --tensorrtllm-backend-repo-tag ${TENSORRTLLM_BACKEND_REPO_TAG} --tensorrtllm-backend-rebuild ${TENSORRTLLM_BACKEND_REBUILD} --dynemo-llm-path /opt/dynemo/llm_binding ; fi ; fi
+
+
 RUN --mount=type=bind,source=./container/deps/requirements.standard.txt,target=/tmp/requirements.txt \
     if [[ "$FRAMEWORK" == "STANDARD" ]] ; then pip install --timeout=2000 -r /tmp/requirements.txt ; fi
 
+# Backend & Framework Specific LD_LIBRARY_PATH
+ARG TENSORRTLLM_FRAMEWORK
+ENV FRAMEWORK_LD_LIBRARY_PATH=${TENSORRTLLM_FRAMEWORK:+/opt/tritonserver/backends/tensorrtllm/}
+ENV LD_LIBRARY_PATH=${FRAMEWORK_LD_LIBRARY_PATH}:${LD_LIBRARY_PATH}
+ENV TENSORRTLLM_BACKEND_REPO_TAG=$TENSORRTLLM_BACKEND_REPO_TAG
+ENV TRTLLM_USE_MPI_KVCACHE=${TENSORRTLLM_FRAMEWORK:+"1"}
 
 # TODO set VLLM Version
 # ENV VLLM_VERSION
@@ -91,7 +106,7 @@ ENV VLLM_GENERATE_WORKERS=${VLLM_FRAMEWORK:+1}
 ENV VLLM_BASELINE_TP_SIZE=${VLLM_FRAMEWORK:+1}
 ENV VLLM_CONTEXT_TP_SIZE=${VLLM_FRAMEWORK:+1}
 ENV VLLM_GENERATE_TP_SIZE=${VLLM_FRAMEWORK:+1}
-ENV VLLM_KV_CAPI_PATH="/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
+ENV VLLM_KV_CAPI_PATH="/opt/dynemo/llm_binding/lib/libdynemo_llm_capi.so"
 ENV PYTHONUNBUFFERED=1
 
 # Install NATS - pointing toward NATS github instead of binaries.nats.dev due to server instability
@@ -139,38 +154,30 @@ RUN cd examples/rust && \
     cp target/release/http /usr/local/bin/ && \
     cp target/release/llmctl /usr/local/bin/
 
-COPY deploy/dynamo/sdk /workspace/deploy/dynamo/sdk
-
-
 # Generate C bindings. Note that this is required for TRTLLM backend re-build
 COPY lib/bindings /workspace/lib/bindings
 RUN cd lib/bindings/c/ && \
     cargo build --release --locked && cargo doc --no-deps
 
-# Install uv, create virtualenv for general use, and build dynamo wheel
+# Install uv, create virtualenv for general use, and build dynemo wheel
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-RUN mkdir /opt/dynamo && \
-    uv venv /opt/dynamo/venv --python 3.12 && \
-    source /opt/dynamo/venv/bin/activate && \
+RUN mkdir /opt/dynemo && \
+    uv venv /opt/dynemo/venv --python 3.12 && \
+    source /opt/dynemo/venv/bin/activate && \
     uv build --wheel --out-dir /workspace/dist && \
-    uv pip install /workspace/dist/ai_dynamo*cp312*.whl && \
-    cd /workspace/deploy/dynamo/sdk && \
-    uv build --wheel --out-dir /workspace/dist && \
-    uv pip install /workspace/dist/ai_dynamo_sdk*any.whl
+    uv pip install /workspace/dist/dynemo*cp312*.whl
 
 # Package the bindings
-RUN mkdir -p /opt/dynamo/bindings/wheels && \
-    mkdir /opt/dynamo/bindings/lib && \
-    cp dist/ai_dynamo*cp312*.whl /opt/dynamo/bindings/wheels/. && \
-    cp lib/bindings/c/target/release/libdynamo_llm_capi.so /opt/dynamo/bindings/lib/. && \
-    cp -r lib/bindings/c/include /opt/dynamo/bindings/.
+RUN mkdir -p /opt/dynemo/bindings/wheels && \
+    mkdir /opt/dynemo/bindings/lib && \
+    cp dist/dynemo*cp312*.whl /opt/dynemo/bindings/wheels/. && \
+    cp lib/bindings/c/target/release/libdynemo_llm_capi.so /opt/dynemo/bindings/lib/. && \
+    cp -r lib/bindings/c/include /opt/dynemo/bindings/.
 
-# Install dynamo.runtime and dynamo.llm wheels globally in container for tests that
+# Install dynemo.runtime and dynemo.llm wheels globally in container for tests that
 # currently run without virtual environment activated.
 # TODO: In future, we may use a virtualenv for everything and remove this.
-RUN cd /opt/dynamo/bindings/wheels && \
-    pip install ai_dynamo*cp312*.whl  && \
-    pip install /workspace/dist/ai_dynamo_sdk*any.whl
+RUN pip install /opt/dynemo/bindings/wheels/dynemo*cp312*.whl
 
 # Copy everything in after ginstall steps to avoid re-running build/install
 # commands on unrelated changes in other dirs.

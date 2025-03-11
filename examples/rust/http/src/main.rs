@@ -16,14 +16,14 @@
 use clap::Parser;
 use std::sync::Arc;
 
-use dynamo_llm::{
+use dynemo_llm::{
     http::service::{
         discovery::{model_watcher, ModelWatchState},
         service_v2::HttpService,
     },
     model_type::ModelType,
 };
-use dynamo_runtime::{
+use dynemo_runtime::{
     logging, transports::etcd::PrefixWatcher, DistributedRuntime, Result, Runtime, Worker,
 };
 

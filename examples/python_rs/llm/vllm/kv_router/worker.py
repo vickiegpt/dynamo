@@ -25,8 +25,8 @@ from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.logger import logger as vllm_logger
 from vllm.sampling_params import RequestOutputKind
 
-from dynamo.llm import KvMetricsPublisher
-from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
+from dynemo.llm import KvMetricsPublisher
+from dynemo.runtime import DistributedRuntime, dynemo_endpoint, dynemo_worker
 
 vllm_logger.info(f"VLLM_KV_CAPI_PATH: {os.environ['VLLM_KV_CAPI_PATH']}")
 
@@ -48,7 +48,7 @@ class VllmEngine(BaseVllmEngine):
         assert self.engine_client is not None, "engine_client was not initialized"
         self.engine_client.set_metrics_publisher(self.metrics_publisher)
 
-    @dynamo_endpoint(vLLMGenerateRequest, MyRequestOutput)
+    @dynemo_endpoint(vLLMGenerateRequest, MyRequestOutput)
     async def generate(self, request) -> AsyncIterator:
         assert (
             self.engine_client is not None
@@ -73,12 +73,12 @@ class VllmEngine(BaseVllmEngine):
             ).model_dump_json()
 
 
-@dynamo_worker()
+@dynemo_worker()
 async def worker(runtime: DistributedRuntime, engine_args: AsyncEngineArgs):
     """
-    Serve the dynamo.vllm.generate endpoint.
+    Serve the dynemo.vllm.generate endpoint.
     """
-    worker_component = runtime.namespace("dynamo").component("vllm")
+    worker_component = runtime.namespace("dynemo").component("vllm")
     await worker_component.create_service()
 
     worker_endpoint = worker_component.endpoint("generate")
@@ -87,7 +87,7 @@ async def worker(runtime: DistributedRuntime, engine_args: AsyncEngineArgs):
     os.environ["VLLM_WORKER_ID"] = str(VLLM_WORKER_ID)
     vllm_logger.info(f"Generate endpoint ID: {VLLM_WORKER_ID}")
 
-    VLLM_KV_NAMESPACE = "dynamo"
+    VLLM_KV_NAMESPACE = "dynemo"
     os.environ["VLLM_KV_NAMESPACE"] = str(VLLM_KV_NAMESPACE)
 
     VLLM_KV_COMPONENT = "vllm"

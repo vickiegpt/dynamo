@@ -29,10 +29,6 @@ from tensorrt_llm.serve.openai_protocol import (
 )
 
 
-class Tokens(BaseModel):
-    tokens: list[int]
-
-
 class Request(BaseModel):
     prompt: str
     sampling_params: dict

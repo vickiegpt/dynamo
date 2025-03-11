@@ -1005,8 +1005,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-llm"
-version = "0.1.0"
+name = "dynemo-llm"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -1020,7 +1020,7 @@ dependencies = [
  "chrono",
  "cmake",
  "derive_builder",
- "dynamo-runtime",
+ "dynemo-runtime",
  "either",
  "erased-serde",
  "futures",
@@ -1054,8 +1054,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-runtime"
-version = "0.1.0"
+name = "dynemo-runtime"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -2199,11 +2199,10 @@ dependencies = [
 name = "metrics"
 version = "0.1.0"
 dependencies = [
- "async-nats",
  "axum 0.6.20",
  "clap",
- "dynamo-llm",
- "dynamo-runtime",
+ "dynemo-llm",
+ "dynemo-runtime",
  "futures",
  "opentelemetry",
  "opentelemetry-prometheus",

@@ -955,8 +955,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-llm"
-version = "0.1.0"
+name = "dynemo-llm"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -970,7 +970,7 @@ dependencies = [
  "chrono",
  "cmake",
  "derive_builder",
- "dynamo-runtime",
+ "dynemo-runtime",
  "either",
  "erased-serde",
  "futures",
@@ -1004,8 +1004,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-runtime"
-version = "0.1.0"
+name = "dynemo-runtime"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -1947,14 +1947,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5aba8db14291edd000dfcc4d620c7ebfb122c613afb886ca8803fa4e128a20a"
 
 [[package]]
-name = "libdynamo_llm"
-version = "0.1.0"
+name = "libdynemo-llm"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-once-cell",
  "cbindgen",
- "dynamo-llm",
- "dynamo-runtime",
+ "dynemo-llm",
+ "dynemo-runtime",
  "futures",
  "libc",
  "once_cell",
