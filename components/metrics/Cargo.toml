@@ -22,12 +22,13 @@ license = "Apache-2.0"
 [dependencies]
 # local
 
-dynemo-runtime = { path = "../../lib/runtime" }
-dynemo-llm = { path = "../../lib/llm" }
+dynamo-runtime = { path = "../../lib/runtime" }
+dynamo-llm = { path = "../../lib/llm" }
 
 # workspace - todo
 
 # crates.io
+async-nats = { version = "0.38", features = ["service"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
