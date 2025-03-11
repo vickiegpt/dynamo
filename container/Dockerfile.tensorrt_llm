@@ -20,6 +20,22 @@ FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS dev
 
 USER root
 
+# Build Tensorrt LLM Wheel
+
+RUN mkdir -p tmp/tensorrtllm; cd tmp/tensorrtllm; git clone https://github.com/NVIDIA/TensorRT-LLM.git; cd TensorRT-LLM
+
+# Start a dev docker container. Dont forget to mount your home directory to /home in the docker run command.
+# RUN make -C docker jenkins_run LOCAL_USER=1 DOCKER_RUN_ARGS="-v /user/home:/home"
+
+# Build wheel for the GPU architecture you are currently using ("native").
+# We use -f to run fast build which should speed up the build process. But it might not work for all GPUs and for full functionality you should disable it.
+RUN python3 scripts/build_wheel.py --clean --trt_root /usr/local/tensorrt -i -p -ccache
+
+# TODO: Try using uv to install tensorrtllm
+
+# Install wheel to your local directory
+RUN find build -name "*.whl" -exec pip install {} +
+
 # Install utilities
 RUN apt update -y && apt install -y git wget curl nvtop tmux vim
 # nats
@@ -30,11 +46,6 @@ RUN wget https://github.com/etcd-io/etcd/releases/download/$ETCD_VERSION/etcd-$E
 mkdir -p /usr/local/bin/etcd && \
 tar -xvf /tmp/etcd.tar.gz -C /usr/local/bin/etcd --strip-components=1
 ENV PATH=/usr/local/bin/etcd/:$PATH
-
-# TODO: Try using uv to install tensorrtllm
-ARG TENSORRTLLM_PIP_WHEEL_PATH=""
-COPY ${TENSORRTLLM_PIP_WHEEL_PATH}/*.whl /tmp/
-RUN find /tmp -name "*.whl" -exec pip install {} +
 
 # Install genai-perf for benchmarking
 # TODO: Move to tag when fix for genai-perf will be released
@@ -78,22 +89,24 @@ RUN cd lib/runtime && \
 
 # Build OpenAI HTTP Service binaries
 COPY lib/llm /workspace/lib/llm
-COPY examples/rust /workspace/examples/rust
-RUN cd examples/rust && \
+COPY components /workspace/components
+RUN cd components && \
     cargo build --release && \
-    cp target/release/http /usr/local/bin/ && \
+    cp target/release/http /usr/local/bin/
+
+# Build Dynamo Run binaries
+COPY launch /workspace/launch
+RUN cd launch && \
+    cargo build --release --features mistralrs,sglang,vllm,python && \
+    cp target/release/dynamo-run /usr/local/bin/ && \
     cp target/release/llmctl /usr/local/bin/
-
-# TODO: Build dynamo-run
-# COPY applications/...
-
-COPY deploy/dynamo/sdk /workspace/deploy/dynamo/sdk
-
 
 # Generate C bindings. Note that this is required for TRTLLM backend re-build
 COPY lib/bindings /workspace/lib/bindings
 RUN cd lib/bindings/c/ && \
     cargo build --release --locked && cargo doc --no-deps
+
+COPY deploy/dynamo/sdk /workspace/deploy/dynamo/sdk
 
 # Install uv, create virtualenv for general use, and build dynamo wheel
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/

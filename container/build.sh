@@ -55,7 +55,7 @@ BUILD_CONTEXT=$(dirname "$(readlink -f "$SOURCE_DIR")")
 TENSORRTLLM_BASE_VERSION=25.01
 TENSORRTLLM_BASE_IMAGE="gitlab-master.nvidia.com:5005/dl/dgx/tritonserver/tensorrt-llm/amd64"
 TENSORRTLLM_BASE_IMAGE_TAG=krish-fix-trtllm-build.23766174
-TENSORRTLLM_PIP_WHEEL_PATH=""
+# TENSORRTLLM_PIP_WHEEL_PATH=""
 
 VLLM_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
 VLLM_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
@@ -78,14 +78,6 @@ get_options() {
         --framework)
             if [ "$2" ]; then
                 FRAMEWORK=$2
-                shift
-            else
-                missing_requirement $1
-            fi
-            ;;
-        --tensorrtllm-pip-wheel-path)
-            if [ "$2" ]; then
-                TENSORRTLLM_PIP_WHEEL_PATH=$2
                 shift
             else
                 missing_requirement $1
@@ -236,9 +228,6 @@ show_image_options() {
     echo ""
     echo "   Base: '${BASE_IMAGE}'"
     echo "   Base_Image_Tag: '${BASE_IMAGE_TAG}'"
-    if [[ $FRAMEWORK == "TENSORRTLLM" ]]; then
-        echo "   Tensorrtllm_Pip_Wheel_Path: '${TENSORRTLLM_PIP_WHEEL_PATH}'"
-    fi
     echo "   Build Context: '${BUILD_CONTEXT}'"
     echo "   Build Arguments: '${BUILD_ARGS}'"
     echo "   Framework: '${FRAMEWORK}'"
@@ -251,7 +240,6 @@ show_help() {
     echo "  [--base-imge-tag base image tag]"
     echo "  [--platform platform for docker build"
     echo "  [--framework framework one of ${!FRAMEWORKS[@]}]"
-    echo "  [--tensorrtllm-pip-wheel-path path to tensorrtllm pip wheel]"
     echo "  [--build-arg additional build args to pass to docker build]"
     echo "  [--cache-from cache location to start from]"
     echo "  [--cache-to location where to cache the build output]"
@@ -291,14 +279,6 @@ fi
 
 if [ ! -z ${GITLAB_TOKEN} ]; then
     BUILD_ARGS+=" --build-arg GITLAB_TOKEN=${GITLAB_TOKEN} "
-fi
-
-if [[ $FRAMEWORK == "TENSORRTLLM" ]]; then
-    if [ ! -z ${TENSORRTLLM_PIP_WHEEL_PATH} ]; then
-        BUILD_ARGS+=" --build-arg TENSORRTLLM_PIP_WHEEL_PATH=${TENSORRTLLM_PIP_WHEEL_PATH} "
-    else
-        error "ERROR: --tensorrtllm-pip-wheel-path is not provided"
-    fi
 fi
 
 if [ ! -z ${HF_TOKEN} ]; then
