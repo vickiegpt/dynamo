@@ -956,8 +956,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynemo-llm"
-version = "0.2.1"
+name = "dynamo-llm"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -971,7 +971,7 @@ dependencies = [
  "chrono",
  "cmake",
  "derive_builder",
- "dynemo-runtime",
+ "dynamo-runtime",
  "either",
  "erased-serde",
  "futures",
@@ -1005,8 +1005,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynemo-runtime"
-version = "0.2.1"
+name = "dynamo-runtime"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -1461,9 +1461,9 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hello_world"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
- "dynemo-runtime",
+ "dynamo-runtime",
 ]
 
 [[package]]
@@ -1485,11 +1485,11 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "clap",
- "dynemo-llm",
- "dynemo-runtime",
+ "dynamo-llm",
+ "dynamo-runtime",
  "serde",
  "serde_json",
  "tokio",
@@ -1985,11 +1985,11 @@ checksum = "4ee93343901ab17bd981295f2cf0026d4ad018c7c31ba84549a4ddbb47a45104"
 
 [[package]]
 name = "llmctl"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "clap",
- "dynemo-llm",
- "dynemo-runtime",
+ "dynamo-llm",
+ "dynamo-runtime",
  "serde",
  "serde_json",
  "tabled",
@@ -3388,9 +3388,9 @@ dependencies = [
 
 [[package]]
 name = "service_metrics"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
- "dynemo-runtime",
+ "dynamo-runtime",
  "futures",
  "serde",
  "serde_json",
