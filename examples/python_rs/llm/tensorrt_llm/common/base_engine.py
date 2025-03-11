@@ -264,11 +264,13 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
             self._stats_loop = asyncio.get_running_loop()
             self.publish_kv_cache_events_thread.set_loop(self._stats_loop)
             self.publish_kv_cache_events_thread.start()
+            logger.debug("Started kv cache events thread")
 
         if self.publish_stats_thread and not self.publish_stats_thread.is_alive():
             self._stats_loop = asyncio.get_running_loop()
             self.publish_stats_thread.set_loop(self._stats_loop)
             self.publish_stats_thread.start()
+            logger.debug("Started stats thread")
 
     async def _run_llm_engine(self):
         # Counter to keep track of ongoing request counts.

@@ -27,7 +27,7 @@ from tensorrt_llm.logger import logger
 from dynamo.llm import KvRouter
 from dynamo.runtime import dynamo_endpoint
 
-logger.set_level("debug")
+logger.set_level("info")
 
 
 class Scheduler:

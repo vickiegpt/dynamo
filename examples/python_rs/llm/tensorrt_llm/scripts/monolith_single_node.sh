@@ -27,12 +27,9 @@ if [ "$WORLD_SIZE" -ne "$TOTAL_GPUS" ]; then
   exit 1
 fi
 
-# Set environment variables
-export DYN_LOG=DEBUG
-
 # Start the HTTP server with debug logging
 echo "Starting HTTP server..."
-http &
+DYN_LOG=DEBUG http &
 
 # Wait for the server to start
 sleep 5

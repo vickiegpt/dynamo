@@ -32,7 +32,7 @@ from tensorrt_llm.serve.openai_protocol import CompletionRequest, DisaggregatedP
 from dynamo.llm import KvRouter
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
-logger.set_level("debug")
+logger.set_level("info")
 
 
 class Router(ChatProcessorMixin):
