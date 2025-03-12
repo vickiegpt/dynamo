@@ -71,21 +71,20 @@ class KVCacheEventPublisher:
             ctypes.c_uint32
         )  # dynamo_llm_result_t
 
-    def stored_event(self, event_id, parent_hash, block_hashes, token_ids, lora_id):
+    def stored_event(self, event_id, parent_hash, block_hash, token_ids, lora_id):
         if self.lib is None:
             logger.error("KVCacheEventPublisher not initialized!")
             return
 
         logger.debug(
-            f"Stored event: {event_id}, parent_hash: {parent_hash}, block_hashes: {block_hashes}, token_ids: {token_ids}"
+            f"Stored event: {event_id}, parent_hash: {parent_hash}, block_hash: {block_hash}, token_ids: {token_ids}"
         )
         parent_hash = (
             (ctypes.c_uint64 * 1)(parent_hash) if parent_hash is not None else None
         )
-        block_hash_arr = (ctypes.c_uint64 * len(block_hashes))(*block_hashes)
-        block_hash_len = len(block_hashes)
         token_ids_arr = (ctypes.c_uint32 * len(token_ids))(*token_ids)
         num_block_tokens = (ctypes.c_size_t * 1)(len(token_ids))
+        block_hash = (ctypes.c_uint64 * 1)(block_hash)
 
         # Publish the event
         # TODO: Currently, lora_id is not available in the stored events.
@@ -93,29 +92,29 @@ class KVCacheEventPublisher:
             event_id,  # uint64_t event_id
             token_ids_arr,  # const uint32_t *token_ids
             num_block_tokens,  # const uintptr_t *num_block_tokens
-            block_hash_arr,  # const uint64_t *block_ids
-            block_hash_len,  # uintptr_t num_blocks
+            block_hash,  # const uint64_t *block_ids
+            1,  # uintptr_t num_blocks
             parent_hash,  # const uint64_t *parent_hash
             lora_id,  # uint64_t lora_id
         )
 
         if result == DynamoResult.OK:
-            logger.debug(f"Store - Published KV Event: {block_hashes}")
+            logger.debug(f"Store - Published KV Event: {block_hash}")
         else:
-            logger.error(f"Store - Failed to Publish KV Event: {block_hashes}")
+            logger.error(f"Store - Failed to Publish KV Event: {block_hash}")
 
-    def removed_event(self, event_id, block_hashes):
+    def removed_event(self, event_id, block_hash):
         if self.lib is None:
             logger.error("KVCacheEventPublisher not initialized!")
             return
 
         result = self.lib.dynamo_kv_event_publish_removed(
             event_id,
-            (ctypes.c_uint64 * len(block_hashes))(*block_hashes),
-            ctypes.c_size_t(len(block_hashes)),
+            (ctypes.c_uint64 * 1)(block_hash),
+            1,
         )
 
         if result == DynamoResult.OK:
-            logger.debug(f"Remove - Published KV Event: {block_hashes}")
+            logger.debug(f"Remove - Published KV Event: {block_hash}")
         else:
-            logger.error(f"Remove - Failed to Publish KV Event: {block_hashes}")
+            logger.error(f"Remove - Failed to Publish KV Event: {block_hash}")
