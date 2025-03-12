@@ -15,9 +15,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Dynamo Component Description
+# VLLM Worker
 
-## VLLM Worker
+## Dynamo Component
 
 ### Brief Description
 
