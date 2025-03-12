@@ -110,7 +110,7 @@ class Scheduler:
             worker_logits[worker_id] = (
                 2 * score - metrics_dict["gpu_cache_usage_perc"] - normalized_waiting
             )
-            logger.info(
+            logger.debug(
                 f"Formula for {worker_id}: {worker_logits[worker_id]:.3f} = 2.0 * {score:.3f} - {metrics_dict['gpu_cache_usage_perc']:.3f} - {normalized_waiting:.3f}"
             )
 
@@ -129,21 +129,21 @@ class Scheduler:
 
         # Log the metrics for the selected worker
         if best_worker_id:
-            logger.info(
+            logger.debug(
                 f"Selected worker: {best_worker_id}, logit: {worker_logits[best_worker_id]:.3f}"
             )
-            logger.info(
+            logger.debug(
                 f"Score: {scores.scores.get(best_worker_id, 0.0) if scores else 0.0:.3f}"
             )
 
             metrics_dict = worker_metrics.get(best_worker_id, {})
-            logger.info(
+            logger.debug(
                 f"GPU Cache Hit Rate: {metrics_dict.get('gpu_prefix_cache_hit_rate', 0.0):.3f}"
             )
-            logger.info(
+            logger.debug(
                 f"GPU Cache Usage: {metrics_dict.get('gpu_cache_usage_perc', 0.0):.3f}"
             )
-            logger.info(
+            logger.debug(
                 f"Requests Waiting: {metrics_dict.get('num_requests_waiting', 0.0) / max_waiting if max_waiting > 0 else 0.0:.3f}"
             )
 
@@ -160,13 +160,13 @@ class Scheduler:
             scores = await self.indexer.find_matches_for_request(
                 request.tokens, lora_id
             )
+            token_length = len(request.tokens)
+            metrics = await self.metrics_aggregator.get_metrics()
+            schedule_result = self._cost_function(scores, metrics, token_length)
         except Exception:
-            scores = {}
-            logger.exception(f"Error during worker selection: {traceback.format_exc()}")
+            schedule_result = ""
+            logger.warning(f"Error during worker selection: {traceback.format_exc()}")
 
-        token_length = len(request.tokens)
-        metrics = await self.metrics_aggregator.get_metrics()
-        schedule_result = self._cost_function(scores, metrics, token_length)
         if schedule_result == "":
             worker_id = ""
             prefix_hit_rate = 0.0
