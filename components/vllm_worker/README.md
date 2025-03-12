@@ -15,6 +15,79 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
+# Dynamo Component Description
+
+## VLLM Worker
+
+### Brief Description
+
+The vllm worker integrates the vllm MQLLMEngine into dynamo and
+extends its capabilities with support for:
+
+- Disaggregated Serving
+- KV Aware Routing
+
+## Component Details
+- **Package Name**: `dynamo.components.vllm_worker`
+- **Version**: `0.1.0`
+- **Dependencies**: `ai-dynamo`
+- **Input/Output**: Supports
+
+## Complete System Diagram
+
+This figure shows an overview of the major components for deploying a
+vllm worker in a dynamo graph with all features.
+
+```
+                                                 +----------------+
+                                          +------| prefill worker |-------+
+                                   notify |      |   (optional)   |       |
+                                 finished |      +----------------+       | pull
+                                          v                               v
++------+      +-----------+      +------------------+    push     +---------------+
+| HTTP |----->| processor |----->| decode/monolith  |------------>| prefill queue |
+|      |<-----|           |<-----|      worker      | (if disagg) |   (optional)  |
++------+      +-----------+      +------------------+             +---------------+
+                  |    ^                  |
+       query best |    | return           | publish kv events
+           worker |    | worker_id        v
+                  |    |         +------------------+
+                  |    +---------|     kv-router    |
+                  +------------->|    (optional)    |
+                                 +------------------+
+```
+
+## Usage Examples
+
+### Standalone Worker
+
+#### System Diagram
+
+```
+  +------+      +------------------+
+  | HTTP |----->| Monolithic Worker|
+  |      |<-----|                  |
+  +------+      +------------------+
+
+```
+
+#### Command
+
+```
+dynamo-llm serve --model X --workers 1
+```
+
+
+
+### KV Cache Aware Router + Worker
+
+```
+
+```
+
+
+
+
 > **NOTE**: This example is based on an internal NVIDIA library that will soon be publicly released. The example won't work until the official release.
 
 ## Prerequisites
