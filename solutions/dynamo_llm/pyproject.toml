@@ -14,23 +14,20 @@
 #  limitations under the License.
 
 [project]
-name = "ai-dynamo-components-vllm-worker"
+name = "ai-dynamo-solutions-dynamo-llm"
 version = "0.1.0"
 description = "Distributed Inference Framework - SDK"
-readme = "README.md"
+# readme = "README.md"
 authors = [
     { name = "NVIDIA Inc.", email = "sw-dl-dynamo@nvidia.com" },
 ]
 dependencies = [
-    # TODO: currently compatible with bentoml==1.4.1,
-    # v1.4.2 has removed normalize_identifier which is used in dynamo
-    # "dynamo=={dynamo_version}",
-      "ai-dynamo==0.1.0"
+    "ai-dynamo==0.1.0"
 ]
 
-[tool.setuptools]
-package-dir = {"dynamo.components.vllm_worker" = "src/dynamo/components/vllm_worker"}
-
 [project.scripts]
-vllm-routerless-worker = "dynamo.components.vllm_worker.routerless.worker:main"
-vllm-worker = "dynamo.components.vllm_worker.worker:main"
+dynamo-llm = "dynamo.solutions.dynamo_llm.__main__:main"
+
+[tool.setuptools]
+package-dir = {"dynamo.solutions.dynamo_llm" = "src/dynamo/solutions/dynamo_llm"}
+

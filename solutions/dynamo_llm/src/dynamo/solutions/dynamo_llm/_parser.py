@@ -5,6 +5,8 @@ import argparse
 def parse_known_args():
     parser = argparse.ArgumentParser(description="Run an example of the llm.")
 
+    parser.add_argument("--dry-run", action="store_true", required=False)
+
     parser.add_argument(
         "--model",
         type=str,

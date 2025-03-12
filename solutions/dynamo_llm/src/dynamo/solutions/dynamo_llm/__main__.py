@@ -13,37 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import signal
 import subprocess
-import sys
 import time
 
-from .parser import parse_known_args
+from ._parser import parse_known_args
+from ._process_manager import Command, ProcessManager
 
 processes = []
-
-
-def handler(signum, frame):
-    exit_code = 0
-
-    for process in processes:
-        print(process)
-        try:
-            process.terminate()
-            process.kill()
-        except Exception:
-            pass
-
-    sys.exit(exit_code)
-
-
-signals = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
-for sig in signals:
-    try:
-        signal.signal(sig, handler)
-    except Exception:
-        pass
-
 
 # llmctl http add chat-models deepseek-ai/DeepSeek-R1-Distill-Llama-8B dynamo-init.process.chat/completions
 
@@ -69,31 +45,53 @@ def _configure_http(args, unknown_args):
     subprocess.call(command)
 
 
-def _launch_http(args, unknown_args):
-    global processes
-    command = [
-        "http",
-        "--port",
-        f"{args.http_port}",
-    ]
+def _http_commands(args, unknown_args):
+    commands = []
 
-    processes.append(
-        subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
+    commands.append(
+        Command(
+            [
+                "http",
+                "--port",
+                f"{args.http_port}",
+            ],
+            name="http",
         )
     )
-    _configure_http(args, unknown_args)
+
+    commands.append(
+        Command(
+            ["llmctl", "http", "remove", "chat-models", args.model],
+            call=True,
+            name="llmctl",
+        )
+    )
+
+    llmctl_args = [
+        "llmctl",
+        "http",
+        "add",
+        "chat-models",
+        args.model,
+    ]
+
+    if args.router == "prefix":
+        llmctl_args.append("dynamo-init.process.chat/completions")
+    else:
+        llmctl_args.append("dynamo-init.vllm.generate")
+
+    commands.append(Command(args=llmctl_args, call=True, name="llmctl"))
+    return commands
 
 
 def _launch_vllm_worker(args, unknown_args):
     global processes
 
-    command = ["python3"]
+    command = []
     if not args.router:
-        command.append("/workspace/components/vllm/routerless/worker.py")
+        command.append("vllm-routerless-worker")
     else:
-        command.append("/workspace/components/vllm/router/worker.py")
+        command.append("vllm-worker")
         command.append("--enable-prefix-caching")
 
     command.extend(unknown_args)
@@ -106,7 +104,8 @@ def _launch_vllm_worker(args, unknown_args):
     print(command)
     processes.append(
         subprocess.Popen(
-            command, stdin=subprocess.DEVNULL, cwd="/workspace/components/vllm"
+            command,
+            stdin=subprocess.DEVNULL,
         )
     )
 
@@ -170,14 +169,24 @@ def _launch_router(args, unknown_args):
         )
 
 
-def main(known_args, unknown_args):
-    print("started", known_args, unknown_args)
-    _launch_http(known_args, unknown_args)
-    _launch_router(known_args, unknown_args)
-    _launch_vllm_worker(known_args, unknown_args)
-    while True:
-        time.sleep(10)
+def main():
+    known_args, unknown_args = parse_known_args()
+
+    with ProcessManager(known_args, unknown_args) as process_manager:
+        process_manager.add_commands(_http_commands(known_args, unknown_args))
+        process_manager.start()
+        while True:
+            time.sleep(5)
+
+    # print("started", known_args, unknown_args)
+    # _launch_http(known_args, unknown_args)
+    # _launch_router(known_args, unknown_args)
+    # _launch_vllm_worker(known_args, unknown_args)
+
+
+#    while True:
+# time.sleep(10)
 
 
 if __name__ == "__main__":
-    main(*parse_known_args())
+    main()
