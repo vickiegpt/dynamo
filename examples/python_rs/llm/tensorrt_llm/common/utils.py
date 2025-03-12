@@ -29,7 +29,7 @@ from tensorrt_llm.logger import logger
 from dynamo.llm import AggregatedMetrics, KvIndexer, KvMetricsAggregator, OverlapScores
 from dynamo.runtime import dynamo_endpoint
 
-logger.set_level("info")
+logger.set_level("debug")
 
 
 class RoutingStrategy(enum.Enum):
@@ -60,7 +60,8 @@ class Scheduler:
                 worker_scores[worker_id] = (
                     score * self.indexer.block_size() / token_length
                 )
-
+        
+        logger.debug(f"Worker scores: {worker_scores}")
         worker_metrics = {}
         # pull metrics for each worker
         max_waiting = 0.0
@@ -81,6 +82,7 @@ class Scheduler:
             max_waiting = max(
                 max_waiting, worker_metrics[worker_id]["num_requests_waiting"]
             )
+        logger.debug(f"Worker metrics: {worker_metrics}")
 
         # Get all worker IDs from the client. This is needed because scores / metrics may not have values for all workers
         # and we want all workers to be considered in the logit calculation
@@ -186,7 +188,7 @@ async def get_worker_id(scheduler: Scheduler, request, tokenizer) -> str:
     )
 
     response = await worker_id_generator.__anext__()  # only one worker id is returned
-    worker_id, prefix_hit_rate = response.data().split("_")
+    worker_id, prefix_hit_rate = response.split("_")
     prefix_hit_rate = float(prefix_hit_rate)
 
     logger.debug(

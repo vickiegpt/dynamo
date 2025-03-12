@@ -35,7 +35,7 @@ from tensorrt_llm.serve.openai_protocol import (
 from dynamo.llm import KvMetricsPublisher
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
-logger.set_level("info")
+logger.set_level("debug")
 
 
 class TensorrtLLMEngine(BaseTensorrtLLMEngine):

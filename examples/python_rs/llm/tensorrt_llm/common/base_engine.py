@@ -137,6 +137,9 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         request_total_slots = 4
         kv_active_block = 0
         kv_total_blocks = 4
+        num_requests_waiting = 0
+        gpu_cache_usage_perc = 0.0
+        gpu_prefix_cache_hit_rate = 0.0
 
         if self._kv_metrics_publisher is None:
             logger.error("KV metrics publisher not initialized!")
@@ -147,6 +150,9 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
             request_total_slots,
             kv_active_block,
             kv_total_blocks,
+            num_requests_waiting,
+            gpu_cache_usage_perc,
+            gpu_prefix_cache_hit_rate,
         )
 
         # Prepare threads for publishing stats but don't start them yet.
