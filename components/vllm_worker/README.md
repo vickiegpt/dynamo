@@ -15,9 +15,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# VLLM Worker
+# Component: VLLM Worker
 
-### Brief Description
+## Description
 
 The vllm worker integrates the vllm MQLLMEngine into dynamo and
 extends its capabilities with support for:
@@ -25,7 +25,7 @@ extends its capabilities with support for:
 - Disaggregated Serving
 - KV Aware Routing
 
-## Component Details
+## Details
 - **Package Name**: `dynamo.components.vllm_worker`
 - **Version**: `0.1.0`
 - **Dependencies**: `ai-dynamo`
