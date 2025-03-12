@@ -84,7 +84,7 @@ This command starts etcd and nats io.
 
 #### Building Environment
 
-This command builds an environment supporti vllm.
+This command builds an environment supporting vllm.
 
 ```
 ./container/build.sh
