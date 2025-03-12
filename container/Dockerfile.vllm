@@ -37,7 +37,7 @@ RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requi
 
 # Install patched vllm - keep this early in Dockerfile to avoid
 # rebuilds from unrelated source code changes
-ARG VLLM_REF="v0.7.3"
+ARG VLLM_REF="c34eeec58d3a94437c5311e256f8ba21d1912a39"
 ARG VLLM_PATCH="vllm_${VLLM_REF}-dynamo-kv-disagg-patch.patch"
 ARG VLLM_SRC_DIR=/opt/vllm/vllm-src
 
@@ -57,7 +57,7 @@ RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
     if [ "${RECOMPILE_VLLM}" = "0" ]; then \
         export VLLM_USE_PRECOMPILED=1; \
         echo "Installing precompiled vLLM"; \
-        uv pip install --verbose --editable .; \
+        uv pip install --editable .; \
     else \
         export VLLM_FLASH_ATTN_SRC_DIR=${FLASH_ATTN_SRC_DIR}; \
         python -m pip install setuptools_scm; \
