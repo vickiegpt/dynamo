@@ -17,8 +17,6 @@ limitations under the License.
 
 # VLLM Worker
 
-## Dynamo Component
-
 ### Brief Description
 
 The vllm worker integrates the vllm MQLLMEngine into dynamo and
@@ -31,7 +29,7 @@ extends its capabilities with support for:
 - **Package Name**: `dynamo.components.vllm_worker`
 - **Version**: `0.1.0`
 - **Dependencies**: `ai-dynamo`
-- **Input/Output**: Supports
+- **Input/Output**: Open AI chat/completions
 
 ## Complete System Diagram
 
