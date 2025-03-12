@@ -84,30 +84,22 @@ def _http_commands(args, unknown_args):
     return commands
 
 
-def _launch_vllm_worker(args, unknown_args):
-    global processes
-
-    command = []
+def _vllm_worker_commands(args, unknown_args):
+    command_args = []
     if not args.router:
-        command.append("vllm-routerless-worker")
+        command_args.append("vllm-routerless-worker")
     else:
-        command.append("vllm-worker")
-        command.append("--enable-prefix-caching")
+        command_args.append("vllm-worker")
+        command_args.append("--enable-prefix-caching")
 
-    command.extend(unknown_args)
-    command.append("--model")
-    command.append(args.model)
-    command.append("--block-size")
-    command.append(str(args.block_size))
-    command.append("--max-model-len")
-    command.append(str(args.max_model_len))
-    print(command)
-    processes.append(
-        subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-        )
-    )
+    command_args.extend(unknown_args)
+    command_args.append("--model")
+    command_args.append(args.model)
+    command_args.append("--block-size")
+    command_args.append(str(args.block_size))
+    command_args.append("--max-model-len")
+    command_args.append(str(args.max_model_len))
+    return [Command(args=command_args, name="vllm worker")]
 
 
 # RUST_LOG=info python3 router/processor.py \
@@ -118,25 +110,19 @@ def _launch_vllm_worker(args, unknown_args):
 # --max-model-len 16384
 
 
-def _launch_processor(args, unknown_args):
-    global processes
+def _processor_commands(args, unknown_args):
+    command_args = ["vllm-processor"]
+    command_args.append("--model")
+    command_args.append(args.model)
+    command_args.append("--tokenizer")
+    command_args.append(args.model)
+    command_args.append("--enable-prefix-caching")
+    command_args.append("--block-size")
+    command_args.append(str(args.block_size))
+    command_args.append("--max-model-len")
+    command_args.append(str(args.max_model_len))
 
-    command = ["python3", "/workspace/components/vllm/router/processor.py"]
-    command.append("--model")
-    command.append(args.model)
-    command.append("--tokenizer")
-    command.append(args.model)
-    command.append("--enable-prefix-caching")
-    command.append("--block-size")
-    command.append(str(args.block_size))
-    command.append("--max-model-len")
-    command.append(str(args.max_model_len))
-
-    processes.append(
-        subprocess.Popen(
-            command, stdin=subprocess.DEVNULL, cwd="/workspace/components/vllm"
-        )
-    )
+    return [Command(args=command_args, name="processor")]
 
 
 # RUST_LOG=info python3 router/kv_router.py \
@@ -146,27 +132,25 @@ def _launch_processor(args, unknown_args):
 #     --min-workers 1
 
 
-def _launch_router(args, unknown_args):
-    global processes
+def _router_commands(args, unknown_args):
+    commands = []
 
     if args.router == "prefix":
-        _launch_processor(args, unknown_args)
+        commands.extend(_processor_commands(args, unknown_args))
 
-        command = ["python3", "/workspace/components/vllm/router/kv_router.py"]
-        command.append("--model-name")
-        command.append(args.model)
-        command.append("--custom-router")
-        command.append("True")
-        command.append("--min-workers")
-        command.append("1")
-        command.append("--block-size")
-        command.append(str(args.block_size))
+        command_args = ["vllm-kv_router.py"]
+        command_args.append("--model-name")
+        command_args.append(args.model)
+        command_args.append("--custom-router")
+        command_args.append("True")
+        command_args.append("--min-workers")
+        command_args.append("1")
+        command_args.append("--block-size")
+        command_args.append(str(args.block_size))
 
-        processes.append(
-            subprocess.Popen(
-                command, stdin=subprocess.DEVNULL, cwd="/workspace/components/vllm"
-            )
-        )
+        commands.append(Command(args=command_args, name="kv router"))
+
+    return commands
 
 
 def main():
@@ -174,6 +158,8 @@ def main():
 
     with ProcessManager(known_args, unknown_args) as process_manager:
         process_manager.add_commands(_http_commands(known_args, unknown_args))
+        process_manager.add_commands(_router_commands(known_args, unknown_args))
+        process_manager.add_commands(_vllm_worker_commands(known_args, unknown_args))
         process_manager.start()
         while True:
             time.sleep(5)
