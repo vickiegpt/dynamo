@@ -17,8 +17,6 @@ limitations under the License.
 
 # VLLM Worker
 
-## Component
-
 ## Description
 
 The vllm worker integrates the vllm MQLLMEngine into dynamo and
