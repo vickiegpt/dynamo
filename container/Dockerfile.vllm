@@ -62,6 +62,7 @@ RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
         export VLLM_FLASH_ATTN_SRC_DIR=${FLASH_ATTN_SRC_DIR}; \
         python -m pip install setuptools_scm; \
         echo "Installing vLLM from source"; \
+        export MAX_JOBS=$(nproc); \
         python setup.py install; \
     fi
 
