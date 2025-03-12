@@ -37,35 +37,33 @@ RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requi
 
 # Install patched vllm - keep this early in Dockerfile to avoid
 # rebuilds from unrelated source code changes
-ARG VLLM_REF="c34eeec58d3a94437c5311e256f8ba21d1912a39"
+ARG VLLM_REF="v0.7.3"
 ARG VLLM_PATCH="vllm_${VLLM_REF}-dynamo-kv-disagg-patch.patch"
-ARG VLLM_FLASH_ATTN_SRC_DIR=/opt/vllm/vllm-flash-attn
 ARG VLLM_SRC_DIR=/opt/vllm/vllm-src
-ARG VLLM_USE_PRECOMPILED=1
+
+ARG FLASH_ATTN_SRC_DIR=/opt/vllm/vllm-flash-attn
+ARG RECOMPILE_VLLM=0
 
 ENV PYTHONPATH=$PYTHONPATH:/usr/local/lib/python3.12/dist-packages/
 
 RUN rm -rf /usr/local/lib/python3.12/dist-packages/vllm*
 RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
-    python -m pip install setuptools_scm && \
     rm -rf ${VLLM_SRC_DIR} && \
     mkdir -p ${VLLM_SRC_DIR} && \
     git clone https://github.com/vllm-project/vllm.git ${VLLM_SRC_DIR} && \
     cd ${VLLM_SRC_DIR} && \
     git checkout ${VLLM_REF} && \
     git apply /tmp/deps/vllm/${VLLM_PATCH} && \
-    if [ "${VLLM_USE_PRECOMPILED}" = "1" ]; then \
+    if [ "${RECOMPILE_VLLM}" = "0" ]; then \
         export VLLM_USE_PRECOMPILED=1; \
-        unset VLLM_FLASH_ATTN_SRC_DIR; \
         echo "Installing precompiled vLLM"; \
-        sleep 10 && \
-        uv pip install --editable .; \
+        uv pip install --verbose --editable .; \
     else \
-        unset VLLM_USE_PRECOMPILED; \
-        export VLLM_FLASH_ATTN_SRC_DIR=${VLLM_FLASH_ATTN_SRC_DIR}; \
+        export VLLM_FLASH_ATTN_SRC_DIR=${FLASH_ATTN_SRC_DIR}; \
+        python -m pip install setuptools_scm; \
         echo "Installing vLLM from source"; \
         python setup.py install; \
-    fi && \
+    fi
 
 
 
