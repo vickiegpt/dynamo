@@ -61,10 +61,32 @@ vllm worker in a dynamo graph with all features.
 
 ### Pre-Requisites
 
-The following examples require that you are running within a dynamo
-development container.
+The following examples require that you have:
+
+1. Cloned the dynamo repo
+2. Started the dynamo infrastructure services
+3. Built dynamo development container.
+3. Launched the container on a system with NVIDIA GPU
+
+#### Cloning the Dynamo Repo
+
+```
+git clone https://github.com/ai-dynamo/dynamo.git
+cd dynamo
+git checkout nnshah1-dynamo-llm
+```
+
+#### Starting Dynamo Infrastructure Services
+
+This command starts etcd and nats io.
+
+```
+  docker compose -f deploy/docker-compose.yml up -d
+```
 
 #### Building Environment
+
+This command builds an environment supporti vllm.
 
 ```
 ./container/build.sh
