@@ -48,14 +48,12 @@ Dynamo development and examples are container based.
 You can build the Dynamo container using the build scripts
 in `container/` (or directly with `docker build`).
 
-We provide 3 types of builds:
+We provide 2 types of environments:
 
-1. `STANDARD` which includes our default set of backends (onnx, openvino...)
 2. `TENSORRTLLM` which includes our TRT-LLM backend
-3. `VLLM` which includes our VLLM backend using NCCL communication library.
-4. `VLLM_NIXL` which includes our VLLM backend using new NIXL communication library.
+3. `VLLM` which includes our VLLM backend using NIXL communication library.
 
-For example, if you want to build a container for the `STANDARD` backends you can run
+For example, if you want to build a container with `VLLM` support you can use the default:
 
 <!--pytest.mark.skip-->
 ```bash
@@ -107,6 +105,42 @@ HF_TOKEN` ) and mounts common directories such as `/tmp:/tmp`,
 
 Please see the instructions in the corresponding example for specific
 deployment instructions.
+
+## LLM Serving Quick Start
+
+You can quickly spin up a local model for quick testing in the development container.
+
+<!--pytest.mark.skip-->
+```bash
+./container/run.sh -it
+```
+
+```bash
+# Download Model
+
+huggingface-cli download --local-dir ./model deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+
+# Run
+
+dynamo run out=vllm deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+
+```
+
+#### Example Output
+
+```
+INFO 03-12 17:38:27 __init__.py:190] Automatically detected platform cuda.
+INFO 03-12 17:38:27 nixl.py:16] NIXL is available
+? User › how are you doing today?
+✔ User · how are you doing today?
+
+<think>
+...
+In summary, after considering all these factors, I think the best response is a positive, open-ended statement that invites the other person to share. So, "I'm doing well, thank you. How about you?" seems like the most appropriate and friendly way to respond.
+</think>
+
+I'm doing well, thank you. How about you?
+```
 
 ## Rust Based Runtime
 
