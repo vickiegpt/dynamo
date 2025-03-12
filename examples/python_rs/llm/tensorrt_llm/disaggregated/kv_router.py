@@ -25,7 +25,7 @@ from common.protocol import (
     DisaggChatCompletionStreamResponse,
     DisaggCompletionStreamResponse,
 )
-from common.utils import Scheduler, get_worker_id
+from common.utils import RoutingStrategy, Scheduler, get_worker_id
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import CompletionRequest, DisaggregatedParams
 
@@ -56,7 +56,9 @@ class Router(ChatProcessorMixin):
         # allows to use tokenizer
         super().__init__(engine_config)
 
-        logger.info(f"INITIALIZED ROUTER with routing strategy: {self.routing_strategy}")
+        logger.info(
+            f"INITIALIZED ROUTER with routing strategy: {self.routing_strategy}"
+        )
 
     async def _get_ctx_resp(self, request, ctx_client):
         logger.debug(f"Received request {request}")
@@ -73,7 +75,9 @@ class Router(ChatProcessorMixin):
             if self.routing_strategy == RoutingStrategy.ROUND_ROBIN:
                 ctx_resp = [
                     resp
-                    async for resp in await ctx_client.round_robin(request.model_dump_json())
+                    async for resp in await ctx_client.round_robin(
+                        request.model_dump_json()
+                    )
                 ]
             else:
                 # fallback to random

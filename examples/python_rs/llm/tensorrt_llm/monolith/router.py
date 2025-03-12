@@ -18,7 +18,7 @@ import asyncio
 import uvloop
 from common.base_engine import ChatProcessorMixin
 from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
-from common.utils import Scheduler, get_worker_id, wait_for_workers, RoutingStrategy
+from common.utils import RoutingStrategy, Scheduler, get_worker_id, wait_for_workers
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import (
     ChatCompletionRequest,
@@ -27,7 +27,7 @@ from tensorrt_llm.serve.openai_protocol import (
     CompletionStreamResponse,
 )
 
-from dynamo.llm import KvRouter
+from dynamo.llm import KvIndexer, KvMetricsAggregator
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
 logger.set_level("debug")
@@ -49,7 +49,9 @@ class Router(ChatProcessorMixin):
         # allows to use tokenizer
         super().__init__(engine_config)
 
-        logger.info(f"INITIALIZED ROUTER with routing strategy: {self.routing_strategy}")
+        logger.info(
+            f"INITIALIZED ROUTER with routing strategy: {self.routing_strategy}"
+        )
 
     async def _generate(self, request, client):
         request.skip_special_tokens = False
@@ -116,14 +118,18 @@ async def worker(runtime: DistributedRuntime, args, engine_config):
         kv_listener = runtime.namespace("dynamo").component("tensorrt-llm")
         await kv_listener.create_service()
 
-        kv_router = KvRouter(runtime, kv_listener)
+        indexer = KvIndexer(kv_listener, args.tokens_per_block)
+        metrics_aggregator = KvMetricsAggregator(kv_listener)
     else:
-        kv_router = None
+        indexer = None
+        metrics_aggregator = None
 
     completions_endpoint = component.endpoint("completions")
     chat_endpoint = component.endpoint("chat/completions")
 
-    scheduler = Scheduler(kv_router)
+    # FIXME: only using completion_client for now
+    # need 1 method for both completion and chat
+    scheduler = Scheduler(indexer, metrics_aggregator, completion_client)
     router = Router(
         completion_client,
         chat_client,

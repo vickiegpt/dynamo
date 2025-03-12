@@ -136,6 +136,12 @@ def parse_tensorrt_llm_args() -> Tuple[Any, Tuple[Dict[str, Any], Dict[str, Any]
         help="Minimum number of workers for aggregated (monolith) server",
     )
     parser.add_argument(
+        "--tokens-per-block",
+        type=int,
+        default=64,
+        help="Number of tokens per KV block",
+    )
+    parser.add_argument(
         "--routing-strategy",
         type=RoutingStrategy,
         default=RoutingStrategy.RANDOM,

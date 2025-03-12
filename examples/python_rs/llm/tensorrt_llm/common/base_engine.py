@@ -187,24 +187,37 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
             logger.error("LLM engine not initialized!")
             return
 
+        if self._kv_metrics_publisher is None:
+            logger.error("KV metrics publisher not initialized!")
+            return False
+
         stats = self._llm_engine.get_stats_async(timeout=5)
         async for stat in stats:
             request_active_slots = stat["numActiveRequests"]
             request_total_slots = stat["maxNumActiveRequests"]
             kv_active_block = stat["kvCacheStats"]["usedNumBlocks"]
             kv_total_blocks = stat["kvCacheStats"]["maxNumBlocks"]
-            if self._kv_metrics_publisher is None:
-                logger.error("KV metrics publisher not initialized!")
-                return False
+            reused_blocks = stat["kvCacheStats"]["reusedBlocks"]
+            # NOTE: num paused requests is always 0 when using guarantee no evict scheduler (default).
+            num_requests_waiting = (
+                stat["numQueuedRequests"]
+                + stat["inflightBatchingStats"]["numPausedRequests"]
+            )
+            gpu_cache_usage_perc = kv_active_block / kv_total_blocks
+            # TODO: we probably need to get this correctly by separating complete and incomplete requests
+            gpu_prefix_cache_hit_rate = reused_blocks / kv_active_block
 
             self._kv_metrics_publisher.publish(
                 request_active_slots,
                 request_total_slots,
                 kv_active_block,
                 kv_total_blocks,
+                num_requests_waiting,
+                gpu_cache_usage_perc,
+                gpu_prefix_cache_hit_rate,
             )
             logger.debug(
-                f"Published stats: request_active_slots: {request_active_slots}, request_total_slots: {request_total_slots}, kv_active_block: {kv_active_block}, kv_total_blocks: {kv_total_blocks}"
+                f"Published stats: request_active_slots: {request_active_slots}, request_total_slots: {request_total_slots}, kv_active_block: {kv_active_block}, kv_total_blocks: {kv_total_blocks}, num_requests_waiting: {num_requests_waiting}, gpu_cache_usage_perc: {gpu_cache_usage_perc}, gpu_prefix_cache_hit_rate: {gpu_prefix_cache_hit_rate}"
             )
 
         return True
