@@ -34,10 +34,10 @@ import (
 	"time"
 
 	"emperror.dev/errors"
-	"github.com/apparentlymart/go-shquot/shquot"
 	"github.com/ai-dynamo/dynamo/deploy/dynamo/operator/internal/controller_common"
 	commonconfig "github.com/ai-dynamo/dynamo/deploy/dynamo/operator/pkg/dynamo/config"
 	commonconsts "github.com/ai-dynamo/dynamo/deploy/dynamo/operator/pkg/dynamo/consts"
+	"github.com/apparentlymart/go-shquot/shquot"
 	"github.com/ettle/strcase"
 	"github.com/huandu/xstrings"
 	"github.com/mitchellh/hashstructure/v2"
@@ -2063,7 +2063,7 @@ func (r *DynamoNimRequestReconciler) generateImageBuilderPodTemplateSpec(ctx con
 			r.Recorder.Eventf(opt.DynamoNimRequest, corev1.EventTypeNormal, "GenerateImageBuilderPod", "Got presigned url for dynamoNim %s from yatai service", opt.DynamoNimRequest.Spec.BentoTag)
 			dynamoNimDownloadURL = dynamoNim_.PresignedDownloadUrl
 		} else {
-			dynamoNimDownloadURL = fmt.Sprintf("%s/api/v1/bento_repositories/%s/bentos/%s/download", yataiConf.Endpoint, dynamoNimRepositoryName, dynamoNimVersion)
+			dynamoNimDownloadURL = fmt.Sprintf("%s/api/v1/dynamo_nims/%s/versions/%s/download", yataiConf.Endpoint, dynamoNimRepositoryName, dynamoNimVersion)
 			dynamoNimDownloadHeader = fmt.Sprintf("%s: %s:%s:$%s", commonconsts.YataiApiTokenHeaderName, commonconsts.YataiImageBuilderComponentName, yataiConf.ClusterName, commonconsts.EnvYataiApiToken)
 		}
 
