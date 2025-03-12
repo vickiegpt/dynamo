@@ -53,7 +53,7 @@ def parse_known_args():
         type=str,
         required=False,
         default="",
-        choices=["", "prefix"],
+        choices=["", "random", "kv", "round-robin"],
         help="Number of context workers",
     )
 

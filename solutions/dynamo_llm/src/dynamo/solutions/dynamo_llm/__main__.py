@@ -91,6 +91,8 @@ def _vllm_worker_commands(args, unknown_args):
     else:
         command_args.append("vllm-worker")
         command_args.append("--enable-prefix-caching")
+        command_args.append("--router")
+        command_args.append(args.router)
 
     command_args.extend(unknown_args)
     command_args.append("--model")
@@ -138,7 +140,7 @@ def _router_commands(args, unknown_args):
     if args.router == "prefix":
         commands.extend(_processor_commands(args, unknown_args))
 
-        command_args = ["vllm-kv_router.py"]
+        command_args = ["vllm-kv-router"]
         command_args.append("--model-name")
         command_args.append(args.model)
         command_args.append("--custom-router")

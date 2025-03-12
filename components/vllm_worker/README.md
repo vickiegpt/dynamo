@@ -74,17 +74,33 @@ vllm worker in a dynamo graph with all features.
 #### Command
 
 ```
-dynamo-llm serve --model X --workers 1
+dynamo-llm --model 'deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B'
 ```
-
 
 
 ### KV Cache Aware Router + Worker
 
-```
+#### System Diagram
 
 ```
++------+      +-----------+      +------------------+
+| HTTP |----->| processor |----->| monolith         |
+|      |<-----|           |<-----|      worker      |
++------+      +-----------+      +------------------+
+                  |    ^                  |
+       query best |    | return           | publish kv events
+           worker |    | worker_id        v
+                  |    |         +------------------+
+                  |    +---------|     kv-router    |
+                  +------------->|                  |
+                                 +------------------+
+```
 
+#### Command
+
+```
+dynamo-llm --model 'deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B' --router prefix
+```
 
 
 
