@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import subprocess
 import time
 
 from ._parser import parse_known_args
@@ -22,27 +21,6 @@ from ._process_manager import Command, ProcessManager
 processes = []
 
 # llmctl http add chat-models deepseek-ai/DeepSeek-R1-Distill-Llama-8B dynamo-init.process.chat/completions
-
-
-def _configure_http(args, unknown_args):
-    command = ["llmctl", "http", "remove", "chat-models", args.model]
-
-    subprocess.call(command)
-
-    command = [
-        "llmctl",
-        "http",
-        "add",
-        "chat-models",
-        args.model,
-    ]
-
-    if args.router == "prefix":
-        command.append("dynamo-init.process.chat/completions")
-    else:
-        command.append("dynamo-init.vllm.generate")
-
-    subprocess.call(command)
 
 
 def _http_commands(args, unknown_args):
@@ -75,7 +53,7 @@ def _http_commands(args, unknown_args):
         args.model,
     ]
 
-    if args.router == "prefix":
+    if args.router:
         llmctl_args.append("dynamo-init.process.chat/completions")
     else:
         llmctl_args.append("dynamo-init.vllm.generate")
@@ -137,7 +115,7 @@ def _processor_commands(args, unknown_args):
 def _router_commands(args, unknown_args):
     commands = []
 
-    if args.router == "prefix":
+    if args.router:
         commands.extend(_processor_commands(args, unknown_args))
 
         command_args = ["vllm-kv-router"]
