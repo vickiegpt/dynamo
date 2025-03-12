@@ -254,6 +254,7 @@ RUN source /opt/dynamo/venv/bin/activate && \
     uv pip install -e /workspace/components/vllm_worker
 
 # Install solution
+COPY solutions /workspace/solutions
 RUN source /opt/dynamo/venv/bin/activate && \
     uv pip install -e /workspace/solutions/dynamo_llm
 
