@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-ARG BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
-ARG BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
+ARG BASE_IMAGE="nvcr.io/nvidia/tritonserver"
+ARG BASE_IMAGE_TAG="25.02-vllm-python-py3"
 
 FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS dev
 
@@ -164,10 +164,18 @@ RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requi
 
 # Install patched vllm - keep this early in Dockerfile to avoid
 # rebuilds from unrelated source code changes
-ARG VLLM_REF="v0.7.2"
+ARG VLLM_REF="c34eeec58d3a94437c5311e256f8ba21d1912a39"
 ARG VLLM_PATCH="vllm_${VLLM_REF}-dynamo-kv-disagg-patch.patch"
+ARG VLLM_FLASH_ATTN_SRC_DIR=/opt/vllm/vllm-flash-attn
+ARG VLLM_SRC_DIR=/opt/vllm/vllm-src
+ARG VLLM_RECOMPILE=false
+
+ENV PYTHONPATH=$PYTHONPATH:/usr/local/lib/python3.12/dist-packages/
+RUN rm -rf /usr/local/lib/python3.12/dist-packages/vllm*
 RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
-    bash /tmp/deps/vllm/install.sh --patch /tmp/deps/vllm/${VLLM_PATCH} --ref ${VLLM_REF} --install-cmd "uv pip install --editable" --use-precompiled --installation-dir /opt/vllm
+    uv pip install setuptools_scm && \
+    bash /tmp/deps/vllm/install.sh --patch /tmp/deps/vllm/${VLLM_PATCH} --ref ${VLLM_REF} --install-cmd "python setup.py install" --installation-dir ${VLLM_SRC_DIR} --recompile ${VLLM_RECOMPILE} --flash-attn-src-dir ${VLLM_FLASH_ATTN_SRC_DIR}
+
 
 # Install genai-perf for benchmarking
 ARG GENAI_PERF_TAG="25d0188713adc47868d6b3f22426375237a90529"
