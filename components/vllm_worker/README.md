@@ -15,7 +15,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Component: VLLM Worker
+# Component
+
+## VLLM Worker
 
 ## Description
 
@@ -31,7 +33,7 @@ extends its capabilities with support for:
 - **Dependencies**: `ai-dynamo`
 - **Input/Output**: Open AI chat/completions
 
-## Complete System Diagram
+## System Diagram
 
 This figure shows an overview of the major components for deploying a
 vllm worker in a dynamo graph with all features.
@@ -74,7 +76,7 @@ development container.
 ./container/run.sh -it
 ```
 
-### Standalone Worker
+### Example 1: Standalone Worker
 
 #### System Diagram
 
@@ -92,7 +94,7 @@ development container.
 dynamo-llm --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B'
 ```
 
-#### Example Request
+#### Request
 
 In a seperate terminal use curl to exercise the endpoint:
 
@@ -111,7 +113,7 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
 ```
 
 
-### KV Cache Aware Router + Worker
+### Example 2: KV Cache Aware Router + Worker
 
 #### System Diagram
 
@@ -135,7 +137,7 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
 dynamo-llm --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B' --router kv
 ```
 
-#### Example Request
+#### Request
 
 In a seperate terminal use curl to exercise the endpoint:
 
