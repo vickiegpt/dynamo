@@ -61,8 +61,8 @@ TENSORRTLLM_BASE_IMAGE="gitlab-master.nvidia.com:5005/dl/dgx/tritonserver/tensor
 TENSORRTLLM_BASE_IMAGE_TAG=krish-fix-trtllm-build.23766174
 TENSORRTLLM_PIP_WHEEL_PATH=""
 
-VLLM_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
-VLLM_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
+VLLM_BASE_IMAGE="nvcr.io/nvidia/tritonserver"
+VLLM_BASE_IMAGE_TAG="25.02-vllm-python-py3"
 
 NIXL_COMMIT=d7a2c571a60d76a3d6c8458140eaaa5025fa48c4
 NIXL_REPO=ai-dynamo/nixl.git

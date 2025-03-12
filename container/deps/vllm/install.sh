@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -e
+set -ex
 
 # Print usage information
 print_usage() {
@@ -23,8 +23,9 @@ print_usage() {
     echo "  --patch PATH        Apply a patch file during installation"
     echo "  --ref REF          Specify the vLLM git reference (branch/tag/commit) to install"
     echo "  --install-cmd CMD  Specify the installation command (default: 'pip install')"
-    echo "  --use-precompiled  Use precompiled kernels during installation"
+    echo "  --recompile        Recompile vLLM kernels"
     echo "  --installation-dir DIR  Specify the installation directory (default: 'vllm')"
+    echo "  --flash-attn-src-dir DIR  Specify the flash-attn source directory (default: none)"
     echo "  --help             Show this help message"
 }
 
@@ -32,8 +33,8 @@ print_usage() {
 INSTALL_CMD="pip install"
 VLLM_REF="main"
 PATCH_PATH=""
-USE_PRECOMPILED=false
-
+RECOMPILE=false
+FLASH_ATTN_SRC_DIR=""
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -49,12 +50,16 @@ while [[ $# -gt 0 ]]; do
             INSTALL_CMD="$2"
             shift 2
             ;;
-        --use-precompiled)
-            USE_PRECOMPILED=true
-            shift
+        --recompile)
+            RECOMPILE="$2"
+            shift 2
             ;;
         --installation-dir)
             INSTALLATION_DIR="$2"
+            shift 2
+            ;;
+        --flash-attn-src-dir)
+            FLASH_ATTN_SRC_DIR="$2"
             shift 2
             ;;
         --help)
@@ -76,6 +81,9 @@ if [[ ! "$PATCH_PATH" = /* ]]; then
     PATCH_PATH="$(pwd)/${PATCH_PATH}"
 fi
 
+# Clean up the installation directory
+rm -r "$INSTALLATION_DIR"
+
 # Clone vLLM repository
 echo "Cloning vLLM repository at ref: $VLLM_REF"
 git clone https://github.com/vllm-project/vllm.git "$INSTALLATION_DIR"
@@ -90,10 +98,18 @@ fi
 
 # Install using specified command
 echo "Installing using: $INSTALL_CMD"
-if [ "$USE_PRECOMPILED" = true ]; then
-    echo "Using precompiled kernels"
+if [ "$RECOMPILE" = true ]; then
+    echo "Recompiling vLLM"
+    export VLLM_USE_PRECOMPILED=0
+else
     export VLLM_USE_PRECOMPILED=1
 fi
-$INSTALL_CMD .
+
+if [ -n "$FLASH_ATTN_SRC_DIR" ]; then
+    export VLLM_FLASH_ATTN_SRC_DIR="$FLASH_ATTN_SRC_DIR"
+else
+    unset VLLM_FLASH_ATTN_SRC_DIR
+fi
+$INSTALL_CMD
 
 echo "Installation complete!"
