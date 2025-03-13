@@ -57,6 +57,7 @@ get_options() {
 	    MOUNT_WORKSPACE=TRUE
 	    ;;
         --dry-run)
+	    DRY_RUN=" --dry-run "
             RUN_PREFIX="echo"
             echo ""
             echo "=============================="
@@ -126,9 +127,9 @@ if [ ! -z "$LEADER" ]; then
 fi;
 
 if [ ! -z "$MOUNT_WORKSPACE" ]; then
-    ${SOURCE_DIR}/../../../container/run.sh -it --mount-workspace ${NATS_SERVER} ${ETCD_ENDPOINTS} -- dynamo-llm "${REMAINING_ARGS[@]}" ;
+    ${SOURCE_DIR}/../../../container/run.sh -it --mount-workspace ${NATS_SERVER} ${ETCD_ENDPOINTS} -- dynamo-llm $DRY_RUN "${REMAINING_ARGS[@]}" ;
 else
-    ${SOURCE_DIR}/../../../container/run.sh -it ${NATS_SERVER} ${ETCD_ENDPOINTS} -- dynamo-llm "${REMAINING_ARGS[@]}" ;
+    ${SOURCE_DIR}/../../../container/run.sh -it ${NATS_SERVER} ${ETCD_ENDPOINTS} -- dynamo-llm $DRY_RUN "${REMAINING_ARGS[@]}" ;
 fi;
 
 { set +x; } 2>/dev/null
