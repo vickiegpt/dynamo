@@ -22,7 +22,7 @@ def parse_known_args():
         help="model",
     )
 
-    parser.add_argument("--block-size", type=int, default=64, required=False)
+    parser.add_argument("--block-size", type=int, default=None, required=False)
 
     parser.add_argument("--max-model-len", type=int, default=16384)
 
@@ -58,6 +58,23 @@ def parse_known_args():
         default="",
         choices=["", "random", "kv", "round-robin"],
         help="Number of context workers",
+    )
+
+    parser.add_argument(
+        "--conditional-disagg",
+        action="store_true",
+        dest="conditional_disagg",
+        required=False,
+        default=False,
+        help="Whether to conditionally do remote prefill based on local cache",
+    )
+
+    parser.add_argument(
+        "--max-local-prefill-length",
+        type=int,
+        required=False,
+        default=None,
+        help="Max prefill to do locally before making remote prefill request",
     )
 
     parser.add_argument(
@@ -121,4 +138,14 @@ def parse_known_args():
     known_args.gpu_count = gpu_count()
     known_args.gpu_product_name = gpu_product_name()
     known_args._next_gpu = 0
+
+    if known_args.prefill_count and not known_args.block_size:
+        known_args.block_size = 128
+
+    if known_args.max_local_prefill_length and not known_args.conditional_disagg:
+        known_args.conditional_disagg = True
+
+    if known_args.conditional_disagg and not known_args.prefill_count:
+        print("Warning conditional disagg enabled but no prefill workers")
+
     return known_args, unknown_args

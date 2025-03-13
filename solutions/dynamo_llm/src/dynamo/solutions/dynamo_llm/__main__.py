@@ -78,8 +78,9 @@ def _vllm_worker_commands(args, unknown_args):
         command_args.extend(unknown_args)
         command_args.append("--model")
         command_args.append(args.model)
-        command_args.append("--block-size")
-        command_args.append(str(args.block_size))
+        if args.block_size:
+            command_args.append("--block-size")
+            command_args.append(str(args.block_size))
         command_args.append("--max-model-len")
         command_args.append(str(args.max_model_len))
         command_args.append("--enforce-eager")
@@ -87,6 +88,14 @@ def _vllm_worker_commands(args, unknown_args):
             command_args.append("--remote-prefill")
             command_args.append("--kv-transfer-config")
             command_args.append('{"kv_connector":"DynamoNixlConnector"}')
+            if args.conditional_disagg:
+                command_args.append("--conditional-disagg")
+                if "--enable-prefix-caching" not in command_args:
+                    command_args.append("--enable-prefix-caching")
+            if args.max_local_prefill_length:
+                command_args.append("--max-local-prefill-length")
+                command_args.append(str(args.max_local_prefill_length))
+
         cuda_visible_devices = []
 
         for _ in range(args.worker_tp):
@@ -130,8 +139,9 @@ def _vllm_prefill_worker_commands(args, unknown_args):
         command_args.extend(unknown_args)
         command_args.append("--model")
         command_args.append(args.model)
-        command_args.append("--block-size")
-        command_args.append(str(args.block_size))
+        if args.block_size:
+            command_args.append("--block-size")
+            command_args.append(str(args.block_size))
         command_args.append("--max-model-len")
         command_args.append(str(args.max_model_len))
         command_args.append("--enforce-eager")
@@ -181,8 +191,9 @@ def _processor_commands(args, unknown_args):
     command_args.append("--tokenizer")
     command_args.append(args.model)
     command_args.append("--enable-prefix-caching")
-    command_args.append("--block-size")
-    command_args.append(str(args.block_size))
+    if args.block_size:
+        command_args.append("--block-size")
+        command_args.append(str(args.block_size))
     command_args.append("--max-model-len")
     command_args.append(str(args.max_model_len))
     command_args.append("--router")
@@ -212,8 +223,9 @@ def _router_commands(args, unknown_args):
             command_args.append("True")
             command_args.append("--min-workers")
             command_args.append("1")
-            command_args.append("--block-size")
-            command_args.append(str(args.block_size))
+            if args.block_size:
+                command_args.append("--block-size")
+                command_args.append(str(args.block_size))
 
             commands.append(Command(args=command_args, name="kv router"))
 
