@@ -113,8 +113,6 @@ def _vllm_worker_commands(args, unknown_args):
         if args.hf_hub_offline:
             env["HF_HUB_OFFLINE"] = "1"
 
-        env["GLOO_SOCKET_IFNAME"] = "lo"
-
         commands.append(
             Command(
                 args=command_args,
@@ -166,8 +164,6 @@ def _vllm_prefill_worker_commands(args, unknown_args):
 
         if args.hf_hub_offline:
             env["HF_HUB_OFFLINE"] = "1"
-
-        env["GLOO_SOCKET_IFNAME"] = "lo"
 
         commands.append(
             Command(

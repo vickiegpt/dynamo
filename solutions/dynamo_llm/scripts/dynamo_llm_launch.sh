@@ -84,7 +84,7 @@ get_options() {
     done
 
     if [ -z "$LEADER" ] && [ -z "$FOLLOWING" ]; then
-       error "Need to follow or lead";
+	LEADER=TRUE
     fi
 
     if [ ! -z "$LEADER" ] && [ ! -z "$FOLLOWING" ]; then
@@ -126,10 +126,12 @@ if [ ! -z "$LEADER" ]; then
     docker compose -f ${SOURCE_DIR}/../../../deploy/docker-compose.yml up -d
 fi;
 
+GLOO_SOCKET_IFNAME=" -e GLOO_SOCKET_IFNAME=lo "
+
 if [ ! -z "$MOUNT_WORKSPACE" ]; then
-    ${SOURCE_DIR}/../../../container/run.sh -it --mount-workspace ${NATS_SERVER} ${ETCD_ENDPOINTS} -- dynamo-llm $DRY_RUN "${REMAINING_ARGS[@]}" ;
+    ${SOURCE_DIR}/../../../container/run.sh -it --mount-workspace ${NATS_SERVER} ${ETCD_ENDPOINTS} ${GLOO_SOCKET_IFNAME} -- dynamo-llm $DRY_RUN "${REMAINING_ARGS[@]}" ;
 else
-    ${SOURCE_DIR}/../../../container/run.sh -it ${NATS_SERVER} ${ETCD_ENDPOINTS} -- dynamo-llm $DRY_RUN "${REMAINING_ARGS[@]}" ;
+    ${SOURCE_DIR}/../../../container/run.sh -it ${NATS_SERVER} ${ETCD_ENDPOINTS} ${GLOO_SOCKET_IFNAME} -- dynamo-llm $DRY_RUN "${REMAINING_ARGS[@]}" ;
 fi;
 
 { set +x; } 2>/dev/null
