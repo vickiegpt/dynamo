@@ -1,5 +1,7 @@
 import argparse
 
+from ._gpu_info import gpu_count, gpu_product_name
+
 
 # FIXME: Remove unused args if any
 def parse_known_args():
@@ -29,7 +31,8 @@ def parse_known_args():
         type=int,
         required=False,
         default=0,
-        help="Number of context workers",
+        dest="prefill_count",
+        help="Number of prefill workers",
     )
 
     parser.add_argument(
@@ -67,32 +70,47 @@ def parse_known_args():
 
     parser.add_argument(
         "--backend",
-        type=int,
+        type=str,
         required=False,
-        default=0,
-        help="Number of context workers",
+        choices=["vllm", "tensorrtllm"],
+        default="vllm",
+        help="backend framework",
     )
 
     parser.add_argument(
-        "--decode-workers",
+        "--workers",
         type=int,
         required=False,
         default=0,
-        help="Number of generate workers",
+        dest="worker_count",
+        help="Number of decode / aggregate workers",
     )
 
     parser.add_argument(
-        "--prefill-tp-size",
+        "--reuse-gpus",
+        action="store_true",
+        required=False,
+        default=False,
+        help="reuse gpu devices",
+    )
+
+    parser.add_argument(
+        "--prefill-tp",
         type=int,
         default=1,
         help="Tensor parallel size of a context worker.",
     )
 
     parser.add_argument(
-        "--decode-tp-size",
+        "--worker-tp",
         type=int,
         default=1,
         help="Tensor parallel size of a generate worker.",
     )
 
-    return parser.parse_known_args()
+    known_args, unknown_args = parser.parse_known_args()
+
+    known_args.gpu_count = gpu_count()
+    known_args.gpu_product_name = gpu_product_name()
+    known_args._next_gpu = 0
+    return known_args, unknown_args

@@ -63,23 +63,48 @@ def _http_commands(args, unknown_args):
 
 
 def _vllm_worker_commands(args, unknown_args):
-    command_args = []
-    if not args.router:
-        command_args.append("vllm-routerless-worker")
-    else:
-        command_args.append("vllm-worker")
-        command_args.append("--enable-prefix-caching")
-        command_args.append("--router")
-        command_args.append(args.router)
+    commands = []
 
-    command_args.extend(unknown_args)
-    command_args.append("--model")
-    command_args.append(args.model)
-    command_args.append("--block-size")
-    command_args.append(str(args.block_size))
-    command_args.append("--max-model-len")
-    command_args.append(str(args.max_model_len))
-    return [Command(args=command_args, name="vllm worker")]
+    for worker_index in range(args.worker_count):
+        command_args = []
+        if not args.router:
+            command_args.append("vllm-routerless-worker")
+        else:
+            command_args.append("vllm-worker")
+            command_args.append("--enable-prefix-caching")
+            command_args.append("--router")
+            command_args.append(args.router)
+
+        command_args.extend(unknown_args)
+        command_args.append("--model")
+        command_args.append(args.model)
+        command_args.append("--block-size")
+        command_args.append(str(args.block_size))
+        command_args.append("--max-model-len")
+        command_args.append(str(args.max_model_len))
+
+        cuda_visible_devices = []
+
+        for _ in range(args.worker_tp):
+            if not args.reuse_gpus and args._next_gpu >= args.gpu_count:
+                raise ValueError("Not enough gpus for configuration")
+            cuda_visible_devices.append(args._next_gpu % args.gpu_count)
+            args._next_gpu += 1
+
+        env = {
+            "CUDA_VISIBLE_DEVICES": ",".join(
+                [f"{next_gpu}" for next_gpu in cuda_visible_devices]
+            )
+        }
+        commands.append(
+            Command(
+                args=command_args,
+                name=f"vllm worker_{worker_index}",
+                environment=env,
+                delay=10,
+            )
+        )
+    return commands
 
 
 # RUST_LOG=info python3 router/processor.py \
@@ -141,8 +166,10 @@ def main():
         process_manager.add_commands(_router_commands(known_args, unknown_args))
         process_manager.add_commands(_vllm_worker_commands(known_args, unknown_args))
         process_manager.start()
-        while True:
-            time.sleep(5)
+
+        if not known_args.dry_run:
+            while True:
+                time.sleep(5)
 
 
 if __name__ == "__main__":

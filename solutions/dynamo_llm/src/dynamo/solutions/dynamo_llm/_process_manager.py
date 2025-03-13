@@ -12,9 +12,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 import signal
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 
 
@@ -24,6 +26,8 @@ class Command:
     name: str = ""
     call: bool = False
     swallow_output: bool = False
+    environment: dict[str, str] = None
+    delay: int = 0
 
 
 class ProcessManager:
@@ -34,6 +38,8 @@ class ProcessManager:
         self._sleep = sleep_between_launch
 
     def add_commands(self, commands: list[Command]):
+        if not commands:
+            return
         for command in commands:
             self.add_command(command)
 
@@ -50,24 +56,38 @@ class ProcessManager:
             print("----------------------------------")
             print(f"{starting} {command.name} Process")
             print()
+            if command.environment:
+                print(f"\t {command.environment}")
             print(f"\t {' '.join(command.args)}")
             print("----------------------------------")
 
             if not self._dry_run:
+                env = os.environ.copy()
+                if command.environment:
+                    env.update(command.environment)
+
                 if command.call:
-                    result = subprocess.call(command.args)
+                    result = subprocess.call(command.args, env=env)
                     if result != 0:
                         sys.exit(result)
                 else:
                     input_ = subprocess.DEVNULL
                     output_ = subprocess.DEVNULL
+                    if command.swallow_output:
+                        output_ = subprocess.DEVNULL
+                    else:
+                        output_ = subprocess.PIPE
                     self._processes.append(
-                        subprocess.Popen(
-                            command.args,
-                            stdin=input_,
-                            stdout=output_ if command.swallow_output else None,
-                        )
+                        subprocess.Popen(command.args, stdin=input_, stdout=output_)
                     )
+                    input_ = self._processes[-1].stdout
+
+                    sed_cmd = ["sed", f"s/^/[{command.name}] /"]
+                    self._processes.append(subprocess.Popen(sed_cmd, stdin=input_))
+                    input_.close()
+
+                    delay = max(command.delay, self._sleep)
+                    time.sleep(delay)
 
     def __enter__(self):
         def handler(signum, frame):
