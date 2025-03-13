@@ -99,6 +99,7 @@ show_help() {
     echo "  [--mount-workspace set up for local development]"
     echo "  [--leader run infrastructure services]"
     echo "  [--following <IP> attach to a leader]"
+    ${SOURCE_DIR}/../../../container/run.sh -it --mount-workspace ${NATS_SERVER} ${ETCD_ENDPOINTS} -- dynamo-llm --help ;
     exit 0
 }
 
