@@ -20,6 +20,10 @@ on:
     - cron: "0 0 * * *" # Run at midnight UTC daily
   workflow_dispatch: # Allow manual triggers
 
+  # Temporary trigger for testing
+  pull_request:
+    branches: [main]
+
 jobs:
   nightly-test:
     runs-on: ${{ fromJSON(vars.PR_FASTCHECK_RUNNERS) }}
@@ -56,7 +60,7 @@ jobs:
 
       - name: Start supporting services
         run: |
-          docker-compose -f deploy/docker-compose.yml up -d nats-server etcd-server
+          docker compose -f deploy/docker-compose.yml up -d nats-server etcd-server
 
       - name: Build image
         env:
