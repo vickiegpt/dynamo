@@ -79,7 +79,7 @@ def parse_known_args():
     )
 
     parser.add_argument(
-        "--workers",
+        ["--workers", "--decode-workers"],
         type=int,
         required=False,
         default=1,
