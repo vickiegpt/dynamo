@@ -74,26 +74,12 @@ cd dynamo
 git checkout nnshah1-dynamo-llm
 ```
 
-#### Starting Dynamo Infrastructure Services
-
-This command starts etcd and nats io.
-
-```
-  docker compose -f deploy/docker-compose.yml up -d
-```
-
 #### Building Environment
 
 This command builds an environment supporting vllm.
 
 ```
 ./container/build.sh
-```
-
-#### Starting Interactive Shell
-
-```
-./container/run.sh -it
 ```
 
 ### Example 1: Standalone Worker
@@ -110,8 +96,11 @@ This command builds an environment supporting vllm.
 
 #### Command
 
+Note the following command launches the supporting services when
+designated as the "leader" (default).
+
 ```
-dynamo-llm --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B'
+./solutions/dynamo_llm/scripts/dynamo_llm_launch.sh -- --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B'
 ```
 
 #### Request
@@ -154,7 +143,182 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
 #### Command
 
 ```
-dynamo-llm --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B' --router kv
+./solutions/dynamo_llm/scripts/dynamo_llm_launch.sh -- --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B' --router kv
+```
+
+#### Request
+
+In a seperate terminal use curl to exercise the endpoint:
+
+```
+curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   -d '{
+    "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "messages": [
+    {
+        "role": "user",
+        "content": "In the heart of Eldoria, an ancient land of boundless magic and mysterious creatures, lies the long-forgotten city of Aeloria. Once a beacon of knowledge and power, Aeloria was buried beneath the shifting sands of time, lost to the world for centuries. You are an intrepid explorer, known for your unparalleled curiosity and courage, who has stumbled upon an ancient map hinting at ests that Aeloria holds a secret so profound that it has the potential to reshape the very fabric of reality. Your journey will take you through treacherous deserts, enchanted forests, and across perilous mountain ranges. Your Task: Character Background: Develop a detailed background for your character. Describe their motivations for seeking out Aeloria, their skills and weaknesses, and any personal connections to the ancient city or its legends. Are they driven by a quest for knowledge, a search for lost familt clue is hidden."
+    }
+    ],
+    "stream":false,
+    "max_tokens": 30
+  }'
+```
+
+### Example 3: KV Cache Aware Router +  8 Workers
+
+#### System Diagram
+
+```
++------+      +-----------+      +------------------+
+| HTTP |----->| processor |----->| 8 monolith       |
+|      |<-----|           |<-----|      workers     |
++------+      +-----------+      +------------------+
+                  |    ^                  |
+       query best |    | return           | publish kv events
+           worker |    | worker_id        v
+                  |    |         +------------------+
+                  |    +---------|     kv-router    |
+                  +------------->|                  |
+                                 +------------------+
+```
+
+#### Command
+
+```
+./solutions/dynamo_llm/scripts/dynamo_llm_launch.sh -- --workers 8 --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B' --router kv
+```
+
+#### Request
+
+In a seperate terminal use curl to exercise the endpoint:
+
+```
+curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   -d '{
+    "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "messages": [
+    {
+        "role": "user",
+        "content": "In the heart of Eldoria, an ancient land of boundless magic and mysterious creatures, lies the long-forgotten city of Aeloria. Once a beacon of knowledge and power, Aeloria was buried beneath the shifting sands of time, lost to the world for centuries. You are an intrepid explorer, known for your unparalleled curiosity and courage, who has stumbled upon an ancient map hinting at ests that Aeloria holds a secret so profound that it has the potential to reshape the very fabric of reality. Your journey will take you through treacherous deserts, enchanted forests, and across perilous mountain ranges. Your Task: Character Background: Develop a detailed background for your character. Describe their motivations for seeking out Aeloria, their skills and weaknesses, and any personal connections to the ancient city or its legends. Are they driven by a quest for knowledge, a search for lost familt clue is hidden."
+    }
+    ],
+    "stream":false,
+    "max_tokens": 30
+  }'
+```
+
+
+### Example 4: 1 Prefill and 1 Decode Disaggregation (TP 1)
+
+#### System Diagram
+
+
+```
+                                                 +----------------+
+                                          +------| prefill worker |
+                                   notify |      |   (optional)   |
+                                 finished |      +----------------+
+                                          v
++------+            +------------------+    push     +---------------+
+| HTTP |----->----->| decode           |------------>| prefill queue |
+|      |<-----<-----|      worker      | (if disagg) |   (optional)  |
++------+            +------------------+             +---------------+
+```
+
+
+#### Command
+
+```
+./solutions/dynamo_llm/scripts/dynamo_llm_launch.sh -- --decode-workers 1 --prefill-workers 1 --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B'
+```
+
+#### Request
+
+In a seperate terminal use curl to exercise the endpoint:
+
+```
+curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   -d '{
+    "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "messages": [
+    {
+        "role": "user",
+        "content": "In the heart of Eldoria, an ancient land of boundless magic and mysterious creatures, lies the long-forgotten city of Aeloria. Once a beacon of knowledge and power, Aeloria was buried beneath the shifting sands of time, lost to the world for centuries. You are an intrepid explorer, known for your unparalleled curiosity and courage, who has stumbled upon an ancient map hinting at ests that Aeloria holds a secret so profound that it has the potential to reshape the very fabric of reality. Your journey will take you through treacherous deserts, enchanted forests, and across perilous mountain ranges. Your Task: Character Background: Develop a detailed background for your character. Describe their motivations for seeking out Aeloria, their skills and weaknesses, and any personal connections to the ancient city or its legends. Are they driven by a quest for knowledge, a search for lost familt clue is hidden."
+    }
+    ],
+    "stream":false,
+    "max_tokens": 30
+  }'
+```
+
+### Example 5: 4 Prefill and 1 Decode Disaggregation (Prefill TP 1 Decode TP 4)
+
+#### System Diagram
+
+
+```
+                                                 +----------------+
+                                          +------| prefill worker |
+                                   notify |      |   (optional)   |
+                                 finished |      +----------------+
+                                          v
++------+            +------------------+    push     +---------------+
+| HTTP |----->----->| decode           |------------>| prefill queue |
+|      |<-----<-----|      worker      | (if disagg) |   (optional)  |
++------+            +------------------+             +---------------+
+```
+
+
+#### Command
+
+```
+./solutions/dynamo_llm/scripts/dynamo_llm_launch.sh -- --decode-workers 1 --prefill-workers 4 --decode-tp 4 --prefill-tp 1  --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B'
+```
+
+#### Request
+
+In a seperate terminal use curl to exercise the endpoint:
+
+```
+curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   -d '{
+    "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "messages": [
+    {
+        "role": "user",
+        "content": "In the heart of Eldoria, an ancient land of boundless magic and mysterious creatures, lies the long-forgotten city of Aeloria. Once a beacon of knowledge and power, Aeloria was buried beneath the shifting sands of time, lost to the world for centuries. You are an intrepid explorer, known for your unparalleled curiosity and courage, who has stumbled upon an ancient map hinting at ests that Aeloria holds a secret so profound that it has the potential to reshape the very fabric of reality. Your journey will take you through treacherous deserts, enchanted forests, and across perilous mountain ranges. Your Task: Character Background: Develop a detailed background for your character. Describe their motivations for seeking out Aeloria, their skills and weaknesses, and any personal connections to the ancient city or its legends. Are they driven by a quest for knowledge, a search for lost familt clue is hidden."
+    }
+    ],
+    "stream":false,
+    "max_tokens": 30
+  }'
+```
+
+### Example 6: 4 Prefill and 1 Decode Disaggregation (Prefill TP 1 Decode TP 4) with KV Aware Routing
+
+#### System Diagram
+
+
+```
+                                                 +----------------+
+                                          +------| prefill worker |-------+
+                                   notify |      |   (optional)   |       |
+                                 finished |      +----------------+       | pull
+                                          v                               v
++------+      +-----------+      +------------------+    push     +---------------+
+| HTTP |----->| processor |----->| decode/monolith  |------------>| prefill queue |
+|      |<-----|           |<-----|      worker      | (if disagg) |   (optional)  |
++------+      +-----------+      +------------------+             +---------------+
+                  |    ^                  |
+       query best |    | return           | publish kv events
+           worker |    | worker_id        v
+                  |    |         +------------------+
+                  |    +---------|     kv-router    |
+                  +------------->|    (optional)    |
+                                 +------------------+
+```
+
+#### Command
+
+```
+./solutions/dynamo_llm/scripts/dynamo_llm_launch.sh -- --decode-workers 1 --prefill-workers 4 --decode-tp 4 --prefill-tp 1  --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B' --router kv
 ```
 
 #### Request
