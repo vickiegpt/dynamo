@@ -29,7 +29,7 @@ SOURCE_DIR=$(dirname "$(readlink -f "$0")")
 
 MOUNT_WORKSPACE=
 REMAINING_ARGS=
-LEADER=TRUE
+LEADER=
 FOLLOWING=
 
 get_options() {
