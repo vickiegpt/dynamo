@@ -58,7 +58,6 @@ jobs:
         id: define_image_tag
         run: |
           echo "image_tag=${{ steps.login-ecr.outputs.registry }}/${{ github.repository }}:latest-${{ matrix.framework }}" >> $GITHUB_ENV
-          echo "image_tag=${{ steps.login-ecr.outputs.registry }}/${{ github.repository }}:latest-${{ matrix.framework }}" >> $GITHUB_OUTPUT
 
       - name: Decide on cache
         id: which_caches
@@ -66,12 +65,12 @@ jobs:
           set +e
           if [ "${{ github.event_name }}" == "pull_request" ]; then
             echo "Not pushing to container image cache"
-            echo "cache_to_location=" >> $GITHUB_OUTPUT
+            echo "cache_to_location=" >> $GITHUB_ENV
           else
             echo "Pushing ${{ steps.define_image_tag.outputs.image_tag }} to container image cache"
-            echo "cache_to_location=--cache-to \"type=registry,ref=${{ steps.define_image_tag.outputs.image_tag }},image-manifest=true,mode=max\"" >> $GITHUB_OUTPUT
+            echo "cache_to_location=--cache-to \"type=registry,ref=${{ steps.define_image_tag.outputs.image_tag }},image-manifest=true,mode=max\"" >> $GITHUB_ENV
           fi
-          echo "cache_from_location=--cache-from \"type=registry,ref=${{ steps.define_image_tag.outputs.image_tag }}\"" >> $GITHUB_OUTPUT
+          echo "cache_from_location=--cache-from \"type=registry,ref=${{ steps.define_image_tag.outputs.image_tag }}\"" >> $GITHUB_ENV
 
       - name: Build image
         env:
@@ -83,7 +82,7 @@ jobs:
         env:
           PYTEST_MARKS: "pre_merge or mypy"
         run: |
-          docker run -w /workspace --name ${{ env.CONTAINER_ID }} ${{ steps.define_image_tag.outputs.image_tag }} pytest --basetemp=/tmp --cov=./ --cov-report=xml:/workspace/coverage.xml -m "${{ env.PYTEST_MARKS }}"
+          docker run -w /workspace --name ${{ env.CONTAINER_ID }} ${{ steps.define_image_tag.outputs.image_tag }} pytest --basetemp=/tmp --cov=./ --junitxml=${{ env.PYTEST_XML_FILE }} --cov-report=xml:/workspace/coverage.xml -m "${{ env.PYTEST_MARKS }}"
 
       - name: Copy test report from test Container
         if: always()
