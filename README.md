@@ -22,8 +22,8 @@ limitations under the License.
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![GitHub Release](https://img.shields.io/github/v/release/ai-dynamo/dynamo)](https://github.com/ai-dynamo/dynamo/releases/latest)
 ![CodeQL](https://github.com/ai-dynamo/dynamo/actions/workflows/codeql-analysis.yml/badge.svg)
-![CI Status](https://github.com/ai-dynamo/dynamo/actions/workflows/workflows/pre-merge-python.yml/badge.svg)
-![Dependabot Status](https://api.dependabot.com/badges/status?dependency-name={dependency-name}&package-manager={package-manager}&version-scheme={version-scheme})
+[![CI Status](https://github.com/ai-dynamo/dynamo/actions/workflows/pr_github_validation.yaml/badge.svg?branch=main)](https://github.com/ai-dynamo/dynamo/actions/workflows/pr_github_validation.yaml)
+[![Dependabot Updates](https://github.com/ai-dynamo/dynamo/actions/workflows/dependabot/dependabot-updates/badge.svg?branch=main)](https://github.com/ai-dynamo/dynamo/actions/workflows/dependabot/dependabot-updates)
 
 
 Dynamo is a flexible, component based, data center scale inference
