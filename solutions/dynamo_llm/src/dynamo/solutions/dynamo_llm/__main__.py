@@ -113,8 +113,6 @@ def _vllm_worker_commands(args, unknown_args):
             )
         }
 
-        print("worker env", env)
-
         if args.hf_hub_offline:
             env["HF_HUB_OFFLINE"] = "1"
 
@@ -160,7 +158,6 @@ def _vllm_prefill_worker_commands(args, unknown_args):
 
         for _ in range(args.prefill_tp):
             if not args.reuse_gpus and args._next_gpu >= args.gpu_count:
-                print(args)
                 raise ValueError("Not enough gpus for configuration")
             cuda_visible_devices.append(args._next_gpu % args.gpu_count)
             args._next_gpu += 1
@@ -170,7 +167,7 @@ def _vllm_prefill_worker_commands(args, unknown_args):
                 [f"{next_gpu}" for next_gpu in cuda_visible_devices]
             )
         }
-        print("prefill", env)
+
         if args.hf_hub_offline:
             env["HF_HUB_OFFLINE"] = "1"
 
