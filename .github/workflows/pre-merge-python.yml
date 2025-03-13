@@ -92,7 +92,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-  
+
       - name: Run pytest
         env:
           PYTEST_MARKS: "pre_merge or mypy"
@@ -103,7 +103,7 @@ jobs:
         if: always()
         run: |
           docker cp ${{ env.CONTAINER_ID }}:/workspace/${{ env.PYTEST_XML_FILE }} .
-  
+
       - name: Archive test report
         uses: actions/upload-artifact@v4
         if: always()
@@ -112,7 +112,7 @@ jobs:
           if-no-files-found: error
           path: |
             ${{ env.PYTEST_XML_FILE }}
-  
+
       - name: Upload Coverage Results to Codecov
         uses: codecov/codecov-action@v5
         with:
