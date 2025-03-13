@@ -171,7 +171,7 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
     "max_tokens": 30
   }'
 ```
-
+https://github.com/ai-dynamo/dynamo/tree/nnshah1-dynamo-llm/components/vllm_worker#example-3-kv-cache-aware-router--8-workers
 ### Example 3: KV Cache Aware Router + 8 Workers
 
 #### System Diagram
