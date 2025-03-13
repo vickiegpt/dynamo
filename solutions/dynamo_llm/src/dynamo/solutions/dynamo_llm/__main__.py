@@ -126,6 +126,8 @@ def _processor_commands(args, unknown_args):
     command_args.append(str(args.block_size))
     command_args.append("--max-model-len")
     command_args.append(str(args.max_model_len))
+    command_args.append("--router")
+    command_args.append(args.router)
 
     return [Command(args=command_args, name="processor")]
 
@@ -143,17 +145,18 @@ def _router_commands(args, unknown_args):
     if args.router:
         commands.extend(_processor_commands(args, unknown_args))
 
-        command_args = ["vllm-kv-router"]
-        command_args.append("--model-name")
-        command_args.append(args.model)
-        command_args.append("--custom-router")
-        command_args.append("True")
-        command_args.append("--min-workers")
-        command_args.append("1")
-        command_args.append("--block-size")
-        command_args.append(str(args.block_size))
+        if args.router == "kv":
+            command_args = ["vllm-kv-router"]
+            command_args.append("--model-name")
+            command_args.append(args.model)
+            command_args.append("--custom-router")
+            command_args.append("True")
+            command_args.append("--min-workers")
+            command_args.append("1")
+            command_args.append("--block-size")
+            command_args.append(str(args.block_size))
 
-        commands.append(Command(args=command_args, name="kv router"))
+            commands.append(Command(args=command_args, name="kv router"))
 
     return commands
 
