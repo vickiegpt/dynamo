@@ -117,7 +117,8 @@ async def worker(runtime: DistributedRuntime, args, engine_config):
     if args.routing_strategy == RoutingStrategy.PREFIX:
         kv_listener = runtime.namespace("dynamo").component("tensorrt-llm")
         await kv_listener.create_service()
-
+        
+        logger.info(f"Intializing KV indexer with tokens per block: {args.tokens_per_block}")
         indexer = KvIndexer(kv_listener, args.tokens_per_block)
         metrics_aggregator = KvMetricsAggregator(kv_listener)
     else:

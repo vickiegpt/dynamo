@@ -201,17 +201,28 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         async for stat in stats:
             request_active_slots = stat["numActiveRequests"]
             request_total_slots = stat["maxNumActiveRequests"]
-            kv_active_block = stat["kvCacheStats"]["usedNumBlocks"]
-            kv_total_blocks = stat["kvCacheStats"]["maxNumBlocks"]
+            kv_active_block = stat["kvCacheStats"]["usedNumBlocks"] # active blocks are only for the inflight requests
+            kv_total_blocks = stat["kvCacheStats"]["maxNumBlocks"] # total blocks per cache level.
             reused_blocks = stat["kvCacheStats"]["reusedBlocks"]
+            freeNumBlocks = stat["kvCacheStats"]["freeNumBlocks"]
+            allocTotalBlocks = stat["kvCacheStats"]["allocTotalBlocks"]
+            allocNewBlocks = stat["kvCacheStats"]["allocNewBlocks"]
+            # Number of blocks that were matched and reused.
+            reusedBlocks = stat["kvCacheStats"]["reusedBlocks"]
             # NOTE: num paused requests is always 0 when using guarantee no evict scheduler (default).
             num_requests_waiting = (
                 stat["numQueuedRequests"]
                 + stat["inflightBatchingStats"]["numPausedRequests"]
             )
+            
+            logger.debug(
+                f"Published stats: request_active_slots: {request_active_slots}, request_total_slots: {request_total_slots}, kv_active_block: {kv_active_block}, kv_total_blocks: {kv_total_blocks}, num_requests_waiting: {num_requests_waiting}, reused_blocks: {reused_blocks}, freeNumBlocks: {freeNumBlocks}, allocTotalBlocks: {allocTotalBlocks}, allocNewBlocks: {allocNewBlocks}"
+            )
+            
             gpu_cache_usage_perc = kv_active_block / kv_total_blocks
             # TODO: we probably need to get this correctly by separating complete and incomplete requests
-            gpu_prefix_cache_hit_rate = reused_blocks / kv_active_block
+            gpu_prefix_cache_hit_rate = reused_blocks / kv_total_blocks
+
 
             self._kv_metrics_publisher.publish(
                 request_active_slots,
@@ -222,9 +233,7 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
                 gpu_cache_usage_perc,
                 gpu_prefix_cache_hit_rate,
             )
-            logger.debug(
-                f"Published stats: request_active_slots: {request_active_slots}, request_total_slots: {request_total_slots}, kv_active_block: {kv_active_block}, kv_total_blocks: {kv_total_blocks}, num_requests_waiting: {num_requests_waiting}, gpu_cache_usage_perc: {gpu_cache_usage_perc}, gpu_prefix_cache_hit_rate: {gpu_prefix_cache_hit_rate}"
-            )
+            
 
         return True
 
@@ -239,12 +248,18 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         events = self._llm_engine.get_kv_cache_events_async(timeout=5)
         async for event_list in events:
             for event in event_list:
-                logger.debug(f"Received event from llmapi: {event}")
                 id = event["event_id"]
                 data = event["data"]
                 if data["type"] == "stored":
                     parent_hash = data["parent_hash"]
                     for block in data["blocks"]:
+                        tokens = []
+                        for token in block["tokens"]:
+                            tokens.append(int(token['token_id']))
+                        if len(tokens) == 1:
+                            print(f"only 1")
+                        else:
+                            print(f"more than 1")
                         # Note: Currently data does not have lora_id.
                         # Using 0 as default value. If later data has
                         # lora_id, we need to verify if this is correct.
@@ -253,18 +268,12 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
                             id,
                             parent_hash,
                             block["block_hash"],
-                            block["tokens"],
+                            tokens,
                             lora_id,
-                        )
-                        logger.debug(
-                            f"Published stored event: {id}, parent_hash: {parent_hash}, block_hashes: {block['block_hash']}, token_ids: {block['tokens']}"
                         )
                 elif data["type"] == "removed":
                     for block_hash in data["block_hashes"]:
                         self._kv_cache_events_publisher.removed_event(id, block_hash)
-                        logger.debug(
-                            f"Published removed event: {id}, block_hash: {block_hash}"
-                        )
         return True
 
     def _start_threads(self):

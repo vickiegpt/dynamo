@@ -18,7 +18,7 @@ from ctypes import c_char_p, c_int64, c_uint32
 
 from tensorrt_llm.logger import logger
 
-logger.set_level("info")
+logger.set_level("debug")
 
 
 class DynamoResult:
@@ -70,6 +70,7 @@ class KVCacheEventPublisher:
         self.lib.dynamo_kv_event_publish_removed.restype = (
             ctypes.c_uint32
         )  # dynamo_llm_result_t
+        self._counter = 0
 
     def stored_event(self, event_id, parent_hash, block_hash, token_ids, lora_id):
         if self.lib is None:
@@ -86,10 +87,14 @@ class KVCacheEventPublisher:
         num_block_tokens = (ctypes.c_size_t * 1)(len(token_ids))
         block_hash = (ctypes.c_uint64 * 1)(block_hash)
 
+        logger.debug(
+            f" After conversion stored, parent_hash: {parent_hash}, block_hash: {block_hash}, token_ids: {token_ids_arr}, num_block_tokens: {num_block_tokens}"
+        )
+
         # Publish the event
         # TODO: Currently, lora_id is not available in the stored events.
         result = self.lib.dynamo_kv_event_publish_stored(
-            event_id,  # uint64_t event_id
+            self._counter,  # uint64_t event_id
             token_ids_arr,  # const uint32_t *token_ids
             num_block_tokens,  # const uintptr_t *num_block_tokens
             block_hash,  # const uint64_t *block_ids
@@ -97,6 +102,7 @@ class KVCacheEventPublisher:
             parent_hash,  # const uint64_t *parent_hash
             lora_id,  # uint64_t lora_id
         )
+        self._counter += 1
 
         if result == DynamoResult.OK:
             logger.debug(f"Store - Published KV Event: {block_hash}")
@@ -109,10 +115,12 @@ class KVCacheEventPublisher:
             return
 
         result = self.lib.dynamo_kv_event_publish_removed(
-            event_id,
+            self._counter,
             (ctypes.c_uint64 * 1)(block_hash),
             1,
         )
+
+        self._counter += 1
 
         if result == DynamoResult.OK:
             logger.debug(f"Remove - Published KV Event: {block_hash}")

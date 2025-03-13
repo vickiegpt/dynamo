@@ -183,6 +183,7 @@ async def get_worker_id(scheduler: Scheduler, request, tokenizer) -> str:
     # prompt is also encoded in the worker.
     # TODO: we need to implement our own request processing and protocols to send only token ids to llmapi worker.
     token_ids = tokenizer.encode(request.prompt)
+    print(f"token_ids: {token_ids}")
     worker_id_generator: AsyncIterator = scheduler.generate(
         Tokens(tokens=token_ids).model_dump_json()
     )

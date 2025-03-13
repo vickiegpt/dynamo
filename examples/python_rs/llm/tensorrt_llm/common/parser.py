@@ -138,7 +138,7 @@ def parse_tensorrt_llm_args() -> Tuple[Any, Tuple[Dict[str, Any], Dict[str, Any]
     parser.add_argument(
         "--tokens-per-block",
         type=int,
-        default=64,
+        default=32,
         help="Number of tokens per KV block",
     )
     parser.add_argument(
