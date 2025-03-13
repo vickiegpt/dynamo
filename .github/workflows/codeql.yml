@@ -2,9 +2,6 @@ name: CodeQL
 
 on:
   pull_request:
-  push:
-    branches:
-      - mesharma/badges  # Only run for pushes to my dev branch
 
 jobs:
   codeql:
