@@ -244,34 +244,27 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
                 data = event["data"]
                 if data["type"] == "stored":
                     parent_hash = data["parent_hash"]
-                    token_ids = []
-                    block_hashes = []
                     for block in data["blocks"]:
-                        block_hash = block["block_hash"]
-                        block_hashes.append(block_hash)
-                        for token in block["tokens"]:
-                            # TODO: How to handle token_extra_id?
-                            token_ids.append(token["token_id"])
-                    # Note: Currently data does not have lora_id.
-                    # Using 0 as default value. If later data has
-                    # lora_id, we need to verify if this is correct.
-                    lora_id = data.get("lora_id", 0)
-                    # Publish the stored event
-                    self._kv_cache_events_publisher.stored_event(
-                        id, parent_hash, block_hashes, token_ids, lora_id
-                    )
-                    logger.debug(
-                        f"Published stored event: {id}, parent_hash: {parent_hash}, block_hashes: {block_hashes}, token_ids: {token_ids}"
-                    )
+                        # Note: Currently data does not have lora_id.
+                        # Using 0 as default value. If later data has
+                        # lora_id, we need to verify if this is correct.
+                        lora_id = data.get("lora_id", 0)
+                        self._kv_cache_events_publisher.stored_event(
+                            id,
+                            parent_hash,
+                            block["block_hash"],
+                            block["tokens"],
+                            lora_id,
+                        )
+                        logger.debug(
+                            f"Published stored event: {id}, parent_hash: {parent_hash}, block_hashes: {block['block_hash']}, token_ids: {block['tokens']}"
+                        )
                 elif data["type"] == "removed":
-                    # Publish the removed event
-                    block_hashes = []
                     for block_hash in data["block_hashes"]:
-                        block_hashes.append(block_hash)
-                    self._kv_cache_events_publisher.removed_event(id, block_hashes)
-                    logger.debug(
-                        f"Published removed event: {id}, block_hashes: {block_hashes}"
-                    )
+                        self._kv_cache_events_publisher.removed_event(id, block_hash)
+                        logger.debug(
+                            f"Published removed event: {id}, block_hash: {block_hash}"
+                        )
         return True
 
     def _start_threads(self):
