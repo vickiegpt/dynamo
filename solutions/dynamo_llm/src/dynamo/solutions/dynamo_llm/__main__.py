@@ -158,7 +158,7 @@ def _vllm_prefill_worker_commands(args, unknown_args):
 
         cuda_visible_devices = []
 
-        for _ in range(args.worker_tp):
+        for _ in range(args.prefill_tp):
             if not args.reuse_gpus and args._next_gpu >= args.gpu_count:
                 print(args)
                 raise ValueError("Not enough gpus for configuration")
