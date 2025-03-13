@@ -78,43 +78,43 @@ jobs:
           path: ${{ github.event_path }}
 
   test:
-  runs-on: ubuntu-latest
-  needs: build  # This ensures that the test job runs after the build job
-  strategy:
-    matrix:
-      framework:
-        - vllm
-  name: Test - ${{ matrix.framework }}
-  env:
-    CONTAINER_ID: test_${{ github.run_id }}_${{ github.run_attempt }}_${{ github.job }}_${{ matrix.framework }}
-    PYTEST_XML_FILE: pytest_test_report.xml
-    COVERAGE_XML_FILE: coverage.xml  # Adding the coverage report file variable
-  steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Run pytest
-      env:
-        PYTEST_MARKS: "pre_merge or mypy"
-      run: |
-        docker run -w /workspace --name ${{ env.CONTAINER_ID }} ${{ needs.build.outputs.image_tag }} pytest --basetemp=/tmp --cov=./ --cov-report=xml:/workspace/${{ env.COVERAGE_XML_FILE }} -m "${{ env.PYTEST_MARKS }}"
-
-    - name: Copy test report from test Container
-      if: always()
-      run: |
-        docker cp ${{ env.CONTAINER_ID }}:/workspace/${{ env.PYTEST_XML_FILE }} .
-
-    - name: Archive test report
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: ${{ matrix.framework }}-python-test-results
-        if-no-files-found: error
-        path: |
-          ${{ env.PYTEST_XML_FILE }}
-
-    - name: Upload Coverage Results to Codecov
-      uses: codecov/codecov-action@v5
-      with:
-        file: ${{ env.COVERAGE_XML_FILE }}  # Specify the coverage XML file
-        token: ${{ secrets.CODECOV_TOKEN }}  # Codecov token stored in GitHub Secrets (if required)
+    runs-on: ubuntu-latest
+    needs: build  # This ensures that the test job runs after the build job
+    strategy:
+      matrix:
+        framework:
+          - vllm
+    name: Test - ${{ matrix.framework }}
+    env:
+      CONTAINER_ID: test_${{ github.run_id }}_${{ github.run_attempt }}_${{ github.job }}_${{ matrix.framework }}
+      PYTEST_XML_FILE: pytest_test_report.xml
+      COVERAGE_XML_FILE: coverage.xml  # Adding the coverage report file variable
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+  
+      - name: Run pytest
+        env:
+          PYTEST_MARKS: "pre_merge or mypy"
+        run: |
+          docker run -w /workspace --name ${{ env.CONTAINER_ID }} ${{ needs.build.outputs.image_tag }} pytest --basetemp=/tmp --cov=./ --cov-report=xml:/workspace/${{ env.COVERAGE_XML_FILE }} -m "${{ env.PYTEST_MARKS }}"
+  
+      - name: Copy test report from test Container
+        if: always()
+        run: |
+          docker cp ${{ env.CONTAINER_ID }}:/workspace/${{ env.PYTEST_XML_FILE }} .
+  
+      - name: Archive test report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.framework }}-python-test-results
+          if-no-files-found: error
+          path: |
+            ${{ env.PYTEST_XML_FILE }}
+  
+      - name: Upload Coverage Results to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          file: ${{ env.COVERAGE_XML_FILE }}  # Specify the coverage XML file
+          token: ${{ secrets.CODECOV_TOKEN }}  # Codecov token stored in GitHub Secrets (if required)
