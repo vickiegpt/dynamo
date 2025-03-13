@@ -33,6 +33,8 @@ package-dir = {"dynamo.components.vllm_worker" = "src/dynamo/components/vllm_wor
 
 [project.scripts]
 vllm-routerless-worker = "dynamo.components.vllm_worker.routerless.worker:main"
+vllm-routerless-prefill-worker = "dynamo.components.vllm_worker.routerless.prefill_worker:main"
 vllm-worker = "dynamo.components.vllm_worker.worker:main"
+vllm-prefill-worker = "dynamo.components.vllm_worker.prefill_worker:main"
 vllm-kv-router = "dynamo.components.vllm_worker.kv_router:main"
 vllm-processor = "dynamo.components.vllm_worker.processor:main"

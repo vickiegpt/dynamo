@@ -89,7 +89,7 @@ async def worker(runtime: DistributedRuntime, engine_args: AsyncEngineArgs):
         )
 
 
-if __name__ == "__main__":
+def main():
     uvloop.install()
     engine_args = parse_vllm_args()
 
@@ -110,3 +110,7 @@ if __name__ == "__main__":
         engine_args.enforce_eager = True
 
     asyncio.run(worker(engine_args))
+
+
+if __name__ == "__main__":
+    main()

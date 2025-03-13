@@ -144,15 +144,6 @@ def main():
         while True:
             time.sleep(5)
 
-    # print("started", known_args, unknown_args)
-    # _launch_http(known_args, unknown_args)
-    # _launch_router(known_args, unknown_args)
-    # _launch_vllm_worker(known_args, unknown_args)
-
-
-#    while True:
-# time.sleep(10)
-
 
 if __name__ == "__main__":
     main()
