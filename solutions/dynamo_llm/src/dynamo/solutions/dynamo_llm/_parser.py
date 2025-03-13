@@ -79,7 +79,8 @@ def parse_known_args():
     )
 
     parser.add_argument(
-        ["--workers", "--decode-workers"],
+        "--workers",
+        "--decode-workers",
         type=int,
         required=False,
         default=1,
@@ -112,6 +113,7 @@ def parse_known_args():
 
     parser.add_argument(
         "--worker-tp",
+        "--decode-tp",
         type=int,
         default=1,
         help="Tensor parallel size of a generate worker.",
