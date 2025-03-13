@@ -171,7 +171,7 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
   }'
 ```
 
-### Example 3: KV Cache Aware Router +  8 Workers
+### Example 3: KV Cache Aware Router + 8 Workers
 
 #### System Diagram
 
