@@ -19,7 +19,7 @@ limitations under the License.
 
 Examples:
 
-| [Single Worker](#example-1-standalone-worker) | [8 Workers with KV Routing](#example-3-kv-cache-aware-router-8-workers)  | [Prefill + Decode] | [Prefill TP1 DP 4 Decode TP 4 DP 1] |
+| [Single Worker](#example-1-standalone-worker) | [8 Workers with KV Routing](#example-3)  | [Prefill + Decode](#example-4) | [Prefill TP1 DP 4 Decode TP 4 DP 1](#example-6) |
 
 ## Description
 
@@ -171,7 +171,7 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
   }'
 ```
 
-### Example 3: KV Cache Aware Router + 8 Workers
+### Example 3: KV Cache Aware Router + 8 Workers {#example-3}
 
 #### System Diagram
 
@@ -218,7 +218,7 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
 ```
 
 
-### Example 4: 1 Prefill and 1 Decode Disaggregation (TP 1)
+### Example 4: 1 Prefill and 1 Decode Disaggregation (TP 1) {#example-4}
 
 #### System Diagram
 
@@ -310,7 +310,7 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
   }'
 ```
 
-### Example 6: 4 Prefill and 1 Decode Disaggregation (Prefill TP 1 Decode TP 4) with KV Aware Routing
+### Example 6: 4 Prefill and 1 Decode Disaggregation (Prefill TP 1 Decode TP 4) with KV Aware Routing {#example-6}
 
 #### System Diagram
 
