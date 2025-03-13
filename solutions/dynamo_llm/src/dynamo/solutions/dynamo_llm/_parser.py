@@ -36,22 +36,6 @@ def parse_known_args():
     )
 
     parser.add_argument(
-        "--leader",
-        type=str,
-        required=False,
-        default=0,
-        help="Number of context workers",
-    )
-
-    parser.add_argument(
-        "--leader-address",
-        type=str,
-        required=False,
-        default=0,
-        help="Number of context workers",
-    )
-
-    parser.add_argument(
         "--router",
         type=str,
         required=False,
@@ -98,7 +82,7 @@ def parse_known_args():
         "--workers",
         type=int,
         required=False,
-        default=0,
+        default=1,
         dest="worker_count",
         help="Number of decode / aggregate workers",
     )
