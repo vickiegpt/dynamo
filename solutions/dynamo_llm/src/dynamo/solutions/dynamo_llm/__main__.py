@@ -82,6 +82,61 @@ def _vllm_worker_commands(args, unknown_args):
         command_args.append(str(args.block_size))
         command_args.append("--max-model-len")
         command_args.append(str(args.max_model_len))
+        command_args.append("--enforce-eager")
+        if args.prefill_count:
+            command_args.append("--remote-prefill")
+            command_args.append("--kv-transfer-config")
+            command_args.append('{"kv_connector":"DynamoNixlConnector"}')
+        cuda_visible_devices = []
+
+        for _ in range(args.worker_tp):
+            if not args.reuse_gpus and args._next_gpu >= args.gpu_count:
+                raise ValueError("Not enough gpus for configuration")
+            cuda_visible_devices.append(args._next_gpu % args.gpu_count)
+            args._next_gpu += 1
+
+        env = {
+            "CUDA_VISIBLE_DEVICES": ",".join(
+                [f"{next_gpu}" for next_gpu in cuda_visible_devices]
+            )
+        }
+
+        if args.hf_hub_offline:
+            env["HF_HUB_OFFLINE"] = "1"
+
+        commands.append(
+            Command(
+                args=command_args,
+                name=f"vllm worker_{worker_index}",
+                environment=env,
+                delay=10,
+            )
+        )
+    return commands
+
+
+def _vllm_prefill_worker_commands(args, unknown_args):
+    commands = []
+
+    for worker_index in range(args.prefill_count):
+        command_args = []
+        if not args.router:
+            command_args.append("vllm-routerless-prefill-worker")
+        else:
+            command_args.append("vllm-prefill-worker")
+            # command_args.append("--router")
+            # command_args.append(args.router)
+
+        command_args.extend(unknown_args)
+        command_args.append("--model")
+        command_args.append(args.model)
+        command_args.append("--block-size")
+        command_args.append(str(args.block_size))
+        command_args.append("--max-model-len")
+        command_args.append(str(args.max_model_len))
+        command_args.append("--enforce-eager")
+        command_args.append("--kv-transfer-config")
+        command_args.append('{"kv_connector":"DynamoNixlConnector"}')
 
         cuda_visible_devices = []
 
@@ -96,10 +151,14 @@ def _vllm_worker_commands(args, unknown_args):
                 [f"{next_gpu}" for next_gpu in cuda_visible_devices]
             )
         }
+
+        if args.hf_hub_offline:
+            env["HF_HUB_OFFLINE"] = "1"
+
         commands.append(
             Command(
                 args=command_args,
-                name=f"vllm worker_{worker_index}",
+                name=f"vllm prefill worker_{worker_index}",
                 environment=env,
                 delay=10,
             )
@@ -167,6 +226,9 @@ def main():
     with ProcessManager(known_args, unknown_args) as process_manager:
         process_manager.add_commands(_http_commands(known_args, unknown_args))
         process_manager.add_commands(_router_commands(known_args, unknown_args))
+        process_manager.add_commands(
+            _vllm_prefill_worker_commands(known_args, unknown_args)
+        )
         process_manager.add_commands(_vllm_worker_commands(known_args, unknown_args))
         process_manager.start()
 

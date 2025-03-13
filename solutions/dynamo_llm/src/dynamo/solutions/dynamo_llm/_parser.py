@@ -95,6 +95,14 @@ def parse_known_args():
     )
 
     parser.add_argument(
+        "--hf-hub-offline",
+        action="store_true",
+        required=False,
+        default=False,
+        help="set hf hub offline",
+    )
+
+    parser.add_argument(
         "--prefill-tp",
         type=int,
         default=1,

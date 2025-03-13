@@ -18,8 +18,6 @@ import asyncio
 
 import msgspec
 import uvloop
-from utils.nixl import NixlMetadataStore
-from utils.vllm import parse_vllm_args
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.entrypoints.openai.api_server import (
     build_async_engine_client_from_engine_args,
@@ -27,6 +25,8 @@ from vllm.entrypoints.openai.api_server import (
 from vllm.inputs.data import TokensPrompt
 from vllm.remote_prefill import RemotePrefillParams, RemotePrefillRequest
 
+from dynamo.components.vllm_worker.utils.nixl import NixlMetadataStore
+from dynamo.components.vllm_worker.utils.parser import parse_vllm_args
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 
 
