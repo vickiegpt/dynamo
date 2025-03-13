@@ -113,6 +113,8 @@ def _vllm_worker_commands(args, unknown_args):
             )
         }
 
+        print("worker env", env)
+
         if args.hf_hub_offline:
             env["HF_HUB_OFFLINE"] = "1"
 
@@ -168,7 +170,7 @@ def _vllm_prefill_worker_commands(args, unknown_args):
                 [f"{next_gpu}" for next_gpu in cuda_visible_devices]
             )
         }
-
+        print("prefill", env)
         if args.hf_hub_offline:
             env["HF_HUB_OFFLINE"] = "1"
 
