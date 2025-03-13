@@ -17,7 +17,6 @@ limitations under the License.
 
 # VLLM Worker
 
-
 Examples:
 
 | [Single Worker](#example-1-standalone-worker) | [8 Workers with KV Routing](#example-3-kv-cache-aware-router--8-workers) | [Prefill + Decode](#example-4-1-prefill-and-1-decode-disaggregation-tp-1) | [Prefill TP1 DP 4 Decode TP 4 DP 1](#example-6-4-prefill-and-1-decode-disaggregation-prefill-tp-1-decode-tp-4-with-kv-aware-routing) |
@@ -171,7 +170,6 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
     "max_tokens": 30
   }'
 ```
-https://github.com/ai-dynamo/dynamo/tree/nnshah1-dynamo-llm/components/vllm_worker#example-3-kv-cache-aware-router--8-workers
 ### Example 3: KV Cache Aware Router + 8 Workers
 
 #### System Diagram
@@ -219,7 +217,7 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
 ```
 
 
-### Example 4: 1 Prefill and 1 Decode Disaggregation (TP 1) {#example-4}
+### Example 4: 1 Prefill and 1 Decode Disaggregation (TP 1)
 
 #### System Diagram
 
