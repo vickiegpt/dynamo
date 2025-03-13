@@ -66,7 +66,7 @@ class Module:
     def __init__(self, module_dict):
         self.__dict__.update(module_dict)
         self._generate_func = module_dict['generate']
-    
+
     async def generate(self, request):
         async for response in self._generate_func(request):
             yield response

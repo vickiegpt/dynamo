@@ -135,7 +135,38 @@ def parse_tensorrt_llm_args() -> Tuple[Any, Tuple[Dict[str, Any], Dict[str, Any]
         default=64,
     )
 
-    # Extra placeholder for dynamo-run launcher
+    args = parser.parse_args()
+    return (args, _init_engine_args(args.engine_args))
+
+
+def parse_dynamo_run_args() -> Tuple[Any, Tuple[Dict[str, Any], Dict[str, Any]]]:
+    parser = argparse.ArgumentParser(description="A TensorRT-LLM Dynamo-run engine parser")
+    parser.add_argument(
+        "--engine_args", type=str, required=True, help="Path to the engine args file"
+    )
+    # Disaggregated mode is not supported in dynamo-run launcher yet. 
+    #parser.add_argument(
+    #    "--llmapi-disaggregated-config",
+    #    "-c",
+    #    type=str,
+    #    help="Path to the llmapi disaggregated config file",
+    #    default=None,
+    #)
+    parser.add_argument(
+        "--publish-kv-cache-events",
+        action="store_true",
+        help="Publish KV cache events from TensorRT-LLM. Currently, only supported for context worker in Disaggregated mode.",
+    )
+    parser.add_argument(
+        "--publish-stats",
+        action="store_true",
+        help="Publish stats from TensorRT-LLM. Currently, only supported for context worker in Disaggregated mode.",
+    )
+
+    # Extra placeholder for dynamo-run launcher.
+    # TODO: Need to pass these settings from rust cli args to llMAPI config.
+    # Setting them in dummy mode for now so that we have an identical interface
+    # with the monolith launcher.
     parser.add_argument(
         "--model-path",
         type=str,

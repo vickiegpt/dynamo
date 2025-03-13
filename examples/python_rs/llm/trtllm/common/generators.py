@@ -13,44 +13,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
-import signal
-import uuid
 
-from llmapi.base_engine import BaseTensorrtLLMEngine, TensorrtLLMEngineConfig
-from llmapi.parser import LLMAPIConfig
-from llmapi.processor import parse_chat_message_content
-from llmapi.trtllm_engine import TensorrtLLMEngine
+from common.base_engine import BaseTensorrtLLMEngine
+from common.processor import parse_chat_message_content, merge_promises
 from tensorrt_llm.executor import CppExecutorError
 from tensorrt_llm.logger import logger
-from tensorrt_llm.serve.openai_protocol import (
-    ChatCompletionRequest,
-    ChatCompletionStreamResponse,
-)
 
-from dynamo.runtime import dynamo_endpoint
+import signal
+import uuid
+import json
 
-logger.set_level("info")
+logger.set_level("debug")
 
-# Hard-coding for now.
-# Make it configurable via rust cli args.
-engine_config = LLMAPIConfig(
-    model_name="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-    tensor_parallel_size=1,
-)
-trt_llm_engine_config = TensorrtLLMEngineConfig(
-    engine_config=engine_config,
-)
 
-engine = None
-
-@dynamo_endpoint(ChatCompletionRequest, ChatCompletionStreamResponse)
-async def generate(request):
-    if engine is None:
+async def chat_generator(engine: BaseTensorrtLLMEngine, request):
+    if engine._llm_engine is None:
         raise RuntimeError("Engine not initialized")
 
     logger.debug(f"Received chat request: {request}")
     request_id = str(uuid.uuid4())
+    engine._ongoing_request_count += 1
 
     try:
         conversation = []
@@ -82,16 +64,56 @@ async def generate(request):
             request, request_id, conversation, promise
         )
         async for response in response_generator:
-            logger.debug(f"Generated response: {response}")
             yield response
 
+        engine._ongoing_request_count -= 1
     except CppExecutorError:
         # If internal executor error is raised, shutdown the server
         signal.raise_signal(signal.SIGINT)
     except Exception as e:
-        logger.error(f"Error in generate: {e}")
         raise RuntimeError("Failed to generate: " + str(e))
+    
+async def completion_generator(engine: BaseTensorrtLLMEngine, request):
+    if engine._llm_engine is None:
+        raise RuntimeError("Engine not initialized")
 
-if __name__ == "__main__":
-    print(f"MAIN: {sys.argv}")
-    engine = TensorrtLLMEngine(trt_llm_engine_config)
+    engine._ongoing_request_count += 1
+    logger.debug(f"Received completion request: {request}")
+
+    if isinstance(request.prompt, str) or (
+        isinstance(request.prompt, list) and isinstance(request.prompt[0], int)
+    ):
+        prompts = [request.prompt]
+    else:
+        prompts = request.prompt
+
+    promises = []
+    sampling_params = request.to_sampling_params()
+
+    try:
+        for prompt in prompts:
+            promise = engine._llm_engine.generate_async(
+                prompt,
+                sampling_params,
+                streaming=request.stream,
+            )
+            promises.append(promise)
+
+        generator = merge_promises(promises)
+        num_choices = (
+            len(prompts) if request.n is None else len(prompts) * request.n
+        )
+
+        # NOTE: always send `stream: true` to the worker, and decide whether to aggregate  or not before sending the response back to client.
+        response_generator = engine.completions_processor.create_completion_generator(
+            request, generator, num_choices
+        )
+        async for response in response_generator:
+            yield json.loads(response)
+
+        engine._ongoing_request_count -= 1
+    except CppExecutorError:
+        # If internal executor error is raised, shutdown the server
+        signal.raise_signal(signal.SIGINT)
+    except Exception as e:
+        raise RuntimeError("Failed to generate: " + str(e))
