@@ -61,7 +61,7 @@ Linux environment.
 ./container/run.sh -it -- dynamo run deepseek-ai/DeepSeek-R1-Distill-Llama-8B
 ```
 
-<!
+<!--
 
 ## Tests above command line
 ```bash
@@ -70,7 +70,7 @@ echo "Testing Dynamo Run"
 echo "hello" | timeout 60s dynamo run deepseek-ai/DeepSeek-R1-Distill-Llama-8B >out.txt 2>&1
 grep -q "Hello" out.txt
 ```
-->
+-->
 
 #### Example Output
 
