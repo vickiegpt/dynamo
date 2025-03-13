@@ -19,7 +19,7 @@ limitations under the License.
 
 Examples:
 
-| [Single Worker](#example-1-standalone-worker) | [8 Workers with KV Routing](#example-3-kv-cache-aware-router-+-8-workers)  | [Prefill + Decode] | [Prefill TP1 DP 4 Decode TP 4 DP 1] |
+| [Single Worker](#example-1-standalone-worker) | [8 Workers with KV Routing](#example-3-kv-cache-aware-router-8-workers)  | [Prefill + Decode] | [Prefill TP1 DP 4 Decode TP 4 DP 1] |
 
 ## Description
 
