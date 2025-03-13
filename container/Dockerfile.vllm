@@ -189,7 +189,6 @@ RUN apt-get update -y && apt-get -y install curl \
                                             python3-full \
                                             python3-pip \
                                             python3-numpy \
-                                            etcd-server \
                                             net-tools \
                                             pciutils \
                                             libpci-dev \
@@ -250,7 +249,7 @@ RUN cd /usr/local/src && \
 
 ENV LD_LIBRARY_PATH=/usr/lib:$LD_LIBRARY_PATH
 ENV CPATH=/usr/include:$CPATH
-ENV PATH=/usr/bin:$PATH
+ENV PATH=$PATH:/usr/bin
 ENV PKG_CONFIG_PATH=/usr/lib/pkgconfig:$PKG_CONFIG_PATH
 SHELL ["/bin/bash", "-c"]
 
