@@ -26,8 +26,8 @@ from vllm.inputs.data import TokensPrompt
 from vllm.logger import logger as vllm_logger
 from vllm.remote_prefill import RemotePrefillParams, RemotePrefillRequest
 
-from dynamo.components.utils.parser import parse_vllm_args
 from dynamo.components.vllm.utils.nixl import NixlMetadataStore
+from dynamo.components.vllm.utils.parser import parse_vllm_args
 from dynamo.components.vllm.utils.prefill_queue import PrefillQueue
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 
