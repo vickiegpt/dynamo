@@ -70,10 +70,10 @@ get_options() {
             break
             ;;
          -?*)
-	    # error 'ERROR: Unknown option: ' $1
+	    error 'ERROR: Unknown option: ' $1
             ;;
 	 ?*)
-	    # error 'ERROR: Unknown option: ' $1
+	    error 'ERROR: Unknown option: ' $1
             ;;
         *)
             break
