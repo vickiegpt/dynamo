@@ -60,7 +60,7 @@ class Scheduler:
                 worker_scores[worker_id] = (
                     score * self.indexer.block_size() / token_length
                 )
-        
+
         logger.debug(f"Worker scores: {worker_scores}")
         worker_metrics = {}
         # pull metrics for each worker
@@ -182,7 +182,8 @@ async def get_worker_id(scheduler: Scheduler, request, tokenizer) -> str:
     # NOTE: this will increase TTFT since we are encoding the prompt here
     # prompt is also encoded in the worker.
     # TODO: we need to implement our own request processing and protocols to send only token ids to llmapi worker.
-    token_ids = tokenizer.encode(request.prompt)
+    # NOTE: dont include the first token (e.g. <s>) when searching for a prefix match. We might want to exclude all special tokens at some point.
+    token_ids = tokenizer.encode(request.prompt)[1:]
     print(f"token_ids: {token_ids}")
     worker_id_generator: AsyncIterator = scheduler.generate(
         Tokens(tokens=token_ids).model_dump_json()

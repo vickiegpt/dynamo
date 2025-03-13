@@ -36,7 +36,7 @@ class KVCacheEventPublisher:
             self.lib.dynamo_llm_init.restype = c_uint32
 
             result = self.lib.dynamo_llm_init(
-                namespace.encode(), component.encode(), worker_id
+                namespace.encode(), component.encode(), worker_id, 32
             )
             if result == DynamoResult.OK:
                 logger.info(
