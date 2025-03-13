@@ -35,47 +35,28 @@ performance or ease of use.
 > rapid-prototyping stage and we are actively looking for feedback and
 > collaborators.
 
-## Building Dynamo
+## Quick Start - LLM Serving
 
 ### Requirements
-Dynamo development and examples are container based.
+
+Dynamo development and examples are container based and tested in a
+Linux environment.
 
 * [Docker](https://docs.docker.com/get-started/get-docker/)
 * [buildx](https://github.com/docker/buildx)
 
-### Development
-
-You can build the Dynamo container using the build scripts
-in `container/` (or directly with `docker build`).
-
-We provide 3 types of builds:
-
-1. `STANDARD` which includes our default set of backends (onnx, openvino...)
-2. `TENSORRTLLM` which includes our TRT-LLM backend
-3. `VLLM` which includes our VLLM backend using NCCL communication library.
-4. `VLLM_NIXL` which includes our VLLM backend using new NIXL communication library.
-
-For example, if you want to build a container for the `STANDARD` backends you can run
+### Build Dynamo Development Image
 
 <!--pytest.mark.skip-->
 ```bash
 ./container/build.sh
 ```
 
-Please see the instructions in the corresponding example for specific build instructions.
-
-## Running Dynamo for Local Testing and Development
-
-You can run the Dynamo container using the run scripts in
-`container/` (or directly with `docker run`).
-
-The run script offers a few common workflows:
-
-1. Running a command in a container and exiting.
+### Launch Dynamo Development Image and Serve an LLM
 
 <!--pytest.mark.skip-->
 ```bash
-./container/run.sh -- python3 -c "import dynamo.runtime; help(dynamo.runtime)"
+./container/run.sh -it -- dynamo-run
 ```
 <!--
 
