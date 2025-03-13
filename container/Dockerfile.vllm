@@ -111,26 +111,26 @@ COPY LICENSE /workspace/
 # Build Rust runtime
 COPY lib/runtime /workspace/lib/runtime
 RUN cd lib/runtime && \
-    cargo build --release --locked && cargo doc --no-deps
+    cargo build --jobs 2 --release --locked && cargo doc --no-deps
 
 # Build OpenAI HTTP Service binaries
 COPY lib/llm /workspace/lib/llm
 COPY components /workspace/components
 RUN cd components && \
-    cargo build --release && \
+    cargo build --jobs 2 --release && \
     cp target/release/http /usr/local/bin/
 
 # Build Dynamo Run binaries
 COPY launch /workspace/launch
 RUN cd launch && \
-    cargo build --release --features mistralrs,sglang,vllm,python && \
+    cargo build --jobs 2 --release --features mistralrs,sglang,vllm,python && \
     cp target/release/dynamo-run /usr/local/bin/ && \
     cp target/release/llmctl /usr/local/bin/
 
 # Generate C bindings for kv cache routing in vLLM
 COPY lib/bindings /workspace/lib/bindings
 RUN cd lib/bindings/c && \
-    cargo build --release --locked && cargo doc --no-deps
+    cargo build --jobs 2 --release --locked && cargo doc --no-deps
 
 COPY deploy/dynamo/sdk /workspace/deploy/dynamo/sdk
 # Build dynamo wheel
@@ -276,7 +276,7 @@ RUN ls -l /usr/local/nixl/include/internal/
 RUN ls /opt/nixl
 
 # FIXME: Copy more specific folders in for dev/debug after directory restructure
-COPY . /workspace
+# COPY . /workspace
 
 # FIXME: May want a modification with dynamo banner on entry
 ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
