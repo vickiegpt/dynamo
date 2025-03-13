@@ -23,6 +23,7 @@ limitations under the License.
 [![GitHub Release](https://img.shields.io/github/v/release/ai-dynamo/dynamo)](https://github.com/ai-dynamo/dynamo/releases/latest)
 ![CodeQL](https://github.com/ai-dynamo/dynamo/actions/workflows/codeql-analysis.yml/badge.svg)
 ![CI Status](https://github.com/ai-dynamo/dynamo/actions/workflows/workflows/pre-merge-python.yml/badge.svg)
+![Dependabot Status](https://api.dependabot.com/badges/status?dependency-name={dependency-name}&package-manager={package-manager}&version-scheme={version-scheme})
 
 
 Dynamo is a flexible, component based, data center scale inference
