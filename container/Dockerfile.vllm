@@ -185,4 +185,12 @@ RUN mkdir -p /opt/dynamo/bindings/wheels && \
 # Tell vllm to use the Dynamo LLM C API for KV Cache Routing
 ENV VLLM_KV_CAPI_PATH="/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
 
-#
+# FIXME: Copy more specific folders in for dev/debug after directory restructure
+COPY . /workspace
+
+# FIXME: May want a modification with dynamo banner on entry
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+
+CMD []
+
+### TODO Lean Runtime Image Stage ###
