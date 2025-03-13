@@ -17,6 +17,10 @@ limitations under the License.
 
 # VLLM Worker
 
+Examples:
+
+| [Single Worker](#example-1:-standalone-worker) | [ 8 Workers with KV Routing] | [Prefill + Decode] | [Prefill TP1 DP 4 Decode TP 4 DP 1] |
+
 ## Description
 
 The vllm worker integrates the vllm MQLLMEngine into dynamo and
@@ -62,8 +66,7 @@ vllm worker in a dynamo graph with all features.
 The following examples require that you have:
 
 1. Cloned the dynamo repo
-2. Started the dynamo infrastructure services
-3. Built dynamo development container.
+2. Built dynamo development container.
 3. Launched the container on a system with NVIDIA GPU
 
 #### Cloning the Dynamo Repo
@@ -142,6 +145,10 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
 
 #### Command
 
+Note the following command launches the supporting services when
+designated as the "leader" (default).
+
+
 ```
 ./solutions/dynamo_llm/scripts/dynamo_llm_launch.sh -- --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B' --router kv
 ```
@@ -183,6 +190,10 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
 ```
 
 #### Command
+
+Note the following command launches the supporting services when
+designated as the "leader" (default).
+
 
 ```
 ./solutions/dynamo_llm/scripts/dynamo_llm_launch.sh -- --workers 8 --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B' --router kv
@@ -227,6 +238,10 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
 
 #### Command
 
+Note the following command launches the supporting services when
+designated as the "leader" (default).
+
+
 ```
 ./solutions/dynamo_llm/scripts/dynamo_llm_launch.sh -- --decode-workers 1 --prefill-workers 1 --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B'
 ```
@@ -268,6 +283,10 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
 
 
 #### Command
+
+Note the following command launches the supporting services when
+designated as the "leader" (default).
+
 
 ```
 ./solutions/dynamo_llm/scripts/dynamo_llm_launch.sh -- --decode-workers 1 --prefill-workers 4 --decode-tp 4 --prefill-tp 1  --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B'
@@ -316,6 +335,10 @@ curl localhost:8181/v1/chat/completions   -H "Content-Type: application/json"   
 ```
 
 #### Command
+
+Note the following command launches the supporting services when
+designated as the "leader" (default).
+
 
 ```
 ./solutions/dynamo_llm/scripts/dynamo_llm_launch.sh -- --decode-workers 1 --prefill-workers 4 --decode-tp 4 --prefill-tp 1  --model 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B' --router kv
