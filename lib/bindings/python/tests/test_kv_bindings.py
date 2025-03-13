@@ -23,15 +23,8 @@ from typing import List
 import pytest
 
 from dynamo.llm import KvIndexer, KvMetricsAggregator, KvMetricsPublisher
-from dynamo.runtime import DistributedRuntime
 
 pytestmark = pytest.mark.pre_merge
-
-
-@pytest.fixture(scope="module")
-async def distributed_runtime():
-    loop = asyncio.get_running_loop()
-    return DistributedRuntime(loop)
 
 
 # TODO Figure out how to test with different kv_block_size

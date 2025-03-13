@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 
 import pytest
 
@@ -22,13 +21,9 @@ from dynamo._core import DistributedRuntime
 pytestmark = pytest.mark.pre_merge
 
 
-async def test_simple_put_get():
-    # Initialize runtime
-    loop = asyncio.get_running_loop()
-    runtime = DistributedRuntime(loop)
-
+async def test_simple_put_get(distributed_runtime: DistributedRuntime):
     # Get etcd client
-    etcd = runtime.etcd_client()
+    etcd = distributed_runtime.etcd_client()
 
     # Write some key-value pairs
     test_keys = {
@@ -63,10 +58,3 @@ async def test_simple_put_get():
     for item in nested_keys_values:
         print(f"Retrieved {item['key']} = {item['value']!r}")
         assert test_keys[item["key"]] == item["value"]
-
-    # Shutdown runtime
-    runtime.shutdown()
-
-
-if __name__ == "__main__":
-    asyncio.run(test_simple_put_get())

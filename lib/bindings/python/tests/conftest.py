@@ -13,10 +13,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+
 import pytest
 import uvloop
+
+from dynamo.runtime import DistributedRuntime
 
 
 @pytest.fixture(scope="session")
 def event_loop_policy():
     return uvloop.EventLoopPolicy()
+
+
+@pytest.fixture(scope="session")
+async def distributed_runtime():
+    loop = asyncio.get_running_loop()
+    runtime = DistributedRuntime(loop)
+    yield runtime
+    runtime.shutdown()
