@@ -36,15 +36,15 @@ from dynamo.runtime import DistributedRuntime, dynamo_worker
 async def worker(runtime: DistributedRuntime):
     ns = random_string()
     task = asyncio.create_task(server_init(runtime, ns))
-    
-    
+
     client = await client_init(runtime, ns)
 
     async def cleanup():
         runtime.shutdown()
         await task
-    
+
     return client, cleanup
+
 
 async def client_init(runtime: DistributedRuntime, ns: str) -> Client:
     """
@@ -60,7 +60,6 @@ async def client_init(runtime: DistributedRuntime, ns: str) -> Client:
     await client.wait_for_endpoints()
 
     return client
-
 
 
 async def do_one(client):
@@ -80,7 +79,7 @@ async def server_init(runtime: DistributedRuntime, ns: str):
     endpoint = component.endpoint("generate")
     handler = RequestHandler()
     print("Started server instance")
-    
+
     await endpoint.serve_endpoint(handler.generate)
 
 
@@ -98,6 +97,7 @@ class RequestHandler:
 def random_string(length=10):
     chars = string.ascii_letters + string.digits  # a-z, A-Z, 0-9
     return "".join(random.choices(chars, k=length))
+
 
 @pytest.fixture(scope="module")
 async def worker_fixture():
