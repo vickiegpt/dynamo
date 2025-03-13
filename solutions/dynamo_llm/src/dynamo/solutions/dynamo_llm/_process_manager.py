@@ -78,12 +78,16 @@ class ProcessManager:
                     else:
                         output_ = subprocess.PIPE
                     self._processes.append(
-                        subprocess.Popen(command.args, stdin=input_, stdout=output_)
+                        subprocess.Popen(
+                            command.args, stdin=input_, stdout=output_, env=env
+                        )
                     )
                     input_ = self._processes[-1].stdout
 
                     sed_cmd = ["sed", f"s/^/[{command.name}] /"]
-                    self._processes.append(subprocess.Popen(sed_cmd, stdin=input_))
+                    self._processes.append(
+                        subprocess.Popen(sed_cmd, stdin=input_, env=env)
+                    )
                     input_.close()
 
                     delay = max(command.delay, self._sleep)
