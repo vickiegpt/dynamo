@@ -97,7 +97,7 @@ def _vllm_worker_commands(args, unknown_args):
                 command_args.append(str(args.max_local_prefill_length))
 
         command_args.append("--tensor-parallel-size")
-        command_args.append(args.worker_tp)
+        command_args.append(str(args.worker_tp))
 
         cuda_visible_devices = []
 
@@ -154,7 +154,7 @@ def _vllm_prefill_worker_commands(args, unknown_args):
         command_args.append('{"kv_connector":"DynamoNixlConnector"}')
 
         command_args.append("--tensor-parallel-size")
-        command_args.append(args.prefill_tp)
+        command_args.append(str(args.prefill_tp))
 
         cuda_visible_devices = []
 
