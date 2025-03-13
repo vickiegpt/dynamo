@@ -58,6 +58,7 @@ class DisaggregatedTypeConverter:
                 first_gen_tokens=disaggregated_params.first_gen_tokens,
                 ctx_request_id=disaggregated_params.ctx_request_id,
                 opaque_state=opaque_state,
+                draft_tokens=disaggregated_params.draft_tokens,
             )
 
     @staticmethod
@@ -77,6 +78,7 @@ class DisaggregatedTypeConverter:
                 first_gen_tokens=tllm_disagg_params.first_gen_tokens,
                 ctx_request_id=tllm_disagg_params.ctx_request_id,
                 encoded_opaque_state=encoded_opaque_state,
+                draft_tokens=tllm_disagg_params.draft_tokens,
             )
 
 
