@@ -134,5 +134,50 @@ def parse_tensorrt_llm_args() -> Tuple[Any, Tuple[Dict[str, Any], Dict[str, Any]
         help="KV block size for TensorRT-LLM. Currently, only supported for context worker in Disaggregated mode.",
         default=64,
     )
+
+    # Extra placeholder for dynamo-run launcher
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        help="dummy argument to keep dynamo-run launcher happy",
+        default=None,
+    )
+    parser.add_argument(
+        "--model-name",
+        type=str,
+        help="dummy argument to keep dynamo-run launcher happy",
+        default=None,
+    )
+    parser.add_argument(
+        "--http-port",
+        type=int,
+        help="dummy argument to keep dynamo-run launcher happy",
+        default=None,
+    )
+    parser.add_argument(
+        "--tensor-parallel-size",
+        type=int,
+        help="dummy argument to keep dynamo-run launcher happy",
+        default=None,
+    )
+    parser.add_argument(
+        "--base-gpu-id",
+        type=int,
+        help="dummy argument to keep dynamo-run launcher happy",
+        default=None,
+    )
+    parser.add_argument(
+        "--num-nodes",
+        type=int,
+        help="dummy argument to keep dynamo-run launcher happy",
+        default=None,
+    )
+    parser.add_argument(
+        "--node-rank",
+        type=int,
+        help="dummy argument to keep dynamo-run launcher happy",
+        default=None,
+    )
+
     args = parser.parse_args()
     return (args, _init_engine_args(args.engine_args))

@@ -13,13 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+import sys
 import signal
 import uuid
 
 from llmapi.base_engine import BaseTensorrtLLMEngine, TensorrtLLMEngineConfig
 from llmapi.parser import LLMAPIConfig
 from llmapi.processor import parse_chat_message_content
+from llmapi.trtllm_engine import TensorrtLLMEngine
 from tensorrt_llm.executor import CppExecutorError
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import (
@@ -31,16 +32,6 @@ from dynamo.runtime import dynamo_endpoint
 
 logger.set_level("info")
 
-
-class TensorrtLLMEngine(BaseTensorrtLLMEngine):
-    """
-    Request handler for the generate endpoint
-    """
-
-    def __init__(self, trt_llm_engine_config: TensorrtLLMEngineConfig):
-        super().__init__(trt_llm_engine_config)
-
-
 # Hard-coding for now.
 # Make it configurable via rust cli args.
 engine_config = LLMAPIConfig(
@@ -50,8 +41,8 @@ engine_config = LLMAPIConfig(
 trt_llm_engine_config = TensorrtLLMEngineConfig(
     engine_config=engine_config,
 )
-engine = TensorrtLLMEngine(trt_llm_engine_config)
 
+engine = None
 
 @dynamo_endpoint(ChatCompletionRequest, ChatCompletionStreamResponse)
 async def generate(request):
@@ -100,3 +91,7 @@ async def generate(request):
     except Exception as e:
         logger.error(f"Error in generate: {e}")
         raise RuntimeError("Failed to generate: " + str(e))
+
+if __name__ == "__main__":
+    print(f"MAIN: {sys.argv}")
+    engine = TensorrtLLMEngine(trt_llm_engine_config)

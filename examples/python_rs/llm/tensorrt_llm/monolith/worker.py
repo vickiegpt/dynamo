@@ -19,9 +19,7 @@ import json
 import signal
 import uuid
 
-import uvloop
 from common.base_engine import BaseTensorrtLLMEngine, TensorrtLLMEngineConfig
-from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
 from common.processor import merge_promises, parse_chat_message_content
 from tensorrt_llm.executor import CppExecutorError
 from tensorrt_llm.logger import logger
@@ -32,7 +30,7 @@ from tensorrt_llm.serve.openai_protocol import (
     CompletionStreamResponse,
 )
 
-from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
+from dynamo.runtime import dynamo_endpoint
 
 logger.set_level("debug")
 
@@ -45,8 +43,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
     def __init__(self, trt_llm_engine_config: TensorrtLLMEngineConfig):
         super().__init__(trt_llm_engine_config)
 
-    @dynamo_endpoint(ChatCompletionRequest, ChatCompletionStreamResponse)
-    async def generate_chat(self, request):
+    async def generate_chat_helper(self, request):
         if self._llm_engine is None:
             raise RuntimeError("Engine not initialized")
 
@@ -92,6 +89,11 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
             signal.raise_signal(signal.SIGINT)
         except Exception as e:
             raise RuntimeError("Failed to generate: " + str(e))
+
+    @dynamo_endpoint(ChatCompletionRequest, ChatCompletionStreamResponse)
+    async def generate_chat(self, request):
+        async for response in self.generate_chat_helper(request):
+            yield response
 
     @dynamo_endpoint(CompletionRequest, CompletionStreamResponse)
     async def generate_completion(self, request):
@@ -139,36 +141,3 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         except Exception as e:
             raise RuntimeError("Failed to generate: " + str(e))
 
-
-@dynamo_worker()
-async def worker(runtime: DistributedRuntime, engine_config: LLMAPIConfig):
-    """
-    Instantiate a `backend` component and serve the `generate` endpoint
-    A `Component` can serve multiple endpoints
-    """
-    namespace_str = "dynamo"
-    component_str = "tensorrt-llm"
-
-    component = runtime.namespace(namespace_str).component(component_str)
-    await component.create_service()
-
-    completions_endpoint = component.endpoint("completions")
-    chat_completions_endpoint = component.endpoint("chat/completions")
-
-    trt_llm_engine_config = TensorrtLLMEngineConfig(
-        namespace_str=namespace_str,
-        component_str=component_str,
-        engine_config=engine_config,
-    )
-    engine = TensorrtLLMEngine(trt_llm_engine_config)
-
-    await asyncio.gather(
-        completions_endpoint.serve_endpoint(engine.generate_completion),
-        chat_completions_endpoint.serve_endpoint(engine.generate_chat),
-    )
-
-
-if __name__ == "__main__":
-    uvloop.install()
-    args, engine_config = parse_tensorrt_llm_args()
-    asyncio.run(worker(engine_config))
