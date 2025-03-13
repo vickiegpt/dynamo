@@ -224,7 +224,7 @@ RUN cd components && \
 # Build Dynamo Run binaries
 COPY launch /workspace/launch
 RUN cd launch && \
-    cargo build --release --features mistralrs,sglang,vllm,python && \
+    cargo build --release --features vllm,mistralrs,sglang,python && \
     cp target/release/dynamo-run /usr/local/bin/ && \
     cp target/release/llmctl /usr/local/bin/
 
