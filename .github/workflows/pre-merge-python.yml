@@ -103,7 +103,7 @@ jobs:
       if: always()
       run: |
         docker cp ${{ env.CONTAINER_ID }}:/workspace/${{ env.PYTEST_XML_FILE }} .
-    
+
     - name: Archive test report
       uses: actions/upload-artifact@v4
       if: always()
