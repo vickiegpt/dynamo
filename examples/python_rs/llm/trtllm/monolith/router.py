@@ -18,7 +18,7 @@ import asyncio
 import uvloop
 from common.base_engine import ChatProcessorMixin
 from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
-from common.utils import RoutingStrategy, Scheduler, get_worker_id, wait_for_workers
+from common.utils import KVRouter, RoutingStrategy, get_worker_id, wait_for_workers
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import (
     ChatCompletionRequest,
@@ -38,13 +38,13 @@ class Router(ChatProcessorMixin):
         self,
         completion_client,
         chat_client,
-        scheduler: Scheduler,
+        kv_router: KVRouter,
         engine_config: LLMAPIConfig,
         routing_strategy: RoutingStrategy,
     ):
         self.completion_client = completion_client
         self.chat_client = chat_client
-        self.scheduler = scheduler
+        self.kv_router = kv_router
         self.routing_strategy = routing_strategy
         # allows to use tokenizer
         super().__init__(engine_config)
@@ -62,7 +62,7 @@ class Router(ChatProcessorMixin):
 
         worker_id = ""
         if self.routing_strategy == RoutingStrategy.PREFIX:
-            worker_id = await get_worker_id(self.scheduler, request, self._tokenizer)
+            worker_id = await get_worker_id(self.kv_router, request, self._tokenizer)
 
         if worker_id == "":
             if self.routing_strategy == RoutingStrategy.ROUND_ROBIN:
@@ -132,11 +132,11 @@ async def worker(runtime: DistributedRuntime, args, engine_config):
 
     # FIXME: only using completion_client for now
     # need 1 method for both completion and chat
-    scheduler = Scheduler(indexer, metrics_aggregator, completion_client)
+    kv_router = KVRouter(indexer, metrics_aggregator, completion_client)
     router = Router(
         completion_client,
         chat_client,
-        scheduler,
+        kv_router,
         engine_config,
         args.routing_strategy,
     )

@@ -25,7 +25,7 @@ from common.protocol import (
     DisaggChatCompletionStreamResponse,
     DisaggCompletionStreamResponse,
 )
-from common.utils import RoutingStrategy, Scheduler, get_worker_id
+from common.utils import KVRouter, RoutingStrategy, get_worker_id
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import CompletionRequest, DisaggregatedParams
 
@@ -43,7 +43,7 @@ class DisaggServer(ChatProcessorMixin):
         ctx_completion_client,
         gen_completion_client,
         engine_config: LLMAPIConfig,
-        kv_router: Scheduler,
+        kv_router: KVRouter,
         routing_strategy: RoutingStrategy,
     ):
         self.ctx_chat_client = ctx_chat_client
@@ -77,7 +77,7 @@ class DisaggServer(ChatProcessorMixin):
 
         worker_id = ""
         if self.routing_strategy == RoutingStrategy.PREFIX:
-            worker_id = await get_worker_id(self.scheduler, request, self._tokenizer)
+            worker_id = await get_worker_id(self.kv_router, request, self._tokenizer)
 
         if worker_id == "":
             if self.routing_strategy == RoutingStrategy.ROUND_ROBIN:
@@ -234,9 +234,9 @@ async def worker(runtime: DistributedRuntime):
         metrics_aggregator = KvMetricsAggregator(kv_listener)
         # FIXME: only using completion_client for now
         # need 1 method for both completion and chat
-        scheduler = Scheduler(indexer, metrics_aggregator, ctx_completion_client)
+        kv_router = KVRouter(indexer, metrics_aggregator, ctx_completion_client)
     else:
-        scheduler = None
+        kv_router = None
 
     completions_endpoint = component.endpoint("completions")
     chat_endpoint = component.endpoint("chat/completions")
@@ -247,7 +247,7 @@ async def worker(runtime: DistributedRuntime):
         ctx_completion_client,
         gen_completion_client,
         engine_config,
-        scheduler,
+        kv_router,
         args.routing_strategy,
     )
     await asyncio.gather(
