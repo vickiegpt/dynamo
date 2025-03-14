@@ -42,14 +42,35 @@ use crate::tokens::{PartialTokenBlock, SequenceHash, TokenBlock, Tokens};
 
 use tracing as log;
 
-pub type UniqueBlock = PoolItem<KvBlock>;
-pub type SharedBlock = SharedPoolItem<KvBlock>;
+pub type UniqueBlock<T> = PoolItem<KvBlock<T>>;
+pub type SharedBlock<T> = SharedPoolItem<KvBlock<T>>;
 
-#[derive(Default)]
-pub struct KvBlock {
+#[derive(Debug, Clone, Default)]
+pub struct NullStorage {}
+
+impl BlockStorage for NullStorage {
+    fn layer_pointer(&self, layer_id: usize) -> u64 {
+        0
+    }
+    fn layer_size_in_bytes(&self) -> usize {
+        0
+    }
+}
+pub trait BlockStorage {
+    fn layer_pointer(&self, layer_id: usize) -> u64 {
+        0
+    }
+    fn layer_size_in_bytes(&self) -> usize {
+        0
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct KvBlock<T: BlockStorage + Send + Sync> {
     token_block: TokenBlock,
     priority: u32,
     return_tick: u64,
+    storage: T,
 }
 
 // pub struct KvStorage {
@@ -63,14 +84,15 @@ pub struct KvBlock {
 //     layout: layer::KvLayer,
 // }
 
-impl KvBlock {
+impl<T: BlockStorage + Send + Sync> KvBlock<T> {
     /// Creates a new KvBlock with the given token block
-    pub fn new(token_block: TokenBlock) -> Self {
-        Self {
+    pub fn new(token_block: TokenBlock) -> KvBlock<NullStorage> {
+        let storage = NullStorage {};
+        KvBlock {
             token_block,
             priority: 0,
             return_tick: 0,
-            // storage: None,
+            storage,
         }
     }
 
@@ -89,7 +111,7 @@ impl KvBlock {
     }
 }
 
-impl Returnable for KvBlock {
+impl<T: BlockStorage + Send + Sync + 'static> Returnable for KvBlock<T> {
     fn on_return(&mut self) {}
 }
 
