@@ -13,8 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::env;
-
 #[cfg(not(feature = "cuda_kv"))]
 fn main() {}
 
@@ -83,7 +81,7 @@ fn main() {
         panic!("Failed to create libblock_copy.a");
     }
 
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let lib_path = PathBuf::from(&manifest_dir).join("src/kernels");
 
     println!("cargo:rustc-link-search=native={}", lib_path.display());
