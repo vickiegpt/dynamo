@@ -43,7 +43,7 @@ PYTHON_PACKAGE_VERSION=${current_tag:-$latest_tag.dev+$commit_id}
 # dependencies are specified in the /container/deps folder and
 # installed within framework specific sections of the Dockerfile.
 
-declare -A FRAMEWORKS=(["STANDARD"]=1 ["TENSORRTLLM"]=2 ["VLLM"]=3 ["VLLM_NIXL"]=4)
+declare -A FRAMEWORKS=(["VLLM"]=1 ["TENSORRTLLM"]=2)
 DEFAULT_FRAMEWORK=VLLM
 
 SOURCE_DIR=$(dirname "$(readlink -f "$0")")
@@ -51,12 +51,8 @@ DOCKERFILE=${SOURCE_DIR}/Dockerfile
 BUILD_CONTEXT=$(dirname "$(readlink -f "$SOURCE_DIR")")
 
 # Base Images
-
-STANDARD_BASE_VERSION=25.01
-STANDARD_BASE_IMAGE=nvcr.io/nvidia/tritonserver
-STANDARD_BASE_IMAGE_TAG=${STANDARD_BASE_VERSION}-py3
-
 TENSORRTLLM_BASE_VERSION=25.01
+# FIXME: Need a public image for public consumption
 TENSORRTLLM_BASE_IMAGE="gitlab-master.nvidia.com:5005/dl/dgx/tritonserver/tensorrt-llm/amd64"
 TENSORRTLLM_BASE_IMAGE_TAG=krish-fix-trtllm-build.23766174
 TENSORRTLLM_PIP_WHEEL_PATH=""
@@ -194,10 +190,6 @@ get_options() {
         FRAMEWORK=$DEFAULT_FRAMEWORK
     fi
 
-    if [[ ${FRAMEWORK^^} == "VLLM_NIXL" ]]; then
-	FRAMEWORK="VLLM"
-    fi
-
     if [ ! -z "$FRAMEWORK" ]; then
         FRAMEWORK=${FRAMEWORK^^}
 
@@ -226,7 +218,7 @@ get_options() {
 
     if [ -z "$TAG" ]; then
         TAG="--tag dynamo:${VERSION}-${FRAMEWORK,,}"
-        if [ ! -z ${TARGET} ]; then
+        if [ ! -z "${TARGET}" ]; then
             TAG="${TAG}-${TARGET}"
         fi
     fi
@@ -292,28 +284,34 @@ elif [[ $FRAMEWORK == "TENSORRTLLM" ]]; then
 fi
 
 if [[ $FRAMEWORK == "VLLM" ]]; then
-    TEMP_DIR=$(mktemp -d)
-
-    # Clean up temp directory on script exit
-    trap 'rm -rf "$TEMP_DIR"' EXIT
+    NIXL_DIR="/tmp/nixl/nixl_src"
 
     # Clone original NIXL to temp directory
-
-    if [ ! -z ${GITHUB_TOKEN} ]; then
-        git clone https://oauth2:${GITHUB_TOKEN}@github.com/${NIXL_REPO} "$TEMP_DIR/nixl_src"
+    if [ -d "$NIXL_DIR" ]; then
+        echo "Warning: $NIXL_DIR already exists, skipping clone"
     else
-        # Try HTTPS first with credential prompting disabled, fall back to SSH if it fails
-        if ! GIT_TERMINAL_PROMPT=0 git clone https://github.com/${NIXL_REPO} "$TEMP_DIR/nixl_src"; then
-            echo "HTTPS clone failed, falling back to SSH..."
-            git clone git@github.com:${NIXL_REPO} "$TEMP_DIR/nixl_src"
+        if [ ! -z ${GITHUB_TOKEN} ]; then
+            git clone https://oauth2:${GITHUB_TOKEN}@github.com/${NIXL_REPO} "$NIXL_DIR"
+        else
+            # Try HTTPS first with credential prompting disabled, fall back to SSH if it fails
+            if ! GIT_TERMINAL_PROMPT=0 git clone https://github.com/${NIXL_REPO} "$NIXL_DIR"; then
+                echo "HTTPS clone failed, falling back to SSH..."
+                git clone git@github.com:${NIXL_REPO} "$NIXL_DIR"
+            fi
         fi
     fi
 
-    cd "$TEMP_DIR/nixl_src"
+    cd "$NIXL_DIR"
+    if ! git checkout ${NIXL_COMMIT}; then
+        echo "ERROR: Failed to checkout NIXL commit ${NIXL_COMMIT}. The cached directory may be out of date."
+        echo "Please delete $NIXL_DIR and re-run the build script."
+        exit 1
+    fi
 
-    git checkout ${NIXL_COMMIT}
+    BUILD_CONTEXT_ARG+=" --build-context nixl=$NIXL_DIR"
 
-    BUILD_CONTEXT_ARG+=" --build-context nixl=$TEMP_DIR/nixl_src"
+    # Add NIXL_COMMIT as a build argument to enable caching
+    BUILD_ARGS+=" --build-arg NIXL_COMMIT=${NIXL_COMMIT} "
 fi
 
 # BUILD DEV IMAGE
