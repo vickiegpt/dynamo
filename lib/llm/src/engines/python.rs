@@ -53,9 +53,6 @@ if module_dir not in sys.path:
 parent_dir = os.path.dirname(module_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
-package_dir = os.path.dirname(parent_dir)
-if package_dir not in sys.path:
-    sys.path.insert(0, package_dir)
 
 
 sys.argv = sys_argv
