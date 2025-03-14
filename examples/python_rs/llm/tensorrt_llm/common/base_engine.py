@@ -171,7 +171,7 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
 
         # TODO: Use python bindings to publish kv cache events once they
         # are available.
-        lib_path = "/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
+        lib_path = "/lustre/fsw/coreai_dlalgo_llm/shreyasm/data_center_inf/dynamo/libdynamo_llm_capi.so"
         self._kv_cache_events_publisher = KVCacheEventPublisher(
             self._namespace_str, self._component_str, int(self._worker_id), lib_path
         )
@@ -219,9 +219,8 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
                 f"Published stats: request_active_slots: {request_active_slots}, request_total_slots: {request_total_slots}, kv_active_block: {kv_active_block}, kv_total_blocks: {kv_total_blocks}, num_requests_waiting: {num_requests_waiting}, reused_blocks: {reused_blocks}, freeNumBlocks: {freeNumBlocks}, allocTotalBlocks: {allocTotalBlocks}, allocNewBlocks: {allocNewBlocks}"
             )
             
-            gpu_cache_usage_perc = kv_active_block / kv_total_blocks
-            # TODO: we probably need to get this correctly by separating complete and incomplete requests
-            gpu_prefix_cache_hit_rate = reused_blocks / kv_total_blocks
+            gpu_cache_usage_perc = allocTotalBlocks / kv_total_blocks
+            gpu_prefix_cache_hit_rate = stat["kvCacheStats"]["cacheHitRate"]
 
 
             self._kv_metrics_publisher.publish(
