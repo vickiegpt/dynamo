@@ -56,7 +56,6 @@ The router will schedule requests to the workers based on the stats and kv cache
 
 Create HTTP endpoints for the router:
 ```bash
-llmctl http add chat TinyLlama/TinyLlama-1.1B-Chat-v1.0 dynamo.router.chat/completions
 llmctl http add completion TinyLlama/TinyLlama-1.1B-Chat-v1.0 dynamo.router.completions
 ```
 
@@ -96,3 +95,7 @@ python3 -m disaggregated.server --engine_args llm_api_config.yaml --routing-stra
 
 Follow the instructions in the [README](../README.md#send-requests) to send requests to the [HTTP server](../README.md#http-server).
 
+
+## Known Issues
+- KV aware routing is not supported for chat endpoint.
+- For disaggregated deployment, kv aware routing is only supported for context server completion endpoints.
