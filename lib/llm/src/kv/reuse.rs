@@ -678,388 +678,388 @@ pub async fn progress_engine<T: BlockStorage + Send + Sync + 'static>(
     }
 }
 
-// #[cfg(test)]
-// pub(crate) mod tests {
-//     use crate::tokens::Token;
-
-//     use super::*;
-
-//     #[test]
-//     fn test_priority_key_ord() {
-//         let mut map = BTreeMap::new();
-//         let hash1 = SequenceHash::from(1u64);
-//         let hash2 = SequenceHash::from(2u64);
-//         let hash3 = SequenceHash::from(3u64);
-
-//         map.insert(
-//             PriorityKey {
-//                 priority: 0,
-//                 return_tick: 1,
-//                 sequence_hash: hash1,
-//             },
-//             "value1",
-//         );
-//         map.insert(
-//             PriorityKey {
-//                 priority: 1,
-//                 return_tick: 0,
-//                 sequence_hash: hash2,
-//             },
-//             "value2",
-//         );
-//         map.insert(
-//             PriorityKey {
-//                 priority: 0,
-//                 return_tick: 2,
-//                 sequence_hash: hash3,
-//             },
-//             "value3",
-//         );
-
-//         let keys: Vec<_> = map.keys().collect();
-
-//         // Priority is the primary sort key (0 before 1)
-//         assert_eq!(keys[0].priority, 0);
-//         assert_eq!(keys[1].priority, 0);
-//         assert_eq!(keys[2].priority, 1);
-
-//         // For same priority, return_tick is the secondary sort key
-//         assert_eq!(keys[0].return_tick, 1);
-//         assert_eq!(keys[1].return_tick, 2);
-
-//         // Test popping from the map to verify ordering
-//         let (first_key, first_value) = map.pop_first().unwrap();
-//         assert_eq!(first_key.priority, 0);
-//         assert_eq!(first_key.return_tick, 1);
-//         assert_eq!(first_key.sequence_hash, hash1);
-//         assert_eq!(first_value, "value1");
-
-//         let (second_key, second_value) = map.pop_first().unwrap();
-//         assert_eq!(second_key.priority, 0);
-//         assert_eq!(second_key.return_tick, 2);
-//         assert_eq!(second_key.sequence_hash, hash3);
-//         assert_eq!(second_value, "value3");
-
-//         let (third_key, third_value) = map.pop_first().unwrap();
-//         assert_eq!(third_key.priority, 1);
-//         assert_eq!(third_key.return_tick, 0);
-//         assert_eq!(third_key.sequence_hash, hash2);
-//         assert_eq!(third_value, "value2");
-
-//         // Map should now be empty
-//         assert!(map.is_empty());
-//     }
-
-//     // Helper function to create a sequence of tokens
-//     pub fn create_token_sequence(values: &[u32]) -> Tokens {
-//         let tokens: Vec<Token> = values.iter().map(|&v| Token::from(v)).collect();
-//         Tokens::from(tokens)
-//     }
-
-//     // Helper to create blocks from a sequence with given size
-//     pub fn create_blocks(sequence: Tokens, block_size: usize) -> Vec<KvBlock<T>> {
-//         let (blocks, _) = sequence.into_sequence(block_size).into_parts();
-//         blocks
-//             .into_iter()
-//             .map(|token_block| KvBlock {
-//                 token_block,
-//                 ..Default::default()
-//             })
-//             .collect()
-//     }
-
-//     #[tokio::test]
-//     async fn test_basic_sequence_matching() {
-//         let pool = AvailableBlocks::new().await;
-
-//         // Create a sequence of 4 tokens split into blocks of 2
-//         let sequence = create_token_sequence(&[1, 2, 3, 4]);
-//         let blocks = create_blocks(sequence, 2);
-//         assert_eq!(blocks.len(), 2);
-
-//         // Match the blocks in sequence
-//         let hashes: Vec<_> = blocks
-//             .iter()
-//             .map(|b| b.token_block.sequence_hash())
-//             .collect();
-
-//         // Insert blocks into pool
-//         for block in blocks {
-//             pool.insert(block).await.unwrap();
-//         }
-
-//         pool.fence().await.unwrap();
-
-//         assert_eq!(pool.total_blocks(), 2);
-//         assert_eq!(pool.available_blocks(), 2);
-
-//         // Match the blocks in sequence
-//         let matched = pool.match_blocks(hashes.clone()).await.unwrap();
-//         assert_eq!(matched.len(), 2);
-
-//         assert_eq!(pool.total_blocks(), 2);
-//         assert_eq!(pool.available_blocks(), 0);
-
-//         // Validate the blocks are in the correct order and match the sequence hashes
-//         assert_eq!(matched[0].token_block.sequence_hash(), hashes[0]);
-//         assert_eq!(matched[1].token_block.sequence_hash(), hashes[1]);
-
-//         // Return blocks in reverse order (tail to root)
-//         for block in matched.into_iter().rev() {
-//             drop(block); // This will trigger return_to_pool
-//         }
-
-//         pool.fence().await.unwrap();
-
-//         assert_eq!(pool.total_blocks(), 2);
-//         assert_eq!(pool.available_blocks(), 2);
-//     }
-
-//     #[tokio::test]
-//     async fn test_equal_priority_taking() {
-//         let pool = AvailableBlocks::new().await;
-
-//         // Create two sequences with different priorities
-//         let seq1 = create_token_sequence(&[1, 2, 3, 4]);
-//         let seq2 = create_token_sequence(&[5, 6, 7, 8]);
-
-//         let mut blocks1 = create_blocks(seq1, 2);
-//         let mut blocks2 = create_blocks(seq2, 2);
-
-//         for block in blocks1.iter_mut() {
-//             block.priority = 1;
-//         }
-//         for block in blocks2.iter_mut() {
-//             block.priority = 1;
-//         }
-
-//         // If priorities were equal, first in, first out would apply
-
-//         // Insert Sequence 2
-//         for block in blocks2.into_iter().rev() {
-//             pool.insert(block).await.unwrap();
-//         }
-
-//         // Insert Sequence 1
-//         for block in blocks1.into_iter().rev() {
-//             pool.insert(block).await.unwrap();
-//         }
-
-//         pool.fence().await.unwrap();
-
-//         let blocks = pool.take_blocks(4).await.unwrap();
-//         assert_eq!(blocks.len(), 4);
-
-//         // Validate the blocks are in the correct order
-//         assert_eq!(blocks[0].token_block.tokens()[0], 7);
-//         assert_eq!(blocks[1].token_block.tokens()[0], 5);
-//         assert_eq!(blocks[2].token_block.tokens()[0], 3);
-//         assert_eq!(blocks[3].token_block.tokens()[0], 1);
-//     }
-
-//     #[tokio::test]
-//     async fn test_priority_taking() {
-//         let pool = AvailableBlocks::new().await;
-
-//         // Create two sequences with different priorities
-//         let seq1 = create_token_sequence(&[1, 2, 3, 4]);
-//         let seq2 = create_token_sequence(&[5, 6, 7, 8]);
-
-//         let mut blocks1 = create_blocks(seq1, 2);
-//         let mut blocks2 = create_blocks(seq2, 2);
-
-//         for block in blocks1.iter_mut() {
-//             block.priority = 1;
-//         }
-//         for block in blocks2.iter_mut() {
-//             block.priority = 2;
-//         }
-
-//         // If priorities were equal, first in, first out would apply
-//         // but here we have a higher priority block first (which are taken last)
-//         // returned first, but lower priority blocks inserted after
-//         // we expect the lower priority blocks to be taken first
-
-//         // Insert Sequence 2
-//         for block in blocks2.into_iter().rev() {
-//             pool.insert(block).await.unwrap();
-//         }
-
-//         // Insert Sequence 1
-//         for block in blocks1.into_iter().rev() {
-//             pool.insert(block).await.unwrap();
-//         }
-
-//         pool.fence().await.unwrap();
-
-//         let blocks = pool.take_blocks(4).await.unwrap();
-//         assert_eq!(blocks.len(), 4);
-
-//         // Validate the blocks are in the correct order
-//         assert_eq!(blocks[0].token_block.tokens()[0], 3);
-//         assert_eq!(blocks[1].token_block.tokens()[0], 1);
-//         assert_eq!(blocks[2].token_block.tokens()[0], 7);
-//         assert_eq!(blocks[3].token_block.tokens()[0], 5);
-//     }
-
-//     #[tokio::test]
-//     async fn test_priority_taking_after_update() {
-//         let pool = AvailableBlocks::new().await;
-
-//         // Create two sequences with different priorities
-//         let seq1 = create_token_sequence(&[1, 2, 3, 4]);
-//         let seq2 = create_token_sequence(&[5, 6, 7, 8]);
-
-//         let mut blocks1 = create_blocks(seq1, 2);
-//         let mut blocks2 = create_blocks(seq2, 2);
-
-//         for block in blocks1.iter_mut() {
-//             block.priority = 1;
-//         }
-//         for block in blocks2.iter_mut() {
-//             block.priority = 1;
-//         }
-
-//         // record hash of blocks 2
-//         // insert blocks 2, then blocks 1
-//         // update priority of blocks 2 to 2 using the update api
-//         // pull 4 blocks and test order
-
-//         let block_hashes = blocks2
-//             .iter()
-//             .map(|b| b.token_block.sequence_hash())
-//             .collect::<Vec<_>>();
-
-//         // Insert Sequence 2
-//         for block in blocks2.into_iter().rev() {
-//             pool.insert(block).await.unwrap();
-//         }
-
-//         // Insert Sequence 1
-//         for block in blocks1.into_iter().rev() {
-//             pool.insert(block).await.unwrap();
-//         }
-
-//         pool.fence().await.unwrap();
-
-//         // Update priority of blocks 2 to 2
-//         pool.update_multiple(
-//             block_hashes
-//                 .into_iter()
-//                 .map(|h| UpdateBlock {
-//                     hash: h,
-//                     priority: Some(2),
-//                 })
-//                 .collect(),
-//         )
-//         .await
-//         .unwrap();
-
-//         pool.fence().await.unwrap();
-
-//         let blocks = pool.take_blocks(4).await.unwrap();
-//         assert_eq!(blocks.len(), 4);
-
-//         // Validate the blocks are in the correct order
-//         assert_eq!(blocks[0].token_block.tokens()[0], 3);
-//         assert_eq!(blocks[1].token_block.tokens()[0], 1);
-//         assert_eq!(blocks[2].token_block.tokens()[0], 7);
-//         assert_eq!(blocks[3].token_block.tokens()[0], 5);
-//     }
-
-//     #[tokio::test]
-//     async fn test_reset_all() {
-//         let pool = AvailableBlocks::new().await;
-
-//         // Create two sequences with different priorities
-//         let seq1 = create_token_sequence(&[1, 2, 3, 4]);
-//         let seq2 = create_token_sequence(&[5, 6, 7, 8]);
-
-//         let mut blocks1 = create_blocks(seq1, 2);
-//         let mut blocks2 = create_blocks(seq2, 2);
-
-//         for block in blocks1.iter_mut() {
-//             block.priority = 1;
-//         }
-
-//         for block in blocks2.iter_mut() {
-//             block.priority = 1;
-//         }
-
-//         // record hash of blocks 2
-//         let block_hashes = blocks2
-//             .iter()
-//             .map(|b| b.token_block.sequence_hash())
-//             .collect::<Vec<_>>();
-
-//         // Insert Sequence 2
-//         for block in blocks2.into_iter().rev() {
-//             pool.insert(block).await.unwrap();
-//         }
-
-//         // Insert Sequence 1
-//         for block in blocks1.into_iter().rev() {
-//             pool.insert(block).await.unwrap();
-//         }
-
-//         // Reset All
-//         pool.reset_all().await.unwrap();
-//         pool.fence().await.unwrap();
-
-//         // Try to match from block 2 hashes, expect no matches
-//         let matched = pool.match_blocks(block_hashes).await.unwrap();
-//         assert_eq!(matched.len(), 0);
-//     }
-
-//     #[tokio::test]
-//     async fn test_reset_block2() {
-//         let pool = AvailableBlocks::new().await;
-
-//         // Create two sequences with different priorities
-//         let seq1 = create_token_sequence(&[1, 2, 3, 4]);
-//         let seq2 = create_token_sequence(&[5, 6, 7, 8]);
-
-//         let mut blocks1 = create_blocks(seq1, 2);
-//         let mut blocks2 = create_blocks(seq2, 2);
-
-//         for block in blocks1.iter_mut() {
-//             block.priority = 1;
-//         }
-
-//         for block in blocks2.iter_mut() {
-//             block.priority = 1;
-//         }
-
-//         // record hash of blocks 2
-//         let block2_hashes = blocks2
-//             .iter()
-//             .map(|b| b.token_block.sequence_hash())
-//             .collect::<Vec<_>>();
-
-//         let block1_hashes = blocks1
-//             .iter()
-//             .map(|b| b.token_block.sequence_hash())
-//             .collect::<Vec<_>>();
-
-//         // Insert Sequence 2
-//         for block in blocks2.into_iter().rev() {
-//             pool.insert(block).await.unwrap();
-//         }
-
-//         // Insert Sequence 1
-//         for block in blocks1.into_iter().rev() {
-//             pool.insert(block).await.unwrap();
-//         }
-
-//         // Reset Block 2
-//         pool.reset(block2_hashes.clone()).await.unwrap();
-//         pool.fence().await.unwrap();
-
-//         // Try to match from block 2 hashes, expect no matches
-//         let matched = pool.match_blocks(block2_hashes).await.unwrap();
-//         assert_eq!(matched.len(), 0);
-
-//         let matched = pool.match_blocks(block1_hashes).await.unwrap();
-//         assert_eq!(matched.len(), 2);
-//     }
-// }
+#[cfg(test)]
+pub(crate) mod tests {
+    use crate::tokens::Token;
+
+    use super::*;
+
+    #[test]
+    fn test_priority_key_ord() {
+        let mut map = BTreeMap::new();
+        let hash1 = SequenceHash::from(1u64);
+        let hash2 = SequenceHash::from(2u64);
+        let hash3 = SequenceHash::from(3u64);
+
+        map.insert(
+            PriorityKey {
+                priority: 0,
+                return_tick: 1,
+                sequence_hash: hash1,
+            },
+            "value1",
+        );
+        map.insert(
+            PriorityKey {
+                priority: 1,
+                return_tick: 0,
+                sequence_hash: hash2,
+            },
+            "value2",
+        );
+        map.insert(
+            PriorityKey {
+                priority: 0,
+                return_tick: 2,
+                sequence_hash: hash3,
+            },
+            "value3",
+        );
+
+        let keys: Vec<_> = map.keys().collect();
+
+        // Priority is the primary sort key (0 before 1)
+        assert_eq!(keys[0].priority, 0);
+        assert_eq!(keys[1].priority, 0);
+        assert_eq!(keys[2].priority, 1);
+
+        // For same priority, return_tick is the secondary sort key
+        assert_eq!(keys[0].return_tick, 1);
+        assert_eq!(keys[1].return_tick, 2);
+
+        // Test popping from the map to verify ordering
+        let (first_key, first_value) = map.pop_first().unwrap();
+        assert_eq!(first_key.priority, 0);
+        assert_eq!(first_key.return_tick, 1);
+        assert_eq!(first_key.sequence_hash, hash1);
+        assert_eq!(first_value, "value1");
+
+        let (second_key, second_value) = map.pop_first().unwrap();
+        assert_eq!(second_key.priority, 0);
+        assert_eq!(second_key.return_tick, 2);
+        assert_eq!(second_key.sequence_hash, hash3);
+        assert_eq!(second_value, "value3");
+
+        let (third_key, third_value) = map.pop_first().unwrap();
+        assert_eq!(third_key.priority, 1);
+        assert_eq!(third_key.return_tick, 0);
+        assert_eq!(third_key.sequence_hash, hash2);
+        assert_eq!(third_value, "value2");
+
+        // Map should now be empty
+        assert!(map.is_empty());
+    }
+
+    // Helper function to create a sequence of tokens
+    pub fn create_token_sequence(values: &[u32]) -> Tokens {
+        let tokens: Vec<Token> = values.iter().map(|&v| Token::from(v)).collect();
+        Tokens::from(tokens)
+    }
+
+    // Helper to create blocks from a sequence with given size
+    pub fn create_blocks(sequence: Tokens, block_size: usize) -> Vec<KvBlock<NullStorage>> {
+        let (blocks, _) = sequence.into_sequence(block_size).into_parts();
+        blocks
+            .into_iter()
+            .map(|token_block| KvBlock {
+                token_block,
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_basic_sequence_matching() {
+        let pool = AvailableBlocks::new().await;
+
+        // Create a sequence of 4 tokens split into blocks of 2
+        let sequence = create_token_sequence(&[1, 2, 3, 4]);
+        let blocks = create_blocks(sequence, 2);
+        assert_eq!(blocks.len(), 2);
+
+        // Match the blocks in sequence
+        let hashes: Vec<_> = blocks
+            .iter()
+            .map(|b| b.token_block.sequence_hash())
+            .collect();
+
+        // Insert blocks into pool
+        for block in blocks {
+            pool.insert(block).await.unwrap();
+        }
+
+        pool.fence().await.unwrap();
+
+        assert_eq!(pool.total_blocks(), 2);
+        assert_eq!(pool.available_blocks(), 2);
+
+        // Match the blocks in sequence
+        let matched = pool.match_blocks(hashes.clone()).await.unwrap();
+        assert_eq!(matched.len(), 2);
+
+        assert_eq!(pool.total_blocks(), 2);
+        assert_eq!(pool.available_blocks(), 0);
+
+        // Validate the blocks are in the correct order and match the sequence hashes
+        assert_eq!(matched[0].token_block.sequence_hash(), hashes[0]);
+        assert_eq!(matched[1].token_block.sequence_hash(), hashes[1]);
+
+        // Return blocks in reverse order (tail to root)
+        for block in matched.into_iter().rev() {
+            drop(block); // This will trigger return_to_pool
+        }
+
+        pool.fence().await.unwrap();
+
+        assert_eq!(pool.total_blocks(), 2);
+        assert_eq!(pool.available_blocks(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_equal_priority_taking() {
+        let pool = AvailableBlocks::new().await;
+
+        // Create two sequences with different priorities
+        let seq1 = create_token_sequence(&[1, 2, 3, 4]);
+        let seq2 = create_token_sequence(&[5, 6, 7, 8]);
+
+        let mut blocks1 = create_blocks(seq1, 2);
+        let mut blocks2 = create_blocks(seq2, 2);
+
+        for block in blocks1.iter_mut() {
+            block.priority = 1;
+        }
+        for block in blocks2.iter_mut() {
+            block.priority = 1;
+        }
+
+        // If priorities were equal, first in, first out would apply
+
+        // Insert Sequence 2
+        for block in blocks2.into_iter().rev() {
+            pool.insert(block).await.unwrap();
+        }
+
+        // Insert Sequence 1
+        for block in blocks1.into_iter().rev() {
+            pool.insert(block).await.unwrap();
+        }
+
+        pool.fence().await.unwrap();
+
+        let blocks = pool.take_blocks(4).await.unwrap();
+        assert_eq!(blocks.len(), 4);
+
+        // Validate the blocks are in the correct order
+        assert_eq!(blocks[0].token_block.tokens()[0], 7);
+        assert_eq!(blocks[1].token_block.tokens()[0], 5);
+        assert_eq!(blocks[2].token_block.tokens()[0], 3);
+        assert_eq!(blocks[3].token_block.tokens()[0], 1);
+    }
+
+    #[tokio::test]
+    async fn test_priority_taking() {
+        let pool = AvailableBlocks::new().await;
+
+        // Create two sequences with different priorities
+        let seq1 = create_token_sequence(&[1, 2, 3, 4]);
+        let seq2 = create_token_sequence(&[5, 6, 7, 8]);
+
+        let mut blocks1 = create_blocks(seq1, 2);
+        let mut blocks2 = create_blocks(seq2, 2);
+
+        for block in blocks1.iter_mut() {
+            block.priority = 1;
+        }
+        for block in blocks2.iter_mut() {
+            block.priority = 2;
+        }
+
+        // If priorities were equal, first in, first out would apply
+        // but here we have a higher priority block first (which are taken last)
+        // returned first, but lower priority blocks inserted after
+        // we expect the lower priority blocks to be taken first
+
+        // Insert Sequence 2
+        for block in blocks2.into_iter().rev() {
+            pool.insert(block).await.unwrap();
+        }
+
+        // Insert Sequence 1
+        for block in blocks1.into_iter().rev() {
+            pool.insert(block).await.unwrap();
+        }
+
+        pool.fence().await.unwrap();
+
+        let blocks = pool.take_blocks(4).await.unwrap();
+        assert_eq!(blocks.len(), 4);
+
+        // Validate the blocks are in the correct order
+        assert_eq!(blocks[0].token_block.tokens()[0], 3);
+        assert_eq!(blocks[1].token_block.tokens()[0], 1);
+        assert_eq!(blocks[2].token_block.tokens()[0], 7);
+        assert_eq!(blocks[3].token_block.tokens()[0], 5);
+    }
+
+    #[tokio::test]
+    async fn test_priority_taking_after_update() {
+        let pool = AvailableBlocks::new().await;
+
+        // Create two sequences with different priorities
+        let seq1 = create_token_sequence(&[1, 2, 3, 4]);
+        let seq2 = create_token_sequence(&[5, 6, 7, 8]);
+
+        let mut blocks1 = create_blocks(seq1, 2);
+        let mut blocks2 = create_blocks(seq2, 2);
+
+        for block in blocks1.iter_mut() {
+            block.priority = 1;
+        }
+        for block in blocks2.iter_mut() {
+            block.priority = 1;
+        }
+
+        // record hash of blocks 2
+        // insert blocks 2, then blocks 1
+        // update priority of blocks 2 to 2 using the update api
+        // pull 4 blocks and test order
+
+        let block_hashes = blocks2
+            .iter()
+            .map(|b| b.token_block.sequence_hash())
+            .collect::<Vec<_>>();
+
+        // Insert Sequence 2
+        for block in blocks2.into_iter().rev() {
+            pool.insert(block).await.unwrap();
+        }
+
+        // Insert Sequence 1
+        for block in blocks1.into_iter().rev() {
+            pool.insert(block).await.unwrap();
+        }
+
+        pool.fence().await.unwrap();
+
+        // Update priority of blocks 2 to 2
+        pool.update_multiple(
+            block_hashes
+                .into_iter()
+                .map(|h| UpdateBlock {
+                    hash: h,
+                    priority: Some(2),
+                })
+                .collect(),
+        )
+        .await
+        .unwrap();
+
+        pool.fence().await.unwrap();
+
+        let blocks = pool.take_blocks(4).await.unwrap();
+        assert_eq!(blocks.len(), 4);
+
+        // Validate the blocks are in the correct order
+        assert_eq!(blocks[0].token_block.tokens()[0], 3);
+        assert_eq!(blocks[1].token_block.tokens()[0], 1);
+        assert_eq!(blocks[2].token_block.tokens()[0], 7);
+        assert_eq!(blocks[3].token_block.tokens()[0], 5);
+    }
+
+    #[tokio::test]
+    async fn test_reset_all() {
+        let pool = AvailableBlocks::new().await;
+
+        // Create two sequences with different priorities
+        let seq1 = create_token_sequence(&[1, 2, 3, 4]);
+        let seq2 = create_token_sequence(&[5, 6, 7, 8]);
+
+        let mut blocks1 = create_blocks(seq1, 2);
+        let mut blocks2 = create_blocks(seq2, 2);
+
+        for block in blocks1.iter_mut() {
+            block.priority = 1;
+        }
+
+        for block in blocks2.iter_mut() {
+            block.priority = 1;
+        }
+
+        // record hash of blocks 2
+        let block_hashes = blocks2
+            .iter()
+            .map(|b| b.token_block.sequence_hash())
+            .collect::<Vec<_>>();
+
+        // Insert Sequence 2
+        for block in blocks2.into_iter().rev() {
+            pool.insert(block).await.unwrap();
+        }
+
+        // Insert Sequence 1
+        for block in blocks1.into_iter().rev() {
+            pool.insert(block).await.unwrap();
+        }
+
+        // Reset All
+        pool.reset_all().await.unwrap();
+        pool.fence().await.unwrap();
+
+        // Try to match from block 2 hashes, expect no matches
+        let matched = pool.match_blocks(block_hashes).await.unwrap();
+        assert_eq!(matched.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_reset_block2() {
+        let pool = AvailableBlocks::new().await;
+
+        // Create two sequences with different priorities
+        let seq1 = create_token_sequence(&[1, 2, 3, 4]);
+        let seq2 = create_token_sequence(&[5, 6, 7, 8]);
+
+        let mut blocks1 = create_blocks(seq1, 2);
+        let mut blocks2 = create_blocks(seq2, 2);
+
+        for block in blocks1.iter_mut() {
+            block.priority = 1;
+        }
+
+        for block in blocks2.iter_mut() {
+            block.priority = 1;
+        }
+
+        // record hash of blocks 2
+        let block2_hashes = blocks2
+            .iter()
+            .map(|b| b.token_block.sequence_hash())
+            .collect::<Vec<_>>();
+
+        let block1_hashes = blocks1
+            .iter()
+            .map(|b| b.token_block.sequence_hash())
+            .collect::<Vec<_>>();
+
+        // Insert Sequence 2
+        for block in blocks2.into_iter().rev() {
+            pool.insert(block).await.unwrap();
+        }
+
+        // Insert Sequence 1
+        for block in blocks1.into_iter().rev() {
+            pool.insert(block).await.unwrap();
+        }
+
+        // Reset Block 2
+        pool.reset(block2_hashes.clone()).await.unwrap();
+        pool.fence().await.unwrap();
+
+        // Try to match from block 2 hashes, expect no matches
+        let matched = pool.match_blocks(block2_hashes).await.unwrap();
+        assert_eq!(matched.len(), 0);
+
+        let matched = pool.match_blocks(block1_hashes).await.unwrap();
+        assert_eq!(matched.len(), 2);
+    }
+}
