@@ -178,7 +178,7 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
 
         # TODO: Use python bindings to publish kv cache events once they
         # are available.
-        lib_path = "/lustre/fsw/coreai_dlalgo_llm/shreyasm/data_center_inf/dynamo/libdynamo_llm_capi.so"
+        lib_path = "/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
         self._kv_cache_events_publisher = KVCacheEventPublisher(
             self._namespace_str,
             self._component_str,
