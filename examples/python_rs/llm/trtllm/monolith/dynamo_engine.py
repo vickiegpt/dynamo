@@ -19,21 +19,20 @@ IMPORTANT:
 - This is only supposed to be used by dynamo-run launcher.
 - It is part of bring-your-own-engine python feature in dynamo-run.
 """
-import sys
 
-from common.parser import parse_dynamo_run_args, LLMAPIConfig
-from common.base_engine import TensorrtLLMEngineConfig, BaseTensorrtLLMEngine
+from common.base_engine import BaseTensorrtLLMEngine, TensorrtLLMEngineConfig
 from common.generators import chat_generator
-
+from common.parser import parse_dynamo_run_args
+from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import (
     ChatCompletionRequest,
     ChatCompletionStreamResponse,
 )
 
 from dynamo.runtime import dynamo_endpoint
-from tensorrt_llm.logger import logger
 
 logger.set_level("info")
+
 
 class DynamoTRTLLMEngine(BaseTensorrtLLMEngine):
     """
@@ -43,7 +42,9 @@ class DynamoTRTLLMEngine(BaseTensorrtLLMEngine):
     def __init__(self, trt_llm_engine_config: TensorrtLLMEngineConfig):
         super().__init__(trt_llm_engine_config)
 
-engine = None # Global variable to store the engine instance. This is initialized in the main function.
+
+engine = None  # Global variable to store the engine instance. This is initialized in the main function.
+
 
 def init_global_engine(args, engine_config):
     global engine
@@ -53,6 +54,7 @@ def init_global_engine(args, engine_config):
         engine_config=engine_config,
     )
     engine = DynamoTRTLLMEngine(trt_llm_engine_config)
+
 
 @dynamo_endpoint(ChatCompletionRequest, ChatCompletionStreamResponse)
 async def generate(request):

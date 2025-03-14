@@ -13,19 +13,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import sys
 from pathlib import Path
+
+import uvloop
 
 # Add the project root to the Python path
 project_root = str(Path(__file__).parents[1])  # Go up to trtllm directory
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-import asyncio
-import uvloop
-from common.parser import parse_tensorrt_llm_args
-from .worker import trtllm_worker
+from common.parser import parse_tensorrt_llm_args  # noqa: E402
 
+from .worker import trtllm_worker  # noqa: E402
 
 if __name__ == "__main__":
     uvloop.install()

@@ -140,18 +140,20 @@ def parse_tensorrt_llm_args() -> Tuple[Any, Tuple[Dict[str, Any], Dict[str, Any]
 
 
 def parse_dynamo_run_args() -> Tuple[Any, Tuple[Dict[str, Any], Dict[str, Any]]]:
-    parser = argparse.ArgumentParser(description="A TensorRT-LLM Dynamo-run engine parser")
+    parser = argparse.ArgumentParser(
+        description="A TensorRT-LLM Dynamo-run engine parser"
+    )
     parser.add_argument(
         "--engine_args", type=str, required=True, help="Path to the engine args file"
     )
-    # Disaggregated mode is not supported in dynamo-run launcher yet. 
-    #parser.add_argument(
+    # Disaggregated mode is not supported in dynamo-run launcher yet.
+    # parser.add_argument(
     #    "--llmapi-disaggregated-config",
     #    "-c",
     #    type=str,
     #    help="Path to the llmapi disaggregated config file",
     #    default=None,
-    #)
+    # )
     parser.add_argument(
         "--publish-kv-cache-events",
         action="store_true",
