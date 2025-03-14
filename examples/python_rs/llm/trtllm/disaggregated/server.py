@@ -29,35 +29,43 @@ from common.utils import RoutingStrategy, Scheduler, get_worker_id
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import CompletionRequest, DisaggregatedParams
 
-from dynamo.llm import KvRouter
+from dynamo.llm import KvIndexer, KvMetricsAggregator
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
 logger.set_level("info")
 
 
-class Router(ChatProcessorMixin):
+class DisaggServer(ChatProcessorMixin):
     def __init__(
         self,
         ctx_chat_client,
         gen_chat_client,
         ctx_completion_client,
         gen_completion_client,
-        scheduler: Scheduler,
         engine_config: LLMAPIConfig,
+        kv_router: Scheduler,
         routing_strategy: RoutingStrategy,
     ):
         self.ctx_chat_client = ctx_chat_client
         self.gen_chat_client = gen_chat_client
         self.ctx_completion_client = ctx_completion_client
         self.gen_completion_client = gen_completion_client
-        self.scheduler = scheduler
+        self.kv_router = kv_router
+
+        if self.kv_router is None:
+            if routing_strategy == RoutingStrategy.PREFIX:
+                logger.warning(
+                    "Prefix routing is not supported without a kv router. Falling back to random."
+                )
+                routing_strategy = RoutingStrategy.RANDOM
+
         self.routing_strategy = routing_strategy
 
         # allows to use tokenizer
         super().__init__(engine_config)
 
         logger.info(
-            f"INITIALIZED ROUTER with routing strategy: {self.routing_strategy}"
+            f"Initialized Disaggregated Server with routing strategy: {self.routing_strategy}"
         )
 
     async def _get_ctx_resp(self, request, ctx_client):
@@ -135,6 +143,9 @@ class Router(ChatProcessorMixin):
         async for response in await self.gen_completion_client.round_robin(
             gen_req.model_dump_json()
         ):
+            logger.debug(
+                f"[router] Received response from generation server: {response.data()}"
+            )
             gen_resp_obj = DisaggCompletionStreamResponse.model_validate(
                 response.data()
             )
@@ -168,6 +179,9 @@ class Router(ChatProcessorMixin):
         async for response in await self.gen_chat_client.round_robin(
             gen_req.model_dump_json()
         ):
+            logger.debug(
+                f"[router] Received response from generation server: {response.data()}"
+            )
             gen_resp_obj = DisaggChatCompletionStreamResponse.model_validate_json(
                 response.data()
             )
@@ -175,12 +189,12 @@ class Router(ChatProcessorMixin):
 
 
 @dynamo_worker()
-async def worker(runtime: DistributedRuntime, args, engine_config):
+async def worker(runtime: DistributedRuntime):
     """
     Instantiate a `backend` component and serve the `generate` endpoint
     A `Component` can serve multiple endpoints
     """
-    component = runtime.namespace("dynamo").component("router")
+    component = runtime.namespace("dynamo").component("disaggregated_server")
     await component.create_service()
 
     ctx_completion_client = (
@@ -208,32 +222,37 @@ async def worker(runtime: DistributedRuntime, args, engine_config):
         .client()
     )
 
-    # Only listen to context server for now
     if args.routing_strategy == RoutingStrategy.PREFIX:
+        # Only listen to context server for now
         kv_listener = runtime.namespace("dynamo").component("tensorrt-llm-ctx")
         await kv_listener.create_service()
 
-        kv_router = KvRouter(runtime, kv_listener, args.kv_block_size)
+        logger.info(
+            f"Intializing KV indexer with tokens per block: {args.kv_block_size}"
+        )
+        indexer = KvIndexer(kv_listener, args.kv_block_size)
+        metrics_aggregator = KvMetricsAggregator(kv_listener)
+        # FIXME: only using completion_client for now
+        # need 1 method for both completion and chat
+        scheduler = Scheduler(indexer, metrics_aggregator, ctx_completion_client)
     else:
-        kv_router = None
+        scheduler = None
 
     completions_endpoint = component.endpoint("completions")
     chat_endpoint = component.endpoint("chat/completions")
 
-    scheduler = Scheduler(kv_router)
-    router = Router(
+    disaggregated_server = DisaggServer(
         ctx_chat_client,
         gen_chat_client,
         ctx_completion_client,
         gen_completion_client,
-        scheduler,
         engine_config,
+        scheduler,
         args.routing_strategy,
     )
-
     await asyncio.gather(
-        completions_endpoint.serve_endpoint(router.generate_completion),
-        chat_endpoint.serve_endpoint(router.generate_chat),
+        completions_endpoint.serve_endpoint(disaggregated_server.generate_completion),
+        chat_endpoint.serve_endpoint(disaggregated_server.generate_chat),
     )
 
 
