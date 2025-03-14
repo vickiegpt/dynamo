@@ -50,10 +50,6 @@ import types
 module_dir = os.path.dirname(file_path)
 if module_dir not in sys.path:
     sys.path.insert(0, module_dir)
-parent_dir = os.path.dirname(module_dir)
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
 
 sys.argv = sys_argv
 module_dict = runpy.run_path(file_path, run_name='__main__')

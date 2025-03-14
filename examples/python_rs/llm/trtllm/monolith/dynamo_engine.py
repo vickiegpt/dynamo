@@ -19,10 +19,9 @@ IMPORTANT:
 - This is only supposed to be used by dynamo-run launcher.
 - It is part of bring-your-own-engine python feature in dynamo-run.
 """
+import sys
+from pathlib import Path
 
-from common.base_engine import BaseTensorrtLLMEngine, TensorrtLLMEngineConfig
-from common.generators import chat_generator
-from common.parser import parse_dynamo_run_args
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import (
     ChatCompletionRequest,
@@ -30,6 +29,18 @@ from tensorrt_llm.serve.openai_protocol import (
 )
 
 from dynamo.runtime import dynamo_endpoint
+
+# Add the project root to the Python path
+project_root = str(Path(__file__).parents[1])  # Go up to trtllm directory
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from common.base_engine import (  # noqa: E402
+    BaseTensorrtLLMEngine,
+    TensorrtLLMEngineConfig,
+)
+from common.generators import chat_generator  # noqa: E402
+from common.parser import parse_dynamo_run_args  # noqa: E402
 
 logger.set_level("info")
 
