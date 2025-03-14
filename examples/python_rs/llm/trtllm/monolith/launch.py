@@ -31,4 +31,4 @@ from .worker import trtllm_worker  # noqa: E402
 if __name__ == "__main__":
     uvloop.install()
     args, engine_config = parse_tensorrt_llm_args()
-    asyncio.run(trtllm_worker(engine_config))
+    asyncio.run(trtllm_worker(engine_config, args))

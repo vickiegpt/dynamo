@@ -20,9 +20,12 @@ import signal
 
 import uvloop
 from common.base_engine import BaseTensorrtLLMEngine, TensorrtLLMEngineConfig
-from common.disagg_processor import ChatProcessor, parse_chat_message_content
 from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
-from common.processor import merge_promises
+from common.processor import (
+    DisaggChatProcessor,
+    merge_promises,
+    parse_chat_message_content,
+)
 from common.protocol import (
     DisaggChatCompletionRequest,
     DisaggChatCompletionStreamResponse,
@@ -100,7 +103,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
             raise error
 
         logger.debug(f"Received request: {request}")
-        chat_processor = ChatProcessor(self._model, self._tokenizer, request)
+        chat_processor = DisaggChatProcessor(self._model, self._tokenizer, request)
 
         self._ongoing_request_count += 1
 
@@ -176,16 +179,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
             raise RuntimeError("Failed to generate: " + str(e))
 
         # Start the publishing threads with first request submission
-        self._stats_loop = asyncio.get_running_loop()
-        if (
-            self.publish_kv_cache_events_thread
-            and not self.publish_kv_cache_events_thread.is_alive()
-        ):
-            self.publish_kv_cache_events_thread.start()
-
-        if self.publish_stats_thread and not self.publish_stats_thread.is_alive():
-            self.publish_stats_thread.start()
-
+        self._start_threads()
         self._ongoing_request_count -= 1
 
     @dynamo_endpoint(CompletionRequest, DisaggCompletionStreamResponse)
@@ -239,20 +233,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
             raise RuntimeError("Non-streaming is not supported")
 
         # Start the publishing threads with first request submission
-        if (
-            self.publish_kv_cache_events_thread
-            and not self.publish_kv_cache_events_thread.is_alive()
-        ):
-            # [NOTE:] TRTLLM needs the stats to be collected on the same loop as the request handler.
-            self._stats_loop = asyncio.get_running_loop()
-            self.publish_kv_cache_events_thread.set_loop(self._stats_loop)
-            self.publish_kv_cache_events_thread.start()
-
-        if self.publish_stats_thread and not self.publish_stats_thread.is_alive():
-            self._stats_loop = asyncio.get_running_loop()
-            self.publish_stats_thread.set_loop(self._stats_loop)
-            self.publish_stats_thread.start()
-
+        self._start_threads()
         self._ongoing_request_count -= 1
 
 
