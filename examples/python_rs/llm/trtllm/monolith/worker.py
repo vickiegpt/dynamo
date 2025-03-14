@@ -15,9 +15,10 @@
 
 import asyncio
 
+import uvloop
 from common.base_engine import BaseTensorrtLLMEngine, TensorrtLLMEngineConfig
 from common.generators import chat_generator, completion_generator
-from common.parser import LLMAPIConfig
+from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import (
     ChatCompletionRequest,
@@ -95,3 +96,10 @@ async def trtllm_worker(runtime: DistributedRuntime, engine_config: LLMAPIConfig
         )
 
     await asyncio.gather(*coros)
+
+
+if __name__ == "__main__":
+    uvloop.install()
+    args, engine_config = parse_tensorrt_llm_args()
+
+    asyncio.run(trtllm_worker(engine_config, args))

@@ -108,7 +108,7 @@ llmctl http add completion TinyLlama/TinyLlama-1.1B-Chat-v1.0 dynamo.tensorrt-ll
 ```bash
 # Launch worker
 cd /workspace/examples/python_rs/llm/trtllm
-mpirun --allow-run-as-root -n 1 --oversubscribe python3 -m monolith.launch --engine_args llm_api_config.yaml 1>agg_worker.log 2>&1 &
+mpirun --allow-run-as-root -n 1 --oversubscribe python3 -m monolith.worker --engine_args llm_api_config.yaml 1>agg_worker.log 2>&1 &
 ```
 
 Upon successful launch, the output should look similar to:
@@ -132,7 +132,7 @@ Update `tensor_parallel_size` in the `llm_api_config.yaml` to load the model wit
 When launching the workers, prepend `trtllm-llmapi-launch` to the command.
 ```bash
 # Note: -n should still be 1
-trtllm-llmapi-launch mpirun --allow-run-as-root -n 1 --oversubscribe python3 -m monolith.launch ...
+trtllm-llmapi-launch mpirun --allow-run-as-root -n 1 --oversubscribe python3 -m monolith.worker ...
 ```
 
 ##### Option 2.3 Multi-Node Multi-GPU
