@@ -26,6 +26,7 @@ from tensorrt_llm.serve.openai_protocol import (
     CompletionStreamResponse,
 )
 
+from dynamo.llm import KvMetricsPublisher
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
 logger.set_level("debug")
@@ -43,15 +44,17 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
     async def generate_chat(self, request):
         async for response in chat_generator(self, request):
             yield response
+        self._start_threads()
 
     @dynamo_endpoint(CompletionRequest, CompletionStreamResponse)
     async def generate_completion(self, request):
         async for response in completion_generator(self, request):
             yield response
+        self._start_threads()
 
 
 @dynamo_worker()
-async def trtllm_worker(runtime: DistributedRuntime, engine_config: LLMAPIConfig):
+async def trtllm_worker(runtime: DistributedRuntime, engine_config: LLMAPIConfig, args):
     """
     Instantiate a `backend` component and serve the `generate` endpoint
     A `Component` can serve multiple endpoints
@@ -69,10 +72,26 @@ async def trtllm_worker(runtime: DistributedRuntime, engine_config: LLMAPIConfig
         namespace_str=namespace_str,
         component_str=component_str,
         engine_config=engine_config,
+        publish_stats=args.publish_stats,
+        publish_kv_cache_events=args.publish_kv_cache_events,
+        kv_block_size=args.kv_block_size,
     )
+
+    if args.publish_stats:
+        trt_llm_engine_config.kv_metrics_publisher = KvMetricsPublisher()
+
+    # TODO: refactor to include both completions and chat in the same worker endpoint.
+    trt_llm_engine_config.worker_id = completions_endpoint.lease_id()
+
     engine = TensorrtLLMEngine(trt_llm_engine_config)
 
-    await asyncio.gather(
+    coros = [
         completions_endpoint.serve_endpoint(engine.generate_completion),
         chat_completions_endpoint.serve_endpoint(engine.generate_chat),
-    )
+    ]
+    if args.publish_stats:
+        coros.append(
+            trt_llm_engine_config.kv_metrics_publisher.create_endpoint(component)
+        )
+
+    await asyncio.gather(*coros)

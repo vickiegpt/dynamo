@@ -39,8 +39,8 @@ For KV aware routing to work, we need to launch multiple workers. To do this, yo
 ```bash
 cd /workspace/examples/python_rs/llm/tensorrt_llm/
 # For 2 workers
-CUDA_VISIBLE_DEVICES=0 mpirun --allow-run-as-root -n 1 --oversubscribe python3 -m monolith.worker --publish-stats --publish-kv-cache-events --engine_args llm_api_config.yaml 1>worker1.log 2>&1 &
-CUDA_VISIBLE_DEVICES=1 mpirun --allow-run-as-root -n 1 --oversubscribe python3 -m monolith.worker --publish-stats --publish-kv-cache-events --engine_args llm_api_config.yaml 1>worker2.log 2>&1 &
+CUDA_VISIBLE_DEVICES=0 mpirun --allow-run-as-root -n 1 --oversubscribe python3 -m monolith.launch --publish-stats --publish-kv-cache-events --engine_args llm_api_config.yaml 1>worker1.log 2>&1 &
+CUDA_VISIBLE_DEVICES=1 mpirun --allow-run-as-root -n 1 --oversubscribe python3 -m monolith.launch --publish-stats --publish-kv-cache-events --engine_args llm_api_config.yaml 1>worker2.log 2>&1 &
 ```
 
 Note the extra arguments `--publish-stats` and `--publish-kv-cache-events` to publish the stats and kv cache events from the workers for effective routing.
