@@ -48,20 +48,31 @@ pub type SharedBlock<T> = SharedPoolItem<KvBlock<T>>;
 #[derive(Debug, Clone, Default)]
 pub struct NullStorage {}
 
-impl BlockStorage for NullStorage {
-    fn layer_pointer(&self, layer_id: usize) -> u64 {
-        0
+pub trait BlockStorage {
+    fn k_layer_pointer(&self, layer_id: usize) -> Result<u64, anyhow::Error> {
+        Ok(0 as usize)
     }
+
+    fn v_layer_pointer(&self, layer_id: usize) -> Result<u64, anyhow::Error> {
+        Ok(0 as usize)
+    }
+
     fn layer_size_in_bytes(&self) -> usize {
-        0
+        0 as usize
     }
 }
-pub trait BlockStorage {
-    fn layer_pointer(&self, layer_id: usize) -> u64 {
-        0
+
+impl BlockStorage for NullStorage {
+    fn k_layer_pointer(&self, layer_id: usize) -> Result<u64, anyhow::Error> {
+        Ok(0 as usize)
     }
+
+    fn v_layer_pointer(&self, layer_id: usize) -> Result<u64, anyhow::Error> {
+        Ok(0 as usize)
+    }
+
     fn layer_size_in_bytes(&self) -> usize {
-        0
+        0 as usize
     }
 }
 
@@ -116,3 +127,45 @@ impl<T: BlockStorage + Send + Sync + 'static> Returnable for KvBlock<T> {
 }
 
 pub struct KvBlockConfig {}
+
+// Host memory but special class of host memory
+pub struct PinnedBlockStorage {
+    layers: Vec<usize>,
+    bytes: usize,
+}
+pub struct DeviceStorage;
+
+pub type PinnedKvBlock = KvBlock<PinnedBlockStorage>;
+
+// Creeated from objects in layers.
+// impl PinnedBlockStorage {
+//     pub fn
+// pub into_pinner_block_storage(&self) -> Result<Vec<PinnedBlockStorage>>
+
+// }
+// layer passed in outside the bounds, need to throw an error
+// currently created with a number of layers
+
+impl BlockStorage for PinnedBlockStorage {
+    // fn layer_pointer(&self, layer_id: usize) -> Result<u64> {
+    //     self.layers.get(layer_id).copied().ok_or_else(|| {
+    //         anyhow::anyhow!(
+    //             "Invalid layer_id: {}. Must be within 0..{}",
+    //             layer_id,
+    //             self.layers.len()
+    //         )
+    //     })
+    // }
+
+    fn k_layer_pointer(&self, layer_id: usize) -> Result<u64, anyhow::Error> {
+        Ok(0 as usize)
+    }
+
+    fn v_layer_pointer(&self, layer_id: usize) -> Result<u64, anyhow::Error> {
+        Ok(0 as usize)
+    }
+
+    fn layer_size_in_bytes(&self) -> usize {
+        self.bytes
+    }
+}
