@@ -272,11 +272,7 @@ async def worker(
         kv_block_size=args.kv_block_size,
     )
 
-    # NOTE: Current implementation adds two endpoints. We can refactor this code to expose only one endpoint.
-    # and handle both completions and chat in the same endpoint.
-    # Currently, we are using completions endpoint lease id as worker id.
-    # I believe this might cause some issues using smart routing with chat completions endpoint.
-    trt_llm_engine_config.worker_id = completions_endpoint.lease_id()
+    trt_llm_engine_config.worker_id = component.lease_id()
 
     if args.publish_stats:
         trt_llm_engine_config.kv_metrics_publisher = KvMetricsPublisher()

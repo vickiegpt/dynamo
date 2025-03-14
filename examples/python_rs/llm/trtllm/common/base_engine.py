@@ -32,6 +32,8 @@ from dynamo.llm import KvMetricsPublisher
 
 from .kv_cache_event_publisher import KVCacheEventPublisher
 
+logger.set_level("info")
+
 
 class ChatProcessorMixin:
     def __init__(self, engine_config: LLMAPIConfig):

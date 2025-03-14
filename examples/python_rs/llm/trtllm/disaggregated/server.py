@@ -19,13 +19,13 @@ import json
 
 import uvloop
 from common.base_engine import ChatProcessorMixin
+from common.kv_router import KVRouter, RoutingStrategy, get_worker_id
 from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
 from common.protocol import (
     DisaggChatCompletionRequest,
     DisaggChatCompletionStreamResponse,
     DisaggCompletionStreamResponse,
 )
-from common.utils import KVRouter, RoutingStrategy, get_worker_id
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import CompletionRequest, DisaggregatedParams
 

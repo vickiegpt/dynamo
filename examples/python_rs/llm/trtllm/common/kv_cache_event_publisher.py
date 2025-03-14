@@ -18,7 +18,7 @@ from ctypes import c_char_p, c_int64, c_uint32
 
 from tensorrt_llm.logger import logger
 
-logger.set_level("debug")
+logger.set_level("info")
 
 
 class DynamoResult:

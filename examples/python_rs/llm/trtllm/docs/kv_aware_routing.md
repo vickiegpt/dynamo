@@ -98,4 +98,4 @@ Follow the instructions in the [README](../README.md#send-requests) to send requ
 
 ## Known Issues
 - KV aware routing is not supported for chat endpoint.
-- For disaggregated deployment, kv aware routing is only supported for context server completion endpoints.
+- For disaggregated deployment, kv aware routing is only supported for context servers. TRT LLM currently does not transfer the KV cache of the new tokens generated in the generation server to the context server which means that KV will not be reused (such as in multi-turn conversations).
