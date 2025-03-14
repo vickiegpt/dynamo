@@ -60,7 +60,6 @@ async def chat_generator(engine: BaseTensorrtLLMEngine, request):
             sampling_params,
             streaming=request.stream,
         )
-
         response_generator = engine.chat_processor.stream_response(
             request, request_id, conversation, promise
         )
