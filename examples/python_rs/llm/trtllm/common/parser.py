@@ -165,52 +165,5 @@ def parse_dynamo_run_args() -> Tuple[Any, Tuple[Dict[str, Any], Dict[str, Any]]]
         help="Publish stats from TensorRT-LLM. Currently, only supported for context worker in Disaggregated mode.",
     )
 
-    # Extra placeholder for dynamo-run launcher.
-    # TODO: Need to pass these settings from rust cli args to llMAPI config.
-    # Setting them in dummy mode for now so that we have an identical interface
-    # with the monolith launcher.
-    parser.add_argument(
-        "--model-path",
-        type=str,
-        help="dummy argument to keep dynamo-run launcher happy",
-        default=None,
-    )
-    parser.add_argument(
-        "--model-name",
-        type=str,
-        help="dummy argument to keep dynamo-run launcher happy",
-        default=None,
-    )
-    parser.add_argument(
-        "--http-port",
-        type=int,
-        help="dummy argument to keep dynamo-run launcher happy",
-        default=None,
-    )
-    parser.add_argument(
-        "--tensor-parallel-size",
-        type=int,
-        help="dummy argument to keep dynamo-run launcher happy",
-        default=None,
-    )
-    parser.add_argument(
-        "--base-gpu-id",
-        type=int,
-        help="dummy argument to keep dynamo-run launcher happy",
-        default=None,
-    )
-    parser.add_argument(
-        "--num-nodes",
-        type=int,
-        help="dummy argument to keep dynamo-run launcher happy",
-        default=None,
-    )
-    parser.add_argument(
-        "--node-rank",
-        type=int,
-        help="dummy argument to keep dynamo-run launcher happy",
-        default=None,
-    )
-
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()
     return (args, _init_engine_args(args.engine_args))
