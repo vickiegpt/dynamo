@@ -174,7 +174,7 @@ RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
 
 # Install genai-perf for benchmarking
 # This fork has more percentiles p1, p5 and p10 necessary for tokens/sec/user metrics
-RUN uv pip install "git+https://github.com/piotrm-nvidia/perf_analyzer.git@piotrm/more_percentiles#subdirectory=genai-perf
+RUN uv pip install "git+https://github.com/piotrm-nvidia/perf_analyzer.git@piotrm/more_percentiles#subdirectory=genai-perf"
 
 # Install test dependencies
 RUN --mount=type=bind,source=./container/deps/requirements.test.txt,target=/tmp/requirements.txt \
