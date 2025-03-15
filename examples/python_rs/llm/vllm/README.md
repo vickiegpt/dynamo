@@ -138,7 +138,7 @@ You can choose only the prefix strategy for now:
 The disaggregated router determines whether a request should be send to a
 remote prefill engine or a local prefill engine for prefilling. Currently, there are two conditions for remote prefill:
 1. The prefill length is more than the `max-local-prefill-length`. The absolute prefill length (actual prefill length - prefix hit length) is greater than the max local prefill length. 
-2. The prefill queue size is less than `max-prefill-queue-size`.
+2. The prefill queue size (current number of requests in the prefill queue) is less than `max-prefill-queue-size`.
 
 When prefilling locally, the vllm scheduler will prioritize
 prefill request and pause any ongoing decode requests.
