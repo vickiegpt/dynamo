@@ -206,15 +206,15 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
                 )
             )
 
-            async for request_output in self._llm_engine.generate_async(
+            num_choices = 1 if request.n is None else request.n
+            echoed = [False] * num_choices
+            for request_output in self._llm_engine.generate_async(
                 request.prompt,
                 sampling_params,
                 streaming=request.stream,
                 disaggregated_params=llm_disaggregated_params,
             ):
                 final_result = request_output
-                num_choices = 1 if request.n is None else request.n
-                echoed = [False] * num_choices
                 for gen_idx, output in enumerate(request_output.outputs):
                     delta_text = output.text_diff
                     if request.echo and not echoed[gen_idx]:
@@ -233,19 +233,19 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
                             )
                         )
                     chunk = DisaggCompletionStreamResponse(
-                        model=self.model,
+                        model=self._model,
                         choices=[choice],
                     )
-                    if self.server_config.type == "ctx":
-                        yield chunk.model_dump_json()
-                    else:
-                        yield chunk.model_dump_json(
-                            exclude_unset=True, exclude={"disaggregated_params"}
-                        )
+                    yield chunk.model_dump_json()
 
-            yield self.completions_processor.create_final_completion_response(
-                final_result
-            ).model_dump_json(exclude_unset=True, exclude={"disaggregated_params"})
+            if self.server_config.type == "gen":
+                final_chunk = (
+                    await self.completions_processor.create_final_completion_response(
+                        final_result
+                    )
+                )
+                logger.debug(f"[worker] final_chunk: {final_chunk}")
+                yield final_chunk.model_dump_json()
 
         except CppExecutorError:
             # If internal executor error is raised, shutdown the server

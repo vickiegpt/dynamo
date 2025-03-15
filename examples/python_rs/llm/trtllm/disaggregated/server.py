@@ -125,7 +125,7 @@ class DisaggServer(ChatProcessorMixin):
 
         request.max_tokens = 1
         ctx_resp = await self._get_ctx_resp(request, self.ctx_completion_client)
-        ctx_resp_obj = DisaggCompletionStreamResponse.model_validate(ctx_resp)
+        ctx_resp_obj = DisaggCompletionStreamResponse.model_validate_json(ctx_resp)
 
         gen_req.disaggregated_params = DisaggregatedParams.model_validate(
             ctx_resp_obj.choices[0].disaggregated_params
@@ -146,7 +146,7 @@ class DisaggServer(ChatProcessorMixin):
             logger.debug(
                 f"[router] Received response from generation server: {response.data()}"
             )
-            gen_resp_obj = DisaggCompletionStreamResponse.model_validate(
+            gen_resp_obj = DisaggCompletionStreamResponse.model_validate_json(
                 response.data()
             )
             yield json.loads(gen_resp_obj.model_dump_json(exclude_unset=True))
