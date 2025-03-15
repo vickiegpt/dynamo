@@ -140,3 +140,12 @@ class NATSQueue:
             return None
         except NatsError as e:
             raise RuntimeError(f"Failed to dequeue task: {e}")
+
+    async def get_queue_size(self) -> int:
+        """Get the number of messages currently in the stream"""
+        await self.ensure_connection()
+        try:
+            stream_info = await self._js.stream_info(self._stream_name)  # type: ignore
+            return stream_info.state.messages
+        except NatsError as e:
+            raise RuntimeError(f"Failed to get queue size: {e}")
