@@ -23,6 +23,7 @@ class PyDisaggregatedRouter:
         runtime,
         served_model_name,
         max_local_prefill_length=1000,
+        # TODO: add max_prefill_queue_size
     ):
         self.runtime = runtime
         self.served_model_name = served_model_name
