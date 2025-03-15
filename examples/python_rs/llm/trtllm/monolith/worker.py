@@ -30,7 +30,7 @@ from tensorrt_llm.serve.openai_protocol import (
 from dynamo.llm import KvMetricsPublisher
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
-logger.set_level("info")
+logger.set_level("debug")
 
 
 class TensorrtLLMEngine(BaseTensorrtLLMEngine):
@@ -81,7 +81,8 @@ async def trtllm_worker(runtime: DistributedRuntime, engine_config: LLMAPIConfig
     if args.publish_stats:
         trt_llm_engine_config.kv_metrics_publisher = KvMetricsPublisher()
 
-    trt_llm_engine_config.worker_id = component.lease_id()
+    # TODO: fix
+    trt_llm_engine_config.worker_id = completions_endpoint.lease_id()
 
     engine = TensorrtLLMEngine(trt_llm_engine_config)
 

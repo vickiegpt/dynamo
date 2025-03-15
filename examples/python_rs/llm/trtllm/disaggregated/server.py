@@ -71,7 +71,6 @@ class DisaggServer(ChatProcessorMixin):
     async def _get_ctx_resp(self, request, ctx_client):
         logger.debug(f"Received request {request}")
 
-        request.max_completion_tokens = 1
         request.disaggregated_params = DisaggregatedParams(request_type="context_only")
         logger.debug(f"[router] Sending request to context server: {request}")
 
@@ -124,6 +123,7 @@ class DisaggServer(ChatProcessorMixin):
 
         gen_req = copy.deepcopy(request)
 
+        request.max_tokens = 1
         ctx_resp = await self._get_ctx_resp(request, self.ctx_completion_client)
         ctx_resp_obj = DisaggCompletionStreamResponse.model_validate(ctx_resp)
 
@@ -160,6 +160,7 @@ class DisaggServer(ChatProcessorMixin):
 
         gen_req = copy.deepcopy(request)
 
+        request.max_completion_tokens = 1
         ctx_resp = await self._get_ctx_resp(request, self.ctx_chat_client)
         ctx_resp_obj = DisaggChatCompletionStreamResponse.model_validate_json(ctx_resp)
 
@@ -189,7 +190,7 @@ class DisaggServer(ChatProcessorMixin):
 
 
 @dynamo_worker()
-async def worker(runtime: DistributedRuntime):
+async def worker(runtime: DistributedRuntime, args, engine_config: LLMAPIConfig):
     """
     Instantiate a `backend` component and serve the `generate` endpoint
     A `Component` can serve multiple endpoints

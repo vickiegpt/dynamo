@@ -279,17 +279,18 @@ class BaseTensorrtLLMEngine(ChatProcessorMixin):
         return True
 
     def _start_threads(self):
-        self._stats_loop = asyncio.get_running_loop()
         if (
             self.publish_kv_cache_events_thread
             and not self.publish_kv_cache_events_thread.is_alive()
         ):
             # [NOTE:] TRTLLM needs the stats to be collected on the same loop as the request handler.
+            self._stats_loop = asyncio.get_running_loop()
             self.publish_kv_cache_events_thread.set_loop(self._stats_loop)
             self.publish_kv_cache_events_thread.start()
             logger.debug("Started kv cache events thread")
 
         if self.publish_stats_thread and not self.publish_stats_thread.is_alive():
+            self._stats_loop = asyncio.get_running_loop()
             self.publish_stats_thread.set_loop(self._stats_loop)
             self.publish_stats_thread.start()
             logger.debug("Started stats thread")

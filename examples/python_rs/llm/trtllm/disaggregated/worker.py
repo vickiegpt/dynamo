@@ -295,7 +295,8 @@ async def worker(
         kv_block_size=args.kv_block_size,
     )
 
-    trt_llm_engine_config.worker_id = component.lease_id()
+    # TODO: fix
+    trt_llm_engine_config.worker_id = completions_endpoint.lease_id()
 
     if args.publish_stats:
         trt_llm_engine_config.kv_metrics_publisher = KvMetricsPublisher()

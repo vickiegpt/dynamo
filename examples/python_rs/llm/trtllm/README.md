@@ -255,7 +255,7 @@ If using the provided [single_node_config.yaml](disaggregated/llmapi_disaggregat
 
 ```bash
 cd /workspace/examples/python_rs/llm/trtllm/
-python3 -m disaggregated.server 1>disagg_server.log 2>&1 &
+python3 -m disaggregated.server --engine_args llm_api_config.yaml 1>disagg_server.log 2>&1 &
 ```
 
 Note: For KV cache aware routing, please refer to the [KV Aware Routing](./docs/kv_aware_routing.md) section.
@@ -316,7 +316,7 @@ Once the workers are launched, you should see the output similar to the followin
 
 4. Launch the disaggregated server from node1 or login node.
 ```bash
-srun --mpi pmix -N 1 --ntasks 1 --ntasks-per-node=1 --overlap --container-image IMAGE --output batch_disagg_server_%x_%j.log --err batch_disagg_server_%x_%j.err --container-mounts PATH_TO_DYNAMO:/workspace  --container-env=NATS_SERVER,ETCD_ENDPOINTS bash -c 'cd /workspace/examples/python_rs/llm/trtllm && python3 -m disaggregated.server' &
+srun --mpi pmix -N 1 --ntasks 1 --ntasks-per-node=1 --overlap --container-image IMAGE --output batch_disagg_server_%x_%j.log --err batch_disagg_server_%x_%j.err --container-mounts PATH_TO_DYNAMO:/workspace  --container-env=NATS_SERVER,ETCD_ENDPOINTS bash -c 'cd /workspace/examples/python_rs/llm/trtllm && python3 -m disaggregated.server --engine_args llm_api_config.yaml --routing-strategy round_robin' &
 ```
 
 5. Send requests to the disaggregated server.
