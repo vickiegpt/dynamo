@@ -136,10 +136,9 @@ You can choose only the prefix strategy for now:
 ### Disaggregated Router
 
 The disaggregated router determines whether a request should be send to a
-remote prefill engine or a local prefill engine for prefilling based on the
-prefill length. If kv router is enabled, the disaggregated router will use
-the absolute prefill length (actual prefill length - prefix hit length) to make
-the decision.
+remote prefill engine or a local prefill engine for prefilling. Currently, there are two conditions for remote prefill:
+1. The prefill length is more than the `max-local-prefill-length`. The absolute prefill length (actual prefill length - prefix hit length) is greater than the max local prefill length. 
+2. The prefill queue size is less than `max-prefill-queue-size`.
 
 When prefilling locally, the vllm scheduler will prioritize
 prefill request and pause any ongoing decode requests.
@@ -149,7 +148,8 @@ To enable the disaggregated router, add the following commands in the decode wor
 python worker.py \
 ...
 --conditional-disagg \
---max-local-prefill-length <length>
+--max-local-prefill-length <length, default=1000> \
+--max-prefill-queue-size <size, default=3>
 ```
 
 ### Worker

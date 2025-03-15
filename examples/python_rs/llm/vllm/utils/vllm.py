@@ -42,7 +42,7 @@ def parse_vllm_args() -> AsyncEngineArgs:
         help="Maximum length of local prefill",
     )
     parser.add_argument(
-        "--max-prefill-size",
+        "--max-prefill-queue-size",
         type=int,
         default=3,
         help="Do not send remote prefill requests (prefill locally) if the queue size is greater than this value",
@@ -54,5 +54,5 @@ def parse_vllm_args() -> AsyncEngineArgs:
     engine_args.remote_prefill = args.remote_prefill
     engine_args.conditional_disagg = args.conditional_disagg
     engine_args.max_local_prefill_length = args.max_local_prefill_length
-    engine_args.max_prefill_size = args.max_prefill_size
+    engine_args.max_prefill_queue_size = args.max_prefill_queue_size
     return engine_args

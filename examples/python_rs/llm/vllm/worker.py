@@ -196,7 +196,7 @@ async def worker(runtime: DistributedRuntime, engine_args: AsyncEngineArgs):
                 runtime,
                 served_model_name,
                 max_local_prefill_length=engine_args.max_local_prefill_length,
-                max_prefill_size=engine_args.max_prefill_size,
+                max_prefill_queue_size=engine_args.max_prefill_queue_size,
             )
         else:
             disaggregated_router = None

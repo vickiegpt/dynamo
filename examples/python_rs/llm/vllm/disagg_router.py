@@ -23,17 +23,17 @@ class PyDisaggregatedRouter:
         runtime,
         served_model_name,
         max_local_prefill_length=1000,
-        max_prefill_size=3,
+        max_prefill_queue_size=3,
     ):
         self.runtime = runtime
         self.served_model_name = served_model_name
         self.max_local_prefill_length = max_local_prefill_length
-        self.max_prefill_size = max_prefill_size
+        self.max_prefill_queue_size = max_prefill_queue_size
 
     def prefill_remote(self, prompt_length: int, prefix_hit_rate: float, queue_size: int):
         absolute_prefill_length = int(prompt_length * (1 - prefix_hit_rate))
-        decision = absolute_prefill_length > self.max_local_prefill_length and queue_size < self.max_prefill_size
+        decision = absolute_prefill_length > self.max_local_prefill_length and queue_size < self.max_prefill_queue_size
         vllm_logger.info(
-            f"Remote prefill: {decision} (prefill length: {absolute_prefill_length}/{prompt_length}, prefill queue size: {queue_size}/{self.max_prefill_size})"
+            f"Remote prefill: {decision} (prefill length: {absolute_prefill_length}/{prompt_length}, prefill queue size: {queue_size}/{self.max_prefill_queue_size})"
         )
         return decision
