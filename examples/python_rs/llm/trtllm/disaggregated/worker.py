@@ -14,21 +14,17 @@
 # limitations under the License.
 
 import asyncio
-import json
 import os
 import signal
 
 import uvloop
 from common.base_engine import BaseTensorrtLLMEngine, TensorrtLLMEngineConfig
 from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
-from common.processor import (
-    DisaggChatProcessor,
-    merge_promises,
-    parse_chat_message_content,
-)
+from common.processor import DisaggChatProcessor, parse_chat_message_content
 from common.protocol import (
     DisaggChatCompletionRequest,
     DisaggChatCompletionStreamResponse,
+    DisaggCompletionResponseStreamChoice,
     DisaggCompletionStreamResponse,
     DisaggregatedTypeConverter,
 )
@@ -210,20 +206,47 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
                 )
             )
 
-            # only 1 prompt is supported for now
-            promise = self._llm_engine.generate_async(
+            async for request_output in self._llm_engine.generate_async(
                 request.prompt,
                 sampling_params,
                 streaming=request.stream,
                 disaggregated_params=llm_disaggregated_params,
-            )
-            generator = merge_promises([promise])
-            num_choices = 1 if request.n is None else request.n
-            response_generator = self.completions_processor.create_completion_generator(
-                request, generator, num_choices
-            )
-            async for response in response_generator:
-                yield json.loads(response)
+            ):
+                final_result = request_output
+                num_choices = 1 if request.n is None else request.n
+                echoed = [False] * num_choices
+                for gen_idx, output in enumerate(request_output.outputs):
+                    delta_text = output.text_diff
+                    if request.echo and not echoed[gen_idx]:
+                        delta_text = request.prompt + delta_text
+                        echoed[gen_idx] = True
+                    choice = DisaggCompletionResponseStreamChoice(
+                        index=gen_idx,
+                        text=delta_text,
+                        stop_reason=output.stop_reason,
+                        finish_reason=output.finish_reason,
+                    )
+                    if output.disaggregated_params is not None:
+                        choice.disaggregated_params = (
+                            DisaggregatedTypeConverter.to_oai_disaggregated_params(
+                                output.disaggregated_params
+                            )
+                        )
+                    chunk = DisaggCompletionStreamResponse(
+                        model=self.model,
+                        choices=[choice],
+                    )
+                    if self.server_config.type == "ctx":
+                        yield chunk.model_dump_json()
+                    else:
+                        yield chunk.model_dump_json(
+                            exclude_unset=True, exclude={"disaggregated_params"}
+                        )
+
+            yield self.completions_processor.create_final_completion_response(
+                final_result
+            ).model_dump_json(exclude_unset=True, exclude={"disaggregated_params"})
+
         except CppExecutorError:
             # If internal executor error is raised, shutdown the server
             signal.raise_signal(signal.SIGINT)

@@ -455,3 +455,18 @@ class CompletionsProcessor:
             pp_res = self._post_process(request, prompt_idx, num_choices, requst_output)
             for _p in pp_res:
                 yield _p
+
+    async def create_final_completion_response(self, response):
+        prompt_tokens = len(response.prompt_token_ids)
+        completion_tokens = sum(len(output.token_ids) for output in response.outputs)
+        final_usage = UsageInfo(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+        chunk = DisaggCompletionStreamResponse(
+            model=self.model,
+            choices=[],
+            usage=final_usage,
+        )
+        return chunk
