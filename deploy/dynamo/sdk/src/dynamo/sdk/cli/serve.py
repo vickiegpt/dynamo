@@ -391,12 +391,27 @@ def build_serve_command() -> click.Group:
                         service_configs[service][key] = value
 
         # Process service-specific options
+        overrides = {}
         cmdline_overrides: t.Dict[str, t.Any] = _parse_service_args(ctx.args)
         for service, configs in cmdline_overrides.items():
             for key, value in configs.items():
                 if service not in service_configs:
                     service_configs[service] = {}
+                if key in service_configs[service]:
+                    overrides[service_configs[service][key]] = value
                 service_configs[service][key] = value
+
+        for service, configs in cmdline_overrides.items():
+            for key, value in configs.items():
+                if service not in service_configs:
+                    service_configs[service] = {}
+                if (
+                    key in service_configs[service]
+                    and service_configs[service][key] in overrides
+                ):
+                    service_configs[service][key] = overrides[
+                        service_configs[service][key]
+                    ]
 
         if dry_run:
             rich.print("[bold]Service Configuration:[/bold]")
