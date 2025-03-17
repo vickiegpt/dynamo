@@ -13,7 +13,7 @@ from bentoml._internal.resource import system_resources
 from bentoml.exceptions import BentoMLConfigException
 
 NVIDIA_GPU = "nvidia.com/gpu"
-DISABLE_GPU_ALLOCATION_ENV = "BENTOML_DISABLE_GPU_ALLOCATION"
+DISABLE_GPU_ALLOCATION_ENV = "DYNAMO_DISABLE_GPU_ALLOCATION"
 DYNAMO_DEPLOYMENT_ENV = "DYNAMO_DEPLOYMENT_ENV"
 
 class ResourceAllocator:

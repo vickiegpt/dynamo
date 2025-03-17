@@ -46,12 +46,6 @@ class PrefillWorkerRouterLess:
     def __init__(self):
         class_name = self.__class__.__name__
         self.engine_args = parse_vllm_args(class_name, "")
-        gpu_idx = (
-            self.engine_args.cuda_visible_device_offset
-            + server_context.worker_index
-            - 1
-        )
-        os.environ["CUDA_VISIBLE_DEVICES"] = f"{gpu_idx}"
         self._loaded_metadata = set()
         self.initialized = False
         if self.engine_args.enable_chunked_prefill is not False:
