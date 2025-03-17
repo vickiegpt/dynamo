@@ -15,8 +15,12 @@
 
 from components.frontend import Frontend
 from components.kv_router import Router
-from components.prefill_worker import PrefillWorker
+from components.prefill_worker import PrefillWorkerTP2W1
+from components.prefill_worker_2 import PrefillWorkerTP2W2
 from components.processor import Processor
-from components.worker import VllmWorker
+from components.worker import VllmWorkerTP2W1
+from components.worker_2 import VllmWorkerTP2W2
 
-Frontend.link(Processor).link(Router).link(VllmWorker).link(PrefillWorker)
+Frontend.link(Processor).link(Router).link(VllmWorkerTP2W1).link(PrefillWorkerTP2W1)
+
+Frontend.link(Processor).link(Router).link(VllmWorkerTP2W2).link(PrefillWorkerTP2W2)
