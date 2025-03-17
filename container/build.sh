@@ -60,7 +60,7 @@ TENSORRTLLM_PIP_WHEEL_PATH=""
 VLLM_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
 VLLM_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
 
-NIXL_COMMIT=d7a2c571a60d76a3d6c8458140eaaa5025fa48c4
+NIXL_COMMIT=f35faf8ba4e725f1724177d0772200481d1d3446
 NIXL_REPO=ai-dynamo/nixl.git
 
 get_options() {
@@ -218,7 +218,7 @@ get_options() {
 
     if [ -z "$TAG" ]; then
         TAG="--tag dynamo:${VERSION}-${FRAMEWORK,,}"
-        if [ ! -z ${TARGET} ]; then
+        if [ ! -z "${TARGET}" ]; then
             TAG="${TAG}-${TARGET}"
         fi
     fi
@@ -229,6 +229,8 @@ get_options() {
 
     if [ ! -z "$TARGET" ]; then
         TARGET_STR="--target ${TARGET}"
+    else
+        TARGET_STR="--target runtime"
     fi
 }
 
@@ -284,28 +286,34 @@ elif [[ $FRAMEWORK == "TENSORRTLLM" ]]; then
 fi
 
 if [[ $FRAMEWORK == "VLLM" ]]; then
-    TEMP_DIR=$(mktemp -d)
-
-    # Clean up temp directory on script exit
-    trap 'rm -rf "$TEMP_DIR"' EXIT
+    NIXL_DIR="/tmp/nixl/nixl_src"
 
     # Clone original NIXL to temp directory
-
-    if [ ! -z ${GITHUB_TOKEN} ]; then
-        git clone https://oauth2:${GITHUB_TOKEN}@github.com/${NIXL_REPO} "$TEMP_DIR/nixl_src"
+    if [ -d "$NIXL_DIR" ]; then
+        echo "Warning: $NIXL_DIR already exists, skipping clone"
     else
-        # Try HTTPS first with credential prompting disabled, fall back to SSH if it fails
-        if ! GIT_TERMINAL_PROMPT=0 git clone https://github.com/${NIXL_REPO} "$TEMP_DIR/nixl_src"; then
-            echo "HTTPS clone failed, falling back to SSH..."
-            git clone git@github.com:${NIXL_REPO} "$TEMP_DIR/nixl_src"
+        if [ ! -z ${GITHUB_TOKEN} ]; then
+            git clone https://oauth2:${GITHUB_TOKEN}@github.com/${NIXL_REPO} "$NIXL_DIR"
+        else
+            # Try HTTPS first with credential prompting disabled, fall back to SSH if it fails
+            if ! GIT_TERMINAL_PROMPT=0 git clone https://github.com/${NIXL_REPO} "$NIXL_DIR"; then
+                echo "HTTPS clone failed, falling back to SSH..."
+                git clone git@github.com:${NIXL_REPO} "$NIXL_DIR"
+            fi
         fi
     fi
 
-    cd "$TEMP_DIR/nixl_src"
+    cd "$NIXL_DIR"
+    if ! git checkout ${NIXL_COMMIT}; then
+        echo "ERROR: Failed to checkout NIXL commit ${NIXL_COMMIT}. The cached directory may be out of date."
+        echo "Please delete $NIXL_DIR and re-run the build script."
+        exit 1
+    fi
 
-    git checkout ${NIXL_COMMIT}
+    BUILD_CONTEXT_ARG+=" --build-context nixl=$NIXL_DIR"
 
-    BUILD_CONTEXT_ARG+=" --build-context nixl=$TEMP_DIR/nixl_src"
+    # Add NIXL_COMMIT as a build argument to enable caching
+    BUILD_ARGS+=" --build-arg NIXL_COMMIT=${NIXL_COMMIT} "
 fi
 
 # BUILD DEV IMAGE
@@ -341,7 +349,7 @@ if [ -z "$RUN_PREFIX" ]; then
     set -x
 fi
 
-$RUN_PREFIX docker buildx build -f $DOCKERFILE $TARGET_STR $PLATFORM $BUILD_ARGS $CACHE_FROM $CACHE_TO --output type=docker $TAG $LATEST_TAG $BUILD_CONTEXT_ARG $BUILD_CONTEXT $NO_CACHE
+$RUN_PREFIX docker build -f $DOCKERFILE $TARGET_STR $PLATFORM $BUILD_ARGS $CACHE_FROM $CACHE_TO $TAG $LATEST_TAG $BUILD_CONTEXT_ARG $BUILD_CONTEXT $NO_CACHE
 
 { set +x; } 2>/dev/null
 

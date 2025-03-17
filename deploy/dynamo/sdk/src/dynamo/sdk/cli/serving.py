@@ -478,16 +478,21 @@ def serve_http(
         arbiter.exit_stack.callback(shutil.rmtree, uds_path, ignore_errors=True)
         arbiter.start(
             cb=lambda _: logger.info(  # type: ignore
-                "Starting Dynamo Service %s (%s/%s) listening on %s://%s:%d (Press CTRL+C to quit)"
-                if (hasattr(svc, "is_dynamo_component") and svc.is_dynamo_component())
-                else 'Starting production %s BentoServer from "%s" (Press CTRL+C to quit)',
+                (
+                    "Starting Dynamo Service %s (%s/%s) listening on %s://%s:%d (Press CTRL+C to quit)"
+                    if (
+                        hasattr(svc, "is_dynamo_component")
+                        and svc.is_dynamo_component()
+                    )
+                    else "Starting %s (Press CTRL+C to quit)"
+                ),
                 *(
                     (svc.name, *svc.dynamo_address(), scheme, log_host, port)
                     if (
                         hasattr(svc, "is_dynamo_component")
                         and svc.is_dynamo_component()
                     )
-                    else (scheme.upper(), bento_identifier)
+                    else (bento_identifier,)
                 ),
             ),
         )
