@@ -41,9 +41,10 @@ accelerating data transfers
 > rapid-prototyping stage and we are actively looking for feedback and
 > collaborators.
 
-## Quick Start
+## Quick Start Guide
 
-TODO add quick start guide here
+You can open the Jupyter Notebook version of the Quick Start guide here:  
+[quick_start.ipynb](quick_start.ipynb) 
 
 ## Building Dynamo
 
