@@ -30,7 +30,7 @@ Follow the instructions in the [README](../README.md) to setup the environment f
 For KV aware routing to work, we need to launch multiple workers. To do this, you can use the following command for each worker:
 
 ```bash
-cd /workspace/examples/python_rs/llm/tensorrt_llm/
+cd /workspace/examples/trtllm
 # For 2 workers
 CUDA_VISIBLE_DEVICES=0 mpirun --allow-run-as-root -n 1 --oversubscribe python3 -m monolith.worker --publish-stats --publish-kv-cache-events --engine_args llm_api_config.yaml 1>worker1.log 2>&1 &
 CUDA_VISIBLE_DEVICES=1 mpirun --allow-run-as-root -n 1 --oversubscribe python3 -m monolith.worker --publish-stats --publish-kv-cache-events --engine_args llm_api_config.yaml 1>worker2.log 2>&1 &
@@ -47,7 +47,7 @@ The config file [llm_api_config.yaml](../llm_api_config.yaml) specifies extra co
 To launch the router, run the following command:
 
 ```bash
-cd /workspace/examples/python_rs/llm/tensorrt_llm/
+cd /workspace/examples/trtllm
 python3 -m monolith.router --min-workers 2 --engine_args llm_api_config.yaml --routing-strategy prefix 1>router.log 2>&1 &
 ```
 
@@ -74,7 +74,7 @@ All of the steps remain the same except launching the [workers and the router](.
 To launch the workers and the router, run the following command:
 
 ```bash
-cd /workspace/examples/python_rs/llm/tensorrt_llm/
+cd /workspace/examples/trtllm
 mpirun --allow-run-as-root --oversubscribe -n 5 python3 -m disaggregated.worker --publish-stats --publish-kv-cache-events --engine_args llm_api_config.yaml -c disaggregated/llmapi_disaggregated_configs/single_node_kv_aware_config.yaml 1>disagg_workers.log 2>&1 &
 ```
 
@@ -87,7 +87,7 @@ Note: The configuration also specifies 4 context servers and 1 generation server
 To launch the disaggregated server, run the following command:
 
 ```bash
-cd /workspace/examples/python_rs/llm/tensorrt_llm/
+cd /workspace/examples/trtllm
 python3 -m disaggregated.server --engine_args llm_api_config.yaml --routing-strategy prefix 1>disagg_server.log 2>&1 &
 ```
 
