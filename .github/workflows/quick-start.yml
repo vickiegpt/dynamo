@@ -24,7 +24,7 @@ jobs:
 
       - name: 📦 Install Jupyter
         run: |
-          pip install notebook nbconvert
+          pip install --upgrade notebook nbconvert jupyter
 
       - name: 🚀 Run Jupyter Notebook
         run: |
