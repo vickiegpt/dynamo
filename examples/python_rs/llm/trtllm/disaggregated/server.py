@@ -132,12 +132,11 @@ class DisaggServer(ChatProcessorMixin):
         )
         gen_req.disaggregated_params.request_type = "generation_only"
 
-        if request.stream:
-            yield json.loads(
-                ctx_resp_obj.model_dump_json(
-                    exclude_unset=True, exclude={"disaggregated_params"}
-                )
+        yield json.loads(
+            ctx_resp_obj.model_dump_json(
+                exclude_unset=True, exclude={"disaggregated_params"}
             )
+        )
 
         logger.debug(f"[router] Sending request to generation server: {gen_req}")
         async for response in await self.gen_completion_client.round_robin(
@@ -169,12 +168,11 @@ class DisaggServer(ChatProcessorMixin):
         )
         gen_req.disaggregated_params.request_type = "generation_only"
 
-        if request.stream:
-            yield json.loads(
-                ctx_resp_obj.model_dump_json(
-                    exclude_unset=True, exclude={"disaggregated_params"}
-                )
+        yield json.loads(
+            ctx_resp_obj.model_dump_json(
+                exclude_unset=True, exclude={"disaggregated_params"}
             )
+        )
 
         logger.debug(f"[router] Sending request to generation server: {gen_req}")
         async for response in await self.gen_chat_client.round_robin(
