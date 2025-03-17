@@ -11,8 +11,7 @@ on:
 
 jobs:
   test-notebook:
-    runs-on:
-        group: Fastchecker
+    runs-on: ubuntu-latest
 
     steps:
       - name: 📥 Checkout Repository
@@ -29,7 +28,16 @@ jobs:
 
       - name: 🚀 Run Jupyter Notebook
         run: |
-          jupyter nbconvert --to notebook --execute quick-start.ipynb --output quick-start-output.ipynb
+          set -e  # Exit immediately if any command fails
+          ls -lah  # List files to verify notebook exists
+          jupyter nbconvert --to notebook --execute quick-start.ipynb --output quick-start-output.ipynb || cat quick-start.ipynb
 
-      - name: ✅ Verify Notebook Execution
-        run: cat quick_start_output.ipynb
+      - name: ✅ Debug Output
+        run: |
+          ls -lah  # Check if output file exists
+          if test -f "quick-start-output.ipynb"; then
+            cat quick-start-output.ipynb
+          else
+            echo "❌ ERROR: quick_start_output.ipynb was not generated!"
+            exit 1
+          fi
