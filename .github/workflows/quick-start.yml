@@ -29,7 +29,7 @@ jobs:
 
       - name: 🚀 Run Jupyter Notebook
         run: |
-          jupyter nbconvert --to notebook --execute quick_start.ipynb --output quick_start_output.ipynb
+          jupyter nbconvert --to notebook --execute quick-start.ipynb --output quick-start-output.ipynb
 
       - name: ✅ Verify Notebook Execution
         run: cat quick_start_output.ipynb
