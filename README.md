@@ -43,7 +43,11 @@ accelerating data transfers
 
 ## Quick Start Guide
 
-You can open the Jupyter Notebook version of the Quick Start guide here:
+Alternatively, you can open the Jupyter Notebook version of the Quick Start guide here:
+git clone https://github.com/ai-dynamo/dynamo.git
+cd dynamo
+pip install notebook
+jupyter nbconvert --to notebook --execute quick-start.ipynb --output output.ipynb
 [quick-start.ipynb](quick-start.ipynb)
 
 ## Building Dynamo
