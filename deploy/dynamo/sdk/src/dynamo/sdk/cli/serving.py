@@ -35,6 +35,7 @@ from bentoml.exceptions import BentoMLConfigException
 from circus.sockets import CircusSocket
 from circus.watcher import Watcher
 from simple_di import Provide, inject
+
 from .allocator import ResourceAllocator
 
 
@@ -265,6 +266,7 @@ def serve_http(
         make_reload_plugin,
     )
     from circus.sockets import CircusSocket
+
     from .allocator import ResourceAllocator
 
     bento_id: str = ""

@@ -19,17 +19,16 @@ import os
 import warnings
 from typing import Any
 
-from simple_di import Provide
-from simple_di import inject
-
 from _bentoml_sdk import Service
 from bentoml._internal.configuration.containers import BentoMLContainer
 from bentoml._internal.resource import system_resources
 from bentoml.exceptions import BentoMLConfigException
+from simple_di import Provide, inject
 
 NVIDIA_GPU = "nvidia.com/gpu"
 DISABLE_GPU_ALLOCATION_ENV = "DYNAMO_DISABLE_GPU_ALLOCATION"
 DYNAMO_DEPLOYMENT_ENV = "DYNAMO_DEPLOYMENT_ENV"
+
 
 class ResourceAllocator:
     def __init__(self) -> None:

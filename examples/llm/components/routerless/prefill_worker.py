@@ -14,7 +14,6 @@
 # limitations under the License.
 
 
-import os
 
 import msgspec
 from utils.nixl import NixlMetadataStore
@@ -29,7 +28,6 @@ from dynamo.sdk import (
     async_on_start,
     dynamo_context,
     dynamo_endpoint,
-    server_context,
     service,
 )
 

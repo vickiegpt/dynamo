@@ -32,7 +32,6 @@ from dynamo.sdk import (
     async_on_start,
     dynamo_context,
     dynamo_endpoint,
-    server_context,
     service,
 )
 
