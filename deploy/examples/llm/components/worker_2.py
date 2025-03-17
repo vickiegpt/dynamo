@@ -46,10 +46,10 @@ from dynamo.sdk import (
         "enabled": True,
         "namespace": "dynamo",
     },
-    resources={"gpu": 2, "cpu": "10", "memory": "80Gi"},
+    resources={"gpu": 1, "cpu": "10", "memory": "20Gi"},
     workers=1,
 )
-class VllmWorkerTP2W1:
+class VllmWorkerTP2W2:
     prefill_worker = depends(PrefillWorker)
 
     def __init__(self):
