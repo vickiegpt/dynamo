@@ -83,3 +83,4 @@ __pycache__/
 *.tgz
 Chart.lock
 generated-values.yaml
+TensorRT-LLM

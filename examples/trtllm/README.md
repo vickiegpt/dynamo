@@ -118,7 +118,7 @@ llmctl http add completion TinyLlama/TinyLlama-1.1B-Chat-v1.0 dynamo.tensorrt-ll
 
 ```bash
 # Launch worker
-cd /workspace/examples/python_rs/llm/trtllm
+cd /workspace/examples/trtllm
 mpirun --allow-run-as-root -n 1 --oversubscribe python3 -m monolith.worker --engine_args llm_api_config.yaml 1>agg_worker.log 2>&1 &
 ```
 
@@ -257,7 +257,7 @@ WORLD_SIZE is the total number of workers covering all the servers described in 
 For example, 2 TP2 generation servers are 2 workers but 4 mpi executors.
 
 ```bash
-cd /workspace/examples/python_rs/llm/trtllm/
+cd /workspace/examples/trtllm/
 mpirun --allow-run-as-root --oversubscribe -n WORLD_SIZE python3 -m disaggregated.worker --engine_args llm_api_config.yaml -c disaggregated/llmapi_disaggregated_configs/single_node_config.yaml 1>disagg_workers.log 2>&1 &
 ```
 If using the provided [single_node_config.yaml](disaggregated/llmapi_disaggregated_configs/single_node_config.yaml), WORLD_SIZE should be 2 as it has 1 context servers(TP=1) and 1 generation server(TP=1).
@@ -265,7 +265,7 @@ If using the provided [single_node_config.yaml](disaggregated/llmapi_disaggregat
 2. **Launch the disaggregated server**
 
 ```bash
-cd /workspace/examples/python_rs/llm/trtllm/
+cd /workspace/examples/trtllm/
 python3 -m disaggregated.server --engine_args llm_api_config.yaml 1>disagg_server.log 2>&1 &
 ```
 
@@ -310,7 +310,7 @@ export ETCD_ENDPOINTS="http://node1:2379,http://node2:2379"
 
 4. Launch the workers from node1 or login node. WORLD_SIZE is similar to single node deployment.
 ```bash
-srun --mpi pmix -N NUM_NODES --ntasks WORLD_SIZE --ntasks-per-node=GPUS_PER_NODE --no-container-mount-home --overlap --container-image IMAGE --output batch_%x_%j.log --err batch_%x_%j.err --container-mounts PATH_TO_DYNAMO:/workspace --container-env=NATS_SERVER,ETCD_ENDPOINTS bash -c 'cd /workspace/examples/python_rs/llm/trtllm && python3 -m disaggregated.worker --engine_args llm_api_config.yaml -c disaggregated/llmapi_disaggregated_configs/multi_node_config.yaml' &
+srun --mpi pmix -N NUM_NODES --ntasks WORLD_SIZE --ntasks-per-node=GPUS_PER_NODE --no-container-mount-home --overlap --container-image IMAGE --output batch_%x_%j.log --err batch_%x_%j.err --container-mounts PATH_TO_DYNAMO:/workspace --container-env=NATS_SERVER,ETCD_ENDPOINTS bash -c 'cd /workspace/examples/trtllm && python3 -m disaggregated.worker --engine_args llm_api_config.yaml -c disaggregated/llmapi_disaggregated_configs/multi_node_config.yaml' &
 ```
 
 Once the workers are launched, you should see the output similar to the following in the worker logs.
@@ -327,7 +327,7 @@ Once the workers are launched, you should see the output similar to the followin
 
 4. Launch the disaggregated server from node1 or login node.
 ```bash
-srun --mpi pmix -N 1 --ntasks 1 --ntasks-per-node=1 --overlap --container-image IMAGE --output batch_disagg_server_%x_%j.log --err batch_disagg_server_%x_%j.err --container-mounts PATH_TO_DYNAMO:/workspace  --container-env=NATS_SERVER,ETCD_ENDPOINTS bash -c 'cd /workspace/examples/python_rs/llm/trtllm && python3 -m disaggregated.server --engine_args llm_api_config.yaml --routing-strategy round_robin' &
+srun --mpi pmix -N 1 --ntasks 1 --ntasks-per-node=1 --overlap --container-image IMAGE --output batch_disagg_server_%x_%j.log --err batch_disagg_server_%x_%j.err --container-mounts PATH_TO_DYNAMO:/workspace  --container-env=NATS_SERVER,ETCD_ENDPOINTS bash -c 'cd /workspace/examples/trtllm && python3 -m disaggregated.server --engine_args llm_api_config.yaml --routing-strategy round_robin' &
 ```
 
 5. Send requests to the disaggregated server.
