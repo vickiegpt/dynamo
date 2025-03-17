@@ -1,0 +1,35 @@
+name: Test Jupyter Notebook
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  test-notebook:
+    runs-on:
+        group: Fastchecker
+
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Set Up Python & Jupyter
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 📦 Install Jupyter
+        run: |
+          pip install notebook nbconvert
+
+      - name: 🚀 Run Jupyter Notebook
+        run: |
+          jupyter nbconvert --to notebook --execute quick_start.ipynb --output quick_start_output.ipynb
+
+      - name: ✅ Verify Notebook Execution
+        run: cat quick_start_output.ipynb
