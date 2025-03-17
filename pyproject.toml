@@ -52,6 +52,11 @@ keywords = ["llm", "genai", "inference", "nvidia", "distributed", "dynamo"]
 Repository = "https://github.com/ai-dynamo/dynamo.git"
 
 [project.optional-dependencies]
+s3 = [
+    "vllm@https://ai-dynamo-wheelhouse.s3.us-east-2.amazonaws.com/vllm-0.7.2%2Bdynamo-cp38-abi3-linux_x86_64.whl",
+    "nixl",
+]
+
 all = [
     "vllm==0.7.2+dynamo",
     "nixl",
@@ -60,6 +65,10 @@ all = [
 vllm = [
     "vllm==0.7.2+dynamo"
 ]
+
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [project.scripts]
 dynamo = "dynamo.sdk.cli.cli:cli"
