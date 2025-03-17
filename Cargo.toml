@@ -51,6 +51,7 @@ derive_builder = { version = "0.20" }
 derive-getters = { version = "0.5" }
 either = { version = "1.13", features = ["serde"] }
 futures = { version = "0.3" }
+rand = { version = "0.8.5" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 thiserror = { version = "2.0.11" }

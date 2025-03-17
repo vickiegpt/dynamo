@@ -47,7 +47,7 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 derive_builder = {workspace = true }
 futures =  { workspace = true }
-
+rand = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -63,7 +63,6 @@ async-openai = "0.27.2"
 blake3 = "1"
 bytemuck = "1.22"
 derive-getters = "0.5"
-rand = "0.9"
 regex = "1"
 rayon = "1"
 
@@ -109,11 +108,10 @@ serde-pickle = "1.2.0"
 llama-cpp-2 = { version = "0.1.86", optional = true }
 
 # tokenizers
-tokenizers = { version = "0.21.0", default-features = false, features = [
+tokenizers = { version = "0.21.1", default-features = false, features = [
   "onig",
   "esaxx_fast",
-  # Waiting for release: https://github.com/huggingface/tokenizers/issues/1736
-  # "rustls-tls",
+  "rustls-tls",
 ] }
 sentencepiece = { version = "0.11.2", optional = true }
 
