@@ -43,8 +43,8 @@ accelerating data transfers
 
 ## Quick Start Guide
 
-You can open the Jupyter Notebook version of the Quick Start guide here:  
-[quick-start.ipynb](quick-start.ipynb) 
+You can open the Jupyter Notebook version of the Quick Start guide here:
+[quick-start.ipynb](quick-start.ipynb)
 
 ## Building Dynamo
 
