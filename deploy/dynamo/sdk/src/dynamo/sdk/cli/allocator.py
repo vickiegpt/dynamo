@@ -48,7 +48,7 @@ class ResourceAllocator:
                 ResourceWarning,
                 stacklevel=3,
             )
-        self.remaining_gpus = max(0, self.remaining_gpus - count)
+        self.remaining_gpus = int(max(0, self.remaining_gpus - count))
         if count < 1:  # a fractional GPU
             try:
                 # try to find the GPU used with the same fragment
