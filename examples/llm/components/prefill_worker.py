@@ -28,12 +28,7 @@ from vllm.inputs.data import TokensPrompt
 from vllm.logger import logger as vllm_logger
 from vllm.remote_prefill import RemotePrefillParams, RemotePrefillRequest
 
-from dynamo.sdk import (
-    async_on_start,
-    dynamo_context,
-    dynamo_endpoint,
-    service,
-)
+from dynamo.sdk import async_on_start, dynamo_context, dynamo_endpoint, service
 
 
 class RequestType(BaseModel):

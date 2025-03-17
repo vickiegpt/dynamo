@@ -14,7 +14,6 @@
 # limitations under the License.
 
 
-
 import msgspec
 from utils.nixl import NixlMetadataStore
 from utils.vllm import parse_vllm_args
@@ -24,12 +23,7 @@ from vllm.entrypoints.openai.api_server import (
 from vllm.inputs.data import TokensPrompt
 from vllm.remote_prefill import RemotePrefillParams, RemotePrefillRequest
 
-from dynamo.sdk import (
-    async_on_start,
-    dynamo_context,
-    dynamo_endpoint,
-    service,
-)
+from dynamo.sdk import async_on_start, dynamo_context, dynamo_endpoint, service
 
 
 @service(
