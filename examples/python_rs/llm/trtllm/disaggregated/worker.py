@@ -233,7 +233,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
                             )
                         )
                     chunk = DisaggCompletionStreamResponse(
-                        model=self._model,
+                        model=self._model_name,
                         choices=[choice],
                     )
                     yield chunk.model_dump_json()
