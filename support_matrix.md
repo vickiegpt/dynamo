@@ -29,8 +29,8 @@ If you are using a **GPU**, the following GPU models and architectures are suppo
 
 | **Operating System**   | **Architecture**   | **Status**              |
 |------------------------|--------------------|-------------------------|
-| **Linux**              | x86_64             | Supported               |
-| **Linux**              | ARM64              | Experimental            |
+| **Ubuntu 24.04**              | x86_64             | Supported               |
+| **Ubuntu 24.04**              | ARM64              | Experimental            |
 
 > **Note**: For **Linux**, the **ARM64** support is experimental and may have limitations.
 
