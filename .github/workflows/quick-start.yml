@@ -26,6 +26,6 @@ jobs:
 
       - name: ✅ Run Dynamo
         run: |
-          dynamo run out=vllm deepseek-ai/DeepSeek-R1-Distill-Llama-8B > output.txt
+          dynamo run Qwen/Qwen2.5-3B-Instruct  > output.txt
           pip list | grep dynamo
           cat output.txt
