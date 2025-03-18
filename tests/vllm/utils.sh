@@ -118,7 +118,7 @@ get_master_node() {
 wait_for_etcd() {
   local ETCD_ENDPOINTS="$1"
   echo "Waiting for etcd to be available at $ETCD_ENDPOINTS..."
-  timeout 1200 bash -c "
+  timeout 1m bash -c "
     until curl -s $ETCD_ENDPOINTS/health > /dev/null; do
       sleep 1
     done" && return 0 || return 1
@@ -128,7 +128,7 @@ wait_for_etcd() {
 wait_for_nats() {
   local NATS_URL="$1"
   echo "Waiting for NATS to be available at $NATS_URL..."
-  timeout 1200 bash -c "
+  timeout 1m bash -c "
     until curl -s $NATS_URL/healthz > /dev/null; do
       sleep 1
     done" && return 0 || return 1
