@@ -3,11 +3,8 @@ name: Test Quick Start Guide
 on:
   push:
     branches:
-      - main
-  pull_request:
-    branches:
-      - main
-  workflow_dispatch:  # Allows manual trigger
+      - mesharma/quick-start-jupyter
+  workflow_dispatch: {}
 
 jobs:
   test-notebook:
