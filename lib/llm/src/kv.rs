@@ -20,9 +20,7 @@ pub mod reuse;
 pub mod sequence;
 pub mod storage;
 
-// #[cfg(feature = "cuda_kv")]
-// pub mod storage;
-
+use layer::KvBlockStorage;
 use reserved::*;
 
 use std::{
@@ -46,42 +44,62 @@ pub type UniqueBlock<T> = PoolItem<KvBlock<T>>;
 pub type SharedBlock<T> = SharedPoolItem<KvBlock<T>>;
 
 #[derive(Debug, Clone, Default)]
-pub struct NullStorage {}
-
-pub trait BlockStorage {
-    fn k_layer_pointer(&self, layer_id: usize) -> Result<u64, anyhow::Error> {
-        Ok(0 as usize)
-    }
-
-    fn v_layer_pointer(&self, layer_id: usize) -> Result<u64, anyhow::Error> {
-        Ok(0 as usize)
-    }
-
-    fn layer_size_in_bytes(&self) -> usize {
-        0 as usize
-    }
-}
-
-impl BlockStorage for NullStorage {
-    fn k_layer_pointer(&self, layer_id: usize) -> Result<u64, anyhow::Error> {
-        Ok(0 as usize)
-    }
-
-    fn v_layer_pointer(&self, layer_id: usize) -> Result<u64, anyhow::Error> {
-        Ok(0 as usize)
-    }
-
-    fn layer_size_in_bytes(&self) -> usize {
-        0 as usize
-    }
-}
-
-#[derive(Debug, Clone, Default)]
 pub struct KvBlock<T: BlockStorage + Send + Sync> {
     token_block: TokenBlock,
     priority: u32,
     return_tick: u64,
     storage: T,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NullStorage {}
+
+pub trait BlockStorage {
+    /// Pointer to the leading element of the key tensor for layer `layer_id`
+    /// The `u64` can be converted to a void* for use in C code
+    fn k_ptr(&self, layer_id: usize) -> Result<u64, anyhow::Error>;
+
+    /// Pointer to the leading element of the value tensor for layer `layer_id`
+    /// The `u64` can be converted to a void* for use in C code
+    fn v_ptr(&self, layer_id: usize) -> Result<u64, anyhow::Error>;
+
+    // /// Number of key-value pairs per block. This is the number of tokens in
+    // /// represented by a single block.
+    // fn tokens_count_per_block(&self) -> usize;
+
+    /// Size of the key and value tensors for layer `layer_id` in bytes
+    /// This is the size of the key or value tensor in bytes. The key and value
+    /// tensors may or may not be contiguous in memory. However, each key or value
+    /// tensor corresponds to a single block is contiguous in memory.
+    fn bytes_per_block_per_k_or_v(&self) -> usize;
+
+    /// Returns true if the key and value tensors for layer `layer_id` are contiguous
+    /// in memory. If true, the starting address of the concatenated key and value
+    /// tensors can be computed as the memory region starting at:
+    /// `k_ptr(layer_id) + 2*bytes_per_block_per_k_or_v(layer_id)`
+    fn k_and_v_are_contiguous(&self) -> bool;
+}
+
+impl BlockStorage for NullStorage {
+    fn k_ptr(&self, _layer_id: usize) -> Result<u64, anyhow::Error> {
+        Ok(0 as u64)
+    }
+
+    fn v_ptr(&self, _layer_id: usize) -> Result<u64, anyhow::Error> {
+        Ok(0 as u64)
+    }
+
+    // fn tokens_count_per_block(&self) -> usize {
+    //     0 as usize
+    // }
+
+    fn bytes_per_block_per_k_or_v(&self) -> usize {
+        0 as usize
+    }
+
+    fn k_and_v_are_contiguous(&self) -> bool {
+        false
+    }
 }
 
 // pub struct KvStorage {
@@ -130,42 +148,49 @@ pub struct KvBlockConfig {}
 
 // Host memory but special class of host memory
 pub struct PinnedBlockStorage {
-    layers: Vec<usize>,
-    bytes: usize,
+    block_id: usize,
+    block_storage: Arc<KvBlockStorage>,
 }
-pub struct DeviceStorage;
+pub struct DeviceBlockStorage {
+    block_id: usize,
+    block_storage: Arc<KvBlockStorage>,
+}
 
-pub type PinnedKvBlock = KvBlock<PinnedBlockStorage>;
-
-// Creeated from objects in layers.
-// impl PinnedBlockStorage {
-//     pub fn
-// pub into_pinner_block_storage(&self) -> Result<Vec<PinnedBlockStorage>>
-
-// }
-// layer passed in outside the bounds, need to throw an error
-// currently created with a number of layers
+pub type KvBlockPinned = KvBlock<PinnedBlockStorage>;
+pub type KvBlockDevice = KvBlock<DeviceBlockStorage>;
 
 impl BlockStorage for PinnedBlockStorage {
-    // fn layer_pointer(&self, layer_id: usize) -> Result<u64> {
-    //     self.layers.get(layer_id).copied().ok_or_else(|| {
-    //         anyhow::anyhow!(
-    //             "Invalid layer_id: {}. Must be within 0..{}",
-    //             layer_id,
-    //             self.layers.len()
-    //         )
-    //     })
-    // }
-
-    fn k_layer_pointer(&self, layer_id: usize) -> Result<u64, anyhow::Error> {
-        Ok(0 as usize)
+    fn k_ptr(&self, layer_id: usize) -> Result<u64> {
+        self.block_storage.k_ptr(self.block_id, layer_id)
     }
 
-    fn v_layer_pointer(&self, layer_id: usize) -> Result<u64, anyhow::Error> {
-        Ok(0 as usize)
+    fn v_ptr(&self, layer_id: usize) -> Result<u64> {
+        self.block_storage.v_ptr(self.block_id, layer_id)
     }
 
-    fn layer_size_in_bytes(&self) -> usize {
-        self.bytes
+    fn bytes_per_block_per_k_or_v(&self) -> usize {
+        self.block_storage.bytes_per_block_per_k_or_v()
+    }
+
+    fn k_and_v_are_contiguous(&self) -> bool {
+        self.block_storage.k_and_v_are_contiguous()
+    }
+}
+
+impl BlockStorage for DeviceBlockStorage {
+    fn k_ptr(&self, layer_id: usize) -> Result<u64> {
+        self.block_storage.k_ptr(self.block_id, layer_id)
+    }
+
+    fn v_ptr(&self, layer_id: usize) -> Result<u64> {
+        self.block_storage.v_ptr(self.block_id, layer_id)
+    }
+
+    fn bytes_per_block_per_k_or_v(&self) -> usize {
+        self.block_storage.bytes_per_block_per_k_or_v()
+    }
+
+    fn k_and_v_are_contiguous(&self) -> bool {
+        self.block_storage.k_and_v_are_contiguous()
     }
 }
