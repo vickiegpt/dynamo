@@ -11,7 +11,7 @@ on:
 
 jobs:
   test-notebook:
-    runs-on: ubuntu-latest
+    runs-on: Fastchecker
 
     steps:
       - name: 📥 Checkout Repository
@@ -22,22 +22,13 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: 📦 Install Jupyter
+      - name: 📦 Install Dynamo
         run: |
-          pip install --upgrade notebook nbconvert jupyter
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -yq python3-dev libucx0
+          pip install ai-dynamo nixl vllm==0.7.2+dynamo
 
-      - name: 🚀 Run Jupyter Notebook
+      - name: ✅ Run Dynamo
         run: |
-          set -e  # Exit immediately if any command fails
-          ls -lah  # List files to verify notebook exists
-          jupyter nbconvert --to notebook --execute quick-start.ipynb --output quick-start-output.ipynb || cat quick-start.ipynb
-
-      - name: ✅ Debug Output
-        run: |
-          ls -lah  # Check if output file exists
-          if test -f "quick-start-output.ipynb"; then
-            cat quick-start-output.ipynb
-          else
-            echo "❌ ERROR: quick_start_output.ipynb was not generated!"
-            exit 1
-          fi
+          dynamo run out=vllm deepseek-ai/DeepSeek-R1-Distill-Llama-8B > output.txt
+          cat output.txt
