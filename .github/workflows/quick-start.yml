@@ -8,7 +8,8 @@ on:
 
 jobs:
   test-notebook:
-    runs-on: Fastchecker
+    runs-on:
+        group: Fastchecker
 
     steps:
       - name: 📥 Checkout Repository
