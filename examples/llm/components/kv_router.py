@@ -126,7 +126,6 @@ class Router:
         # pull metrics for each worker
         max_waiting = 0.0
         if metrics:
-            print("[ROUTER] metrics.endpoint ", metrics.endpoints)
             for endpoint in metrics.endpoints:
                 worker_id = endpoint.worker_id
                 worker_metrics[worker_id] = {

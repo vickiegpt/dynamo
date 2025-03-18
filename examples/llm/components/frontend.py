@@ -14,15 +14,26 @@
 # limitations under the License.
 
 import subprocess
+from pathlib import Path
 
 from components.processor import Processor
 from components.routerless.worker import VllmWorkerRouterLess
 from components.worker import VllmWorker
 from pydantic import BaseModel
 
+from dynamo import sdk
 from dynamo.sdk import depends, service
 from dynamo.sdk.lib.config import ServiceConfig
 from dynamo.sdk.lib.image import DYNAMO_IMAGE
+
+
+def get_http_binary_path():
+    sdk_path = Path(sdk.__file__)
+    binary_path = sdk_path.parent / "cli/bin/http"
+    if not binary_path.exists():
+        return "http"
+    else:
+        return str(binary_path)
 
 
 class FrontendConfig(BaseModel):
@@ -61,8 +72,9 @@ class Frontend:
         )
 
         print("Starting HTTP server")
+        http_binary = get_http_binary_path()
         process = subprocess.Popen(
-            ["http", "-p", str(frontend_config.port)], stdout=None, stderr=None
+            [http_binary, "-p", str(frontend_config.port)], stdout=None, stderr=None
         )
         try:
             process.wait()
