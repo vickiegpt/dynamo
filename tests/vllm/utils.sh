@@ -123,3 +123,26 @@ wait_for_etcd() {
       sleep 1
     done" && return 0 || return 1
 }
+
+
+wait_for_nats() {
+  local NATS_URL="$1"
+  echo "Waiting for NATS to be available at $NATS_URL..."
+  timeout 1200 bash -c "
+    until curl -s $NATS_URL/healthz > /dev/null; do
+      sleep 1
+    done" && return 0 || return 1
+}
+
+get_served_model_name_and_port_from_config() {
+  local CONFIG_FILE="$1"
+  if [ ! -f "$CONFIG_FILE" ]; then
+      echo "Error: File $CONFIG_FILE not found!"
+      exit 1
+  fi
+
+  # Extract model and port from Frontend section
+  SERVED_MODEL_NAME=$(grep -A5 "Frontend:" "$CONFIG_FILE" | grep "model:" | head -n1 | cut -d ":" -f2- | tr -d " ")
+  PORT=$(grep -A5 "Frontend:" "$CONFIG_FILE" | grep "port:" | head -n1 | cut -d ":" -f2- | tr -d " ")
+
+}

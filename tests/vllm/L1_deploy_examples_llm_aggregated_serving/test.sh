@@ -15,7 +15,7 @@
 # limitations under the License.
 
 
-set -e
+set -ex
 
 
 export HF_HUB_ENABLE_HF_TRANSFER=1
@@ -26,9 +26,9 @@ rm -rf default.etcd
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 source $SCRIPT_DIR/../utils.sh
 
-SERVED_MODEL_NAME="deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+CONFIG_FILE="/workspace/examples/llm/configs/agg.yaml"
 HOST="127.0.0.1"
-PORT="8000"
+get_served_model_name_and_port_from_config $CONFIG_FILE
 env | grep VLLM_
 
 setup_cleanup_trap
@@ -37,10 +37,12 @@ nats-server -js -p 4222 -m 8222 &
 etcd \
     --listen-client-urls http://0.0.0.0:2379 \
     --advertise-client-urls http://0.0.0.0:2379 &
-sleep 3
+
+wait_for_nats "http://127.0.0.1:8222" || exit 1
+wait_for_etcd "http://127.0.0.1:2379" || exit 1
 
 cd /workspace/examples/llm
-dynamo serve graphs.agg:Frontend -f ./configs/agg.yaml &
+dynamo serve graphs.agg:Frontend -f $CONFIG_FILE &
 
 wait_for_server "$HOST:$PORT" $SERVED_MODEL_NAME || exit 1
 
