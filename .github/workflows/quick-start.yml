@@ -26,7 +26,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -yq python3-dev libucx0
-          pip install ai-dynamo nixl vllm==0.7.2+dynamo
+          pip install ai-dynamo[all]
 
       - name: ✅ Run Dynamo
         run: |
