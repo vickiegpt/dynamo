@@ -289,26 +289,26 @@ if [[ $FRAMEWORK == "VLLM" ]]; then
     NIXL_DIR="/tmp/nixl/nixl_src"
 
     # Clone original NIXL to temp directory
-    # if [ -d "$NIXL_DIR" ]; then
-    #     echo "Warning: $NIXL_DIR already exists, skipping clone"
-    # else
-    #     if [ ! -z ${GITHUB_TOKEN} ]; then
-    #         git clone https://oauth2:${GITHUB_TOKEN}@github.com/${NIXL_REPO} "$NIXL_DIR"
-    #     else
-    #         # Try HTTPS first with credential prompting disabled, fall back to SSH if it fails
-    #         if ! GIT_TERMINAL_PROMPT=0 git clone https://github.com/${NIXL_REPO} "$NIXL_DIR"; then
-    #             echo "HTTPS clone failed, falling back to SSH..."
-    #             git clone git@github.com:${NIXL_REPO} "$NIXL_DIR"
-    #         fi
-    #     fi
-    # fi
+    if [ -d "$NIXL_DIR" ]; then
+        echo "Warning: $NIXL_DIR already exists, skipping clone"
+    else
+        if [ ! -z ${GITHUB_TOKEN} ]; then
+            git clone https://oauth2:${GITHUB_TOKEN}@github.com/${NIXL_REPO} "$NIXL_DIR"
+        else
+            # Try HTTPS first with credential prompting disabled, fall back to SSH if it fails
+            if ! GIT_TERMINAL_PROMPT=0 git clone https://github.com/${NIXL_REPO} "$NIXL_DIR"; then
+                echo "HTTPS clone failed, falling back to SSH..."
+                git clone git@github.com:${NIXL_REPO} "$NIXL_DIR"
+            fi
+        fi
+    fi
 
-    # cd "$NIXL_DIR"
-    # if ! git checkout ${NIXL_COMMIT}; then
-    #     echo "ERROR: Failed to checkout NIXL commit ${NIXL_COMMIT}. The cached directory may be out of date."
-    #     echo "Please delete $NIXL_DIR and re-run the build script."
-    #     exit 1
-    # fi
+    cd "$NIXL_DIR"
+    if ! git checkout ${NIXL_COMMIT}; then
+        echo "ERROR: Failed to checkout NIXL commit ${NIXL_COMMIT}. The cached directory may be out of date."
+        echo "Please delete $NIXL_DIR and re-run the build script."
+        exit 1
+    fi
 
     BUILD_CONTEXT_ARG+=" --build-context nixl=$NIXL_DIR"
 
