@@ -25,10 +25,6 @@ rm -rf default.etcd
 
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 source $SCRIPT_DIR/../utils.sh
-
-CONFIG_FILE="/workspace/examples/llm/configs/agg_router.yaml"
-HOST="127.0.0.1"
-get_served_model_name_and_port_from_config $CONFIG_FILE
 env | grep VLLM_
 
 setup_cleanup_trap
@@ -42,8 +38,12 @@ wait_for_nats "http://127.0.0.1:8222" || exit 1
 wait_for_etcd "http://127.0.0.1:2379" || exit 1
 
 cd /workspace/examples/llm
-dynamo serve graphs.agg_router:Frontend -f $CONFIG_FILE &
+CONFIG_FILE="configs/agg_router.yaml"
+SERVED_MODEL_NAME=$(yq .Frontend.model $CONFIG_FILE)
+HOST="127.0.0.1"
+PORT=$(yq .Frontend.port $CONFIG_FILE)
 
+dynamo serve graphs.agg_router:Frontend -f $CONFIG_FILE &
 wait_for_server "$HOST:$PORT" $SERVED_MODEL_NAME || exit 1
 
 echo "Checking if responses are deterministic..."

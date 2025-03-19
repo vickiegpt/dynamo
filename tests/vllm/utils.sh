@@ -32,10 +32,12 @@ wait_for_server() {
 
     echo "Waiting for server to be ready at $host_port..."
     while [ $attempt -le $max_attempts ]; do
+        echo "Attempt $attempt"
+        echo "Trying to connect to $host_port with model $model"
         if curl -s -X POST http://$host_port/v1/chat/completions \
             -H "Content-Type: application/json" \
             -d '{
-                "model": "'$model'",
+                "model": '$model',
                 "messages": [
                     {
                         "role": "user",
@@ -132,17 +134,4 @@ wait_for_nats() {
     until curl -s $NATS_URL/healthz > /dev/null; do
       sleep 1
     done" && return 0 || return 1
-}
-
-get_served_model_name_and_port_from_config() {
-  local CONFIG_FILE="$1"
-  if [ ! -f "$CONFIG_FILE" ]; then
-      echo "Error: File $CONFIG_FILE not found!"
-      exit 1
-  fi
-
-  # Extract model and port from Frontend section
-  SERVED_MODEL_NAME=$(grep -A5 "Frontend:" "$CONFIG_FILE" | grep "model:" | head -n1 | cut -d ":" -f2- | tr -d " ")
-  PORT=$(grep -A5 "Frontend:" "$CONFIG_FILE" | grep "port:" | head -n1 | cut -d ":" -f2- | tr -d " ")
-
 }
