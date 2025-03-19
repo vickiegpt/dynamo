@@ -53,7 +53,7 @@ for i in {1..10}; do
     response=$(curl -s -X POST http://$HOST:$PORT/v1/chat/completions \
             -H "Content-Type: application/json" \
             -d '{
-                "model": "'$SERVED_MODEL_NAME'",
+                "model": '$SERVED_MODEL_NAME',
                 "messages": [
                     {
                         "role": "user",
