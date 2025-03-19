@@ -21,11 +21,7 @@ import signal
 import uvloop
 from common.base_engine import BaseTensorrtLLMEngine, TensorrtLLMEngineConfig
 from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
-from common.processor import (
-    DisaggChatProcessor,
-    merge_promises,
-    parse_chat_message_content,
-)
+from common.processor import ChatProcessor, merge_promises, parse_chat_message_content
 from common.protocol import (
     DisaggChatCompletionRequest,
     DisaggChatCompletionStreamResponse,
@@ -102,7 +98,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
             raise error
 
         logger.debug(f"Received request: {request}")
-        chat_processor = DisaggChatProcessor(self._model, self._tokenizer, request)
+        chat_processor = ChatProcessor(self._model, self._tokenizer, request)
 
         self._ongoing_request_count += 1
 
@@ -131,41 +127,48 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
                 )
             )
 
-            final_result = None
-            async for result in self._llm_engine.generate_async(
+            # final_result = None
+            # async for result in self._llm_engine.generate_async(
+            #     prompt,
+            #     sampling_params,
+            #     streaming=request.stream,
+            #     disaggregated_params=disaggregated_params,
+            # ):
+            #     final_result = result
+            #     logger.debug(f"Generated result: {result}")
+            #     # if self.server_config.type == "ctx":
+            #     #     disaggregated_response = chat_processor.get_chat_stream_response(
+            #     #         request.id,
+            #     #         result,
+            #     #         first_iteration=True,
+            #     #     )
+            #     #     disaggregated_response.disaggregated_params = (
+            #     #         DisaggregatedTypeConverter.to_oai_disaggregated_params(
+            #     #             result.outputs[0].disaggregated_params
+            #     #         )
+            #     #     )
+            #     #     yield disaggregated_response.model_dump_json()
+            #     yield chat_processor.get_chat_stream_response(
+            #         request.id,
+            #         result,
+            #     ).model_dump_json()
+            promise = self._llm_engine.generate_async(
                 prompt,
                 sampling_params,
                 streaming=request.stream,
                 disaggregated_params=disaggregated_params,
-            ):
-                final_result = result
-                logger.debug(f"Generated result: {result}")
-                if self.server_config.type == "ctx":
-                    disaggregated_response = chat_processor.get_chat_stream_response(
-                        request.id,
-                        result,
-                        first_iteration=True,
-                    )
-                    disaggregated_response.disaggregated_params = (
-                        DisaggregatedTypeConverter.to_oai_disaggregated_params(
-                            result.outputs[0].disaggregated_params
-                        )
-                    )
-                    yield disaggregated_response.model_dump_json()
-                else:
-                    yield chat_processor.get_chat_stream_response(
-                        request.id,
-                        result,
-                        first_iteration=False,
-                    ).model_dump_json(
-                        exclude_unset=True, exclude={"disaggregated_params"}
-                    )
+            )
+            response_generator = chat_processor.stream_response(
+                request, request.id, conversation, promise
+            )
+            async for response in response_generator:
+                yield response
 
-            if request.stream_options and request.stream_options.include_usage:
-                yield chat_processor.create_final_stream_response(
-                    request.id,
-                    final_result,
-                ).model_dump_json(exclude_unset=True, exclude={"disaggregated_params"})
+            # if request.stream_options and request.stream_options.include_usage:
+            #     yield chat_processor.create_final_stream_response(
+            #         request.id,
+            #         final_result,
+            #     ).model_dump_json(exclude_unset=True, exclude={"disaggregated_params"})
 
         except CppExecutorError:
             # If internal executor error is raised, shutdown the server

@@ -42,7 +42,6 @@ from tensorrt_llm.serve.openai_protocol import (
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionRequest,
     ChatCompletionResponseStreamChoice,
-    ChatCompletionStreamResponse,
     CompletionRequest,
     DeltaMessage,
     FunctionCall,
@@ -158,7 +157,7 @@ class ChatProcessor(BaseChatProcessor):
                     delta=DeltaMessage(role=role, content=content),
                     finish_reason=None,
                 )
-                chunk = ChatCompletionStreamResponse(
+                chunk = DisaggChatCompletionStreamResponse(
                     id=request_id,
                     created=int(time.time()),
                     object="chat.completion.chunk",
@@ -223,7 +222,7 @@ class ChatProcessor(BaseChatProcessor):
                     choice.finish_reason = output.finish_reason
                     choice.stop_reason = output.stop_reason
                     finish_reason_sent[i] = True
-                chunk = ChatCompletionStreamResponse(
+                chunk = DisaggChatCompletionStreamResponse(
                     id=request_id,
                     created=int(time.time()),
                     object="chat.completion.chunk",
@@ -244,7 +243,7 @@ class ChatProcessor(BaseChatProcessor):
                 total_tokens=prompt_tokens + completion_tokens,
             )
 
-            final_usage_chunk = ChatCompletionStreamResponse(
+            final_usage_chunk = DisaggChatCompletionStreamResponse(
                 id=request_id,
                 created=int(time.time()),
                 object="chat.completion",
