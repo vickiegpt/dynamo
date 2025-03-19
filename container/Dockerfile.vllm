@@ -32,7 +32,6 @@ ARG MOFED_VERSION=24.10-1.1.4.0
 ARG PYTHON_VERSION=3.12
 ARG NSYS_URL=https://developer.nvidia.com/downloads/assets/tools/secure/nsight-systems/2025_1/
 ARG NSYS_PKG=NsightSystems-linux-cli-public-2025.1.1.131-3554042.deb
-ENV DEBIAN_FRONTEND=noninteractive 
 
 RUN apt-get update -y && \
     DEBIAN_FRONTEND=noninteractive apt-get -y install curl \
