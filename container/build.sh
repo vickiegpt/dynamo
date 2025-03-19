@@ -58,7 +58,7 @@ TENSORRTLLM_BASE_IMAGE_TAG=krish-fix-trtllm-build.23766174
 TENSORRTLLM_PIP_WHEEL_PATH=""
 
 VLLM_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
-VLLM_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
+VLLM_BASE_IMAGE_TAG="24.10-cuda12.6-devel-ubuntu22.04"
 
 NIXL_COMMIT=f35faf8ba4e725f1724177d0772200481d1d3446
 NIXL_REPO=ai-dynamo/nixl.git
@@ -289,26 +289,26 @@ if [[ $FRAMEWORK == "VLLM" ]]; then
     NIXL_DIR="/tmp/nixl/nixl_src"
 
     # Clone original NIXL to temp directory
-    if [ -d "$NIXL_DIR" ]; then
-        echo "Warning: $NIXL_DIR already exists, skipping clone"
-    else
-        if [ ! -z ${GITHUB_TOKEN} ]; then
-            git clone https://oauth2:${GITHUB_TOKEN}@github.com/${NIXL_REPO} "$NIXL_DIR"
-        else
-            # Try HTTPS first with credential prompting disabled, fall back to SSH if it fails
-            if ! GIT_TERMINAL_PROMPT=0 git clone https://github.com/${NIXL_REPO} "$NIXL_DIR"; then
-                echo "HTTPS clone failed, falling back to SSH..."
-                git clone git@github.com:${NIXL_REPO} "$NIXL_DIR"
-            fi
-        fi
-    fi
+    # if [ -d "$NIXL_DIR" ]; then
+    #     echo "Warning: $NIXL_DIR already exists, skipping clone"
+    # else
+    #     if [ ! -z ${GITHUB_TOKEN} ]; then
+    #         git clone https://oauth2:${GITHUB_TOKEN}@github.com/${NIXL_REPO} "$NIXL_DIR"
+    #     else
+    #         # Try HTTPS first with credential prompting disabled, fall back to SSH if it fails
+    #         if ! GIT_TERMINAL_PROMPT=0 git clone https://github.com/${NIXL_REPO} "$NIXL_DIR"; then
+    #             echo "HTTPS clone failed, falling back to SSH..."
+    #             git clone git@github.com:${NIXL_REPO} "$NIXL_DIR"
+    #         fi
+    #     fi
+    # fi
 
-    cd "$NIXL_DIR"
-    if ! git checkout ${NIXL_COMMIT}; then
-        echo "ERROR: Failed to checkout NIXL commit ${NIXL_COMMIT}. The cached directory may be out of date."
-        echo "Please delete $NIXL_DIR and re-run the build script."
-        exit 1
-    fi
+    # cd "$NIXL_DIR"
+    # if ! git checkout ${NIXL_COMMIT}; then
+    #     echo "ERROR: Failed to checkout NIXL commit ${NIXL_COMMIT}. The cached directory may be out of date."
+    #     echo "Please delete $NIXL_DIR and re-run the build script."
+    #     exit 1
+    # fi
 
     BUILD_CONTEXT_ARG+=" --build-context nixl=$NIXL_DIR"
 

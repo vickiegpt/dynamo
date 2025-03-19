@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ARG BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
-ARG BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
+ARG BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu22.04"
 
 ARG RUNTIME_IMAGE="nvcr.io/nvidia/cuda"
-ARG RUNTIME_IMAGE_TAG="12.8.1-runtime-ubuntu24.04"
+ARG RUNTIME_IMAGE_TAG="12.8.1-runtime-ubuntu22.04"
 
 ARG GENAI_PERF_TAG="25d0188713adc47868d6b3f22426375237a90529"
 
@@ -32,8 +32,10 @@ ARG MOFED_VERSION=24.10-1.1.4.0
 ARG PYTHON_VERSION=3.12
 ARG NSYS_URL=https://developer.nvidia.com/downloads/assets/tools/secure/nsight-systems/2025_1/
 ARG NSYS_PKG=NsightSystems-linux-cli-public-2025.1.1.131-3554042.deb
+ENV DEBIAN_FRONTEND=noninteractive 
 
-RUN apt-get update -y && apt-get -y install curl \
+RUN apt-get update -y && \
+    DEBIAN_FRONTEND=noninteractive apt-get -y install curl \
     git \
     libnuma-dev \
     numactl \
@@ -71,9 +73,10 @@ RUN apt-get update -y && apt-get -y install curl \
     ibverbs-utils \
     libibmad-dev
 
-RUN apt-get install -y linux-tools-common linux-tools-generic ethtool iproute2
-RUN apt-get install -y dkms linux-headers-generic
-RUN apt-get install -y meson ninja-build uuid-dev gdb
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y linux-tools-common linux-tools-generic ethtool iproute2
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y dkms linux-headers-generic
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y ninja-build uuid-dev gdb && \
+    pip3 install --upgrade meson
 
 RUN apt install -y libglib2.0-0
 RUN wget ${NSYS_URL}${NSYS_PKG} &&\
@@ -81,10 +84,11 @@ RUN wget ${NSYS_URL}${NSYS_PKG} &&\
     rm ${NSYS_PKG}
 
 RUN cd /usr/local/src && \
-    curl -fSsL "https://content.mellanox.com/ofed/MLNX_OFED-${MOFED_VERSION}/MLNX_OFED_LINUX-${MOFED_VERSION}-ubuntu24.04-x86_64.tgz" -o mofed.tgz && \
+    curl -fSsL "https://content.mellanox.com/ofed/MLNX_OFED-${MOFED_VERSION}/MLNX_OFED_LINUX-${MOFED_VERSION}-ubuntu22.04-x86_64.tgz" -o mofed.tgz && \
     tar -xf /usr/local/src/mofed.tgz && \
     cd MLNX_OFED_LINUX-* && \
-    apt-get update && apt-get install -y --no-install-recommends \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ./DEBS/libibverbs* ./DEBS/ibverbs-providers* ./DEBS/librdmacm* ./DEBS/libibumad* && \
     rm -rf /var/lib/apt/lists/* /usr/local/src/* mofed.tgz
 
@@ -265,23 +269,24 @@ RUN cargo build --release --locked --features mistralrs,sglang,vllm,python && \
 
 COPY deploy/dynamo/sdk /workspace/deploy/dynamo/sdk
 # Build dynamo wheel
-RUN source /opt/dynamo/venv/bin/activate && \
-    cd /workspace/lib/bindings/python && \
-    uv build --wheel --out-dir /workspace/dist && \
-    uv pip install /workspace/dist/ai_dynamo_runtime*cp312*.whl && \
-    cd /workspace && \
-    uv build --wheel --out-dir /workspace/dist && \
-    uv pip install /workspace/dist/ai_dynamo*any.whl
+# RUN source /opt/dynamo/venv/bin/activate && \
+#     cd /workspace/lib/bindings/python && \
+#     uv build --wheel --out-dir /workspace/dist && \
+#     uv pip install /workspace/dist/ai_dynamo_runtime*cp312*.whl && \
+#     cd /workspace && \
+#     uv build --wheel --out-dir /workspace/dist && \
+#     uv pip install /workspace/dist/ai_dynamo*any.whl
 
-# Package the bindings
-RUN mkdir -p /opt/dynamo/bindings/wheels && \
-    mkdir /opt/dynamo/bindings/lib && \
-    cp dist/ai_dynamo*cp312*.whl /opt/dynamo/bindings/wheels/. && \
-    cp target/release/libdynamo_llm_capi.so /opt/dynamo/bindings/lib/. && \
-    cp -r lib/bindings/c/include /opt/dynamo/bindings/.
+# # Package the bindings
+# RUN mkdir -p /opt/dynamo/bindings/wheels && \
+#     mkdir /opt/dynamo/bindings/lib && \
+#     cp dist/ai_dynamo*cp312*.whl /opt/dynamo/bindings/wheels/. && \
+#     cp target/release/libdynamo_llm_capi.so /opt/dynamo/bindings/lib/. && \
+#     cp -r lib/bindings/c/include /opt/dynamo/bindings/.
 
 # Tell vllm to use the Dynamo LLM C API for KV Cache Routing
 ENV VLLM_KV_CAPI_PATH="/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
+ENV LD_LIBRARY_PATH=/root/.local/share/uv/python/cpython-3.12.9-linux-x86_64-gnu/lib/:$LD_LIBRARY_PATH
 
 # Copy launch banner
 RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/launch_message.txt \
