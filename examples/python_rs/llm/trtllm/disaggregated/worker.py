@@ -22,6 +22,7 @@ import uvloop
 from common.base_engine import BaseTensorrtLLMEngine, TensorrtLLMEngineConfig
 from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
 from common.processor import ChatProcessor, merge_promises, parse_chat_message_content
+from common.generators import chat_generator
 from common.protocol import (
     DisaggChatCompletionRequest,
     DisaggChatCompletionStreamResponse,
@@ -92,7 +93,6 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         if self._llm_engine is None:
             raise RuntimeError("Engine not initialized")
 
-        # Check if there are any errors in the error queue.
         if self._error_queue.qsize() > 0:
             error = self._error_queue.get()
             raise error
@@ -102,47 +102,10 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         self._ongoing_request_count += 1
 
         try:
-            conversation = []
-            for message in request.messages:
-                conversation.extend(parse_chat_message_content(message))
-            tool_dicts = (
-                None
-                if request.tools is None
-                else [tool.model_dump() for tool in request.tools]
-            )
-            prompt: str = self._tokenizer.apply_chat_template(
-                conversation=conversation,
-                tokenize=False,
-                add_generation_prompt=request.add_generation_prompt,
-                tools=tool_dicts,
-                documents=request.documents,
-                chat_template=request.chat_template,
-                **(request.chat_template_kwargs or {}),
-            )
-            sampling_params = request.to_sampling_params()
-            disaggregated_params = (
-                DisaggregatedTypeConverter.to_llm_disaggregated_params(
-                    request.disaggregated_params
-                )
-            )
-
-            async for response in self._llm_engine.generate_async(
-                prompt,
-                sampling_params,
-                streaming=request.stream,
-                disaggregated_params=disaggregated_params,
-            ):
-                if self.server_config.type == "ctx":
-                    yield json.loads(self.chat_processor.yield_first_chat(request, request.id, response))
-                else:
-                    raw_response = self.chat_processor.create_chat_stream_response(
-                        request, request.id, response, conversation, first_iteration=False
-                    )
-                    yield json.loads(raw_response)
-
-
+            async for response in chat_generator(self, request, is_disaggregated=True):
+                yield response
+        
         except CppExecutorError:
-            # If internal executor error is raised, shutdown the server
             signal.raise_signal(signal.SIGINT)
         except Exception as e:
             raise RuntimeError("Failed to generate: " + str(e))
@@ -157,7 +120,6 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         if self._llm_engine is None:
             raise RuntimeError("Engine not initialized")
 
-        # Check if there are any errors in the error queue.
         if self._error_queue.qsize() > 0:
             error = self._error_queue.get()
             raise error
@@ -199,7 +161,6 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
             async for response in response_generator:
                 yield json.loads(response)
         except CppExecutorError:
-            # If internal executor error is raised, shutdown the server
             signal.raise_signal(signal.SIGINT)
         except Exception as e:
             raise RuntimeError("Failed to generate: " + str(e))

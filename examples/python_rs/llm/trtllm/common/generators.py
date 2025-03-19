@@ -20,19 +20,18 @@ import uuid
 
 from common.base_engine import BaseTensorrtLLMEngine
 from common.processor import merge_promises, parse_chat_message_content
+from common.protocol import DisaggregatedTypeConverter
 from tensorrt_llm.executor import CppExecutorError
 from tensorrt_llm.logger import logger
 
 logger.set_level("info")
 
 
-# TODO: support disaggregated as well
-async def chat_generator(engine: BaseTensorrtLLMEngine, request):
+async def chat_generator(engine: BaseTensorrtLLMEngine, request, is_disaggregated: bool = False):
     if engine._llm_engine is None:
         raise RuntimeError("Engine not initialized")
 
     logger.debug(f"Received chat request: {request}")
-    request_id = str(uuid.uuid4())
     engine._ongoing_request_count += 1
 
     try:
@@ -54,16 +53,28 @@ async def chat_generator(engine: BaseTensorrtLLMEngine, request):
             **(request.chat_template_kwargs or {}),
         )
         sampling_params = request.to_sampling_params()
+        disaggregated_params = None
+        if is_disaggregated:
+            disaggregated_params = (
+                DisaggregatedTypeConverter.to_llm_disaggregated_params(
+                    request.disaggregated_params
+                )
+            )
 
         async for response in engine._llm_engine.generate_async(
             prompt,
             sampling_params,
             streaming=request.stream,
+            disaggregated_params=disaggregated_params,
         ):
-            raw_response = engine.chat_processor.create_chat_stream_response(
-                request, request_id, response, conversation
-            )
-            yield json.loads(raw_response)
+            if is_disaggregated and engine.server_config.type == "ctx":
+                response_data = engine.chat_processor.yield_first_chat(request, request.id, response)
+            else:
+                response_data = engine.chat_processor.create_chat_stream_response(
+                    request, request.id, response, conversation,
+                    first_iteration=(not is_disaggregated)
+                )
+            yield json.loads(response_data)
 
         engine._ongoing_request_count -= 1
     except CppExecutorError:

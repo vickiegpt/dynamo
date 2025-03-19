@@ -245,12 +245,12 @@ class ChatProcessor(BaseChatProcessor):
                 choices=[choice],
                 model=self.model,
             )
-            print("chunk: ", chunk)
             chunk.usage = self._stream_usage_info(
                 request, prompt_tokens, output.length
             )
             return chunk.model_dump_json()
 
+        # TODO: make request.stream_options.include_usage = True when stream=False in rust
         if request.stream_options and request.stream_options.include_usage:
             completion_tokens = sum(output.length for output in promise.outputs)
             final_usage = UsageInfo(

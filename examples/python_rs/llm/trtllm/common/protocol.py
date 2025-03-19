@@ -34,10 +34,12 @@ from tensorrt_llm.serve.openai_protocol import (
 # The max_tokens is being deprecated in favor of max_completion_tokens.
 # However, TRTLLM protocol might still refer it as max_tokens.
 class AdaptedCompletionRequest(CompletionRequest):
+    id: str = Field(default_factory=lambda: f"cmpl-{str(uuid.uuid4().hex)}")
     max_completion_tokens: Optional[int] = None
 
 
 class AdaptedChatCompletionRequest(ChatCompletionRequest):
+    id: str = Field(default_factory=lambda: f"chatcmpl-{str(uuid.uuid4().hex)}")
     max_completion_tokens: Optional[int] = None
 
 
@@ -96,7 +98,6 @@ class DisaggregatedTypeConverter:
 
 
 class DisaggChatCompletionRequest(AdaptedChatCompletionRequest):
-    id: str = Field(default_factory=lambda: f"cmpl-{str(uuid.uuid4().hex)}")
     disaggregated_params: Optional[DisaggregatedParams] = Field(default=None)
 
 
