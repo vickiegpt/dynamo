@@ -27,6 +27,7 @@ from common.protocol import (
     DisaggChatCompletionStreamResponse,
     DisaggCompletionStreamResponse,
     DisaggregatedTypeConverter,
+    AdaptedCompletionRequest
 )
 from mpi4py.futures import MPICommExecutor
 from mpi4py.MPI import COMM_WORLD
@@ -113,7 +114,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         self._start_threads()
         self._ongoing_request_count -= 1
 
-    @dynamo_endpoint(CompletionRequest, DisaggCompletionStreamResponse)
+    @dynamo_endpoint(AdaptedCompletionRequest, DisaggCompletionStreamResponse)
     async def generate_completions(self, request):
         logger.debug(f"[worker] worker_id: {self._worker_id} received request")
         if self._llm_engine is None:

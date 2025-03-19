@@ -25,6 +25,7 @@ from common.protocol import (
     DisaggChatCompletionRequest,
     DisaggChatCompletionStreamResponse,
     DisaggCompletionStreamResponse,
+    AdaptedCompletionRequest
 )
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.openai_protocol import CompletionRequest, DisaggregatedParams
@@ -68,9 +69,13 @@ class DisaggServer(ChatProcessorMixin):
             f"Initialized Disaggregated Server with routing strategy: {self.routing_strategy}"
         )
 
-    async def _get_ctx_resp(self, request, ctx_client):
-        logger.debug(f"Received request {request}")
+   async def _generate(self, request, ctx_client, gen_client, response_cls):
+        request.skip_special_tokens = False
+        request.add_special_tokens = False
+        request.spaces_between_special_tokens = False
+        gen_req = copy.deepcopy(request)
 
+        request.max_tokens = 1
         request.disaggregated_params = DisaggregatedParams(request_type="context_only")
         logger.debug(f"[router] Sending request to context server: {request}")
 
@@ -107,25 +112,7 @@ class DisaggServer(ChatProcessorMixin):
         logger.debug(
             f"[router] received response from context server: {ctx_resp[0].data()}"
         )
-        return ctx_resp[0].data()
-
-    # TODO (shreyasm): The only reason we cant further combine the two methods below is
-    # because the disagg params are in different locations.
-    # Disagg params should be in under the choices field in the response object.
-    # This is the case for completions but not for chat.
-
-    @dynamo_endpoint(CompletionRequest, DisaggCompletionStreamResponse)
-    async def generate_completion(self, request):
-        # These settings are needed to satisfy request checks.
-        request.skip_special_tokens = False
-        request.add_special_tokens = False
-        request.spaces_between_special_tokens = False
-
-        gen_req = copy.deepcopy(request)
-
-        request.max_tokens = 1
-        ctx_resp = await self._get_ctx_resp(request, self.ctx_completion_client)
-        ctx_resp_obj = DisaggCompletionStreamResponse.model_validate(ctx_resp)
+        ctx_resp_obj = response_cls.model_validate(ctx_resp[0].data())
 
         gen_req.disaggregated_params = DisaggregatedParams.model_validate(
             ctx_resp_obj.choices[0].disaggregated_params
@@ -139,53 +126,23 @@ class DisaggServer(ChatProcessorMixin):
         )
 
         logger.debug(f"[router] Sending request to generation server: {gen_req}")
-        async for response in await self.gen_completion_client.round_robin(
+        async for response in await gen_client.round_robin(
             gen_req.model_dump_json()
         ):
             logger.debug(
                 f"[router] Received response from generation server: {response.data()}"
             )
-            gen_resp_obj = DisaggCompletionStreamResponse.model_validate(
-                response.data()
-            )
+            gen_resp_obj = response_cls.model_validate(response.data())
             yield json.loads(gen_resp_obj.model_dump_json(exclude_unset=True))
+
+
+    @dynamo_endpoint(AdaptedCompletionRequest, DisaggCompletionStreamResponse)
+    async def generate_completion(self, request):
+        await self._generate(request, self.ctx_completion_client, self.gen_completion_client, DisaggCompletionStreamResponse)
 
     @dynamo_endpoint(DisaggChatCompletionRequest, DisaggChatCompletionStreamResponse)
     async def generate_chat(self, request):
-        # These settings are needed to satisfy request checks.
-        request.skip_special_tokens = False
-        request.add_special_tokens = False
-        request.spaces_between_special_tokens = False
-
-        gen_req = copy.deepcopy(request)
-
-        request.max_completion_tokens = 1
-        ctx_resp = await self._get_ctx_resp(request, self.ctx_chat_client)
-        ctx_resp_obj = DisaggChatCompletionStreamResponse.model_validate(ctx_resp)
-
-        gen_req.disaggregated_params = DisaggregatedParams.model_validate(
-            ctx_resp_obj.choices[0].disaggregated_params
-        )
-        gen_req.disaggregated_params.request_type = "generation_only"
-
-        yield json.loads(
-            ctx_resp_obj.model_dump_json(
-                exclude_unset=True, exclude={"disaggregated_params"}
-            )
-        )
-
-        logger.debug(f"[router] Sending request to generation server: {gen_req}")
-        async for response in await self.gen_chat_client.round_robin(
-            gen_req.model_dump_json()
-        ):
-            logger.debug(
-                f"[router] Received response from generation server: {response.data()}"
-            )
-            gen_resp_obj = DisaggChatCompletionStreamResponse.model_validate(
-                response.data()
-            )
-            print("gen_resp_obj: ", gen_resp_obj)
-            yield json.loads(gen_resp_obj.model_dump_json(exclude_unset=True))
+        await self._generate(request, self.ctx_chat_client, self.gen_chat_client, DisaggChatCompletionStreamResponse)
 
 
 @dynamo_worker()

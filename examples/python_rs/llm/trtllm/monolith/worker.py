@@ -43,7 +43,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
     @dynamo_endpoint(AdaptedChatCompletionRequest, ChatCompletionStreamResponse)
     async def generate_chat(self, request):
         if request.max_completion_tokens is not None:
-            request.max_completion_tokens = request.max_completion_tokens
+            request.max_tokens = request.max_completion_tokens
         async for response in chat_generator(self, request):
             yield response
         self._start_threads()
