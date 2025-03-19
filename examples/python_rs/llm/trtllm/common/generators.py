@@ -55,16 +55,15 @@ async def chat_generator(engine: BaseTensorrtLLMEngine, request):
         )
         sampling_params = request.to_sampling_params()
 
-        promise = engine._llm_engine.generate_async(
+        async for response in engine._llm_engine.generate_async(
             prompt,
             sampling_params,
             streaming=request.stream,
-        )
-        response_generator = engine.chat_processor.stream_response(
-            request, request_id, conversation, promise
-        )
-        async for response in response_generator:
-            yield response
+        ):
+            raw_response = engine.chat_processor.create_chat_stream_response(
+                request, request_id, response, conversation
+            )
+            yield json.loads(raw_response)
 
         engine._ongoing_request_count -= 1
     except CppExecutorError:

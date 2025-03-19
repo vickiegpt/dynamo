@@ -184,7 +184,7 @@ class ChatProcessor(BaseChatProcessor):
 
         prompt_tokens = len(response.prompt_token_ids)
         if first_iteration:
-            return f"data: {self.yield_first_chat(request, request_id, response)} \n\n"
+            return self.yield_first_chat(request, request_id, response)
 
             if request.echo:
                 last_msg_content = ""
@@ -196,7 +196,7 @@ class ChatProcessor(BaseChatProcessor):
                     last_msg_content = conversation[-1]["content"]
 
                 if last_msg_content:
-                    return f"data: {self.yield_first_chat(request, request_id, response, content=last_msg_content)}\n\n"
+                    return self.yield_first_chat(request, request_id, response, content=last_msg_content)
         first_iteration = False
 
         for output in response.outputs:
