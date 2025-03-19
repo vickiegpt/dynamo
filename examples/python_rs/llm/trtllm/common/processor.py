@@ -32,6 +32,7 @@ from common.protocol import (
     DisaggCompletionResponseStreamChoice,
     DisaggCompletionStreamResponse,
     DisaggregatedTypeConverter,
+    DisaggChatCompletionResponseStreamChoice
 )
 from openai.types.chat import ChatCompletionMessageParam
 from tensorrt_llm.llmapi.llm import RequestOutput
@@ -50,7 +51,7 @@ from tensorrt_llm.serve.openai_protocol import (
 )
 from transformers import AutoTokenizer
 
-logger.set_level("info")
+logger.set_level("debug")
 
 
 class ConversationMessage(TypedDict):
@@ -136,104 +137,119 @@ class ChatProcessor(BaseChatProcessor):
     def __init__(self, model: str, tokenizer: AutoTokenizer):
         super().__init__(model, tokenizer)
 
-    async def _chat_stream_generator(
+    def yield_first_chat(
         self,
         request: ChatCompletionRequest,
         request_id: str,
+        response: RequestOutput,
+        content: str | None = None
+    ):
+        role = self._get_role(request)
+        num_choices = 1 if request.n is None else request.n
+        num_tokens = len(response.prompt_token_ids)
+        content = response.outputs[0].text_diff
+        
+        for i in range(num_choices):
+            choice = DisaggChatCompletionResponseStreamChoice(
+                index=i,
+                delta=DeltaMessage(role=role, content=content),
+                finish_reason=None,
+            )
+            if response.outputs[0].disaggregated_params is not None:
+                choice.disaggregated_params = (
+                    DisaggregatedTypeConverter.to_oai_disaggregated_params(
+                        response.outputs[0].disaggregated_params
+                    )
+                )
+            chunk = DisaggChatCompletionStreamResponse(
+                id=request_id,
+                choices=[choice],
+                model=self.model,
+            )
+            chunk.usage = self._stream_usage_info(request, num_tokens, 0)
+
+            return chunk.model_dump_json()
+    
+    def create_chat_stream_response(
+        self,
+        request: ChatCompletionRequest,
+        request_id: str,
+        response: RequestOutput,
         conversation: List[Dict[str, Any]],
-        promise: RequestOutput,
-    ) -> AsyncGenerator[str, None]:
-        first_iteration = True
+        first_iteration: bool = True,
+    ) -> str:
         num_choices = 1 if request.n is None else request.n
         finish_reason_sent = [False] * num_choices
         role = self._get_role(request)
 
-        def yield_first_chat(
-            num_tokens: int, role: str | None = None, content: str | None = None
-        ):
-            for i in range(num_choices):
-                choice_data = ChatCompletionResponseStreamChoice(
-                    index=i,
-                    delta=DeltaMessage(role=role, content=content),
-                    finish_reason=None,
-                )
-                chunk = DisaggChatCompletionStreamResponse(
-                    id=request_id,
-                    created=int(time.time()),
-                    object="chat.completion.chunk",
-                    choices=[choice_data],
-                    model=self.model,
-                )
-                chunk.usage = self._stream_usage_info(request, num_tokens, 0)
+        prompt_tokens = len(response.prompt_token_ids)
+        if first_iteration:
+            return f"data: {self.yield_first_chat(request, request_id, response)} \n\n"
 
-                data = chunk.model_dump_json(exclude_unset=True)
-                return data
-
-        async for res in promise:
-            prompt_tokens = len(res.prompt_token_ids)
-            if first_iteration:
-                yield f"data: {yield_first_chat(prompt_tokens, role=role)} \n\n"
-
-                if request.echo:
-                    last_msg_content = ""
-                    if (
-                        conversation
-                        and conversation[-1].get("content")
-                        and conversation[-1].get("role") == role
-                    ):
-                        last_msg_content = conversation[-1]["content"]
-
-                    if last_msg_content:
-                        yield f"data: {yield_first_chat(prompt_tokens, content=last_msg_content)}\n\n"
-            first_iteration = False
-
-            for output in res.outputs:
-                i = output.index
-
-                if finish_reason_sent[i]:
-                    continue
-
-                delta_text = output.text_diff
+            if request.echo:
+                last_msg_content = ""
                 if (
-                    request.tool_choice
-                    and type(request.tool_choice) is ChatCompletionNamedToolChoiceParam
+                    conversation
+                    and conversation[-1].get("content")
+                    and conversation[-1].get("role") == role
                 ):
-                    delta_message = DeltaMessage(
-                        tool_calls=[
-                            ToolCall(
-                                function=FunctionCall(
-                                    name=request.tool_choice.function.name,
-                                    arguments=delta_text,
-                                )
-                            )
-                        ]
-                    )
-                else:
-                    delta_message = DeltaMessage(content=delta_text)
+                    last_msg_content = conversation[-1]["content"]
 
-                choice = ChatCompletionResponseStreamChoice(
-                    index=i, delta=delta_message, finish_reason=None
+                if last_msg_content:
+                    return f"data: {self.yield_first_chat(request, request_id, response, content=last_msg_content)}\n\n"
+        first_iteration = False
+
+        for output in response.outputs:
+            i = output.index
+
+            if finish_reason_sent[i]:
+                continue
+
+            delta_text = output.text_diff
+            if (
+                request.tool_choice
+                and type(request.tool_choice) is ChatCompletionNamedToolChoiceParam
+            ):
+                delta_message = DeltaMessage(
+                    tool_calls=[
+                        ToolCall(
+                            function=FunctionCall(
+                                name=request.tool_choice.function.name,
+                                arguments=delta_text,
+                            )
+                        )
+                    ]
                 )
-                if request.logprobs:
-                    logprobs = output.logprobs_diff
-                    token_ids = output.token_ids_diff
-                    choice.logprobs = self._create_logprobs(token_ids, logprobs)
-                if output.finish_reason is not None:
-                    choice.finish_reason = output.finish_reason
-                    choice.stop_reason = output.stop_reason
-                    finish_reason_sent[i] = True
-                chunk = DisaggChatCompletionStreamResponse(
-                    id=request_id,
-                    created=int(time.time()),
-                    object="chat.completion.chunk",
-                    choices=[choice],
-                    model=self.model,
+            else:
+                delta_message = DeltaMessage(content=delta_text, role=role)
+
+            choice = DisaggChatCompletionResponseStreamChoice(
+                index=i, delta=delta_message, finish_reason=None
+            )
+            if request.logprobs:
+                logprobs = output.logprobs_diff
+                token_ids = output.token_ids_diff
+                choice.logprobs = self._create_logprobs(token_ids, logprobs)
+            if output.finish_reason is not None:
+                choice.finish_reason = output.finish_reason
+                choice.stop_reason = output.stop_reason
+                finish_reason_sent[i] = True
+            if output.disaggregated_params is not None:
+                choice.disaggregated_params = (
+                    DisaggregatedTypeConverter.to_oai_disaggregated_params(
+                        output.disaggregated_params
+                    )
                 )
-                chunk.usage = self._stream_usage_info(
-                    request, prompt_tokens, output.length
-                )
-                data = chunk.model_dump_json(exclude_unset=True)
-                yield f"data: {data}\n\n"
+            chunk = DisaggChatCompletionStreamResponse(
+                id=request_id,
+                choices=[choice],
+                model=self.model,
+            )
+            print("chunk: ", chunk)
+            chunk.usage = self._stream_usage_info(
+                request, prompt_tokens, output.length
+            )
+            return chunk.model_dump_json()
 
         if request.stream_options and request.stream_options.include_usage:
             completion_tokens = sum(output.length for output in promise.outputs)
@@ -245,146 +261,12 @@ class ChatProcessor(BaseChatProcessor):
 
             final_usage_chunk = DisaggChatCompletionStreamResponse(
                 id=request_id,
-                created=int(time.time()),
-                object="chat.completion",
                 choices=[],
                 model=self.model,
                 usage=final_usage,
             )
-            final_usage_data = final_usage_chunk.model_dump_json()
-            yield f"data: {final_usage_data}\n\n"
-        yield "data: [DONE]\n\n"
-
-    async def stream_response(
-        self,
-        request: ChatCompletionRequest,
-        request_id: str,
-        conversation: List[Dict[str, Any]],
-        promise: RequestOutput,
-    ) -> AsyncGenerator[str, None]:
-        assert request.stream, "Only stream is supported"
-        async for raw_response in self._chat_stream_generator(
-            request, request_id, conversation, promise
-        ):
-            if raw_response.startswith("data: [DONE]"):
-                break
-            response = json.loads(raw_response.lstrip("data: "))
-            yield response
-
-
-class DisaggChatProcessor(BaseChatProcessor):
-    def __init__(
-        self, model: str, tokenizer: AutoTokenizer, request: ChatCompletionRequest
-    ):
-        super().__init__(model, tokenizer)
-
-        self.request = request
-        self.num_choices = 1 if self.request.n is None else self.request.n
-        self.finish_reason_sent = [False] * self.num_choices
-        self.role = self._get_role(self.request)
-
-    # TODO (shreyasm): combine this with the chat processor
-    def get_chat_stream_response(
-        self,
-        request_id: str,
-        res: RequestOutput,
-        first_iteration: bool,
-    ) -> DisaggChatCompletionStreamResponse:
-        def get_first_chat(
-            num_tokens: int, role: str | None = None, content: str | None = None
-        ):
-            for i in range(self.num_choices):
-                choice_data = ChatCompletionResponseStreamChoice(
-                    index=i,
-                    delta=DeltaMessage(role=role, content=content),
-                    finish_reason=None,
-                )
-                chunk = DisaggChatCompletionStreamResponse(
-                    id=request_id,
-                    created=int(time.time()),
-                    object="chat.completion.chunk",
-                    choices=[choice_data],
-                    model=self.model,
-                )
-                chunk.usage = self._stream_usage_info(
-                    self.request, num_tokens, completion_tokens=0
-                )
-
-                return chunk
-
-        prompt_tokens = len(res.prompt_token_ids)
-        if first_iteration:
-            return get_first_chat(prompt_tokens, role=self.role)
-
-        for output in res.outputs:
-            i = output.index
-
-            if self.finish_reason_sent[i]:
-                continue
-
-            delta_text = output.text_diff
-            if (
-                self.request.tool_choice
-                and type(self.request.tool_choice) is ChatCompletionNamedToolChoiceParam
-            ):
-                delta_message = DeltaMessage(
-                    tool_calls=[
-                        ToolCall(
-                            function=FunctionCall(
-                                name=self.request.tool_choice.function.name,
-                                arguments=delta_text,
-                            )
-                        )
-                    ]
-                )
-            else:
-                delta_message = DeltaMessage(content=delta_text)
-
-            choice = ChatCompletionResponseStreamChoice(
-                index=i, delta=delta_message, finish_reason=None
-            )
-            if self.request.logprobs:
-                logprobs = output.logprobs_diff
-                token_ids = output.token_ids_diff
-                choice.logprobs = self._create_logprobs(token_ids, logprobs)
-            if output.finish_reason is not None:
-                choice.finish_reason = output.finish_reason
-                choice.stop_reason = output.stop_reason
-                self.finish_reason_sent[i] = True
-            chunk = DisaggChatCompletionStreamResponse(
-                id=request_id,
-                created=int(time.time()),
-                object="chat.completion.chunk",
-                choices=[choice],
-                model=self.model,
-            )
-            chunk.usage = self._stream_usage_info(
-                self.request, prompt_tokens, output.length
-            )
-            return chunk
-
-    def create_final_stream_response(
-        self,
-        request_id: str,
-        final_result: RequestOutput,
-    ) -> DisaggChatCompletionStreamResponse:
-        prompt_tokens = len(final_result.prompt_token_ids)
-        completion_tokens = sum(output.length for output in final_result.outputs)
-        final_usage = UsageInfo(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
-        )
-
-        final_usage_chunk = DisaggChatCompletionStreamResponse(
-            id=request_id,
-            created=int(time.time()),
-            object="chat.completion",
-            choices=[],
-            model=self.model,
-            usage=final_usage,
-        )
-        return final_usage_chunk
+            return final_usage_chunk.model_dump_json()
+        return "data: [DONE]\n\n"
 
 
 def merge_promises(

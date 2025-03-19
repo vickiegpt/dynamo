@@ -45,7 +45,7 @@ from tensorrt_llm.serve.openai_protocol import CompletionRequest
 from dynamo.llm import KvMetricsPublisher
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
-logger.set_level("info")
+logger.set_level("debug")
 
 
 def update_args_from_disagg_config(
@@ -98,7 +98,6 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
             raise error
 
         logger.debug(f"Received request: {request}")
-        chat_processor = ChatProcessor(self._model, self._tokenizer, request)
 
         self._ongoing_request_count += 1
 
@@ -127,48 +126,20 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
                 )
             )
 
-            # final_result = None
-            # async for result in self._llm_engine.generate_async(
-            #     prompt,
-            #     sampling_params,
-            #     streaming=request.stream,
-            #     disaggregated_params=disaggregated_params,
-            # ):
-            #     final_result = result
-            #     logger.debug(f"Generated result: {result}")
-            #     # if self.server_config.type == "ctx":
-            #     #     disaggregated_response = chat_processor.get_chat_stream_response(
-            #     #         request.id,
-            #     #         result,
-            #     #         first_iteration=True,
-            #     #     )
-            #     #     disaggregated_response.disaggregated_params = (
-            #     #         DisaggregatedTypeConverter.to_oai_disaggregated_params(
-            #     #             result.outputs[0].disaggregated_params
-            #     #         )
-            #     #     )
-            #     #     yield disaggregated_response.model_dump_json()
-            #     yield chat_processor.get_chat_stream_response(
-            #         request.id,
-            #         result,
-            #     ).model_dump_json()
-            promise = self._llm_engine.generate_async(
+            async for response in self._llm_engine.generate_async(
                 prompt,
                 sampling_params,
                 streaming=request.stream,
                 disaggregated_params=disaggregated_params,
-            )
-            response_generator = chat_processor.stream_response(
-                request, request.id, conversation, promise
-            )
-            async for response in response_generator:
-                yield response
+            ):
+                if self.server_config.type == "ctx":
+                    yield json.loads(self.chat_processor.yield_first_chat(request, request.id, response))
+                else:
+                    raw_response = self.chat_processor.create_chat_stream_response(
+                        request, request.id, response, conversation, first_iteration=False
+                    )
+                    yield json.loads(raw_response)
 
-            # if request.stream_options and request.stream_options.include_usage:
-            #     yield chat_processor.create_final_stream_response(
-            #         request.id,
-            #         final_result,
-            #     ).model_dump_json(exclude_unset=True, exclude={"disaggregated_params"})
 
         except CppExecutorError:
             # If internal executor error is raised, shutdown the server

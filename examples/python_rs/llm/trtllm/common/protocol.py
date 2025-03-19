@@ -16,7 +16,7 @@
 import base64
 import time
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from tensorrt_llm.llmapi import DisaggregatedParams as LlmDisaggregatedParams
@@ -25,6 +25,7 @@ from tensorrt_llm.serve.openai_protocol import (
     ChatCompletionStreamResponse,
     CompletionRequest,
     CompletionResponseStreamChoice,
+    ChatCompletionResponseStreamChoice,
     DisaggregatedParams,
     UsageInfo,
 )
@@ -94,13 +95,22 @@ class DisaggregatedTypeConverter:
 # Chat Completions
 
 
-class DisaggChatCompletionRequest(ChatCompletionRequest):
+class DisaggChatCompletionRequest(AdaptedChatCompletionRequest):
     id: str = Field(default_factory=lambda: f"cmpl-{str(uuid.uuid4().hex)}")
     disaggregated_params: Optional[DisaggregatedParams] = Field(default=None)
 
 
-class DisaggChatCompletionStreamResponse(ChatCompletionStreamResponse):
+class DisaggChatCompletionResponseStreamChoice(ChatCompletionResponseStreamChoice):
     disaggregated_params: Optional[DisaggregatedParams] = Field(default=None)
+
+
+class DisaggChatCompletionStreamResponse(BaseModel):
+    id: str = Field(default_factory=lambda: f"chatcmpl-{str(uuid.uuid4().hex)}")
+    object: Literal["chat.completion.chunk"] = "chat.completion.chunk"
+    created: int = Field(default_factory=lambda: int(time.time()))
+    model: str
+    choices: List[DisaggChatCompletionResponseStreamChoice]
+    usage: Optional[UsageInfo] = Field(default=None)
 
 
 ## Completions

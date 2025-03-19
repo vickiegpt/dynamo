@@ -32,7 +32,7 @@ from tensorrt_llm.serve.openai_protocol import CompletionRequest, DisaggregatedP
 from dynamo.llm import KvIndexer, KvMetricsAggregator
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 
-logger.set_level("info")
+logger.set_level("debug")
 
 
 class DisaggServer(ChatProcessorMixin):
@@ -159,12 +159,12 @@ class DisaggServer(ChatProcessorMixin):
 
         gen_req = copy.deepcopy(request)
 
-        request.max_tokens = 1
+        request.max_completion_tokens = 1
         ctx_resp = await self._get_ctx_resp(request, self.ctx_chat_client)
-        ctx_resp_obj = DisaggChatCompletionStreamResponse.model_validate_json(ctx_resp)
+        ctx_resp_obj = DisaggChatCompletionStreamResponse.model_validate(ctx_resp)
 
         gen_req.disaggregated_params = DisaggregatedParams.model_validate(
-            ctx_resp_obj.disaggregated_params
+            ctx_resp_obj.choices[0].disaggregated_params
         )
         gen_req.disaggregated_params.request_type = "generation_only"
 
@@ -181,9 +181,10 @@ class DisaggServer(ChatProcessorMixin):
             logger.debug(
                 f"[router] Received response from generation server: {response.data()}"
             )
-            gen_resp_obj = DisaggChatCompletionStreamResponse.model_validate_json(
+            gen_resp_obj = DisaggChatCompletionStreamResponse.model_validate(
                 response.data()
             )
+            print("gen_resp_obj: ", gen_resp_obj)
             yield json.loads(gen_resp_obj.model_dump_json(exclude_unset=True))
 
 
