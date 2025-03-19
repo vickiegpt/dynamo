@@ -14,20 +14,18 @@
 # limitations under the License.
 
 import asyncio
-import json
 import os
 import signal
 
 import uvloop
 from common.base_engine import BaseTensorrtLLMEngine, TensorrtLLMEngineConfig
-from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
 from common.generators import chat_generator, completion_generator
+from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
 from common.protocol import (
+    AdaptedCompletionRequest,
     DisaggChatCompletionRequest,
     DisaggChatCompletionStreamResponse,
     DisaggCompletionStreamResponse,
-    DisaggregatedTypeConverter,
-    AdaptedCompletionRequest
 )
 from mpi4py.futures import MPICommExecutor
 from mpi4py.MPI import COMM_WORLD
@@ -41,7 +39,6 @@ from tensorrt_llm.llmapi.disagg_utils import (
     split_world_comm,
 )
 from tensorrt_llm.logger import logger
-from tensorrt_llm.serve.openai_protocol import CompletionRequest
 
 from dynamo.llm import KvMetricsPublisher
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
@@ -104,7 +101,7 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         try:
             async for response in chat_generator(self, request, is_disaggregated=True):
                 yield response
-        
+
         except CppExecutorError:
             signal.raise_signal(signal.SIGINT)
         except Exception as e:
@@ -128,7 +125,9 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         logger.debug(f"[worker] Received completions request: {request}")
 
         try:
-            async for response in completion_generator(self, request, is_disaggregated=True):
+            async for response in completion_generator(
+                self, request, is_disaggregated=True
+            ):
                 yield response
         except CppExecutorError:
             signal.raise_signal(signal.SIGINT)

@@ -22,13 +22,13 @@ from common.base_engine import ChatProcessorMixin
 from common.kv_router import KVRouter, RoutingStrategy, get_worker_id
 from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
 from common.protocol import (
+    AdaptedCompletionRequest,
     DisaggChatCompletionRequest,
     DisaggChatCompletionStreamResponse,
     DisaggCompletionStreamResponse,
-    AdaptedCompletionRequest
 )
 from tensorrt_llm.logger import logger
-from tensorrt_llm.serve.openai_protocol import CompletionRequest, DisaggregatedParams
+from tensorrt_llm.serve.openai_protocol import DisaggregatedParams
 
 from dynamo.llm import KvIndexer, KvMetricsAggregator
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
@@ -69,7 +69,7 @@ class DisaggServer(ChatProcessorMixin):
             f"Initialized Disaggregated Server with routing strategy: {self.routing_strategy}"
         )
 
-   async def _generate(self, request, ctx_client, gen_client, response_cls):
+    async def _generate(self, request, ctx_client, gen_client, response_cls):
         request.skip_special_tokens = False
         request.add_special_tokens = False
         request.spaces_between_special_tokens = False
@@ -126,23 +126,30 @@ class DisaggServer(ChatProcessorMixin):
         )
 
         logger.debug(f"[router] Sending request to generation server: {gen_req}")
-        async for response in await gen_client.round_robin(
-            gen_req.model_dump_json()
-        ):
+        async for response in await gen_client.round_robin(gen_req.model_dump_json()):
             logger.debug(
                 f"[router] Received response from generation server: {response.data()}"
             )
             gen_resp_obj = response_cls.model_validate(response.data())
             yield json.loads(gen_resp_obj.model_dump_json(exclude_unset=True))
 
-
     @dynamo_endpoint(AdaptedCompletionRequest, DisaggCompletionStreamResponse)
     async def generate_completion(self, request):
-        await self._generate(request, self.ctx_completion_client, self.gen_completion_client, DisaggCompletionStreamResponse)
+        await self._generate(
+            request,
+            self.ctx_completion_client,
+            self.gen_completion_client,
+            DisaggCompletionStreamResponse,
+        )
 
     @dynamo_endpoint(DisaggChatCompletionRequest, DisaggChatCompletionStreamResponse)
     async def generate_chat(self, request):
-        await self._generate(request, self.ctx_chat_client, self.gen_chat_client, DisaggChatCompletionStreamResponse)
+        await self._generate(
+            request,
+            self.ctx_chat_client,
+            self.gen_chat_client,
+            DisaggChatCompletionStreamResponse,
+        )
 
 
 @dynamo_worker()

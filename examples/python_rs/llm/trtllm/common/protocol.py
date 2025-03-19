@@ -16,16 +16,15 @@
 import base64
 import time
 import uuid
-from typing import List, Optional, Literal
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 from tensorrt_llm.llmapi import DisaggregatedParams as LlmDisaggregatedParams
 from tensorrt_llm.serve.openai_protocol import (
     ChatCompletionRequest,
-    ChatCompletionStreamResponse,
+    ChatCompletionResponseStreamChoice,
     CompletionRequest,
     CompletionResponseStreamChoice,
-    ChatCompletionResponseStreamChoice,
     DisaggregatedParams,
     UsageInfo,
 )

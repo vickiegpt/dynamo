@@ -14,25 +14,14 @@
 # limitations under the License.
 
 import asyncio
-import json
-import time
-from typing import (
-    Any,
-    AsyncGenerator,
-    AsyncIterator,
-    Dict,
-    List,
-    Tuple,
-    TypedDict,
-    Union,
-)
+from typing import Any, AsyncIterator, Dict, List, Tuple, TypedDict, Union
 
 from common.protocol import (
+    DisaggChatCompletionResponseStreamChoice,
     DisaggChatCompletionStreamResponse,
     DisaggCompletionResponseStreamChoice,
     DisaggCompletionStreamResponse,
     DisaggregatedTypeConverter,
-    DisaggChatCompletionResponseStreamChoice
 )
 from openai.types.chat import ChatCompletionMessageParam
 from tensorrt_llm.llmapi.llm import RequestOutput
@@ -42,7 +31,6 @@ from tensorrt_llm.serve.openai_protocol import (
     ChatCompletionLogProbsContent,
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionRequest,
-    ChatCompletionResponseStreamChoice,
     CompletionRequest,
     DeltaMessage,
     FunctionCall,
@@ -142,13 +130,13 @@ class ChatProcessor(BaseChatProcessor):
         request: ChatCompletionRequest,
         request_id: str,
         response: RequestOutput,
-        content: str | None = None
+        content: str | None = None,
     ):
         role = self._get_role(request)
         num_choices = 1 if request.n is None else request.n
         num_tokens = len(response.prompt_token_ids)
         content = response.outputs[0].text_diff
-        
+
         for i in range(num_choices):
             choice = DisaggChatCompletionResponseStreamChoice(
                 index=i,
@@ -169,7 +157,7 @@ class ChatProcessor(BaseChatProcessor):
             chunk.usage = self._stream_usage_info(request, num_tokens, 0)
 
             return chunk.model_dump_json()
-    
+
     def create_chat_stream_response(
         self,
         request: ChatCompletionRequest,
@@ -196,7 +184,9 @@ class ChatProcessor(BaseChatProcessor):
                     last_msg_content = conversation[-1]["content"]
 
                 if last_msg_content:
-                    return self.yield_first_chat(request, request_id, response, content=last_msg_content)
+                    return self.yield_first_chat(
+                        request, request_id, response, content=last_msg_content
+                    )
         first_iteration = False
 
         for output in response.outputs:
@@ -245,14 +235,12 @@ class ChatProcessor(BaseChatProcessor):
                 choices=[choice],
                 model=self.model,
             )
-            chunk.usage = self._stream_usage_info(
-                request, prompt_tokens, output.length
-            )
+            chunk.usage = self._stream_usage_info(request, prompt_tokens, output.length)
             return chunk.model_dump_json()
 
         # TODO: make request.stream_options.include_usage = True when stream=False in rust
         if request.stream_options and request.stream_options.include_usage:
-            completion_tokens = sum(output.length for output in promise.outputs)
+            completion_tokens = sum(output.length for output in response.outputs)
             final_usage = UsageInfo(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,

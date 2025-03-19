@@ -16,7 +16,6 @@
 
 import json
 import signal
-import uuid
 
 from common.base_engine import BaseTensorrtLLMEngine
 from common.processor import merge_promises, parse_chat_message_content
@@ -27,7 +26,9 @@ from tensorrt_llm.logger import logger
 logger.set_level("info")
 
 
-async def chat_generator(engine: BaseTensorrtLLMEngine, request, is_disaggregated: bool = False):
+async def chat_generator(
+    engine: BaseTensorrtLLMEngine, request, is_disaggregated: bool = False
+):
     if engine._llm_engine is None:
         raise RuntimeError("Engine not initialized")
 
@@ -68,11 +69,16 @@ async def chat_generator(engine: BaseTensorrtLLMEngine, request, is_disaggregate
             disaggregated_params=disaggregated_params,
         ):
             if is_disaggregated and engine.server_config.type == "ctx":
-                response_data = engine.chat_processor.yield_first_chat(request, request.id, response)
+                response_data = engine.chat_processor.yield_first_chat(
+                    request, request.id, response
+                )
             else:
                 response_data = engine.chat_processor.create_chat_stream_response(
-                    request, request.id, response, conversation,
-                    first_iteration=(not is_disaggregated)
+                    request,
+                    request.id,
+                    response,
+                    conversation,
+                    first_iteration=(not is_disaggregated),
                 )
             yield json.loads(response_data)
 
@@ -84,7 +90,9 @@ async def chat_generator(engine: BaseTensorrtLLMEngine, request, is_disaggregate
         raise RuntimeError("Failed to generate: " + str(e))
 
 
-async def completion_generator(engine: BaseTensorrtLLMEngine, request, is_disaggregated: bool = False):
+async def completion_generator(
+    engine: BaseTensorrtLLMEngine, request, is_disaggregated: bool = False
+):
     if engine._llm_engine is None:
         raise RuntimeError("Engine not initialized")
 
@@ -92,22 +100,20 @@ async def completion_generator(engine: BaseTensorrtLLMEngine, request, is_disagg
     logger.debug(f"Received completion request: {request}")
 
     if isinstance(request.prompt, str) or (
-        isinstance(request.prompt, list) and all(
-            isinstance(x, int) for x in request.prompt
-        )
+        isinstance(request.prompt, list)
+        and all(isinstance(x, int) for x in request.prompt)
     ):
         prompt = request.prompt
     else:
-        raise ValueError("Invalid prompt type. Only string or list of integers are supported.")
+        raise ValueError(
+            "Invalid prompt type. Only string or list of integers are supported."
+        )
 
-    promises = []
     sampling_params = request.to_sampling_params()
     disaggregated_params = None
     if is_disaggregated:
-        disaggregated_params = (
-            DisaggregatedTypeConverter.to_llm_disaggregated_params(
-                request.disaggregated_params
-            )
+        disaggregated_params = DisaggregatedTypeConverter.to_llm_disaggregated_params(
+            request.disaggregated_params
         )
 
     try:
