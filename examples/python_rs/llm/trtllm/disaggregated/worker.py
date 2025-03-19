@@ -21,8 +21,7 @@ import signal
 import uvloop
 from common.base_engine import BaseTensorrtLLMEngine, TensorrtLLMEngineConfig
 from common.parser import LLMAPIConfig, parse_tensorrt_llm_args
-from common.processor import ChatProcessor, merge_promises, parse_chat_message_content
-from common.generators import chat_generator
+from common.generators import chat_generator, completion_generator
 from common.protocol import (
     DisaggChatCompletionRequest,
     DisaggChatCompletionStreamResponse,
@@ -127,39 +126,9 @@ class TensorrtLLMEngine(BaseTensorrtLLMEngine):
         self._ongoing_request_count += 1
         logger.debug(f"[worker] Received completions request: {request}")
 
-        if not isinstance(request.prompt, str):
-            # Check if it's a list and contains integers
-            if isinstance(request.prompt, list) and len(request.prompt) == 1:
-                request.prompt = request.prompt[0]
-            elif not isinstance(request.prompt, list) or not all(
-                isinstance(x, int) for x in request.prompt
-            ):
-                raise ValueError(
-                    "Disaggregated server currently only supports single string prompt or list of integers in request"
-                )
-
         try:
-            sampling_params = request.to_sampling_params()
-            llm_disaggregated_params = (
-                DisaggregatedTypeConverter.to_llm_disaggregated_params(
-                    request.disaggregated_params
-                )
-            )
-
-            # only 1 prompt is supported for now
-            promise = self._llm_engine.generate_async(
-                request.prompt,
-                sampling_params,
-                streaming=request.stream,
-                disaggregated_params=llm_disaggregated_params,
-            )
-            generator = merge_promises([promise])
-            num_choices = 1 if request.n is None else request.n
-            response_generator = self.completions_processor.create_completion_generator(
-                request, generator, num_choices
-            )
-            async for response in response_generator:
-                yield json.loads(response)
+            async for response in completion_generator(self, request, is_disaggregated=True):
+                yield response
         except CppExecutorError:
             signal.raise_signal(signal.SIGINT)
         except Exception as e:

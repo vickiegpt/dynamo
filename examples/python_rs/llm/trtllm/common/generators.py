@@ -84,7 +84,7 @@ async def chat_generator(engine: BaseTensorrtLLMEngine, request, is_disaggregate
         raise RuntimeError("Failed to generate: " + str(e))
 
 
-async def completion_generator(engine: BaseTensorrtLLMEngine, request):
+async def completion_generator(engine: BaseTensorrtLLMEngine, request, is_disaggregated: bool = False):
     if engine._llm_engine is None:
         raise RuntimeError("Engine not initialized")
 
@@ -92,28 +92,34 @@ async def completion_generator(engine: BaseTensorrtLLMEngine, request):
     logger.debug(f"Received completion request: {request}")
 
     if isinstance(request.prompt, str) or (
-        isinstance(request.prompt, list) and isinstance(request.prompt[0], int)
+        isinstance(request.prompt, list) and all(
+            isinstance(x, int) for x in request.prompt
+        )
     ):
-        prompts = [request.prompt]
+        prompt = request.prompt
     else:
-        prompts = request.prompt
+        raise ValueError("Invalid prompt type. Only string or list of integers are supported.")
 
     promises = []
     sampling_params = request.to_sampling_params()
+    disaggregated_params = None
+    if is_disaggregated:
+        disaggregated_params = (
+            DisaggregatedTypeConverter.to_llm_disaggregated_params(
+                request.disaggregated_params
+            )
+        )
 
     try:
-        for prompt in prompts:
-            promise = engine._llm_engine.generate_async(
-                prompt,
-                sampling_params,
-                streaming=request.stream,
-            )
-            promises.append(promise)
+        promise = engine._llm_engine.generate_async(
+            prompt,
+            sampling_params,
+            streaming=request.stream,
+            disaggregated_params=disaggregated_params,
+        )
+        generator = merge_promises([promise])
+        num_choices = 1 if request.n is None else request.n
 
-        generator = merge_promises(promises)
-        num_choices = len(prompts) if request.n is None else len(prompts) * request.n
-
-        # NOTE: always send `stream: true` to the worker, and decide whether to aggregate  or not before sending the response back to client.
         response_generator = engine.completions_processor.create_completion_generator(
             request, generator, num_choices
         )
