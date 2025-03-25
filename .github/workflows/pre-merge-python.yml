@@ -64,14 +64,15 @@ jobs:
           if-no-files-found: error
           path: |
             ${{ env.PYTEST_XML_FILE }}
-
-  event_file:
-    name: "Event File"
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'pull_request' }}
-    steps:
-      - name: Upload
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+      - name: Copy Python wheels from test Container
+        run: |
+          mkdir wheels
+          docker exec ${{ env.CONTAINER_ID }} bash -c 'ls dist/*.whl' | while read line; do docker cp ${{ env.CONTAINER_ID }}:/workspace/$line ./wheels; done
+          ls -al wheels
+      - name: Archive Python Wheels
+        uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: Event File
-          path: ${{ github.event_path }}
+          name: python-wheels
+          if-no-files-found: error
+          path: ./wheels
