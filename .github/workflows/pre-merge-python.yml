@@ -51,7 +51,7 @@ jobs:
         run: |
           mkdir wheels
           docker run -w /workspace  --name wheel_copy -d ${{ steps.define_image_tag.outputs.image_tag }} tail -f /dev/null
-          docker exec ${{ env.CONTAINER_ID }} bash -c 'ls dist/*.whl' | while read line; do docker cp wheel_copy:/workspace/$line ./wheels; done
+          docker exec wheel_copy bash -c 'ls dist/*.whl' | while read line; do docker cp wheel_copy:/workspace/$line ./wheels; done
           docker container stop wheel_copy
           ls -al wheels
       - name: Archive Python Wheels
