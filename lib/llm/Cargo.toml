@@ -47,6 +47,7 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 derive_builder = {workspace = true }
 futures =  { workspace = true }
+humanize-bytes = { workspace = true }
 
 serde = { workspace = true }
 thiserror = { workspace = true }

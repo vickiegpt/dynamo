@@ -32,5 +32,7 @@ pub mod tokenizers;
 pub mod tokens;
 pub mod types;
 
-#[cfg(feature = "cuda_kv")]
-pub mod kv;
+// #[cfg(feature = "cuda_kv")]
+// pub mod kv;
+
+pub mod kv_v2;
