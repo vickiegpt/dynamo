@@ -246,16 +246,16 @@ impl<T: Returnable> Pool<T> {
         Self::new(initial_values)
     }
 
-    async fn try_acquire(&self) -> Option<PoolItem<T>> {
+    pub async fn try_acquire(&self) -> Option<PoolItem<T>> {
         let mut pool = self.state.pool.lock().unwrap();
         pool.pop_front()
             .map(|value| PoolItem::new(value, self.state.clone()))
     }
 
-    async fn acquire(&self) -> PoolItem<T> {
+    pub async fn acquire(&self) -> PoolItem<T> {
         loop {
-            if let Some(guard) = self.try_acquire().await {
-                return guard;
+            if let Some(item) = self.try_acquire().await {
+                return item;
             }
             self.state.available.notified().await;
         }

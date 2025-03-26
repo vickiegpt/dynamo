@@ -100,7 +100,7 @@ extern "C" {
     fn cuda_memcpy_sync(dst: *mut c_void, src: *const c_void, count: usize) -> i32;
 }
 
-pub trait Storage: std::fmt::Debug {
+pub trait Storage: std::fmt::Debug + Send + Sync {
     /// Get memory pointer as a u64 for direct indexing
     fn get_pointer(&self) -> u64;
 
@@ -133,6 +133,10 @@ impl OwnedStorage {
         Self { storage }
     }
 
+    pub fn allocate(bytes: usize, storage_type: StorageType) -> Result<Self> {
+        Self::create(bytes, storage_type)
+    }
+
     pub fn create(bytes: usize, storage_type: StorageType) -> Result<Self> {
         match storage_type {
             StorageType::Device(device) => Self::create_device_array(bytes, device),
@@ -151,6 +155,10 @@ impl OwnedStorage {
     pub fn create_pinned_array(bytes: usize) -> Result<Self> {
         let pinned_memory = CudaPinnedMemory::new(bytes)?;
         Ok(Self::new(Arc::new(pinned_memory)))
+    }
+
+    pub fn into_storage(self) -> Arc<dyn Storage> {
+        self.storage
     }
 
     pub fn byo_device_array(

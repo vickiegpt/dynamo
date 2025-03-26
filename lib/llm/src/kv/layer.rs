@@ -30,8 +30,8 @@ use std::{ptr::NonNull, sync::Arc};
 use validator::{Validate, ValidationError};
 
 use super::{
+    block::{DeviceBlockStorage, PinnedBlockStorage},
     storage::{DType, OwnedStorage, Storage, StorageType, TensorView},
-    DeviceBlockStorage, PinnedBlockStorage,
 };
 extern "C" {
     fn copy_blocks_3d(
@@ -597,49 +597,43 @@ impl KvBlockStorage {
     //     };
     // }
 
-    /// Convert the [KvBlockStorage] object into a vector of [PinnedBlockStorage] objects
-    pub fn into_pinned_blocks(self) -> Result<Vec<PinnedBlockStorage>> {
-        let this = Arc::new(self);
+    // /// Convert the [KvBlockStorage] object into a vector of [PinnedBlockStorage] objects
+    // pub fn into_pinned_blocks(self) -> Result<Vec<PinnedBlockStorage>> {
+    //     let this = Arc::new(self);
 
-        // check the storage type
-        match this.storage_type {
-            StorageType::Pinned => {}
-            _ => raise!("Storage type must be Pinned"),
-        }
+    //     // check the storage type
+    //     match this.storage_type {
+    //         StorageType::Pinned => {}
+    //         _ => raise!("Storage type must be Pinned"),
+    //     }
 
-        let mut blocks = Vec::new();
+    //     let mut blocks = Vec::new();
 
-        for block_id in 0..this.number_of_blocks {
-            let block_storage = PinnedBlockStorage {
-                block_id,
-                block_storage: this.clone(),
-            };
-            blocks.push(block_storage);
-        }
+    //     for block_id in 0..this.number_of_blocks {
+    //         let block_storage = PinnedBlockStorage::new(block_id, this.clone());
+    //         blocks.push(block_storage);
+    //     }
 
-        Ok(blocks)
-    }
+    //     Ok(blocks)
+    // }
 
-    pub fn into_device_blocks(self) -> Result<Vec<DeviceBlockStorage>> {
-        let this = Arc::new(self);
+    // pub fn into_device_blocks(self) -> Result<Vec<DeviceBlockStorage>> {
+    //     let this = Arc::new(self);
 
-        match this.storage_type {
-            StorageType::Device(_) => {}
-            _ => raise!("Storage type must be Device"),
-        }
+    //     match this.storage_type {
+    //         StorageType::Device(_) => {}
+    //         _ => raise!("Storage type must be Device"),
+    //     }
 
-        let mut blocks = Vec::new();
+    //     let mut blocks = Vec::new();
 
-        for block_id in 0..this.number_of_blocks {
-            let block_storage = DeviceBlockStorage {
-                block_id,
-                block_storage: this.clone(),
-            };
-            blocks.push(block_storage);
-        }
+    //     for block_id in 0..this.number_of_blocks {
+    //         let block_storage = DeviceBlockStorage::new(block_id, this.clone());
+    //         blocks.push(block_storage);
+    //     }
 
-        Ok(blocks)
-    }
+    //     Ok(blocks)
+    // }
 
     pub(crate) fn k_ptr(&self, block_id: usize, layer_id: usize) -> Result<u64> {
         let layer = self.layer(layer_id)?;

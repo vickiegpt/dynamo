@@ -51,8 +51,11 @@ derive_builder = { version = "0.20" }
 derive-getters = { version = "0.5" }
 either = { version = "1.13", features = ["serde"] }
 futures = { version = "0.3" }
+humanize-bytes = { version = "1.0.6" }
+prometheus = { version = "0.13" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
+strum = { version = "0.27", features = ["derive"] }
 thiserror = { version = "2.0.11" }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1" }
@@ -61,8 +64,6 @@ tracing = { version = "0.1" }
 validator = { version = "0.20.0", features = ["derive"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 xxhash-rust = { version = "0.8", features = ["xxh3", "const_xxh3"] }
-strum = { version = "0.27", features = ["derive"] }
-prometheus = { version = "0.13" }
 
 [profile.dev.package]
 insta.opt-level = 3

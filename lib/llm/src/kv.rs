@@ -13,7 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// pub mod agent;
+pub mod block;
 pub mod layer;
+pub mod layouts;
 pub mod manager;
 pub mod reserved;
 pub mod reuse;
@@ -22,6 +25,7 @@ pub mod storage;
 
 use layer::KvBlockStorage;
 use reserved::*;
+use storage::OwnedStorage;
 
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
@@ -29,12 +33,14 @@ use std::{
 };
 
 use async_trait::async_trait;
-use derive_getters::Dissolve;
+use derive_builder::Builder;
+use derive_getters::{Dissolve, Getters};
 use dynamo_runtime::{
     raise,
     utils::pool::{PoolExt, PoolItem, PoolValue, Returnable, SharedPoolItem},
-    Result,
+    Error, Result,
 };
+use validator::Validate;
 
 use crate::tokens::{PartialTokenBlock, SequenceHash, TokenBlock, Tokens};
 
@@ -43,6 +49,159 @@ use tracing as log;
 pub type UniqueBlock<T> = PoolItem<KvBlock<T>>;
 pub type SharedBlock<T> = SharedPoolItem<KvBlock<T>>;
 
+/// Memory layout type for inner dimensions, i.e. the KV/latent dimension
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryLayout {
+    /// [2, block_size, inner_dim/2] - KV dimension first
+    KvFirst,
+
+    /// [block_size, 2, inner_dim/2] - Block dimension first
+    BlockFirst,
+
+    /// MLA =>[block_size, inner_dim] where inner_dim = latent_size
+    MLA,
+
+    /// Custom layout that requires special handling
+    Custom,
+}
+
+/// Storage pattern for layers
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerConfiguration {
+    /// All layers are contiguous in memory [n_layers, ...]
+    Contiguous,
+
+    /// Each layer is stored separately with no guaranteed stride
+    NonContiguous,
+}
+
+/// Blocks can have different storage strategies
+pub trait BlockStorage {
+    // /// Common dimensions for the block storage
+    // fn dimensions(&self) -> &Dimensions;
+
+    /// Whether the blocks and layers are contiguous.
+    ///
+    /// If true, then the an entire block and its internal layers are contiguous in memory
+    /// and can be copied with a single memory copy or nixl rdma transfer.
+    fn is_contiguous(&self) -> bool;
+
+    // /// Returns the memory layout pattern of this storage
+    // fn memory_layout(&self) -> MemoryLayout;
+
+    // /// Number of tokens in the block
+    // fn block_size(&self) -> usize;
+
+    // /// Hidden dimension size
+    // fn inner_dim(&self) -> usize;
+
+    // /// Number of layers in the block
+    // fn n_layers(&self) -> usize;
+
+    // /// Pointer to the starting memory address for the entire block
+    // /// Only meaningful for LayerStorage::Contiguous
+    // fn block_ptr(&self) -> Result<Option<u64>, Error>;
+
+    // /// Pointer to layer's inner memory region
+    // /// For KvFirst layout: pointer to [2, block_size, inner_dim/2] for this layer
+    // /// For BlockFirst layout: pointer to [block_size, 2, inner_dim/2] for this layer
+    // /// For MLA layout: pointer to [block_size, inner_dim] for this layer
+    // fn layer_ptr(&self, layer_id: usize) -> Result<u64, Error>;
+
+    // /// Pointer to the key tensor for a specific layer
+    // fn k_ptr(&self, block_id: usize, layer_id: usize) -> Result<u64, Error>;
+
+    // /// Pointer to the value tensor for a specific layer
+    // fn v_ptr(&self, layer_id: usize) -> Result<u64, Error>;
+
+    // /// Size in bytes of one layer's data
+    // fn bytes_per_layer(&self) -> usize;
+
+    // /// Size in bytes of key or value data for one layer
+    // fn bytes_per_layer_per_k_or_v(&self) -> usize;
+
+    // /// Stride between layers in bytes (only relevant for contiguous storage)
+    // fn layer_stride(&self) -> Option<usize>;
+
+    /// Check if this storage is compatible for direct transfer with another storage
+    fn is_compatible_with<T: BlockStorage + ?Sized>(&self, other: &T) -> bool;
+
+    // /// Get a description of the memory layout for debugging
+    // fn layout_description(&self) -> String {
+    //     format!(
+    //         "{}:{},  n_layers={}, block_size={}, inner_dim={}",
+    //         match self.is_contiguous() {
+    //             true => "Contiguous",
+    //             false => "NonContiguous",
+    //         },
+    //         match self.memory_layout() {
+    //             MemoryLayout::KvFirst => "KvFirst",
+    //             MemoryLayout::BlockFirst => "BlockFirst",
+    //             MemoryLayout::MLA => "MLA",
+    //             MemoryLayout::Custom => "Custom",
+    //         },
+    //         self.n_layers(),
+    //         self.block_size(),
+    //         self.inner_dim(),
+    //     )
+    // }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NullStorage {
+    dimensions: Dimensions,
+}
+
+impl BlockStorage for NullStorage {
+    // fn dimensions(&self) -> &Dimensions {
+    //     &self.dimensions
+    // }
+
+    // fn is_contiguous(&self) -> bool {
+    //     false
+    // }
+
+    // fn memory_layout(&self) -> MemoryLayout {
+    //     MemoryLayout::Custom
+    // }
+
+    // fn block_size(&self) -> usize {
+    //     0
+    // }
+
+    // fn inner_dim(&self) -> usize {
+    //     0
+    // }
+
+    // fn n_layers(&self) -> usize {
+    //     0
+    // }
+
+    // fn block_ptr(&self) -> Result<Option<u64>, Error> {
+    //     Ok(None)
+    // }
+
+    // fn inner_ptr(&self, _block_id: usize, _layer_id: usize) -> Result<u64, Error> {
+    //     Ok(0)
+    // }
+
+    // fn bytes_per_layer(&self) -> usize {
+    //     0
+    // }
+
+    // fn bytes_per_layer_per_k_or_v(&self) -> usize {
+    //     0
+    // }
+
+    // fn layer_stride(&self) -> Option<usize> {
+    //     None
+    // }
+
+    fn is_compatible_with<T: BlockStorage + ?Sized>(&self, _other: &T) -> bool {
+        false
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct KvBlock<T: BlockStorage + Send + Sync> {
     token_block: TokenBlock,
@@ -50,68 +209,6 @@ pub struct KvBlock<T: BlockStorage + Send + Sync> {
     return_tick: u64,
     storage: T,
 }
-
-#[derive(Debug, Clone, Default)]
-pub struct NullStorage {}
-
-pub trait BlockStorage {
-    /// Pointer to the leading element of the key tensor for layer `layer_id`
-    /// The `u64` can be converted to a void* for use in C code
-    fn k_ptr(&self, layer_id: usize) -> Result<u64, anyhow::Error>;
-
-    /// Pointer to the leading element of the value tensor for layer `layer_id`
-    /// The `u64` can be converted to a void* for use in C code
-    fn v_ptr(&self, layer_id: usize) -> Result<u64, anyhow::Error>;
-
-    // /// Number of key-value pairs per block. This is the number of tokens in
-    // /// represented by a single block.
-    // fn tokens_count_per_block(&self) -> usize;
-
-    /// Size of the key and value tensors for layer `layer_id` in bytes
-    /// This is the size of the key or value tensor in bytes. The key and value
-    /// tensors may or may not be contiguous in memory. However, each key or value
-    /// tensor corresponds to a single block is contiguous in memory.
-    fn bytes_per_block_per_k_or_v(&self) -> usize;
-
-    /// Returns true if the key and value tensors for layer `layer_id` are contiguous
-    /// in memory. If true, the starting address of the concatenated key and value
-    /// tensors can be computed as the memory region starting at:
-    /// `k_ptr(layer_id) + 2*bytes_per_block_per_k_or_v(layer_id)`
-    fn k_and_v_are_contiguous(&self) -> bool;
-}
-
-impl BlockStorage for NullStorage {
-    fn k_ptr(&self, _layer_id: usize) -> Result<u64, anyhow::Error> {
-        Ok(0 as u64)
-    }
-
-    fn v_ptr(&self, _layer_id: usize) -> Result<u64, anyhow::Error> {
-        Ok(0 as u64)
-    }
-
-    // fn tokens_count_per_block(&self) -> usize {
-    //     0 as usize
-    // }
-
-    fn bytes_per_block_per_k_or_v(&self) -> usize {
-        0 as usize
-    }
-
-    fn k_and_v_are_contiguous(&self) -> bool {
-        false
-    }
-}
-
-// pub struct KvStorage {
-//     data: u64,
-//     size: usize,
-
-//     layer_idx: usize,
-//     block_idx: usize,
-
-//     /// The layout of the tensor
-//     layout: layer::KvLayer,
-// }
 
 impl<T: BlockStorage + Send + Sync> KvBlock<T> {
     /// Creates a new KvBlock with the given token block
@@ -135,8 +232,6 @@ impl<T: BlockStorage + Send + Sync> KvBlock<T> {
         self.token_block = TokenBlock::default();
         self.priority = 0;
         self.return_tick = 0;
-        // self.storage = None;
-        // self.storage_state = StorageState::Absent;
     }
 }
 
@@ -144,53 +239,32 @@ impl<T: BlockStorage + Send + Sync + 'static> Returnable for KvBlock<T> {
     fn on_return(&mut self) {}
 }
 
-pub struct KvBlockConfig {}
+#[derive(Debug, Clone, Copy, Builder, Validate, Getters)]
+pub struct Dimensions {
+    #[getter(copy)]
+    #[validate(range(min = 1))]
+    n_blocks: usize,
 
-// Host memory but special class of host memory
-pub struct PinnedBlockStorage {
-    block_id: usize,
-    block_storage: Arc<KvBlockStorage>,
-}
-pub struct DeviceBlockStorage {
-    block_id: usize,
-    block_storage: Arc<KvBlockStorage>,
-}
+    #[getter(copy)]
+    #[validate(range(min = 1))]
+    n_layers: usize,
 
-pub type KvBlockPinned = KvBlock<PinnedBlockStorage>;
-pub type KvBlockDevice = KvBlock<DeviceBlockStorage>;
+    #[getter(copy)]
+    #[validate(range(min = 1))]
+    block_size: usize,
 
-impl BlockStorage for PinnedBlockStorage {
-    fn k_ptr(&self, layer_id: usize) -> Result<u64> {
-        self.block_storage.k_ptr(self.block_id, layer_id)
-    }
+    #[getter(copy)]
+    #[validate(range(min = 1))]
+    inner_dim: usize,
 
-    fn v_ptr(&self, layer_id: usize) -> Result<u64> {
-        self.block_storage.v_ptr(self.block_id, layer_id)
-    }
-
-    fn bytes_per_block_per_k_or_v(&self) -> usize {
-        self.block_storage.bytes_per_block_per_k_or_v()
-    }
-
-    fn k_and_v_are_contiguous(&self) -> bool {
-        self.block_storage.k_and_v_are_contiguous()
-    }
+    #[getter(copy)]
+    dtype: DType,
 }
 
-impl BlockStorage for DeviceBlockStorage {
-    fn k_ptr(&self, layer_id: usize) -> Result<u64> {
-        self.block_storage.k_ptr(self.block_id, layer_id)
-    }
-
-    fn v_ptr(&self, layer_id: usize) -> Result<u64> {
-        self.block_storage.v_ptr(self.block_id, layer_id)
-    }
-
-    fn bytes_per_block_per_k_or_v(&self) -> usize {
-        self.block_storage.bytes_per_block_per_k_or_v()
-    }
-
-    fn k_and_v_are_contiguous(&self) -> bool {
-        self.block_storage.k_and_v_are_contiguous()
-    }
+pub struct NixlContext {}
+pub struct NixlDescriptor {}
+pub struct NixlRegisteredStorage {
+    storage: OwnedStorage,
+    descriptor: NixlDescriptor,
+    context: Arc<NixlContext>,
 }
