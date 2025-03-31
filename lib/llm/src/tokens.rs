@@ -95,14 +95,18 @@ impl PartialTokenBlock {
     /// Push a token onto the block, if the block is full, return a new [TokenBlock]
     /// and reset the incomplete block
     pub fn push_token(&mut self, token: Token) -> Option<TokenBlock> {
+        assert!(self.tokens.0.len() < self.block_size);
         self.tokens.0.push(token);
         if self.tokens.0.len() == self.block_size {
             let block = std::mem::take(&mut self.tokens);
             let block_hash = compute_hash(cast_slice(&block));
-            let sequence_hash = compute_hash(bytemuck::cast_slice(&[
-                self.parent_sequence_hash.unwrap_or_default(),
-                block_hash,
-            ]));
+
+            let sequence_hash = match self.parent_sequence_hash {
+                None => block_hash,
+                Some(parent_sequence_hash) => {
+                    compute_hash(bytemuck::cast_slice(&[block_hash, parent_sequence_hash]))
+                }
+            };
             Some(TokenBlock {
                 tokens: block,
                 sequence_hash,
@@ -163,6 +167,10 @@ impl TokenSequence {
         } else {
             None
         }
+    }
+
+    pub fn last(&self) -> Option<&TokenBlock> {
+        self.blocks.last()
     }
 
     pub fn blocks(&self) -> &[TokenBlock] {

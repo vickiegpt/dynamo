@@ -1191,7 +1191,7 @@ dependencies = [
 [[package]]
 name = "cudarc"
 version = "0.13.9"
-source = "git+https://github.com/coreylowman/cudarc.git?rev=8c52e735b55bf8e979e1a16bd85e3dfe4f87c9fe#8c52e735b55bf8e979e1a16bd85e3dfe4f87c9fe"
+source = "git+https://github.com/coreylowman/cudarc.git?rev=2ddd39e829a619ea5b95bcf40135dd9387a20135#2ddd39e829a619ea5b95bcf40135dd9387a20135"
 dependencies = [
  "libloading",
 ]
@@ -1511,7 +1511,7 @@ dependencies = [
  "bytes",
  "chrono",
  "cmake",
- "cudarc 0.13.9 (git+https://github.com/coreylowman/cudarc.git?rev=8c52e735b55bf8e979e1a16bd85e3dfe4f87c9fe)",
+ "cudarc 0.13.9 (git+https://github.com/coreylowman/cudarc.git?rev=2ddd39e829a619ea5b95bcf40135dd9387a20135)",
  "derive-getters",
  "derive_builder",
  "dynamo-runtime",
