@@ -22,7 +22,7 @@ license.workspace = true
 homepage.workspace = true
 
 [features]
-default = ["cuda_kv"]
+default = ["cuda_kv", "block_manager"]
 mistralrs = ["dep:mistralrs"]
 llamacpp = ["dep:llama-cpp-2"]
 sglang = ["dep:async_zmq"]
@@ -31,6 +31,7 @@ vllm = ["dep:async_zmq"]
 python = ["dep:pyo3-async-runtimes", "dep:pythonize"]
 trtllm = []
 cuda_kv = ["dep:cudarc", "dep:ndarray"]
+block_manager = ["dep:cudarc", "dep:ndarray"]
 
 cuda = ["mistralrs/cuda", "llama-cpp-2/cuda"]
 metal = ["mistralrs/metal", "llama-cpp-2/metal"]
@@ -69,7 +70,7 @@ regex = "1"
 rayon = "1"
 
 # kv_cuda
-cudarc = { git = "https://github.com/coreylowman/cudarc.git", rev = "8c52e735b55bf8e979e1a16bd85e3dfe4f87c9fe", features = ["cuda-12040"], optional = true }
+cudarc = { git = "https://github.com/coreylowman/cudarc.git", rev = "2ddd39e829a619ea5b95bcf40135dd9387a20135", features = ["cuda-12040"], optional = true }
 ndarray = { version = "0.16", optional = true }
 # candle-core = { version = "0.8.3", features = ["cuda"], optional = true }
 # half = "2.4.1"

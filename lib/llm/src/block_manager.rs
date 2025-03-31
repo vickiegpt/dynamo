@@ -13,27 +13,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # Dynamo LLM
+//! Block Manager for LLM KV Cache
 //!
-//! The `dynamo.llm` crate is a Rust library that provides a set of traits and types for building
-//! distributed LLM inference solutions.
+//! This module provides functionality for managing KV blocks in LLM attention
+//! mechanisms. It handles storage allocation, block management, and safe access
+//! patterns for both system memory and remote (NIXL) storage.
 
-pub mod backend;
-pub mod block_manager;
-pub mod common;
-pub mod disagg_router;
-pub mod engines;
-pub mod http;
-pub mod kv_router;
-pub mod model_card;
-pub mod model_type;
-pub mod preprocessor;
-pub mod protocols;
-pub mod tokenizers;
-pub mod tokens;
-pub mod types;
-
-// #[cfg(feature = "cuda_kv")]
-// pub mod kv;
-
-pub mod kv_v2;
+pub mod block;
+pub mod events;
+pub mod layout;
+pub mod pool;
+pub mod state;
+pub mod storage;
