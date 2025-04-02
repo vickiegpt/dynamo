@@ -272,3 +272,24 @@ impl NixlMetadata {
 pub struct NixlDescriptor {
     // Implementation details...
 }
+
+#[derive(Debug, Default)]
+pub struct NullStorage {}
+
+impl Storage for NullStorage {
+    fn size(&self) -> usize {
+        0
+    }
+
+    fn is_host_accessible(&self) -> bool {
+        false
+    }
+
+    unsafe fn as_ptr(&self) -> Option<*const u8> {
+        None
+    }
+
+    unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
+        None
+    }
+}

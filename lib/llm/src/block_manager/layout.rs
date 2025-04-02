@@ -60,7 +60,7 @@ pub trait BlockLayout: Send + Sync + std::fmt::Debug {
     fn num_layers(&self) -> usize;
 
     /// Returns the size of each block in bytes
-    fn block_size(&self) -> usize;
+    fn page_size(&self) -> usize;
 
     /// Returns the inner dimension size
     fn inner_dim(&self) -> usize;
@@ -81,7 +81,7 @@ pub trait BlockLayout: Send + Sync + std::fmt::Debug {
 pub struct LayoutConfig {
     pub num_blocks: usize,
     pub num_layers: usize,
-    pub block_size: usize,
+    pub page_size: usize,
     pub inner_dim: usize,
     pub layer_config: LayerConfiguration,
 }
@@ -103,7 +103,7 @@ impl ContiguousLayout {
             ));
         }
 
-        let layer_size = config.block_size * config.inner_dim;
+        let layer_size = config.page_size * config.inner_dim;
 
         let layer_stride = layer_size;
         let block_stride = layer_stride * config.num_layers;
@@ -125,8 +125,8 @@ impl BlockLayout for ContiguousLayout {
         self.config.num_layers
     }
 
-    fn block_size(&self) -> usize {
-        self.config.block_size
+    fn page_size(&self) -> usize {
+        self.config.page_size
     }
 
     fn inner_dim(&self) -> usize {
@@ -182,7 +182,7 @@ impl NonContiguousLayout {
             ));
         }
 
-        let layer_size = config.block_size * config.inner_dim;
+        let layer_size = config.page_size * config.inner_dim;
 
         let expected_offsets = config.num_blocks * config.num_layers;
         if layer_offsets.len() != expected_offsets {
@@ -210,8 +210,8 @@ impl BlockLayout for NonContiguousLayout {
         self.config.num_layers
     }
 
-    fn block_size(&self) -> usize {
-        self.config.block_size
+    fn page_size(&self) -> usize {
+        self.config.page_size
     }
 
     fn inner_dim(&self) -> usize {
@@ -251,5 +251,54 @@ impl BlockLayout for NonContiguousLayout {
         let offset = self.layer_offsets[offset_idx];
 
         Ok((offset, self.layer_size))
+    }
+}
+
+#[derive(Debug)]
+pub struct NullLayout {
+    config: LayoutConfig,
+}
+
+impl NullLayout {
+    pub fn new(num_blocks: usize) -> Self {
+        Self {
+            config: LayoutConfig {
+                num_blocks,
+                num_layers: 0,
+                page_size: 0,
+                inner_dim: 0,
+                layer_config: LayerConfiguration::Contiguous,
+            },
+        }
+    }
+}
+
+impl BlockLayout for NullLayout {
+    fn num_blocks(&self) -> usize {
+        self.config.num_blocks
+    }
+
+    fn num_layers(&self) -> usize {
+        self.config.num_layers
+    }
+
+    fn page_size(&self) -> usize {
+        self.config.page_size
+    }
+
+    fn inner_dim(&self) -> usize {
+        self.config.inner_dim
+    }
+
+    fn layer_configuration(&self) -> LayerConfiguration {
+        self.config.layer_config
+    }
+
+    fn validate_storage(&self, storage: &dyn Storage) -> Result<()> {
+        Ok(())
+    }
+
+    fn get_layer_region(&self, block_idx: usize, layer_idx: usize) -> Result<(usize, usize)> {
+        Ok((0, 0))
     }
 }

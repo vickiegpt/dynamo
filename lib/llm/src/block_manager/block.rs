@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod state;
 pub mod view;
 
 use super::layout::BlockLayout;
@@ -43,29 +44,46 @@ pub enum BlockError {
 
     #[error("Lock error: {0}")]
     LockError(String),
+
+    #[error("Invalid state: {0}")]
+    InvalidState(String),
+
+    #[error("Unregistered")]
+    Unregistered,
 }
 
-pub trait BlockState {
-    fn sequence_hash(&self) -> u64;
-    fn local_hash(&self) -> u64;
+pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync + 'static {
+    /// Called when the block is acquired from the pool
+    fn on_acquired(&mut self);
+
+    /// Called when the block is returned to the pool
+    fn on_returned(&mut self);
+
+    /// Resets the metadata to the default value
+    /// If called, the [BlockMetadata::is_reset()] should return true
+    fn reset_metadata(&mut self);
+
+    /// Returns true if the metadata is reset
+    fn is_reset(&self) -> bool;
 }
 
 /// A block with storage and associated metadata/state
 #[derive(Debug)]
-pub struct Block<S: Storage> {
+pub struct Block<S: Storage, M: BlockMetadata> {
     storage: BlockStorage<S>,
-    // Metadata and state would be added here
+    metadata: M,
     sequence_hash: u64,
-    local_hash: u64,
+    block_hash: u64,
 }
 
-impl<S: Storage> Block<S> {
+impl<S: Storage, M: BlockMetadata> Block<S, M> {
     /// Create a new block with default metadata/state
-    pub fn new(storage: BlockStorage<S>) -> BlockResult<Self> {
+    pub fn new(storage: BlockStorage<S>, metadata: M) -> BlockResult<Self> {
         Ok(Self {
             storage,
+            metadata,
             sequence_hash: 0,
-            local_hash: 0,
+            block_hash: 0,
         })
     }
 
@@ -79,9 +97,36 @@ impl<S: Storage> Block<S> {
     //     Ok(Self {
     //         storage,
     //         sequence_hash: 0,
-    //         local_hash: 0,
+    //         block_hash: 0,
     //     })
     // }
+
+    /// Get the sequence hash of the block
+    pub fn sequence_hash(&self) -> u64 {
+        self.sequence_hash
+    }
+
+    pub fn set_sequence_hash(&mut self, sequence_hash: u64) {
+        self.sequence_hash = sequence_hash;
+    }
+
+    /// Get the local hash of the block
+    pub fn block_hash(&self) -> u64 {
+        self.block_hash
+    }
+
+    pub fn set_block_hash(&mut self, block_hash: u64) {
+        self.block_hash = block_hash;
+    }
+
+    /// Get the metadata of the block
+    pub fn metadata(&self) -> &M {
+        &self.metadata
+    }
+
+    pub fn metadata_mut(&mut self) -> &mut M {
+        &mut self.metadata
+    }
 
     /// Get a read-only view of a layer
     pub fn layer_view(&self, layer_idx: usize) -> BlockResult<view::BlockView<S>> {
@@ -104,8 +149,8 @@ impl<S: Storage> Block<S> {
     }
 
     /// Get the size of each block in the block
-    pub fn block_size(&self) -> usize {
-        self.storage.layout.block_size()
+    pub fn page_size(&self) -> usize {
+        self.storage.layout.page_size()
     }
 
     /// Get the inner dimension of the block
@@ -114,7 +159,7 @@ impl<S: Storage> Block<S> {
     }
 }
 
-impl<S: Storage> Returnable for Block<S> {
+impl<S: Storage, M: BlockMetadata> Returnable for Block<S, M> {
     fn on_return(&mut self) {}
 }
 
@@ -128,7 +173,7 @@ pub struct BlockStorage<S: Storage> {
 
 impl<S: Storage> BlockStorage<S> {
     /// Create a new block storage
-    pub fn new(storage: Arc<S>, layout: Arc<dyn BlockLayout>, block_idx: usize) -> Self {
+    fn new(storage: Arc<S>, layout: Arc<dyn BlockLayout>, block_idx: usize) -> Self {
         Self {
             storage,
             layout,
@@ -169,12 +214,13 @@ impl<S: Storage> BlockStorage<S> {
 
 /// Collection that holds shared storage and layout
 #[derive(Debug)]
-pub struct BlockStorageCollection<S: Storage> {
+pub struct BlockStorageCollection<S: Storage, M: BlockMetadata> {
     storage: Arc<S>,
     layout: Arc<dyn BlockLayout>,
+    metadata: std::marker::PhantomData<M>,
 }
 
-impl<S: Storage> BlockStorageCollection<S> {
+impl<S: Storage, M: BlockMetadata> BlockStorageCollection<S, M> {
     /// Create a new block storage collection
     pub fn new(storage: S, layout: impl BlockLayout + 'static) -> BlockResult<Self> {
         // Validate storage against layout
@@ -185,15 +231,19 @@ impl<S: Storage> BlockStorageCollection<S> {
         let storage = Arc::new(storage);
         let layout = Arc::new(layout);
 
-        Ok(Self { storage, layout })
+        Ok(Self {
+            storage,
+            layout,
+            metadata: std::marker::PhantomData,
+        })
     }
 
     /// Convert collection into Vec<Block> with default metadata/state
-    pub fn into_blocks(self) -> BlockResult<Vec<Block<S>>> {
+    pub fn into_blocks(self) -> BlockResult<Vec<Block<S, M>>> {
         (0..self.layout.num_blocks())
             .map(|idx| {
                 let storage = BlockStorage::new(self.storage.clone(), self.layout.clone(), idx);
-                Block::new(storage)
+                Block::new(storage, M::default())
             })
             .collect()
     }
