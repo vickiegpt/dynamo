@@ -20,8 +20,7 @@
 //! patterns for both system memory and remote (NIXL) storage.
 
 pub mod block;
-pub mod events;
+// pub mod events;
 pub mod layout;
 pub mod pool;
-pub mod state;
 pub mod storage;
