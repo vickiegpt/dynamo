@@ -126,6 +126,24 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
         &mut self.state
     }
 
+    /// Returns true if the block is empty
+    pub fn is_empty(&self) -> bool {
+        matches!(self.state, BlockState::Reset)
+    }
+
+    /// Returns true if the block is in the complete or registered state
+    pub fn is_complete(&self) -> bool {
+        matches!(
+            self.state,
+            BlockState::Complete(_) | BlockState::Registered(_)
+        )
+    }
+
+    /// Returns true if the block is in the registered state
+    pub fn is_registered(&self) -> bool {
+        matches!(self.state, BlockState::Registered(_))
+    }
+
     /// Get a read-only view of a layer
     pub fn layer_view(&self, layer_idx: usize) -> BlockResult<view::BlockView<S>> {
         self.storage.layer_view(layer_idx)
