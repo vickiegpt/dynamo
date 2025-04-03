@@ -38,6 +38,8 @@ fn main() {
         // C++ flags
         .flag("-std=c++11")
         .flag("-fPIC")
+        .flag("-Wno-unused-parameter")
+        .flag("-Wno-unused-variable")
         .compile("wrapper");
 
     // Generate bindings
@@ -47,6 +49,9 @@ fn main() {
         .clang_arg("-x")
         .clang_arg("c++")
         .clang_arg("-std=c++11")
+        // Suppress unused parameter warnings
+        .clang_arg("-Wno-unused-parameter")
+        .clang_arg("-Wno-unused-variable")
         // NIXL includes
         .clang_arg(format!("-I{}", nixl_include))
         .clang_arg(format!("-I{}/utils", nixl_include))
@@ -66,6 +71,10 @@ fn main() {
         .opaque_type("nixl_b_params_t")
         .opaque_type("nixl_opt_args_t")
         .allowlist_file("wrapper.h")
+        .allowlist_recursively(true)
+        // Generate bindings for NIXL types and functions
+        .allowlist_type("nixl.*")
+        .allowlist_function("nixl_.*")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
         .expect("Unable to generate bindings");

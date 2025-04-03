@@ -19,7 +19,7 @@ members = [
     "launch/*",
     "lib/llm",
     "lib/runtime",
-    "lib/bindings/c",
+    "lib/bindings/c", "lib/bindings/nixl-sys",
 ]
 resolver = "2"
 
