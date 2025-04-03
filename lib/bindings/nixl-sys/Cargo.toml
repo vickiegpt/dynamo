@@ -12,10 +12,10 @@ links = "nixl"
 build = "build.rs"
 
 [dependencies]
-thiserror = "1.0"
+thiserror = "2.0"
 libc = "0.2"
 
 [build-dependencies]
-bindgen = "0.69"
+bindgen = "0.71"
 cc = { version = "1.0", features = ["parallel"] }
 pkg-config = "0.3"
