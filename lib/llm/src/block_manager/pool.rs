@@ -57,9 +57,9 @@ use crate::{
 use super::block::{Block, BlockMetadata};
 use super::storage::Storage;
 
-pub type UniqueBlock<S: Storage, M: BlockMetadata> = PoolItem<Block<S, M>>;
+pub type UniqueBlock<S, M> = PoolItem<Block<S, M>>;
 
-pub struct BlockPool<T: Storage, M: BlockMetadata> {
+pub struct InactiveBlockPool<T: Storage, M: BlockMetadata> {
     match_tx: mpsc::UnboundedSender<MatchRequest<T, M>>,
     control_tx: mpsc::UnboundedSender<ControlRequest<T, M>>,
     fence_tx: mpsc::UnboundedSender<oneshot::Sender<()>>,
@@ -69,7 +69,7 @@ pub struct BlockPool<T: Storage, M: BlockMetadata> {
     join_handle: JoinHandle<()>,
 }
 
-impl<T: Storage, M: BlockMetadata> BlockPool<T, M> {
+impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
     pub async fn new() -> Self {
         let (match_tx, match_rx) = mpsc::unbounded_channel();
         let (return_tx, return_rx) = mpsc::unbounded_channel();
@@ -121,7 +121,7 @@ impl<T: Storage, M: BlockMetadata> BlockPool<T, M> {
         !self.join_handle.is_finished()
     }
 
-    pub async fn match_blocks(
+    pub async fn match_sequence_hashes(
         &self,
         hashes: Vec<SequenceHash>,
     ) -> Result<Vec<PoolItem<Block<T, M>>>> {
@@ -147,7 +147,7 @@ impl<T: Storage, M: BlockMetadata> BlockPool<T, M> {
         token_blocks: &[TokenBlock],
     ) -> Result<Vec<PoolItem<Block<T, M>>>> {
         let hashes: Vec<u64> = token_blocks.iter().map(|b| b.sequence_hash()).collect();
-        self.match_blocks(hashes).await
+        self.match_sequence_hashes(hashes).await
     }
 
     pub async fn take_blocks(&self, count: u32) -> Result<Vec<PoolItem<Block<T, M>>>> {
@@ -269,7 +269,7 @@ impl<T: Storage, M: BlockMetadata> ReturnHandle<Block<T, M>> for ReturnHandleImp
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PriorityKey<M: BlockMetadata> {
+pub struct PriorityKey<M: BlockMetadata> {
     metadata: M,
     sequence_hash: SequenceHash,
 }
@@ -282,15 +282,15 @@ impl<M: BlockMetadata> PriorityKey<M> {
         }
     }
 
-    fn sequence_hash(&self) -> SequenceHash {
+    pub fn sequence_hash(&self) -> SequenceHash {
         self.sequence_hash
     }
 
-    fn metadata(&self) -> &M {
+    pub fn metadata(&self) -> &M {
         &self.metadata
     }
 
-    fn update_metadata(&mut self, metadata: M) {
+    pub fn update_metadata(&mut self, metadata: M) {
         self.metadata = metadata;
     }
 }
@@ -401,6 +401,8 @@ impl<T: Storage, M: BlockMetadata> BlockPoolInner<T, M> {
             }
             BlockState::Partial(_) => {
                 tracing::debug!("inserted block to uninitialized set");
+                let mut block = block;
+                block.reset();
                 self.uninitialized_set.push_back(block);
             }
             BlockState::Complete(state) => {
@@ -487,7 +489,10 @@ impl<T: Storage, M: BlockMetadata> BlockPoolInner<T, M> {
         // a fatal error will occur if the block is not found in the lookup map
         if let Some(key) = self.priority_set.pop_first() {
             let block = match self.lookup_map.remove(&key.sequence_hash()) {
-                Some(block) => block,
+                Some(mut block) => {
+                    block.reset();
+                    block
+                }
                 None => {
                     panic!("block from priority set not found in lookup map");
                 }
@@ -752,7 +757,7 @@ pub async fn progress_engine<T: Storage + 'static, M: BlockMetadata>(
 pub(crate) mod tests {
     use crate::{
         block_manager::{
-            block::{BlockStorage, BlockStorageCollection},
+            block::{state::CompleteState, BlockStorage, BlockStorageCollection},
             layout::{BlockLayout, NullLayout},
             storage::NullStorage,
         },
@@ -834,8 +839,10 @@ pub(crate) mod tests {
         Tokens::from(tokens)
     }
 
-    pub async fn create_block_pool(num_blocks: usize) -> BlockPool<NullStorage, TestMetadata> {
-        let pool = BlockPool::new().await;
+    pub async fn create_block_pool(
+        num_blocks: usize,
+    ) -> InactiveBlockPool<NullStorage, TestMetadata> {
+        let pool = InactiveBlockPool::new().await;
 
         let block_collection = BlockStorageCollection::<NullStorage, TestMetadata>::new(
             NullStorage::default(),
@@ -852,32 +859,108 @@ pub(crate) mod tests {
         pool
     }
 
-    // // Helper to create blocks from a sequence with given size
-    // pub fn populate_block_pool(
-    //     tokens: Tokens,
-    //     block_size: usize,
-    //     pool: &BlockPool<NullStorage, TestMetadata>,
-    // ) -> Vec<Block<NullStorage, TestMetadata>> {
-    //     let (token_blocks, partial_token_block) = tokens.into_sequence(block_size).into_parts();
+    pub async fn acquire_blocks(
+        tokens: Tokens,
+        block_size: usize,
+        pool: &InactiveBlockPool<NullStorage, TestMetadata>,
+    ) -> (Vec<UniqueBlock<NullStorage, TestMetadata>>, usize) {
+        let (mut token_blocks, _partial_token_block) =
+            tokens.into_sequence(block_size).into_parts();
 
-    //     // pop off the last block for partial
-    //     let partial_block = blocks.pop().unwrap();
+        let total_complete_blocks = token_blocks.len();
 
-    //     // zip token and blocks and initialize the blocks
-    //     token_blocks
-    //         .into_iter()
-    //         .map(|token_block| {
-    //             let mut block = pool.take_block(token_block.sequence_hash()).await.unwrap();
-    //             block.set_sequence_hash(token_block.sequence_hash());
-    //             block.set_block_hash(token_block.block_hash());
-    //             block
-    //         })
-    //         .collect()
-    // }
+        // this will match the token_blocks to any matching blocks in the inactive pool
+        // these blocks have the same sequence hash as the token_blocks, thus no updates are needed
+        let matched_blocks = pool.match_token_blocks(&token_blocks).await.unwrap();
+        let matched_block_count = matched_blocks.len();
+        println!("matched_blocks: {:?}", matched_block_count);
+
+        // all matched blocks should be in the complete or registered state
+        for block in &matched_blocks {
+            assert!(block.is_complete());
+        }
+
+        // drain the matched blocks from the token_blocks
+        token_blocks.drain(0..matched_block_count);
+
+        assert_eq!(
+            token_blocks.len() + matched_blocks.len(),
+            total_complete_blocks
+        );
+
+        // try to acquire the remaining blocks
+        let mut unmatched_blocks = pool.take_blocks(token_blocks.len() as u32).await.unwrap();
+
+        assert_eq!(unmatched_blocks.len(), token_blocks.len());
+
+        for unmatched in &unmatched_blocks {
+            assert!(unmatched.is_empty());
+        }
+
+        for (unmatched, token_block) in unmatched_blocks.iter_mut().zip(token_blocks.into_iter()) {
+            assert!(unmatched.is_empty());
+            *unmatched.state_mut() = BlockState::Complete(CompleteState { token_block });
+        }
+
+        let mut blocks = matched_blocks;
+        blocks.extend(unmatched_blocks);
+        (blocks, matched_block_count)
+    }
+
+    #[tokio::test]
+    async fn test_block_pool_lifecycle() {
+        dynamo_runtime::logging::init();
+
+        const PAGE_SIZE: usize = 2;
+
+        let pool = create_block_pool(10).await;
+        assert_eq!(pool.total_blocks(), 10);
+        assert_eq!(pool.available_blocks(), 10);
+
+        let blocks = pool.take_blocks(10).await.unwrap();
+        assert_eq!(blocks.len(), 10);
+        assert_eq!(pool.total_blocks(), 10);
+        assert_eq!(pool.available_blocks(), 0);
+
+        drop(blocks);
+        pool.fence().await.unwrap();
+
+        assert_eq!(pool.total_blocks(), 10);
+        assert_eq!(pool.available_blocks(), 10);
+
+        let tokens = create_token_sequence(&[1, 2, 3, 4]);
+
+        let (blocks, matched_block_count) = acquire_blocks(tokens.clone(), PAGE_SIZE, &pool).await;
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(matched_block_count, 0);
+        assert_eq!(pool.available_blocks(), 8);
+
+        drop(blocks);
+        pool.fence().await.unwrap();
+
+        assert_eq!(pool.total_blocks(), 10);
+        assert_eq!(pool.available_blocks(), 10);
+
+        let (blocks, matched_block_count) = acquire_blocks(tokens.clone(), PAGE_SIZE, &pool).await;
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(matched_block_count, 2);
+        assert_eq!(pool.available_blocks(), 8);
+
+        drop(blocks);
+        pool.fence().await.unwrap();
+
+        assert_eq!(pool.total_blocks(), 10);
+        assert_eq!(pool.available_blocks(), 10);
+
+        let blocks = pool.take_blocks(10).await.unwrap();
+        for block in &blocks {
+            assert!(block.is_empty());
+        }
+    }
 
     // #[tokio::test]
     // async fn test_basic_sequence_matching() {
-    //     let pool = BlockPool::new().await;
+    //     let pool = InactiveBlockPool::new().await;
 
     //     // Create a sequence of 4 tokens split into blocks of 2
     //     let sequence = create_token_sequence(&[1, 2, 3, 4]);
@@ -901,7 +984,7 @@ pub(crate) mod tests {
     //     assert_eq!(pool.available_blocks(), 2);
 
     //     // Match the blocks in sequence
-    //     let matched = pool.match_blocks(hashes.clone()).await.unwrap();
+    //     let matched = pool.match_sequence_hashes(hashes.clone()).await.unwrap();
     //     assert_eq!(matched.len(), 2);
 
     //     assert_eq!(pool.total_blocks(), 2);
@@ -924,7 +1007,7 @@ pub(crate) mod tests {
 
     // #[tokio::test]
     // async fn test_equal_priority_taking() {
-    //     let pool = BlockPool::new().await;
+    //     let pool = InactiveBlockPool::new().await;
 
     //     // Create two sequences with different priorities
     //     let seq1 = create_token_sequence(&[1, 2, 3, 4]);
@@ -966,7 +1049,7 @@ pub(crate) mod tests {
 
     // #[tokio::test]
     // async fn test_priority_taking() {
-    //     let pool = BlockPool::new().await;
+    //     let pool = InactiveBlockPool::new().await;
 
     //     // Create two sequences with different priorities
     //     let seq1 = create_token_sequence(&[1, 2, 3, 4]);
@@ -1011,7 +1094,7 @@ pub(crate) mod tests {
 
     // #[tokio::test]
     // async fn test_priority_taking_after_update() {
-    //     let pool = BlockPool::new().await;
+    //     let pool = InactiveBlockPool::new().await;
 
     //     // Create two sequences with different priorities
     //     let seq1 = create_token_sequence(&[1, 2, 3, 4]);
@@ -1076,7 +1159,7 @@ pub(crate) mod tests {
 
     // #[tokio::test]
     // async fn test_reset_all() {
-    //     let pool = BlockPool::new().await;
+    //     let pool = InactiveBlockPool::new().await;
 
     //     // Create two sequences with different priorities
     //     let seq1 = create_token_sequence(&[1, 2, 3, 4]);
@@ -1114,13 +1197,13 @@ pub(crate) mod tests {
     //     pool.fence().await.unwrap();
 
     //     // Try to match from block 2 hashes, expect no matches
-    //     let matched = pool.match_blocks(block_hashes).await.unwrap();
+    //     let matched = pool.match_sequence_hashes(block_hashes).await.unwrap();
     //     assert_eq!(matched.len(), 0);
     // }
 
     // #[tokio::test]
     // async fn test_reset_block2() {
-    //     let pool = BlockPool::new().await;
+    //     let pool = InactiveBlockPool::new().await;
 
     //     // Create two sequences with different priorities
     //     let seq1 = create_token_sequence(&[1, 2, 3, 4]);
@@ -1163,10 +1246,10 @@ pub(crate) mod tests {
     //     pool.fence().await.unwrap();
 
     //     // Try to match from block 2 hashes, expect no matches
-    //     let matched = pool.match_blocks(block2_hashes).await.unwrap();
+    //     let matched = pool.match_sequence_hashes(block2_hashes).await.unwrap();
     //     assert_eq!(matched.len(), 0);
 
-    //     let matched = pool.match_blocks(block1_hashes).await.unwrap();
+    //     let matched = pool.match_sequence_hashes(block1_hashes).await.unwrap();
     //     assert_eq!(matched.len(), 2);
     // }
 }
