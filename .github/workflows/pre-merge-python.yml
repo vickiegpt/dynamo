@@ -54,13 +54,27 @@ jobs:
           docker exec wheel_copy bash -c 'ls dist/*.whl' | while read line; do docker cp wheel_copy:/workspace/$line ./wheels; done
           docker container stop wheel_copy
           ls -al wheels
-      - name: Archive Python Wheels
+      - name: Archive ai_dynamo Wheel
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: python-wheels
+          name: wheel-ai_dynamo
           if-no-files-found: error
-          path: ./wheels
+          path: ./wheels/ai_dynamo-*.whl
+      - name: Archive ai_dynamo_runtime Wheel
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wheel-ai_dynamo_runtime
+          if-no-files-found: error
+          path: ./wheels/ai_dynamo_runtime-*.whl
+      - name: Archive ai_dynamo_vllm Wheel
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wheel-ai_dynamo_vllm
+          if-no-files-found: error
+          path: ./wheels/ai_dynamo_vllm-*.whl
       - name: Run pytest
         env:
           PYTEST_MARKS: "pre_merge or mypy"
