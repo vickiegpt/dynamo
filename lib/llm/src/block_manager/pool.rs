@@ -43,44 +43,78 @@ use dynamo_runtime::{
     utils::pool::{PoolExt, PoolItem, PoolValue, ReturnHandle},
     Result,
 };
-use std::{
-    collections::BTreeMap,
-    collections::HashMap,
-    collections::VecDeque,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-};
+use std::{collections::BTreeSet, collections::HashMap, collections::VecDeque, sync::Arc};
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, watch},
     task::JoinHandle,
 };
 
-use crate::tokens::{SequenceHash, TokenBlock};
+use crate::{
+    block_manager::block::BlockState,
+    tokens::{SequenceHash, TokenBlock},
+};
 
 use super::block::{Block, BlockMetadata};
 use super::storage::Storage;
 
 pub type UniqueBlock<S: Storage, M: BlockMetadata> = PoolItem<Block<S, M>>;
 
-pub struct AvailableBlocks<T: Storage + Send + Sync + 'static, M: BlockMetadata> {
+pub struct BlockPool<T: Storage, M: BlockMetadata> {
     match_tx: mpsc::UnboundedSender<MatchRequest<T, M>>,
     control_tx: mpsc::UnboundedSender<ControlRequest<T, M>>,
     fence_tx: mpsc::UnboundedSender<oneshot::Sender<()>>,
     return_handle: Arc<ReturnHandleImpl<T, M>>,
-    total_blocks: Arc<AtomicU64>,
-    available_blocks: Arc<AtomicU64>,
+    total_blocks_rx: watch::Receiver<u64>,
+    available_blocks_rx: watch::Receiver<u64>,
     join_handle: JoinHandle<()>,
 }
 
-impl<T: Storage + Send + Sync, M: BlockMetadata> AvailableBlocks<T, M> {
+impl<T: Storage, M: BlockMetadata> BlockPool<T, M> {
+    pub async fn new() -> Self {
+        let (match_tx, match_rx) = mpsc::unbounded_channel();
+        let (return_tx, return_rx) = mpsc::unbounded_channel();
+        let (control_tx, control_rx) = mpsc::unbounded_channel();
+        let (fence_tx, fence_rx) = mpsc::unbounded_channel();
+
+        let return_tx_clone = return_tx.clone();
+        let return_handle = Arc::new(ReturnHandleImpl {
+            return_tx: return_tx_clone,
+        });
+
+        let state = BlockPoolInner::new();
+
+        let total_blocks_rx = state.total_blocks_watcher();
+        let available_blocks_rx = state.available_blocks_watcher();
+
+        let join_handle = tokio::spawn(progress_engine(
+            match_rx, return_rx, control_rx, fence_rx, state,
+        ));
+
+        Self {
+            match_tx,
+            control_tx,
+            fence_tx,
+            return_handle,
+            total_blocks_rx,
+            available_blocks_rx,
+            join_handle,
+        }
+    }
+
     pub fn total_blocks(&self) -> u64 {
-        self.total_blocks.load(Ordering::SeqCst)
+        *self.total_blocks_rx.borrow()
     }
 
     pub fn available_blocks(&self) -> u64 {
-        self.available_blocks.load(Ordering::SeqCst)
+        *self.available_blocks_rx.borrow()
+    }
+
+    pub fn total_blocks_watch(&self) -> watch::Receiver<u64> {
+        self.total_blocks_rx.clone()
+    }
+
+    pub fn available_blocks_watch(&self) -> watch::Receiver<u64> {
+        self.available_blocks_rx.clone()
     }
 
     pub fn is_active(&self) -> bool {
@@ -222,52 +256,14 @@ impl<T: Storage + Send + Sync, M: BlockMetadata> AvailableBlocks<T, M> {
     }
 }
 
-struct ReturnHandleImpl<T: Storage + Send + Sync + 'static, M: BlockMetadata> {
+struct ReturnHandleImpl<T: Storage + 'static, M: BlockMetadata> {
     return_tx: mpsc::UnboundedSender<PoolValue<Block<T, M>>>,
 }
 
-impl<T: Storage + Send + Sync, M: BlockMetadata> ReturnHandle<Block<T, M>>
-    for ReturnHandleImpl<T, M>
-{
+impl<T: Storage, M: BlockMetadata> ReturnHandle<Block<T, M>> for ReturnHandleImpl<T, M> {
     fn return_to_pool(&self, value: PoolValue<Block<T, M>>) {
         if self.return_tx.send(value).is_err() {
             tracing::trace!("Failed to return block to pool");
-        }
-    }
-}
-
-impl<T: Storage + Send + Sync, M: BlockMetadata> AvailableBlocks<T, M> {
-    pub async fn new() -> Self {
-        let (match_tx, match_rx) = mpsc::unbounded_channel();
-        let (return_tx, return_rx) = mpsc::unbounded_channel();
-        let (control_tx, control_rx) = mpsc::unbounded_channel();
-        let (fence_tx, fence_rx) = mpsc::unbounded_channel();
-
-        let total_blocks = Arc::new(AtomicU64::new(0));
-        let available_blocks = Arc::new(AtomicU64::new(0));
-
-        let return_tx_clone = return_tx.clone();
-        let return_handle = Arc::new(ReturnHandleImpl {
-            return_tx: return_tx_clone,
-        });
-
-        let join_handle = tokio::spawn(progress_engine(
-            match_rx,
-            return_rx,
-            control_rx,
-            fence_rx,
-            total_blocks.clone(),
-            available_blocks.clone(),
-        ));
-
-        Self {
-            match_tx,
-            control_tx,
-            fence_tx,
-            return_handle,
-            total_blocks,
-            available_blocks,
-            join_handle,
         }
     }
 }
@@ -279,6 +275,21 @@ struct PriorityKey<M: BlockMetadata> {
 }
 
 impl<M: BlockMetadata> PriorityKey<M> {
+    fn new(metadata: M, sequence_hash: SequenceHash) -> Self {
+        Self {
+            metadata,
+            sequence_hash,
+        }
+    }
+
+    fn sequence_hash(&self) -> SequenceHash {
+        self.sequence_hash
+    }
+
+    fn metadata(&self) -> &M {
+        &self.metadata
+    }
+
     fn update_metadata(&mut self, metadata: M) {
         self.metadata = metadata;
     }
@@ -299,22 +310,22 @@ impl<M: BlockMetadata> Ord for PriorityKey<M> {
     }
 }
 
-impl<T: Storage + Send + Sync, M: BlockMetadata> From<&Block<T, M>> for PriorityKey<M> {
-    fn from(block: &Block<T, M>) -> Self {
-        Self {
-            metadata: block.metadata().clone(),
-            sequence_hash: block.sequence_hash(),
-        }
-    }
-}
+// impl<T: Storage, M: BlockMetadata> From<&Block<T, M>> for PriorityKey<M> {
+//     fn from(block: &Block<T, M>) -> Result<Self, BlockError> {
+//         Self {
+//             metadata: block.metadata().clone(),
+//             sequence_hash: block.sequence_hash(),
+//         }
+//     }
+// }
 
 #[derive(Default)]
-struct AvailableBlocksState<T: Storage + Send + Sync + 'static, M: BlockMetadata> {
+pub struct BlockPoolInner<T: Storage + 'static, M: BlockMetadata> {
     // Direct lookup by sequence_hash
     lookup_map: HashMap<SequenceHash, PoolValue<Block<T, M>>>,
 
     // Ordered by timestamp (oldest first)
-    priority_set: BTreeMap<PriorityKey<M>, SequenceHash>,
+    priority_set: BTreeSet<PriorityKey<M>>,
 
     // Fully Uninitialized
     uninitialized_set: VecDeque<PoolValue<Block<T, M>>>,
@@ -323,50 +334,86 @@ struct AvailableBlocksState<T: Storage + Send + Sync + 'static, M: BlockMetadata
     return_tick: u64,
 
     // Total blocks
-    total_blocks: Arc<AtomicU64>,
+    total_blocks_tx: watch::Sender<u64>,
 
     // Available blocks
-    available_blocks: Arc<AtomicU64>,
+    available_blocks_tx: watch::Sender<u64>,
 }
 
-impl<T: Storage + Send + Sync, M: BlockMetadata> AvailableBlocksState<T, M> {
-    fn new(total_blocks: Arc<AtomicU64>, available_blocks: Arc<AtomicU64>) -> Self {
+impl<T: Storage, M: BlockMetadata> BlockPoolInner<T, M> {
+    fn new() -> Self {
+        let (total_blocks_tx, _) = watch::channel(0);
+        let (available_blocks_tx, _) = watch::channel(0);
+
         Self {
             lookup_map: HashMap::new(),
-            priority_set: BTreeMap::new(),
+            priority_set: BTreeSet::new(),
             uninitialized_set: VecDeque::new(),
             return_tick: 0,
-            total_blocks,
-            available_blocks,
+            total_blocks_tx,
+            available_blocks_tx,
         }
     }
+
+    pub fn total_blocks_watcher(&self) -> watch::Receiver<u64> {
+        self.total_blocks_tx.subscribe()
+    }
+
+    pub fn available_blocks_watcher(&self) -> watch::Receiver<u64> {
+        self.available_blocks_tx.subscribe()
+    }
+
+    fn insert_with_sequence_hash(
+        &mut self,
+        block: PoolValue<Block<T, M>>,
+        sequence_hash: SequenceHash,
+    ) {
+        let priority_key = PriorityKey::new(block.metadata().clone(), sequence_hash);
+        if self.priority_set.contains(&priority_key) {
+            tracing::debug!("multiple entries with the same priority key, resetting block and inserting into uninitialized set");
+            let mut block = block;
+            block.reset();
+            self.uninitialized_set.push_back(block);
+        } else {
+            if self.lookup_map.contains_key(&sequence_hash) {
+                tracing::debug!("multiple entries in lookup map with the same sequence hash, inserting into uninitialized set");
+                let mut block = block;
+                block.reset();
+                self.uninitialized_set.push_back(block);
+            } else {
+                tracing::debug!("inserting block to map and priority set");
+                self.priority_set.insert(priority_key);
+                self.lookup_map.insert(sequence_hash, block);
+            }
+        }
+    }
+
     // Insert an item with a given key and sequence_hash
     fn insert(&mut self, block: PoolValue<Block<T, M>>) {
-        let sequence_hash = block.sequence_hash();
-        tracing::debug!(sequence_hash, "inserting block into available blocks");
+        tracing::debug!("inserting block into available blocks");
 
         // If we already have an entry for this sequence hash or the block is reset,
         // we need to move it to the uninitialized set
-        if self.lookup_map.contains_key(&sequence_hash) || block.metadata().is_reset() {
-            tracing::debug!(sequence_hash, "inserted block to uninitialized set");
-            self.uninitialized_set.push_back(block);
-            return;
+        match block.state() {
+            BlockState::Reset => {
+                tracing::debug!("inserted block to uninitialized set");
+                self.uninitialized_set.push_back(block);
+            }
+            BlockState::Partial(_) => {
+                tracing::debug!("inserted block to uninitialized set");
+                self.uninitialized_set.push_back(block);
+            }
+            BlockState::Complete(state) => {
+                tracing::debug!("inserting completed/unregistered block to map and priority set");
+                let sequence_hash = state.token_block.sequence_hash();
+                self.insert_with_sequence_hash(block, sequence_hash);
+            }
+            BlockState::Registered(state) => {
+                tracing::debug!("inserting registered block to map and priority set");
+                let sequence_hash = state.sequence_hash;
+                self.insert_with_sequence_hash(block, sequence_hash);
+            }
         }
-
-        // Insert into timestamp set
-        let key = PriorityKey::from(&*block);
-        let check_multiple_entries = self.priority_set.insert(key, sequence_hash);
-        assert!(
-            check_multiple_entries.is_none(),
-            "fatal error: multiple entries for the same sequence hash in timestamp set"
-        );
-
-        // Add to the lookup map
-        let check_multiple_entries = self.lookup_map.insert(sequence_hash, block);
-        assert!(
-            check_multiple_entries.is_none(),
-            "fatal error: multiple entries for the same sequence hash in lookup map"
-        );
     }
 
     fn take_with_sequence_hash(
@@ -375,8 +422,9 @@ impl<T: Storage + Send + Sync, M: BlockMetadata> AvailableBlocksState<T, M> {
     ) -> Option<PoolValue<Block<T, M>>> {
         match self.lookup_map.remove(&sequence_hash) {
             Some(block) => {
-                // Remove from timestamp set
-                self.priority_set.remove(&PriorityKey::from(&*block));
+                // Remove from priority set
+                let priority_key = PriorityKey::new(block.metadata().clone(), sequence_hash);
+                self.priority_set.remove(&priority_key);
                 Some(block)
             }
             None => None,
@@ -398,8 +446,9 @@ impl<T: Storage + Send + Sync, M: BlockMetadata> AvailableBlocksState<T, M> {
             }
         }
 
-        self.available_blocks
-            .fetch_sub(matched_blocks.len() as u64, Ordering::SeqCst);
+        let count = matched_blocks.len() as u64;
+        self.available_blocks_tx
+            .send_modify(|n| *n = n.saturating_sub(count));
 
         matched_blocks
     }
@@ -436,8 +485,8 @@ impl<T: Storage + Send + Sync, M: BlockMetadata> AvailableBlocksState<T, M> {
 
         // if we have blocks in the priority set, pop the first (it's sorted by priority)
         // a fatal error will occur if the block is not found in the lookup map
-        if let Some((_key, sequence_hash)) = self.priority_set.pop_first() {
-            let block = match self.lookup_map.remove(&sequence_hash) {
+        if let Some(key) = self.priority_set.pop_first() {
+            let block = match self.lookup_map.remove(&key.sequence_hash()) {
                 Some(block) => block,
                 None => {
                     panic!("block from priority set not found in lookup map");
@@ -463,10 +512,9 @@ impl<T: Storage + Send + Sync, M: BlockMetadata> AvailableBlocksState<T, M> {
             }
         }
 
-        self.available_blocks.fetch_sub(
-            taken_blocks.len() as u64,
-            std::sync::atomic::Ordering::SeqCst,
-        );
+        let count = taken_blocks.len() as u64;
+        self.available_blocks_tx
+            .send_modify(|n| *n = n.saturating_sub(count));
 
         // Send the result back through the channel
         if tx.send(taken_blocks).is_err() {
@@ -523,22 +571,22 @@ impl<T: Storage + Send + Sync, M: BlockMetadata> AvailableBlocksState<T, M> {
             }
         }
     }
+
     fn handle_insert(&mut self, block: Block<T, M>) {
-        self.available_blocks
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.total_blocks
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.available_blocks_tx.send_modify(|n| *n += 1);
+        self.total_blocks_tx.send_modify(|n| *n += 1);
         self.return_tick += 1;
 
         self.insert(PoolValue::Direct(block));
     }
+
     fn handle_return(&mut self, block: PoolValue<Block<T, M>>) {
-        self.available_blocks
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.available_blocks_tx.send_modify(|n| *n += 1);
         self.return_tick += 1;
 
         self.insert(block);
     }
+
     fn handle_update_single(&mut self, update: UpdateBlock<M>) {
         self.update_block(vec![update]);
     }
@@ -572,10 +620,10 @@ impl<T: Storage + Send + Sync, M: BlockMetadata> AvailableBlocksState<T, M> {
     }
 
     fn handle_reset_all(&mut self) {
-        while let Some((_key, sequence_hash)) = self.priority_set.pop_first() {
-            if let Some(mut block) = self.lookup_map.remove(&sequence_hash) {
-                // Reset metadata through deref
-                block.metadata_mut().reset_metadata();
+        while let Some(priority_key) = self.priority_set.pop_first() {
+            if let Some(mut block) = self.lookup_map.remove(&priority_key.sequence_hash()) {
+                // reset block -- both state and metadata
+                block.reset();
                 self.insert(block);
             } else {
                 panic!("block from priority set not found in lookup map");
@@ -584,33 +632,30 @@ impl<T: Storage + Send + Sync, M: BlockMetadata> AvailableBlocksState<T, M> {
     }
 }
 
-impl<T: Storage + Send + Sync, M: BlockMetadata> PoolExt<Block<T, M>>
-    for AvailableBlocksState<T, M>
-{
-}
+impl<T: Storage, M: BlockMetadata> PoolExt<Block<T, M>> for BlockPoolInner<T, M> {}
 
 #[derive(Dissolve)]
-pub struct MatchSingle<T: Storage + Send + Sync + 'static, M: BlockMetadata> {
+pub struct MatchSingle<T: Storage + 'static, M: BlockMetadata> {
     hash: SequenceHash,
     return_handle: Arc<ReturnHandleImpl<T, M>>,
     tx: oneshot::Sender<Option<UniqueBlock<T, M>>>,
 }
 
 #[derive(Dissolve)]
-pub struct MatchMultiple<T: Storage + Send + Sync + 'static, M: BlockMetadata> {
+pub struct MatchMultiple<T: Storage + 'static, M: BlockMetadata> {
     hashes: Vec<SequenceHash>,
     return_handle: Arc<ReturnHandleImpl<T, M>>,
     tx: oneshot::Sender<Vec<UniqueBlock<T, M>>>,
 }
 
 #[derive(Dissolve)]
-pub struct Take<T: Storage + Send + Sync + 'static, M: BlockMetadata> {
+pub struct Take<T: Storage + 'static, M: BlockMetadata> {
     count: u32,
     return_handle: Arc<ReturnHandleImpl<T, M>>,
     tx: oneshot::Sender<Vec<UniqueBlock<T, M>>>,
 }
 
-pub enum MatchRequest<T: Storage + Send + Sync + 'static, M: BlockMetadata> {
+pub enum MatchRequest<T: Storage + 'static, M: BlockMetadata> {
     MatchSingle(MatchSingle<T, M>),
     MatchMultiple(MatchMultiple<T, M>),
     Take(Take<T, M>),
@@ -628,7 +673,7 @@ impl<M: BlockMetadata> UpdateBlock<M> {
 }
 
 #[derive(Dissolve)]
-pub struct InsertControl<T: Storage + Send + Sync + 'static, M: BlockMetadata> {
+pub struct InsertControl<T: Storage + 'static, M: BlockMetadata> {
     block: Block<T, M>,
     tx: oneshot::Sender<()>,
 }
@@ -658,7 +703,7 @@ pub struct ResetAllControl<M: BlockMetadata> {
     _phantom: std::marker::PhantomData<M>,
 }
 
-pub enum ControlRequest<T: Storage + Send + Sync + 'static, M: BlockMetadata> {
+pub enum ControlRequest<T: Storage + 'static, M: BlockMetadata> {
     Insert(InsertControl<T, M>),
     UpdateSingle(UpdateSingleControl<M>),
     UpdateMultiple(UpdateMultipleControl<M>),
@@ -666,20 +711,17 @@ pub enum ControlRequest<T: Storage + Send + Sync + 'static, M: BlockMetadata> {
     ResetAll(ResetAllControl<M>),
 }
 
-pub async fn progress_engine<T: Storage + Send + Sync + 'static, M: BlockMetadata>(
+pub async fn progress_engine<T: Storage + 'static, M: BlockMetadata>(
     match_rx: mpsc::UnboundedReceiver<MatchRequest<T, M>>,
     return_rx: mpsc::UnboundedReceiver<PoolValue<Block<T, M>>>,
     ctrl_rx: mpsc::UnboundedReceiver<ControlRequest<T, M>>,
     fence_rx: mpsc::UnboundedReceiver<oneshot::Sender<()>>,
-    total_blocks: Arc<AtomicU64>,
-    available_blocks: Arc<AtomicU64>,
+    mut state: BlockPoolInner<T, M>,
 ) {
     let mut match_rx = match_rx;
     let mut return_rx = return_rx;
     let mut ctrl_rx = ctrl_rx;
     let mut fence_rx = fence_rx;
-
-    let mut state = AvailableBlocksState::new(total_blocks, available_blocks);
 
     loop {
         tokio::select! {
@@ -728,7 +770,9 @@ pub(crate) mod tests {
     impl BlockMetadata for TestMetadata {
         fn on_acquired(&mut self) {}
 
-        fn on_returned(&mut self) {}
+        fn on_returned(&mut self, tick: u64) {
+            self.return_tick = tick;
+        }
 
         fn is_reset(&self) -> bool {
             self.priority == 0 && self.return_tick == 0
@@ -742,73 +786,43 @@ pub(crate) mod tests {
 
     type TestPriorityKey = PriorityKey<TestMetadata>;
 
+    fn make_priority_key(priority: u32, return_tick: u64) -> TestPriorityKey {
+        TestPriorityKey {
+            metadata: TestMetadata {
+                priority,
+                return_tick,
+            },
+            sequence_hash: SequenceHash::from(return_tick),
+        }
+    }
+
     #[test]
     fn test_priority_key_ord() {
-        let mut map = BTreeMap::new();
+        let mut map = BTreeSet::new();
+
         let hash1 = SequenceHash::from(1u64);
         let hash2 = SequenceHash::from(2u64);
         let hash3 = SequenceHash::from(3u64);
 
-        map.insert(
-            TestPriorityKey {
-                metadata: TestMetadata {
-                    priority: 0,
-                    return_tick: 1,
-                },
-                sequence_hash: hash1,
-            },
-            "value1",
-        );
-        map.insert(
-            TestPriorityKey {
-                metadata: TestMetadata {
-                    priority: 1,
-                    return_tick: 0,
-                },
-                sequence_hash: hash2,
-            },
-            "value2",
-        );
-        map.insert(
-            TestPriorityKey {
-                metadata: TestMetadata {
-                    priority: 0,
-                    return_tick: 2,
-                },
-                sequence_hash: hash3,
-            },
-            "value3",
-        );
-
-        let keys: Vec<_> = map.keys().collect();
-
-        // Priority is the primary sort key (0 before 1)
-        assert_eq!(keys[0].metadata.priority, 0);
-        assert_eq!(keys[1].metadata.priority, 0);
-        assert_eq!(keys[2].metadata.priority, 1);
-
-        // For same priority, return_tick is the secondary sort key
-        assert_eq!(keys[0].metadata.return_tick, 1);
-        assert_eq!(keys[1].metadata.return_tick, 2);
+        map.insert(make_priority_key(0, 2));
+        map.insert(make_priority_key(1, 1));
+        map.insert(make_priority_key(0, 3));
 
         // Test popping from the map to verify ordering
-        let (first_key, first_value) = map.pop_first().unwrap();
+        let first_key = map.pop_first().unwrap();
         assert_eq!(first_key.metadata.priority, 0);
-        assert_eq!(first_key.metadata.return_tick, 1);
+        assert_eq!(first_key.metadata.return_tick, 2);
         assert_eq!(first_key.sequence_hash, hash1);
-        assert_eq!(first_value, "value1");
 
-        let (second_key, second_value) = map.pop_first().unwrap();
+        let second_key = map.pop_first().unwrap();
         assert_eq!(second_key.metadata.priority, 0);
-        assert_eq!(second_key.metadata.return_tick, 2);
+        assert_eq!(second_key.metadata.return_tick, 3);
         assert_eq!(second_key.sequence_hash, hash3);
-        assert_eq!(second_value, "value3");
 
-        let (third_key, third_value) = map.pop_first().unwrap();
+        let third_key = map.pop_first().unwrap();
         assert_eq!(third_key.metadata.priority, 1);
-        assert_eq!(third_key.metadata.return_tick, 0);
+        assert_eq!(third_key.metadata.return_tick, 1);
         assert_eq!(third_key.sequence_hash, hash2);
-        assert_eq!(third_value, "value2");
 
         // Map should now be empty
         assert!(map.is_empty());
@@ -820,40 +834,50 @@ pub(crate) mod tests {
         Tokens::from(tokens)
     }
 
-    // Helper to create blocks from a sequence with given size
-    pub fn create_blocks(
-        tokens: Tokens,
-        block_size: usize,
-    ) -> Vec<Block<NullStorage, TestMetadata>> {
-        let (token_blocks, partial_token_block) = tokens.into_sequence(block_size).into_parts();
+    pub async fn create_block_pool(num_blocks: usize) -> BlockPool<NullStorage, TestMetadata> {
+        let pool = BlockPool::new().await;
 
-        let block_collection = BlockStorageCollection::new(
+        let block_collection = BlockStorageCollection::<NullStorage, TestMetadata>::new(
             NullStorage::default(),
-            NullLayout::new(token_blocks.len() + 1),
+            NullLayout::new(num_blocks),
         )
         .unwrap();
 
-        let mut blocks = block_collection.into_blocks().unwrap();
+        let blocks = block_collection.into_blocks().unwrap();
 
-        // pop off the last block for partial
-        let partial_block = blocks.pop().unwrap();
+        for block in blocks {
+            pool.insert(block).await.unwrap();
+        }
 
-        // zip token and blocks and initialize the blocks
-        token_blocks
-            .into_iter()
-            .zip(blocks.into_iter())
-            .into_iter()
-            .map(|(token_block, mut block)| {
-                block.set_sequence_hash(token_block.sequence_hash());
-                block.set_block_hash(token_block.block_hash());
-                block
-            })
-            .collect()
+        pool
     }
+
+    // // Helper to create blocks from a sequence with given size
+    // pub fn populate_block_pool(
+    //     tokens: Tokens,
+    //     block_size: usize,
+    //     pool: &BlockPool<NullStorage, TestMetadata>,
+    // ) -> Vec<Block<NullStorage, TestMetadata>> {
+    //     let (token_blocks, partial_token_block) = tokens.into_sequence(block_size).into_parts();
+
+    //     // pop off the last block for partial
+    //     let partial_block = blocks.pop().unwrap();
+
+    //     // zip token and blocks and initialize the blocks
+    //     token_blocks
+    //         .into_iter()
+    //         .map(|token_block| {
+    //             let mut block = pool.take_block(token_block.sequence_hash()).await.unwrap();
+    //             block.set_sequence_hash(token_block.sequence_hash());
+    //             block.set_block_hash(token_block.block_hash());
+    //             block
+    //         })
+    //         .collect()
+    // }
 
     // #[tokio::test]
     // async fn test_basic_sequence_matching() {
-    //     let pool = AvailableBlocks::new().await;
+    //     let pool = BlockPool::new().await;
 
     //     // Create a sequence of 4 tokens split into blocks of 2
     //     let sequence = create_token_sequence(&[1, 2, 3, 4]);
@@ -900,7 +924,7 @@ pub(crate) mod tests {
 
     // #[tokio::test]
     // async fn test_equal_priority_taking() {
-    //     let pool = AvailableBlocks::new().await;
+    //     let pool = BlockPool::new().await;
 
     //     // Create two sequences with different priorities
     //     let seq1 = create_token_sequence(&[1, 2, 3, 4]);
@@ -942,7 +966,7 @@ pub(crate) mod tests {
 
     // #[tokio::test]
     // async fn test_priority_taking() {
-    //     let pool = AvailableBlocks::new().await;
+    //     let pool = BlockPool::new().await;
 
     //     // Create two sequences with different priorities
     //     let seq1 = create_token_sequence(&[1, 2, 3, 4]);
@@ -987,7 +1011,7 @@ pub(crate) mod tests {
 
     // #[tokio::test]
     // async fn test_priority_taking_after_update() {
-    //     let pool = AvailableBlocks::new().await;
+    //     let pool = BlockPool::new().await;
 
     //     // Create two sequences with different priorities
     //     let seq1 = create_token_sequence(&[1, 2, 3, 4]);
@@ -1052,7 +1076,7 @@ pub(crate) mod tests {
 
     // #[tokio::test]
     // async fn test_reset_all() {
-    //     let pool = AvailableBlocks::new().await;
+    //     let pool = BlockPool::new().await;
 
     //     // Create two sequences with different priorities
     //     let seq1 = create_token_sequence(&[1, 2, 3, 4]);
@@ -1096,7 +1120,7 @@ pub(crate) mod tests {
 
     // #[tokio::test]
     // async fn test_reset_block2() {
-    //     let pool = AvailableBlocks::new().await;
+    //     let pool = BlockPool::new().await;
 
     //     // Create two sequences with different priorities
     //     let seq1 = create_token_sequence(&[1, 2, 3, 4]);
