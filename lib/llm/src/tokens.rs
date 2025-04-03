@@ -85,6 +85,7 @@ impl Tokens {
     }
 }
 
+#[derive(Debug)]
 pub struct PartialTokenBlock {
     tokens: Tokens,
     block_size: usize,
@@ -145,6 +146,7 @@ pub struct TokenBlock {
     parent_sequence_hash: Option<SequenceHash>,
 }
 
+#[derive(Debug)]
 pub struct TokenSequence {
     blocks: Vec<TokenBlock>,
     current_block: PartialTokenBlock,

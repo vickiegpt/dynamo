@@ -16,6 +16,8 @@
 pub mod state;
 pub mod view;
 
+pub use state::BlockState;
+
 use super::layout::BlockLayout;
 use super::storage::{Storage, StorageError};
 
@@ -57,7 +59,7 @@ pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync +
     fn on_acquired(&mut self);
 
     /// Called when the block is returned to the pool
-    fn on_returned(&mut self);
+    fn on_returned(&mut self, tick: u64);
 
     /// Resets the metadata to the default value
     /// If called, the [BlockMetadata::is_reset()] should return true
@@ -72,8 +74,7 @@ pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync +
 pub struct Block<S: Storage, M: BlockMetadata> {
     storage: BlockStorage<S>,
     metadata: M,
-    sequence_hash: u64,
-    block_hash: u64,
+    state: BlockState,
 }
 
 impl<S: Storage, M: BlockMetadata> Block<S, M> {
@@ -82,8 +83,7 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
         Ok(Self {
             storage,
             metadata,
-            sequence_hash: 0,
-            block_hash: 0,
+            state: BlockState::Reset,
         })
     }
 
@@ -101,22 +101,9 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
     //     })
     // }
 
-    /// Get the sequence hash of the block
-    pub fn sequence_hash(&self) -> u64 {
-        self.sequence_hash
-    }
-
-    pub fn set_sequence_hash(&mut self, sequence_hash: u64) {
-        self.sequence_hash = sequence_hash;
-    }
-
-    /// Get the local hash of the block
-    pub fn block_hash(&self) -> u64 {
-        self.block_hash
-    }
-
-    pub fn set_block_hash(&mut self, block_hash: u64) {
-        self.block_hash = block_hash;
+    pub(crate) fn reset(&mut self) {
+        self.state = BlockState::Reset;
+        self.metadata.reset_metadata();
     }
 
     /// Get the metadata of the block
@@ -124,8 +111,19 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
         &self.metadata
     }
 
+    /// Get a mutable reference to the metadata of the block
     pub fn metadata_mut(&mut self) -> &mut M {
         &mut self.metadata
+    }
+
+    /// Get a reference to the state of the block
+    pub fn state(&self) -> &BlockState {
+        &self.state
+    }
+
+    /// Get a mutable reference to the state of the block
+    pub(crate) fn state_mut(&mut self) -> &mut BlockState {
+        &mut self.state
     }
 
     /// Get a read-only view of a layer
