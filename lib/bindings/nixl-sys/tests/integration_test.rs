@@ -9,6 +9,27 @@ const AGENT2_NAME: &str = "Agent002";
 // const NIXL_SUCCESS: i32 = 0;
 // const NIXL_WRITE: i32 = 1;
 
+fn print_params(params: &Params, mems: &MemList) {
+    println!("Parameters:");
+    if !params.is_empty().unwrap() {
+        for param in params.iter().unwrap() {
+            let param = param.unwrap();
+            println!("  {} = {}", param.key, param.value);
+        }
+    } else {
+        println!("  (empty)");
+    }
+
+    println!("Mems:");
+    if !mems.is_empty().unwrap() {
+        for mem_type in mems.iter() {
+            println!("  {}", mem_type.unwrap());
+        }
+    } else {
+        println!("  (empty)");
+    }
+}
+
 #[test]
 fn test_basic_agent_lifecycle() {
     // Create two agents like in the C++ example
@@ -33,7 +54,8 @@ fn test_basic_agent_lifecycle() {
         .expect("Failed to get UCX params for agent2");
 
     println!("Params before init:");
-    // TODO: Add parameter printing once we have access to the parameter contents
+    print_params(&params1, &mems1);
+    print_params(&params2, &mems2);
 
     // Create backends for both agents
     let backend1 = agent1

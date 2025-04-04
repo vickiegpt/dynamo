@@ -6,6 +6,7 @@
 
 use libc::size_t;
 use std::ffi::{CStr, CString};
+use std::fmt;
 use std::os::raw::c_char;
 use std::ptr;
 use std::ptr::NonNull;
@@ -26,8 +27,12 @@ pub use bindings::{
     nixl_capi_create_opt_args, nixl_capi_destroy_agent, nixl_capi_destroy_backend,
     nixl_capi_destroy_mem_list, nixl_capi_destroy_opt_args, nixl_capi_destroy_params,
     nixl_capi_destroy_string_list, nixl_capi_get_available_plugins, nixl_capi_get_plugin_params,
-    nixl_capi_mem_list_t, nixl_capi_opt_args_add_backend, nixl_capi_opt_args_t, nixl_capi_params_t,
-    nixl_capi_string_list_get, nixl_capi_string_list_size, nixl_capi_string_list_t,
+    nixl_capi_mem_list_get, nixl_capi_mem_list_is_empty, nixl_capi_mem_list_size,
+    nixl_capi_mem_list_t, nixl_capi_mem_type_t, nixl_capi_mem_type_to_string,
+    nixl_capi_opt_args_add_backend, nixl_capi_opt_args_t, nixl_capi_params_create_iterator,
+    nixl_capi_params_destroy_iterator, nixl_capi_params_is_empty, nixl_capi_params_iterator_next,
+    nixl_capi_params_t, nixl_capi_string_list_get, nixl_capi_string_list_size,
+    nixl_capi_string_list_t,
 };
 
 /// Errors that can occur when using NIXL
@@ -41,6 +46,41 @@ pub enum NixlError {
     StringConversionError(#[from] std::ffi::NulError),
     #[error("Index out of bounds")]
     IndexOutOfBounds,
+}
+
+/// Memory types supported by NIXL
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemType {
+    Unknown,
+    Dram,
+    Gpu,
+}
+
+impl From<nixl_capi_mem_type_t> for MemType {
+    fn from(mem_type: nixl_capi_mem_type_t) -> Self {
+        match mem_type {
+            1 => MemType::Dram,
+            2 => MemType::Gpu,
+            _ => MemType::Unknown,
+        }
+    }
+}
+
+impl fmt::Display for MemType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // SAFETY: We know the memory type is valid and the string will be available
+        let mut str_ptr = ptr::null();
+        unsafe {
+            let mem_type = match self {
+                MemType::Unknown => 0,
+                MemType::Dram => 1,
+                MemType::Gpu => 2,
+            };
+            nixl_capi_mem_type_to_string(mem_type, &mut str_ptr);
+            let c_str = CStr::from_ptr(str_ptr);
+            write!(f, "{}", c_str.to_str().unwrap())
+        }
+    }
 }
 
 /// A safe wrapper around a list of strings from NIXL
@@ -374,6 +414,179 @@ impl Drop for OptArgs {
     }
 }
 
+/// A key-value pair in the parameters
+#[derive(Debug)]
+pub struct ParamPair<'a> {
+    pub key: &'a str,
+    pub value: &'a str,
+}
+
+/// An iterator over parameter key-value pairs
+pub struct ParamIterator<'a> {
+    iter: NonNull<bindings::nixl_capi_param_iter_s>,
+    _phantom: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> Iterator for ParamIterator<'a> {
+    type Item = Result<ParamPair<'a>, NixlError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut key_ptr = ptr::null();
+        let mut value_ptr = ptr::null();
+        let mut has_next = false;
+
+        // SAFETY: self.iter is guaranteed to be valid by NonNull
+        let status = unsafe {
+            nixl_capi_params_iterator_next(
+                self.iter.as_ptr(),
+                &mut key_ptr,
+                &mut value_ptr,
+                &mut has_next,
+            )
+        };
+
+        match status {
+            0 if !has_next => None,
+            0 => {
+                // SAFETY: If status is 0, both pointers are valid null-terminated strings
+                let result = unsafe {
+                    let key = CStr::from_ptr(key_ptr).to_str().unwrap();
+                    let value = CStr::from_ptr(value_ptr).to_str().unwrap();
+                    Ok(ParamPair { key, value })
+                };
+                Some(result)
+            }
+            -1 => Some(Err(NixlError::InvalidParam)),
+            _ => Some(Err(NixlError::BackendError)),
+        }
+    }
+}
+
+impl<'a> Drop for ParamIterator<'a> {
+    fn drop(&mut self) {
+        // SAFETY: self.iter is guaranteed to be valid by NonNull
+        unsafe {
+            nixl_capi_params_destroy_iterator(self.iter.as_ptr());
+        }
+    }
+}
+
+impl Params {
+    /// Returns true if the parameters are empty
+    pub fn is_empty(&self) -> Result<bool, NixlError> {
+        let mut is_empty = false;
+
+        // SAFETY: self.inner is guaranteed to be valid by NonNull
+        let status = unsafe { nixl_capi_params_is_empty(self.inner.as_ptr(), &mut is_empty) };
+
+        match status {
+            0 => Ok(is_empty),
+            -1 => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Returns an iterator over the parameter key-value pairs
+    pub fn iter(&self) -> Result<ParamIterator<'_>, NixlError> {
+        let mut iter = ptr::null_mut();
+
+        // SAFETY: self.inner is guaranteed to be valid by NonNull
+        let status = unsafe { nixl_capi_params_create_iterator(self.inner.as_ptr(), &mut iter) };
+
+        match status {
+            0 => {
+                // SAFETY: If status is 0, iter was successfully created and is non-null
+                let iter = unsafe { NonNull::new_unchecked(iter) };
+                Ok(ParamIterator {
+                    iter,
+                    _phantom: std::marker::PhantomData,
+                })
+            }
+            -1 => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+}
+
+impl MemList {
+    /// Returns true if the memory list is empty
+    pub fn is_empty(&self) -> Result<bool, NixlError> {
+        let mut is_empty = false;
+
+        // SAFETY: self.inner is guaranteed to be valid by NonNull
+        let status = unsafe { nixl_capi_mem_list_is_empty(self.inner.as_ptr(), &mut is_empty) };
+
+        match status {
+            0 => Ok(is_empty),
+            -1 => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Returns the number of memory types in the list
+    pub fn len(&self) -> Result<usize, NixlError> {
+        let mut size = 0;
+
+        // SAFETY: self.inner is guaranteed to be valid by NonNull
+        let status = unsafe { nixl_capi_mem_list_size(self.inner.as_ptr(), &mut size) };
+
+        match status {
+            0 => Ok(size),
+            -1 => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Returns the memory type at the given index
+    pub fn get(&self, index: usize) -> Result<MemType, NixlError> {
+        let mut mem_type = 0;
+
+        // SAFETY: self.inner is guaranteed to be valid by NonNull
+        let status = unsafe { nixl_capi_mem_list_get(self.inner.as_ptr(), index, &mut mem_type) };
+
+        match status {
+            0 => Ok(MemType::from(mem_type)),
+            -1 => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Returns an iterator over the memory types
+    pub fn iter(&self) -> MemListIterator<'_> {
+        MemListIterator {
+            list: self,
+            index: 0,
+            length: self.len().unwrap_or(0),
+        }
+    }
+}
+
+/// An iterator over memory types in a MemList
+pub struct MemListIterator<'a> {
+    list: &'a MemList,
+    index: usize,
+    length: usize,
+}
+
+impl<'a> Iterator for MemListIterator<'a> {
+    type Item = Result<MemType, NixlError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.length {
+            None
+        } else {
+            let result = self.list.get(self.index);
+            self.index += 1;
+            Some(result)
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.length - self.index;
+        (remaining, Some(remaining))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,5 +639,32 @@ mod tests {
         opt_args
             .add_backend(&backend)
             .expect("Failed to add backend");
+    }
+
+    #[test]
+    fn test_params_iteration() {
+        let agent = Agent::new("test_agent").expect("Failed to create agent");
+        let (mems, params) = agent
+            .get_plugin_params("UCX")
+            .expect("Failed to get plugin params");
+
+        println!("Parameters:");
+        if !params.is_empty().unwrap() {
+            for param in params.iter().unwrap() {
+                let param = param.unwrap();
+                println!("  {} = {}", param.key, param.value);
+            }
+        } else {
+            println!("  (empty)");
+        }
+
+        println!("Memory types:");
+        if !mems.is_empty().unwrap() {
+            for mem_type in mems.iter() {
+                println!("  {}", mem_type.unwrap());
+            }
+        } else {
+            println!("  (empty)");
+        }
     }
 }

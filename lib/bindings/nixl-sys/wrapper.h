@@ -15,12 +15,21 @@ typedef enum {
   NIXL_CAPI_ERROR_BACKEND = -2,
 } nixl_capi_status_t;
 
+// Memory types enum (matching nixl's memory types)
+typedef enum {
+  NIXL_CAPI_MEM_UNKNOWN = 0,
+  NIXL_CAPI_MEM_DRAM = 1,
+  NIXL_CAPI_MEM_GPU = 2,
+  // Add other memory types as needed
+} nixl_capi_mem_type_t;
+
 struct nixl_capi_agent_s;
 struct nixl_capi_params_s;
 struct nixl_capi_mem_list_s;
 struct nixl_capi_string_list_s;
 struct nixl_capi_backend_s;
 struct nixl_capi_opt_args_s;
+struct nixl_capi_param_iter_s;
 
 // Opaque handle types for C++ objects
 typedef struct nixl_capi_agent_s* nixl_capi_agent_t;
@@ -29,6 +38,7 @@ typedef struct nixl_capi_mem_list_s* nixl_capi_mem_list_t;
 typedef struct nixl_capi_string_list_s* nixl_capi_string_list_t;
 typedef struct nixl_capi_backend_s* nixl_capi_backend_t;
 typedef struct nixl_capi_opt_args_s* nixl_capi_opt_args_t;
+typedef struct nixl_capi_param_iter_s* nixl_capi_param_iter_t;
 
 // Core API functions
 nixl_capi_status_t nixl_capi_create_agent(const char* name, nixl_capi_agent_t* agent);
@@ -56,6 +66,19 @@ nixl_capi_status_t nixl_capi_destroy_backend(nixl_capi_backend_t backend);
 nixl_capi_status_t nixl_capi_create_opt_args(nixl_capi_opt_args_t* args);
 nixl_capi_status_t nixl_capi_destroy_opt_args(nixl_capi_opt_args_t args);
 nixl_capi_status_t nixl_capi_opt_args_add_backend(nixl_capi_opt_args_t args, nixl_capi_backend_t backend);
+
+// Parameter access functions
+nixl_capi_status_t nixl_capi_params_is_empty(nixl_capi_params_t params, bool* is_empty);
+nixl_capi_status_t nixl_capi_params_create_iterator(nixl_capi_params_t params, nixl_capi_param_iter_t* iter);
+nixl_capi_status_t nixl_capi_params_iterator_next(
+    nixl_capi_param_iter_t iter, const char** key, const char** value, bool* has_next);
+nixl_capi_status_t nixl_capi_params_destroy_iterator(nixl_capi_param_iter_t iter);
+
+// Memory list access functions
+nixl_capi_status_t nixl_capi_mem_list_is_empty(nixl_capi_mem_list_t list, bool* is_empty);
+nixl_capi_status_t nixl_capi_mem_list_size(nixl_capi_mem_list_t list, size_t* size);
+nixl_capi_status_t nixl_capi_mem_list_get(nixl_capi_mem_list_t list, size_t index, nixl_capi_mem_type_t* mem_type);
+nixl_capi_status_t nixl_capi_mem_type_to_string(nixl_capi_mem_type_t mem_type, const char** str);
 
 #ifdef __cplusplus
 }
