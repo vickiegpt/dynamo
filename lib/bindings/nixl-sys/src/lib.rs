@@ -4,11 +4,11 @@
 //! It is not meant to be used directly, but rather through the higher-level
 //! `nixl` crate.
 
+use libc::uintptr_t;
 use std::ffi::{CStr, CString};
 use std::fmt;
 use std::ptr;
 use std::ptr::NonNull;
-use libc::uintptr_t;
 use thiserror::Error;
 
 // Include the generated bindings
@@ -946,6 +946,11 @@ mod tests {
 
         // Resize list
         dlist.resize(5).unwrap();
+
+        // add descriptors with overlaps
+        dlist.add_desc(0x1000, 0x100, 0).unwrap();
+        dlist.add_desc(0x1050, 0x100, 0).unwrap();
+        assert!(dlist.has_overlaps().unwrap());
     }
 
     #[test]
