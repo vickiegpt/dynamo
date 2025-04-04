@@ -7,6 +7,7 @@
 use libc::uintptr_t;
 use std::ffi::{CStr, CString};
 use std::fmt;
+use std::marker::PhantomData;
 use std::ptr;
 use std::ptr::NonNull;
 use thiserror::Error;
@@ -630,11 +631,12 @@ impl<'a> Iterator for MemListIterator<'a> {
 }
 
 /// A safe wrapper around a NIXL transfer descriptor list
-pub struct XferDescList {
+pub struct XferDescList<'a> {
     inner: NonNull<bindings::nixl_capi_xfer_dlist_s>,
+    _phantom: PhantomData<&'a dyn NixlDescriptor>,
 }
 
-impl XferDescList {
+impl<'a> XferDescList<'a> {
     /// Creates a new transfer descriptor list for the given memory type
     pub fn new(mem_type: MemType) -> Result<Self, NixlError> {
         let mut dlist = ptr::null_mut();
@@ -645,7 +647,10 @@ impl XferDescList {
             NIXL_CAPI_SUCCESS => {
                 // SAFETY: If status is NIXL_CAPI_SUCCESS, dlist is non-null
                 let inner = unsafe { NonNull::new_unchecked(dlist) };
-                Ok(Self { inner })
+                Ok(Self {
+                    inner,
+                    _phantom: PhantomData,
+                })
             }
             NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
             _ => Err(NixlError::BackendError),
@@ -713,7 +718,15 @@ impl XferDescList {
     }
 
     /// Add a descriptor from a type implementing NixlDescriptor
-    pub fn add_storage_desc<D: NixlDescriptor>(&mut self, desc: &D) -> Result<(), NixlError> {
+    ///
+    /// # Safety
+    /// The caller must ensure that:
+    /// - The descriptor remains valid for the lifetime of the list
+    /// - The memory region pointed to by the descriptor remains valid
+    pub fn add_storage_desc<D: NixlDescriptor + 'a>(
+        &mut self,
+        desc: &'a D,
+    ) -> Result<(), NixlError> {
         // Validate memory type matches
         let desc_mem_type = desc.mem_type();
         let list_mem_type = unsafe {
@@ -746,7 +759,7 @@ impl XferDescList {
     }
 }
 
-impl Drop for XferDescList {
+impl<'a> Drop for XferDescList<'a> {
     fn drop(&mut self) {
         // SAFETY: self.inner is guaranteed to be valid by NonNull
         unsafe {
@@ -756,11 +769,12 @@ impl Drop for XferDescList {
 }
 
 /// A safe wrapper around a NIXL registration descriptor list
-pub struct RegDescList {
+pub struct RegDescList<'a> {
     inner: NonNull<bindings::nixl_capi_reg_dlist_s>,
+    _phantom: PhantomData<&'a dyn NixlDescriptor>,
 }
 
-impl RegDescList {
+impl<'a> RegDescList<'a> {
     /// Creates a new registration descriptor list for the given memory type
     pub fn new(mem_type: MemType) -> Result<Self, NixlError> {
         let mut dlist = ptr::null_mut();
@@ -771,7 +785,10 @@ impl RegDescList {
             NIXL_CAPI_SUCCESS => {
                 // SAFETY: If status is NIXL_CAPI_SUCCESS, dlist is non-null
                 let inner = unsafe { NonNull::new_unchecked(dlist) };
-                Ok(Self { inner })
+                Ok(Self {
+                    inner,
+                    _phantom: PhantomData,
+                })
             }
             NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
             _ => Err(NixlError::BackendError),
@@ -839,7 +856,15 @@ impl RegDescList {
     }
 
     /// Add a descriptor from a type implementing NixlDescriptor
-    pub fn add_storage_desc<D: NixlDescriptor>(&mut self, desc: &D) -> Result<(), NixlError> {
+    ///
+    /// # Safety
+    /// The caller must ensure that:
+    /// - The descriptor remains valid for the lifetime of the list
+    /// - The memory region pointed to by the descriptor remains valid
+    pub fn add_storage_desc<D: NixlDescriptor + 'a>(
+        &mut self,
+        desc: &'a D,
+    ) -> Result<(), NixlError> {
         // Validate memory type matches
         let desc_mem_type = desc.mem_type();
         let list_mem_type = unsafe {
@@ -872,7 +897,7 @@ impl RegDescList {
     }
 }
 
-impl Drop for RegDescList {
+impl<'a> Drop for RegDescList<'a> {
     fn drop(&mut self) {
         // SAFETY: self.inner is guaranteed to be valid by NonNull
         unsafe {
@@ -1136,17 +1161,33 @@ mod tests {
     }
 
     #[test]
-    fn test_storage_descriptor() {
-        // Create a descriptor list
-        let mut dlist = XferDescList::new(MemType::Dram).unwrap();
-
-        // Create a system storage
+    fn test_storage_descriptor_lifetime() {
+        // Create storage that outlives the descriptor list
         let storage = SystemStorage::new(1024).unwrap();
 
-        // Add storage as descriptor
-        dlist.add_storage_desc(&storage).unwrap();
+        {
+            // Create a descriptor list with shorter lifetime
+            let mut dlist = XferDescList::new(MemType::Dram).unwrap();
+            dlist.add_storage_desc(&storage).unwrap();
+            assert_eq!(dlist.len().unwrap(), 1);
+            // dlist is dropped here, but storage is still valid
+        }
 
-        // Verify length
-        assert_eq!(dlist.len().unwrap(), 1);
+        // Storage is still valid here
+        assert_eq!(<SystemStorage as Storage>::size(&storage), 1024);
+    }
+
+    #[test]
+    fn test_multiple_storage_descriptors() {
+        let storage1 = SystemStorage::new(1024).unwrap();
+        let storage2 = SystemStorage::new(2048).unwrap();
+
+        let mut dlist = XferDescList::new(MemType::Dram).unwrap();
+
+        // Add multiple descriptors
+        dlist.add_storage_desc(&storage1).unwrap();
+        dlist.add_storage_desc(&storage2).unwrap();
+
+        assert_eq!(dlist.len().unwrap(), 2);
     }
 }
