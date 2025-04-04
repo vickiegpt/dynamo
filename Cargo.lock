@@ -1584,17 +1584,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-nixl-sys"
-version = "0.1.0"
-dependencies = [
- "bindgen 0.71.1",
- "cc",
- "libc",
- "pkg-config",
- "thiserror 2.0.12",
-]
-
-[[package]]
 name = "dynamo-run"
 version = "0.1.0"
 dependencies = [
@@ -3917,6 +3906,17 @@ dependencies = [
  "cfg-if 1.0.0",
  "cfg_aliases",
  "libc",
+]
+
+[[package]]
+name = "nixl-sys"
+version = "0.1.0"
+dependencies = [
+ "bindgen 0.71.1",
+ "cc",
+ "libc",
+ "pkg-config",
+ "thiserror 2.0.12",
 ]
 
 [[package]]

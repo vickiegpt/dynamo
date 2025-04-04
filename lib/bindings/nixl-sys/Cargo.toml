@@ -1,5 +1,5 @@
 [package]
-name = "dynamo-nixl-sys"
+name = "nixl-sys"
 version = "0.1.0"
 edition = "2021"
 description.workspace = true
