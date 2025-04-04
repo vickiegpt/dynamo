@@ -41,6 +41,15 @@ struct nixl_capi_param_iter_s {
   std::string current_value;  // Keep string alive while iterator exists
 };
 
+// Internal structs for descriptor lists
+struct nixl_capi_xfer_dlist_s {
+  nixl_xfer_dlist_t* dlist;
+};
+
+struct nixl_capi_reg_dlist_s {
+  nixl_reg_dlist_t* dlist;
+};
+
 nixl_capi_status_t
 nixl_capi_create_agent(const char* name, nixl_capi_agent_t* agent)
 {
@@ -484,6 +493,240 @@ nixl_capi_get_backend_params(
     *mems = mem_list;
     *params = param_list;
 
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+// Transfer descriptor list functions
+nixl_capi_status_t
+nixl_capi_create_xfer_dlist(nixl_capi_mem_type_t mem_type, nixl_capi_xfer_dlist_t* dlist)
+{
+  if (!dlist) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    auto d = new nixl_capi_xfer_dlist_s;
+    d->dlist = new nixl_xfer_dlist_t(static_cast<nixl_mem_t>(mem_type));
+    *dlist = d;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_destroy_xfer_dlist(nixl_capi_xfer_dlist_t dlist)
+{
+  if (!dlist) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    delete dlist->dlist;
+    delete dlist;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_xfer_dlist_add_desc(nixl_capi_xfer_dlist_t dlist, uintptr_t addr, size_t len, uint32_t dev_id)
+{
+  if (!dlist) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    nixlBasicDesc desc(addr, len, dev_id);
+    dlist->dlist->addDesc(desc);
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_xfer_dlist_len(nixl_capi_xfer_dlist_t dlist, size_t* len)
+{
+  if (!dlist || !len) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    *len = dlist->dlist->descCount();
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_xfer_dlist_has_overlaps(nixl_capi_xfer_dlist_t dlist, bool* has_overlaps)
+{
+  if (!dlist || !has_overlaps) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    *has_overlaps = dlist->dlist->hasOverlaps();
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_xfer_dlist_clear(nixl_capi_xfer_dlist_t dlist)
+{
+  if (!dlist) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    dlist->dlist->clear();
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_xfer_dlist_resize(nixl_capi_xfer_dlist_t dlist, size_t new_size)
+{
+  if (!dlist) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    dlist->dlist->resize(new_size);
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+// Registration descriptor list functions
+nixl_capi_status_t
+nixl_capi_create_reg_dlist(nixl_capi_mem_type_t mem_type, nixl_capi_reg_dlist_t* dlist)
+{
+  if (!dlist) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    auto d = new nixl_capi_reg_dlist_s;
+    d->dlist = new nixl_reg_dlist_t(static_cast<nixl_mem_t>(mem_type));
+    *dlist = d;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_destroy_reg_dlist(nixl_capi_reg_dlist_t dlist)
+{
+  if (!dlist) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    delete dlist->dlist;
+    delete dlist;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_reg_dlist_add_desc(nixl_capi_reg_dlist_t dlist, uintptr_t addr, size_t len, uint32_t dev_id)
+{
+  if (!dlist) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    nixlBlobDesc desc(addr, len, dev_id, nixl_blob_t());  // Empty metadata
+    dlist->dlist->addDesc(desc);
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_reg_dlist_len(nixl_capi_reg_dlist_t dlist, size_t* len)
+{
+  if (!dlist || !len) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    *len = dlist->dlist->descCount();
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_reg_dlist_has_overlaps(nixl_capi_reg_dlist_t dlist, bool* has_overlaps)
+{
+  if (!dlist || !has_overlaps) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    *has_overlaps = dlist->dlist->hasOverlaps();
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_reg_dlist_clear(nixl_capi_reg_dlist_t dlist)
+{
+  if (!dlist) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    dlist->dlist->clear();
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_reg_dlist_resize(nixl_capi_reg_dlist_t dlist, size_t new_size)
+{
+  if (!dlist) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    dlist->dlist->resize(new_size);
     return NIXL_CAPI_SUCCESS;
   }
   catch (...) {
