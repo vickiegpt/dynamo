@@ -1,13 +1,6 @@
 // #![allow(unused_variables)]
 
 use nixl_sys::*;
-// use std::ffi::CString;
-
-const AGENT1_NAME: &str = "Agent001";
-const AGENT2_NAME: &str = "Agent002";
-// const NIXL_IN_PROG: i32 = 1;
-// const NIXL_SUCCESS: i32 = 0;
-// const NIXL_WRITE: i32 = 1;
 
 fn print_params(params: &Params, mems: &MemList) {
     println!("Parameters:");
@@ -77,10 +70,10 @@ fn test_basic_agent_lifecycle() {
     print_params(&params2_after, &mems2_after);
 
     // Create optional arguments and add backends
-    let mut opt_args_1 = OptArgs::new().unwrap();
-    let mut opt_args_2 = OptArgs::new().unwrap();
-    opt_args_1.add_backend(&backend1).unwrap();
-    opt_args_2.add_backend(&backend2).unwrap();
+    let mut extra_params1 = OptArgs::new().unwrap();
+    let mut extra_params2 = OptArgs::new().unwrap();
+    extra_params1.add_backend(&backend1).unwrap();
+    extra_params2.add_backend(&backend2).unwrap();
 
     // Allocate and initialize memory regions
     let mut storage1 = SystemStorage::new(256).unwrap();
