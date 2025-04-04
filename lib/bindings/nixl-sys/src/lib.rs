@@ -711,6 +711,39 @@ impl XferDescList {
             _ => Err(NixlError::BackendError),
         }
     }
+
+    /// Add a descriptor from a type implementing NixlDescriptor
+    pub fn add_storage_desc<D: NixlDescriptor>(&mut self, desc: &D) -> Result<(), NixlError> {
+        // Validate memory type matches
+        let desc_mem_type = desc.mem_type();
+        let list_mem_type = unsafe {
+            // Get the memory type from the list by checking first descriptor
+            let mut len = 0;
+            match nixl_capi_xfer_dlist_len(self.inner.as_ptr(), &mut len) {
+                0 => Ok(()),
+                -1 => Err(NixlError::InvalidParam),
+                _ => Err(NixlError::BackendError),
+            }?;
+            if len > 0 {
+                // TODO: Add API to get descriptor memory type
+                MemType::Unknown
+            } else {
+                desc_mem_type
+            }
+        };
+
+        if desc_mem_type != list_mem_type && list_mem_type != MemType::Unknown {
+            return Err(NixlError::InvalidParam);
+        }
+
+        // Get descriptor details
+        let addr = unsafe { desc.as_ptr() }.ok_or(NixlError::InvalidParam)? as usize;
+        let len = desc.size();
+        let dev_id = desc.device_id();
+
+        // Add to list
+        self.add_desc(addr, len, dev_id)
+    }
 }
 
 impl Drop for XferDescList {
@@ -804,6 +837,39 @@ impl RegDescList {
             _ => Err(NixlError::BackendError),
         }
     }
+
+    /// Add a descriptor from a type implementing NixlDescriptor
+    pub fn add_storage_desc<D: NixlDescriptor>(&mut self, desc: &D) -> Result<(), NixlError> {
+        // Validate memory type matches
+        let desc_mem_type = desc.mem_type();
+        let list_mem_type = unsafe {
+            // Get the memory type from the list by checking first descriptor
+            let mut len = 0;
+            match nixl_capi_reg_dlist_len(self.inner.as_ptr(), &mut len) {
+                0 => Ok(()),
+                -1 => Err(NixlError::InvalidParam),
+                _ => Err(NixlError::BackendError),
+            }?;
+            if len > 0 {
+                // TODO: Add API to get descriptor memory type
+                MemType::Unknown
+            } else {
+                desc_mem_type
+            }
+        };
+
+        if desc_mem_type != list_mem_type && list_mem_type != MemType::Unknown {
+            return Err(NixlError::InvalidParam);
+        }
+
+        // Get descriptor details
+        let addr = unsafe { desc.as_ptr() }.ok_or(NixlError::InvalidParam)? as usize;
+        let len = desc.size();
+        let dev_id = desc.device_id();
+
+        // Add to list
+        self.add_desc(addr, len, dev_id)
+    }
 }
 
 impl Drop for RegDescList {
@@ -815,9 +881,99 @@ impl Drop for RegDescList {
     }
 }
 
+/// A trait for types that can be added to NIXL descriptor lists
+pub trait NixlDescriptor {
+    /// Get the memory type for this descriptor
+    fn mem_type(&self) -> MemType;
+
+    /// Get the raw pointer to the memory
+    ///
+    /// # Safety
+    /// The caller must ensure:
+    /// - The pointer is valid for the lifetime of the descriptor
+    /// - The pointer is properly aligned
+    unsafe fn as_ptr(&self) -> Option<*const u8>;
+
+    /// Get the size of the memory region in bytes
+    fn size(&self) -> usize;
+
+    /// Get the device ID for this memory region
+    fn device_id(&self) -> u32;
+}
+
+/// A trait for storage types that can be used with NIXL
+pub trait Storage: std::fmt::Debug + Send + Sync + 'static {
+    /// Returns the total size of the storage in bytes
+    fn size(&self) -> usize;
+
+    /// Returns true if the storage is accessible by the host/cpu portion
+    /// of the application.
+    fn is_host_accessible(&self) -> bool;
+
+    /// Get a raw pointer to the storage
+    ///
+    /// # Safety
+    /// The caller must ensure:
+    /// - The pointer is not used after the storage is dropped
+    /// - Access patterns respect the storage's thread safety model
+    unsafe fn as_ptr(&self) -> Option<*const u8>;
+}
+
+impl<T: Storage> NixlDescriptor for T {
+    fn mem_type(&self) -> MemType {
+        if self.is_host_accessible() {
+            MemType::Dram
+        } else {
+            MemType::Gpu
+        }
+    }
+
+    unsafe fn as_ptr(&self) -> Option<*const u8> {
+        self.as_ptr()
+    }
+
+    fn size(&self) -> usize {
+        self.size()
+    }
+
+    fn device_id(&self) -> u32 {
+        0 // Default device ID, could be made configurable
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// System memory storage implementation using a Vec<u8>
+    #[derive(Debug)]
+    struct SystemStorage {
+        data: Vec<u8>,
+    }
+
+    impl SystemStorage {
+        /// Create a new system storage with the given size
+        fn new(size: usize) -> Result<Self, NixlError> {
+            let mut data = Vec::with_capacity(size);
+            // Initialize to zero to ensure consistent behavior
+            data.resize(size, 0);
+            Ok(Self { data })
+        }
+    }
+
+    impl Storage for SystemStorage {
+        fn size(&self) -> usize {
+            self.data.len()
+        }
+
+        fn is_host_accessible(&self) -> bool {
+            true
+        }
+
+        unsafe fn as_ptr(&self) -> Option<*const u8> {
+            Some(self.data.as_ptr())
+        }
+    }
 
     #[test]
     fn test_agent_creation() {
@@ -977,5 +1133,20 @@ mod tests {
 
         // Resize list
         dlist.resize(5).unwrap();
+    }
+
+    #[test]
+    fn test_storage_descriptor() {
+        // Create a descriptor list
+        let mut dlist = XferDescList::new(MemType::Dram).unwrap();
+
+        // Create a system storage
+        let storage = SystemStorage::new(1024).unwrap();
+
+        // Add storage as descriptor
+        dlist.add_storage_desc(&storage).unwrap();
+
+        // Verify length
+        assert_eq!(dlist.len().unwrap(), 1);
     }
 }
