@@ -77,9 +77,34 @@ fn test_basic_agent_lifecycle() {
     print_params(&params2_after, &mems2_after);
 
     // Create optional arguments and add backends
-    let mut opt_args = OptArgs::new().unwrap();
-    opt_args.add_backend(&backend1).unwrap();
-    opt_args.add_backend(&backend2).unwrap();
+    let mut opt_args_1 = OptArgs::new().unwrap();
+    let mut opt_args_2 = OptArgs::new().unwrap();
+    opt_args_1.add_backend(&backend1).unwrap();
+    opt_args_2.add_backend(&backend2).unwrap();
+
+    // Allocate and initialize memory regions
+    let mut storage1 = SystemStorage::new(256).unwrap();
+    let mut storage2 = SystemStorage::new(256).unwrap();
+
+    // Initialize memory patterns
+    storage1.memset(0xbb);
+    storage2.memset(0x00);
+
+    // Create registration descriptor lists
+    let mut dlist1 = RegDescList::new(MemType::Dram).unwrap();
+    let mut dlist2 = RegDescList::new(MemType::Dram).unwrap();
+
+    // Add descriptors
+    dlist1.add_storage_desc(&storage1).unwrap();
+    dlist2.add_storage_desc(&storage2).unwrap();
+
+    // Verify descriptor lists
+    assert_eq!(dlist1.len().unwrap(), 1);
+    assert_eq!(dlist2.len().unwrap(), 1);
+
+    // Verify memory patterns
+    assert!(storage1.as_slice().iter().all(|&x| x == 0xbb));
+    assert!(storage2.as_slice().iter().all(|&x| x == 0x00));
 
     // More implementation will follow as we add more bindings
 }
