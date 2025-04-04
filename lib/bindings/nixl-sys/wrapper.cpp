@@ -2,6 +2,8 @@
 
 #include <nixl.h>
 
+#include <iterator>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -30,6 +32,13 @@ struct nixl_capi_backend_s {
 
 struct nixl_capi_opt_args_s {
   nixl_opt_args_t args;
+};
+
+struct nixl_capi_param_iter_s {
+  nixl_b_params_t::iterator current;
+  nixl_b_params_t::iterator end;
+  std::string current_key;    // Keep string alive while iterator exists
+  std::string current_value;  // Keep string alive while iterator exists
 };
 
 nixl_capi_status_t
@@ -290,6 +299,161 @@ nixl_capi_opt_args_add_backend(nixl_capi_opt_args_t args, nixl_capi_backend_t ba
 
   try {
     args->args.backends.push_back(backend->backend);
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_params_is_empty(nixl_capi_params_t params, bool* is_empty)
+{
+  if (!params || !is_empty) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    *is_empty = params->params.empty();
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_params_create_iterator(nixl_capi_params_t params, nixl_capi_param_iter_t* iter)
+{
+  if (!params || !iter) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    auto param_iter = new nixl_capi_param_iter_s;
+    param_iter->current = params->params.begin();
+    param_iter->end = params->params.end();
+    *iter = param_iter;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_params_iterator_next(nixl_capi_param_iter_t iter, const char** key, const char** value, bool* has_next)
+{
+  if (!iter || !key || !value || !has_next) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    if (iter->current == iter->end) {
+      *has_next = false;
+      return NIXL_CAPI_SUCCESS;
+    }
+
+    // Store the strings in the iterator to keep them alive
+    iter->current_key = iter->current->first;
+    iter->current_value = iter->current->second;
+
+    *key = iter->current_key.c_str();
+    *value = iter->current_value.c_str();
+
+    ++iter->current;
+    *has_next = (iter->current != iter->end);
+
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_params_destroy_iterator(nixl_capi_param_iter_t iter)
+{
+  if (!iter) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    delete iter;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_mem_list_is_empty(nixl_capi_mem_list_t list, bool* is_empty)
+{
+  if (!list || !is_empty) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    *is_empty = list->mems.empty();
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_mem_list_size(nixl_capi_mem_list_t list, size_t* size)
+{
+  if (!list || !size) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    *size = list->mems.size();
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_mem_list_get(nixl_capi_mem_list_t list, size_t index, nixl_capi_mem_type_t* mem_type)
+{
+  if (!list || !mem_type || index >= list->mems.size()) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    *mem_type = static_cast<nixl_capi_mem_type_t>(list->mems[index]);
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_mem_type_to_string(nixl_capi_mem_type_t mem_type, const char** str)
+{
+  if (!str) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    static const char* mem_type_strings[] = {
+        "Unknown",
+        "DRAM",
+        "GPU",
+    };
+
+    if (mem_type < 0 || mem_type >= sizeof(mem_type_strings) / sizeof(mem_type_strings[0])) {
+      return NIXL_CAPI_ERROR_INVALID_PARAM;
+    }
+
+    *str = mem_type_strings[mem_type];
     return NIXL_CAPI_SUCCESS;
   }
   catch (...) {
