@@ -10,6 +10,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::ptr;
 use std::ptr::NonNull;
+use std::sync::Arc;
 use thiserror::Error;
 
 // Include the generated bindings
@@ -207,46 +208,42 @@ impl Drop for Params {
     }
 }
 
-/// A safe wrapper around a NIXL agent
-pub struct Agent {
-    // NonNull ensures we always have a valid pointer and enables optimizations
-    inner: NonNull<bindings::nixl_capi_agent_s>,
+/// Inner state for an agent that manages the raw pointer
+#[derive(Debug)]
+struct AgentInner {
+    handle: NonNull<bindings::nixl_capi_agent_s>,
 }
 
-// SAFETY: Agent can be sent between threads safely as the underlying C++ nixlAgent is thread-safe
-unsafe impl Send for Agent {}
-// SAFETY: Agent can be shared between threads safely as the underlying C++ nixlAgent is thread-safe
-unsafe impl Sync for Agent {}
+impl Drop for AgentInner {
+    fn drop(&mut self) {
+        unsafe {
+            nixl_capi_destroy_agent(self.handle.as_ptr());
+        }
+    }
+}
+
+/// A NIXL agent that can create backends and manage memory
+#[derive(Debug, Clone)]
+pub struct Agent {
+    inner: Arc<AgentInner>,
+}
 
 impl Agent {
-    /// Creates a new NIXL agent with the given name
-    ///
-    /// # Arguments
-    /// * `name` - The name to give the agent
-    ///
-    /// # Returns
-    /// A new Agent instance
-    ///
-    /// # Errors
-    /// Returns a NixlError if:
-    /// * The name contains interior nul bytes
-    /// * The agent creation fails
+    /// Creates a new agent with the given name
     pub fn new(name: &str) -> Result<Self, NixlError> {
-        // Convert the name to a C string
-        let name = CString::new(name)?;
-
+        let c_name = CString::new(name)?;
         let mut agent = ptr::null_mut();
-
-        // SAFETY: We ensure the CString is valid and properly null-terminated
-        let status = unsafe { nixl_capi_create_agent(name.as_ptr(), &mut agent) };
+        let status = unsafe { nixl_capi_create_agent(c_name.as_ptr(), &mut agent) };
 
         match status {
-            0 => {
-                // SAFETY: If status is 0, agent was successfully created and is non-null
-                let inner = unsafe { NonNull::new_unchecked(agent) };
-                Ok(Self { inner })
+            NIXL_CAPI_SUCCESS => {
+                // SAFETY: If status is NIXL_CAPI_SUCCESS, agent is non-null
+                let handle = unsafe { NonNull::new_unchecked(agent) };
+                Ok(Self {
+                    inner: Arc::new(AgentInner { handle }),
+                })
             }
-            -1 => Err(NixlError::InvalidParam),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
             _ => Err(NixlError::BackendError),
         }
     }
@@ -262,7 +259,8 @@ impl Agent {
         let mut plugins = ptr::null_mut();
 
         // SAFETY: self.inner is guaranteed to be valid by NonNull
-        let status = unsafe { nixl_capi_get_available_plugins(self.inner.as_ptr(), &mut plugins) };
+        let status =
+            unsafe { nixl_capi_get_available_plugins(self.inner.handle.as_ptr(), &mut plugins) };
 
         match status {
             0 => {
@@ -295,7 +293,7 @@ impl Agent {
         // SAFETY: self.inner is guaranteed to be valid by NonNull
         let status = unsafe {
             nixl_capi_get_plugin_params(
-                self.inner.as_ptr(),
+                self.inner.handle.as_ptr(),
                 plugin_name.as_ptr(),
                 &mut mems,
                 &mut params,
@@ -319,40 +317,29 @@ impl Agent {
         }
     }
 
-    /// Creates a new backend for the given plugin
-    ///
-    /// # Arguments
-    /// * `plugin_name` - The name of the plugin to create a backend for
-    /// * `params` - The parameters to initialize the backend with
-    ///
-    /// # Returns
-    /// A new Backend instance
-    ///
-    /// # Errors
-    /// Returns a NixlError if:
-    /// * The plugin name contains interior nul bytes
-    /// * The backend creation fails
-    pub fn create_backend(&self, plugin_name: &str, params: &Params) -> Result<Backend, NixlError> {
-        let plugin_name = CString::new(plugin_name)?;
+    /// Creates a new backend for the given plugin using the provided parameters
+    pub fn create_backend(&self, plugin: &str, params: &Params) -> Result<Backend, NixlError> {
+        let c_plugin = CString::new(plugin).map_err(|_| NixlError::InvalidParam)?;
         let mut backend = ptr::null_mut();
-
-        // SAFETY: self.inner and params.inner are guaranteed to be valid by NonNull
         let status = unsafe {
             nixl_capi_create_backend(
-                self.inner.as_ptr(),
-                plugin_name.as_ptr(),
+                self.inner.handle.as_ptr(),
+                c_plugin.as_ptr(),
                 params.inner.as_ptr(),
                 &mut backend,
             )
         };
 
         match status {
-            0 => {
-                // SAFETY: If status is 0, backend was successfully created and is non-null
+            NIXL_CAPI_SUCCESS => {
+                // SAFETY: If status is NIXL_CAPI_SUCCESS, backend is non-null
                 let inner = unsafe { NonNull::new_unchecked(backend) };
-                Ok(Backend { inner })
+                Ok(Backend {
+                    inner,
+                    _agent: self.inner.clone(), // Keep agent alive while backend exists
+                })
             }
-            -1 => Err(NixlError::InvalidParam),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
             _ => Err(NixlError::BackendError),
         }
     }
@@ -364,7 +351,7 @@ impl Agent {
 
         let status = unsafe {
             nixl_capi_get_backend_params(
-                self.inner.as_ptr(),
+                self.inner.handle.as_ptr(),
                 backend.inner.as_ptr(),
                 &mut mem_list,
                 &mut params,
@@ -389,23 +376,15 @@ impl Agent {
     }
 }
 
-impl Drop for Agent {
-    fn drop(&mut self) {
-        // SAFETY: self.inner is guaranteed to be valid by NonNull
-        unsafe {
-            nixl_capi_destroy_agent(self.inner.as_ptr());
-        }
-    }
-}
-
-/// A safe wrapper around a NIXL backend
+/// A NIXL backend that can be used for data transfer
+#[derive(Debug)]
 pub struct Backend {
     inner: NonNull<bindings::nixl_capi_backend_s>,
+    _agent: Arc<AgentInner>, // Ensures agent outlives backend
 }
 
 impl Drop for Backend {
     fn drop(&mut self) {
-        // SAFETY: self.inner is guaranteed to be valid by NonNull
         unsafe {
             nixl_capi_destroy_backend(self.inner.as_ptr());
         }
@@ -435,14 +414,13 @@ impl OptArgs {
         }
     }
 
-    /// Adds a backend to the optional arguments
+    /// Add a backend to the optional arguments
     pub fn add_backend(&mut self, backend: &Backend) -> Result<(), NixlError> {
         let status =
             unsafe { nixl_capi_opt_args_add_backend(self.inner.as_ptr(), backend.inner.as_ptr()) };
-
         match status {
-            0 => Ok(()),
-            -1 => Err(NixlError::InvalidParam),
+            NIXL_CAPI_SUCCESS => Ok(()),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
             _ => Err(NixlError::BackendError),
         }
     }
