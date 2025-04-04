@@ -966,39 +966,49 @@ impl<T: Storage> NixlDescriptor for T {
     }
 }
 
+/// System memory storage implementation using a Vec<u8>
+#[derive(Debug)]
+pub struct SystemStorage {
+    data: Vec<u8>,
+}
+
+impl SystemStorage {
+    /// Create a new system storage with the given size
+    pub fn new(size: usize) -> Result<Self, NixlError> {
+        let mut data = Vec::with_capacity(size);
+        // Initialize to zero to ensure consistent behavior
+        data.resize(size, 0);
+        Ok(Self { data })
+    }
+
+    /// Fill the storage with a specific byte value
+    pub fn memset(&mut self, value: u8) {
+        self.data.fill(value);
+    }
+
+    /// Get a slice of the underlying data
+    pub fn as_slice(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+impl Storage for SystemStorage {
+    fn size(&self) -> usize {
+        self.data.len()
+    }
+
+    fn is_host_accessible(&self) -> bool {
+        true
+    }
+
+    unsafe fn as_ptr(&self) -> Option<*const u8> {
+        Some(self.data.as_ptr())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// System memory storage implementation using a Vec<u8>
-    #[derive(Debug)]
-    struct SystemStorage {
-        data: Vec<u8>,
-    }
-
-    impl SystemStorage {
-        /// Create a new system storage with the given size
-        fn new(size: usize) -> Result<Self, NixlError> {
-            let mut data = Vec::with_capacity(size);
-            // Initialize to zero to ensure consistent behavior
-            data.resize(size, 0);
-            Ok(Self { data })
-        }
-    }
-
-    impl Storage for SystemStorage {
-        fn size(&self) -> usize {
-            self.data.len()
-        }
-
-        fn is_host_accessible(&self) -> bool {
-            true
-        }
-
-        unsafe fn as_ptr(&self) -> Option<*const u8> {
-            Some(self.data.as_ptr())
-        }
-    }
 
     #[test]
     fn test_agent_creation() {
@@ -1189,5 +1199,55 @@ mod tests {
         dlist.add_storage_desc(&storage2).unwrap();
 
         assert_eq!(dlist.len().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_basic_agent_lifecycle() {
+        // Create two agents
+        let agent1 = Agent::new("A1").unwrap();
+        let agent2 = Agent::new("A2").unwrap();
+
+        // Get available plugins and print their names
+        let plugins = agent1.get_available_plugins().unwrap();
+        for plugin in plugins.iter() {
+            println!("Found plugin: {}", plugin.unwrap());
+        }
+
+        // Get plugin parameters for both agents
+        let (mem_list1, params1) = agent1.get_plugin_params("UCX").unwrap();
+        let (mem_list2, params2) = agent2.get_plugin_params("UCX").unwrap();
+
+        // Create backends for both agents
+        let backend1 = agent1.create_backend("UCX", &params1).unwrap();
+        let backend2 = agent2.create_backend("UCX", &params2).unwrap();
+
+        // Create optional arguments and add backends
+        let mut opt_args = OptArgs::new().unwrap();
+        opt_args.add_backend(&backend1).unwrap();
+        opt_args.add_backend(&backend2).unwrap();
+
+        // Allocate and initialize memory regions
+        let mut storage1 = SystemStorage::new(256).unwrap();
+        let mut storage2 = SystemStorage::new(256).unwrap();
+
+        // Initialize memory patterns
+        storage1.memset(0xbb);
+        storage2.memset(0x00);
+
+        // Create registration descriptor lists
+        let mut dlist1 = RegDescList::new(MemType::Dram).unwrap();
+        let mut dlist2 = RegDescList::new(MemType::Dram).unwrap();
+
+        // Add descriptors
+        dlist1.add_storage_desc(&storage1).unwrap();
+        dlist2.add_storage_desc(&storage2).unwrap();
+
+        // Verify descriptor lists
+        assert_eq!(dlist1.len().unwrap(), 1);
+        assert_eq!(dlist2.len().unwrap(), 1);
+
+        // Verify memory patterns
+        assert!(storage1.as_slice().iter().all(|&x| x == 0xbb));
+        assert!(storage2.as_slice().iter().all(|&x| x == 0x00));
     }
 }
