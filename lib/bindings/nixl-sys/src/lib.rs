@@ -22,9 +22,11 @@ mod bindings {
 
 // Re-export types from the included bindings
 pub use bindings::{
-    nixl_capi_agent_t, nixl_capi_create_agent, nixl_capi_destroy_agent, nixl_capi_destroy_mem_list,
-    nixl_capi_destroy_params, nixl_capi_destroy_string_list, nixl_capi_get_available_plugins,
-    nixl_capi_get_plugin_params, nixl_capi_mem_list_t, nixl_capi_params_t,
+    nixl_capi_agent_t, nixl_capi_backend_t, nixl_capi_create_agent, nixl_capi_create_backend,
+    nixl_capi_create_opt_args, nixl_capi_destroy_agent, nixl_capi_destroy_backend,
+    nixl_capi_destroy_mem_list, nixl_capi_destroy_opt_args, nixl_capi_destroy_params,
+    nixl_capi_destroy_string_list, nixl_capi_get_available_plugins, nixl_capi_get_plugin_params,
+    nixl_capi_mem_list_t, nixl_capi_opt_args_add_backend, nixl_capi_opt_args_t, nixl_capi_params_t,
     nixl_capi_string_list_get, nixl_capi_string_list_size, nixl_capi_string_list_t,
 };
 
@@ -264,6 +266,44 @@ impl Agent {
             _ => Err(NixlError::BackendError),
         }
     }
+
+    /// Creates a new backend for the given plugin
+    ///
+    /// # Arguments
+    /// * `plugin_name` - The name of the plugin to create a backend for
+    /// * `params` - The parameters to initialize the backend with
+    ///
+    /// # Returns
+    /// A new Backend instance
+    ///
+    /// # Errors
+    /// Returns a NixlError if:
+    /// * The plugin name contains interior nul bytes
+    /// * The backend creation fails
+    pub fn create_backend(&self, plugin_name: &str, params: &Params) -> Result<Backend, NixlError> {
+        let plugin_name = CString::new(plugin_name)?;
+        let mut backend = ptr::null_mut();
+
+        // SAFETY: self.inner and params.inner are guaranteed to be valid by NonNull
+        let status = unsafe {
+            nixl_capi_create_backend(
+                self.inner.as_ptr(),
+                plugin_name.as_ptr(),
+                params.inner.as_ptr(),
+                &mut backend,
+            )
+        };
+
+        match status {
+            0 => {
+                // SAFETY: If status is 0, backend was successfully created and is non-null
+                let inner = unsafe { NonNull::new_unchecked(backend) };
+                Ok(Backend { inner })
+            }
+            -1 => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
 }
 
 impl Drop for Agent {
@@ -271,6 +311,65 @@ impl Drop for Agent {
         // SAFETY: self.inner is guaranteed to be valid by NonNull
         unsafe {
             nixl_capi_destroy_agent(self.inner.as_ptr());
+        }
+    }
+}
+
+/// A safe wrapper around a NIXL backend
+pub struct Backend {
+    inner: NonNull<bindings::nixl_capi_backend_s>,
+}
+
+impl Drop for Backend {
+    fn drop(&mut self) {
+        // SAFETY: self.inner is guaranteed to be valid by NonNull
+        unsafe {
+            nixl_capi_destroy_backend(self.inner.as_ptr());
+        }
+    }
+}
+
+/// A safe wrapper around NIXL optional arguments
+pub struct OptArgs {
+    inner: NonNull<bindings::nixl_capi_opt_args_s>,
+}
+
+impl OptArgs {
+    /// Creates a new empty optional arguments struct
+    pub fn new() -> Result<Self, NixlError> {
+        let mut args = ptr::null_mut();
+
+        let status = unsafe { nixl_capi_create_opt_args(&mut args) };
+
+        match status {
+            0 => {
+                // SAFETY: If status is 0, args was successfully created and is non-null
+                let inner = unsafe { NonNull::new_unchecked(args) };
+                Ok(Self { inner })
+            }
+            -1 => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Adds a backend to the optional arguments
+    pub fn add_backend(&mut self, backend: &Backend) -> Result<(), NixlError> {
+        let status =
+            unsafe { nixl_capi_opt_args_add_backend(self.inner.as_ptr(), backend.inner.as_ptr()) };
+
+        match status {
+            0 => Ok(()),
+            -1 => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+}
+
+impl Drop for OptArgs {
+    fn drop(&mut self) {
+        // SAFETY: self.inner is guaranteed to be valid by NonNull
+        unsafe {
+            nixl_capi_destroy_opt_args(self.inner.as_ptr());
         }
     }
 }
@@ -311,5 +410,21 @@ mod tests {
             .get_plugin_params("UCX")
             .expect("Failed to get plugin params");
         // MemList and Params will be automatically dropped here
+    }
+
+    #[test]
+    fn test_backend_creation() {
+        let agent = Agent::new("test_agent").expect("Failed to create agent");
+        let (mems, params) = agent
+            .get_plugin_params("UCX")
+            .expect("Failed to get plugin params");
+        let backend = agent
+            .create_backend("UCX", &params)
+            .expect("Failed to create backend");
+
+        let mut opt_args = OptArgs::new().expect("Failed to create opt args");
+        opt_args
+            .add_backend(&backend)
+            .expect("Failed to add backend");
     }
 }

@@ -19,12 +19,16 @@ struct nixl_capi_agent_s;
 struct nixl_capi_params_s;
 struct nixl_capi_mem_list_s;
 struct nixl_capi_string_list_s;
+struct nixl_capi_backend_s;
+struct nixl_capi_opt_args_s;
 
 // Opaque handle types for C++ objects
 typedef struct nixl_capi_agent_s* nixl_capi_agent_t;
 typedef struct nixl_capi_params_s* nixl_capi_params_t;
 typedef struct nixl_capi_mem_list_s* nixl_capi_mem_list_t;
 typedef struct nixl_capi_string_list_s* nixl_capi_string_list_t;
+typedef struct nixl_capi_backend_s* nixl_capi_backend_t;
+typedef struct nixl_capi_opt_args_s* nixl_capi_opt_args_t;
 
 // Core API functions
 nixl_capi_status_t nixl_capi_create_agent(const char* name, nixl_capi_agent_t* agent);
@@ -42,6 +46,16 @@ nixl_capi_status_t nixl_capi_get_plugin_params(
 
 nixl_capi_status_t nixl_capi_destroy_mem_list(nixl_capi_mem_list_t list);
 nixl_capi_status_t nixl_capi_destroy_params(nixl_capi_params_t params);
+
+// Backend creation and management
+nixl_capi_status_t nixl_capi_create_backend(
+    nixl_capi_agent_t agent, const char* plugin_name, nixl_capi_params_t params, nixl_capi_backend_t* backend);
+nixl_capi_status_t nixl_capi_destroy_backend(nixl_capi_backend_t backend);
+
+// Optional arguments management
+nixl_capi_status_t nixl_capi_create_opt_args(nixl_capi_opt_args_t* args);
+nixl_capi_status_t nixl_capi_destroy_opt_args(nixl_capi_opt_args_t args);
+nixl_capi_status_t nixl_capi_opt_args_add_backend(nixl_capi_opt_args_t args, nixl_capi_backend_t backend);
 
 #ifdef __cplusplus
 }

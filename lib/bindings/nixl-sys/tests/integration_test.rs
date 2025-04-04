@@ -35,6 +35,25 @@ fn test_basic_agent_lifecycle() {
     println!("Params before init:");
     // TODO: Add parameter printing once we have access to the parameter contents
 
+    // Create backends for both agents
+    let backend1 = agent1
+        .create_backend("UCX", &params1)
+        .expect("Failed to create backend for agent1");
+    let backend2 = agent2
+        .create_backend("UCX", &params2)
+        .expect("Failed to create backend for agent2");
+
+    // Create and populate optional arguments
+    let mut extra_params1 = OptArgs::new().expect("Failed to create extra params for agent1");
+    let mut extra_params2 = OptArgs::new().expect("Failed to create extra params for agent2");
+
+    extra_params1
+        .add_backend(&backend1)
+        .expect("Failed to add backend to extra params1");
+    extra_params2
+        .add_backend(&backend2)
+        .expect("Failed to add backend to extra params2");
+
     // The rest of the example will be implemented as we add more bindings
 }
 
