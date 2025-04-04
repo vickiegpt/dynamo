@@ -24,6 +24,14 @@ struct nixl_capi_mem_list_s {
   nixl_mem_list_t mems;
 };
 
+struct nixl_capi_backend_s {
+  nixlBackendH* backend;
+};
+
+struct nixl_capi_opt_args_s {
+  nixl_opt_args_t args;
+};
+
 nixl_capi_status_t
 nixl_capi_create_agent(const char* name, nixl_capi_agent_t* agent)
 {
@@ -192,6 +200,96 @@ nixl_capi_destroy_params(nixl_capi_params_t params)
 
   try {
     delete params;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_create_backend(
+    nixl_capi_agent_t agent, const char* plugin_name, nixl_capi_params_t params, nixl_capi_backend_t* backend)
+{
+  if (!agent || !plugin_name || !params || !backend) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    auto backend_handle = new nixl_capi_backend_s;
+    nixl_status_t ret = agent->agent->createBackend(plugin_name, params->params, backend_handle->backend);
+
+    if (ret != NIXL_SUCCESS) {
+      delete backend_handle;
+      return NIXL_CAPI_ERROR_BACKEND;
+    }
+
+    *backend = backend_handle;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_destroy_backend(nixl_capi_backend_t backend)
+{
+  if (!backend) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    delete backend;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_create_opt_args(nixl_capi_opt_args_t* args)
+{
+  if (!args) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    auto opt_args = new nixl_capi_opt_args_s;
+    *args = opt_args;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_destroy_opt_args(nixl_capi_opt_args_t args)
+{
+  if (!args) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    delete args;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_opt_args_add_backend(nixl_capi_opt_args_t args, nixl_capi_backend_t backend)
+{
+  if (!args || !backend) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    args->args.backends.push_back(backend->backend);
     return NIXL_CAPI_SUCCESS;
   }
   catch (...) {
