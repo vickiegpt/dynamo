@@ -30,6 +30,8 @@ struct nixl_capi_string_list_s;
 struct nixl_capi_backend_s;
 struct nixl_capi_opt_args_s;
 struct nixl_capi_param_iter_s;
+struct nixl_capi_xfer_dlist_s;
+struct nixl_capi_reg_dlist_s;
 
 // Opaque handle types for C++ objects
 typedef struct nixl_capi_agent_s* nixl_capi_agent_t;
@@ -39,6 +41,8 @@ typedef struct nixl_capi_string_list_s* nixl_capi_string_list_t;
 typedef struct nixl_capi_backend_s* nixl_capi_backend_t;
 typedef struct nixl_capi_opt_args_s* nixl_capi_opt_args_t;
 typedef struct nixl_capi_param_iter_s* nixl_capi_param_iter_t;
+typedef struct nixl_capi_xfer_dlist_s* nixl_capi_xfer_dlist_t;
+typedef struct nixl_capi_reg_dlist_s* nixl_capi_reg_dlist_t;
 
 // Core API functions
 nixl_capi_status_t nixl_capi_create_agent(const char* name, nixl_capi_agent_t* agent);
@@ -83,6 +87,25 @@ nixl_capi_status_t nixl_capi_mem_list_is_empty(nixl_capi_mem_list_t list, bool* 
 nixl_capi_status_t nixl_capi_mem_list_size(nixl_capi_mem_list_t list, size_t* size);
 nixl_capi_status_t nixl_capi_mem_list_get(nixl_capi_mem_list_t list, size_t index, nixl_capi_mem_type_t* mem_type);
 nixl_capi_status_t nixl_capi_mem_type_to_string(nixl_capi_mem_type_t mem_type, const char** str);
+
+// Descriptor list functions
+nixl_capi_status_t nixl_capi_create_xfer_dlist(nixl_capi_mem_type_t mem_type, nixl_capi_xfer_dlist_t* dlist);
+nixl_capi_status_t nixl_capi_destroy_xfer_dlist(nixl_capi_xfer_dlist_t dlist);
+nixl_capi_status_t nixl_capi_xfer_dlist_add_desc(
+    nixl_capi_xfer_dlist_t dlist, uintptr_t addr, size_t len, uint32_t dev_id);
+nixl_capi_status_t nixl_capi_xfer_dlist_len(nixl_capi_xfer_dlist_t dlist, size_t* len);
+nixl_capi_status_t nixl_capi_xfer_dlist_has_overlaps(nixl_capi_xfer_dlist_t dlist, bool* has_overlaps);
+nixl_capi_status_t nixl_capi_xfer_dlist_clear(nixl_capi_xfer_dlist_t dlist);
+nixl_capi_status_t nixl_capi_xfer_dlist_resize(nixl_capi_xfer_dlist_t dlist, size_t new_size);
+
+nixl_capi_status_t nixl_capi_create_reg_dlist(nixl_capi_mem_type_t mem_type, nixl_capi_reg_dlist_t* dlist);
+nixl_capi_status_t nixl_capi_destroy_reg_dlist(nixl_capi_reg_dlist_t dlist);
+nixl_capi_status_t nixl_capi_reg_dlist_add_desc(
+    nixl_capi_reg_dlist_t dlist, uintptr_t addr, size_t len, uint32_t dev_id);
+nixl_capi_status_t nixl_capi_reg_dlist_len(nixl_capi_reg_dlist_t dlist, size_t* len);
+nixl_capi_status_t nixl_capi_reg_dlist_has_overlaps(nixl_capi_reg_dlist_t dlist, bool* has_overlaps);
+nixl_capi_status_t nixl_capi_reg_dlist_clear(nixl_capi_reg_dlist_t dlist);
+nixl_capi_status_t nixl_capi_reg_dlist_resize(nixl_capi_reg_dlist_t dlist, size_t new_size);
 
 #ifdef __cplusplus
 }

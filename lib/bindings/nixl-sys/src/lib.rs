@@ -8,6 +8,7 @@ use std::ffi::{CStr, CString};
 use std::fmt;
 use std::ptr;
 use std::ptr::NonNull;
+use libc::uintptr_t;
 use thiserror::Error;
 
 // Include the generated bindings
@@ -22,15 +23,20 @@ mod bindings {
 // Re-export types from the included bindings
 pub use bindings::{
     nixl_capi_agent_t, nixl_capi_backend_t, nixl_capi_create_agent, nixl_capi_create_backend,
-    nixl_capi_create_opt_args, nixl_capi_destroy_agent, nixl_capi_destroy_backend,
-    nixl_capi_destroy_mem_list, nixl_capi_destroy_opt_args, nixl_capi_destroy_params,
-    nixl_capi_destroy_string_list, nixl_capi_get_available_plugins, nixl_capi_get_backend_params,
-    nixl_capi_get_plugin_params, nixl_capi_mem_list_get, nixl_capi_mem_list_is_empty,
-    nixl_capi_mem_list_size, nixl_capi_mem_list_t, nixl_capi_mem_type_t,
-    nixl_capi_mem_type_to_string, nixl_capi_opt_args_add_backend, nixl_capi_opt_args_t,
-    nixl_capi_params_create_iterator, nixl_capi_params_destroy_iterator, nixl_capi_params_is_empty,
-    nixl_capi_params_iterator_next, nixl_capi_params_t, nixl_capi_string_list_get,
-    nixl_capi_string_list_size, nixl_capi_string_list_t,
+    nixl_capi_create_opt_args, nixl_capi_create_reg_dlist, nixl_capi_create_xfer_dlist,
+    nixl_capi_destroy_agent, nixl_capi_destroy_backend, nixl_capi_destroy_mem_list,
+    nixl_capi_destroy_opt_args, nixl_capi_destroy_params, nixl_capi_destroy_reg_dlist,
+    nixl_capi_destroy_string_list, nixl_capi_destroy_xfer_dlist, nixl_capi_get_available_plugins,
+    nixl_capi_get_backend_params, nixl_capi_get_plugin_params, nixl_capi_mem_list_get,
+    nixl_capi_mem_list_is_empty, nixl_capi_mem_list_size, nixl_capi_mem_list_t,
+    nixl_capi_mem_type_t, nixl_capi_mem_type_to_string, nixl_capi_opt_args_add_backend,
+    nixl_capi_opt_args_t, nixl_capi_params_create_iterator, nixl_capi_params_destroy_iterator,
+    nixl_capi_params_is_empty, nixl_capi_params_iterator_next, nixl_capi_params_t,
+    nixl_capi_reg_dlist_add_desc, nixl_capi_reg_dlist_clear, nixl_capi_reg_dlist_has_overlaps,
+    nixl_capi_reg_dlist_len, nixl_capi_reg_dlist_resize, nixl_capi_reg_dlist_t,
+    nixl_capi_string_list_get, nixl_capi_string_list_size, nixl_capi_string_list_t,
+    nixl_capi_xfer_dlist_add_desc, nixl_capi_xfer_dlist_clear, nixl_capi_xfer_dlist_has_overlaps,
+    nixl_capi_xfer_dlist_len, nixl_capi_xfer_dlist_resize, nixl_capi_xfer_dlist_t,
 };
 
 // Re-export status codes
@@ -623,6 +629,192 @@ impl<'a> Iterator for MemListIterator<'a> {
     }
 }
 
+/// A safe wrapper around a NIXL transfer descriptor list
+pub struct XferDescList {
+    inner: NonNull<bindings::nixl_capi_xfer_dlist_s>,
+}
+
+impl XferDescList {
+    /// Creates a new transfer descriptor list for the given memory type
+    pub fn new(mem_type: MemType) -> Result<Self, NixlError> {
+        let mut dlist = ptr::null_mut();
+        let status =
+            unsafe { nixl_capi_create_xfer_dlist(mem_type as nixl_capi_mem_type_t, &mut dlist) };
+
+        match status {
+            NIXL_CAPI_SUCCESS => {
+                // SAFETY: If status is NIXL_CAPI_SUCCESS, dlist is non-null
+                let inner = unsafe { NonNull::new_unchecked(dlist) };
+                Ok(Self { inner })
+            }
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Adds a descriptor to the list
+    pub fn add_desc(&mut self, addr: usize, len: usize, dev_id: u32) -> Result<(), NixlError> {
+        let status = unsafe {
+            nixl_capi_xfer_dlist_add_desc(self.inner.as_ptr(), addr as uintptr_t, len, dev_id)
+        };
+
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(()),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Returns the number of descriptors in the list
+    pub fn len(&self) -> Result<usize, NixlError> {
+        let mut len = 0;
+        let status = unsafe { nixl_capi_xfer_dlist_len(self.inner.as_ptr(), &mut len) };
+
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(len),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Returns true if any descriptors in the list overlap
+    pub fn has_overlaps(&self) -> Result<bool, NixlError> {
+        let mut has_overlaps = false;
+        let status =
+            unsafe { nixl_capi_xfer_dlist_has_overlaps(self.inner.as_ptr(), &mut has_overlaps) };
+
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(has_overlaps),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Clears all descriptors from the list
+    pub fn clear(&mut self) -> Result<(), NixlError> {
+        let status = unsafe { nixl_capi_xfer_dlist_clear(self.inner.as_ptr()) };
+
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(()),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Resizes the list to the given size
+    pub fn resize(&mut self, new_size: usize) -> Result<(), NixlError> {
+        let status = unsafe { nixl_capi_xfer_dlist_resize(self.inner.as_ptr(), new_size) };
+
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(()),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+}
+
+impl Drop for XferDescList {
+    fn drop(&mut self) {
+        // SAFETY: self.inner is guaranteed to be valid by NonNull
+        unsafe {
+            nixl_capi_destroy_xfer_dlist(self.inner.as_ptr());
+        }
+    }
+}
+
+/// A safe wrapper around a NIXL registration descriptor list
+pub struct RegDescList {
+    inner: NonNull<bindings::nixl_capi_reg_dlist_s>,
+}
+
+impl RegDescList {
+    /// Creates a new registration descriptor list for the given memory type
+    pub fn new(mem_type: MemType) -> Result<Self, NixlError> {
+        let mut dlist = ptr::null_mut();
+        let status =
+            unsafe { nixl_capi_create_reg_dlist(mem_type as nixl_capi_mem_type_t, &mut dlist) };
+
+        match status {
+            NIXL_CAPI_SUCCESS => {
+                // SAFETY: If status is NIXL_CAPI_SUCCESS, dlist is non-null
+                let inner = unsafe { NonNull::new_unchecked(dlist) };
+                Ok(Self { inner })
+            }
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Adds a descriptor to the list
+    pub fn add_desc(&mut self, addr: usize, len: usize, dev_id: u32) -> Result<(), NixlError> {
+        let status = unsafe {
+            nixl_capi_reg_dlist_add_desc(self.inner.as_ptr(), addr as uintptr_t, len, dev_id)
+        };
+
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(()),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Returns the number of descriptors in the list
+    pub fn len(&self) -> Result<usize, NixlError> {
+        let mut len = 0;
+        let status = unsafe { nixl_capi_reg_dlist_len(self.inner.as_ptr(), &mut len) };
+
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(len),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Returns true if any descriptors in the list overlap
+    pub fn has_overlaps(&self) -> Result<bool, NixlError> {
+        let mut has_overlaps = false;
+        let status =
+            unsafe { nixl_capi_reg_dlist_has_overlaps(self.inner.as_ptr(), &mut has_overlaps) };
+
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(has_overlaps),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Clears all descriptors from the list
+    pub fn clear(&mut self) -> Result<(), NixlError> {
+        let status = unsafe { nixl_capi_reg_dlist_clear(self.inner.as_ptr()) };
+
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(()),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Resizes the list to the given size
+    pub fn resize(&mut self, new_size: usize) -> Result<(), NixlError> {
+        let status = unsafe { nixl_capi_reg_dlist_resize(self.inner.as_ptr(), new_size) };
+
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(()),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+}
+
+impl Drop for RegDescList {
+    fn drop(&mut self) {
+        // SAFETY: self.inner is guaranteed to be valid by NonNull
+        unsafe {
+            nixl_capi_destroy_reg_dlist(self.inner.as_ptr());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -728,5 +920,57 @@ mod tests {
         for mem_type in backend_mems.iter() {
             println!("Backend memory type: {:?}", mem_type.unwrap());
         }
+    }
+
+    #[test]
+    fn test_xfer_dlist() {
+        let mut dlist = XferDescList::new(MemType::Dram).unwrap();
+
+        // Add some descriptors
+        dlist.add_desc(0x1000, 0x100, 0).unwrap();
+        dlist.add_desc(0x2000, 0x200, 1).unwrap();
+
+        // Check length
+        assert_eq!(dlist.len().unwrap(), 2);
+
+        // Check overlaps
+        assert!(!dlist.has_overlaps().unwrap());
+
+        // Add overlapping descriptor
+        dlist.add_desc(0x1050, 0x100, 0).unwrap();
+        assert!(dlist.has_overlaps().unwrap());
+
+        // Clear list
+        dlist.clear().unwrap();
+        assert_eq!(dlist.len().unwrap(), 0);
+
+        // Resize list
+        dlist.resize(5).unwrap();
+    }
+
+    #[test]
+    fn test_reg_dlist() {
+        let mut dlist = RegDescList::new(MemType::Dram).unwrap();
+
+        // Add some descriptors
+        dlist.add_desc(0x1000, 0x100, 0).unwrap();
+        dlist.add_desc(0x2000, 0x200, 1).unwrap();
+
+        // Check length
+        assert_eq!(dlist.len().unwrap(), 2);
+
+        // Check overlaps
+        assert!(!dlist.has_overlaps().unwrap());
+
+        // Add overlapping descriptor
+        dlist.add_desc(0x1050, 0x100, 0).unwrap();
+        assert!(dlist.has_overlaps().unwrap());
+
+        // Clear list
+        dlist.clear().unwrap();
+        assert_eq!(dlist.len().unwrap(), 0);
+
+        // Resize list
+        dlist.resize(5).unwrap();
     }
 }
