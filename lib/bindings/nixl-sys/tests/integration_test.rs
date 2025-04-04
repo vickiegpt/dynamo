@@ -32,51 +32,56 @@ fn print_params(params: &Params, mems: &MemList) {
 
 #[test]
 fn test_basic_agent_lifecycle() {
-    // Create two agents like in the C++ example
-    let agent1 = Agent::new(AGENT1_NAME).expect("Failed to create agent1");
-    let agent2 = Agent::new(AGENT2_NAME).expect("Failed to create agent2");
+    const AGENT1_NAME: &str = "agent1";
+    const AGENT2_NAME: &str = "agent2";
+
+    // Create agents
+    let agent1 = Agent::new(AGENT1_NAME).unwrap();
+    let agent2 = Agent::new(AGENT2_NAME).unwrap();
 
     // Get available plugins
-    let plugins = agent1
-        .get_available_plugins()
-        .expect("Failed to get plugins");
-    println!("Available plugins:");
-    for plugin in plugins.iter() {
-        println!("{}", plugin.expect("Failed to get plugin name"));
+    let plugins1 = agent1.get_available_plugins().unwrap();
+    let plugins2 = agent2.get_available_plugins().unwrap();
+
+    println!("Available plugins for agent1:");
+    for plugin in plugins1.iter() {
+        println!("  {}", plugin.unwrap());
     }
 
-    // Get plugin parameters for both agents
-    let (mems1, params1) = agent1
-        .get_plugin_params("UCX")
-        .expect("Failed to get UCX params for agent1");
-    let (mems2, params2) = agent2
-        .get_plugin_params("UCX")
-        .expect("Failed to get UCX params for agent2");
+    println!("Available plugins for agent2:");
+    for plugin in plugins2.iter() {
+        println!("  {}", plugin.unwrap());
+    }
 
-    println!("Params before init:");
+    // Get plugin parameters
+    let plugin_name = plugins1.get(0).unwrap();
+    let (mems1, params1) = agent1.get_plugin_params(&plugin_name).unwrap();
+    let (mems2, params2) = agent2.get_plugin_params(&plugin_name).unwrap();
+
+    println!("Initial params for agent1:");
     print_params(&params1, &mems1);
+    println!("Initial params for agent2:");
     print_params(&params2, &mems2);
 
-    // Create backends for both agents
-    let backend1 = agent1
-        .create_backend("UCX", &params1)
-        .expect("Failed to create backend for agent1");
-    let backend2 = agent2
-        .create_backend("UCX", &params2)
-        .expect("Failed to create backend for agent2");
+    // Create backends
+    let backend1 = agent1.create_backend(&plugin_name, &params1).unwrap();
+    let backend2 = agent2.create_backend(&plugin_name, &params2).unwrap();
 
-    // Create and populate optional arguments
-    let mut extra_params1 = OptArgs::new().expect("Failed to create extra params for agent1");
-    let mut extra_params2 = OptArgs::new().expect("Failed to create extra params for agent2");
+    // Get backend parameters after initialization
+    let (mems1_after, params1_after) = agent1.get_backend_params(&backend1).unwrap();
+    let (mems2_after, params2_after) = agent2.get_backend_params(&backend2).unwrap();
 
-    extra_params1
-        .add_backend(&backend1)
-        .expect("Failed to add backend to extra params1");
-    extra_params2
-        .add_backend(&backend2)
-        .expect("Failed to add backend to extra params2");
+    println!("Params after init for agent1:");
+    print_params(&params1_after, &mems1_after);
+    println!("Params after init for agent2:");
+    print_params(&params2_after, &mems2_after);
 
-    // The rest of the example will be implemented as we add more bindings
+    // Create optional arguments and add backends
+    let mut opt_args = OptArgs::new().unwrap();
+    opt_args.add_backend(&backend1).unwrap();
+    opt_args.add_backend(&backend2).unwrap();
+
+    // More implementation will follow as we add more bindings
 }
 
 // #[test]
