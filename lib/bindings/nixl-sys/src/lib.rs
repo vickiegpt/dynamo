@@ -4,10 +4,8 @@
 //! It is not meant to be used directly, but rather through the higher-level
 //! `nixl` crate.
 
-use libc::size_t;
 use std::ffi::{CStr, CString};
 use std::fmt;
-use std::os::raw::c_char;
 use std::ptr;
 use std::ptr::NonNull;
 use thiserror::Error;
@@ -26,13 +24,20 @@ pub use bindings::{
     nixl_capi_agent_t, nixl_capi_backend_t, nixl_capi_create_agent, nixl_capi_create_backend,
     nixl_capi_create_opt_args, nixl_capi_destroy_agent, nixl_capi_destroy_backend,
     nixl_capi_destroy_mem_list, nixl_capi_destroy_opt_args, nixl_capi_destroy_params,
-    nixl_capi_destroy_string_list, nixl_capi_get_available_plugins, nixl_capi_get_plugin_params,
-    nixl_capi_mem_list_get, nixl_capi_mem_list_is_empty, nixl_capi_mem_list_size,
-    nixl_capi_mem_list_t, nixl_capi_mem_type_t, nixl_capi_mem_type_to_string,
-    nixl_capi_opt_args_add_backend, nixl_capi_opt_args_t, nixl_capi_params_create_iterator,
-    nixl_capi_params_destroy_iterator, nixl_capi_params_is_empty, nixl_capi_params_iterator_next,
-    nixl_capi_params_t, nixl_capi_string_list_get, nixl_capi_string_list_size,
-    nixl_capi_string_list_t,
+    nixl_capi_destroy_string_list, nixl_capi_get_available_plugins, nixl_capi_get_backend_params,
+    nixl_capi_get_plugin_params, nixl_capi_mem_list_get, nixl_capi_mem_list_is_empty,
+    nixl_capi_mem_list_size, nixl_capi_mem_list_t, nixl_capi_mem_type_t,
+    nixl_capi_mem_type_to_string, nixl_capi_opt_args_add_backend, nixl_capi_opt_args_t,
+    nixl_capi_params_create_iterator, nixl_capi_params_destroy_iterator, nixl_capi_params_is_empty,
+    nixl_capi_params_iterator_next, nixl_capi_params_t, nixl_capi_string_list_get,
+    nixl_capi_string_list_size, nixl_capi_string_list_t,
+};
+
+// Re-export status codes
+pub use bindings::{
+    nixl_capi_status_t_NIXL_CAPI_ERROR_BACKEND as NIXL_CAPI_ERROR_BACKEND,
+    nixl_capi_status_t_NIXL_CAPI_ERROR_INVALID_PARAM as NIXL_CAPI_ERROR_INVALID_PARAM,
+    nixl_capi_status_t_NIXL_CAPI_SUCCESS as NIXL_CAPI_SUCCESS,
 };
 
 /// Errors that can occur when using NIXL
@@ -342,6 +347,37 @@ impl Agent {
             }
             -1 => Err(NixlError::InvalidParam),
             _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Gets the parameters and memory types for a backend after initialization
+    pub fn get_backend_params(&self, backend: &Backend) -> Result<(MemList, Params), NixlError> {
+        let mut mem_list = ptr::null_mut();
+        let mut params = ptr::null_mut();
+
+        let status = unsafe {
+            nixl_capi_get_backend_params(
+                self.inner.as_ptr(),
+                backend.inner.as_ptr(),
+                &mut mem_list,
+                &mut params,
+            )
+        };
+
+        if status != NIXL_CAPI_SUCCESS {
+            return Err(NixlError::BackendError);
+        }
+
+        // SAFETY: If status is NIXL_CAPI_SUCCESS, both pointers are non-null
+        unsafe {
+            Ok((
+                MemList {
+                    inner: NonNull::new_unchecked(mem_list),
+                },
+                Params {
+                    inner: NonNull::new_unchecked(params),
+                },
+            ))
         }
     }
 }
@@ -665,6 +701,32 @@ mod tests {
             }
         } else {
             println!("  (empty)");
+        }
+    }
+
+    #[test]
+    fn test_get_backend_params() {
+        let agent = Agent::new("test_agent").unwrap();
+        let plugins = agent.get_available_plugins().unwrap();
+        assert!(plugins.is_empty().unwrap_or(false) == false);
+
+        let plugin_name = plugins.get(0).unwrap();
+        let (mems, params) = agent.get_plugin_params(&plugin_name).unwrap();
+        let backend = agent.create_backend(&plugin_name, &params).unwrap();
+
+        // Get backend params after initialization
+        let (backend_mems, backend_params) = agent.get_backend_params(&backend).unwrap();
+
+        // Verify we can access the parameters
+        let param_iter = backend_params.iter().unwrap();
+        for param in param_iter {
+            let param = param.unwrap();
+            println!("Backend param: {} = {}", param.key, param.value);
+        }
+
+        // Verify we can access the memory types
+        for mem_type in backend_mems.iter() {
+            println!("Backend memory type: {:?}", mem_type.unwrap());
         }
     }
 }

@@ -62,6 +62,10 @@ nixl_capi_status_t nixl_capi_create_backend(
     nixl_capi_agent_t agent, const char* plugin_name, nixl_capi_params_t params, nixl_capi_backend_t* backend);
 nixl_capi_status_t nixl_capi_destroy_backend(nixl_capi_backend_t backend);
 
+// Get backend parameters after initialization
+nixl_capi_status_t nixl_capi_get_backend_params(
+    nixl_capi_agent_t agent, nixl_capi_backend_t backend, nixl_capi_mem_list_t* mems, nixl_capi_params_t* params);
+
 // Optional arguments management
 nixl_capi_status_t nixl_capi_create_opt_args(nixl_capi_opt_args_t* args);
 nixl_capi_status_t nixl_capi_destroy_opt_args(nixl_capi_opt_args_t args);

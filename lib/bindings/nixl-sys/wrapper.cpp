@@ -461,4 +461,34 @@ nixl_capi_mem_type_to_string(nixl_capi_mem_type_t mem_type, const char** str)
   }
 }
 
+nixl_capi_status_t
+nixl_capi_get_backend_params(
+    nixl_capi_agent_t agent, nixl_capi_backend_t backend, nixl_capi_mem_list_t* mems, nixl_capi_params_t* params)
+{
+  if (!agent || !backend || !mems || !params) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    auto mem_list = new nixl_capi_mem_list_s;
+    auto param_list = new nixl_capi_params_s;
+
+    nixl_status_t ret = agent->agent->getBackendParams(backend->backend, mem_list->mems, param_list->params);
+
+    if (ret != NIXL_SUCCESS) {
+      delete mem_list;
+      delete param_list;
+      return NIXL_CAPI_ERROR_BACKEND;
+    }
+
+    *mems = mem_list;
+    *params = param_list;
+
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
 }  // extern "C"
