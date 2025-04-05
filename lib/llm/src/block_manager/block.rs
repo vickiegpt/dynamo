@@ -65,6 +65,7 @@ pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync +
     /// If called, the [BlockMetadata::is_reset()] should return true
     fn reset_metadata(&mut self);
 
+    // NOTE: we might not need this
     /// Returns true if the metadata is reset
     fn is_reset(&self) -> bool;
 }

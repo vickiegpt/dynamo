@@ -88,6 +88,13 @@ nixl_capi_status_t nixl_capi_mem_list_size(nixl_capi_mem_list_t list, size_t* si
 nixl_capi_status_t nixl_capi_mem_list_get(nixl_capi_mem_list_t list, size_t index, nixl_capi_mem_type_t* mem_type);
 nixl_capi_status_t nixl_capi_mem_type_to_string(nixl_capi_mem_type_t mem_type, const char** str);
 
+// Memory registration functions
+nixl_capi_status_t nixl_capi_register_mem(
+    nixl_capi_agent_t agent, nixl_capi_reg_dlist_t dlist, nixl_capi_opt_args_t opt_args);
+
+nixl_capi_status_t nixl_capi_deregister_mem(
+    nixl_capi_agent_t agent, nixl_capi_reg_dlist_t dlist, nixl_capi_opt_args_t opt_args);
+
 // Descriptor list functions
 nixl_capi_status_t nixl_capi_create_xfer_dlist(nixl_capi_mem_type_t mem_type, nixl_capi_xfer_dlist_t* dlist);
 nixl_capi_status_t nixl_capi_destroy_xfer_dlist(nixl_capi_xfer_dlist_t dlist);
