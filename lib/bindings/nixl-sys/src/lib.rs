@@ -30,16 +30,17 @@ pub use bindings::{
     nixl_capi_destroy_mem_list, nixl_capi_destroy_opt_args, nixl_capi_destroy_params,
     nixl_capi_destroy_reg_dlist, nixl_capi_destroy_string_list, nixl_capi_destroy_xfer_dlist,
     nixl_capi_get_available_plugins, nixl_capi_get_backend_params, nixl_capi_get_local_md,
-    nixl_capi_get_plugin_params, nixl_capi_mem_list_get, nixl_capi_mem_list_is_empty,
-    nixl_capi_mem_list_size, nixl_capi_mem_list_t, nixl_capi_mem_type_t,
-    nixl_capi_mem_type_to_string, nixl_capi_opt_args_add_backend, nixl_capi_opt_args_t,
-    nixl_capi_params_create_iterator, nixl_capi_params_destroy_iterator, nixl_capi_params_is_empty,
-    nixl_capi_params_iterator_next, nixl_capi_params_t, nixl_capi_reg_dlist_add_desc,
-    nixl_capi_reg_dlist_clear, nixl_capi_reg_dlist_has_overlaps, nixl_capi_reg_dlist_len,
-    nixl_capi_reg_dlist_resize, nixl_capi_reg_dlist_t, nixl_capi_register_mem,
-    nixl_capi_string_list_get, nixl_capi_string_list_size, nixl_capi_string_list_t,
-    nixl_capi_xfer_dlist_add_desc, nixl_capi_xfer_dlist_clear, nixl_capi_xfer_dlist_has_overlaps,
-    nixl_capi_xfer_dlist_len, nixl_capi_xfer_dlist_resize, nixl_capi_xfer_dlist_t,
+    nixl_capi_get_plugin_params, nixl_capi_load_remote_md, nixl_capi_mem_list_get,
+    nixl_capi_mem_list_is_empty, nixl_capi_mem_list_size, nixl_capi_mem_list_t,
+    nixl_capi_mem_type_t, nixl_capi_mem_type_to_string, nixl_capi_opt_args_add_backend,
+    nixl_capi_opt_args_t, nixl_capi_params_create_iterator, nixl_capi_params_destroy_iterator,
+    nixl_capi_params_is_empty, nixl_capi_params_iterator_next, nixl_capi_params_t,
+    nixl_capi_reg_dlist_add_desc, nixl_capi_reg_dlist_clear, nixl_capi_reg_dlist_has_overlaps,
+    nixl_capi_reg_dlist_len, nixl_capi_reg_dlist_resize, nixl_capi_reg_dlist_t,
+    nixl_capi_register_mem, nixl_capi_string_list_get, nixl_capi_string_list_size,
+    nixl_capi_string_list_t, nixl_capi_xfer_dlist_add_desc, nixl_capi_xfer_dlist_clear,
+    nixl_capi_xfer_dlist_has_overlaps, nixl_capi_xfer_dlist_len, nixl_capi_xfer_dlist_resize,
+    nixl_capi_xfer_dlist_t,
 };
 
 // Re-export status codes
@@ -407,6 +408,9 @@ impl Agent {
     /// # Returns
     /// A Vec<u8> containing the serialized metadata
     ///
+    /// # Notes
+    /// This call will fail if no backends have been created.
+    ///
     /// # Errors
     /// Returns a NixlError if the operation fails
     pub fn get_local_md(&self) -> Result<Vec<u8>, NixlError> {
@@ -432,6 +436,45 @@ impl Agent {
                     vec
                 };
                 Ok(bytes)
+            }
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Loads remote metadata from a byte slice and returns the remote agent's name
+    ///
+    /// # Arguments
+    /// * `metadata` - The serialized metadata as a byte slice
+    ///
+    /// # Returns
+    /// The name of the remote agent
+    ///
+    /// # Errors
+    /// Returns a NixlError if the operation fails
+    pub fn load_remote_md(&self, metadata: &[u8]) -> Result<String, NixlError> {
+        let mut agent_name = std::ptr::null_mut();
+
+        // SAFETY: self.inner is guaranteed to be valid by NonNull
+        let status = unsafe {
+            nixl_capi_load_remote_md(
+                self.inner.handle.as_ptr(),
+                metadata.as_ptr() as *const std::ffi::c_void,
+                metadata.len(),
+                &mut agent_name,
+            )
+        };
+
+        match status {
+            NIXL_CAPI_SUCCESS => {
+                // SAFETY: If status is NIXL_CAPI_SUCCESS, agent_name points to a valid null-terminated string
+                let name = unsafe {
+                    let c_str = std::ffi::CStr::from_ptr(agent_name);
+                    let s = c_str.to_str().unwrap().to_string();
+                    libc::free(agent_name as *mut libc::c_void);
+                    s
+                };
+                Ok(name)
             }
             NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
             _ => Err(NixlError::BackendError),
@@ -1419,5 +1462,26 @@ mod tests {
 
         // Check if the size has increased
         // assert!(final_size > initial_size);
+    }
+
+    #[test]
+    fn test_metadata_exchange() {
+        // Create two agents
+        let agent1 = Agent::new("agent1").unwrap();
+        let agent2 = Agent::new("agent2").unwrap();
+
+        // Get plugin parameters for both agents
+        let (_mem_list, params) = agent1.get_plugin_params("UCX").unwrap();
+
+        // Create backends for both agents
+        let _backend1 = agent1.create_backend("UCX", &params).unwrap();
+        let _backend2 = agent2.create_backend("UCX", &params).unwrap();
+
+        // Get metadata from agent1
+        let md = agent1.get_local_md().unwrap();
+
+        // Load metadata into agent2
+        let remote_name = agent2.load_remote_md(&md).unwrap();
+        assert_eq!(remote_name, "agent1");
     }
 }
