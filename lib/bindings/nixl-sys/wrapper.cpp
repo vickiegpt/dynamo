@@ -2,6 +2,8 @@
 
 #include <nixl.h>
 
+#include <cstdlib>
+#include <cstring>
 #include <iterator>
 #include <map>
 #include <string>
@@ -82,6 +84,39 @@ nixl_capi_destroy_agent(nixl_capi_agent_t agent)
   try {
     delete agent->agent;
     delete agent;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_get_local_md(nixl_capi_agent_t agent, void** data, size_t* len)
+{
+  if (!agent || !data || !len) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    nixl_blob_t blob;
+    nixl_status_t ret = agent->agent->getLocalMD(blob);
+    if (ret != NIXL_SUCCESS) {
+      return NIXL_CAPI_ERROR_BACKEND;
+    }
+
+    // Allocate memory for the blob data
+    size_t blob_size = blob.size();
+    void* blob_data = malloc(blob_size);
+    if (!blob_data) {
+      return NIXL_CAPI_ERROR_BACKEND;
+    }
+
+    // Copy the data
+    memcpy(blob_data, blob.data(), blob_size);
+    *data = blob_data;
+    *len = blob_size;
+
     return NIXL_CAPI_SUCCESS;
   }
   catch (...) {

@@ -83,21 +83,13 @@ fn test_basic_agent_lifecycle() {
     storage1.memset(0xbb);
     storage2.memset(0x00);
 
-    // Create registration descriptor lists
-    let mut dlist1 = RegDescList::new(MemType::Dram).unwrap();
-    let mut dlist2 = RegDescList::new(MemType::Dram).unwrap();
-
-    // Add descriptors
-    dlist1.add_storage_desc(&storage1).unwrap();
-    dlist2.add_storage_desc(&storage2).unwrap();
-
-    // Verify descriptor lists
-    assert_eq!(dlist1.len().unwrap(), 1);
-    assert_eq!(dlist2.len().unwrap(), 1);
-
-    // Verify memory patterns
+    // Check memory patterns
     assert!(storage1.as_slice().iter().all(|&x| x == 0xbb));
     assert!(storage2.as_slice().iter().all(|&x| x == 0x00));
+
+    // Register memory
+    storage1.register(&agent1).unwrap();
+    storage2.register(&agent2).unwrap();
 
     // More implementation will follow as we add more bindings
 }
