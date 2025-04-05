@@ -734,4 +734,37 @@ nixl_capi_reg_dlist_resize(nixl_capi_reg_dlist_t dlist, size_t new_size)
   }
 }
 
+// Memory registration functions
+nixl_capi_status_t
+nixl_capi_register_mem(nixl_capi_agent_t agent, nixl_capi_reg_dlist_t dlist, nixl_capi_opt_args_t opt_args)
+{
+  if (!agent || !dlist) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    nixl_status_t ret = agent->agent->registerMem(*dlist->dlist, opt_args ? &opt_args->args : nullptr);
+    return ret == NIXL_SUCCESS ? NIXL_CAPI_SUCCESS : NIXL_CAPI_ERROR_BACKEND;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_deregister_mem(nixl_capi_agent_t agent, nixl_capi_reg_dlist_t dlist, nixl_capi_opt_args_t opt_args)
+{
+  if (!agent || !dlist) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    nixl_status_t ret = agent->agent->deregisterMem(*dlist->dlist, opt_args ? &opt_args->args : nullptr);
+    return ret == NIXL_SUCCESS ? NIXL_CAPI_SUCCESS : NIXL_CAPI_ERROR_BACKEND;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
 }  // extern "C"

@@ -26,19 +26,20 @@ mod bindings {
 pub use bindings::{
     nixl_capi_agent_t, nixl_capi_backend_t, nixl_capi_create_agent, nixl_capi_create_backend,
     nixl_capi_create_opt_args, nixl_capi_create_reg_dlist, nixl_capi_create_xfer_dlist,
-    nixl_capi_destroy_agent, nixl_capi_destroy_backend, nixl_capi_destroy_mem_list,
-    nixl_capi_destroy_opt_args, nixl_capi_destroy_params, nixl_capi_destroy_reg_dlist,
-    nixl_capi_destroy_string_list, nixl_capi_destroy_xfer_dlist, nixl_capi_get_available_plugins,
-    nixl_capi_get_backend_params, nixl_capi_get_plugin_params, nixl_capi_mem_list_get,
-    nixl_capi_mem_list_is_empty, nixl_capi_mem_list_size, nixl_capi_mem_list_t,
-    nixl_capi_mem_type_t, nixl_capi_mem_type_to_string, nixl_capi_opt_args_add_backend,
-    nixl_capi_opt_args_t, nixl_capi_params_create_iterator, nixl_capi_params_destroy_iterator,
-    nixl_capi_params_is_empty, nixl_capi_params_iterator_next, nixl_capi_params_t,
-    nixl_capi_reg_dlist_add_desc, nixl_capi_reg_dlist_clear, nixl_capi_reg_dlist_has_overlaps,
-    nixl_capi_reg_dlist_len, nixl_capi_reg_dlist_resize, nixl_capi_reg_dlist_t,
-    nixl_capi_string_list_get, nixl_capi_string_list_size, nixl_capi_string_list_t,
-    nixl_capi_xfer_dlist_add_desc, nixl_capi_xfer_dlist_clear, nixl_capi_xfer_dlist_has_overlaps,
-    nixl_capi_xfer_dlist_len, nixl_capi_xfer_dlist_resize, nixl_capi_xfer_dlist_t,
+    nixl_capi_deregister_mem, nixl_capi_destroy_agent, nixl_capi_destroy_backend,
+    nixl_capi_destroy_mem_list, nixl_capi_destroy_opt_args, nixl_capi_destroy_params,
+    nixl_capi_destroy_reg_dlist, nixl_capi_destroy_string_list, nixl_capi_destroy_xfer_dlist,
+    nixl_capi_get_available_plugins, nixl_capi_get_backend_params, nixl_capi_get_plugin_params,
+    nixl_capi_mem_list_get, nixl_capi_mem_list_is_empty, nixl_capi_mem_list_size,
+    nixl_capi_mem_list_t, nixl_capi_mem_type_t, nixl_capi_mem_type_to_string,
+    nixl_capi_opt_args_add_backend, nixl_capi_opt_args_t, nixl_capi_params_create_iterator,
+    nixl_capi_params_destroy_iterator, nixl_capi_params_is_empty, nixl_capi_params_iterator_next,
+    nixl_capi_params_t, nixl_capi_reg_dlist_add_desc, nixl_capi_reg_dlist_clear,
+    nixl_capi_reg_dlist_has_overlaps, nixl_capi_reg_dlist_len, nixl_capi_reg_dlist_resize,
+    nixl_capi_reg_dlist_t, nixl_capi_register_mem, nixl_capi_string_list_get,
+    nixl_capi_string_list_size, nixl_capi_string_list_t, nixl_capi_xfer_dlist_add_desc,
+    nixl_capi_xfer_dlist_clear, nixl_capi_xfer_dlist_has_overlaps, nixl_capi_xfer_dlist_len,
+    nixl_capi_xfer_dlist_resize, nixl_capi_xfer_dlist_t,
 };
 
 // Re-export status codes
@@ -214,6 +215,9 @@ struct AgentInner {
     handle: NonNull<bindings::nixl_capi_agent_s>,
 }
 
+unsafe impl Send for AgentInner {}
+unsafe impl Sync for AgentInner {}
+
 impl Drop for AgentInner {
     fn drop(&mut self) {
         unsafe {
@@ -372,6 +376,62 @@ impl Agent {
                     inner: NonNull::new_unchecked(params),
                 },
             ))
+        }
+    }
+
+    pub fn register_memory(
+        &self,
+        descriptor: &dyn NixlDescriptor,
+    ) -> Result<RegistrationHandle, NixlError> {
+        let mut reg_dlist = RegDescList::new(descriptor.mem_type())?;
+        unsafe {
+            reg_dlist.add_storage_desc(descriptor)?;
+            let _opt_args = OptArgs::new()?;
+            nixl_capi_register_mem(
+                self.inner.handle.as_ptr(),
+                reg_dlist.inner.as_ptr(),
+                _opt_args.inner.as_ptr(),
+            );
+        }
+        Ok(RegistrationHandle {
+            agent: self.inner.clone(),
+            ptr: unsafe { descriptor.as_ptr() }.ok_or(NixlError::InvalidParam)? as usize,
+            size: descriptor.size(),
+            dev_id: descriptor.device_id(),
+            mem_type: descriptor.mem_type(),
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct RegistrationHandle {
+    agent: Arc<AgentInner>,
+    ptr: usize,
+    size: usize,
+    dev_id: u32,
+    mem_type: MemType,
+}
+
+impl RegistrationHandle {
+    pub fn deregister(&mut self) -> Result<(), NixlError> {
+        let mut reg_dlist = RegDescList::new(self.mem_type)?;
+        unsafe {
+            reg_dlist.add_desc(self.ptr, self.size, self.dev_id)?;
+            let _opt_args = OptArgs::new().unwrap();
+            nixl_capi_deregister_mem(
+                self.agent.handle.as_ptr(),
+                reg_dlist.inner.as_ptr(),
+                _opt_args.inner.as_ptr(),
+            );
+        }
+        Ok(())
+    }
+}
+
+impl Drop for RegistrationHandle {
+    fn drop(&mut self) {
+        if let Err(e) = self.deregister() {
+            tracing::debug!("Failed to deregister memory: {:?}", e);
         }
     }
 }
@@ -839,10 +899,7 @@ impl<'a> RegDescList<'a> {
     /// The caller must ensure that:
     /// - The descriptor remains valid for the lifetime of the list
     /// - The memory region pointed to by the descriptor remains valid
-    pub fn add_storage_desc<D: NixlDescriptor + 'a>(
-        &mut self,
-        desc: &'a D,
-    ) -> Result<(), NixlError> {
+    pub fn add_storage_desc(&mut self, desc: &'a dyn NixlDescriptor) -> Result<(), NixlError> {
         // Validate memory type matches
         let desc_mem_type = desc.mem_type();
         let list_mem_type = unsafe {
@@ -884,35 +941,8 @@ impl<'a> Drop for RegDescList<'a> {
     }
 }
 
-/// A trait for types that can be added to NIXL descriptor lists
-pub trait NixlDescriptor {
-    /// Get the memory type for this descriptor
-    fn mem_type(&self) -> MemType;
-
-    /// Get the raw pointer to the memory
-    ///
-    /// # Safety
-    /// The caller must ensure:
-    /// - The pointer is valid for the lifetime of the descriptor
-    /// - The pointer is properly aligned
-    unsafe fn as_ptr(&self) -> Option<*const u8>;
-
-    /// Get the size of the memory region in bytes
-    fn size(&self) -> usize;
-
-    /// Get the device ID for this memory region
-    fn device_id(&self) -> u32;
-}
-
 /// A trait for storage types that can be used with NIXL
-pub trait Storage: std::fmt::Debug + Send + Sync + 'static {
-    /// Returns the total size of the storage in bytes
-    fn size(&self) -> usize;
-
-    /// Returns true if the storage is accessible by the host/cpu portion
-    /// of the application.
-    fn is_host_accessible(&self) -> bool;
-
+pub trait MemoryRegion: std::fmt::Debug + Send + Sync + 'static {
     /// Get a raw pointer to the storage
     ///
     /// # Safety
@@ -920,34 +950,36 @@ pub trait Storage: std::fmt::Debug + Send + Sync + 'static {
     /// - The pointer is not used after the storage is dropped
     /// - Access patterns respect the storage's thread safety model
     unsafe fn as_ptr(&self) -> Option<*const u8>;
+
+    /// Returns the total size of the storage in bytes
+    fn size(&self) -> usize;
 }
 
-impl<T: Storage> NixlDescriptor for T {
-    fn mem_type(&self) -> MemType {
-        if self.is_host_accessible() {
-            MemType::Dram
-        } else {
-            MemType::Gpu
-        }
-    }
+/// A trait for types that can be added to NIXL descriptor lists
+pub trait NixlDescriptor: MemoryRegion {
+    /// Get the memory type for this descriptor
+    fn mem_type(&self) -> MemType;
 
-    unsafe fn as_ptr(&self) -> Option<*const u8> {
-        self.as_ptr()
-    }
+    /// Get the device ID for this memory region
+    fn device_id(&self) -> u32;
 
-    fn size(&self) -> usize {
-        self.size()
-    }
+    /// Is registered
+    fn is_registered(&self) -> bool;
 
-    fn device_id(&self) -> u32 {
-        0 // Default device ID, could be made configurable
-    }
+    /// Registration Handle
+    fn handle(&self) -> Option<&RegistrationHandle>;
+}
+
+/// A trait for types that can be registered with NIXL
+pub trait NixlRegistration: NixlDescriptor {
+    fn register(&mut self, agent: &Agent) -> Result<(), NixlError>;
 }
 
 /// System memory storage implementation using a Vec<u8>
 #[derive(Debug)]
 pub struct SystemStorage {
     data: Vec<u8>,
+    handle: Option<RegistrationHandle>,
 }
 
 impl SystemStorage {
@@ -956,7 +988,7 @@ impl SystemStorage {
         let mut data = Vec::with_capacity(size);
         // Initialize to zero to ensure consistent behavior
         data.resize(size, 0);
-        Ok(Self { data })
+        Ok(Self { data, handle: None })
     }
 
     /// Fill the storage with a specific byte value
@@ -970,17 +1002,39 @@ impl SystemStorage {
     }
 }
 
-impl Storage for SystemStorage {
+impl MemoryRegion for SystemStorage {
     fn size(&self) -> usize {
         self.data.len()
     }
 
-    fn is_host_accessible(&self) -> bool {
-        true
-    }
-
     unsafe fn as_ptr(&self) -> Option<*const u8> {
         Some(self.data.as_ptr())
+    }
+}
+
+impl NixlDescriptor for SystemStorage {
+    fn mem_type(&self) -> MemType {
+        MemType::Dram
+    }
+
+    fn device_id(&self) -> u32 {
+        0
+    }
+
+    fn is_registered(&self) -> bool {
+        self.handle.is_some()
+    }
+
+    fn handle(&self) -> Option<&RegistrationHandle> {
+        self.handle.as_ref()
+    }
+}
+
+impl NixlRegistration for SystemStorage {
+    fn register(&mut self, agent: &Agent) -> Result<(), NixlError> {
+        let handle = agent.register_memory(self)?;
+        self.handle = Some(handle);
+        Ok(())
     }
 }
 
@@ -1161,8 +1215,8 @@ mod tests {
             // dlist is dropped here, but storage is still valid
         }
 
-        // Storage is still valid here
-        assert_eq!(<SystemStorage as Storage>::size(&storage), 1024);
+        // MemoryRegion is still valid here
+        assert_eq!(<SystemStorage as MemoryRegion>::size(&storage), 1024);
     }
 
     #[test]
@@ -1227,5 +1281,72 @@ mod tests {
         // Verify memory patterns
         assert!(storage1.as_slice().iter().all(|&x| x == 0xbb));
         assert!(storage2.as_slice().iter().all(|&x| x == 0x00));
+    }
+
+    #[test]
+    fn test_memory_registration() {
+        let agent = Agent::new("test_agent").unwrap();
+        let mut storage = SystemStorage::new(1024).unwrap();
+
+        // Test initial state
+        assert!(!storage.is_registered());
+        assert!(storage.handle().is_none());
+
+        // Register memory
+        storage.register(&agent).unwrap();
+
+        // Verify registration
+        assert!(storage.is_registered());
+        assert!(storage.handle().is_some());
+
+        let handle = storage.handle().unwrap();
+        assert_eq!(handle.size, 1024);
+        assert_eq!(handle.mem_type, MemType::Dram);
+        assert_eq!(handle.dev_id, 0);
+
+        // Verify we can still access the memory
+        storage.memset(0xAA);
+        assert!(storage.as_slice().iter().all(|&x| x == 0xAA));
+    }
+
+    #[test]
+    fn test_registration_handle_drop() {
+        let agent = Agent::new("test_agent").unwrap();
+        let mut storage = SystemStorage::new(1024).unwrap();
+
+        // Register memory
+        storage.register(&agent).unwrap();
+        assert!(storage.is_registered());
+
+        // Drop the storage, which should trigger deregistration
+        drop(storage);
+
+        // Create new storage to verify we can register again
+        let mut new_storage = SystemStorage::new(1024).unwrap();
+        new_storage.register(&agent).unwrap();
+        assert!(new_storage.is_registered());
+    }
+
+    #[test]
+    fn test_multiple_registrations() {
+        let agent = Agent::new("test_agent").unwrap();
+        let mut storage1 = SystemStorage::new(1024).unwrap();
+        let mut storage2 = SystemStorage::new(2048).unwrap();
+
+        // Register both storages
+        storage1.register(&agent).unwrap();
+        storage2.register(&agent).unwrap();
+
+        // Verify both are registered with correct sizes
+        assert!(storage1.is_registered());
+        assert!(storage2.is_registered());
+        assert_eq!(storage1.handle().unwrap().size, 1024);
+        assert_eq!(storage2.handle().unwrap().size, 2048);
+
+        // Verify we can still access both memories
+        storage1.memset(0xAA);
+        storage2.memset(0xBB);
+        assert!(storage1.as_slice().iter().all(|&x| x == 0xAA));
+        assert!(storage2.as_slice().iter().all(|&x| x == 0xBB));
     }
 }
