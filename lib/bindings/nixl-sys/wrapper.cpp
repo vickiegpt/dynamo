@@ -15,7 +15,7 @@ extern "C" {
 
 // Internal struct definitions to match our opaque types
 struct nixl_capi_agent_s {
-  nixlAgent* agent;
+  nixlAgent* inner;
 };
 
 struct nixl_capi_string_list_s {
@@ -67,7 +67,7 @@ nixl_capi_create_agent(const char* name, nixl_capi_agent_t* agent)
     auto inner = new nixlAgent(agent_name, nixl_config);
 
     auto agent_handle = new nixl_capi_agent_s;
-    agent_handle->agent = inner;
+    agent_handle->inner = inner;
     *agent = agent_handle;
     return NIXL_CAPI_SUCCESS;
   }
@@ -84,7 +84,7 @@ nixl_capi_destroy_agent(nixl_capi_agent_t agent)
   }
 
   try {
-    delete agent->agent;
+    delete agent->inner;
     delete agent;
     return NIXL_CAPI_SUCCESS;
   }
@@ -102,7 +102,7 @@ nixl_capi_get_local_md(nixl_capi_agent_t agent, void** data, size_t* len)
 
   try {
     nixl_blob_t blob;
-    nixl_status_t ret = agent->agent->getLocalMD(blob);
+    nixl_status_t ret = agent->inner->getLocalMD(blob);
     if (ret != NIXL_SUCCESS) {
       return NIXL_CAPI_ERROR_BACKEND;
     }
@@ -139,7 +139,7 @@ nixl_capi_load_remote_md(nixl_capi_agent_t agent, const void* data, size_t len, 
     std::string name;
 
     // Load the metadata
-    nixl_status_t ret = agent->agent->loadRemoteMD(blob, name);
+    nixl_status_t ret = agent->inner->loadRemoteMD(blob, name);
     if (ret != NIXL_SUCCESS) {
       return NIXL_CAPI_ERROR_BACKEND;
     }
@@ -167,7 +167,7 @@ nixl_capi_get_available_plugins(nixl_capi_agent_t agent, nixl_capi_string_list_t
 
   try {
     std::vector<nixl_backend_t> backend_plugins;
-    nixl_status_t ret = agent->agent->getAvailPlugins(backend_plugins);
+    nixl_status_t ret = agent->inner->getAvailPlugins(backend_plugins);
 
     if (ret != NIXL_SUCCESS) {
       return NIXL_CAPI_ERROR_BACKEND;
@@ -244,7 +244,7 @@ nixl_capi_get_plugin_params(
     auto mem_list = new nixl_capi_mem_list_s;
     auto param_list = new nixl_capi_params_s;
 
-    nixl_status_t ret = agent->agent->getPluginParams(plugin_name, mem_list->mems, param_list->params);
+    nixl_status_t ret = agent->inner->getPluginParams(plugin_name, mem_list->mems, param_list->params);
 
     if (ret != NIXL_SUCCESS) {
       delete mem_list;
@@ -304,7 +304,7 @@ nixl_capi_create_backend(
 
   try {
     auto backend_handle = new nixl_capi_backend_s;
-    nixl_status_t ret = agent->agent->createBackend(plugin_name, params->params, backend_handle->backend);
+    nixl_status_t ret = agent->inner->createBackend(plugin_name, params->params, backend_handle->backend);
 
     if (ret != NIXL_SUCCESS) {
       delete backend_handle;
@@ -551,7 +551,7 @@ nixl_capi_get_backend_params(
     auto mem_list = new nixl_capi_mem_list_s;
     auto param_list = new nixl_capi_params_s;
 
-    nixl_status_t ret = agent->agent->getBackendParams(backend->backend, mem_list->mems, param_list->params);
+    nixl_status_t ret = agent->inner->getBackendParams(backend->backend, mem_list->mems, param_list->params);
 
     if (ret != NIXL_SUCCESS) {
       delete mem_list;
@@ -812,7 +812,7 @@ nixl_capi_register_mem(nixl_capi_agent_t agent, nixl_capi_reg_dlist_t dlist, nix
   }
 
   try {
-    nixl_status_t ret = agent->agent->registerMem(*dlist->dlist, opt_args ? &opt_args->args : nullptr);
+    nixl_status_t ret = agent->inner->registerMem(*dlist->dlist, opt_args ? &opt_args->args : nullptr);
     return ret == NIXL_SUCCESS ? NIXL_CAPI_SUCCESS : NIXL_CAPI_ERROR_BACKEND;
   }
   catch (...) {
@@ -828,7 +828,7 @@ nixl_capi_deregister_mem(nixl_capi_agent_t agent, nixl_capi_reg_dlist_t dlist, n
   }
 
   try {
-    nixl_status_t ret = agent->agent->deregisterMem(*dlist->dlist, opt_args ? &opt_args->args : nullptr);
+    nixl_status_t ret = agent->inner->deregisterMem(*dlist->dlist, opt_args ? &opt_args->args : nullptr);
     return ret == NIXL_SUCCESS ? NIXL_CAPI_SUCCESS : NIXL_CAPI_ERROR_BACKEND;
   }
   catch (...) {
