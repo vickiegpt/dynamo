@@ -1,6 +1,7 @@
 #include "wrapper.h"
 
 #include <nixl.h>
+#include <nixl_types.h>
 
 #include <cstdlib>
 #include <cstring>
@@ -8,6 +9,7 @@
 #include <map>
 #include <string>
 #include <vector>
+
 
 extern "C" {
 
@@ -106,16 +108,48 @@ nixl_capi_get_local_md(nixl_capi_agent_t agent, void** data, size_t* len)
     }
 
     // Allocate memory for the blob data
-    size_t blob_size = blob.size();
-    void* blob_data = malloc(blob_size);
+    void* blob_data = malloc(blob.size());
     if (!blob_data) {
       return NIXL_CAPI_ERROR_BACKEND;
     }
 
     // Copy the data
-    memcpy(blob_data, blob.data(), blob_size);
+    memcpy(blob_data, blob.data(), blob.size());
     *data = blob_data;
-    *len = blob_size;
+    *len = blob.size();
+
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_load_remote_md(nixl_capi_agent_t agent, const void* data, size_t len, char** agent_name)
+{
+  if (!agent || !data || !len || !agent_name) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    // Create blob from input data - use the constructor that takes void*
+    nixl_blob_t blob;
+    blob.assign((const char*)data, len);
+    std::string name;
+
+    // Load the metadata
+    nixl_status_t ret = agent->agent->loadRemoteMD(blob, name);
+    if (ret != NIXL_SUCCESS) {
+      return NIXL_CAPI_ERROR_BACKEND;
+    }
+
+    // Allocate and copy the agent name
+    char* name_str = strdup(name.c_str());
+    if (!name_str) {
+      return NIXL_CAPI_ERROR_BACKEND;
+    }
+    *agent_name = name_str;
 
     return NIXL_CAPI_SUCCESS;
   }

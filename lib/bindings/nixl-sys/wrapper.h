@@ -52,6 +52,9 @@ nixl_capi_status_t nixl_capi_destroy_agent(nixl_capi_agent_t agent);
 // Get local metadata as a byte array
 nixl_capi_status_t nixl_capi_get_local_md(nixl_capi_agent_t agent, void** data, size_t* len);
 
+// Load remote metadata from a byte array
+nixl_capi_status_t nixl_capi_load_remote_md(nixl_capi_agent_t agent, const void* data, size_t len, char** agent_name);
+
 // Plugin and parameter functions
 nixl_capi_status_t nixl_capi_get_available_plugins(nixl_capi_agent_t agent, nixl_capi_string_list_t* plugins);
 nixl_capi_status_t nixl_capi_destroy_string_list(nixl_capi_string_list_t list);
