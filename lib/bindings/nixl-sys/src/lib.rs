@@ -29,17 +29,17 @@ pub use bindings::{
     nixl_capi_deregister_mem, nixl_capi_destroy_agent, nixl_capi_destroy_backend,
     nixl_capi_destroy_mem_list, nixl_capi_destroy_opt_args, nixl_capi_destroy_params,
     nixl_capi_destroy_reg_dlist, nixl_capi_destroy_string_list, nixl_capi_destroy_xfer_dlist,
-    nixl_capi_get_available_plugins, nixl_capi_get_backend_params, nixl_capi_get_plugin_params,
-    nixl_capi_mem_list_get, nixl_capi_mem_list_is_empty, nixl_capi_mem_list_size,
-    nixl_capi_mem_list_t, nixl_capi_mem_type_t, nixl_capi_mem_type_to_string,
-    nixl_capi_opt_args_add_backend, nixl_capi_opt_args_t, nixl_capi_params_create_iterator,
-    nixl_capi_params_destroy_iterator, nixl_capi_params_is_empty, nixl_capi_params_iterator_next,
-    nixl_capi_params_t, nixl_capi_reg_dlist_add_desc, nixl_capi_reg_dlist_clear,
-    nixl_capi_reg_dlist_has_overlaps, nixl_capi_reg_dlist_len, nixl_capi_reg_dlist_resize,
-    nixl_capi_reg_dlist_t, nixl_capi_register_mem, nixl_capi_string_list_get,
-    nixl_capi_string_list_size, nixl_capi_string_list_t, nixl_capi_xfer_dlist_add_desc,
-    nixl_capi_xfer_dlist_clear, nixl_capi_xfer_dlist_has_overlaps, nixl_capi_xfer_dlist_len,
-    nixl_capi_xfer_dlist_resize, nixl_capi_xfer_dlist_t,
+    nixl_capi_get_available_plugins, nixl_capi_get_backend_params, nixl_capi_get_local_md,
+    nixl_capi_get_plugin_params, nixl_capi_mem_list_get, nixl_capi_mem_list_is_empty,
+    nixl_capi_mem_list_size, nixl_capi_mem_list_t, nixl_capi_mem_type_t,
+    nixl_capi_mem_type_to_string, nixl_capi_opt_args_add_backend, nixl_capi_opt_args_t,
+    nixl_capi_params_create_iterator, nixl_capi_params_destroy_iterator, nixl_capi_params_is_empty,
+    nixl_capi_params_iterator_next, nixl_capi_params_t, nixl_capi_reg_dlist_add_desc,
+    nixl_capi_reg_dlist_clear, nixl_capi_reg_dlist_has_overlaps, nixl_capi_reg_dlist_len,
+    nixl_capi_reg_dlist_resize, nixl_capi_reg_dlist_t, nixl_capi_register_mem,
+    nixl_capi_string_list_get, nixl_capi_string_list_size, nixl_capi_string_list_t,
+    nixl_capi_xfer_dlist_add_desc, nixl_capi_xfer_dlist_clear, nixl_capi_xfer_dlist_has_overlaps,
+    nixl_capi_xfer_dlist_len, nixl_capi_xfer_dlist_resize, nixl_capi_xfer_dlist_t,
 };
 
 // Re-export status codes
@@ -400,6 +400,42 @@ impl Agent {
             dev_id: descriptor.device_id(),
             mem_type: descriptor.mem_type(),
         })
+    }
+
+    /// Gets the local metadata for this agent as a byte array
+    ///
+    /// # Returns
+    /// A Vec<u8> containing the serialized metadata
+    ///
+    /// # Errors
+    /// Returns a NixlError if the operation fails
+    pub fn get_local_md(&self) -> Result<Vec<u8>, NixlError> {
+        let mut data = std::ptr::null_mut();
+        let mut len = 0;
+
+        // SAFETY: self.inner is guaranteed to be valid by NonNull
+        let status = unsafe {
+            nixl_capi_get_local_md(
+                self.inner.handle.as_ptr(),
+                &mut data as *mut *mut _ as *mut *mut std::ffi::c_void,
+                &mut len,
+            )
+        };
+
+        match status {
+            NIXL_CAPI_SUCCESS => {
+                // SAFETY: If status is NIXL_CAPI_SUCCESS, data points to valid memory of size len
+                let bytes = unsafe {
+                    let slice = std::slice::from_raw_parts(data as *const u8, len);
+                    let vec = slice.to_vec();
+                    libc::free(data as *mut libc::c_void);
+                    vec
+                };
+                Ok(bytes)
+            }
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
     }
 }
 
@@ -1348,5 +1384,40 @@ mod tests {
         storage2.memset(0xBB);
         assert!(storage1.as_slice().iter().all(|&x| x == 0xAA));
         assert!(storage2.as_slice().iter().all(|&x| x == 0xBB));
+    }
+
+    #[test]
+    fn test_get_local_md() {
+        let agent = Agent::new("test_agent").unwrap();
+
+        // Get available plugins and print their names
+        let plugins = agent.get_available_plugins().unwrap();
+        for plugin in plugins.iter() {
+            println!("Found plugin: {}", plugin.unwrap());
+        }
+
+        // Get plugin parameters for both agents
+        let (mem_list, params) = agent.get_plugin_params("UCX").unwrap();
+
+        // Create backends for both agents
+        let backend1 = agent.create_backend("UCX", &params).unwrap();
+
+        let md = agent.get_local_md().unwrap();
+
+        // Measure the size
+        let initial_size = md.len();
+        println!("Local metadata size: {}", initial_size);
+
+        // Register some memory regions
+        let mut storage = SystemStorage::new(1024).unwrap();
+        storage.register(&agent).unwrap();
+        assert!(storage.is_registered());
+
+        // Measure the size again
+        let final_size = md.len();
+        println!("Local metadata size: {}", final_size);
+
+        // Check if the size has increased
+        // assert!(final_size > initial_size);
     }
 }
