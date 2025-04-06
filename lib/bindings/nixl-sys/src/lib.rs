@@ -5,12 +5,13 @@
 //! `nixl` crate.
 
 use libc::uintptr_t;
+use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 use std::fmt;
 use std::marker::PhantomData;
 use std::ptr;
 use std::ptr::NonNull;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
 // Include the generated bindings
@@ -30,17 +31,17 @@ pub use bindings::{
     nixl_capi_destroy_mem_list, nixl_capi_destroy_opt_args, nixl_capi_destroy_params,
     nixl_capi_destroy_reg_dlist, nixl_capi_destroy_string_list, nixl_capi_destroy_xfer_dlist,
     nixl_capi_get_available_plugins, nixl_capi_get_backend_params, nixl_capi_get_local_md,
-    nixl_capi_get_plugin_params, nixl_capi_load_remote_md, nixl_capi_mem_list_get,
-    nixl_capi_mem_list_is_empty, nixl_capi_mem_list_size, nixl_capi_mem_list_t,
-    nixl_capi_mem_type_t, nixl_capi_mem_type_to_string, nixl_capi_opt_args_add_backend,
-    nixl_capi_opt_args_t, nixl_capi_params_create_iterator, nixl_capi_params_destroy_iterator,
-    nixl_capi_params_is_empty, nixl_capi_params_iterator_next, nixl_capi_params_t,
-    nixl_capi_reg_dlist_add_desc, nixl_capi_reg_dlist_clear, nixl_capi_reg_dlist_has_overlaps,
-    nixl_capi_reg_dlist_len, nixl_capi_reg_dlist_resize, nixl_capi_reg_dlist_t,
-    nixl_capi_register_mem, nixl_capi_string_list_get, nixl_capi_string_list_size,
-    nixl_capi_string_list_t, nixl_capi_xfer_dlist_add_desc, nixl_capi_xfer_dlist_clear,
-    nixl_capi_xfer_dlist_has_overlaps, nixl_capi_xfer_dlist_len, nixl_capi_xfer_dlist_resize,
-    nixl_capi_xfer_dlist_t,
+    nixl_capi_get_plugin_params, nixl_capi_invalidate_remote_md, nixl_capi_load_remote_md,
+    nixl_capi_mem_list_get, nixl_capi_mem_list_is_empty, nixl_capi_mem_list_size,
+    nixl_capi_mem_list_t, nixl_capi_mem_type_t, nixl_capi_mem_type_to_string,
+    nixl_capi_opt_args_add_backend, nixl_capi_opt_args_t, nixl_capi_params_create_iterator,
+    nixl_capi_params_destroy_iterator, nixl_capi_params_is_empty, nixl_capi_params_iterator_next,
+    nixl_capi_params_t, nixl_capi_reg_dlist_add_desc, nixl_capi_reg_dlist_clear,
+    nixl_capi_reg_dlist_has_overlaps, nixl_capi_reg_dlist_len, nixl_capi_reg_dlist_resize,
+    nixl_capi_reg_dlist_t, nixl_capi_register_mem, nixl_capi_string_list_get,
+    nixl_capi_string_list_size, nixl_capi_string_list_t, nixl_capi_xfer_dlist_add_desc,
+    nixl_capi_xfer_dlist_clear, nixl_capi_xfer_dlist_has_overlaps, nixl_capi_xfer_dlist_len,
+    nixl_capi_xfer_dlist_resize, nixl_capi_xfer_dlist_t,
 };
 
 // Re-export status codes
@@ -63,6 +64,8 @@ pub enum NixlError {
     IndexOutOfBounds,
     #[error("Invalid data pointer")]
     InvalidDataPointer,
+    #[error("Failed to create XferRequest")]
+    FailedToCreateXferRequest,
 }
 
 /// Memory types supported by NIXL
@@ -216,14 +219,49 @@ impl Drop for Params {
 #[derive(Debug)]
 struct AgentInner {
     handle: NonNull<bindings::nixl_capi_agent_s>,
+    remotes: HashSet<String>,
 }
 
 unsafe impl Send for AgentInner {}
 unsafe impl Sync for AgentInner {}
 
+impl AgentInner {
+    fn new(handle: NonNull<bindings::nixl_capi_agent_s>) -> Self {
+        Self {
+            handle,
+            remotes: HashSet::new(),
+        }
+    }
+
+    fn invalidate_remote_md(&mut self, remote_agent: &str) -> Result<(), NixlError> {
+        unsafe {
+            if self.remotes.remove(remote_agent) {
+                nixl_capi_invalidate_remote_md(self.handle.as_ptr(), remote_agent.as_ptr().cast());
+            } else {
+                return Err(NixlError::InvalidParam);
+            }
+        }
+        Ok(())
+    }
+
+    fn invalidate_all_remotes(&mut self) -> Result<(), NixlError> {
+        unsafe {
+            for remote in self.remotes.drain() {
+                nixl_capi_invalidate_remote_md(self.handle.as_ptr(), remote.as_ptr().cast());
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Drop for AgentInner {
     fn drop(&mut self) {
         unsafe {
+            // invalidate all remotes
+            for remote in self.remotes.iter() {
+                nixl_capi_invalidate_remote_md(self.handle.as_ptr(), remote.as_ptr().cast());
+            }
+
             nixl_capi_destroy_agent(self.handle.as_ptr());
         }
     }
@@ -232,7 +270,7 @@ impl Drop for AgentInner {
 /// A NIXL agent that can create backends and manage memory
 #[derive(Debug, Clone)]
 pub struct Agent {
-    inner: Arc<AgentInner>,
+    inner: Arc<RwLock<AgentInner>>,
 }
 
 impl Agent {
@@ -247,7 +285,7 @@ impl Agent {
                 // SAFETY: If status is NIXL_CAPI_SUCCESS, agent is non-null
                 let handle = unsafe { NonNull::new_unchecked(agent) };
                 Ok(Self {
-                    inner: Arc::new(AgentInner { handle }),
+                    inner: Arc::new(RwLock::new(AgentInner::new(handle))),
                 })
             }
             NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
@@ -266,8 +304,12 @@ impl Agent {
         let mut plugins = ptr::null_mut();
 
         // SAFETY: self.inner is guaranteed to be valid by NonNull
-        let status =
-            unsafe { nixl_capi_get_available_plugins(self.inner.handle.as_ptr(), &mut plugins) };
+        let status = unsafe {
+            nixl_capi_get_available_plugins(
+                self.inner.write().unwrap().handle.as_ptr(),
+                &mut plugins,
+            )
+        };
 
         match status {
             0 => {
@@ -300,7 +342,7 @@ impl Agent {
         // SAFETY: self.inner is guaranteed to be valid by NonNull
         let status = unsafe {
             nixl_capi_get_plugin_params(
-                self.inner.handle.as_ptr(),
+                self.inner.read().unwrap().handle.as_ptr(),
                 plugin_name.as_ptr(),
                 &mut mems,
                 &mut params,
@@ -330,7 +372,7 @@ impl Agent {
         let mut backend = ptr::null_mut();
         let status = unsafe {
             nixl_capi_create_backend(
-                self.inner.handle.as_ptr(),
+                self.inner.write().unwrap().handle.as_ptr(),
                 c_plugin.as_ptr(),
                 params.inner.as_ptr(),
                 &mut backend,
@@ -358,7 +400,7 @@ impl Agent {
 
         let status = unsafe {
             nixl_capi_get_backend_params(
-                self.inner.handle.as_ptr(),
+                self.inner.read().unwrap().handle.as_ptr(),
                 backend.inner.as_ptr(),
                 &mut mem_list,
                 &mut params,
@@ -391,7 +433,7 @@ impl Agent {
             reg_dlist.add_storage_desc(descriptor)?;
             let _opt_args = OptArgs::new()?;
             nixl_capi_register_mem(
-                self.inner.handle.as_ptr(),
+                self.inner.write().unwrap().handle.as_ptr(),
                 reg_dlist.inner.as_ptr(),
                 _opt_args.inner.as_ptr(),
             );
@@ -414,7 +456,7 @@ impl Agent {
         unsafe {
             reg_dlist.add_storage_desc(descriptor)?;
             nixl_capi_register_mem(
-                self.inner.handle.as_ptr(),
+                self.inner.write().unwrap().handle.as_ptr(),
                 reg_dlist.inner.as_ptr(),
                 opt_args.inner.as_ptr(),
             );
@@ -445,7 +487,7 @@ impl Agent {
         // SAFETY: self.inner is guaranteed to be valid by NonNull
         let status = unsafe {
             nixl_capi_get_local_md(
-                self.inner.handle.as_ptr(),
+                self.inner.write().unwrap().handle.as_ptr(),
                 &mut data as *mut *mut _ as *mut *mut std::ffi::c_void,
                 &mut len,
             )
@@ -490,7 +532,7 @@ impl Agent {
         // SAFETY: self.inner is guaranteed to be valid by NonNull
         let status = unsafe {
             nixl_capi_load_remote_md(
-                self.inner.handle.as_ptr(),
+                self.inner.write().unwrap().handle.as_ptr(),
                 metadata.as_ptr() as *const std::ffi::c_void,
                 metadata.len(),
                 &mut agent_name,
@@ -506,17 +548,81 @@ impl Agent {
                     libc::free(agent_name as *mut libc::c_void);
                     s
                 };
+                self.inner.write().unwrap().remotes.insert(name.clone());
                 Ok(name)
             }
             NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
             _ => Err(NixlError::BackendError),
         }
     }
+
+    pub fn invalidate_remote_md(&self, remote_agent: &str) -> Result<(), NixlError> {
+        self.inner
+            .write()
+            .unwrap()
+            .invalidate_remote_md(remote_agent)
+    }
+
+    pub fn invalidate_all_remotes(&self) -> Result<(), NixlError> {
+        self.inner.write().unwrap().invalidate_all_remotes()
+    }
+
+    /// Creates a transfer request between local and remote descriptors
+    ///
+    /// # Arguments
+    /// * `operation` - The transfer operation (read or write)
+    /// * `local_descs` - The local descriptor list
+    /// * `remote_descs` - The remote descriptor list
+    /// * `remote_agent` - The name of the remote agent
+    /// * `opt_args` - Optional arguments for the transfer
+    ///
+    /// # Returns
+    /// A handle to the transfer request
+    ///
+    /// # Errors
+    /// Returns a NixlError if the operation fails
+    pub fn create_xfer_req(
+        &self,
+        operation: XferOp,
+        local_descs: &XferDescList,
+        remote_descs: &XferDescList,
+        remote_agent: &str,
+        opt_args: Option<&OptArgs>,
+    ) -> Result<XferRequest, NixlError> {
+        let remote_agent = CString::new(remote_agent)?;
+        let mut req = std::ptr::null_mut();
+
+        // SAFETY: All pointers are guaranteed to be valid
+        let status = unsafe {
+            bindings::nixl_capi_create_xfer_req(
+                self.inner.read().unwrap().handle.as_ptr(),
+                operation as bindings::nixl_capi_xfer_op_t,
+                local_descs.inner.as_ptr(),
+                remote_descs.inner.as_ptr(),
+                remote_agent.as_ptr(),
+                &mut req,
+                opt_args.map_or(std::ptr::null_mut(), |args| args.inner.as_ptr()),
+            )
+        };
+
+        match status {
+            NIXL_CAPI_SUCCESS => {
+                // SAFETY: If status is NIXL_CAPI_SUCCESS, req is guaranteed to be non-null
+                let inner = NonNull::new(req).ok_or(NixlError::FailedToCreateXferRequest)?;
+                Ok(XferRequest {
+                    inner,
+                    agent: self.inner.clone(),
+                })
+            }
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::FailedToCreateXferRequest),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct RegistrationHandle {
-    agent: Arc<AgentInner>,
+    agent: Arc<RwLock<AgentInner>>,
     ptr: usize,
     size: usize,
     dev_id: u32,
@@ -530,7 +636,7 @@ impl RegistrationHandle {
             reg_dlist.add_desc(self.ptr, self.size, self.dev_id)?;
             let _opt_args = OptArgs::new().unwrap();
             nixl_capi_deregister_mem(
-                self.agent.handle.as_ptr(),
+                self.agent.write().unwrap().handle.as_ptr(),
                 reg_dlist.inner.as_ptr(),
                 _opt_args.inner.as_ptr(),
             );
@@ -551,7 +657,7 @@ impl Drop for RegistrationHandle {
 #[derive(Debug)]
 pub struct Backend {
     inner: NonNull<bindings::nixl_capi_backend_s>,
-    _agent: Arc<AgentInner>, // Ensures agent outlives backend
+    _agent: Arc<RwLock<AgentInner>>, // Ensures agent outlives backend
 }
 
 impl Drop for Backend {
@@ -1156,6 +1262,37 @@ impl NixlRegistration for SystemStorage {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum XferOp {
+    Write = 0,
+    Read = 1,
+}
+
+/// A handle to a transfer request
+pub struct XferRequest {
+    inner: NonNull<bindings::nixl_capi_xfer_req_s>,
+    agent: Arc<RwLock<AgentInner>>,
+}
+
+// SAFETY: XferRequest can be sent between threads safely
+unsafe impl Send for XferRequest {}
+// SAFETY: XferRequest can be shared between threads safely
+unsafe impl Sync for XferRequest {}
+
+impl Drop for XferRequest {
+    fn drop(&mut self) {
+        unsafe {
+            bindings::nixl_capi_release_xfer_req(
+                self.agent.write().unwrap().handle.as_ptr(),
+                self.inner.as_ptr(),
+            );
+
+            bindings::nixl_capi_destroy_xfer_req(self.inner.as_ptr());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1197,7 +1334,7 @@ mod tests {
     #[test]
     fn test_backend_creation() {
         let agent = Agent::new("test_agent").expect("Failed to create agent");
-        let (mems, params) = agent
+        let (_mems, params) = agent
             .get_plugin_params("UCX")
             .expect("Failed to get plugin params");
         let backend = agent
@@ -1244,7 +1381,7 @@ mod tests {
         assert!(plugins.is_empty().unwrap_or(false) == false);
 
         let plugin_name = plugins.get(0).unwrap();
-        let (mems, params) = agent.get_plugin_params(&plugin_name).unwrap();
+        let (_mems, params) = agent.get_plugin_params(&plugin_name).unwrap();
         let backend = agent.create_backend(&plugin_name, &params).unwrap();
 
         // Get backend params after initialization
@@ -1364,8 +1501,8 @@ mod tests {
         }
 
         // Get plugin parameters for both agents
-        let (mem_list1, params1) = agent1.get_plugin_params("UCX").unwrap();
-        let (mem_list2, params2) = agent2.get_plugin_params("UCX").unwrap();
+        let (_mem_list1, params1) = agent1.get_plugin_params("UCX").unwrap();
+        let (_mem_list2, params2) = agent2.get_plugin_params("UCX").unwrap();
 
         // Create backends for both agents
         let backend1 = agent1.create_backend("UCX", &params1).unwrap();
@@ -1403,8 +1540,23 @@ mod tests {
         let mut remote_xfer_dlist = XferDescList::new(MemType::Dram).unwrap();
         remote_xfer_dlist.add_storage_desc(&storage2).unwrap();
 
+        let xfer_args = OptArgs::new().unwrap();
 
+        let xfer_req = agent1
+            .create_xfer_req(
+                XferOp::Write,
+                &local_xfer_dlist,
+                &remote_xfer_dlist,
+                &remote_name,
+                Some(&xfer_args),
+            )
+            .unwrap();
 
+        drop(xfer_req);
+
+        // Invalidate all remotes
+        agent1.invalidate_all_remotes().unwrap();
+        agent2.invalidate_all_remotes().unwrap();
     }
 
     #[test]
@@ -1485,7 +1637,7 @@ mod tests {
         }
 
         // Get plugin parameters for both agents
-        let (mem_list, params) = agent.get_plugin_params("UCX").unwrap();
+        let (_mem_list, params) = agent.get_plugin_params("UCX").unwrap();
 
         // Create backends for both agents
         let backend1 = agent.create_backend("UCX", &params).unwrap();
@@ -1501,7 +1653,7 @@ mod tests {
 
         let mut storages = Vec::new();
 
-        for i in 0..10 {
+        for _i in 0..10 {
             // Register some memory regions
             let mut storage = SystemStorage::new(1024).unwrap();
             storage.register_with_args(&agent, &opt_args).unwrap();
@@ -1538,5 +1690,25 @@ mod tests {
         // Load metadata into agent2
         let remote_name = agent2.load_remote_md(&md).unwrap();
         assert_eq!(remote_name, "agent1");
+    }
+
+    #[test]
+    fn test_create_xfer_req() {
+        let agent = Agent::new("test_agent").unwrap();
+
+        // Create local and remote descriptor lists
+        let local_descs = XferDescList::new(MemType::Dram).unwrap();
+        let remote_descs = XferDescList::new(MemType::Dram).unwrap();
+
+        // Create a transfer request
+        let _req = agent
+            .create_xfer_req(
+                XferOp::Write,
+                &local_descs,
+                &remote_descs,
+                "remote_agent",
+                None,
+            )
+            .unwrap();
     }
 }

@@ -13,6 +13,7 @@ typedef enum {
   NIXL_CAPI_SUCCESS = 0,
   NIXL_CAPI_ERROR_INVALID_PARAM = -1,
   NIXL_CAPI_ERROR_BACKEND = -2,
+  NIXL_CAPI_ERROR_INVALID_STATE = -3,
 } nixl_capi_status_t;
 
 // Memory types enum (matching nixl's memory types)
@@ -54,6 +55,9 @@ nixl_capi_status_t nixl_capi_get_local_md(nixl_capi_agent_t agent, void** data, 
 
 // Load remote metadata from a byte array
 nixl_capi_status_t nixl_capi_load_remote_md(nixl_capi_agent_t agent, const void* data, size_t len, char** agent_name);
+
+// Invalidate remote agent metadata
+nixl_capi_status_t nixl_capi_invalidate_remote_md(nixl_capi_agent_t agent, const char* remote_agent);
 
 // Plugin and parameter functions
 nixl_capi_status_t nixl_capi_get_available_plugins(nixl_capi_agent_t agent, nixl_capi_string_list_t* plugins);
@@ -100,6 +104,24 @@ nixl_capi_status_t nixl_capi_register_mem(
 
 nixl_capi_status_t nixl_capi_deregister_mem(
     nixl_capi_agent_t agent, nixl_capi_reg_dlist_t dlist, nixl_capi_opt_args_t opt_args);
+
+// Transfer request functions
+typedef enum {
+  NIXL_CAPI_XFER_OP_WRITE = 0,
+  NIXL_CAPI_XFER_OP_READ = 1,
+} nixl_capi_xfer_op_t;
+
+struct nixl_capi_xfer_req_s;
+typedef struct nixl_capi_xfer_req_s* nixl_capi_xfer_req_t;
+
+nixl_capi_status_t nixl_capi_create_xfer_req(
+    nixl_capi_agent_t agent, nixl_capi_xfer_op_t operation, nixl_capi_xfer_dlist_t local_descs,
+    nixl_capi_xfer_dlist_t remote_descs, const char* remote_agent, nixl_capi_xfer_req_t* req_hndl,
+    nixl_capi_opt_args_t opt_args);
+
+nixl_capi_status_t nixl_capi_destroy_xfer_req(nixl_capi_xfer_req_t req);
+
+nixl_capi_status_t nixl_capi_release_xfer_req(nixl_capi_agent_t agent, nixl_capi_xfer_req_t req);
 
 // Descriptor list functions
 nixl_capi_status_t nixl_capi_create_xfer_dlist(nixl_capi_mem_type_t mem_type, nixl_capi_xfer_dlist_t* dlist);
