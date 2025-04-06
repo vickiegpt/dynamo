@@ -4,6 +4,11 @@
 //! It is not meant to be used directly, but rather through the higher-level
 //! `nixl` crate.
 
+use bindings::{
+    nixl_capi_opt_args_get_has_notif, nixl_capi_opt_args_get_notif_msg,
+    nixl_capi_opt_args_get_skip_desc_merge, nixl_capi_opt_args_set_has_notif,
+    nixl_capi_opt_args_set_notif_msg, nixl_capi_opt_args_set_skip_desc_merge,
+};
 use libc::uintptr_t;
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
@@ -697,6 +702,95 @@ impl OptArgs {
             unsafe { nixl_capi_opt_args_add_backend(self.inner.as_ptr(), backend.inner.as_ptr()) };
         match status {
             NIXL_CAPI_SUCCESS => Ok(()),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Set the notification message
+    pub fn set_notification_message(&mut self, message: &[u8]) -> Result<(), NixlError> {
+        let status = unsafe {
+            nixl_capi_opt_args_set_notif_msg(
+                self.inner.as_ptr(),
+                message.as_ptr() as *const _,
+                message.len(),
+            )
+        };
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(()),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Get the notification message
+    pub fn get_notification_message(&self) -> Result<Vec<u8>, NixlError> {
+        let mut data = ptr::null_mut();
+        let mut len = 0;
+        let status =
+            unsafe { nixl_capi_opt_args_get_notif_msg(self.inner.as_ptr(), &mut data, &mut len) };
+
+        match status {
+            NIXL_CAPI_SUCCESS => {
+                if data.is_null() {
+                    Ok(Vec::new())
+                } else {
+                    // SAFETY: If status is 0 and data is not null, it points to valid memory of size len
+                    let message = unsafe {
+                        let slice = std::slice::from_raw_parts(data as *const u8, len);
+                        let vec = slice.to_vec();
+                        libc::free(data as *mut _);
+                        vec
+                    };
+                    Ok(message)
+                }
+            }
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Set whether notification is enabled
+    pub fn set_has_notification(&mut self, has_notification: bool) -> Result<(), NixlError> {
+        let status =
+            unsafe { nixl_capi_opt_args_set_has_notif(self.inner.as_ptr(), has_notification) };
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(()),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Get whether notification is enabled
+    pub fn has_notification(&self) -> Result<bool, NixlError> {
+        let mut has_notification = false;
+        let status =
+            unsafe { nixl_capi_opt_args_get_has_notif(self.inner.as_ptr(), &mut has_notification) };
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(has_notification),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Set whether to skip descriptor merging
+    pub fn set_skip_descriptor_merge(&mut self, skip_merge: bool) -> Result<(), NixlError> {
+        let status =
+            unsafe { nixl_capi_opt_args_set_skip_desc_merge(self.inner.as_ptr(), skip_merge) };
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(()),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Get whether descriptor merging is skipped
+    pub fn skip_descriptor_merge(&self) -> Result<bool, NixlError> {
+        let mut skip_merge = false;
+        let status =
+            unsafe { nixl_capi_opt_args_get_skip_desc_merge(self.inner.as_ptr(), &mut skip_merge) };
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(skip_merge),
             NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
             _ => Err(NixlError::BackendError),
         }
@@ -1693,7 +1787,11 @@ mod tests {
         let mut remote_xfer_dlist = XferDescList::new(MemType::Dram).unwrap();
         remote_xfer_dlist.add_storage_desc(&storage2).unwrap();
 
-        let xfer_args = OptArgs::new().unwrap();
+        let mut xfer_args = OptArgs::new().unwrap();
+        xfer_args.set_has_notification(true).unwrap();
+        xfer_args
+            .set_notification_message(b"notification message")
+            .unwrap();
 
         let xfer_req = agent1
             .create_xfer_req(
@@ -1705,6 +1803,7 @@ mod tests {
             )
             .unwrap();
 
+        drop(xfer_args);
         drop(xfer_req);
 
         // Invalidate all remotes
