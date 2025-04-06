@@ -34,9 +34,10 @@ import subprocess
 from collections import defaultdict
 from functools import partial
 
+# Get the directory of the current file
+dynamo_docs_abspath = os.path.dirname(os.path.abspath(__file__))
 # Global constants
 dynamo_abspath = os.environ.get("DYNAMO_ABSPATH", os.getcwd())
-dynamo_docs_abspath = os.path.join(dynamo_abspath, "docs")
 
 """
 TODO: Needs to handle cross-branch linkage.
