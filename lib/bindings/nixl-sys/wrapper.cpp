@@ -5,12 +5,11 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <iterator>
 #include <map>
 #include <string>
 #include <vector>
-
-#define NIXL_DEBUG 1
 
 extern "C" {
 
@@ -58,6 +57,10 @@ struct nixl_capi_reg_dlist_s {
 // Internal struct for transfer request handle
 struct nixl_capi_xfer_req_s {
   nixlXferReqH* req;
+};
+
+struct nixl_capi_notif_map_s {
+  nixl_notifs_t notif_map;
 };
 
 nixl_capi_status_t
@@ -1016,6 +1019,39 @@ nixl_capi_create_xfer_req(
 }
 
 nixl_capi_status_t
+nixl_capi_post_xfer_req(nixl_capi_agent_t agent, nixl_capi_xfer_req_t req_hndl, nixl_capi_opt_args_t opt_args)
+{
+  if (!agent || !req_hndl) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    nixl_status_t ret = agent->inner->postXferReq(req_hndl->req, opt_args ? &opt_args->args : nullptr);
+
+    return ret == NIXL_SUCCESS ? NIXL_CAPI_SUCCESS : ret == NIXL_IN_PROG ? NIXL_CAPI_IN_PROG : NIXL_CAPI_ERROR_BACKEND;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_get_xfer_status(nixl_capi_agent_t agent, nixl_capi_xfer_req_t req_hndl)
+{
+  if (!agent || !req_hndl) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    nixl_status_t ret = agent->inner->getXferStatus(req_hndl->req);
+    return ret == NIXL_SUCCESS ? NIXL_CAPI_SUCCESS : ret == NIXL_IN_PROG ? NIXL_CAPI_IN_PROG : NIXL_CAPI_ERROR_BACKEND;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
 nixl_capi_destroy_xfer_req(nixl_capi_xfer_req_t req)
 {
   if (!req) {
@@ -1050,6 +1086,138 @@ nixl_capi_release_xfer_req(nixl_capi_agent_t agent, nixl_capi_xfer_req_t req)
     return ret == NIXL_SUCCESS ? NIXL_CAPI_SUCCESS : NIXL_CAPI_ERROR_BACKEND;
   }
   catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_get_notifs(nixl_capi_agent_t agent, nixl_capi_notif_map_t notif_map, nixl_capi_opt_args_t opt_args)
+{
+  if (!agent || !notif_map) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    nixl_status_t ret = agent->inner->getNotifs(notif_map->notif_map, opt_args ? &opt_args->args : nullptr);
+    if (ret != NIXL_SUCCESS) {
+      return NIXL_CAPI_ERROR_BACKEND;
+    }
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (const std::exception& e) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_create_notif_map(nixl_capi_notif_map_t* notif_map)
+{
+  if (!notif_map) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    auto map = new nixl_capi_notif_map_s;
+    *notif_map = map;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (const std::exception& e) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_destroy_notif_map(nixl_capi_notif_map_t notif_map)
+{
+  if (!notif_map) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    delete notif_map;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (const std::exception& e) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_notif_map_size(nixl_capi_notif_map_t map, size_t* size)
+{
+  if (!map || !size) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    *size = map->notif_map.size();
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (const std::exception& e) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_notif_map_get_agent_at(nixl_capi_notif_map_t map, size_t index, const char** agent_name)
+{
+  if (!map || !agent_name) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    auto it = map->notif_map.begin();
+    std::advance(it, index);
+    if (it == map->notif_map.end()) {
+      return NIXL_CAPI_ERROR_INVALID_PARAM;
+    }
+    *agent_name = it->first.c_str();
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (const std::exception& e) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_notif_map_get_notifs_size(nixl_capi_notif_map_t map, const char* agent_name, size_t* size)
+{
+  if (!map || !agent_name || !size) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    auto it = map->notif_map.find(agent_name);
+    if (it == map->notif_map.end()) {
+      return NIXL_CAPI_ERROR_INVALID_PARAM;
+    }
+    *size = it->second.size();
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (const std::exception& e) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_notif_map_get_notif(
+    nixl_capi_notif_map_t map, const char* agent_name, size_t index, const void** data, size_t* len)
+{
+  if (!map || !agent_name || !data || !len) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    auto it = map->notif_map.find(agent_name);
+    if (it == map->notif_map.end() || index >= it->second.size()) {
+      return NIXL_CAPI_ERROR_INVALID_PARAM;
+    }
+    const auto& notif = it->second[index];
+    *data = notif.data();
+    *len = notif.size();
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (const std::exception& e) {
     return NIXL_CAPI_ERROR_BACKEND;
   }
 }
