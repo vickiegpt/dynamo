@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#define NIXL_DEBUG 1
 
 extern "C" {
 
@@ -730,8 +731,13 @@ nixl_capi_reg_dlist_add_desc(nixl_capi_reg_dlist_t dlist, uintptr_t addr, size_t
   }
 
   try {
-    nixlBlobDesc desc(addr, len, dev_id, nixl_blob_t());  // Empty metadata
+    nixlBlobDesc desc(addr, len, dev_id);  // Empty metadata
     dlist->dlist->addDesc(desc);
+#ifdef NIXL_DEBUG
+    printf("** Adding descriptor\n");
+    dlist->dlist->print();
+    printf("** Added descriptor\n");
+#endif
     return NIXL_CAPI_SUCCESS;
   }
   catch (...) {
@@ -812,6 +818,13 @@ nixl_capi_register_mem(nixl_capi_agent_t agent, nixl_capi_reg_dlist_t dlist, nix
   }
 
   try {
+#ifdef NIXL_DEBUG
+    printf("** Registering memory\n");
+    printf("** Backend Count: %d\n", opt_args ? opt_args->args.backends.size() : 0);
+    printf("** Descriptor list:\n");
+    dlist->dlist->print();
+    printf("** Registered memory\n");
+#endif
     nixl_status_t ret = agent->inner->registerMem(*dlist->dlist, opt_args ? &opt_args->args : nullptr);
     return ret == NIXL_SUCCESS ? NIXL_CAPI_SUCCESS : NIXL_CAPI_ERROR_BACKEND;
   }
@@ -828,6 +841,11 @@ nixl_capi_deregister_mem(nixl_capi_agent_t agent, nixl_capi_reg_dlist_t dlist, n
   }
 
   try {
+#ifdef NIXL_DEBUG
+    printf("** Deregistering memory\n");
+    dlist->dlist->print();
+    printf("** Deregistered memory\n");
+#endif
     nixl_status_t ret = agent->inner->deregisterMem(*dlist->dlist, opt_args ? &opt_args->args : nullptr);
     return ret == NIXL_SUCCESS ? NIXL_CAPI_SUCCESS : NIXL_CAPI_ERROR_BACKEND;
   }

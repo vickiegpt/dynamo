@@ -61,6 +61,8 @@ pub enum NixlError {
     StringConversionError(#[from] std::ffi::NulError),
     #[error("Index out of bounds")]
     IndexOutOfBounds,
+    #[error("Invalid data pointer")]
+    InvalidDataPointer,
 }
 
 /// Memory types supported by NIXL
@@ -403,6 +405,29 @@ impl Agent {
         })
     }
 
+    pub fn register_memory_with_args(
+        &self,
+        descriptor: &dyn NixlDescriptor,
+        opt_args: &OptArgs,
+    ) -> Result<RegistrationHandle, NixlError> {
+        let mut reg_dlist = RegDescList::new(descriptor.mem_type())?;
+        unsafe {
+            reg_dlist.add_storage_desc(descriptor)?;
+            nixl_capi_register_mem(
+                self.inner.handle.as_ptr(),
+                reg_dlist.inner.as_ptr(),
+                opt_args.inner.as_ptr(),
+            );
+        }
+        Ok(RegistrationHandle {
+            agent: self.inner.clone(),
+            ptr: unsafe { descriptor.as_ptr() }.ok_or(NixlError::InvalidParam)? as usize,
+            size: descriptor.size(),
+            dev_id: descriptor.device_id(),
+            mem_type: descriptor.mem_type(),
+        })
+    }
+
     /// Gets the local metadata for this agent as a byte array
     ///
     /// # Returns
@@ -426,11 +451,18 @@ impl Agent {
             )
         };
 
+        let data = data as *const u8;
+
+        // Check if the data pointer is valid
+        if data.is_null() {
+            return Err(NixlError::InvalidDataPointer);
+        }
+
         match status {
             NIXL_CAPI_SUCCESS => {
                 // SAFETY: If status is NIXL_CAPI_SUCCESS, data points to valid memory of size len
                 let bytes = unsafe {
-                    let slice = std::slice::from_raw_parts(data as *const u8, len);
+                    let slice = std::slice::from_raw_parts(data, len);
                     let vec = slice.to_vec();
                     libc::free(data as *mut libc::c_void);
                     vec
@@ -1052,6 +1084,7 @@ pub trait NixlDescriptor: MemoryRegion {
 /// A trait for types that can be registered with NIXL
 pub trait NixlRegistration: NixlDescriptor {
     fn register(&mut self, agent: &Agent) -> Result<(), NixlError>;
+    fn register_with_args(&mut self, agent: &Agent, opt_args: &OptArgs) -> Result<(), NixlError>;
 }
 
 /// System memory storage implementation using a Vec<u8>
@@ -1112,6 +1145,12 @@ impl NixlDescriptor for SystemStorage {
 impl NixlRegistration for SystemStorage {
     fn register(&mut self, agent: &Agent) -> Result<(), NixlError> {
         let handle = agent.register_memory(self)?;
+        self.handle = Some(handle);
+        Ok(())
+    }
+
+    fn register_with_args(&mut self, agent: &Agent, opt_args: &OptArgs) -> Result<(), NixlError> {
+        let handle = agent.register_memory_with_args(self, opt_args)?;
         self.handle = Some(handle);
         Ok(())
     }
@@ -1451,17 +1490,27 @@ mod tests {
         let initial_size = md.len();
         println!("Local metadata size: {}", initial_size);
 
-        // Register some memory regions
-        let mut storage = SystemStorage::new(1024).unwrap();
-        storage.register(&agent).unwrap();
-        assert!(storage.is_registered());
+        let mut opt_args = OptArgs::new().unwrap();
+        opt_args.add_backend(&backend1).unwrap();
+
+        let mut storages = Vec::new();
+
+        for i in 0..10 {
+            // Register some memory regions
+            let mut storage = SystemStorage::new(1024).unwrap();
+            storage.register_with_args(&agent, &opt_args).unwrap();
+            assert!(storage.is_registered());
+            storages.push(storage);
+        }
+
+        let md = agent.get_local_md().unwrap();
 
         // Measure the size again
         let final_size = md.len();
         println!("Local metadata size: {}", final_size);
 
         // Check if the size has increased
-        // assert!(final_size > initial_size);
+        assert!(final_size > initial_size);
     }
 
     #[test]
