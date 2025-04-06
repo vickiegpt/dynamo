@@ -39,8 +39,8 @@ RUN uv venv $VIRTUAL_ENV --python 3.12 && \
       myst-nb \
       nbclient \
       nbsphinx \
-      rst-to-myst \
-      sphinx==5.0.0 \
+      nvidia-sphinx-theme \
+      sphinx \
       sphinx-book-theme \
       sphinx-copybutton \
       sphinx-design \
@@ -50,9 +50,10 @@ RUN uv venv $VIRTUAL_ENV --python 3.12 && \
       sphinxcontrib-bibtex \
       sphinxcontrib-mermaid
 
-RUN uv pip install nvidia-sphinx-theme
-
 # Set visitor script to be included on every HTML page
 ENV VISITS_COUNTING_SCRIPT="//assets.adobedtm.com/b92787824f2e0e9b68dc2e993f9bd995339fe417/satelliteLib-7ba51e58dc61bcb0e9311aadd02a0108ab24cc6c.js"
 
 COPY . /workspace/dynamo
+
+RUN . .venv/bin/activate && \
+    python3 docs/generate_docs.py
