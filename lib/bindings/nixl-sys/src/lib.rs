@@ -1384,21 +1384,27 @@ mod tests {
         storage1.memset(0xbb);
         storage2.memset(0x00);
 
-        // Create registration descriptor lists
-        let mut dlist1 = RegDescList::new(MemType::Dram).unwrap();
-        let mut dlist2 = RegDescList::new(MemType::Dram).unwrap();
-
-        // Add descriptors
-        dlist1.add_storage_desc(&storage1).unwrap();
-        dlist2.add_storage_desc(&storage2).unwrap();
-
-        // Verify descriptor lists
-        assert_eq!(dlist1.len().unwrap(), 1);
-        assert_eq!(dlist2.len().unwrap(), 1);
-
         // Verify memory patterns
         assert!(storage1.as_slice().iter().all(|&x| x == 0xbb));
         assert!(storage2.as_slice().iter().all(|&x| x == 0x00));
+
+        // Create registration descriptor lists
+        storage1.register(&agent1).unwrap();
+        storage2.register(&agent2).unwrap();
+
+        // Mimic transferring metadata from agent2 to agent1
+        let metadata = agent2.get_local_md().unwrap();
+        let remote_name = agent1.load_remote_md(&metadata).unwrap();
+        assert_eq!(remote_name, "A2");
+
+        let mut local_xfer_dlist = XferDescList::new(MemType::Dram).unwrap();
+        local_xfer_dlist.add_storage_desc(&storage1).unwrap();
+
+        let mut remote_xfer_dlist = XferDescList::new(MemType::Dram).unwrap();
+        remote_xfer_dlist.add_storage_desc(&storage2).unwrap();
+
+
+
     }
 
     #[test]
