@@ -55,6 +55,11 @@ struct nixl_capi_reg_dlist_s {
   nixl_reg_dlist_t* dlist;
 };
 
+// Internal struct for transfer request handle
+struct nixl_capi_xfer_req_s {
+  nixlXferReqH* req;
+};
+
 nixl_capi_status_t
 nixl_capi_create_agent(const char* name, nixl_capi_agent_t* agent)
 {
@@ -153,6 +158,22 @@ nixl_capi_load_remote_md(nixl_capi_agent_t agent, const void* data, size_t len, 
     *agent_name = name_str;
 
     return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_invalidate_remote_md(nixl_capi_agent_t agent, const char* remote_agent)
+{
+  if (!agent || !remote_agent) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    nixl_status_t ret = agent->inner->invalidateRemoteMD(std::string(remote_agent));
+    return ret == NIXL_SUCCESS ? NIXL_CAPI_SUCCESS : NIXL_CAPI_ERROR_BACKEND;
   }
   catch (...) {
     return NIXL_CAPI_ERROR_BACKEND;
@@ -820,7 +841,7 @@ nixl_capi_register_mem(nixl_capi_agent_t agent, nixl_capi_reg_dlist_t dlist, nix
   try {
 #ifdef NIXL_DEBUG
     printf("** Registering memory\n");
-    printf("** Backend Count: %d\n", opt_args ? opt_args->args.backends.size() : 0);
+    printf("** Backend Count: %ld\n", opt_args ? opt_args->args.backends.size() : 0);
     printf("** Descriptor list:\n");
     dlist->dlist->print();
     printf("** Registered memory\n");
@@ -847,6 +868,75 @@ nixl_capi_deregister_mem(nixl_capi_agent_t agent, nixl_capi_reg_dlist_t dlist, n
     printf("** Deregistered memory\n");
 #endif
     nixl_status_t ret = agent->inner->deregisterMem(*dlist->dlist, opt_args ? &opt_args->args : nullptr);
+    return ret == NIXL_SUCCESS ? NIXL_CAPI_SUCCESS : NIXL_CAPI_ERROR_BACKEND;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+
+nixl_capi_status_t
+nixl_capi_create_xfer_req(
+    nixl_capi_agent_t agent, nixl_capi_xfer_op_t operation, nixl_capi_xfer_dlist_t local_descs,
+    nixl_capi_xfer_dlist_t remote_descs, const char* remote_agent, nixl_capi_xfer_req_t* req_hndl,
+    nixl_capi_opt_args_t opt_args)
+{
+  if (!agent || !local_descs || !remote_descs || !remote_agent || !req_hndl) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    auto req = new nixl_capi_xfer_req_s;
+    nixl_status_t ret = agent->inner->createXferReq(
+        static_cast<nixl_xfer_op_t>(operation), *local_descs->dlist, *remote_descs->dlist, std::string(remote_agent),
+        req->req, opt_args ? &opt_args->args : nullptr);
+
+    if (ret != NIXL_SUCCESS) {
+      delete req;
+      return NIXL_CAPI_ERROR_BACKEND;
+    }
+
+    *req_hndl = req;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_destroy_xfer_req(nixl_capi_xfer_req_t req)
+{
+  if (!req) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  if (req->req) {
+    return NIXL_CAPI_ERROR_INVALID_STATE;
+  }
+
+  try {
+    delete req;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_release_xfer_req(nixl_capi_agent_t agent, nixl_capi_xfer_req_t req)
+{
+  if (!agent || !req || !req->req) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    nixl_status_t ret = agent->inner->releaseXferReq(req->req);
+    if (ret == NIXL_SUCCESS) {
+      req->req = nullptr;  // Prevent double-free in destroy
+    }
     return ret == NIXL_SUCCESS ? NIXL_CAPI_SUCCESS : NIXL_CAPI_ERROR_BACKEND;
   }
   catch (...) {
