@@ -407,6 +407,116 @@ nixl_capi_opt_args_add_backend(nixl_capi_opt_args_t args, nixl_capi_backend_t ba
 }
 
 nixl_capi_status_t
+nixl_capi_opt_args_set_notif_msg(nixl_capi_opt_args_t args, const void* data, size_t len)
+{
+  if (!args || (!data && len > 0)) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    args->args.notifMsg.assign((const char*)data, len);
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_opt_args_get_notif_msg(nixl_capi_opt_args_t args, void** data, size_t* len)
+{
+  if (!args || !data || !len) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    size_t msg_size = args->args.notifMsg.size();
+    if (msg_size == 0) {
+      *data = nullptr;
+      *len = 0;
+      return NIXL_CAPI_SUCCESS;
+    }
+
+    void* msg_data = malloc(msg_size);
+    if (!msg_data) {
+      return NIXL_CAPI_ERROR_BACKEND;
+    }
+
+    memcpy(msg_data, args->args.notifMsg.data(), msg_size);
+    *data = msg_data;
+    *len = msg_size;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_opt_args_set_has_notif(nixl_capi_opt_args_t args, bool has_notif)
+{
+  if (!args) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    args->args.hasNotif = has_notif;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_opt_args_get_has_notif(nixl_capi_opt_args_t args, bool* has_notif)
+{
+  if (!args || !has_notif) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    *has_notif = args->args.hasNotif;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_opt_args_set_skip_desc_merge(nixl_capi_opt_args_t args, bool skip_merge)
+{
+  if (!args) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    args->args.skipDescMerge = skip_merge;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
+nixl_capi_opt_args_get_skip_desc_merge(nixl_capi_opt_args_t args, bool* skip_merge)
+{
+  if (!args || !skip_merge) {
+    return NIXL_CAPI_ERROR_INVALID_PARAM;
+  }
+
+  try {
+    *skip_merge = args->args.skipDescMerge;
+    return NIXL_CAPI_SUCCESS;
+  }
+  catch (...) {
+    return NIXL_CAPI_ERROR_BACKEND;
+  }
+}
+
+nixl_capi_status_t
 nixl_capi_params_is_empty(nixl_capi_params_t params, bool* is_empty)
 {
   if (!params || !is_empty) {
