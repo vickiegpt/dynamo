@@ -4,11 +4,6 @@
 //! It is not meant to be used directly, but rather through the higher-level
 //! `nixl` crate.
 
-use bindings::{
-    nixl_capi_opt_args_get_has_notif, nixl_capi_opt_args_get_notif_msg,
-    nixl_capi_opt_args_get_skip_desc_merge, nixl_capi_opt_args_set_has_notif,
-    nixl_capi_opt_args_set_notif_msg, nixl_capi_opt_args_set_skip_desc_merge,
-};
 use libc::uintptr_t;
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
@@ -29,30 +24,35 @@ mod bindings {
 }
 
 // Re-export types from the included bindings
-pub use bindings::{
-    nixl_capi_agent_t, nixl_capi_backend_t, nixl_capi_create_agent, nixl_capi_create_backend,
+use bindings::{
+    nixl_capi_create_agent, nixl_capi_create_backend, nixl_capi_create_notif_map,
     nixl_capi_create_opt_args, nixl_capi_create_reg_dlist, nixl_capi_create_xfer_dlist,
     nixl_capi_deregister_mem, nixl_capi_destroy_agent, nixl_capi_destroy_backend,
-    nixl_capi_destroy_mem_list, nixl_capi_destroy_opt_args, nixl_capi_destroy_params,
-    nixl_capi_destroy_reg_dlist, nixl_capi_destroy_string_list, nixl_capi_destroy_xfer_dlist,
-    nixl_capi_get_available_plugins, nixl_capi_get_backend_params, nixl_capi_get_local_md,
-    nixl_capi_get_plugin_params, nixl_capi_invalidate_remote_md, nixl_capi_load_remote_md,
+    nixl_capi_destroy_mem_list, nixl_capi_destroy_notif_map, nixl_capi_destroy_opt_args,
+    nixl_capi_destroy_params, nixl_capi_destroy_reg_dlist, nixl_capi_destroy_string_list,
+    nixl_capi_destroy_xfer_dlist, nixl_capi_get_available_plugins, nixl_capi_get_backend_params,
+    nixl_capi_get_local_md, nixl_capi_get_notifs, nixl_capi_get_plugin_params,
+    nixl_capi_get_xfer_status, nixl_capi_invalidate_remote_md, nixl_capi_load_remote_md,
     nixl_capi_mem_list_get, nixl_capi_mem_list_is_empty, nixl_capi_mem_list_size,
-    nixl_capi_mem_list_t, nixl_capi_mem_type_t, nixl_capi_mem_type_to_string,
-    nixl_capi_opt_args_add_backend, nixl_capi_opt_args_t, nixl_capi_params_create_iterator,
+    nixl_capi_mem_type_t, nixl_capi_mem_type_to_string, nixl_capi_notif_map_get_agent_at,
+    nixl_capi_notif_map_get_notif, nixl_capi_notif_map_get_notifs_size, nixl_capi_notif_map_size,
+    nixl_capi_opt_args_add_backend, nixl_capi_opt_args_get_has_notif,
+    nixl_capi_opt_args_get_notif_msg, nixl_capi_opt_args_get_skip_desc_merge,
+    nixl_capi_opt_args_set_has_notif, nixl_capi_opt_args_set_notif_msg,
+    nixl_capi_opt_args_set_skip_desc_merge, nixl_capi_params_create_iterator,
     nixl_capi_params_destroy_iterator, nixl_capi_params_is_empty, nixl_capi_params_iterator_next,
-    nixl_capi_params_t, nixl_capi_reg_dlist_add_desc, nixl_capi_reg_dlist_clear,
+    nixl_capi_post_xfer_req, nixl_capi_reg_dlist_add_desc, nixl_capi_reg_dlist_clear,
     nixl_capi_reg_dlist_has_overlaps, nixl_capi_reg_dlist_len, nixl_capi_reg_dlist_resize,
-    nixl_capi_reg_dlist_t, nixl_capi_register_mem, nixl_capi_string_list_get,
-    nixl_capi_string_list_size, nixl_capi_string_list_t, nixl_capi_xfer_dlist_add_desc,
-    nixl_capi_xfer_dlist_clear, nixl_capi_xfer_dlist_has_overlaps, nixl_capi_xfer_dlist_len,
-    nixl_capi_xfer_dlist_resize, nixl_capi_xfer_dlist_t,
+    nixl_capi_register_mem, nixl_capi_string_list_get, nixl_capi_string_list_size,
+    nixl_capi_xfer_dlist_add_desc, nixl_capi_xfer_dlist_clear, nixl_capi_xfer_dlist_has_overlaps,
+    nixl_capi_xfer_dlist_len, nixl_capi_xfer_dlist_resize,
 };
 
 // Re-export status codes
 pub use bindings::{
     nixl_capi_status_t_NIXL_CAPI_ERROR_BACKEND as NIXL_CAPI_ERROR_BACKEND,
     nixl_capi_status_t_NIXL_CAPI_ERROR_INVALID_PARAM as NIXL_CAPI_ERROR_INVALID_PARAM,
+    nixl_capi_status_t_NIXL_CAPI_IN_PROG as NIXL_CAPI_IN_PROG,
     nixl_capi_status_t_NIXL_CAPI_SUCCESS as NIXL_CAPI_SUCCESS,
 };
 
@@ -621,6 +621,83 @@ impl Agent {
             }
             NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
             _ => Err(NixlError::FailedToCreateXferRequest),
+        }
+    }
+
+    /// Posts a transfer request to initiate a transfer
+    ///
+    /// After this, the transfer state can be checked asynchronously until completion.
+    /// For small transfers that complete within the call, the function returns `Ok(())`.
+    /// Otherwise, it returns `Ok(true)` to indicate the transfer is in progress.
+    ///
+    /// # Arguments
+    /// * `req` - Transfer request handle obtained from `create_xfer_req`
+    /// * `opt_args` - Optional arguments for the transfer request
+    pub fn post_xfer_req(
+        &self,
+        req: &XferRequest,
+        opt_args: Option<&OptArgs>,
+    ) -> Result<bool, NixlError> {
+        let status = unsafe {
+            nixl_capi_post_xfer_req(
+                self.inner.write().unwrap().handle.as_ptr(),
+                req.inner.as_ptr(),
+                opt_args.map_or(ptr::null_mut(), |args| args.inner.as_ptr()),
+            )
+        };
+
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(false), // Transfer completed
+            NIXL_CAPI_IN_PROG => Ok(true),  // Transfer in progress
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Checks the status of a transfer request
+    ///
+    /// Returns `Ok(true)` if the transfer is still in progress, `Ok(false)` if it completed successfully.
+    ///
+    /// # Arguments
+    /// * `req` - Transfer request handle after `post_xfer_req`
+    pub fn get_xfer_status(&self, req: &XferRequest) -> Result<bool, NixlError> {
+        let status = unsafe {
+            nixl_capi_get_xfer_status(
+                self.inner.write().unwrap().handle.as_ptr(),
+                req.inner.as_ptr(),
+            )
+        };
+
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(false), // Transfer completed
+            NIXL_CAPI_IN_PROG => Ok(true),  // Transfer in progress
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Gets notifications from other agents
+    ///
+    /// # Arguments
+    /// * `notifs` - Notification map to populate with notifications
+    /// * `opt_args` - Optional arguments to filter notifications by backend
+    pub fn get_notifications(
+        &self,
+        notifs: &mut NotificationMap,
+        opt_args: Option<&OptArgs>,
+    ) -> Result<(), NixlError> {
+        let status = unsafe {
+            nixl_capi_get_notifs(
+                self.inner.write().unwrap().handle.as_ptr(),
+                notifs.inner.as_ptr(),
+                opt_args.map_or(ptr::null_mut(), |args| args.inner.as_ptr()),
+            )
+        };
+
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(()),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
         }
     }
 }
@@ -1359,8 +1436,8 @@ impl NixlRegistration for SystemStorage {
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum XferOp {
-    Write = 0,
-    Read = 1,
+    Read = 0,
+    Write = 1,
 }
 
 /// A handle to a transfer request
@@ -1384,6 +1461,189 @@ impl Drop for XferRequest {
 
             bindings::nixl_capi_destroy_xfer_req(self.inner.as_ptr());
         }
+    }
+}
+
+/// A safe wrapper around NIXL notification map
+pub struct NotificationMap {
+    inner: NonNull<bindings::nixl_capi_notif_map_s>,
+}
+
+impl NotificationMap {
+    /// Creates a new empty notification map
+    pub fn new() -> Result<Self, NixlError> {
+        let mut map = ptr::null_mut();
+        let status = unsafe { nixl_capi_create_notif_map(&mut map) };
+        match status {
+            NIXL_CAPI_SUCCESS => {
+                // SAFETY: If status is NIXL_CAPI_SUCCESS, map is non-null
+                let inner = unsafe { NonNull::new_unchecked(map) };
+                Ok(Self { inner })
+            }
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Returns the number of agents that have notifications
+    pub fn len(&self) -> Result<usize, NixlError> {
+        let mut size = 0;
+        let status = unsafe { nixl_capi_notif_map_size(self.inner.as_ptr(), &mut size) };
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(size),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Returns true if there are no notifications
+    pub fn is_empty(&self) -> Result<bool, NixlError> {
+        Ok(self.len()? == 0)
+    }
+
+    /// Returns an iterator over the agent names that have notifications
+    pub fn agents(&self) -> NotificationMapAgentIterator<'_> {
+        NotificationMapAgentIterator {
+            map: self,
+            index: 0,
+            length: self.len().unwrap_or(0),
+        }
+    }
+
+    /// Returns the number of notifications for a given agent
+    pub fn get_notifications_size(&self, agent_name: &str) -> Result<usize, NixlError> {
+        let mut size = 0;
+        let c_name = CString::new(agent_name)?;
+        let status = unsafe {
+            nixl_capi_notif_map_get_notifs_size(self.inner.as_ptr(), c_name.as_ptr(), &mut size)
+        };
+        match status {
+            NIXL_CAPI_SUCCESS => Ok(size),
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Returns an iterator over the notifications for a given agent
+    pub fn get_notifications(
+        &self,
+        agent_name: &str,
+    ) -> Result<NotificationIterator<'_>, NixlError> {
+        let size = self.get_notifications_size(agent_name)?;
+        Ok(NotificationIterator {
+            map: self,
+            agent_name: agent_name.to_string(),
+            index: 0,
+            length: size,
+        })
+    }
+
+    /// Returns a specific notification for a given agent
+    pub fn get_notification(&self, agent_name: &str, index: usize) -> Result<Vec<u8>, NixlError> {
+        let c_name = CString::new(agent_name)?;
+        let mut data: *const u8 = ptr::null();
+        let mut len = 0;
+        let status = unsafe {
+            nixl_capi_notif_map_get_notif(
+                self.inner.as_ptr(),
+                c_name.as_ptr(),
+                index,
+                &mut data as *mut *const _ as *mut *const std::ffi::c_void,
+                &mut len,
+            )
+        };
+        match status {
+            NIXL_CAPI_SUCCESS => {
+                if data.is_null() {
+                    Ok(Vec::new())
+                } else {
+                    // SAFETY: If status is NIXL_CAPI_SUCCESS, data points to valid memory of size len
+                    let bytes = unsafe {
+                        let slice = std::slice::from_raw_parts(data as *const u8, len);
+                        slice.to_vec()
+                    };
+                    Ok(bytes)
+                }
+            }
+            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
+            _ => Err(NixlError::BackendError),
+        }
+    }
+}
+
+impl Drop for NotificationMap {
+    fn drop(&mut self) {
+        unsafe {
+            nixl_capi_destroy_notif_map(self.inner.as_ptr());
+        }
+    }
+}
+
+/// An iterator over agent names in a NotificationMap
+pub struct NotificationMapAgentIterator<'a> {
+    map: &'a NotificationMap,
+    index: usize,
+    length: usize,
+}
+
+impl<'a> Iterator for NotificationMapAgentIterator<'a> {
+    type Item = Result<&'a str, NixlError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.length {
+            None
+        } else {
+            let mut agent_name = ptr::null();
+            let status = unsafe {
+                nixl_capi_notif_map_get_agent_at(
+                    self.map.inner.as_ptr(),
+                    self.index,
+                    &mut agent_name,
+                )
+            };
+            self.index += 1;
+            match status {
+                NIXL_CAPI_SUCCESS => {
+                    // SAFETY: If status is NIXL_CAPI_SUCCESS, agent_name points to a valid C string
+                    let name = unsafe { CStr::from_ptr(agent_name) };
+                    Some(name.to_str().map_err(|_| NixlError::InvalidParam))
+                }
+                NIXL_CAPI_ERROR_INVALID_PARAM => Some(Err(NixlError::InvalidParam)),
+                _ => Some(Err(NixlError::BackendError)),
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.length - self.index;
+        (remaining, Some(remaining))
+    }
+}
+
+/// An iterator over notifications for a specific agent
+pub struct NotificationIterator<'a> {
+    map: &'a NotificationMap,
+    agent_name: String,
+    index: usize,
+    length: usize,
+}
+
+impl<'a> Iterator for NotificationIterator<'a> {
+    type Item = Result<Vec<u8>, NixlError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.length {
+            None
+        } else {
+            let result = self.map.get_notification(&self.agent_name, self.index);
+            self.index += 1;
+            Some(result)
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.length - self.index;
+        (remaining, Some(remaining))
     }
 }
 
@@ -1748,12 +2008,12 @@ mod tests {
         }
 
         // Get plugin parameters for both agents
-        let (_mem_list1, params1) = agent1.get_plugin_params("UCX").unwrap();
-        let (_mem_list2, params2) = agent2.get_plugin_params("UCX").unwrap();
+        let (_mem_list1, _params) = agent1.get_plugin_params("UCX").unwrap();
+        let (_mem_list2, params) = agent2.get_plugin_params("UCX").unwrap();
 
         // Create backends for both agents
-        let backend1 = agent1.create_backend("UCX", &params1).unwrap();
-        let backend2 = agent2.create_backend("UCX", &params2).unwrap();
+        let backend1 = agent1.create_backend("UCX", &params).unwrap();
+        let backend2 = agent2.create_backend("UCX", &params).unwrap();
 
         // Create optional arguments and add backends
         let mut opt_args = OptArgs::new().unwrap();
@@ -1789,9 +2049,7 @@ mod tests {
 
         let mut xfer_args = OptArgs::new().unwrap();
         xfer_args.set_has_notification(true).unwrap();
-        xfer_args
-            .set_notification_message(b"notification message")
-            .unwrap();
+        xfer_args.set_notification_message(b"notification").unwrap();
 
         let xfer_req = agent1
             .create_xfer_req(
@@ -1803,11 +2061,70 @@ mod tests {
             )
             .unwrap();
 
+        let status = agent1.post_xfer_req(&xfer_req, None).unwrap();
+        assert!(status);
+
+        println!("Waiting for local completions");
+
+        loop {
+            let status = agent1.get_xfer_status(&xfer_req).unwrap();
+
+            if status == false {
+                println!("Xfer req completed");
+                break;
+            } else {
+                println!("Xfer req not completed");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        let mut notifs = NotificationMap::new().unwrap();
+        println!("Waiting for notifications");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // // see if the values in storage2 are 0xbb
+        // assert!(storage2.as_slice().iter().all(|&x| x == 0xbb));
+
+        loop {
+            agent2.get_notifications(&mut notifs, None).unwrap();
+            if !notifs.is_empty().unwrap() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        println!("Got notifications");
+
+        // Get first notification from first agent
+        let agent_name = notifs.agents().next().unwrap().unwrap();
+        let notif = notifs
+            .get_notifications(agent_name)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(notif, b"notification");
+
+        // Verify memory patterns
+        assert!(storage1.as_slice().iter().all(|&x| x == 0xbb));
+        assert!(storage2.as_slice().iter().all(|&x| x == 0xbb));
+
         drop(xfer_args);
         drop(xfer_req);
 
-        // Invalidate all remotes
+        drop(local_xfer_dlist);
+        drop(remote_xfer_dlist);
+
         agent1.invalidate_all_remotes().unwrap();
         agent2.invalidate_all_remotes().unwrap();
+
+        drop(storage1);
+        drop(storage2);
+
+        drop(backend1);
+        drop(backend2);
+
+        drop(agent1);
+        drop(agent2);
     }
 }
