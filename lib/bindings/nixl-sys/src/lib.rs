@@ -1489,77 +1489,6 @@ mod tests {
     }
 
     #[test]
-    fn test_basic_agent_lifecycle() {
-        // Create two agents
-        let agent1 = Agent::new("A1").unwrap();
-        let agent2 = Agent::new("A2").unwrap();
-
-        // Get available plugins and print their names
-        let plugins = agent1.get_available_plugins().unwrap();
-        for plugin in plugins.iter() {
-            println!("Found plugin: {}", plugin.unwrap());
-        }
-
-        // Get plugin parameters for both agents
-        let (_mem_list1, params1) = agent1.get_plugin_params("UCX").unwrap();
-        let (_mem_list2, params2) = agent2.get_plugin_params("UCX").unwrap();
-
-        // Create backends for both agents
-        let backend1 = agent1.create_backend("UCX", &params1).unwrap();
-        let backend2 = agent2.create_backend("UCX", &params2).unwrap();
-
-        // Create optional arguments and add backends
-        let mut opt_args = OptArgs::new().unwrap();
-        opt_args.add_backend(&backend1).unwrap();
-        opt_args.add_backend(&backend2).unwrap();
-
-        // Allocate and initialize memory regions
-        let mut storage1 = SystemStorage::new(256).unwrap();
-        let mut storage2 = SystemStorage::new(256).unwrap();
-
-        // Initialize memory patterns
-        storage1.memset(0xbb);
-        storage2.memset(0x00);
-
-        // Verify memory patterns
-        assert!(storage1.as_slice().iter().all(|&x| x == 0xbb));
-        assert!(storage2.as_slice().iter().all(|&x| x == 0x00));
-
-        // Create registration descriptor lists
-        storage1.register(&agent1).unwrap();
-        storage2.register(&agent2).unwrap();
-
-        // Mimic transferring metadata from agent2 to agent1
-        let metadata = agent2.get_local_md().unwrap();
-        let remote_name = agent1.load_remote_md(&metadata).unwrap();
-        assert_eq!(remote_name, "A2");
-
-        let mut local_xfer_dlist = XferDescList::new(MemType::Dram).unwrap();
-        local_xfer_dlist.add_storage_desc(&storage1).unwrap();
-
-        let mut remote_xfer_dlist = XferDescList::new(MemType::Dram).unwrap();
-        remote_xfer_dlist.add_storage_desc(&storage2).unwrap();
-
-        let xfer_args = OptArgs::new().unwrap();
-
-        let xfer_req = agent1
-            .create_xfer_req(
-                XferOp::Write,
-                &local_xfer_dlist,
-                &remote_xfer_dlist,
-                &remote_name,
-                Some(&xfer_args),
-            )
-            .unwrap();
-
-        drop(xfer_req);
-
-        // Invalidate all remotes
-        agent1.invalidate_all_remotes().unwrap();
-        agent2.invalidate_all_remotes().unwrap();
-    }
-
-    #[test]
     fn test_memory_registration() {
         let agent = Agent::new("test_agent").unwrap();
         let mut storage = SystemStorage::new(1024).unwrap();
@@ -1710,5 +1639,76 @@ mod tests {
                 None,
             )
             .unwrap();
+    }
+
+    #[test]
+    fn test_basic_agent_lifecycle() {
+        // Create two agents
+        let agent1 = Agent::new("A1").unwrap();
+        let agent2 = Agent::new("A2").unwrap();
+
+        // Get available plugins and print their names
+        let plugins = agent1.get_available_plugins().unwrap();
+        for plugin in plugins.iter() {
+            println!("Found plugin: {}", plugin.unwrap());
+        }
+
+        // Get plugin parameters for both agents
+        let (_mem_list1, params1) = agent1.get_plugin_params("UCX").unwrap();
+        let (_mem_list2, params2) = agent2.get_plugin_params("UCX").unwrap();
+
+        // Create backends for both agents
+        let backend1 = agent1.create_backend("UCX", &params1).unwrap();
+        let backend2 = agent2.create_backend("UCX", &params2).unwrap();
+
+        // Create optional arguments and add backends
+        let mut opt_args = OptArgs::new().unwrap();
+        opt_args.add_backend(&backend1).unwrap();
+        opt_args.add_backend(&backend2).unwrap();
+
+        // Allocate and initialize memory regions
+        let mut storage1 = SystemStorage::new(256).unwrap();
+        let mut storage2 = SystemStorage::new(256).unwrap();
+
+        // Initialize memory patterns
+        storage1.memset(0xbb);
+        storage2.memset(0x00);
+
+        // Verify memory patterns
+        assert!(storage1.as_slice().iter().all(|&x| x == 0xbb));
+        assert!(storage2.as_slice().iter().all(|&x| x == 0x00));
+
+        // Create registration descriptor lists
+        storage1.register(&agent1).unwrap();
+        storage2.register(&agent2).unwrap();
+
+        // Mimic transferring metadata from agent2 to agent1
+        let metadata = agent2.get_local_md().unwrap();
+        let remote_name = agent1.load_remote_md(&metadata).unwrap();
+        assert_eq!(remote_name, "A2");
+
+        let mut local_xfer_dlist = XferDescList::new(MemType::Dram).unwrap();
+        local_xfer_dlist.add_storage_desc(&storage1).unwrap();
+
+        let mut remote_xfer_dlist = XferDescList::new(MemType::Dram).unwrap();
+        remote_xfer_dlist.add_storage_desc(&storage2).unwrap();
+
+        let xfer_args = OptArgs::new().unwrap();
+
+        let xfer_req = agent1
+            .create_xfer_req(
+                XferOp::Write,
+                &local_xfer_dlist,
+                &remote_xfer_dlist,
+                &remote_name,
+                Some(&xfer_args),
+            )
+            .unwrap();
+
+        drop(xfer_req);
+
+        // Invalidate all remotes
+        agent1.invalidate_all_remotes().unwrap();
+        agent2.invalidate_all_remotes().unwrap();
     }
 }
