@@ -22,12 +22,7 @@ RUN apt-get update && \
         build-essential \
         curl \
         doxygen \
-        git \
-        git-lfs \
         pandoc \
-        protobuf-compiler \
-        unzip \
-        wget \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace/dynamo
@@ -61,4 +56,3 @@ RUN uv pip install nvidia-sphinx-theme
 ENV VISITS_COUNTING_SCRIPT="//assets.adobedtm.com/b92787824f2e0e9b68dc2e993f9bd995339fe417/satelliteLib-7ba51e58dc61bcb0e9311aadd02a0108ab24cc6c.js"
 
 COPY . /workspace/dynamo
-COPY .git /workspace/dynamo/.git
