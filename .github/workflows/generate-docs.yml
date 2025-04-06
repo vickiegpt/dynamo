@@ -61,5 +61,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dynamo-documentation
-          path: docs-output/html
+          path: docs-output
           retention-days: 7
