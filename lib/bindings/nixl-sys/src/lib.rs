@@ -29,23 +29,22 @@ use bindings::{
     nixl_capi_create_opt_args, nixl_capi_create_reg_dlist, nixl_capi_create_xfer_dlist,
     nixl_capi_deregister_mem, nixl_capi_destroy_agent, nixl_capi_destroy_backend,
     nixl_capi_destroy_mem_list, nixl_capi_destroy_notif_map, nixl_capi_destroy_opt_args,
-    nixl_capi_destroy_params, nixl_capi_destroy_reg_dlist, nixl_capi_destroy_string_list,
-    nixl_capi_destroy_xfer_dlist, nixl_capi_get_available_plugins, nixl_capi_get_backend_params,
-    nixl_capi_get_local_md, nixl_capi_get_notifs, nixl_capi_get_plugin_params,
-    nixl_capi_get_xfer_status, nixl_capi_invalidate_remote_md, nixl_capi_load_remote_md,
-    nixl_capi_mem_list_get, nixl_capi_mem_list_is_empty, nixl_capi_mem_list_size,
-    nixl_capi_mem_type_t, nixl_capi_mem_type_to_string, nixl_capi_notif_map_get_agent_at,
-    nixl_capi_notif_map_get_notif, nixl_capi_notif_map_get_notifs_size, nixl_capi_notif_map_size,
-    nixl_capi_opt_args_add_backend, nixl_capi_opt_args_get_has_notif,
-    nixl_capi_opt_args_get_notif_msg, nixl_capi_opt_args_get_skip_desc_merge,
-    nixl_capi_opt_args_set_has_notif, nixl_capi_opt_args_set_notif_msg,
-    nixl_capi_opt_args_set_skip_desc_merge, nixl_capi_params_create_iterator,
-    nixl_capi_params_destroy_iterator, nixl_capi_params_is_empty, nixl_capi_params_iterator_next,
-    nixl_capi_post_xfer_req, nixl_capi_reg_dlist_add_desc, nixl_capi_reg_dlist_clear,
-    nixl_capi_reg_dlist_has_overlaps, nixl_capi_reg_dlist_len, nixl_capi_reg_dlist_resize,
-    nixl_capi_register_mem, nixl_capi_string_list_get, nixl_capi_string_list_size,
-    nixl_capi_xfer_dlist_add_desc, nixl_capi_xfer_dlist_clear, nixl_capi_xfer_dlist_has_overlaps,
-    nixl_capi_xfer_dlist_len, nixl_capi_xfer_dlist_resize,
+    nixl_capi_destroy_params, nixl_capi_destroy_string_list, nixl_capi_destroy_xfer_dlist,
+    nixl_capi_get_available_plugins, nixl_capi_get_backend_params, nixl_capi_get_local_md,
+    nixl_capi_get_notifs, nixl_capi_get_plugin_params, nixl_capi_get_xfer_status,
+    nixl_capi_invalidate_remote_md, nixl_capi_load_remote_md, nixl_capi_mem_list_get,
+    nixl_capi_mem_list_is_empty, nixl_capi_mem_list_size, nixl_capi_mem_type_t,
+    nixl_capi_mem_type_to_string, nixl_capi_notif_map_get_agent_at, nixl_capi_notif_map_get_notif,
+    nixl_capi_notif_map_get_notifs_size, nixl_capi_notif_map_size, nixl_capi_opt_args_add_backend,
+    nixl_capi_opt_args_get_has_notif, nixl_capi_opt_args_get_notif_msg,
+    nixl_capi_opt_args_get_skip_desc_merge, nixl_capi_opt_args_set_has_notif,
+    nixl_capi_opt_args_set_notif_msg, nixl_capi_opt_args_set_skip_desc_merge,
+    nixl_capi_params_create_iterator, nixl_capi_params_destroy_iterator, nixl_capi_params_is_empty,
+    nixl_capi_params_iterator_next, nixl_capi_post_xfer_req, nixl_capi_reg_dlist_add_desc,
+    nixl_capi_reg_dlist_clear, nixl_capi_reg_dlist_has_overlaps, nixl_capi_reg_dlist_len,
+    nixl_capi_reg_dlist_resize, nixl_capi_register_mem, nixl_capi_string_list_get,
+    nixl_capi_string_list_size, nixl_capi_xfer_dlist_add_desc, nixl_capi_xfer_dlist_clear,
+    nixl_capi_xfer_dlist_has_overlaps, nixl_capi_xfer_dlist_len, nixl_capi_xfer_dlist_resize,
 };
 
 // Re-export status codes
@@ -422,7 +421,7 @@ impl Agent {
                     .write()
                     .unwrap()
                     .backends
-                    .insert(name.clone(), backend_handle.clone());
+                    .insert(name.clone(), backend_handle);
                 tracing::trace!(plugin.name = %plugin, "Successfully created NIXL backend");
                 Ok(Backend {
                     inner: backend_handle,
@@ -440,11 +439,11 @@ impl Agent {
     }
 
     pub fn get_backend(&self, name: &str) -> Option<Backend> {
-        if let Some(backend) = self.inner.read().unwrap().get_backend(name) {
-            Some(Backend { inner: backend })
-        } else {
-            None
-        }
+        self.inner
+            .read()
+            .unwrap()
+            .get_backend(name)
+            .map(|backend| Backend { inner: backend })
     }
 
     /// Gets the parameters and memory types for a backend after initialization
@@ -533,7 +532,7 @@ impl Agent {
         let status = unsafe {
             nixl_capi_get_local_md(
                 self.inner.write().unwrap().handle.as_ptr(),
-                &mut data as *mut *mut _ as *mut *mut std::ffi::c_void,
+                &mut data as *mut *mut _,
                 &mut len,
             )
         };
@@ -1025,7 +1024,7 @@ impl<'a> Iterator for ParamIterator<'a> {
     }
 }
 
-impl<'a> Drop for ParamIterator<'a> {
+impl Drop for ParamIterator<'_> {
     fn drop(&mut self) {
         // SAFETY: self.iter is guaranteed to be valid by NonNull
         unsafe {
@@ -1131,7 +1130,7 @@ pub struct MemListIterator<'a> {
     length: usize,
 }
 
-impl<'a> Iterator for MemListIterator<'a> {
+impl Iterator for MemListIterator<'_> {
     type Item = Result<MemType, NixlError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1199,6 +1198,15 @@ impl<'a> XferDescList<'a> {
             NIXL_CAPI_SUCCESS => Ok(len),
             NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
             _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Returns true if the list is empty
+    pub fn is_empty(&self) -> Result<bool, NixlError> {
+        if self.len()? == 0 {
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -1279,7 +1287,7 @@ impl<'a> XferDescList<'a> {
     }
 }
 
-impl<'a> Drop for XferDescList<'a> {
+impl Drop for XferDescList<'_> {
     fn drop(&mut self) {
         // SAFETY: self.inner is guaranteed to be valid by NonNull
         unsafe {
@@ -1340,6 +1348,15 @@ impl<'a> RegDescList<'a> {
             NIXL_CAPI_SUCCESS => Ok(len),
             NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
             _ => Err(NixlError::BackendError),
+        }
+    }
+
+    /// Returns true if the list is empty
+    pub fn is_empty(&self) -> Result<bool, NixlError> {
+        if self.len()? == 0 {
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -1417,7 +1434,7 @@ impl<'a> RegDescList<'a> {
     }
 }
 
-impl<'a> Drop for RegDescList<'a> {
+impl Drop for RegDescList<'_> {
     fn drop(&mut self) {
         tracing::trace!("Dropping registration descriptor list");
         unsafe {
@@ -1472,9 +1489,7 @@ pub struct SystemStorage {
 impl SystemStorage {
     /// Create a new system storage with the given size
     pub fn new(size: usize) -> Result<Self, NixlError> {
-        let mut data = Vec::with_capacity(size);
-        // Initialize to zero to ensure consistent behavior
-        data.resize(size, 0);
+        let data = vec![0; size];
         Ok(Self { data, handle: None })
     }
 
@@ -1657,7 +1672,7 @@ impl NotificationMap {
                 } else {
                     // SAFETY: If status is NIXL_CAPI_SUCCESS, data points to valid memory of size len
                     let bytes = unsafe {
-                        let slice = std::slice::from_raw_parts(data as *const u8, len);
+                        let slice = std::slice::from_raw_parts(data, len);
                         slice.to_vec()
                     };
                     Ok(bytes)
@@ -1718,7 +1733,7 @@ pub struct NotificationIterator<'a> {
     length: usize,
 }
 
-impl<'a> Iterator for NotificationIterator<'a> {
+impl Iterator for NotificationIterator<'_> {
     type Item = Result<Vec<u8>, NixlError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1822,11 +1837,11 @@ mod tests {
     fn test_get_backend_params() {
         let agent = Agent::new("test_agent").unwrap();
         let plugins = agent.get_available_plugins().unwrap();
-        assert!(plugins.is_empty().unwrap_or(false) == false);
+        assert!(!plugins.is_empty().unwrap_or(false));
 
         let plugin_name = plugins.get(0).unwrap();
-        let (_mems, params) = agent.get_plugin_params(&plugin_name).unwrap();
-        let backend = agent.create_backend(&plugin_name, &params).unwrap();
+        let (_mems, params) = agent.get_plugin_params(plugin_name).unwrap();
+        let backend = agent.create_backend(plugin_name, &params).unwrap();
 
         // Get backend params after initialization
         let (backend_mems, backend_params) = agent.get_backend_params(&backend).unwrap();
@@ -2139,7 +2154,7 @@ mod tests {
         loop {
             let status = agent1.get_xfer_status(&xfer_req).unwrap();
 
-            if status == false {
+            if !status {
                 println!("Xfer req completed");
                 break;
             } else {
