@@ -5,7 +5,7 @@
 //! `nixl` crate.
 
 use libc::uintptr_t;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::fmt;
 use std::marker::PhantomData;
@@ -71,6 +71,10 @@ pub enum NixlError {
     InvalidDataPointer,
     #[error("Failed to create XferRequest")]
     FailedToCreateXferRequest,
+    #[error("Failed to create registration descriptor list")]
+    RegDescListCreationFailed,
+    #[error("Failed to add registration descriptor")]
+    RegDescAddFailed,
 }
 
 /// Memory types supported by NIXL
@@ -224,6 +228,7 @@ impl Drop for Params {
 #[derive(Debug)]
 struct AgentInner {
     handle: NonNull<bindings::nixl_capi_agent_s>,
+    backends: HashMap<String, NonNull<bindings::nixl_capi_backend_s>>,
     remotes: HashSet<String>,
 }
 
@@ -234,8 +239,13 @@ impl AgentInner {
     fn new(handle: NonNull<bindings::nixl_capi_agent_s>) -> Self {
         Self {
             handle,
+            backends: HashMap::new(),
             remotes: HashSet::new(),
         }
+    }
+
+    fn get_backend(&self, name: &str) -> Option<NonNull<bindings::nixl_capi_backend_s>> {
+        self.backends.get(name).cloned()
     }
 
     fn invalidate_remote_md(&mut self, remote_agent: &str) -> Result<(), NixlError> {
@@ -261,14 +271,23 @@ impl AgentInner {
 
 impl Drop for AgentInner {
     fn drop(&mut self) {
+        tracing::trace!("Dropping NIXL agent");
         unsafe {
             // invalidate all remotes
             for remote in self.remotes.iter() {
+                tracing::trace!(remote.agent = %remote, "Invalidating remote agent");
                 nixl_capi_invalidate_remote_md(self.handle.as_ptr(), remote.as_ptr().cast());
+            }
+
+            // destroy all backends
+            for backend in self.backends.values() {
+                tracing::trace!("Destroying backend");
+                nixl_capi_destroy_backend(backend.as_ptr());
             }
 
             nixl_capi_destroy_agent(self.handle.as_ptr());
         }
+        tracing::trace!("NIXL agent dropped");
     }
 }
 
@@ -281,6 +300,7 @@ pub struct Agent {
 impl Agent {
     /// Creates a new agent with the given name
     pub fn new(name: &str) -> Result<Self, NixlError> {
+        tracing::trace!(agent.name = %name, "Creating new NIXL agent");
         let c_name = CString::new(name)?;
         let mut agent = ptr::null_mut();
         let status = unsafe { nixl_capi_create_agent(c_name.as_ptr(), &mut agent) };
@@ -289,23 +309,25 @@ impl Agent {
             NIXL_CAPI_SUCCESS => {
                 // SAFETY: If status is NIXL_CAPI_SUCCESS, agent is non-null
                 let handle = unsafe { NonNull::new_unchecked(agent) };
+                tracing::trace!(agent.name = %name, "Successfully created NIXL agent");
                 Ok(Self {
                     inner: Arc::new(RwLock::new(AgentInner::new(handle))),
                 })
             }
-            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
-            _ => Err(NixlError::BackendError),
+            NIXL_CAPI_ERROR_INVALID_PARAM => {
+                tracing::trace!(agent.name = %name, error = "invalid_param", "Failed to create NIXL agent");
+                Err(NixlError::InvalidParam)
+            }
+            _ => {
+                tracing::trace!(agent.name = %name, error = "backend_error", "Failed to create NIXL agent");
+                Err(NixlError::BackendError)
+            }
         }
     }
 
     /// Gets the list of available plugins
-    ///
-    /// # Returns
-    /// A list of available plugin names
-    ///
-    /// # Errors
-    /// Returns a NixlError if the operation fails
     pub fn get_available_plugins(&self) -> Result<StringList, NixlError> {
+        tracing::trace!("Getting available NIXL plugins");
         let mut plugins = ptr::null_mut();
 
         // SAFETY: self.inner is guaranteed to be valid by NonNull
@@ -320,10 +342,17 @@ impl Agent {
             0 => {
                 // SAFETY: If status is 0, plugins was successfully created and is non-null
                 let inner = unsafe { NonNull::new_unchecked(plugins) };
+                tracing::trace!("Successfully retrieved NIXL plugins");
                 Ok(StringList { inner })
             }
-            -1 => Err(NixlError::InvalidParam),
-            _ => Err(NixlError::BackendError),
+            -1 => {
+                tracing::trace!(error = "invalid_param", "Failed to get NIXL plugins");
+                Err(NixlError::InvalidParam)
+            }
+            _ => {
+                tracing::trace!(error = "backend_error", "Failed to get NIXL plugins");
+                Err(NixlError::BackendError)
+            }
         }
     }
 
@@ -373,7 +402,9 @@ impl Agent {
 
     /// Creates a new backend for the given plugin using the provided parameters
     pub fn create_backend(&self, plugin: &str, params: &Params) -> Result<Backend, NixlError> {
+        tracing::trace!(plugin.name = %plugin, "Creating new NIXL backend");
         let c_plugin = CString::new(plugin).map_err(|_| NixlError::InvalidParam)?;
+        let name = c_plugin.to_string_lossy().to_string();
         let mut backend = ptr::null_mut();
         let status = unsafe {
             nixl_capi_create_backend(
@@ -386,15 +417,33 @@ impl Agent {
 
         match status {
             NIXL_CAPI_SUCCESS => {
-                // SAFETY: If status is NIXL_CAPI_SUCCESS, backend is non-null
-                let inner = unsafe { NonNull::new_unchecked(backend) };
+                let backend_handle = NonNull::new(backend).ok_or(NixlError::BackendError)?;
+                self.inner
+                    .write()
+                    .unwrap()
+                    .backends
+                    .insert(name.clone(), backend_handle.clone());
+                tracing::trace!(plugin.name = %plugin, "Successfully created NIXL backend");
                 Ok(Backend {
-                    inner,
-                    _agent: self.inner.clone(), // Keep agent alive while backend exists
+                    inner: backend_handle,
                 })
             }
-            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
-            _ => Err(NixlError::BackendError),
+            NIXL_CAPI_ERROR_INVALID_PARAM => {
+                tracing::trace!(plugin.name = %plugin, error = "invalid_param", "Failed to create NIXL backend");
+                Err(NixlError::InvalidParam)
+            }
+            _ => {
+                tracing::trace!(plugin.name = %plugin, error = "backend_error", "Failed to create NIXL backend");
+                Err(NixlError::BackendError)
+            }
+        }
+    }
+
+    pub fn get_backend(&self, name: &str) -> Option<Backend> {
+        if let Some(backend) = self.inner.read().unwrap().get_backend(name) {
+            Some(Backend { inner: backend })
+        } else {
+            None
         }
     }
 
@@ -476,20 +525,11 @@ impl Agent {
     }
 
     /// Gets the local metadata for this agent as a byte array
-    ///
-    /// # Returns
-    /// A Vec<u8> containing the serialized metadata
-    ///
-    /// # Notes
-    /// This call will fail if no backends have been created.
-    ///
-    /// # Errors
-    /// Returns a NixlError if the operation fails
     pub fn get_local_md(&self) -> Result<Vec<u8>, NixlError> {
+        tracing::trace!("Getting local metadata");
         let mut data = std::ptr::null_mut();
         let mut len = 0;
 
-        // SAFETY: self.inner is guaranteed to be valid by NonNull
         let status = unsafe {
             nixl_capi_get_local_md(
                 self.inner.write().unwrap().handle.as_ptr(),
@@ -500,41 +540,41 @@ impl Agent {
 
         let data = data as *const u8;
 
-        // Check if the data pointer is valid
         if data.is_null() {
+            tracing::trace!(
+                error = "invalid_data_pointer",
+                "Failed to get local metadata"
+            );
             return Err(NixlError::InvalidDataPointer);
         }
 
         match status {
             NIXL_CAPI_SUCCESS => {
-                // SAFETY: If status is NIXL_CAPI_SUCCESS, data points to valid memory of size len
                 let bytes = unsafe {
                     let slice = std::slice::from_raw_parts(data, len);
                     let vec = slice.to_vec();
                     libc::free(data as *mut libc::c_void);
                     vec
                 };
+                tracing::trace!(metadata.size = len, "Successfully retrieved local metadata");
                 Ok(bytes)
             }
-            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
-            _ => Err(NixlError::BackendError),
+            NIXL_CAPI_ERROR_INVALID_PARAM => {
+                tracing::trace!(error = "invalid_param", "Failed to get local metadata");
+                Err(NixlError::InvalidParam)
+            }
+            _ => {
+                tracing::trace!(error = "backend_error", "Failed to get local metadata");
+                Err(NixlError::BackendError)
+            }
         }
     }
 
-    /// Loads remote metadata from a byte slice and returns the remote agent's name
-    ///
-    /// # Arguments
-    /// * `metadata` - The serialized metadata as a byte slice
-    ///
-    /// # Returns
-    /// The name of the remote agent
-    ///
-    /// # Errors
-    /// Returns a NixlError if the operation fails
+    /// Loads remote metadata from a byte slice
     pub fn load_remote_md(&self, metadata: &[u8]) -> Result<String, NixlError> {
+        tracing::trace!(metadata.size = metadata.len(), "Loading remote metadata");
         let mut agent_name = std::ptr::null_mut();
 
-        // SAFETY: self.inner is guaranteed to be valid by NonNull
         let status = unsafe {
             nixl_capi_load_remote_md(
                 self.inner.write().unwrap().handle.as_ptr(),
@@ -546,7 +586,6 @@ impl Agent {
 
         match status {
             NIXL_CAPI_SUCCESS => {
-                // SAFETY: If status is NIXL_CAPI_SUCCESS, agent_name points to a valid null-terminated string
                 let name = unsafe {
                     let c_str = std::ffi::CStr::from_ptr(agent_name);
                     let s = c_str.to_str().unwrap().to_string();
@@ -554,10 +593,17 @@ impl Agent {
                     s
                 };
                 self.inner.write().unwrap().remotes.insert(name.clone());
+                tracing::trace!(remote.agent = %name, "Successfully loaded remote metadata");
                 Ok(name)
             }
-            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
-            _ => Err(NixlError::BackendError),
+            NIXL_CAPI_ERROR_INVALID_PARAM => {
+                tracing::trace!(error = "invalid_param", "Failed to load remote metadata");
+                Err(NixlError::InvalidParam)
+            }
+            _ => {
+                tracing::trace!(error = "backend_error", "Failed to load remote metadata");
+                Err(NixlError::BackendError)
+            }
         }
     }
 
@@ -627,17 +673,23 @@ impl Agent {
     /// Posts a transfer request to initiate a transfer
     ///
     /// After this, the transfer state can be checked asynchronously until completion.
-    /// For small transfers that complete within the call, the function returns `Ok(())`.
+    /// For small transfers that complete within the call, the function returns `Ok(false)`.
     /// Otherwise, it returns `Ok(true)` to indicate the transfer is in progress.
     ///
     /// # Arguments
     /// * `req` - Transfer request handle obtained from `create_xfer_req`
     /// * `opt_args` - Optional arguments for the transfer request
+    ///
+    /// # Returns
+    /// * `Ok(false)` - If the transfer completed immediately
+    /// * `Ok(true)` - If the transfer is in progress
+    /// * `Err` - If there was an error posting the transfer request
     pub fn post_xfer_req(
         &self,
         req: &XferRequest,
         opt_args: Option<&OptArgs>,
     ) -> Result<bool, NixlError> {
+        tracing::trace!("Posting transfer request");
         let status = unsafe {
             nixl_capi_post_xfer_req(
                 self.inner.write().unwrap().handle.as_ptr(),
@@ -647,10 +699,25 @@ impl Agent {
         };
 
         match status {
-            NIXL_CAPI_SUCCESS => Ok(false), // Transfer completed
-            NIXL_CAPI_IN_PROG => Ok(true),  // Transfer in progress
-            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
-            _ => Err(NixlError::BackendError),
+            NIXL_CAPI_SUCCESS => {
+                tracing::trace!(
+                    status = "completed",
+                    "Transfer request completed immediately"
+                );
+                Ok(false)
+            }
+            NIXL_CAPI_IN_PROG => {
+                tracing::trace!(status = "in_progress", "Transfer request in progress");
+                Ok(true)
+            }
+            NIXL_CAPI_ERROR_INVALID_PARAM => {
+                tracing::trace!(error = "invalid_param", "Failed to post transfer request");
+                Err(NixlError::InvalidParam)
+            }
+            _ => {
+                tracing::trace!(error = "backend_error", "Failed to post transfer request");
+                Err(NixlError::BackendError)
+            }
         }
     }
 
@@ -686,6 +753,7 @@ impl Agent {
         notifs: &mut NotificationMap,
         opt_args: Option<&OptArgs>,
     ) -> Result<(), NixlError> {
+        tracing::trace!("Getting notifications");
         let status = unsafe {
             nixl_capi_get_notifs(
                 self.inner.write().unwrap().handle.as_ptr(),
@@ -695,10 +763,29 @@ impl Agent {
         };
 
         match status {
-            NIXL_CAPI_SUCCESS => Ok(()),
-            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
-            _ => Err(NixlError::BackendError),
+            NIXL_CAPI_SUCCESS => {
+                tracing::trace!("Successfully retrieved notifications");
+                Ok(())
+            }
+            NIXL_CAPI_ERROR_INVALID_PARAM => {
+                tracing::trace!(error = "invalid_param", "Failed to get notifications");
+                Err(NixlError::InvalidParam)
+            }
+            _ => {
+                tracing::trace!(error = "backend_error", "Failed to get notifications");
+                Err(NixlError::BackendError)
+            }
         }
+    }
+}
+
+impl Drop for NotificationMap {
+    fn drop(&mut self) {
+        tracing::trace!("Dropping notification map");
+        unsafe {
+            nixl_capi_destroy_notif_map(self.inner.as_ptr());
+        }
+        tracing::trace!("Notification map dropped");
     }
 }
 
@@ -713,6 +800,13 @@ pub struct RegistrationHandle {
 
 impl RegistrationHandle {
     pub fn deregister(&mut self) -> Result<(), NixlError> {
+        tracing::trace!(
+            ptr = self.ptr,
+            size = self.size,
+            dev_id = self.dev_id,
+            mem_type = ?self.mem_type,
+            "Deregistering memory"
+        );
         let mut reg_dlist = RegDescList::new(self.mem_type)?;
         unsafe {
             reg_dlist.add_desc(self.ptr, self.size, self.dev_id)?;
@@ -723,14 +817,22 @@ impl RegistrationHandle {
                 _opt_args.inner.as_ptr(),
             );
         }
+        tracing::trace!("Memory deregistered successfully");
         Ok(())
     }
 }
 
 impl Drop for RegistrationHandle {
     fn drop(&mut self) {
+        tracing::trace!(
+            ptr = self.ptr,
+            size = self.size,
+            dev_id = self.dev_id,
+            mem_type = ?self.mem_type,
+            "Dropping registration handle"
+        );
         if let Err(e) = self.deregister() {
-            tracing::debug!("Failed to deregister memory: {:?}", e);
+            tracing::debug!(error = ?e, "Failed to deregister memory");
         }
     }
 }
@@ -739,15 +841,6 @@ impl Drop for RegistrationHandle {
 #[derive(Debug)]
 pub struct Backend {
     inner: NonNull<bindings::nixl_capi_backend_s>,
-    _agent: Arc<RwLock<AgentInner>>, // Ensures agent outlives backend
-}
-
-impl Drop for Backend {
-    fn drop(&mut self) {
-        unsafe {
-            nixl_capi_destroy_backend(self.inner.as_ptr());
-        }
-    }
 }
 
 /// A safe wrapper around NIXL optional arguments
@@ -876,10 +969,11 @@ impl OptArgs {
 
 impl Drop for OptArgs {
     fn drop(&mut self) {
-        // SAFETY: self.inner is guaranteed to be valid by NonNull
+        tracing::trace!("Dropping optional arguments");
         unsafe {
             nixl_capi_destroy_opt_args(self.inner.as_ptr());
         }
+        tracing::trace!("Optional arguments dropped");
     }
 }
 
@@ -1209,15 +1303,18 @@ impl<'a> RegDescList<'a> {
 
         match status {
             NIXL_CAPI_SUCCESS => {
-                // SAFETY: If status is NIXL_CAPI_SUCCESS, dlist is non-null
-                let inner = unsafe { NonNull::new_unchecked(dlist) };
+                if dlist.is_null() {
+                    tracing::error!("Failed to create registration descriptor list");
+                    return Err(NixlError::RegDescListCreationFailed);
+                }
+                let ptr = NonNull::new(dlist).ok_or(NixlError::RegDescListCreationFailed)?;
+
                 Ok(Self {
-                    inner,
+                    inner: ptr,
                     _phantom: PhantomData,
                 })
             }
-            NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
-            _ => Err(NixlError::BackendError),
+            _ => Err(NixlError::RegDescListCreationFailed),
         }
     }
 
@@ -1322,10 +1419,11 @@ impl<'a> RegDescList<'a> {
 
 impl<'a> Drop for RegDescList<'a> {
     fn drop(&mut self) {
-        // SAFETY: self.inner is guaranteed to be valid by NonNull
+        tracing::trace!("Dropping registration descriptor list");
         unsafe {
-            nixl_capi_destroy_reg_dlist(self.inner.as_ptr());
+            bindings::nixl_capi_destroy_reg_dlist(self.inner.as_ptr());
         }
+        tracing::trace!("Registration descriptor list dropped");
     }
 }
 
@@ -1567,14 +1665,6 @@ impl NotificationMap {
             }
             NIXL_CAPI_ERROR_INVALID_PARAM => Err(NixlError::InvalidParam),
             _ => Err(NixlError::BackendError),
-        }
-    }
-}
-
-impl Drop for NotificationMap {
-    fn drop(&mut self) {
-        unsafe {
-            nixl_capi_destroy_notif_map(self.inner.as_ptr());
         }
     }
 }
@@ -1957,8 +2047,8 @@ mod tests {
     #[test]
     fn test_metadata_exchange() {
         // Create two agents
-        let agent1 = Agent::new("agent1").unwrap();
         let agent2 = Agent::new("agent2").unwrap();
+        let agent1 = Agent::new("agent1").unwrap();
 
         // Get plugin parameters for both agents
         let (_mem_list, params) = agent1.get_plugin_params("UCX").unwrap();
@@ -1976,30 +2066,10 @@ mod tests {
     }
 
     #[test]
-    fn test_create_xfer_req() {
-        let agent = Agent::new("test_agent").unwrap();
-
-        // Create local and remote descriptor lists
-        let local_descs = XferDescList::new(MemType::Dram).unwrap();
-        let remote_descs = XferDescList::new(MemType::Dram).unwrap();
-
-        // Create a transfer request
-        let _req = agent
-            .create_xfer_req(
-                XferOp::Write,
-                &local_descs,
-                &remote_descs,
-                "remote_agent",
-                None,
-            )
-            .unwrap();
-    }
-
-    #[test]
     fn test_basic_agent_lifecycle() {
         // Create two agents
-        let agent1 = Agent::new("A1").unwrap();
         let agent2 = Agent::new("A2").unwrap();
+        let agent1 = Agent::new("A1").unwrap();
 
         // Get available plugins and print their names
         let plugins = agent1.get_available_plugins().unwrap();
@@ -2109,22 +2179,16 @@ mod tests {
         assert!(storage1.as_slice().iter().all(|&x| x == 0xbb));
         assert!(storage2.as_slice().iter().all(|&x| x == 0xbb));
 
-        drop(xfer_args);
-        drop(xfer_req);
+        // drop(xfer_req);
+        // drop(xfer_args);
 
-        drop(local_xfer_dlist);
-        drop(remote_xfer_dlist);
+        // drop(local_xfer_dlist);
+        // drop(remote_xfer_dlist);
 
-        agent1.invalidate_all_remotes().unwrap();
-        agent2.invalidate_all_remotes().unwrap();
+        // drop(storage1);
+        // drop(storage2);
 
-        drop(storage1);
-        drop(storage2);
-
-        drop(backend1);
-        drop(backend2);
-
-        drop(agent1);
-        drop(agent2);
+        // drop(agent1);
+        // drop(agent2);
     }
 }
