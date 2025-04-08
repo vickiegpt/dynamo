@@ -16,24 +16,29 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import time
 
 import numpy as np
+from rich.console import Console
+from rich.table import Table
 from utils.prefill_queue import PrefillQueue
 
 from dynamo.llm import KvMetricsAggregator
 from dynamo.runtime import DistributedRuntime, dynamo_worker
+from dynamo.runtime.logging import configure_logger
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("Planner")
+configure_logger()
+logger = logging.getLogger(__name__)
 
 
 class Planner:
     def __init__(self, runtime: DistributedRuntime, args: argparse.Namespace):
         self.runtime = runtime
         self.args = args
+        self.namespace = args.namespace
 
         self._prefill_queue_nats_server = os.getenv(
             "NATS_SERVER", "nats://localhost:4222"
@@ -44,14 +49,14 @@ class Planner:
 
     async def set_metric_aggregator(self):
         # TODO: separate KV metrics and prefill metrics
-        kv_listener = self.runtime.namespace("dynamo").component("VllmWorker")
+        kv_listener = self.runtime.namespace(self.namespace).component("VllmWorker")
         await kv_listener.create_service()
         self.metrics_aggregator = KvMetricsAggregator(kv_listener)
 
     async def get_workers_info(self):
         try:
             prefill_client = (
-                await self.runtime.namespace("dynamo")
+                await self.runtime.namespace(self.namespace)
                 .component("PrefillWorker")
                 .endpoint("mock")
                 .client()
@@ -62,7 +67,7 @@ class Planner:
             logger.info("No prefill workers found, operating in aggregated mode")
         try:
             workers_client = (
-                await self.runtime.namespace("dynamo")
+                await self.runtime.namespace(self.namespace)
                 .component("VllmWorker")
                 .endpoint("generate")
                 .client()
@@ -230,11 +235,39 @@ class Planner:
 @dynamo_worker()
 async def start_planner(runtime: DistributedRuntime, args: argparse.Namespace):
     planner = Planner(runtime, args)
+    logger.info(f"Components present in namespace: {args.namespace}")
+    console = Console()
+    table = Table()
+    table.add_column("Component", style="cyan")
+    table.add_column("Endpoint", style="green")
+
+    components = await runtime.etcd_client().kv_get_prefix(args.namespace)
+    for component in components:
+        try:
+            # Parse the byte string as JSON and extract component name
+            data = json.loads(component["value"].decode("utf-8"))
+            if "component" in data:
+                name = data["component"]
+                endpoint = data["endpoint"]
+                table.add_row(name, endpoint)
+        except Exception:
+            # Some entries may not be valid JSON or might be binary data
+            pass
+
+    # Print the table before running the planner
+    console.print(table)
+
     await planner.run()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--namespace",
+        type=str,
+        required=True,
+        help="Namespace planner will look at",
+    )
     parser.add_argument(
         "--served-model-name",
         type=str,
