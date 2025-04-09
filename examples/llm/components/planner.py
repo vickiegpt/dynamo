@@ -244,7 +244,6 @@ async def start_planner(runtime: DistributedRuntime, args: argparse.Namespace):
     components = await runtime.etcd_client().kv_get_prefix(args.namespace)
     for component in components:
         try:
-            # Parse the byte string as JSON and extract component name
             data = json.loads(component["value"].decode("utf-8"))
             if "component" in data:
                 name = data["component"]
@@ -254,7 +253,6 @@ async def start_planner(runtime: DistributedRuntime, args: argparse.Namespace):
             # Some entries may not be valid JSON or might be binary data
             pass
 
-    # Print the table before running the planner
     console.print(table)
 
     await planner.run()

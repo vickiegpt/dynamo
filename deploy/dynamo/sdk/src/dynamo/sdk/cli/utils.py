@@ -16,15 +16,20 @@
 #  Modifications Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES
 
 import contextlib
+import json
+import logging
 import os
 import pathlib
 import random
 import socket
 import typing as t
+from typing import Any
 
 import click
 import psutil
 from click import Command, Context
+
+logger = logging.getLogger(__name__)
 
 
 class DynamoCommandGroup(click.Group):
@@ -149,3 +154,28 @@ def path_to_uri(path: str) -> str:
     if psutil.POSIX:
         return pathlib.PurePosixPath(path).as_uri()
     raise ValueError("Unsupported OS")
+
+
+def save_dynamo_state(
+    namespace: str,
+    circus_endpoint: str,
+    components: dict[str, Any],
+    environment: dict[str, Any],
+):
+    state_dir = os.path.expanduser("~/.dynamo/state")
+    os.makedirs(state_dir, exist_ok=True)
+
+    # create the state object
+    state = {
+        "namespace": namespace,
+        "circus_endpoint": circus_endpoint,
+        "components": components,
+        "environment": environment,
+    }
+
+    # save the state object to a file
+    state_file = os.path.join(state_dir, f"{namespace}.json")
+    with open(state_file, "w") as f:
+        json.dump(state, f)
+
+    logger.warning(f"Saved state to {state_file}")
