@@ -12,17 +12,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-{{- if .Values.serviceAccount.create -}}
----
-apiVersion: v1
-kind: ServiceAccount
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
 metadata:
-  name: {{ include "helm.serviceAccountName" . }}
-  labels:
-    {{- include "helm.labels" . | nindent 4 }}
-  {{- with .Values.serviceAccount.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
-{{- end }}
+  name: dynamo-ingress
+spec:
+  gateways:
+  - istio-system/ingress-alb
+  hosts:
+  - "{{ .Values.istio.host }}"
+  http:
+  - match:
+    - uri:
+        prefix: /
+    route:
+    - destination:
+        host: dynamo-store.{{ .Release.Namespace }}.svc.cluster.local
+        port:
+          number: 80
