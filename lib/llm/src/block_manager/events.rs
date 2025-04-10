@@ -9,7 +9,8 @@ use crate::kv_router::{
 use derive_getters::Dissolve;
 use dynamo_runtime::traits::events::EventPublisher;
 use dynamo_runtime::{
-    component::{Component, Namespace}, Result,
+    component::{Component, Namespace},
+    Result,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;

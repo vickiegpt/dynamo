@@ -221,7 +221,9 @@ impl<T: Storage, M: BlockMetadata> BlockPoolInner<T, M> {
             let mut block = block;
             block.reset();
             self.uninitialized_set.push_back(block);
-        } else if let std::collections::hash_map::Entry::Vacant(e) = self.lookup_map.entry(sequence_hash) {
+        } else if let std::collections::hash_map::Entry::Vacant(e) =
+            self.lookup_map.entry(sequence_hash)
+        {
             tracing::debug!("inserting block to map and priority set");
             self.priority_set.insert(priority_key);
             e.insert(block);

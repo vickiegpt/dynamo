@@ -18,7 +18,6 @@
 //! This module provides traits and implementations for managing how blocks
 //! are arranged in storage, including both contiguous and non-contiguous layouts.
 
-
 use thiserror::Error;
 
 use crate::block_manager::storage::Storage;
