@@ -43,7 +43,11 @@ from circus.sockets import CircusSocket
 from circus.watcher import Watcher
 from simple_di import Provide, inject
 
+<<<<<<< HEAD
 from .allocator import NVIDIA_GPU, ResourceAllocator
+=======
+from .allocator import ResourceAllocator
+>>>>>>> main
 from .utils import (
     DYN_LOCAL_STATE_DIR,
     path_to_uri,
