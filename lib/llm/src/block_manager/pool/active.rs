@@ -65,7 +65,7 @@ pub struct ActiveBlock<S: Storage, M: BlockMetadata> {
 impl<S: Storage, M: BlockMetadata> Deref for ActiveBlock<S, M> {
     type Target = Block<S, M>;
     fn deref(&self) -> &Self::Target {
-        &*self.inner.block
+        &self.inner.block
     }
 }
 

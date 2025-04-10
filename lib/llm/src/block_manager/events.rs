@@ -1,4 +1,3 @@
-use super::storage::StorageType;
 use crate::kv_router::{
     indexer::RouterEvent,
     protocols::{
@@ -10,10 +9,8 @@ use crate::kv_router::{
 use derive_getters::Dissolve;
 use dynamo_runtime::traits::events::EventPublisher;
 use dynamo_runtime::{
-    component::{Component, Namespace},
-    raise, Result,
+    component::{Component, Namespace}, Result,
 };
-use prometheus::local;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -187,7 +184,7 @@ impl EventManager for NatsEventManager {
                 .parent_sequence_hash()
                 .map(ExternalSequenceBlockHash),
         });
-        if self.event_channel.tx.send(event).is_err() {}
+        self.event_channel.tx.send(event).is_err();
         Ok(RegistrationHandle {
             sequence_hash: token_block.sequence_hash(),
             release_manager: Some(self.event_channel.clone()),

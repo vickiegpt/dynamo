@@ -219,7 +219,7 @@ impl<S: Storage> BlockData<S> {
                 BlockError::OperationFailed(format!("Failed to get layer region: {}", e))
             })?;
 
-        unsafe { view::BlockView::new(&self, offset as usize, self.layout.memory_region_size()) }
+        unsafe { view::BlockView::new(self, offset as usize, self.layout.memory_region_size()) }
     }
 
     /// Get a mutable view of this block's storage for a layer

@@ -1,4 +1,4 @@
-use crate::tokens::{Token, TokenBlock, TokenSequence};
+use crate::tokens::{TokenBlock, TokenSequence};
 
 #[derive(Debug)]
 pub enum BlockState {

@@ -235,8 +235,8 @@ pub enum ControlRequest<T: Storage + 'static, M: BlockMetadata> {
 pub(crate) mod tests {
     use crate::{
         block_manager::{
-            block::{state::CompleteState, BlockData, BlockStorageCollection},
-            layout::{BlockLayout, NullLayout},
+            block::{state::CompleteState, BlockStorageCollection},
+            layout::NullLayout,
             storage::NullStorage,
         },
         tokens::{Token, Tokens},

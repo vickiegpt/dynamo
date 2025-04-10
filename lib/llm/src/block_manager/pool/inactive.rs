@@ -221,17 +221,15 @@ impl<T: Storage, M: BlockMetadata> BlockPoolInner<T, M> {
             let mut block = block;
             block.reset();
             self.uninitialized_set.push_back(block);
+        } else if let std::collections::hash_map::Entry::Vacant(e) = self.lookup_map.entry(sequence_hash) {
+            tracing::debug!("inserting block to map and priority set");
+            self.priority_set.insert(priority_key);
+            e.insert(block);
         } else {
-            if self.lookup_map.contains_key(&sequence_hash) {
-                tracing::debug!("multiple entries in lookup map with the same sequence hash, inserting into uninitialized set");
-                let mut block = block;
-                block.reset();
-                self.uninitialized_set.push_back(block);
-            } else {
-                tracing::debug!("inserting block to map and priority set");
-                self.priority_set.insert(priority_key);
-                self.lookup_map.insert(sequence_hash, block);
-            }
+            tracing::debug!("multiple entries in lookup map with the same sequence hash, inserting into uninitialized set");
+            let mut block = block;
+            block.reset();
+            self.uninitialized_set.push_back(block);
         }
     }
 
