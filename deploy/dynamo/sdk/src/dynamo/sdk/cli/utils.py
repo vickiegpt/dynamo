@@ -31,6 +31,11 @@ from click import Command, Context
 
 logger = logging.getLogger(__name__)
 
+<<<<<<< HEAD
+=======
+DYN_LOCAL_STATE_DIR = "DYN_LOCAL_STATE_DIR"
+
+>>>>>>> ishan/serving-clean-prep-for-planner
 
 class DynamoCommandGroup(click.Group):
     """Simplified version of BentoMLCommandGroup for Dynamo CLI"""
@@ -159,10 +164,12 @@ def path_to_uri(path: str) -> str:
 def save_dynamo_state(
     namespace: str,
     circus_endpoint: str,
-    components: dict[str, Any],
-    environment: dict[str, Any],
+    components: dict[str, t.Any],
+    environment: dict[str, t.Any],
 ):
-    state_dir = os.path.expanduser("~/.dynamo/state")
+    state_dir = os.environ.get(
+        DYN_LOCAL_STATE_DIR, os.path.expanduser("~/.dynamo/state")
+    )
     os.makedirs(state_dir, exist_ok=True)
 
     # create the state object
