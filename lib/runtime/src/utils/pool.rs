@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use tokio::sync::Notify;
 
 /// Trait for items that can be returned to a pool
-pub trait Returnable: Send + Sync + 'static {
+pub trait Returnable: std::fmt::Debug + Send + Sync + 'static {
     /// Called when an item is returned to the pool
     fn on_return(&mut self) {}
 }
@@ -30,6 +30,7 @@ pub trait ReturnHandle<T: Returnable>: Send + Sync + 'static {
 }
 
 /// Enum to hold either a `Box<T>` or `T` directly
+#[derive(Debug)]
 pub enum PoolValue<T: Returnable> {
     Boxed(Box<T>),
     Direct(T),
@@ -114,6 +115,12 @@ pub struct PoolItem<T: Returnable> {
     _token: private::PoolItemToken,
 }
 
+impl<T: Returnable> std::fmt::Debug for PoolItem<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PoolItem {{ value: {:?} }}", self.value)
+    }
+}
+
 impl<T: Returnable> PoolItem<T> {
     /// Create a new PoolItem (only available within this module)
     fn new(value: PoolValue<T>, handle: Arc<dyn ReturnHandle<T>>) -> Self {
@@ -162,6 +169,7 @@ impl<T: Returnable> Drop for PoolItem<T> {
 }
 
 /// A shared reference to a pooled item
+#[derive(Debug)]
 pub struct SharedPoolItem<T: Returnable> {
     inner: Arc<PoolItem<T>>,
 }

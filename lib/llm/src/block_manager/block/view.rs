@@ -19,13 +19,13 @@
 //! and their storage. It handles the relationship between storage, layout,
 //! and individual blocks.
 
-use super::{BlockError, BlockStorage, Storage, StorageError};
+use super::{BlockData, BlockError, Storage};
 
 /// Storage view that provides safe access to a region of storage
 #[derive(Debug)]
 pub struct BlockView<'a, S: Storage> {
-    block_storage: &'a BlockStorage<S>,
-    offset: usize,
+    _block_storage: &'a BlockData<S>,
+    addr: usize,
     size: usize,
 }
 
@@ -37,22 +37,16 @@ where
     ///
     /// # Safety
     /// The caller must ensure:
-    /// - offset + size <= storage.size()
+    /// - addr + size <= storage.size()
     /// - The view does not outlive the storage
-    pub unsafe fn new(
-        block_storage: &'a BlockStorage<S>,
-        offset: usize,
+    pub(crate) unsafe fn new(
+        _block_storage: &'a BlockData<S>,
+        addr: usize,
         size: usize,
     ) -> Result<Self, BlockError> {
-        if offset + size > block_storage.storage.size() {
-            return Err(BlockError::Storage(StorageError::InvalidConfig(
-                "View extends beyond storage bounds".into(),
-            )));
-        }
-
         Ok(Self {
-            block_storage,
-            offset,
+            _block_storage,
+            addr,
             size,
         })
     }
@@ -64,12 +58,7 @@ where
     /// - The pointer is not used after the view is dropped
     /// - Access patterns respect the storage's thread safety model
     pub unsafe fn as_ptr(&self) -> *const u8 {
-        let base = self
-            .block_storage
-            .storage
-            .as_ptr()
-            .expect("Storage became inaccessible");
-        base.add(self.offset)
+        self.addr as *const u8
     }
 
     /// Size of the view in bytes
@@ -81,8 +70,8 @@ where
 /// Mutable storage view that provides exclusive access to a region of storage
 #[derive(Debug)]
 pub struct BlockViewMut<'a, S: Storage> {
-    block_storage: &'a mut BlockStorage<S>,
-    offset: usize,
+    _block_storage: &'a mut BlockData<S>,
+    addr: usize,
     size: usize,
 }
 
@@ -91,23 +80,17 @@ impl<'a, S: Storage> BlockViewMut<'a, S> {
     ///
     /// # Safety
     /// The caller must ensure:
-    /// - offset + size <= storage.size()
+    /// - addr + size <= storage.size()
     /// - The view does not outlive the storage
     /// - No other views exist for this region
-    pub unsafe fn new(
-        block_storage: &'a mut BlockStorage<S>,
-        offset: usize,
+    pub(crate) unsafe fn new(
+        _block_storage: &'a mut BlockData<S>,
+        addr: usize,
         size: usize,
     ) -> Result<Self, BlockError> {
-        if offset + size > block_storage.storage.size() {
-            return Err(BlockError::Storage(StorageError::InvalidConfig(
-                "View extends beyond storage bounds".into(),
-            )));
-        }
-
         Ok(Self {
-            block_storage,
-            offset,
+            _block_storage,
+            addr,
             size,
         })
     }
@@ -120,14 +103,7 @@ impl<'a, S: Storage> BlockViewMut<'a, S> {
     /// - No other references exist while the pointer is in use
     /// - Access patterns respect the storage's thread safety model
     pub unsafe fn as_mut_ptr(&mut self) -> *mut u8 {
-        unsafe {
-            let base: *mut u8 = self
-                .block_storage
-                .storage
-                .as_ptr()
-                .expect("Storage became inaccessible") as *mut u8;
-            base.add(self.offset)
-        }
+        self.addr as *mut u8
     }
 
     /// Size of the view in bytes

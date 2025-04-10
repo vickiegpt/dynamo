@@ -18,6 +18,8 @@ pub mod view;
 
 pub use state::BlockState;
 
+use crate::tokens::SequenceHash;
+
 use super::layout::BlockLayout;
 use super::storage::{Storage, StorageError};
 
@@ -73,14 +75,14 @@ pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync +
 /// A block with storage and associated metadata/state
 #[derive(Debug)]
 pub struct Block<S: Storage, M: BlockMetadata> {
-    storage: BlockStorage<S>,
+    storage: BlockData<S>,
     metadata: M,
     state: BlockState,
 }
 
 impl<S: Storage, M: BlockMetadata> Block<S, M> {
     /// Create a new block with default metadata/state
-    pub fn new(storage: BlockStorage<S>, metadata: M) -> BlockResult<Self> {
+    pub fn new(storage: BlockData<S>, metadata: M) -> BlockResult<Self> {
         Ok(Self {
             storage,
             metadata,
@@ -90,7 +92,7 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
 
     // /// Create a new block with custom metadata/state
     // pub fn with_metadata_state<M, St>(
-    //     storage: BlockStorage<S>,
+    //     storage: BlockData<S>,
     //     _metadata: M,
     //     _state: St,
     // ) -> BlockResult<Self> {
@@ -101,6 +103,16 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
     //         block_hash: 0,
     //     })
     // }
+
+    pub fn sequence_hash(&self) -> Result<SequenceHash, BlockError> {
+        match self.state() {
+            BlockState::Complete(state) => Ok(state.token_block.sequence_hash()),
+            BlockState::Registered(state) => Ok(state.sequence_hash),
+            _ => Err(BlockError::InvalidState(
+                "Block is not complete".to_string(),
+            )),
+        }
+    }
 
     pub(crate) fn reset(&mut self) {
         self.state = BlockState::Reset;
@@ -182,32 +194,32 @@ impl<S: Storage, M: BlockMetadata> Returnable for Block<S, M> {
 
 /// Individual block storage - cannot be cloned to ensure uniqueness
 #[derive(Debug)]
-pub struct BlockStorage<S: Storage> {
-    storage: Arc<S>,
+pub struct BlockData<S: Storage> {
     layout: Arc<dyn BlockLayout>,
     block_idx: usize,
+    storage: std::marker::PhantomData<S>,
 }
 
-impl<S: Storage> BlockStorage<S> {
+impl<S: Storage> BlockData<S> {
     /// Create a new block storage
-    fn new(storage: Arc<S>, layout: Arc<dyn BlockLayout>, block_idx: usize) -> Self {
+    fn new(layout: Arc<dyn BlockLayout>, block_idx: usize) -> Self {
         Self {
-            storage,
             layout,
             block_idx,
+            storage: std::marker::PhantomData,
         }
     }
 
     /// Get a read-only view of this block's storage for a layer
     pub fn layer_view(&self, layer_idx: usize) -> BlockResult<view::BlockView<S>> {
-        let (offset, size) = self
+        let offset = self
             .layout
-            .get_layer_region(self.block_idx, layer_idx)
+            .get_memory_region(self.block_idx, layer_idx)
             .map_err(|e| {
                 BlockError::OperationFailed(format!("Failed to get layer region: {}", e))
             })?;
 
-        unsafe { view::BlockView::new(&self, offset, size) }
+        unsafe { view::BlockView::new(&self, offset as usize, self.layout.memory_region_size()) }
     }
 
     /// Get a mutable view of this block's storage for a layer
@@ -218,39 +230,33 @@ impl<S: Storage> BlockStorage<S> {
     /// - This is enforced in Rust by BlockView requiring unique access
     /// - Cannot be enforced when using with Python bindings or CUDA kernels
     pub fn layer_view_mut(&mut self, layer_idx: usize) -> BlockResult<view::BlockViewMut<S>> {
-        let (offset, size) = self
+        let offset = self
             .layout
-            .get_layer_region(self.block_idx, layer_idx)
+            .get_memory_region(self.block_idx, layer_idx)
             .map_err(|e| {
                 BlockError::OperationFailed(format!("Failed to get layer region: {}", e))
             })?;
 
-        unsafe { view::BlockViewMut::new(self, offset, size) }
+        unsafe { view::BlockViewMut::new(self, offset as usize, self.layout.memory_region_size()) }
     }
 }
 
 /// Collection that holds shared storage and layout
 #[derive(Debug)]
 pub struct BlockStorageCollection<S: Storage, M: BlockMetadata> {
-    storage: Arc<S>,
     layout: Arc<dyn BlockLayout>,
+    storage: std::marker::PhantomData<S>,
     metadata: std::marker::PhantomData<M>,
 }
 
 impl<S: Storage, M: BlockMetadata> BlockStorageCollection<S, M> {
     /// Create a new block storage collection
-    pub fn new(storage: S, layout: impl BlockLayout + 'static) -> BlockResult<Self> {
-        // Validate storage against layout
-        layout.validate_storage(&storage).map_err(|e| {
-            BlockError::OperationFailed(format!("Storage validation failed: {}", e))
-        })?;
-
-        let storage = Arc::new(storage);
+    pub fn new(layout: impl BlockLayout + 'static) -> BlockResult<Self> {
         let layout = Arc::new(layout);
 
         Ok(Self {
-            storage,
             layout,
+            storage: std::marker::PhantomData,
             metadata: std::marker::PhantomData,
         })
     }
@@ -259,7 +265,7 @@ impl<S: Storage, M: BlockMetadata> BlockStorageCollection<S, M> {
     pub fn into_blocks(self) -> BlockResult<Vec<Block<S, M>>> {
         (0..self.layout.num_blocks())
             .map(|idx| {
-                let storage = BlockStorage::new(self.storage.clone(), self.layout.clone(), idx);
+                let storage = BlockData::new(self.layout.clone(), idx);
                 Block::new(storage, M::default())
             })
             .collect()
@@ -272,7 +278,7 @@ impl<S: Storage, M: BlockMetadata> BlockStorageCollection<S, M> {
     // {
     //     (0..self.layout.num_blocks())
     //         .map(|idx| {
-    //             let storage = BlockStorage::new(self.storage.clone(), self.layout.clone(), idx);
+    //             let storage = BlockData::new(self.storage.clone(), self.layout.clone(), idx);
     //             let (metadata, state) = f(idx);
     //             Block::with_metadata_state(storage, metadata, state)
     //         })

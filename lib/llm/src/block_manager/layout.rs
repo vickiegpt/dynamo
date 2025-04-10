@@ -18,9 +18,12 @@
 //! This module provides traits and implementations for managing how blocks
 //! are arranged in storage, including both contiguous and non-contiguous layouts.
 
+use std::sync::Arc;
+
 use thiserror::Error;
 
 use crate::block_manager::storage::Storage;
+use crate::common::dtype::DType;
 
 /// Errors that can occur during layout operations
 #[derive(Debug, Error)]
@@ -45,10 +48,21 @@ pub type Result<T> = std::result::Result<T, LayoutError>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerConfiguration {
     /// All layers are contiguous in memory [n_layers, ...]
-    Contiguous,
+    FullyContiguous,
+
+    /// Each layer is stored separately with a common stride between blocks
+    /// in different layers
+    LayerContiguousWithCommonStride,
 
     /// Each layer is stored separately with no guaranteed stride
-    NonContiguous,
+    LayerContiguousWithSeparateStride,
+
+    /// Each page is stored separately with no guaranteed stride
+    PageContiguousWithSeparateStride,
+
+    /// NullLayout
+    /// Used for testing and debugging
+    Null,
 }
 
 /// Core trait for block layouts
@@ -65,15 +79,11 @@ pub trait BlockLayout: Send + Sync + std::fmt::Debug {
     /// Returns the inner dimension size
     fn inner_dim(&self) -> usize;
 
-    /// Returns the layer configuration
-    fn layer_configuration(&self) -> LayerConfiguration;
+    /// Get the memory region for a specific page [page_size, inner_dim]
+    fn get_memory_region(&self, block_idx: usize, layer_idx: usize) -> Result<u64>;
 
-    /// Validate that the storage is compatible with this layout
-    fn validate_storage(&self, storage: &dyn Storage) -> Result<()>;
-
-    /// Get the memory region for a specific layer in a block
-    /// Returns (offset, size) tuple
-    fn get_layer_region(&self, block_idx: usize, layer_idx: usize) -> Result<(usize, usize)>;
+    /// Get the memory region for a specific page [page_size, inner_dim]
+    fn memory_region_size(&self) -> usize;
 }
 
 /// Configuration for block layouts
@@ -83,40 +93,56 @@ pub struct LayoutConfig {
     pub num_layers: usize,
     pub page_size: usize,
     pub inner_dim: usize,
-    pub layer_config: LayerConfiguration,
+    pub dtype: DType,
 }
 
 /// Contiguous memory layout where all blocks and layers are sequential
 #[derive(Debug)]
-pub struct ContiguousLayout {
+pub struct FullyContiguous<S: Storage> {
     config: LayoutConfig,
-    block_stride: usize,
-    layer_stride: usize,
+    storage: S,
+    layer_stride_in_bytes: usize,
+    block_stride_in_bytes: usize,
+    memory_region_size: usize,
 }
 
-impl ContiguousLayout {
+impl<S: Storage> FullyContiguous<S> {
     /// Create a new contiguous layout
-    pub fn new(config: LayoutConfig) -> Result<Self> {
-        if config.layer_config != LayerConfiguration::Contiguous {
-            return Err(LayoutError::InvalidConfig(
-                "ContiguousLayout requires Contiguous layer configuration".into(),
-            ));
+    pub fn new(config: LayoutConfig, storage: S) -> Result<Self> {
+        // Validate storage size fits [n_blocks, n_layers, page_size, inner_dim]
+        if storage.size()
+            < (config.num_blocks * config.num_layers * config.page_size * config.inner_dim)
+        {
+            return Err(LayoutError::InvalidConfig(format!(
+                "Storage size {} is less than required size {}",
+                storage.size(),
+                config.page_size
+                    * config.inner_dim
+                    * config.num_blocks
+                    * config.num_layers
+                    * config.dtype.size_in_bytes()
+            )));
         }
 
-        let layer_size = config.page_size * config.inner_dim;
+        // Contiguous memory region on which the application uses for its own purposes
+        // [page_size, inner_dim] elements
+        let memory_region = config.page_size * config.inner_dim;
+        let memory_region_size = memory_region * config.dtype.size_in_bytes();
 
-        let layer_stride = layer_size;
-        let block_stride = layer_stride * config.num_layers;
+        let layer_stride_in_bytes = memory_region * config.dtype.size_in_bytes();
+        let block_stride_in_bytes = config.num_layers * layer_stride_in_bytes;
 
         Ok(Self {
             config,
-            block_stride,
-            layer_stride,
+            storage,
+            layer_stride_in_bytes,
+            block_stride_in_bytes,
+            memory_region_size,
         })
     }
 }
 
-impl BlockLayout for ContiguousLayout {
+impl<S: Storage> BlockLayout for FullyContiguous<S> {
     fn num_blocks(&self) -> usize {
         self.config.num_blocks
     }
@@ -133,25 +159,7 @@ impl BlockLayout for ContiguousLayout {
         self.config.inner_dim
     }
 
-    fn layer_configuration(&self) -> LayerConfiguration {
-        self.config.layer_config
-    }
-
-    fn validate_storage(&self, storage: &dyn Storage) -> Result<()> {
-        let required_size = self.block_stride * self.num_blocks();
-
-        if storage.size() < required_size {
-            return Err(LayoutError::InvalidConfig(format!(
-                "Storage size {} is less than required size {}",
-                storage.size(),
-                required_size
-            )));
-        }
-
-        Ok(())
-    }
-
-    fn get_layer_region(&self, block_idx: usize, layer_idx: usize) -> Result<(usize, usize)> {
+    fn get_memory_region(&self, block_idx: usize, layer_idx: usize) -> Result<u64> {
         if block_idx >= self.num_blocks() {
             return Err(LayoutError::InvalidBlockIndex(block_idx));
         }
@@ -160,97 +168,14 @@ impl BlockLayout for ContiguousLayout {
             return Err(LayoutError::InvalidLayerIndex(layer_idx));
         }
 
-        let offset = block_idx * self.block_stride + layer_idx * self.layer_stride;
-        Ok((offset, self.layer_stride))
-    }
-}
+        let offset =
+            block_idx * self.block_stride_in_bytes + layer_idx * self.layer_stride_in_bytes;
 
-/// Non-contiguous memory layout where blocks and layers can be scattered
-#[derive(Debug)]
-pub struct NonContiguousLayout {
-    config: LayoutConfig,
-    layer_size: usize,
-    layer_offsets: Vec<usize>,
-}
-
-impl NonContiguousLayout {
-    /// Create a new non-contiguous layout
-    pub fn new(config: LayoutConfig, layer_offsets: Vec<usize>) -> Result<Self> {
-        if config.layer_config != LayerConfiguration::NonContiguous {
-            return Err(LayoutError::InvalidConfig(
-                "NonContiguousLayout requires NonContiguous layer configuration".into(),
-            ));
-        }
-
-        let layer_size = config.page_size * config.inner_dim;
-
-        let expected_offsets = config.num_blocks * config.num_layers;
-        if layer_offsets.len() != expected_offsets {
-            return Err(LayoutError::InvalidConfig(format!(
-                "Expected {} layer offsets, got {}",
-                expected_offsets,
-                layer_offsets.len()
-            )));
-        }
-
-        Ok(Self {
-            config,
-            layer_size,
-            layer_offsets,
-        })
-    }
-}
-
-impl BlockLayout for NonContiguousLayout {
-    fn num_blocks(&self) -> usize {
-        self.config.num_blocks
+        Ok(self.storage.addr() + offset as u64)
     }
 
-    fn num_layers(&self) -> usize {
-        self.config.num_layers
-    }
-
-    fn page_size(&self) -> usize {
-        self.config.page_size
-    }
-
-    fn inner_dim(&self) -> usize {
-        self.config.inner_dim
-    }
-
-    fn layer_configuration(&self) -> LayerConfiguration {
-        self.config.layer_config
-    }
-
-    fn validate_storage(&self, storage: &dyn Storage) -> Result<()> {
-        let max_offset = self.layer_offsets.iter().max().copied().unwrap_or(0);
-
-        let required_size = max_offset + self.layer_size;
-
-        if storage.size() < required_size {
-            return Err(LayoutError::InvalidConfig(format!(
-                "Storage size {} is less than required size {}",
-                storage.size(),
-                required_size
-            )));
-        }
-
-        Ok(())
-    }
-
-    fn get_layer_region(&self, block_idx: usize, layer_idx: usize) -> Result<(usize, usize)> {
-        if block_idx >= self.num_blocks() {
-            return Err(LayoutError::InvalidBlockIndex(block_idx));
-        }
-
-        if layer_idx >= self.num_layers() {
-            return Err(LayoutError::InvalidLayerIndex(layer_idx));
-        }
-
-        let offset_idx = block_idx * self.num_layers() + layer_idx;
-        let offset = self.layer_offsets[offset_idx];
-
-        Ok((offset, self.layer_size))
+    fn memory_region_size(&self) -> usize {
+        self.memory_region_size
     }
 }
 
@@ -267,7 +192,7 @@ impl NullLayout {
                 num_layers: 0,
                 page_size: 0,
                 inner_dim: 0,
-                layer_config: LayerConfiguration::Contiguous,
+                dtype: DType::U8,
             },
         }
     }
@@ -290,15 +215,11 @@ impl BlockLayout for NullLayout {
         self.config.inner_dim
     }
 
-    fn layer_configuration(&self) -> LayerConfiguration {
-        self.config.layer_config
+    fn get_memory_region(&self, _block_idx: usize, _layer_idx: usize) -> Result<u64> {
+        Ok(0)
     }
 
-    fn validate_storage(&self, storage: &dyn Storage) -> Result<()> {
-        Ok(())
-    }
-
-    fn get_layer_region(&self, block_idx: usize, layer_idx: usize) -> Result<(usize, usize)> {
-        Ok((0, 0))
+    fn memory_region_size(&self) -> usize {
+        0
     }
 }

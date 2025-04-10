@@ -19,7 +19,12 @@
 //! It handles system memory, pinned memory, device memory, and remote (NIXL) storage,
 //! with a focus on safety and performance.
 
-use std::{fmt::Debug, sync::Arc};
+use std::{
+    alloc::{alloc_zeroed, dealloc, Layout},
+    fmt::Debug,
+    ptr::NonNull,
+    sync::Arc,
+};
 use thiserror::Error;
 
 // Re-export cudarc types we use
@@ -27,6 +32,24 @@ use cudarc::driver::{sys, CudaContext, DriverError};
 
 /// Result type for storage operations
 pub type StorageResult<T> = std::result::Result<T, StorageError>;
+
+/// Represents the type of storage used for a block
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StorageType {
+    Device(Arc<CudaContext>),
+    Pinned,
+    System, // todo: for grace
+}
+
+pub enum StorageLocality {
+    Local,
+
+    // todo: add a nixl agent/bytes identifier
+    // perhaps this is an enum. other options could be a etcd path to a
+    // keyval object with nixl metadata
+    Remote,
+}
+
 
 /// Errors that can occur during storage operations
 #[derive(Debug, Error)]
@@ -52,6 +75,8 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 
 /// Core storage trait that provides access to memory regions
 pub trait Storage: Debug + Send + Sync + 'static {
+    fn addr(&self) -> u64;
+
     /// Returns the total size of the storage in bytes
     fn size(&self) -> usize;
 
@@ -77,25 +102,56 @@ pub trait Storage: Debug + Send + Sync + 'static {
     unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8>;
 }
 
-/// System memory storage implementation using a Vec<u8>
+/// System memory storage implementation using pinned memory
 #[derive(Debug)]
 pub struct SystemStorage {
-    data: Vec<u8>,
+    ptr: NonNull<u8>,
+    layout: Layout,
+    len: usize,
 }
+
+unsafe impl Send for SystemStorage {}
+unsafe impl Sync for SystemStorage {}
 
 impl SystemStorage {
     /// Create a new system storage with the given size
+    ///
+    /// # Safety
+    /// This function allocates memory that will be freed when the SystemStorage is dropped.
     pub fn new(size: usize) -> Result<Self> {
-        let mut data = Vec::with_capacity(size);
-        // Initialize to zero to ensure consistent behavior
-        data.resize(size, 0);
-        Ok(Self { data })
+        // Create layout for the allocation, ensuring proper alignment
+        let layout =
+            Layout::array::<u8>(size).map_err(|e| StorageError::AllocationFailed(e.to_string()))?;
+
+        // Allocate zeroed memory
+        let ptr = unsafe {
+            NonNull::new(alloc_zeroed(layout))
+                .ok_or_else(|| StorageError::AllocationFailed("memory allocation failed".into()))?
+        };
+
+        Ok(Self {
+            ptr,
+            layout,
+            len: size,
+        })
+    }
+}
+
+impl Drop for SystemStorage {
+    fn drop(&mut self) {
+        unsafe {
+            dealloc(self.ptr.as_ptr(), self.layout);
+        }
     }
 }
 
 impl Storage for SystemStorage {
+    fn addr(&self) -> u64 {
+        self.ptr.as_ptr() as u64
+    }
+
     fn size(&self) -> usize {
-        self.data.len()
+        self.len
     }
 
     fn is_host_accessible(&self) -> bool {
@@ -103,11 +159,11 @@ impl Storage for SystemStorage {
     }
 
     unsafe fn as_ptr(&self) -> Option<*const u8> {
-        Some(self.data.as_ptr())
+        Some(self.ptr.as_ptr())
     }
 
     unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
-        Some(self.data.as_mut_ptr())
+        Some(self.ptr.as_ptr())
     }
 }
 
@@ -145,6 +201,10 @@ impl Drop for PinnedStorage {
 }
 
 impl Storage for PinnedStorage {
+    fn addr(&self) -> u64 {
+        self.ptr
+    }
+
     fn size(&self) -> usize {
         self.size
     }
@@ -185,6 +245,10 @@ impl DeviceStorage {
 }
 
 impl Storage for DeviceStorage {
+    fn addr(&self) -> u64 {
+        self.ptr
+    }
+
     fn size(&self) -> usize {
         self.size
     }
@@ -235,6 +299,10 @@ impl NixlStorage {
 }
 
 impl Storage for NixlStorage {
+    fn addr(&self) -> u64 {
+        unimplemented!()
+    }
+
     fn size(&self) -> usize {
         self.size
     }
@@ -277,6 +345,10 @@ pub struct NixlDescriptor {
 pub struct NullStorage {}
 
 impl Storage for NullStorage {
+    fn addr(&self) -> u64 {
+        unimplemented!()
+    }
+
     fn size(&self) -> usize {
         0
     }
