@@ -149,6 +149,34 @@ class Planner:
         )
         logger.info(f"Current engines use {curr_gpu_usage} GPUs")
 
+        # check if we need to scale up/down prefill workers
+        # we first check for prefill worker because prefill queueing can also lead
+        # to high kv load on decode workers
+        avg_prefill_queue_load = np.mean(self.prefill_queue_load)
+        if (
+            avg_prefill_queue_load < self.args.prefill_queue_scale_down_threshold
+            and len(self.p_endpoints) > self.args.min_gpu_budget
+        ):
+            logger.info(
+                f"Average prefill queue load ({avg_prefill_queue_load:.2f}) is below threshold ({self.args.prefill_queue_scale_down_threshold:.2f}), scaling down prefill workers"
+            )
+            # TODO: scale down one prefill worker
+            curr_gpu_usage -= self.args.prefill_engine_num_gpu
+        elif (
+            avg_prefill_queue_load > self.args.prefill_queue_scale_up_threshold
+            and curr_gpu_usage + self.args.prefill_engine_num_gpu
+            <= self.args.max_gpu_budget
+        ):
+            logger.info(
+                f"Average prefill queue load ({avg_prefill_queue_load:.2f}) is above threshold ({self.args.prefill_queue_scale_up_threshold:.2f}), scaling up prefill workers"
+            )
+            # TODO: scale up one prefill worker
+            curr_gpu_usage += self.args.prefill_engine_num_gpu
+        else:
+            logger.info(
+                f"prefill queue load ({avg_prefill_queue_load:.2f}) is within threshold, no prefill worker scaling needed"
+            )
+
         # check if we need to scale up/down decode workers
         avg_kv_load = np.mean(self.kv_load)
         if (
@@ -173,32 +201,6 @@ class Planner:
         else:
             logger.info(
                 f"kv load ({avg_kv_load:.2f}) is within threshold, no decode worker scaling needed"
-            )
-
-        # check if we need to scale up/down prefill workers
-        avg_prefill_queue_load = np.mean(self.prefill_queue_load)
-        if (
-            avg_prefill_queue_load < self.args.prefill_queue_scale_down_threshold
-            and len(self.p_endpoints) > self.args.min_gpu_budget
-        ):
-            logger.info(
-                f"Average prefill queue load ({avg_prefill_queue_load:.2f}) is below threshold ({self.args.prefill_queue_scale_down_threshold:.2f}), scaling down prefill workers"
-            )
-            # TODO: scale down one prefill worker
-            curr_gpu_usage -= self.args.prefill_engine_num_gpu
-        elif (
-            avg_prefill_queue_load > self.args.prefill_queue_scale_up_threshold
-            and curr_gpu_usage + self.args.prefill_engine_num_gpu
-            <= self.args.max_gpu_budget
-        ):
-            logger.info(
-                f"Average prefill queue load ({avg_prefill_queue_load:.2f}) is above threshold ({self.args.prefill_queue_scale_up_threshold:.2f}), scaling up prefill workers"
-            )
-            # TODO: scale up one prefill worker
-            curr_gpu_usage += self.args.prefill_engine_num_gpu
-        else:
-            logger.info(
-                f"prefill queue load ({avg_prefill_queue_load:.2f}) is within threshold, no prefill worker scaling needed"
             )
 
         logger.info(f"Engines after adjustment use {curr_gpu_usage} GPUs")
