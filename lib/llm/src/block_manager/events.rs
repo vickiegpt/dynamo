@@ -10,7 +10,7 @@ use derive_getters::Dissolve;
 use dynamo_runtime::traits::events::EventPublisher;
 use dynamo_runtime::{
     component::{Component, Namespace},
-    Result,
+    raise, Result,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -144,7 +144,9 @@ struct EventChannel {
 impl EventReleaseManager for EventChannel {
     // Generalize sequence_hash
     fn block_release(&self, sequence_hash: SequenceHash) {
-        self.tx.send(Event::RemoveSingle(sequence_hash));
+        if self.tx.send(Event::RemoveSingle(sequence_hash)).is_err() {
+            tracing::warn!("Failed to send remove block event");
+        }
     }
 }
 
@@ -185,7 +187,10 @@ impl EventManager for NatsEventManager {
                 .parent_sequence_hash()
                 .map(ExternalSequenceBlockHash),
         });
-        self.event_channel.tx.send(event).is_err();
+        if self.event_channel.tx.send(event).is_err() {
+            tracing::warn!("Failed to send store block event");
+            raise!("Failed to send store block event");
+        }
         Ok(RegistrationHandle {
             sequence_hash: token_block.sequence_hash(),
             release_manager: Some(self.event_channel.clone()),
@@ -193,7 +198,35 @@ impl EventManager for NatsEventManager {
     }
 
     fn register_blocks(&self, token_blocks: &[TokenBlock]) -> Result<Vec<RegistrationHandle>> {
-        unimplemented!()
+        let event = Event::StoreMultiple(RegisterBlocksEvent {
+            hashes: token_blocks
+                .iter()
+                .map(|block| {
+                    (
+                        LocalBlockHash(block.block_hash()),
+                        ExternalSequenceBlockHash(block.sequence_hash()),
+                    )
+                })
+                .collect(),
+            parent_hash: token_blocks
+                .first()
+                .and_then(|block| block.parent_sequence_hash().map(ExternalSequenceBlockHash)),
+        });
+
+        let handles = token_blocks
+            .iter()
+            .map(|block| RegistrationHandle {
+                sequence_hash: block.sequence_hash(),
+                release_manager: Some(self.event_channel.clone()),
+            })
+            .collect();
+
+        if self.event_channel.tx.send(event).is_err() {
+            tracing::warn!("Failed to send store block event");
+            raise!("Failed to send store block event");
+        }
+
+        Ok(handles)
     }
 }
 
