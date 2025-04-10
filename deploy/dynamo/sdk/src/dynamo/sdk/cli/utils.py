@@ -31,11 +31,8 @@ from click import Command, Context
 
 logger = logging.getLogger(__name__)
 
-<<<<<<< HEAD
-=======
 DYN_LOCAL_STATE_DIR = "DYN_LOCAL_STATE_DIR"
 
->>>>>>> ishan/serving-clean-prep-for-planner
 
 class DynamoCommandGroup(click.Group):
     """Simplified version of BentoMLCommandGroup for Dynamo CLI"""
