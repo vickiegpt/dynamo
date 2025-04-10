@@ -23,7 +23,6 @@ import pathlib
 import random
 import socket
 import typing as t
-from typing import Any
 
 import click
 import psutil
