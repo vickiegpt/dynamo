@@ -56,8 +56,8 @@ TENSORRTLLM_BASE_IMAGE=tensorrt_llm/release
 TENSORRTLLM_BASE_IMAGE_TAG=latest
 TENSORRTLLM_PIP_WHEEL_PATH=""
 
-VLLM_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
-VLLM_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
+VLLM_BASE_IMAGE="nvcr.io/nvidia/pytorch"
+VLLM_BASE_IMAGE_TAG="25.03-py3"
 
 NONE_BASE_IMAGE="ubuntu"
 NONE_BASE_IMAGE_TAG="24.04"
