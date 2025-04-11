@@ -83,7 +83,7 @@ source = "versioningit"
 
 [tool.versioningit.format]
 # Format used when there have been commits since the most recent tag:
-distance = "{next_version}+post{distance}.{rev}"
+distance = "{base_version}+post{distance}.{rev}"
 # Format used when there are uncommitted changes:
 dirty = "{base_version}+d{build_date:%Y%m%d%H%M%S}"
 # Format used when there are both commits and uncommitted changes:
