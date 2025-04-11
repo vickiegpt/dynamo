@@ -96,5 +96,14 @@ ssh-add ~/.ssh/id_rsa
 
 Verify access by running `ssh -T git@github.com` in both host and container.
 
+### Environment Variables Not Set in Container?
+
+If your environment variables are not being set in your devcontainer (e.g., `echo $HF_TOKEN` returns empty), and these variables are defined in your `~/.bashrc`, there are two ways to ensure they are properly sourced:
+
+1. Add `source ~/.bashrc` to your `~/.bash_profile`, OR
+2. Add `source ~/.bashrc` to your `~/.profile` AND ensure `~/.bash_profile` does not exist
+
+Note: If both `~/.bash_profile` and `~/.profile` exist, bash will only read `~/.bash_profile` for login shells. Therefore, if you choose option 2, you must remove or rename `~/.bash_profile` to ensure `~/.profile` (and consequently `~/.bashrc`) is sourced.
+
 
 See VS Code Dev Containers [documentation](https://code.visualstudio.com/docs/devcontainers/containers) for more details.
