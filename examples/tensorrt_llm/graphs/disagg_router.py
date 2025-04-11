@@ -12,29 +12,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-apiVersion: networking.istio.io/v1beta1
-kind: VirtualService
-metadata:
-  name: dynamo-ingress
-spec:
-  gateways:
-  - istio-system/ingress-alb
-  hosts:
-  - "{{ .Values.istio.host }}"
-  http:
-  - match:
-    - uri:
-        prefix: /api/
-    route:
-    - destination:
-        host: dynamo-server.{{ .Release.Namespace }}.svc.cluster.local
-        port:
-          number: 80
-  - match:
-    - uri:
-        prefix: /
-    route:
-    - destination:
-        host: dynamo-ui.{{ .Release.Namespace }}.svc.cluster.local
-        port:
-          number: 80
+
+from components.frontend import Frontend
+from components.kv_router import Router
+from components.prefill_worker import TensorRTLLMPrefillWorker
+from components.processor import Processor
+from components.worker import TensorRTLLMWorker
+
+Frontend.link(Processor).link(Router).link(TensorRTLLMWorker).link(
+    TensorRTLLMPrefillWorker
+)
