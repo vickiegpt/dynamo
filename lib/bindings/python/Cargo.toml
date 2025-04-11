@@ -19,7 +19,7 @@
 
 [package]
 name = "dynamo-py3"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["NVIDIA"]
 license = "Apache-2.0"
@@ -35,8 +35,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 
-dynamo-llm = { path = "../../llm", features = ["python"] }
+dynamo-llm = { path = "../../llm" }
 dynamo-runtime = { path = "../../runtime" }
+dynamo-engine-python = { path = "../../engines/python" }
 
 futures = { version = "0.3" }
 once_cell = { version = "1.20.3" }

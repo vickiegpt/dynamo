@@ -19,10 +19,10 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"dario.cat/mergo"
-	"emperror.dev/errors"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -71,6 +71,7 @@ func (r *DynamoDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	var err error
 	reason := "undefined"
+	message := ""
 	readyStatus := metav1.ConditionFalse
 	// retrieve the CRD
 	dynamoDeployment := &nvidiacomv1alpha1.DynamoDeployment{}
@@ -83,7 +84,6 @@ func (r *DynamoDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	defer func() {
-		message := ""
 		if err != nil {
 			dynamoDeployment.SetState(FailedState)
 			message = err.Error()
@@ -106,7 +106,7 @@ func (r *DynamoDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}()
 
 	// fetch the DynamoNIMConfig
-	dynamoNIMConfig, err := nim.GetDynamoNIMConfig(ctx, dynamoDeployment, r.getSecret, r.Recorder)
+	dynamoNIMConfig, err := nim.GetDynamoNIMConfig(ctx, dynamoDeployment, r.Recorder)
 	if err != nil {
 		reason = "failed_to_get_the_DynamoNIMConfig"
 		return ctrl.Result{}, err
@@ -133,7 +133,7 @@ func (r *DynamoDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// reconcile the dynamoNimRequest
 	dynamoNimRequest := &nvidiacomv1alpha1.DynamoNimRequest{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      generateDynamoNimRequestName(dynamoDeployment.Spec.DynamoNim),
+			Name:      strings.ReplaceAll(dynamoDeployment.Spec.DynamoNim, ":", "--"),
 			Namespace: dynamoDeployment.Namespace,
 		},
 		Spec: nvidiacomv1alpha1.DynamoNimRequestSpec{
@@ -144,13 +144,13 @@ func (r *DynamoDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		reason = "failed_to_set_the_controller_reference_for_the_DynamoNimRequest"
 		return ctrl.Result{}, err
 	}
-	_, err = commonController.SyncResource(ctx, r.Client, dynamoNimRequest, types.NamespacedName{Name: dynamoNimRequest.Name, Namespace: dynamoNimRequest.Namespace}, true)
+	_, err = commonController.SyncResource(ctx, r.Client, dynamoNimRequest, types.NamespacedName{Name: dynamoNimRequest.Name, Namespace: dynamoNimRequest.Namespace}, false)
 	if err != nil {
 		reason = "failed_to_sync_the_DynamoNimRequest"
 		return ctrl.Result{}, err
 	}
 
-	allAreReady := true
+	notReadyDeployments := []string{}
 	// reconcile the DynamoNimDeployments
 	for serviceName, dynamoNimDeployment := range dynamoNimDeployments {
 		logger.Info("Reconciling the DynamoNimDeployment", "serviceName", serviceName, "dynamoNimDeployment", dynamoNimDeployment)
@@ -158,19 +158,23 @@ func (r *DynamoDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			reason = "failed_to_set_the_controller_reference_for_the_DynamoNimDeployment"
 			return ctrl.Result{}, err
 		}
-		dynamoNimDeployment, err = commonController.SyncResource(ctx, r.Client, dynamoNimDeployment, types.NamespacedName{Name: dynamoNimDeployment.Name, Namespace: dynamoNimDeployment.Namespace}, true)
+		dynamoNimDeployment, err = commonController.SyncResource(ctx, r.Client, dynamoNimDeployment, types.NamespacedName{Name: dynamoNimDeployment.Name, Namespace: dynamoNimDeployment.Namespace}, false)
 		if err != nil {
 			reason = "failed_to_sync_the_DynamoNimDeployment"
 			return ctrl.Result{}, err
 		}
 		if !dynamoNimDeployment.Status.IsReady() {
-			allAreReady = false
+			notReadyDeployments = append(notReadyDeployments, dynamoNimDeployment.Name)
 		}
 	}
-	if allAreReady {
+	if len(notReadyDeployments) == 0 {
 		dynamoDeployment.SetState(ReadyState)
+		reason = "all_deployments_are_ready"
+		message = "All deployments are ready"
 		readyStatus = metav1.ConditionTrue
 	} else {
+		reason = "some_deployments_are_not_ready"
+		message = fmt.Sprintf("The following deployments are not ready: %v", notReadyDeployments)
 		dynamoDeployment.SetState(PendingState)
 	}
 
@@ -178,16 +182,12 @@ func (r *DynamoDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 }
 
-func (r *DynamoDeploymentReconciler) getSecret(ctx context.Context, namespace, name string) (*corev1.Secret, error) {
-	secret := &corev1.Secret{}
-	err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, secret)
-	return secret, errors.Wrap(err, "get secret")
-}
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *DynamoDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&nvidiacomv1alpha1.DynamoDeployment{}).
+		For(&nvidiacomv1alpha1.DynamoDeployment{}, builder.WithPredicates(
+			predicate.GenerationChangedPredicate{},
+		)).
 		Named("dynamodeployment").
 		Owns(&nvidiacomv1alpha1.DynamoNimDeployment{}, builder.WithPredicates(predicate.Funcs{
 			// ignore creation cause we don't want to be called again after we create the deployment

@@ -1,3 +1,4 @@
+#  SPDX-FileCopyrightText: Copyright (c) 2020 Atalaya Tech. Inc
 #  SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #  SPDX-License-Identifier: Apache-2.0
 #  #
@@ -12,6 +13,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+#  Modifications Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES
 
 from __future__ import annotations
 
@@ -28,8 +30,13 @@ import tempfile
 import typing as t
 from typing import Any, Dict, Optional, Protocol, TypeVar
 
+# WARNING: internal
 from _bentoml_sdk import Service
+
+# WARNING: internal
 from bentoml._internal.container import BentoMLContainer
+
+# WARNING: internal
 from bentoml._internal.utils.circus import Server
 from bentoml.exceptions import BentoMLConfigException
 from circus.sockets import CircusSocket
@@ -37,6 +44,12 @@ from circus.watcher import Watcher
 from simple_di import Provide, inject
 
 from .allocator import ResourceAllocator
+from .utils import (
+    DYN_LOCAL_STATE_DIR,
+    path_to_uri,
+    reserve_free_port,
+    save_dynamo_state,
+)
 
 
 # Define a Protocol for services to ensure type safety
@@ -49,6 +62,9 @@ class ServiceProtocol(Protocol):
     def is_dynamo_component(self) -> bool:
         ...
 
+    def dynamo_address(self) -> tuple[str, str]:
+        ...
+
 
 # Use Protocol as the base for type alias
 AnyService = TypeVar("AnyService", bound=ServiceProtocol)
@@ -59,7 +75,7 @@ IS_WSL = "microsoft-standard" in platform.release()
 API_SERVER_NAME = "_bento_api_server"
 
 MAX_AF_UNIX_PATH_LENGTH = 103
-logger = logging.getLogger("bentoml.serve")
+logger = logging.getLogger(__name__)
 
 if POSIX and not IS_WSL:
 
@@ -67,15 +83,13 @@ if POSIX and not IS_WSL:
         service: ServiceProtocol,
         uds_path: str,
         port_stack: contextlib.ExitStack,
-        backlog: int,
     ) -> tuple[str, CircusSocket]:
-        from bentoml._internal.utils.uri import path_to_uri
         from circus.sockets import CircusSocket
 
         socket_path = os.path.join(uds_path, f"{id(service)}.sock")
         assert len(socket_path) < MAX_AF_UNIX_PATH_LENGTH
         return path_to_uri(socket_path), CircusSocket(
-            name=service.name, path=socket_path, backlog=backlog
+            name=service.name, path=socket_path
         )
 
 elif WINDOWS or IS_WSL:
@@ -84,9 +98,7 @@ elif WINDOWS or IS_WSL:
         service: ServiceProtocol,
         uds_path: str,
         port_stack: contextlib.ExitStack,
-        backlog: int,
     ) -> tuple[str, CircusSocket]:
-        from bentoml._internal.utils import reserve_free_port
         from circus.sockets import CircusSocket
 
         runner_port = port_stack.enter_context(reserve_free_port())
@@ -96,7 +108,6 @@ elif WINDOWS or IS_WSL:
             name=service.name,
             host=runner_host,
             port=runner_port,
-            backlog=backlog,
         )
 
 else:
@@ -105,14 +116,44 @@ else:
         service: ServiceProtocol,
         uds_path: str,
         port_stack: contextlib.ExitStack,
-        backlog: int,
     ) -> tuple[str, CircusSocket]:
         from bentoml.exceptions import BentoMLException
 
         raise BentoMLException("Unsupported platform")
 
 
-_SERVICE_WORKER_SCRIPT = "_bentoml_impl.worker.service"
+# WARNING: internal
+_BENTO_WORKER_SCRIPT = "_bentoml_impl.worker.service"
+_DYNAMO_WORKER_SCRIPT = "dynamo.sdk.cli.serve_dynamo"
+
+
+def _get_dynamo_worker_script(bento_identifier: str, svc_name: str) -> list[str]:
+    args = [
+        "-m",
+        _DYNAMO_WORKER_SCRIPT,
+        bento_identifier,
+        "--service-name",
+        svc_name,
+        "--worker-id",
+        "$(CIRCUS.WID)",
+    ]
+    return args
+
+
+def _get_bento_worker_script(bento_identifier: str, svc_name: str) -> list[str]:
+    args = [
+        "-m",
+        _BENTO_WORKER_SCRIPT,
+        bento_identifier,
+        "--service-name",
+        svc_name,
+        "--fd",
+        f"$(circus.sockets.{svc_name})",
+        "--worker-id",
+        "$(CIRCUS.WID)",
+    ]
+
+    return args
 
 
 def create_dependency_watcher(
@@ -120,29 +161,17 @@ def create_dependency_watcher(
     svc: ServiceProtocol,
     uds_path: str,
     port_stack: contextlib.ExitStack,
-    backlog: int,
     scheduler: ResourceAllocator,
     working_dir: Optional[str] = None,
     env: Optional[Dict[str, str]] = None,
 ) -> tuple[Watcher, CircusSocket, str]:
     from bentoml.serving import create_watcher
 
-    num_workers, worker_envs = scheduler.get_worker_env(svc)
-    uri, socket = _get_server_socket(svc, uds_path, port_stack, backlog)
-    args = [
-        "-m",
-        _SERVICE_WORKER_SCRIPT,
-        bento_identifier,
-        "--service-name",
-        svc.name,
-        "--fd",
-        f"$(circus.sockets.{svc.name})",
-        "--worker-id",
-        "$(CIRCUS.WID)",
-    ]
-
-    if worker_envs:
-        args.extend(["--worker-env", json.dumps(worker_envs)])
+    num_workers, resource_envs = scheduler.get_resource_envs(svc)
+    uri, socket = _get_server_socket(svc, uds_path, port_stack)
+    args = _get_bento_worker_script(bento_identifier, svc.name)
+    if resource_envs:
+        args.extend(["--worker-env", json.dumps(resource_envs)])
 
     watcher = create_watcher(
         name=f"service_{svc.name}",
@@ -159,7 +188,6 @@ def create_dynamo_watcher(
     svc: ServiceProtocol,
     uds_path: str,
     port_stack: contextlib.ExitStack,
-    backlog: int,
     scheduler: ResourceAllocator,
     working_dir: Optional[str] = None,
     env: Optional[Dict[str, str]] = None,
@@ -167,25 +195,11 @@ def create_dynamo_watcher(
     """Create a watcher for a Dynamo service in the dependency graph"""
     from bentoml.serving import create_watcher
 
-    # Get socket for this service
-    uri, socket = _get_server_socket(svc, uds_path, port_stack, backlog)
-
-    # Get worker configuration
-    num_workers, worker_envs = scheduler.get_worker_env(svc)
-
-    # Create Dynamo-specific worker args
-    args = [
-        "-m",
-        "dynamo.sdk.cli.serve_dynamo",  # Use our Dynamo worker module
-        bento_identifier,
-        "--service-name",
-        svc.name,
-        "--worker-id",
-        "$(CIRCUS.WID)",
-    ]
-
-    if worker_envs:
-        args.extend(["--worker-env", json.dumps(worker_envs)])
+    num_workers, resource_envs = scheduler.get_resource_envs(svc)
+    uri, socket = _get_server_socket(svc, uds_path, port_stack)
+    args = _get_dynamo_worker_script(bento_identifier, svc.name)
+    if resource_envs:
+        args.extend(["--worker-env", json.dumps(resource_envs)])
 
     # Update env to include ServiceConfig and service-specific environment variables
     worker_env = env.copy() if env else {}
@@ -208,41 +222,21 @@ def create_dynamo_watcher(
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse DYNAMO_SERVICE_ENVS: {e}")
 
+    # use namespace from the service
+    namespace, _ = svc.dynamo_address()
+
     # Create the watcher with updated environment
     watcher = create_watcher(
-        name=f"dynamo_service_{svc.name}",
+        name=f"{namespace}_{svc.name}",
         args=args,
         numprocesses=num_workers,
         working_dir=working_dir,
         env=worker_env,
     )
 
+    logger.info(f"Created watcher for {svc.name}'s in the {namespace} namespace")
+
     return watcher, socket, uri
-
-
-@inject
-def server_on_deployment(
-    svc: ServiceProtocol, result_file: str = Provide[BentoMLContainer.result_store_file]
-) -> None:
-    # Resolve models before server starts.
-    if hasattr(svc, "bento") and (bento := getattr(svc, "bento")):
-        for model in bento.info.all_models:
-            model.to_model().resolve()
-    elif hasattr(svc, "models"):
-        for model in svc.models:
-            model.resolve()
-
-    if hasattr(svc, "inner"):
-        inner = svc.inner
-        for name in dir(inner):
-            member = getattr(inner, name)
-            if callable(member) and getattr(
-                member, "__bentoml_deployment_hook__", False
-            ):
-                member()
-
-    if os.path.exists(result_file):
-        os.remove(result_file)
 
 
 @inject(squeeze_none=True)
@@ -251,42 +245,27 @@ def serve_http(
     working_dir: str | None = None,
     host: str = Provide[BentoMLContainer.http.host],
     port: int = Provide[BentoMLContainer.http.port],
-    backlog: int = Provide[BentoMLContainer.api_server_config.backlog],
-    timeout: int | None = None,
-    ssl_certfile: str | None = Provide[BentoMLContainer.ssl.certfile],
-    ssl_keyfile: str | None = Provide[BentoMLContainer.ssl.keyfile],
-    ssl_keyfile_password: str | None = Provide[BentoMLContainer.ssl.keyfile_password],
-    ssl_version: int | None = Provide[BentoMLContainer.ssl.version],
-    ssl_cert_reqs: int | None = Provide[BentoMLContainer.ssl.cert_reqs],
-    ssl_ca_certs: str | None = Provide[BentoMLContainer.ssl.ca_certs],
-    ssl_ciphers: str | None = Provide[BentoMLContainer.ssl.ciphers],
-    bentoml_home: str = Provide[BentoMLContainer.bentoml_home],
-    development_mode: bool = False,
-    reload: bool = False,
-    timeout_keep_alive: int | None = None,
-    timeout_graceful_shutdown: int | None = None,
     dependency_map: dict[str, str] | None = None,
     service_name: str = "",
-    threaded: bool = False,
+    enable_planner: bool = False,
 ) -> Server:
-    from _bentoml_impl.loader import import_service, normalize_identifier
-    from bentoml._internal.log import SERVER_LOGGING_CONFIG
-    from bentoml._internal.utils import reserve_free_port
-    from bentoml._internal.utils.analytics.usage_stats import track_serve
+    # WARNING: internal
+    from _bentoml_impl.loader import load
+
+    # WARNING: internal
     from bentoml._internal.utils.circus import create_standalone_arbiter
-    from bentoml.serving import (
-        construct_ssl_args,
-        construct_timeouts_args,
-        create_watcher,
-        ensure_prometheus_dir,
-        make_reload_plugin,
-    )
+    from bentoml.serving import create_watcher
     from circus.sockets import CircusSocket
+
+    from dynamo.sdk.lib.logging import configure_server_logging
 
     from .allocator import ResourceAllocator
 
+    configure_server_logging()
+
     bento_id: str = ""
-    env = {"PROMETHEUS_MULTIPROC_DIR": ensure_prometheus_dir()}
+    namespace: str = ""
+    env: dict[str, Any] = {}
     if isinstance(bento_identifier, Service):
         svc = bento_identifier
         bento_id = svc.import_string
@@ -296,9 +275,9 @@ def serve_http(
         # use cwd
         bento_path = pathlib.Path(".")
     else:
-        bento_id, bento_path = normalize_identifier(bento_identifier, working_dir)
-
-        svc = import_service(bento_id, bento_path)
+        svc = load(bento_identifier, working_dir)
+        bento_id = str(bento_identifier)
+        bento_path = pathlib.Path(working_dir or ".")
 
     watchers: list[Watcher] = []
     sockets: list[CircusSocket] = []
@@ -309,17 +288,16 @@ def serve_http(
     # TODO: Only for testing, this will prevent any other dep services from getting started, relying entirely on configured deps in the runner-map
     standalone = False
     if service_name:
-        print("Running in standalone mode")
-        print(f"service_name: {service_name}")
+        logger.info("Running in standalone mode")
+        logger.info(f"service_name: {service_name}")
         standalone = True
 
     if service_name and service_name != svc.name:
         svc = svc.find_dependent_by_name(service_name)
-    num_workers, worker_envs = allocator.get_worker_env(svc)
-    server_on_deployment(svc)
+    num_workers, resource_envs = allocator.get_resource_envs(svc)
     uds_path = tempfile.mkdtemp(prefix="bentoml-uds-")
     try:
-        if not service_name and not development_mode and not standalone:
+        if not service_name and not standalone:
             with contextlib.ExitStack() as port_stack:
                 for name, dep_svc in svc.all_services().items():
                     if name == svc.name:
@@ -337,11 +315,11 @@ def serve_http(
                             dep_svc,
                             uds_path,
                             port_stack,
-                            backlog,
                             allocator,
                             str(bento_path.absolute()),
                             env=env,
                         )
+                        namespace, _ = dep_svc.dynamo_address()
                     else:
                         # Regular BentoML service
                         new_watcher, new_socket, uri = create_dependency_watcher(
@@ -349,7 +327,6 @@ def serve_http(
                             dep_svc,
                             uds_path,
                             port_stack,
-                            backlog,
                             allocator,
                             str(bento_path.absolute()),
                             env=env,
@@ -358,7 +335,6 @@ def serve_http(
                     watchers.append(new_watcher)
                     sockets.append(new_socket)
                     dependency_map[name] = uri
-                    server_on_deployment(dep_svc)
                 # reserve one more to avoid conflicts
                 port_stack.enter_context(reserve_free_port())
 
@@ -382,81 +358,78 @@ def serve_http(
                     host=host,
                     port=port,
                     family=family,
-                    backlog=backlog,
                 )
             )
-        if BentoMLContainer.ssl.enabled.get() and not ssl_certfile:
-            raise BentoMLConfigException("ssl_certfile is required when ssl is enabled")
-
-        ssl_args = construct_ssl_args(
-            ssl_certfile=ssl_certfile,
-            ssl_keyfile=ssl_keyfile,
-            ssl_keyfile_password=ssl_keyfile_password,
-            ssl_version=ssl_version,
-            ssl_cert_reqs=ssl_cert_reqs,
-            ssl_ca_certs=ssl_ca_certs,
-            ssl_ciphers=ssl_ciphers,
-        )
-        timeouts_args = construct_timeouts_args(
-            timeout_keep_alive=timeout_keep_alive,
-            timeout_graceful_shutdown=timeout_graceful_shutdown,
-        )
-        timeout_args = ["--timeout", str(timeout)] if timeout else []
 
         server_args = [
             "-m",
-            _SERVICE_WORKER_SCRIPT,
+            _BENTO_WORKER_SCRIPT,
             bento_identifier,
             "--fd",
             f"$(circus.sockets.{API_SERVER_NAME})",
             "--service-name",
             svc.name,
-            "--backlog",
-            str(backlog),
             "--worker-id",
             "$(CIRCUS.WID)",
-            *ssl_args,
-            *timeouts_args,
-            *timeout_args,
         ]
-        if worker_envs:
-            server_args.extend(["--worker-env", json.dumps(worker_envs)])
-        if development_mode:
-            server_args.append("--development-mode")
+        dynamo_args = [
+            "-m",
+            _DYNAMO_WORKER_SCRIPT,
+            bento_identifier,
+            "--service-name",
+            svc.name,
+            "--worker-id",
+            "$(CIRCUS.WID)",
+        ]
+        if resource_envs:
+            server_args.extend(["--worker-env", json.dumps(resource_envs)])
 
-        scheme = "https" if BentoMLContainer.ssl.enabled.get() else "http"
+        scheme = "http"
 
         # Check if this is a Dynamo service
         if hasattr(svc, "is_dynamo_component") and svc.is_dynamo_component():
-            # Create Dynamo-specific watcher using existing socket
-            args = [
-                "-m",
-                "dynamo.sdk.cli.serve_dynamo",  # Use our Dynamo worker module
-                bento_identifier,
-                "--service-name",
-                svc.name,
-                "--worker-id",
-                "$(CIRCUS.WID)",
-            ]
+            # resource_envs is the resource allocation (ie CUDA_VISIBLE_DEVICES) for each worker created by the allocator
+            # these resource_envs are passed to each individual worker's environment which is set in serve_dynamo
+            if resource_envs:
+                dynamo_args.extend(["--worker-env", json.dumps(resource_envs)])
+            # env is the base bentoml environment variables. We make a copy and update it to add any service configurations and additional env vars
+            worker_env = env.copy() if env else {}
+
+            # Pass through the main service config
+            if "DYNAMO_SERVICE_CONFIG" in os.environ:
+                worker_env["DYNAMO_SERVICE_CONFIG"] = os.environ[
+                    "DYNAMO_SERVICE_CONFIG"
+                ]
+
+            # Get service-specific environment variables from DYNAMO_SERVICE_ENVS
+            if "DYNAMO_SERVICE_ENVS" in os.environ:
+                try:
+                    service_envs = json.loads(os.environ["DYNAMO_SERVICE_ENVS"])
+                    if svc.name in service_envs:
+                        service_args = service_envs[svc.name].get("ServiceArgs", {})
+                        if "envs" in service_args:
+                            worker_env.update(service_args["envs"])
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse DYNAMO_SERVICE_ENVS: {e}")
+
             watcher = create_watcher(
-                name=f"dynamo_service_{svc.name}",
-                args=args,
+                name=f"{namespace}_{svc.name}",
+                args=dynamo_args,
                 numprocesses=num_workers,
                 working_dir=str(bento_path.absolute()),
-                close_child_stdin=not development_mode,
-                env=env,  # Dependency map will be injected by serve_http
+                env=worker_env,
             )
             watchers.append(watcher)
-            print(f"dynamo_service_{svc.name} entrypoint created")
+            logger.info(
+                f"Created watcher for {svc.name}'s in the {namespace} namespace"
+            )
         else:
-            # Create regular BentoML service watcher
             watchers.append(
                 create_watcher(
                     name="service",
                     args=server_args,
                     working_dir=str(bento_path.absolute()),
                     numprocesses=num_workers,
-                    close_child_stdin=not development_mode,
                     env=env,
                 )
             )
@@ -476,26 +449,40 @@ def serve_http(
         arbiter_kwargs: dict[str, t.Any] = {
             "watchers": watchers,
             "sockets": sockets,
-            "threaded": threaded,
         }
 
-        if reload:
-            reload_plugin = make_reload_plugin(str(bento_path.absolute()), bentoml_home)
-            arbiter_kwargs["plugins"] = [reload_plugin]
-
-        if development_mode:
-            arbiter_kwargs["debug"] = True
-            arbiter_kwargs["loggerconfig"] = SERVER_LOGGING_CONFIG
-
         arbiter = create_standalone_arbiter(**arbiter_kwargs)
-        arbiter.exit_stack.enter_context(
-            track_serve(svc, production=not development_mode)
-        )
         arbiter.exit_stack.callback(shutil.rmtree, uds_path, ignore_errors=True)
+        if enable_planner:
+            arbiter.exit_stack.callback(
+                shutil.rmtree,
+                os.environ.get(
+                    DYN_LOCAL_STATE_DIR, os.path.expanduser("~/.dynamo/state")
+                ),
+                ignore_errors=True,
+            )
+            logger.warn(f"arbiter: {arbiter.endpoint}")
+            # save deployment state for planner
+            if not namespace:
+                raise ValueError("No namespace found for service")
+            save_dynamo_state(
+                namespace,
+                arbiter.endpoint,
+                components={
+                    watcher.name: {
+                        "watcher_name": watcher.name,
+                        "cmd": watcher.cmd + " ".join(watcher.args),
+                    }
+                    for watcher in watchers
+                },
+                environment={
+                    "DYNAMO_SERVICE_CONFIG": os.environ["DYNAMO_SERVICE_CONFIG"],
+                },
+            )
         arbiter.start(
             cb=lambda _: logger.info(  # type: ignore
                 (
-                    "Starting Dynamo Service %s (%s/%s) listening on %s://%s:%d (Press CTRL+C to quit)"
+                    "Starting Dynamo Service %s (Press CTRL+C to quit)"
                     if (
                         hasattr(svc, "is_dynamo_component")
                         and svc.is_dynamo_component()
@@ -503,7 +490,7 @@ def serve_http(
                     else "Starting %s (Press CTRL+C to quit)"
                 ),
                 *(
-                    (svc.name, *svc.dynamo_address(), scheme, log_host, port)
+                    (svc.name,)
                     if (
                         hasattr(svc, "is_dynamo_component")
                         and svc.is_dynamo_component()
