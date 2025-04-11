@@ -161,11 +161,11 @@ RUN ls /opt/nixl
 # Install utilities
 RUN apt update -y && apt install -y git wget curl nvtop tmux vim
 # nats
-RUN wget https://github.com/nats-io/nats-server/releases/download/v2.10.24/nats-server-v2.10.24-amd64.deb && \
-    dpkg -i nats-server-v2.10.24-amd64.deb && rm nats-server-v2.10.24-amd64.deb
+RUN wget https://github.com/nats-io/nats-server/releases/download/v2.10.24/nats-server-v2.10.24-arm64.deb && \
+    dpkg -i nats-server-v2.10.24-arm64.deb && rm nats-server-v2.10.24-arm64.deb
 # etcd
 ENV ETCD_VERSION="v3.5.18"
-RUN wget https://github.com/etcd-io/etcd/releases/download/$ETCD_VERSION/etcd-$ETCD_VERSION-linux-amd64.tar.gz -O /tmp/etcd.tar.gz && \
+RUN wget https://github.com/etcd-io/etcd/releases/download/$ETCD_VERSION/etcd-$ETCD_VERSION-linux-arm64.tar.gz -O /tmp/etcd.tar.gz && \
     mkdir -p /usr/local/bin/etcd && \
     tar -xvf /tmp/etcd.tar.gz -C /usr/local/bin/etcd --strip-components=1 && \
     rm /tmp/etcd.tar.gz
@@ -189,29 +189,30 @@ RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requi
 
 # Install patched vllm - keep this early in Dockerfile to avoid
 # rebuilds from unrelated source code changes
-ARG VLLM_REF="0.7.2"
-ARG VLLM_PATCH="vllm_v${VLLM_REF}-dynamo-kv-disagg-patch.patch"
-ARG VLLM_PATCHED_PACKAGE_NAME="ai_dynamo_vllm"
-ARG VLLM_PATCHED_PACKAGE_VERSION="0.7.2.post1"
-RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
-    mkdir /tmp/vllm && \
-    uv pip install pip wheel && \
-    python -m pip download --only-binary=:all: --no-deps --dest /tmp/vllm vllm==v${VLLM_REF} && \
-    cd /tmp/vllm && \
-    wheel unpack *.whl && \
-    cd vllm-${VLLM_REF}/ && \
-    patch -p1 < /tmp/deps/vllm/${VLLM_PATCH} && \
-    # Rename the package from vllm to ai_dynamo_vllm
-    mv vllm-${VLLM_REF}.dist-info ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info && \
-    sed -i "s/^Name: vllm/Name: ${VLLM_PATCHED_PACKAGE_NAME}/g" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/METADATA && \
-    sed -i "s/^Version: ${VLLM_REF}/Version: ${VLLM_PATCHED_PACKAGE_VERSION}/g" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/METADATA && \
-    # Update wheel tag from linux_aarch64 to manylinux1_aarch64-linux-gnu in WHEEL file
-    sed -i 's/Tag: cp38-abi3-linux_aarch64-linux-gnu/Tag: cp38-abi3-manylinux1_aarch64-linux-gnu/g' ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/WHEEL && \
-    # Also update the tag in RECORD file to match
-    sed -i "s/-cp38-abi3-linux_aarch64.whl/-cp38-abi3-manylinux1_aarch64-linux-gnu.whl/g" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/RECORD && \
-    mkdir -p /workspace/dist && \
-    wheel pack . --dest-dir /workspace/dist && \
-    uv pip install /workspace/dist/${VLLM_PATCHED_PACKAGE_NAME}-*.whl
+# FIXME: There is no public vLLM to patch you need to build it inside container in editable model
+#ARG VLLM_REF="0.7.2"
+#ARG VLLM_PATCH="vllm_v${VLLM_REF}-dynamo-kv-disagg-patch.patch"
+#ARG VLLM_PATCHED_PACKAGE_NAME="ai_dynamo_vllm"
+#ARG VLLM_PATCHED_PACKAGE_VERSION="0.7.2.post1"
+#RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
+#    mkdir /tmp/vllm && \
+#    uv pip install pip wheel && \
+#    python -m pip download --only-binary=:all: --no-deps --dest /tmp/vllm vllm==v${VLLM_REF} && \
+#    cd /tmp/vllm && \
+#    wheel unpack *.whl && \
+#    cd vllm-${VLLM_REF}/ && \
+#    patch -p1 < /tmp/deps/vllm/${VLLM_PATCH} && \
+#    # Rename the package from vllm to ai_dynamo_vllm
+#    mv vllm-${VLLM_REF}.dist-info ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info && \
+#    sed -i "s/^Name: vllm/Name: ${VLLM_PATCHED_PACKAGE_NAME}/g" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/METADATA && \
+#    sed -i "s/^Version: ${VLLM_REF}/Version: ${VLLM_PATCHED_PACKAGE_VERSION}/g" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/METADATA && \
+#    # Update wheel tag from linux_aarch64 to manylinux1_aarch64-linux-gnu in WHEEL file
+#    sed -i 's/Tag: cp38-abi3-linux_aarch64-linux-gnu/Tag: cp38-abi3-manylinux1_aarch64-linux-gnu/g' ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/WHEEL && \
+#    # Also update the tag in RECORD file to match
+#    sed -i "s/-cp38-abi3-linux_aarch64.whl/-cp38-abi3-manylinux1_aarch64-linux-gnu.whl/g" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/RECORD && \
+#    mkdir -p /workspace/dist && \
+#    wheel pack . --dest-dir /workspace/dist && \
+#    uv pip install /workspace/dist/${VLLM_PATCHED_PACKAGE_NAME}-*.whl
 
 # Install test dependencies
 RUN --mount=type=bind,source=./container/deps/requirements.test.txt,target=/tmp/requirements.txt \
