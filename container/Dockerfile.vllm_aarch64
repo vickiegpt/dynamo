@@ -30,8 +30,9 @@ USER root
 
 ARG MOFED_VERSION=24.10-1.1.4.0
 ARG PYTHON_VERSION=3.12
-ARG NSYS_URL=https://developer.nvidia.com/downloads/assets/tools/secure/nsight-systems/2025_1/
-ARG NSYS_PKG=NsightSystems-linux-cli-public-2025.1.1.131-3554042.deb
+# FIXME: Doesn't work for ARM
+#ARG NSYS_URL=https://developer.nvidia.com/downloads/assets/tools/secure/nsight-systems/2025_1/
+#ARG NSYS_PKG=NsightSystems-linux-cli-public-2025.1.1.131-3554042.deb
 
 RUN apt-get update -y && apt-get -y install curl \
     git \
@@ -77,9 +78,10 @@ RUN apt-get install -y dkms linux-headers-generic
 RUN apt-get install -y meson ninja-build uuid-dev gdb
 
 RUN apt install -y libglib2.0-0
-RUN wget ${NSYS_URL}${NSYS_PKG} &&\
-    apt install -y ./${NSYS_PKG} &&\
-    rm ${NSYS_PKG}
+# FIXME: Doesn't work for ARM
+#RUN wget ${NSYS_URL}${NSYS_PKG} &&\
+#    apt install -y ./${NSYS_PKG} &&\
+#    rm ${NSYS_PKG}
 
 RUN cd /usr/local/src && \
     curl -fSsL "https://content.mellanox.com/ofed/MLNX_OFED-${MOFED_VERSION}/MLNX_OFED_LINUX-${MOFED_VERSION}-ubuntu24.04-aarch64.tgz" -o mofed.tgz && \
