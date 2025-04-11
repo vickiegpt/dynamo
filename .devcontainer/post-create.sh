@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Function to retry a command up to a specified number of times
+trap 'echo "❌ ERROR: Command failed at line $LINENO: $BASH_COMMAND"; echo "⚠️ This was unexpected and setup was not completed. Can try to resolve yourself and then manually run the rest of the commands in this file or file a bug."' ERR
 
 retry() {
     # retries for connectivity issues in installs
@@ -35,21 +35,21 @@ retry() {
     return 0
 }
 
-
-set -x
+set -xe
 
 # Changing permission to match local user since volume mounts default to root ownership
-sudo chown -R ubuntu:ubuntu /home/ubuntu/.cache/pre-commit
+sudo chown -R ubuntu:ubuntu ~/.cache/pre-commit
 
 # Pre-commit hooks
-cd $HOME/dynamo && pre-commit install && retry pre-commit install-hooks && pre-commit run --all-files
+cd $HOME/dynamo && pre-commit install && retry pre-commit install-hooks
+pre-commit run --all-files || true # don't fail the build if pre-commit hooks fail
 
 # Set build directory
 mkdir -p $HOME/dynamo/.build/target
 export CARGO_TARGET_DIR=$HOME/dynamo/.build/target
 
 # build project, it will be saved at $HOME/dynamo/.build/target
-cargo build --profile dev --locked --features mistralrs,sglang,vllm,python
+cargo build --locked --profile dev --features mistralrs,sglang,vllm,python
 cargo doc --no-deps
 
 # create symlinks for the binaries in the deploy directory
@@ -65,3 +65,4 @@ cd $HOME/dynamo && retry env DYNAMO_BIN_PATH=$HOME/dynamo/.build/target/debug uv
 # source the venv and set the VLLM_KV_CAPI_PATH in bashrc
 echo "source /opt/dynamo/venv/bin/activate" >> ~/.bashrc
 echo "export VLLM_KV_CAPI_PATH=$HOME/dynamo/.build/target/debug/libdynamo_llm_capi.so" >> ~/.bashrc
+echo "export GPG_TTY=$(tty)" >> ~/.bashrc

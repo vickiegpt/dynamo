@@ -1,9 +1,11 @@
 # NVIDIA Dynamo Development Environment
+
+> Warning: devcontainers is an experimental feature and we are not testing in CI. Please submit any feedback using the issues on github.
+
 ## Prerequisites
 - Docker installed and configured on your host system
 - Visual Studio Code with the Dev Containers extension installed
 - Appropriate NVIDIA drivers (compatible with CUDA 12.8)
-- `HF_HOME`, `GITHUB_TOKEN`, and `HF_TOKEN` environment variables
 
 ## Quick Start
 1. Build the container image
@@ -12,15 +14,26 @@
 ./container/build.sh --target local-dev
 ```
 
+The container will be built and give certain file permissions to your local uid and gid.
+
 > Note: Currently local-dev is only implemented for --framework VLLM
 
 2. Open Dynamo folder in VS Code
 - Press Ctrl + Shift + P
 - Select "Dev Containers: Open Folder in Container"
 
+If you want to mount your hugging face cache, go to `.devcontainer` and uncomment in the mounts section:
+
+```json
+// "source=${localEnv:HF_HOME},target=/home/ubuntu/.cache/huggingface,type=bind", // Uncomment to enable HF Cache Mount. Make sure to set HF_HOME env var in you .bashrc
+```
+Make sure HF_HOME is sourced in your .bashrc or .zshenv and your vscode default terminal is set properly.
+
 3. Wait for Initialization
 - The container will mount your local code
 - `post-create.sh` will build the project and configure the environment
+
+If `post-create.sh` fails, you can try to debug or submit an issue on github.
 
 ## What's Inside
 Development Environment:
@@ -29,7 +42,7 @@ Development Environment:
 - VS Code extensions for Rust and Python
 - Persistent build cache in `.build/` directory enables fast incremental builds (only changed files are recompiled)
 
-`cargo build --profile dev --locked` to re-build
+`cargo build --locked --profile dev` to re-build
 
 - Edits to files are propogated to local repo due to the volume mount
 - SSH and GPG agent passthrough orchestrated by devcontainer
@@ -37,7 +50,7 @@ Development Environment:
 File Structure:
 - Local dynamo repo mounts to `/home/ubuntu/dynamo`
 - Python venv in `/opt/dynamo/venv`
-- Build artifacts in `.build/target`
+- Build artifacts in `dynamo/.build/target`
 - HuggingFace cache preserved between sessions (Mounting local path `HF_HOME` at `/home/ubuntu/.cache/huggingface`)
 - Bash memory preserved between sessions at `/home/ubuntu/.commandhistory` using docker volume `dynamo-bashhistory`
 - Precommit peeserved between sessions at `/home/ubuntu/.cache/precommit` using docker volume `dynamo-precommit-cache`
@@ -47,6 +60,7 @@ Edit `.devcontainer/devcontainer.json` to modify:
 - VS Code settings and extensions
 - Environment variables
 - Container configuration
+- Custom Mounts
 
 ## FAQ
 
