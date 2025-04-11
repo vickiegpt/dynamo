@@ -62,8 +62,8 @@ VLLM_BASE_IMAGE_TAG="25.03-py3"
 NONE_BASE_IMAGE="ubuntu"
 NONE_BASE_IMAGE_TAG="24.04"
 
-NIXL_COMMIT=3aa8133369566e9ce61301f7eb56ad79b7f4fd92
-NIXL_REPO=ai-dynamo/nixl.git
+NIXL_COMMIT=8c4dcc1399c951632b6083303ce2e95dc7dcc7b9
+NIXL_REPO=piotrm-nvidia/nixl
 
 get_options() {
     while :; do
@@ -237,6 +237,8 @@ get_options() {
     else
         TARGET_STR="--target dev"
     fi
+
+
 }
 
 
