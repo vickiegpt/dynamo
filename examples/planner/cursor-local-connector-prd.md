@@ -1,197 +1,83 @@
 # Product Requirements Document: LocalConnector for Dynamo Planner
 
 ## Overview
+The LocalConnector enables automatic scaling of Dynamo components in a local development environment, with special focus on GPU resource management for workers.
 
-The LocalConnector is a critical component of the Dynamo Planner system that enables automatic scaling of Dynamo components in a local development environment. This document outlines the detailed requirements, APIs, and implementation strategy for the LocalConnector.
+## Core Requirements
 
-## Objectives
+### 1. Component Management
+- Discover and track components in namespace
+- Scale components up/down with proper resource handling
+- Monitor component health and status
+- Handle process lifecycle (start/stop/restart)
 
-1. Create a clean, user-friendly API for managing local Dynamo components
-2. Integrate with existing Dynamo serving infrastructure
-3. Support automatic resource allocation for components
-4. Provide comprehensive metrics collection
-5. Enable scale up/down operations for components
+### 2. Resource Management
+- Track GPU allocations and availability
+- Manage GPU assignments for workers
+- Update state file with resource allocations
+- Prevent resource conflicts and overallocation
 
-## Target Users
-
-- Dynamo developers working in local environments
-- Data scientists testing scaling behaviors
-- DevOps engineers validating scaling policies before production deployment
-
-## Functional Requirements
-
-### Core Functionality
-
-1. **Component Discovery**
-   - Discover all components in a specified namespace
-   - Retrieve component metadata (name, endpoint, status)
-
-2. **Component Scaling**
-   - Scale components up by adding new instances
-   - Scale components down by removing instances
-   - Support granular scaling (add/remove specific number of replicas)
-
-3. **Resource Management**
-   - Allocate appropriate CPU/memory/GPU resources
-   - Track resource usage per component
-   - Prevent resource overallocation
-
-4. **Metrics Collection**
-   - Gather system metrics (CPU, memory, GPU usage)
-   - Collect component-specific metrics
-   - Monitor queue sizes and backpressure
-
-5. **Process Management**
-   - Start/stop component processes
-   - Monitor process health
-   - Restart failed processes if needed
-
-### User-Friendly APIs
-
-1. **Component Operations**
-   - List all components with status
-   - Get detailed component information
-   - Restart components
-   - View component logs
-
-2. **Metrics Access**
-   - Get comprehensive metrics for a component
-   - Monitor prefill queue metrics
-   - Track system-wide resource usage
-
-3. **System Topology**
-   - View component relationships
-   - Understand data flow between components
-
-## Technical Requirements
-
-### Integration Points
-
-1. **Circus Integration**
-   - Use Circus for process management
-   - Manage watchers for each component
-
-2. **Dynamo Runtime**
-   - Connect to DistributedRuntime
-   - Query component state via etcd
-
-3. **Resource Allocation**
-   - Leverage ResourceAllocator for GPU assignment
-   - Track port and socket usage
-
-4. **Service Discovery**
-   - Import services from Bento packages
-   - Map components to service definitions
-
-### Implementation Details
-
-1. **Initialization and Cleanup**
-   - Support async context manager pattern
-   - Provide factory method for easy creation
-   - Ensure proper resource cleanup
-
-2. **Process Management**
-   - Create and manage Unix domain sockets
-   - Handle process lifecycle events
-   - Capture process logs
-
-3. **Error Handling**
-   - Gracefully handle process failures
-   - Provide detailed error information
-   - Support automatic retry for critical operations
+### 3. State Management
+- Read/write state file for persistence
+- Track component configurations
+- Maintain resource allocation state
+- Handle environment variables
 
 ## API Design
 
-### Class Overview
-
+### Core APIs
 ```python
 class LocalConnector(PlannerConnector):
-    # Core methods for scaling
+    # Base Component Operations
     async def get_component_replicas(self, component_name: str) -> int
-    async def scale_component(self, component_name: str, replicas: int) -> bool
-
-    # Resource and metrics methods
-    async def get_resource_usage(self, component_name: str) -> dict
-    async def get_system_topology(self) -> dict
-
-    # User-friendly APIs
-    async def list_components(self) -> List[dict]
+    async def list_components(self) -> List[Dict[str, Any]]
     async def get_component_logs(self, component_name: str, lines: int = 100) -> List[str]
     async def restart_component(self, component_name: str) -> bool
-    async def get_component_metrics(self, component_name: str) -> dict
-    async def get_prefill_queue_metrics(self) -> dict
 
-    # Lifecycle methods
-    async def initialize(self)
-    async def shutdown(self)
+    # Resource Management
+    async def get_available_gpus(self) -> List[str]
+    async def allocate_gpus(self, component_name: str, num_gpus: int) -> List[str]
+    async def release_gpus(self, component_name: str) -> bool
+    
+    # State Management
+    async def load_state(self) -> Dict[str, Any]
+    async def save_state(self, state: Dict[str, Any]) -> bool
+    async def update_component_resources(self, component_name: str, resources: Dict) -> bool
 
-    # Factory and context manager methods
-    @classmethod
-    async def create(cls, namespace: str, bento_identifier: str = ".", working_dir: Optional[str] = None)
-    async def __aenter__(self)
-    async def __aexit__(self, exc_type, exc_val, exc_tb)
+    # Enhanced Scaling Operations
+    async def add_gpu_worker(self, component_name: str, num_gpus: int = 1) -> bool
+    async def remove_gpu_worker(self, component_name: str) -> bool
+    async def scale_component(self, component_name: str, replicas: int) -> bool
 ```
 
-## Implementation Phases
+## Implementation Strategy
 
-### Phase 1: Core Infrastructure
+### Phase 1: State Management
+1. Implement state file operations
+2. Add component configuration tracking
+3. Handle resource state persistence
 
-1. Implement basic connector structure
-2. Integrate with Circus for process management
-3. Connect to Dynamo runtime
-4. Implement component discovery
+### Phase 2: Resource Management
+1. Implement GPU tracking
+2. Add allocation/deallocation logic
+3. Handle resource conflicts
+4. Update state file on changes
 
-### Phase 2: Scaling Operations
+### Phase 3: Enhanced Scaling
+1. Add GPU worker-specific scaling
+2. Implement resource-aware scaling
+3. Handle environment updates
+4. Add validation and error handling
 
-1. Implement scale up operation
-2. Implement scale down operation
-3. Add resource allocation logic
-4. Handle process lifecycle events
+### Phase 4: Testing & Validation
+1. Test GPU allocation scenarios
+2. Validate state persistence
+3. Test scaling operations
+4. Add comprehensive error handling
 
-### Phase 3: Metrics and User APIs
-
-1. Implement metrics collection
-2. Add user-friendly APIs
-3. Support component logs
-4. Implement topology discovery
-
-### Phase 4: Testing and Optimization
-
-1. Test with different component types
-2. Optimize resource allocation
-3. Add comprehensive error handling
-4. Performance testing
-
-## Discussion Points
-
-As we begin implementation, let's discuss the following:
-
-1. **Resource Allocation Strategy**
-   - How should GPU resources be divided among components?
-   - Should we implement dynamic resource allocation based on load?
-
-2. **Metrics Collection**
-   - What specific metrics are most important to collect?
-   - How frequently should metrics be collected?
-
-3. **Component Dependencies**
-   - How should we handle scaling interdependent components?
-   - Should we implement dependency-aware scaling?
-
-4. **Failure Handling**
-   - How should component failures be handled?
-   - What recovery mechanisms should be implemented?
-
-5. **Logging and Observability**
-   - What level of logging is appropriate?
-   - How can we make the connector observable for debugging?
-
-## Next Steps
-
-1. Review the proposed API design and provide feedback
-2. Discuss the resource allocation strategy
-3. Define metrics collection requirements in more detail
-4. Outline testing strategy for the connector
-5. Prioritize implementation phases
-
-Let's continue the discussion to refine this PRD and move toward implementation.
+## Success Criteria
+1. Successfully scale GPU workers up/down
+2. Maintain accurate resource allocation state
+3. Prevent GPU conflicts
+4. Handle component lifecycle properly
+5. Persist state across restarts

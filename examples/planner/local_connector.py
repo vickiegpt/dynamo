@@ -17,7 +17,9 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
+import copy
+import os
+import random
 from circusd import CircusController
 from planner_connector import PlannerConnector
 
@@ -55,6 +57,86 @@ class LocalConnector(PlannerConnector):
         with open(self.state_file, "r") as f:
             return json.load(f)
 
+    async def save_state(self, state: Dict[str, Any]) -> bool:
+        """Save state to state file.
+
+        Args:
+            state: State dictionary to save
+
+        Returns:
+            True if successful
+        """
+        try:
+            with open(self.state_file, "w") as f:
+                json.dump(state, f, indent=2)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save state: {e}")
+            return False
+
+    async def get_available_gpus(self) -> List[str]:
+        """Get list of unallocated GPU IDs.
+
+        Returns:
+            List of available GPU IDs
+        """
+        try:
+            state = await self.load_state()
+            system_resources = state.get("environment", {}).get("SYSTEM_RESOURCES", {})
+            all_gpus = set(str(gpu) for gpu in system_resources.get("gpu_info", []))
+            
+            # Get allocated GPUs
+            allocated_gpus = set()
+            for component_info in state.get("components", {}).values():
+                resources = component_info.get("resources", {})
+                gpu_list = resources.get("allocated_gpus", [])
+                allocated_gpus.update(str(gpu) for gpu in gpu_list)
+            
+            logger.info(f"Allocated GPUs: {allocated_gpus}")
+            available = sorted(list(all_gpus - allocated_gpus))
+            logger.info(f"Available GPUs: {available}")
+            return available
+        except Exception as e:
+            logger.error(f"Failed to get available GPUs: {e}")
+            return []
+
+    async def allocate_gpus(self, component_name: str, num_gpus: int) -> List[str]:
+        """Allocate specified number of GPUs to component.
+
+        Args:
+            component_name: Name of the component
+            num_gpus: Number of GPUs to allocate
+
+        Returns:
+            List of allocated GPU IDs
+        """
+        try:
+            available_gpus = await self.get_available_gpus()
+            if len(available_gpus) < num_gpus:
+                raise ValueError(f"Not enough GPUs available. Requested: {num_gpus}, Available: {len(available_gpus)}")
+
+            # Take the first num_gpus available
+            allocated = available_gpus[:num_gpus]
+            
+            # Update state
+            state = await self.load_state()
+            watcher_name = f"{self.namespace}_{component_name}"
+            
+            if watcher_name not in state["components"]:
+                raise ValueError(f"Component {component_name} not found in state")
+            
+            # Update component resources
+            if "resources" not in state["components"][watcher_name]:
+                state["components"][watcher_name]["resources"] = {}
+            state["components"][watcher_name]["resources"]["allocated_gpus"] = allocated
+            
+            # Save state
+            await self.save_state(state)
+            return allocated
+        except Exception as e:
+            logger.error(f"Failed to allocate GPUs for {component_name}: {e}")
+            return []
+
     async def get_component_replicas(self, component_name: str) -> int:
         """Get the number of replicas for a component.
 
@@ -65,60 +147,78 @@ class LocalConnector(PlannerConnector):
             Number of replicas
         """
         # Normalize component name to match circus watcher format
-        watcher_name = f"dynamo_{component_name}"
+        watcher_name = f"{self.namespace}_{component_name}"
 
         try:
             return await self.circus.get_watcher_processes(watcher_name)
         except Exception as e:
             logger.error(f"Failed to get replicas for {component_name}: {e}")
             return 0
-
-    async def scale_component(self, component_name: str, replicas: int) -> bool:
-        """Scale a component to specified number of replicas.
-
-        Args:
-            component_name: Name of the component
-            replicas: Target number of replicas
-
-        Returns:
-            True if successful
-        """
-        # Normalize component name to match circus watcher format
-        watcher_name = f"dynamo_{component_name}"
-
-        if replicas <= 0:
-            # Remove the component if scaling to zero
-            return await self.circus.remove_watcher(watcher_name)
-
+        
+    async def add_component(self, component_name: str) -> bool:
+        """Add a component to the planner"""
         try:
-            current_replicas = await self.get_component_replicas(component_name)
+            state = await self.load_state()
+            watcher_name = f"{self.namespace}_{component_name}_{random.randint(0, 10)}"
 
-            if current_replicas == 0:
-                # Component doesn't exist, need to add it
-                state = await self.load_state()
-                components = state.get("components", {})
+            if component_name not in [c.replace(f"{self.namespace}_", "") for c in state["components"]]:
+                raise ValueError(f"Component {component_name} not found in state configuration")
 
-                if watcher_name not in components:
-                    raise ValueError(
-                        f"Component {component_name} not found in state file"
-                    )
+            # Get base command from state
+            component_info = state["components"][f"{self.namespace}_{component_name}"]
+            base_cmd = component_info["cmd"].split("--worker-env")[0].strip()
 
-                component_info = components[watcher_name]
-                command = component_info.get("cmd")
+            # Get service config
+            service_config = state["environment"].get("DYNAMO_SERVICE_CONFIG")
+            if not service_config:
+                raise ValueError("DYNAMO_SERVICE_CONFIG not found in environment")
 
-                if not command:
-                    raise ValueError(f"No command found for {component_name}")
+            # If GPU component, handle GPU allocation
+            worker_env = {}
+            if component_name in ["VllmWorker", "PrefillWorker"]:
+                available_gpus = await self.get_available_gpus()
+                if not available_gpus:
+                    raise ValueError("No GPUs available for allocation")
+                
+                gpu_id = available_gpus[0]
+                worker_env["CUDA_VISIBLE_DEVICES"] = gpu_id
+                
+                # Update state with GPU allocation
+                if "resources" not in component_info:
+                    component_info["resources"] = {}
+                component_info["resources"]["allocated_gpus"] = [gpu_id]
+                await self.save_state(state)
 
-                # Add the watcher with specified replicas
-                await self.circus.add_watcher(watcher_name, command, start=True)
-                if replicas > 1:
-                    await self.circus.scale_watcher(watcher_name, replicas)
-                return True
-            else:
-                # Component exists, just scale it
-                return await self.circus.scale_watcher(watcher_name, replicas)
+            # Add service config to worker env
+            worker_env["DYNAMO_SERVICE_CONFIG"] = service_config
+            
+            # Create the worker env array and convert to JSON string
+            worker_env_list = [worker_env]
+            worker_env_json = json.dumps(worker_env_list)
+            
+            # Construct the full command with properly escaped worker-env
+            full_cmd = f"{base_cmd} --worker-env '{worker_env_json}'"
+            
+            logger.info(f"Full command: {full_cmd}")
+
+            return await self.circus.add_watcher(
+                watcher_name=watcher_name,
+                command=full_cmd,
+                start=True
+            )
+
         except Exception as e:
-            logger.error(f"Failed to scale {component_name}: {e}")
+            logger.error(f"Failed to add component {component_name}: {e}")
+            if component_name in ["VllmWorker", "PrefillWorker"]:
+                await self.release_gpus(component_name)
+            return False
+    
+    async def remove_component(self, component_name: str) -> bool:
+        """Remove a component from the planner"""
+        try:
+            return await self.circus.remove_watcher(component_name)
+        except Exception as e:
+            logger.error(f"Failed to remove component {component_name}: {e}")
             return False
 
     async def get_resource_usage(self, component_name: str) -> Dict[str, Any]:
@@ -131,7 +231,7 @@ class LocalConnector(PlannerConnector):
             Dictionary with resource usage metrics
         """
         # Normalize component name to match circus watcher format
-        watcher_name = f"dynamo_{component_name}"
+        watcher_name = f"{self.namespace}_{component_name}"
 
         try:
             stats = await self.circus.get_watcher_info(watcher_name)
@@ -158,13 +258,13 @@ class LocalConnector(PlannerConnector):
             watchers = await self.circus.list_watchers()
 
             # Filter for dynamo components
-            components = [w for w in watchers if w.startswith("dynamo_")]
+            components = [w for w in watchers if w.startswith(f"{self.namespace}_")]
 
             topology = {"namespace": self.namespace, "components": {}}
 
             for component in components:
-                # Strip the dynamo_ prefix
-                name = component.replace("dynamo_", "", 1)
+                # Strip the namespace prefix
+                name = component.replace(f"{self.namespace}_", "", 1)
                 replicas = await self.circus.get_watcher_processes(component)
                 resources = await self.get_resource_usage(name)
 
@@ -177,75 +277,3 @@ class LocalConnector(PlannerConnector):
         except Exception as e:
             logger.error(f"Failed to get system topology: {e}")
             return {"namespace": self.namespace, "components": {}}
-
-    async def restart_component(self, component_name: str) -> bool:
-        """Restart a component.
-
-        Args:
-            component_name: Name of the component
-
-        Returns:
-            True if successful
-        """
-        # Normalize component name to match circus watcher format
-        watcher_name = f"dynamo_{component_name}"
-
-        try:
-            return await self.circus.restart_watcher(watcher_name)
-        except Exception as e:
-            logger.error(f"Failed to restart {component_name}: {e}")
-            return False
-
-    async def list_components(self) -> List[Dict[str, Any]]:
-        """List all components with their status.
-
-        Returns:
-            List of component dictionaries with status information
-        """
-        try:
-            watchers = await self.circus.list_watchers()
-
-            # Filter for dynamo components
-            components = [w for w in watchers if w.startswith("dynamo_")]
-
-            result = []
-            for component in components:
-                # Strip the dynamo_ prefix
-                name = component.replace("dynamo_", "", 1)
-                replicas = await self.circus.get_watcher_processes(component)
-                resources = await self.get_resource_usage(name)
-
-                result.append(
-                    {
-                        "name": name,
-                        "replicas": replicas,
-                        "status": resources["status"],
-                        "resources": resources,
-                    }
-                )
-
-            return result
-        except Exception as e:
-            logger.error(f"Failed to list components: {e}")
-            return []
-
-    async def get_component_logs(
-        self, component_name: str, lines: int = 100
-    ) -> List[str]:
-        """Get logs for a component.
-
-        Args:
-            component_name: Name of the component
-            lines: Number of lines to return
-
-        Returns:
-            List of log lines
-        """
-        # Normalize component name to match circus watcher format
-        watcher_name = f"dynamo_{component_name}"
-
-        try:
-            return await self.circus.get_watcher_logs(watcher_name, lines)
-        except Exception as e:
-            logger.error(f"Failed to get logs for {component_name}: {e}")
-            return [f"Error retrieving logs: {str(e)}"]

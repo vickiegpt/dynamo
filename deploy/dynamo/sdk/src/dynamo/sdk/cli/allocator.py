@@ -123,13 +123,6 @@ class ResourceAllocator:
 
         return assigned
 
-    # def get_service_gpu_allocations(self) -> dict[str, list[int]]:
-    #     """Return the current GPU allocations by service name."""
-    #     logger.debug(
-    #         f"Current GPU allocations by service: {self._service_gpu_allocations}"
-    #     )
-    #     return self._service_gpu_allocations.copy()
-
     def get_available_gpus(self) -> list[int]:
         """Return list of available GPU indices."""
         available = [

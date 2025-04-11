@@ -16,8 +16,9 @@
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class CircusController:
         Returns:
             CircusController instance
         """
-        state_file = Path.home() / ".dynamo" / "state" / f"{namespace}.json"
+        state_file = Path(os.environ.get("DYN_LOCAL_STATE_DIR", Path.home() / ".dynamo" / "state")) / f"{namespace}.json"
         if not state_file.exists():
             raise FileNotFoundError(f"State file not found: {state_file}")
 
@@ -140,37 +141,34 @@ class CircusController:
             logger.error(f"Unexpected output format: {output}")
             raise ValueError(f"Unexpected output format: {output}")
 
-    async def add_watcher(
-        self, watcher_name: str, command: str, start: bool = True
-    ) -> bool:
-        """Add a new watcher to circus.
+    async def add_watcher(self, watcher_name: str, command: str, start: bool = True, env: Optional[Dict[str, str]] = None) -> bool:
+        """Add a new watcher to circus."""
+        try:
+            cmd = ["circusctl", "--endpoint", self.endpoint, "add"]
+            if start:
+                cmd.append("--start")
+            
+            # Quote the entire command as a single string
+            cmd.extend([watcher_name, command])
 
-        Args:
-            watcher_name: Name of the watcher
-            command: The command to run
-            start: Whether to start the watcher immediately
+            logger.info(f"Adding watcher with command: {' '.join(cmd)}")
+            
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
 
-        Returns:
-            True if successful
-        """
-        cmd = ["circusctl", "--endpoint", self.endpoint, "add"]
-        if start:
-            cmd.append("--start")
-        cmd.extend([watcher_name, command])
+            if proc.returncode != 0:
+                error = stderr.decode().strip()
+                logger.error(f"Failed to add watcher {watcher_name}: {error}")
+                raise RuntimeError(f"Failed to add watcher {watcher_name}: {error}")
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-
-        if proc.returncode != 0:
-            error = stderr.decode().strip()
-            logger.error(f"Failed to add watcher {watcher_name}: {error}")
-            raise RuntimeError(f"Failed to add watcher {watcher_name}: {error}")
-
-        return True
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add watcher {watcher_name}: {e}")
+            raise
 
     async def remove_watcher(self, watcher_name: str) -> bool:
         """Remove a watcher from circus.
@@ -195,92 +193,3 @@ class CircusController:
             raise RuntimeError(f"Failed to remove watcher {watcher_name}: {error}")
 
         return True
-
-    async def scale_watcher(self, watcher_name: str, num_processes: int) -> bool:
-        """Scale a watcher to specified number of processes.
-
-        Args:
-            watcher_name: Name of the watcher
-            num_processes: Target number of processes
-
-        Returns:
-            True if successful
-        """
-        cmd = [
-            "circusctl",
-            "--endpoint",
-            self.endpoint,
-            "set",
-            watcher_name,
-            "numprocesses",
-            str(num_processes),
-        ]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-
-        if proc.returncode != 0:
-            error = stderr.decode().strip()
-            logger.error(f"Failed to scale watcher {watcher_name}: {error}")
-            raise RuntimeError(f"Failed to scale watcher {watcher_name}: {error}")
-
-        return True
-
-    async def restart_watcher(self, watcher_name: str) -> bool:
-        """Restart a watcher.
-
-        Args:
-            watcher_name: Name of the watcher
-
-        Returns:
-            True if successful
-        """
-        cmd = ["circusctl", "--endpoint", self.endpoint, "restart", watcher_name]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-
-        if proc.returncode != 0:
-            error = stderr.decode().strip()
-            logger.error(f"Failed to restart watcher {watcher_name}: {error}")
-            raise RuntimeError(f"Failed to restart watcher {watcher_name}: {error}")
-
-        return True
-
-    async def get_watcher_logs(self, watcher_name: str, lines: int = 100) -> List[str]:
-        """Get logs for a watcher.
-
-        Args:
-            watcher_name: Name of the watcher
-            lines: Number of lines to return
-
-        Returns:
-            List of log lines
-        """
-        # This is a simplified implementation - actual implementation may need to
-        # parse log files directly if circusctl doesn't provide this functionality
-
-        cmd = ["circusctl", "--endpoint", self.endpoint, "dumpconfig"]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-
-        if proc.returncode != 0:
-            error = stderr.decode().strip()
-            logger.error(f"Failed to get config: {error}")
-            raise RuntimeError(f"Failed to get config: {error}")
-
-        # Parse the output to find log file location
-        # This is a simplification - actual implementation would need to parse the config properly
-
-        # For now, return a placeholder
-        return [f"Log retrieval not fully implemented for {watcher_name}"]

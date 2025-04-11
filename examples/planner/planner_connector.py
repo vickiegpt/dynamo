@@ -16,6 +16,7 @@
 from abc import ABC, abstractmethod
 
 
+# TODO: add ability to scale component to X replicas
 class PlannerConnector(ABC):
     @abstractmethod
     async def get_component_replicas(self, component_name):
@@ -23,8 +24,13 @@ class PlannerConnector(ABC):
         pass
 
     @abstractmethod
-    async def scale_component(self, component_name, replicas):
-        """Scale a component to specified number of replicas"""
+    async def add_component(self, component_name):
+        """Add a component to the planner"""
+        pass
+
+    @abstractmethod
+    async def remove_component(self, component_name):
+        """Remove a component from the planner"""
         pass
 
     @abstractmethod
