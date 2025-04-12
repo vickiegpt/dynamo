@@ -102,9 +102,12 @@ dynamo-base-docker:
     ENV CARGO_TARGET_DIR=/workspace/target
 
     RUN cargo build --release --locked --features mistralrs,sglang,vllm,python && \
-        cargo doc --no-deps && \
-        # Create directory structure for Python package
-        mkdir -p /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/ && \
+        cargo doc --no-deps
+
+    # Create directory structure for Python package
+    RUN mkdir -p /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/ && \
+        # Remove any existing symlinks in the bin directory
+        rm -f /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/* && \
         # Copy binaries to both locations
         cp target/release/dynamo-run /usr/local/bin/ && \
         cp target/release/http /usr/local/bin/ && \
