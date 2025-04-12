@@ -103,11 +103,17 @@ dynamo-base-docker:
 
     RUN cargo build --release --locked --features mistralrs,sglang,vllm,python && \
         cargo doc --no-deps && \
-        cp target/release/dynamo-run /usr/local/bin && \
-        cp target/release/http /usr/local/bin && \
-        cp target/release/llmctl /usr/local/bin && \
-        cp target/release/metrics /usr/local/bin && \
-        cp target/release/mock_worker /usr/local/bin
+        # Create directory structure for Python package
+        mkdir -p /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/ && \
+        # Copy binaries to both locations
+        cp target/release/dynamo-run /usr/local/bin/ && \
+        cp target/release/http /usr/local/bin/ && \
+        cp target/release/llmctl /usr/local/bin/ && \
+        cp target/release/metrics /usr/local/bin/ && \
+        cp target/release/mock_worker /usr/local/bin/ && \
+        cp target/release/dynamo-run /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/ && \
+        cp target/release/http /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/ && \
+        cp target/release/llmctl /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/
 
     RUN uv build --wheel --out-dir /workspace/dist && \
         uv pip install /workspace/dist/ai_dynamo*any.whl
