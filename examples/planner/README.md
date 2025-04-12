@@ -27,5 +27,16 @@ python components/planner.py --namespace <namespace>
 
 ## Backends
 We currently support two backends:
-1. `local` - uses dynamo serve to start/stop a system
+1. `local` - uses circus to start/stop worker subprocesses
 2. `kuberentes` - uses the kuberentes api to adjust replicas of each component's resource definition
+
+# Local Backend
+
+Circus is a Python program which can be used to monitor and control processes and sockets. Dynamo serve uses circus to start each node in a graph and monitors each subprocesses. We leverage a core feature to do this called `Watcher`. A `Watcher` is the target program that you would like to run (which in our case is `serve_dynamo.py`). When planner decides to scale up or down, it will either add or remove a watcher from the existing `circus`. You can find our interface for circus in [circusd.py](./circusd.py)
+
+> [!NOTE]
+> Although circus allows you to `increment` an existing watcher, it was not designed to allow variables to be passed in which does not allow us to schedule on a GPU. So instead we start a new watcher per process. When planner decdies to add or remove a worker, we have logic to handle this adding/removing and incrementing/decrementing the workers.
+
+# Kubernetes Backend
+
+
