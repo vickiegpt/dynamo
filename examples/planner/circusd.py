@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 class CircusController:
-    """Direct connection to circus arbiter for managing watchers"""
+    """A circus client implementation for Dynamo"""
 
     def __init__(self, endpoint: str):
         """Initialize connection to arbiter.
@@ -34,6 +34,7 @@ class CircusController:
             endpoint: The circus endpoint (e.g., tcp://127.0.0.1:54927)
         """
         self.endpoint = endpoint
+        # TODO: should i just use the async client as this might block?
         self.client = CircusClient(endpoint=endpoint, timeout=5.0)
 
     @classmethod

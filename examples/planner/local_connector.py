@@ -60,7 +60,7 @@ class LocalConnector(PlannerConnector):
             logger.error(f"Failed to save state: {e}")
             return False
 
-    async def get_available_gpus(self) -> List[str]:
+    async def _get_available_gpus(self) -> List[str]:
         """Get list of unallocated GPU IDs.
 
         Returns:
@@ -132,7 +132,7 @@ class LocalConnector(PlannerConnector):
             # Build environment
             watcher_env = os.environ.copy()
             if component_name in ["VllmWorker", "PrefillWorker"]:
-                available_gpus = await self.get_available_gpus()
+                available_gpus = await self._get_available_gpus()
                 if not available_gpus:
                     raise ValueError("No GPUs available for allocation")
                 gpu_id = available_gpus[0]
@@ -168,20 +168,33 @@ class LocalConnector(PlannerConnector):
         except Exception as e:
             logger.error(f"Failed to add component {component_name}: {e}")
             if component_name in ["VllmWorker", "PrefillWorker"]:
-                await self.release_gpus(component_name)
+                await self._release_gpus(component_name)
             return False
 
-    async def remove_component(self, component_name: str) -> bool:
-        """Remove a component from the planner"""
+    async def _release_gpus(self, component_name: str) -> bool:
+        """Release GPUs allocated to a component.
+
+        Args:
+            component_name: Name of the component to release GPUs from
+
+        Returns:
+            True if GPUs were released successfully
+        """
         try:
             state = await self.load_state()
             matching_components = {}
 
-            base_name = f"{self.namespace}_{component_name}_"
+            base_name = f"{self.namespace}_{component_name}"
+            base_name_with_underscore = f"{base_name}_"
+
             for watcher_name in state["components"].keys():
-                if watcher_name.startswith(base_name):
+                if watcher_name == base_name:  # Exact match for non-numbered watchers
+                    matching_components[0] = watcher_name
+                elif watcher_name.startswith(base_name_with_underscore):
                     try:
-                        suffix = int(watcher_name.replace(base_name, ""))
+                        suffix = int(
+                            watcher_name.replace(base_name_with_underscore, "")
+                        )
                         matching_components[suffix] = watcher_name
                     except ValueError:
                         continue
@@ -193,15 +206,54 @@ class LocalConnector(PlannerConnector):
             highest_suffix = max(matching_components.keys())
             target_watcher = matching_components[highest_suffix]
 
-            # Use waiting=True to ensure complete removal before proceeding
+            if target_watcher in state["components"]:
+                component_info = state["components"][target_watcher]
+                if "resources" in component_info:
+                    component_info["resources"] = {"allocated_gpus": []}
+                await self.save_state(state)
+                return True
+
+            return False
+
+        except Exception as e:
+            logger.error(f"Failed to release GPUs for {component_name}: {e}")
+            return False
+
+    async def remove_component(self, component_name: str) -> bool:
+        """Remove a component from the planner"""
+        try:
+            state = await self.load_state()
+            matching_components = {}
+
+            base_name = f"{self.namespace}_{component_name}"
+            base_name_with_underscore = f"{base_name}_"
+
+            for watcher_name in state["components"].keys():
+                if watcher_name == base_name:  # Exact match for non-numbered watchers
+                    matching_components[0] = watcher_name
+                elif watcher_name.startswith(base_name_with_underscore):
+                    try:
+                        suffix = int(
+                            watcher_name.replace(base_name_with_underscore, "")
+                        )
+                        matching_components[suffix] = watcher_name
+                    except ValueError:
+                        continue
+
+            if not matching_components:
+                logger.error(f"No matching components found for {component_name}")
+                return False
+
+            highest_suffix = max(matching_components.keys())
+            target_watcher = matching_components[highest_suffix]
+
             success = await self.circus.remove_watcher(
                 name=target_watcher,
             )
 
             if success:
-                if target_watcher in state["components"]:
-                    del state["components"][target_watcher]
-                    await self.save_state(state)
+                # Release any allocated GPUs
+                await self._release_gpus(component_name)
 
             return success
 
