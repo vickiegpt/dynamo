@@ -92,23 +92,16 @@ dynamo-base-docker:
     FROM +rust-base
     WORKDIR /workspace
     COPY Cargo.toml Cargo.lock ./
-    COPY pyproject.toml README.md ./
+    COPY pyproject.toml README.md hatch_build.py ./
     COPY components/ components/
     COPY lib/ lib/
     COPY launch/ launch/
     COPY deploy/ deploy/
-    COPY examples/ examples/
 
     ENV CARGO_TARGET_DIR=/workspace/target
 
     RUN cargo build --release --locked --features mistralrs,sglang,vllm,python && \
         cargo doc --no-deps
-
-    RUN cp target/release/dynamo-run /usr/local/bin/ && \
-        cp target/release/http /usr/local/bin/ && \
-        cp target/release/llmctl /usr/local/bin/ && \
-        cp target/release/metrics /usr/local/bin/ && \
-        cp target/release/mock_worker /usr/local/bin/
 
     RUN mkdir -p /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/ && \
         # Remove existing symlinks
