@@ -1,4 +1,17 @@
-# local_connector.py
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import json
 import logging
@@ -181,22 +194,28 @@ class LocalConnector(PlannerConnector):
             True if GPUs were released successfully
         """
         try:
+            logger.info(f"Attempting to release GPUs for component {component_name}")
             state = await self.load_state()
+            logger.debug(f"Loaded state for namespace {self.namespace}")
             matching_components = {}
 
             base_name = f"{self.namespace}_{component_name}"
             base_name_with_underscore = f"{base_name}_"
+            logger.debug(f"Looking for components matching {base_name} or {base_name_with_underscore}")
 
             for watcher_name in state["components"].keys():
                 if watcher_name == base_name:  # Exact match for non-numbered watchers
+                    logger.debug(f"Found exact match: {watcher_name}")
                     matching_components[0] = watcher_name
                 elif watcher_name.startswith(base_name_with_underscore):
                     try:
                         suffix = int(
                             watcher_name.replace(base_name_with_underscore, "")
                         )
+                        logger.debug(f"Found numbered match: {watcher_name} with suffix {suffix}")
                         matching_components[suffix] = watcher_name
                     except ValueError:
+                        logger.debug(f"Skipping invalid suffix in {watcher_name}")
                         continue
 
             if not matching_components:
@@ -205,14 +224,18 @@ class LocalConnector(PlannerConnector):
 
             highest_suffix = max(matching_components.keys())
             target_watcher = matching_components[highest_suffix]
+            logger.info(f"Selected {target_watcher} for GPU release")
 
             if target_watcher in state["components"]:
                 component_info = state["components"][target_watcher]
                 if "resources" in component_info:
                     component_info["resources"] = {"allocated_gpus": []}
+                    logger.info(f"Cleared GPU allocations for {target_watcher}")
                 await self.save_state(state)
+                logger.info("Successfully saved updated state")
                 return True
 
+            logger.error(f"Target watcher {target_watcher} not found in state components")
             return False
 
         except Exception as e:
@@ -222,22 +245,28 @@ class LocalConnector(PlannerConnector):
     async def remove_component(self, component_name: str) -> bool:
         """Remove a component from the planner"""
         try:
+            logger.info(f"Attempting to remove component {component_name}")
             state = await self.load_state()
+            logger.debug(f"Loaded state for namespace {self.namespace}")
             matching_components = {}
 
             base_name = f"{self.namespace}_{component_name}"
             base_name_with_underscore = f"{base_name}_"
+            logger.debug(f"Looking for components matching {base_name} or {base_name_with_underscore}")
 
             for watcher_name in state["components"].keys():
                 if watcher_name == base_name:  # Exact match for non-numbered watchers
+                    logger.debug(f"Found exact match: {watcher_name}")
                     matching_components[0] = watcher_name
                 elif watcher_name.startswith(base_name_with_underscore):
                     try:
                         suffix = int(
                             watcher_name.replace(base_name_with_underscore, "")
                         )
+                        logger.debug(f"Found numbered match: {watcher_name} with suffix {suffix}")
                         matching_components[suffix] = watcher_name
                     except ValueError:
+                        logger.debug(f"Skipping invalid suffix in {watcher_name}")
                         continue
 
             if not matching_components:
@@ -246,14 +275,18 @@ class LocalConnector(PlannerConnector):
 
             highest_suffix = max(matching_components.keys())
             target_watcher = matching_components[highest_suffix]
+            logger.info(f"Selected {target_watcher} for removal")
 
             success = await self.circus.remove_watcher(
                 name=target_watcher,
             )
+            print("SUCC",success)
+            logger.info(f"Circus remove_watcher for {target_watcher} {'succeeded' if success else 'failed'}")
 
             if success:
-                # Release any allocated GPUs
-                await self._release_gpus(component_name)
+                logger.info(f"Attempting to release GPUs for {component_name}")
+                gpu_release = await self._release_gpus(component_name)
+                logger.info(f"GPU release {'succeeded' if gpu_release else 'failed'}")
 
             return success
 

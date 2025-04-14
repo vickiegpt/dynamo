@@ -1,5 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import argparse
 import asyncio
@@ -55,10 +67,7 @@ async def test_remove_component(
     """Test removing a component."""
     print(f"\n=== Testing Remove Component: {component} ===")
     try:
-        # Get state to find a component to remove
         state = await connector.load_state()
-
-        # Look for VllmWorker components
         base_name = f"{connector.namespace}_{component}_"
 
         # Find all components with numbered suffixes
@@ -72,33 +81,31 @@ async def test_remove_component(
                     continue
 
         if not matching_components:
-            # No numbered components found, check for the base component
             base_component = f"{connector.namespace}_{component}"
             if base_component in state["components"]:
-                print(f"Found base component {base_component} to remove")
                 success = await connector.remove_component(component)
-                print(
-                    f"{'✓' if success else '✗'} Remove {component} {'successful' if success else 'failed'}"
-                )
+                print(f"{'✓' if success else '✗'} Remove {component} {'successful' if success else 'failed'}")
                 return success
             else:
                 print(f"✗ No {component} components found to remove")
                 return False
 
-        # Remove the component with highest suffix
         success = await connector.remove_component(component)
-
-        # Verify removal
-        new_state = await connector.load_state()
-        highest_suffix = max(suffix for suffix, _ in matching_components)
-        removed_component = f"{base_name}{highest_suffix}"
-
-        if success and removed_component not in new_state["components"]:
-            print(f"✓ Successfully removed {removed_component}")
-            return True
-        else:
-            print(f"✗ Failed to remove {removed_component}")
-            return False
+        
+        # New verification logic: check if GPUs were cleared
+        if success:
+            new_state = await connector.load_state()
+            highest_suffix = max(suffix for suffix, _ in matching_components)
+            target_component = f"{base_name}{highest_suffix}"
+            
+            if target_component in new_state["components"]:
+                resources = new_state["components"][target_component].get("resources", {})
+                if not resources.get("allocated_gpus"):
+                    print(f"✓ Successfully removed {target_component} and cleared GPUs")
+                    return True
+            
+        print(f"✗ Failed to remove {component} or clear GPUs")
+        return False
 
     except Exception as e:
         print(f"✗ Remove {component} test failed: {e}")

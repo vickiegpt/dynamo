@@ -130,6 +130,7 @@ class CircusController:
             response = self.client.send_message(
                 "rm", name=name, nostop=nostop, waiting=waiting
             )
+            print("RESPONSE",response)
 
             if response.get("status") != "ok":
                 logger.error(
