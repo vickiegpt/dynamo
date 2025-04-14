@@ -44,7 +44,12 @@ class CircusController:
         Returns:
             CircusController instance
         """
-        state_file = Path(os.environ.get("DYN_LOCAL_STATE_DIR", Path.home() / ".dynamo" / "state")) / f"{namespace}.json"
+        state_file = (
+            Path(
+                os.environ.get("DYN_LOCAL_STATE_DIR", Path.home() / ".dynamo" / "state")
+            )
+            / f"{namespace}.json"
+        )
         if not state_file.exists():
             raise FileNotFoundError(f"State file not found: {state_file}")
 
@@ -141,18 +146,24 @@ class CircusController:
             logger.error(f"Unexpected output format: {output}")
             raise ValueError(f"Unexpected output format: {output}")
 
-    async def add_watcher(self, watcher_name: str, command: str, start: bool = True, env: Optional[Dict[str, str]] = None) -> bool:
+    async def add_watcher(
+        self,
+        watcher_name: str,
+        command: str,
+        start: bool = True,
+        env: Optional[Dict[str, str]] = None,
+    ) -> bool:
         """Add a new watcher to circus."""
         try:
             cmd = ["circusctl", "--endpoint", self.endpoint, "add"]
             if start:
                 cmd.append("--start")
-            
+
             # Quote the entire command as a single string
             cmd.extend([watcher_name, command])
 
             logger.info(f"Adding watcher with command: {' '.join(cmd)}")
-            
+
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,

@@ -38,7 +38,7 @@ class LocalConnector(PlannerConnector):
     async def get_available_gpus(self) -> List[str]
     async def allocate_gpus(self, component_name: str, num_gpus: int) -> List[str]
     async def release_gpus(self, component_name: str) -> bool
-    
+
     # State Management
     async def load_state(self) -> Dict[str, Any]
     async def save_state(self, state: Dict[str, Any]) -> bool

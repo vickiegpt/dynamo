@@ -64,27 +64,27 @@ The current allocation state of resources, including which components are using 
 ```python
 class ComputeGroup:
     """Represents a logical grouping of compute resources"""
-    
+
     @property
     def id(self) -> str:
         """Unique identifier for this compute group"""
-        
+
     @property
     def resources(self) -> Dict[str, Any]:
         """Resources in this compute group (types, quantities)"""
-        
+
     @property
     def topology(self) -> Dict[str, Any]:
         """Topology information for the resources in this group"""
-        
+
     @property
     def utilization(self) -> Dict[str, float]:
         """Current utilization metrics for resources in this group"""
-        
+
     @property
     def allocation_state(self) -> str:
         """Current allocation state (free, allocated, draining, etc.)"""
-        
+
     @property
     def component(self) -> Optional[str]:
         """Component currently using this compute group, if any"""
@@ -92,19 +92,19 @@ class ComputeGroup:
 
 class ComputeNode:
     """Represents a physical or virtual machine with compute resources"""
-    
+
     @property
     def id(self) -> str:
         """Unique identifier for this compute node"""
-        
+
     @property
     def compute_groups(self) -> List[ComputeGroup]:
         """Compute groups available on this node"""
-        
+
     @property
     def resources(self) -> Dict[str, Any]:
         """Total resources available on this node"""
-        
+
     @property
     def utilization(self) -> Dict[str, float]:
         """Current utilization metrics for this node"""
@@ -112,54 +112,54 @@ class ComputeNode:
 
 class ComputeGroupManager:
     """Manages compute groups across the system"""
-    
+
     async def list_compute_nodes(self) -> List[ComputeNode]:
         """List all compute nodes in the system"""
-        
+
     async def list_compute_groups(self, filters: Dict[str, Any] = None) -> List[ComputeGroup]:
         """List compute groups, optionally filtered by criteria"""
-        
+
     async def get_compute_group(self, group_id: str) -> ComputeGroup:
         """Get a specific compute group by ID"""
-        
+
     async def create_compute_group(self, resources: Dict[str, Any], node_id: Optional[str] = None) -> ComputeGroup:
         """Create a new compute group with specified resources"""
-        
+
     async def delete_compute_group(self, group_id: str) -> bool:
         """Delete a compute group"""
-        
-    async def allocate_compute_group(self, component_name: str, resource_requirements: Dict[str, Any], 
+
+    async def allocate_compute_group(self, component_name: str, resource_requirements: Dict[str, Any],
                                      constraints: Dict[str, Any] = None) -> ComputeGroup:
         """Allocate a compute group to a component with specific requirements"""
-        
+
     async def deallocate_compute_group(self, group_id: str) -> bool:
         """Deallocate a compute group, making it available for reallocation"""
-        
+
     async def drain_compute_group(self, group_id: str) -> bool:
         """Mark a compute group as draining, preventing new allocations"""
-        
+
     async def get_allocation_summary(self) -> Dict[str, Any]:
         """Get a summary of current resource allocations"""
-        
+
     async def get_component_allocations(self, component_name: str) -> List[ComputeGroup]:
         """Get all compute groups allocated to a specific component"""
 
 
 class ComputeResourceProvider(ABC):
     """Abstract base class for environment-specific resource providers"""
-    
+
     @abstractmethod
     async def discover_resources(self) -> Dict[str, Any]:
         """Discover available compute resources in the environment"""
-        
+
     @abstractmethod
     async def allocate_resources(self, component_name: str, resources: Dict[str, Any]) -> Dict[str, Any]:
         """Allocate resources to a component"""
-        
+
     @abstractmethod
     async def deallocate_resources(self, component_name: str, resource_ids: List[str]) -> bool:
         """Deallocate resources from a component"""
-        
+
     @abstractmethod
     async def get_resource_state(self) -> Dict[str, Any]:
         """Get current state of all resources"""
@@ -265,4 +265,4 @@ class KubernetesComputeResourceProvider(ComputeResourceProvider):
 3. Component scaling operations handle resource allocation correctly
 4. System recovers gracefully from failures
 5. Resource state is accurately tracked and persisted
-6. Performance overhead of abstraction is minimal 
+6. Performance overhead of abstraction is minimal

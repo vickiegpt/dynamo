@@ -506,7 +506,11 @@ def serve_http(
             components_dict = {
                 watcher.name: {
                     "watcher_name": watcher.name,
-                    "cmd": watcher.cmd + " -m " + " ".join(watcher.args[1:]) # WAR because it combines python-m into 1 word
+                    "cmd": watcher.cmd
+                    + " -m "
+                    + " ".join(
+                        watcher.args[1:]
+                    )  # WAR because it combines python-m into 1 word
                     if hasattr(watcher, "args")
                     else watcher.cmd,
                     "resources": component_resources.get(watcher.name, {}),

@@ -29,9 +29,9 @@ import click
 import uvloop
 
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
+from dynamo.runtime.logging import configure_logger as configure_dynamo_logger
 from dynamo.sdk import dynamo_context
 from dynamo.sdk.lib.service import LinkedServices
-from dynamo.runtime.logging import configure_logger as configure_dynamo_logger
 
 logger = logging.getLogger(__name__)
 configure_dynamo_logger()
