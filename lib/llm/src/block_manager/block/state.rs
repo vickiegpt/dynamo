@@ -1,4 +1,4 @@
-use crate::tokens::{TokenBlock, TokenSequence};
+use crate::{block_manager::events::RegistrationHandle, tokens::{TokenBlock, TokenSequence}};
 
 #[derive(Debug)]
 pub enum BlockState {
@@ -40,14 +40,18 @@ impl BlockState {
 #[derive(Debug)]
 pub struct PartialState {
     pub sequence: TokenSequence,
+    pub salt: u64,
 }
 
 #[derive(Debug)]
 pub struct CompleteState {
     pub token_block: TokenBlock,
+    pub salt: u64,
 }
 
 #[derive(Debug)]
 pub struct RegisteredState {
     pub sequence_hash: u64,
+    pub salt: u64,
+    registration_handle: Arc<RegistrationHandle>,
 }

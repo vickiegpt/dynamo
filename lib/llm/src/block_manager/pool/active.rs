@@ -130,7 +130,10 @@ struct RequestRegister<S: Storage, M: BlockMetadata> {
     resp_tx: oneshot::Sender<ActiveBlock<S, M>>,
 }
 
-async fn progress_engine<S: Storage, M: BlockMetadata>(req_rx: ActiveRequestReceiver<S, M>) {
+async fn progress_engine<S: Storage, M: BlockMetadata>(
+    req_rx: ActiveRequestReceiver<S, M>,
+    event_manager: Arc<dyn EventManager>,
+) {
     let mut req_rx = req_rx;
     let mut active_blocks = HashMap::<SequenceHash, Weak<ActiveBlockInner<S, M>>>::new();
     while let Some(req) = req_rx.recv().await {
@@ -152,9 +155,12 @@ async fn progress_engine<S: Storage, M: BlockMetadata>(req_rx: ActiveRequestRece
                         continue;
                     }
                 }
+
                 // Otherwise, the block is not active, so we insert it into the active blocks map
                 // Note: it might be the case that there is an entry in the map; however, the weak
                 // reference is not alive, so we will replace the entry.
+                let registration_handle
+
                 let block = block.into_shared();
                 let inner = Arc::new(ActiveBlockInner { block, ret_tx });
                 active_blocks.insert(sequence_hash, Arc::downgrade(&inner));
