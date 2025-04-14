@@ -104,20 +104,26 @@ dynamo-base-docker:
     RUN cargo build --release --locked --features mistralrs,sglang,vllm,python && \
         cargo doc --no-deps
 
-    # Create directory structure for Python package
-    RUN mkdir -p /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/ && \
-        # Remove any existing symlinks in the bin directory
-        rm -f /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/* && \
-        # Copy binaries to both locations
-        cp target/release/dynamo-run /usr/local/bin/ && \
+    RUN cp target/release/dynamo-run /usr/local/bin/ && \
         cp target/release/http /usr/local/bin/ && \
         cp target/release/llmctl /usr/local/bin/ && \
         cp target/release/metrics /usr/local/bin/ && \
-        cp target/release/mock_worker /usr/local/bin/ && \
+        cp target/release/mock_worker /usr/local/bin/
+
+    RUN mkdir -p /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/ && \
+        # Remove existing symlinks
+        rm -f /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/* && \
+        # Copy actual binaries
         cp target/release/dynamo-run /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/ && \
         cp target/release/http /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/ && \
         cp target/release/llmctl /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/
 
+    # Install ai-dynamo-runtime first
+    RUN cd lib/bindings/python && \
+        uv pip install . && \
+        cd ../../../
+
+    # Build and install ai-dynamo
     RUN uv build --wheel --out-dir /workspace/dist && \
         uv pip install /workspace/dist/ai_dynamo*any.whl
     SAVE IMAGE --push $CI_REGISTRY_IMAGE/$IMAGE:$CI_COMMIT_SHA
