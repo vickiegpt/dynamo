@@ -13,26 +13,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+
+from circus.client import CircusClient
+from circus.exc import CallError
 
 logger = logging.getLogger(__name__)
 
 
 class CircusController:
-    """Wrapper over circusctl commands to manage Dynamo services."""
+    """Direct connection to circus arbiter for managing watchers"""
 
     def __init__(self, endpoint: str):
-        """Initialize CircusController with circus endpoint.
+        """Initialize connection to arbiter.
 
         Args:
             endpoint: The circus endpoint (e.g., tcp://127.0.0.1:54927)
         """
         self.endpoint = endpoint
+        self.client = CircusClient(endpoint=endpoint, timeout=5.0)
 
     @classmethod
     def from_state_file(cls, namespace: str) -> "CircusController":
@@ -43,6 +45,10 @@ class CircusController:
 
         Returns:
             CircusController instance
+
+        Raises:
+            FileNotFoundError: If state file doesn't exist
+            ValueError: If no endpoint found in state file
         """
         state_file = (
             Path(
@@ -62,145 +68,97 @@ class CircusController:
 
         return cls(endpoint)
 
-    async def list_watchers(self) -> List[str]:
-        """List all watchers (components) managed by circus.
-
-        Returns:
-            List of watcher names
-        """
-        cmd = ["circusctl", "--endpoint", self.endpoint, "list"]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-
-        if proc.returncode != 0:
-            error = stderr.decode().strip()
-            logger.error(f"Failed to list watchers: {error}")
-            raise RuntimeError(f"Failed to list watchers: {error}")
-
-        output = stdout.decode().strip()
-        # Output is comma-separated list
-        return [name.strip() for name in output.split(",") if name.strip()]
-
-    async def get_watcher_info(self, watcher_name: str) -> Dict:
-        """Get detailed information about a watcher.
-
-        Args:
-            watcher_name: Name of the watcher
-
-        Returns:
-            Dictionary containing watcher information
-        """
-        cmd = ["circusctl", "--endpoint", self.endpoint, "stats", watcher_name]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-
-        if proc.returncode != 0:
-            error = stderr.decode().strip()
-            logger.error(f"Failed to get info for {watcher_name}: {error}")
-            raise RuntimeError(f"Failed to get info for {watcher_name}: {error}")
-
-        output = stdout.decode().strip()
-        try:
-            # Try to parse as JSON, but handle possible formatting issues
-            return json.loads(output)
-        except json.JSONDecodeError:
-            # If cannot parse as JSON, return as text
-            return {"output": output}
-
-    async def get_watcher_processes(self, watcher_name: str) -> int:
-        """Get the number of processes for a watcher.
-
-        Args:
-            watcher_name: Name of the watcher
-
-        Returns:
-            Number of processes
-        """
-        cmd = ["circusctl", "--endpoint", self.endpoint, "numprocesses", watcher_name]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-
-        if proc.returncode != 0:
-            error = stderr.decode().strip()
-            logger.error(f"Failed to get process count for {watcher_name}: {error}")
-            raise RuntimeError(
-                f"Failed to get process count for {watcher_name}: {error}"
-            )
-
-        output = stdout.decode().strip()
-        try:
-            return int(output)
-        except ValueError:
-            logger.error(f"Unexpected output format: {output}")
-            raise ValueError(f"Unexpected output format: {output}")
-
     async def add_watcher(
-        self,
-        watcher_name: str,
-        command: str,
-        start: bool = True,
-        env: Optional[Dict[str, str]] = None,
+        self, name: str, cmd: str, env: dict = None, **options
     ) -> bool:
-        """Add a new watcher to circus."""
+        """Add a new watcher to circus.
+
+        Args:
+            name: Name of the watcher
+            cmd: Command to run
+            env: Environment variables
+            **options: Additional watcher options
+        """
         try:
-            cmd = ["circusctl", "--endpoint", self.endpoint, "add"]
-            if start:
-                cmd.append("--start")
+            # Build the watcher options dict
+            watcher_options = {
+                "copy_env": True,
+                "stop_children": True,
+                "graceful_timeout": 86400,
+            }
 
-            # Quote the entire command as a single string
-            cmd.extend([watcher_name, command])
+            # Add env if provided
+            if env:
+                watcher_options["env"] = env
 
-            logger.info(f"Adding watcher with command: {' '.join(cmd)}")
+            # Add any additional options
+            watcher_options.update(options)
 
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            # Format message exactly as AddWatcher command expects
+            response = self.client.send_message(
+                "add",
+                name=name,  # Required property
+                cmd=cmd,  # Required property
+                args=[],  # Optional array of args
+                options=watcher_options,  # Options dict
+                start=True,  # Start immediately
             )
-            stdout, stderr = await proc.communicate()
 
-            if proc.returncode != 0:
-                error = stderr.decode().strip()
-                logger.error(f"Failed to add watcher {watcher_name}: {error}")
-                raise RuntimeError(f"Failed to add watcher {watcher_name}: {error}")
-
+            if response.get("status") != "ok":
+                logger.error(
+                    f"Failed to add watcher {name}: {response.get('reason', 'unknown error')}"
+                )
+                return False
             return True
-        except Exception as e:
-            logger.error(f"Failed to add watcher {watcher_name}: {e}")
-            raise
 
-    async def remove_watcher(self, watcher_name: str) -> bool:
+        except (CallError, Exception) as e:
+            logger.error(f"Failed to add watcher {name}: {e}")
+            return False
+
+    async def remove_watcher(
+        self, name: str, nostop: bool = False, waiting: bool = True
+    ) -> bool:
         """Remove a watcher from circus.
 
         Args:
-            watcher_name: Name of the watcher
-
-        Returns:
-            True if successful
+            name: Name of the watcher
+            nostop: If True, don't stop the processes, just remove the watcher
+            waiting: If True, wait for complete removal before returning
         """
-        cmd = ["circusctl", "--endpoint", self.endpoint, "rm", watcher_name]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
+        try:
+            response = self.client.send_message(
+                "rm", name=name, nostop=nostop, waiting=waiting
+            )
 
-        if proc.returncode != 0:
-            error = stderr.decode().strip()
-            logger.error(f"Failed to remove watcher {watcher_name}: {error}")
-            raise RuntimeError(f"Failed to remove watcher {watcher_name}: {error}")
+            if response.get("status") != "ok":
+                logger.error(
+                    f"Failed to remove watcher {name}: {response.get('reason', 'unknown error')}"
+                )
+                return False
+            return True
+        except (CallError, Exception) as e:
+            logger.error(f"Failed to remove watcher {name}: {e}")
+            return False
 
-        return True
+    async def get_watcher_processes(self, name: str) -> int:
+        """Get number of processes for a watcher."""
+        try:
+            response = self.client.send_message("numprocesses", name=name)
+            return int(response.get("numprocesses", 0))
+        except (CallError, Exception) as e:
+            logger.error(f"Failed to get process count for {name}: {e}")
+            return 0
+
+    async def list_watchers(self) -> list[str]:
+        """List all watchers managed by circus."""
+        try:
+            response = self.client.send_message("list")
+            return response.get("watchers", [])
+        except (CallError, Exception) as e:
+            logger.error(f"Failed to list watchers: {e}")
+            return []
+
+    def close(self):
+        """Close the connection to the arbiter."""
+        if hasattr(self, "client"):
+            self.client.stop()
