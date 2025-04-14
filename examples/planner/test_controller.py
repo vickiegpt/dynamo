@@ -7,10 +7,13 @@ import asyncio
 import json
 import sys
 from pathlib import Path
+from typing import Literal
 
 from circusd import CircusController
 from local_connector import LocalConnector
 
+ComponentType = Literal["VllmWorker", "PrefillWorker"]
+VALID_COMPONENTS = ["VllmWorker", "PrefillWorker"]
 
 async def test_state_management(connector: LocalConnector) -> bool:
     """Test state file operations."""
@@ -29,26 +32,26 @@ async def test_state_management(connector: LocalConnector) -> bool:
         print(f"✗ State management test failed: {e}")
         return False
 
-async def test_add_component(connector: LocalConnector) -> bool:
+async def test_add_component(connector: LocalConnector, component: ComponentType) -> bool:
     """Test adding a component."""
-    print("\n=== Testing Add Component ===")
+    print(f"\n=== Testing Add Component: {component} ===")
     try:
-        component = "VllmWorker"
         success = await connector.add_component(component)
+        print(f"{'✓' if success else '✗'} Add {component} {'successful' if success else 'failed'}")
+        return success
     except Exception as e:
-        print(f"✗ Add component test failed: {e}")
+        print(f"✗ Add {component} test failed: {e}")
         return False
 
-async def test_remove_component(connector: LocalConnector) -> bool:
+async def test_remove_component(connector: LocalConnector, component: ComponentType) -> bool:
     """Test removing a component."""
-    print("\n=== Testing Remove Component ===")
+    print(f"\n=== Testing Remove Component: {component} ===")
     try:
         # Get state to find a component to remove
         state = await connector.load_state()
         
         # Look for VllmWorker components
-        component_type = "VllmWorker"
-        base_name = f"{connector.namespace}_{component_type}_"
+        base_name = f"{connector.namespace}_{component}_"
         
         # Find all components with numbered suffixes
         matching_components = []
@@ -62,18 +65,18 @@ async def test_remove_component(connector: LocalConnector) -> bool:
         
         if not matching_components:
             # No numbered components found, check for the base component
-            base_component = f"{connector.namespace}_{component_type}"
+            base_component = f"{connector.namespace}_{component}"
             if base_component in state["components"]:
                 print(f"Found base component {base_component} to remove")
-                success = await connector.remove_component(component_type)
-                print(f"{'✓' if success else '✗'} Remove component {'successful' if success else 'failed'}")
+                success = await connector.remove_component(component)
+                print(f"{'✓' if success else '✗'} Remove {component} {'successful' if success else 'failed'}")
                 return success
             else:
-                print(f"✗ No {component_type} components found to remove")
+                print(f"✗ No {component} components found to remove")
                 return False
         
         # Remove the component with highest suffix
-        success = await connector.remove_component(component_type)
+        success = await connector.remove_component(component)
         
         # Verify removal
         new_state = await connector.load_state()
@@ -88,16 +91,23 @@ async def test_remove_component(connector: LocalConnector) -> bool:
             return False
             
     except Exception as e:
-        print(f"✗ Remove component test failed: {e}")
+        print(f"✗ Remove {component} test failed: {e}")
         return False
 
 async def main():
     parser = argparse.ArgumentParser(description="Test the LocalConnector")
     parser.add_argument("namespace", help="Dynamo namespace to use")
     parser.add_argument("--test", choices=["state", "add", "remove"], 
-                      default="state", help="Specific test to run")
+                      required=True, help="Specific test to run")
+    parser.add_argument("--component", choices=VALID_COMPONENTS,
+                      help="Component type (required for add/remove operations)")
     
     args = parser.parse_args()
+    
+    # Validate component argument for add/remove operations
+    if args.test in ["add", "remove"]:
+        if not args.component:
+            parser.error(f"--component is required for {args.test} operation")
    
     # Check if namespace state file exists
     state_file = Path.home() / ".dynamo" / "state" / f"{args.namespace}.json"
@@ -108,14 +118,13 @@ async def main():
     connector = LocalConnector(args.namespace)
     
     tests = {
-        "state": test_state_management,
-        "add": test_add_component,
-        "remove": test_remove_component
+        "state": lambda: test_state_management(connector),
+        "add": lambda: test_add_component(connector, args.component),
+        "remove": lambda: test_remove_component(connector, args.component)
     }
 
-    await tests[args.test](connector)
-
-    return 0
+    success = await tests[args.test]()
+    return 0 if success else 1
 
 
 if __name__ == "__main__":

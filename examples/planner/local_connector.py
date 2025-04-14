@@ -159,7 +159,14 @@ class LocalConnector(PlannerConnector):
         """Add a component to the planner"""
         try:
             state = await self.load_state()
-            watcher_name = f"{self.namespace}_{component_name}_{random.randint(0, 10)}"
+            # find max suffix 
+            max_suffix = 0
+            for watcher_name in state["components"].keys():
+                if watcher_name.startswith(f"{self.namespace}_{component_name}_"):
+                    suffix = int(watcher_name.replace(f"{self.namespace}_{component_name}_", ""))
+                    max_suffix = max(max_suffix, suffix)
+
+            watcher_name = f"{self.namespace}_{component_name}_{max_suffix + 1}"
 
             if component_name not in [c.replace(f"{self.namespace}_", "") for c in state["components"]]:
                 raise ValueError(f"Component {component_name} not found in state configuration")
@@ -234,7 +241,7 @@ class LocalConnector(PlannerConnector):
             state = await self.load_state()
             matching_components = {}
 
-            # TODO: assume we cannot remove the min replicas
+            # TODO: assume we cannot remove the min replicas (dynamo_vllmworker or dynamo_prefillworker)
             base_name = f"{self.namespace}_{component_name}_"
             for watcher_name in state["components"].keys():
                 if watcher_name.startswith(base_name):
