@@ -43,8 +43,50 @@ async def test_remove_component(connector: LocalConnector) -> bool:
     """Test removing a component."""
     print("\n=== Testing Remove Component ===")
     try:
-        component = "VllmWorker"
-        success = await connector.remove_component(component)
+        # Get state to find a component to remove
+        state = await connector.load_state()
+        
+        # Look for VllmWorker components
+        component_type = "VllmWorker"
+        base_name = f"{connector.namespace}_{component_type}_"
+        
+        # Find all components with numbered suffixes
+        matching_components = []
+        for watcher_name in state["components"].keys():
+            if watcher_name.startswith(base_name):
+                try:
+                    suffix = int(watcher_name.replace(base_name, ""))
+                    matching_components.append((suffix, watcher_name))
+                except ValueError:
+                    continue
+        
+        if not matching_components:
+            # No numbered components found, check for the base component
+            base_component = f"{connector.namespace}_{component_type}"
+            if base_component in state["components"]:
+                print(f"Found base component {base_component} to remove")
+                success = await connector.remove_component(component_type)
+                print(f"{'✓' if success else '✗'} Remove component {'successful' if success else 'failed'}")
+                return success
+            else:
+                print(f"✗ No {component_type} components found to remove")
+                return False
+        
+        # Remove the component with highest suffix
+        success = await connector.remove_component(component_type)
+        
+        # Verify removal
+        new_state = await connector.load_state()
+        highest_suffix = max(suffix for suffix, _ in matching_components)
+        removed_component = f"{base_name}{highest_suffix}"
+        
+        if success and removed_component not in new_state["components"]:
+            print(f"✓ Successfully removed {removed_component}")
+            return True
+        else:
+            print(f"✗ Failed to remove {removed_component}")
+            return False
+            
     except Exception as e:
         print(f"✗ Remove component test failed: {e}")
         return False
@@ -56,7 +98,7 @@ async def main():
                       default="state", help="Specific test to run")
     
     args = parser.parse_args()
-    
+   
     # Check if namespace state file exists
     state_file = Path.home() / ".dynamo" / "state" / f"{args.namespace}.json"
     if not state_file.exists():

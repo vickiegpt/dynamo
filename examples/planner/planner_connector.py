@@ -32,13 +32,3 @@ class PlannerConnector(ABC):
     async def remove_component(self, component_name):
         """Remove a component from the planner"""
         pass
-
-    @abstractmethod
-    async def get_resource_usage(self, component_name):
-        """Get resource usage for a component"""
-        pass
-
-    @abstractmethod
-    async def get_system_topology(self):
-        """Get system topology (components and their relationships)"""
-        pass

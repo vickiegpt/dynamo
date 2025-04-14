@@ -182,12 +182,6 @@ class LocalConnector(PlannerConnector):
                 
                 gpu_id = available_gpus[0]
                 worker_env["CUDA_VISIBLE_DEVICES"] = gpu_id
-                
-                # Update state with GPU allocation
-                if "resources" not in component_info:
-                    component_info["resources"] = {}
-                component_info["resources"]["allocated_gpus"] = [gpu_id]
-                await self.save_state(state)
 
             # Add service config to worker env
             worker_env["DYNAMO_SERVICE_CONFIG"] = service_config
@@ -201,11 +195,32 @@ class LocalConnector(PlannerConnector):
             
             logger.info(f"Full command: {full_cmd}")
 
-            return await self.circus.add_watcher(
+            # Add the watcher
+            success = await self.circus.add_watcher(
                 watcher_name=watcher_name,
                 command=full_cmd,
                 start=True
             )
+            
+            # If watcher was added successfully, update the state file
+            if success:
+                # Update state with new component and GPU allocation if applicable
+                resources = {}
+                if component_name in ["VllmWorker", "PrefillWorker"]:
+                    resources["allocated_gpus"] = [gpu_id]
+                
+                # Add the new component to state
+                state["components"][watcher_name] = {
+                    "watcher_name": watcher_name,
+                    "cmd": full_cmd,
+                    "resources": resources
+                }
+                
+                # Save updated state
+                await self.save_state(state)
+                logger.info(f"Updated state file with new component: {watcher_name}")
+                
+            return success
 
         except Exception as e:
             logger.error(f"Failed to add component {component_name}: {e}")
@@ -216,64 +231,51 @@ class LocalConnector(PlannerConnector):
     async def remove_component(self, component_name: str) -> bool:
         """Remove a component from the planner"""
         try:
-            return await self.circus.remove_watcher(component_name)
+            state = await self.load_state()
+            matching_components = {}
+
+            # TODO: assume we cannot remove the min replicas
+            base_name = f"{self.namespace}_{component_name}_"
+            for watcher_name in state["components"].keys():
+                if watcher_name.startswith(base_name):
+                    try:
+                        suffix = int(watcher_name.replace(base_name, ""))
+                        matching_components[suffix] = watcher_name
+                    except ValueError:
+                        # note a numeric suffix - skip
+                        continue
+
+            # Remove the component with the highest suffix
+            if not matching_components:
+                logger.error(f"No matching components found for {component_name}")
+                return False
+            
+            # get highest suffix
+            highest_suffix = max(matching_components.keys())
+            target_watcher = matching_components[highest_suffix]
+
+            logger.info(f"Removing component {target_watcher}")
+
+            # check gpu allocation and release if needed
+            component_info = state["components"].get(target_watcher, {})
+            resources = component_info.get("resources", {})
+            has_gpu_allocation = resources.get("allocated_gpus", [])
+
+            success = await self.circus.remove_watcher(target_watcher)
+
+            if success: 
+                if target_watcher in state["components"]:
+                    del state["components"][target_watcher]
+                    logger.info(f"Removed component {target_watcher} from state")
+
+                    # save updated state
+                    await self.save_state(state)
+                    logger.info(f"Updated state file with removed component: {target_watcher}")
+                else:
+                    logger.warning(f"Component {target_watcher} not found in state")
+
+            return success
         except Exception as e:
             logger.error(f"Failed to remove component {component_name}: {e}")
             return False
-
-    async def get_resource_usage(self, component_name: str) -> Dict[str, Any]:
-        """Get resource usage for a component.
-
-        Args:
-            component_name: Name of the component
-
-        Returns:
-            Dictionary with resource usage metrics
-        """
-        # Normalize component name to match circus watcher format
-        watcher_name = f"{self.namespace}_{component_name}"
-
-        try:
-            stats = await self.circus.get_watcher_info(watcher_name)
-            return {
-                "cpu": stats.get("cpu", 0),
-                "memory": stats.get("mem", 0),
-                "processes": await self.get_component_replicas(component_name),
-                "status": "running"
-                if await self.get_component_replicas(component_name) > 0
-                else "stopped",
-            }
-        except Exception as e:
-            logger.error(f"Failed to get resource usage for {component_name}: {e}")
-            return {"cpu": 0, "memory": 0, "processes": 0, "status": "unknown"}
-
-    async def get_system_topology(self) -> Dict[str, Any]:
-        """Get system topology information.
-
-        Returns:
-            Dictionary with topology information
-        """
-        try:
-            state = await self.load_state()
-            watchers = await self.circus.list_watchers()
-
-            # Filter for dynamo components
-            components = [w for w in watchers if w.startswith(f"{self.namespace}_")]
-
-            topology = {"namespace": self.namespace, "components": {}}
-
-            for component in components:
-                # Strip the namespace prefix
-                name = component.replace(f"{self.namespace}_", "", 1)
-                replicas = await self.circus.get_watcher_processes(component)
-                resources = await self.get_resource_usage(name)
-
-                topology["components"][name] = {
-                    "replicas": replicas,
-                    "resources": resources,
-                }
-
-            return topology
-        except Exception as e:
-            logger.error(f"Failed to get system topology: {e}")
-            return {"namespace": self.namespace, "components": {}}
+                    
