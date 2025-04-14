@@ -119,12 +119,13 @@ dynamo-base-docker:
         cp target/release/llmctl /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/
 
     # Install ai-dynamo-runtime first
-    RUN cd lib/bindings/python && \
-        uv pip install . && \
-        cd ../../../
+    RUN cd /workspace/lib/bindings/python && \
+        uv build --wheel --out-dir /workspace/dist --python 3.12 && \
+        uv pip install /workspace/dist/ai_dynamo_runtime*cp312*.whl
 
     # Build and install ai-dynamo
-    RUN uv build --wheel --out-dir /workspace/dist && \
+    RUN cd /workspace && \
+        uv build --wheel --out-dir /workspace/dist && \
         uv pip install /workspace/dist/ai_dynamo*any.whl
     SAVE IMAGE --push $CI_REGISTRY_IMAGE/$IMAGE:$CI_COMMIT_SHA
 
