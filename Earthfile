@@ -100,16 +100,16 @@ dynamo-base-docker:
 
     ENV CARGO_TARGET_DIR=/workspace/target
 
-    RUN cargo build --release --locked --features mistralrs,sglang,vllm,python && \
+    RUN cargo build --release --locked && \
         cargo doc --no-deps
 
     RUN mkdir -p /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/ && \
         # Remove existing symlinks
         rm -f /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/* && \
-        # Copy actual binaries
-        cp target/release/dynamo-run /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/ && \
-        cp target/release/http /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/ && \
-        cp target/release/llmctl /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/
+        # Create new symlinks pointing to the correct location
+        ln -sf /workspace/target/release/dynamo-run /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/dynamo-run && \
+        ln -sf /workspace/target/release/http /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/http && \
+        ln -sf /workspace/target/release/llmctl /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/llmctl
 
     # Install ai-dynamo-runtime first
     RUN cd /workspace/lib/bindings/python && \
