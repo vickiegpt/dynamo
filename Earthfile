@@ -85,10 +85,7 @@ rust-base:
         rm rustup-init && \
         chmod -R a+w $RUSTUP_HOME $CARGO_HOME
 
-dynamo-base-docker:
-    ARG IMAGE=dynamo-base-docker
-    ARG CI_REGISTRY_IMAGE=my-registry
-    ARG CI_COMMIT_SHA=latest
+dynamo-build:
     FROM +rust-base
     WORKDIR /workspace
     COPY Cargo.toml Cargo.lock ./
@@ -99,10 +96,10 @@ dynamo-base-docker:
     COPY deploy/ deploy/
 
     ENV CARGO_TARGET_DIR=/workspace/target
-
     RUN cargo build --release --locked && \
         cargo doc --no-deps
 
+    # Create symlinks for wheel building
     RUN mkdir -p /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/ && \
         # Remove existing symlinks
         rm -f /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/* && \
@@ -111,18 +108,50 @@ dynamo-base-docker:
         ln -sf /workspace/target/release/http /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/http && \
         ln -sf /workspace/target/release/llmctl /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin/llmctl
 
-    # Install ai-dynamo-runtime first
+
     RUN cd /workspace/lib/bindings/python && \
-        uv build --wheel --out-dir /workspace/dist --python 3.12 && \
-        uv pip install /workspace/dist/ai_dynamo_runtime*cp312*.whl
-
-    # Build and install ai-dynamo
+        uv build --wheel --out-dir /workspace/dist --python 3.12
     RUN cd /workspace && \
-        uv build --wheel --out-dir /workspace/dist && \
-        uv pip install /workspace/dist/ai_dynamo*any.whl
+        uv build --wheel --out-dir /workspace/dist
+
+    # Save wheels
+    SAVE ARTIFACT /workspace/dist/ai_dynamo_runtime*.whl
+    SAVE ARTIFACT /workspace/dist/ai_dynamo*.whl
+
+dynamo-base-docker:
+    ARG IMAGE=dynamo-base-docker
+    ARG CI_REGISTRY_IMAGE=my-registry
+    ARG CI_COMMIT_SHA=latest
+
+    FROM ubuntu:24.04
+    WORKDIR /workspace
+
+    # Install Python and other dependencies
+    RUN apt-get update && \
+        apt-get install -y --no-install-recommends \
+        python3.12 \
+        curl && \
+        rm -rf /var/lib/apt/lists/*
+
+    COPY +uv-source/uv /bin/uv
+
+    # Create and activate virtual environment
+    RUN mkdir -p /opt/dynamo && \
+        uv venv /opt/dynamo/venv --python 3.12 && \
+        . /opt/dynamo/venv/bin/activate && \
+        uv pip install pip
+
+    ENV VIRTUAL_ENV=/opt/dynamo/venv
+    ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+
+    # Copy and install wheels -- ai-dynamo-runtime first, then ai-dynamo
+    COPY +dynamo-build/ai_dynamo_runtime*.whl /tmp/wheels/
+    COPY +dynamo-build/ai_dynamo*.whl /tmp/wheels/
+    RUN . /opt/dynamo/venv/bin/activate && \
+        uv pip install /tmp/wheels/*.whl && \
+        rm -rf /tmp/wheels
+
     SAVE IMAGE --push $CI_REGISTRY_IMAGE/$IMAGE:$CI_COMMIT_SHA
-
-
 
 ############### ALL TARGETS ##############################
 all-test:
