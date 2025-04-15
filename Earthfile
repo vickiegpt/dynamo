@@ -72,6 +72,22 @@ rust-base:
         libclang-dev \
         git
 
+    RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
+        apt install -y ./cuda-keyring_1.1-1_all.deb && \
+        apt update && \
+        apt install -y cuda-toolkit nvidia-utils-535 nvidia-driver-535 && \
+        rm cuda-keyring_1.1-1_all.deb
+
+    # Set CUDA compute capability explicitly
+    ENV CUDA_COMPUTE_CAP=80
+
+    ENV CUDA_HOME=/usr/local/cuda
+    ENV CUDA_ROOT=/usr/local/cuda
+    ENV CUDA_PATH=/usr/local/cuda
+    ENV CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda
+    ENV PATH=$CUDA_HOME/bin:$PATH
+    ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+
     ENV RUSTUP_HOME=/usr/local/rustup
     ENV CARGO_HOME=/usr/local/cargo
     ENV PATH=/usr/local/cargo/bin:$PATH
@@ -96,7 +112,7 @@ dynamo-build:
     COPY deploy/ deploy/
 
     ENV CARGO_TARGET_DIR=/workspace/target
-    RUN cargo build --release --locked && \
+    RUN cargo build --release --locked --features llamacpp,python,cuda && \
         cargo doc --no-deps
 
     # Create symlinks for wheel building
