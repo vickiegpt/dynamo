@@ -30,15 +30,17 @@ from dynamo.llm import KvMetricsAggregator
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 from dynamo.runtime.logging import configure_logger
 
-configure_logger()
-logger = logging.getLogger(__name__)
+from utils.planner_utils.local_connector import LocalConnector
 
+logger = logging.getLogger(__name__)
+configure_logger()
 
 class Planner:
     def __init__(self, runtime: DistributedRuntime, args: argparse.Namespace):
         self.runtime = runtime
         self.args = args
         self.namespace = args.namespace
+        self.connector = LocalConnector(args.namespace, runtime)
 
         self._prefill_queue_nats_server = os.getenv(
             "NATS_SERVER", "nats://localhost:4222"
@@ -160,8 +162,11 @@ class Planner:
             logger.info(
                 f"Average prefill queue load ({avg_prefill_queue_load:.2f}) is below threshold ({self.args.prefill_queue_scale_down_threshold:.2f}), scaling down prefill workers"
             )
-            # TODO: scale down one prefill worker
-            curr_gpu_usage -= self.args.prefill_engine_num_gpu
+            success = await self.connector.remove_component("PrefillWorker")
+            if success:
+                curr_gpu_usage -= self.args.prefill_engine_num_gpu
+            else:
+                logger.error("Failed to scale down prefill worker")
         elif (
             avg_prefill_queue_load > self.args.prefill_queue_scale_up_threshold
             and curr_gpu_usage + self.args.prefill_engine_num_gpu
@@ -170,8 +175,11 @@ class Planner:
             logger.info(
                 f"Average prefill queue load ({avg_prefill_queue_load:.2f}) is above threshold ({self.args.prefill_queue_scale_up_threshold:.2f}), scaling up prefill workers"
             )
-            # TODO: scale up one prefill worker
-            curr_gpu_usage += self.args.prefill_engine_num_gpu
+            success = await self.connector.add_component("PrefillWorker")
+            if success:
+                curr_gpu_usage += self.args.prefill_engine_num_gpu
+            else:
+                logger.error("Failed to scale up prefill worker")
         else:
             logger.info(
                 f"prefill queue load ({avg_prefill_queue_load:.2f}) is within threshold, no prefill worker scaling needed"
@@ -186,8 +194,11 @@ class Planner:
             logger.info(
                 f"Average kv load ({avg_kv_load:.2f}) is below threshold ({self.args.decode_kv_scale_down_threshold:.2f}), scaling down decode workers"
             )
-            # TODO: scale down one decode worker
-            curr_gpu_usage -= self.args.decode_engine_num_gpu
+            success = await self.connector.remove_component("VllmWorker")
+            if success:
+                curr_gpu_usage -= self.args.decode_engine_num_gpu
+            else:
+                logger.error("Failed to scale down decode worker")
         elif (
             avg_kv_load > self.args.decode_kv_scale_up_threshold
             and curr_gpu_usage + self.args.decode_engine_num_gpu
@@ -196,8 +207,11 @@ class Planner:
             logger.info(
                 f"Average kv load ({avg_kv_load:.2f}) is above threshold ({self.args.decode_kv_scale_up_threshold:.2f}), scaling up decode workers"
             )
-            # TODO: scale up one decode worker
-            curr_gpu_usage += self.args.decode_engine_num_gpu
+            success = await self.connector.add_component("VllmWorker")
+            if success:
+                curr_gpu_usage += self.args.decode_engine_num_gpu
+            else:
+                logger.error("Failed to scale up decode worker")
         else:
             logger.info(
                 f"kv load ({avg_kv_load:.2f}) is within threshold, no decode worker scaling needed"

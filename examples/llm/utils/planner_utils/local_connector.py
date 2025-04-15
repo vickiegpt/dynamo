@@ -19,8 +19,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from circusd import CircusController
-from planner_connector import PlannerConnector
+from .circusd import CircusController
+from .planner_connector import PlannerConnector
 
 from dynamo.runtime import DistributedRuntime
 from dynamo.runtime.logging import configure_logger
