@@ -24,7 +24,7 @@ impl<S: Storage, M: BlockMetadata> ActiveBlockPool<S, M> {
     pub async fn new() -> Self {
         let (req_tx, req_rx) = mpsc::unbounded_channel();
 
-        let _ = tokio::spawn(progress_engine(req_rx));
+        // let _ = tokio::spawn(progress_engine(req_rx));
 
         Self { req_tx }
     }
@@ -130,76 +130,76 @@ struct RequestRegister<S: Storage, M: BlockMetadata> {
     resp_tx: oneshot::Sender<ActiveBlock<S, M>>,
 }
 
-async fn progress_engine<S: Storage, M: BlockMetadata>(
-    req_rx: ActiveRequestReceiver<S, M>,
-    event_manager: Arc<dyn EventManager>,
-) {
-    let mut req_rx = req_rx;
-    let mut active_blocks = HashMap::<SequenceHash, Weak<ActiveBlockInner<S, M>>>::new();
-    while let Some(req) = req_rx.recv().await {
-        match req {
-            RequestType::Register(block) => {
-                let (block, ret_tx, resp_tx) = block.dissolve();
-                let sequence_hash = block.sequence_hash().expect("Block is not complete");
+// async fn progress_engine<S: Storage, M: BlockMetadata>(
+//     req_rx: ActiveRequestReceiver<S, M>,
+//     event_manager: Arc<dyn EventManager>,
+// ) {
+//     let mut req_rx = req_rx;
+//     let mut active_blocks = HashMap::<SequenceHash, Weak<ActiveBlockInner<S, M>>>::new();
+//     while let Some(req) = req_rx.recv().await {
+//         match req {
+//             RequestType::Register(block) => {
+//                 let (block, ret_tx, resp_tx) = block.dissolve();
+//                 let sequence_hash = block.sequence_hash().expect("Block is not complete");
 
-                if let Some(weak) = active_blocks.get(&sequence_hash) {
-                    // If the block is already registered AND it is still active, then return the active block
-                    // which is different from the one we are registering. The one we are registered is dropped
-                    // and returned to the pool.
-                    if let Some(block) = weak.upgrade() {
-                        // Create a new ActiveBlock from the inner block
-                        let block = ActiveBlock { inner: block };
-                        if let Err(e) = resp_tx.send(block) {
-                            tracing::warn!("Failed to complete registration; the requesting task dropped the response channel");
-                        }
-                        continue;
-                    }
-                }
+//                 if let Some(weak) = active_blocks.get(&sequence_hash) {
+//                     // If the block is already registered AND it is still active, then return the active block
+//                     // which is different from the one we are registering. The one we are registered is dropped
+//                     // and returned to the pool.
+//                     if let Some(block) = weak.upgrade() {
+//                         // Create a new ActiveBlock from the inner block
+//                         let block = ActiveBlock { inner: block };
+//                         if let Err(e) = resp_tx.send(block) {
+//                             tracing::warn!("Failed to complete registration; the requesting task dropped the response channel");
+//                         }
+//                         continue;
+//                     }
+//                 }
 
-                // Otherwise, the block is not active, so we insert it into the active blocks map
-                // Note: it might be the case that there is an entry in the map; however, the weak
-                // reference is not alive, so we will replace the entry.
-                let registration_handle
+//                 // Otherwise, the block is not active, so we insert it into the active blocks map
+//                 // Note: it might be the case that there is an entry in the map; however, the weak
+//                 // reference is not alive, so we will replace the entry.
+//                 let registration_handle
 
-                let block = block.into_shared();
-                let inner = Arc::new(ActiveBlockInner { block, ret_tx });
-                active_blocks.insert(sequence_hash, Arc::downgrade(&inner));
-                let active_block = ActiveBlock { inner };
-                if let Err(e) = resp_tx.send(active_block) {
-                    tracing::warn!("Failed to complete registration; the requesting task dropped the response channel");
-                }
-            }
-            RequestType::Match(hashes) => {
-                let (hashes, resp_tx) = hashes.dissolve();
-                let mut inner_blocks = Vec::new();
-                for hash in hashes {
-                    if let Some(weak) = active_blocks.get(&hash) {
-                        if let Some(block) = weak.upgrade() {
-                            inner_blocks.push(block);
-                            continue;
-                        }
-                    }
-                    break;
-                }
-                let active_blocks = inner_blocks
-                    .into_iter()
-                    .map(|block| ActiveBlock { inner: block })
-                    .collect();
-                if resp_tx.send(active_blocks).is_err() {
-                    tracing::warn!("Failed to complete match; the requesting task dropped the response channel");
-                }
-            }
-            RequestType::Drop(block) => {
-                // A block entry is expected, but if the weak reference is alive, then a registration event
-                // has occurred before the drop event was processed — if this is the case, we simply continue.
-                if let Some(weak) = active_blocks.get(&block) {
-                    if let Some(_block) = weak.upgrade() {
-                        continue;
-                    }
-                }
-                // Otherwise, the block is not active, so we remove it from the active blocks map
-                active_blocks.remove(&block);
-            }
-        }
-    }
+//                 let block = block.into_shared();
+//                 let inner = Arc::new(ActiveBlockInner { block, ret_tx });
+//                 active_blocks.insert(sequence_hash, Arc::downgrade(&inner));
+//                 let active_block = ActiveBlock { inner };
+//                 if let Err(e) = resp_tx.send(active_block) {
+//                     tracing::warn!("Failed to complete registration; the requesting task dropped the response channel");
+//                 }
+//             }
+//             RequestType::Match(hashes) => {
+//                 let (hashes, resp_tx) = hashes.dissolve();
+//                 let mut inner_blocks = Vec::new();
+//                 for hash in hashes {
+//                     if let Some(weak) = active_blocks.get(&hash) {
+//                         if let Some(block) = weak.upgrade() {
+//                             inner_blocks.push(block);
+//                             continue;
+//                         }
+//                     }
+//                     break;
+//                 }
+//                 let active_blocks = inner_blocks
+//                     .into_iter()
+//                     .map(|block| ActiveBlock { inner: block })
+//                     .collect();
+//                 if resp_tx.send(active_blocks).is_err() {
+//                     tracing::warn!("Failed to complete match; the requesting task dropped the response channel");
+//                 }
+//             }
+//             RequestType::Drop(block) => {
+//                 // A block entry is expected, but if the weak reference is alive, then a registration event
+//                 // has occurred before the drop event was processed — if this is the case, we simply continue.
+//                 if let Some(weak) = active_blocks.get(&block) {
+//                     if let Some(_block) = weak.upgrade() {
+//                         continue;
+//                     }
+//                 }
+//                 // Otherwise, the block is not active, so we remove it from the active blocks map
+//                 active_blocks.remove(&block);
+//             }
+//         }
+//     }
 }

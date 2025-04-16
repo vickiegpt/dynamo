@@ -8,6 +8,8 @@ pub enum BlockState {
     Registered(RegisteredState),
 }
 
+pub type Salt = Vec<u8>;
+
 impl BlockState {
     // pub fn push_token(&mut self, token: Token) -> Result<(), Token> {
     //     match self {
@@ -40,14 +42,17 @@ impl BlockState {
 #[derive(Debug)]
 pub struct PartialState {
     pub sequence: TokenSequence,
-    pub salt: u64,
+    pub salt: Salt,
 }
 
 #[derive(Debug)]
 pub struct CompleteState {
     pub token_block: TokenBlock,
-    pub salt: u64,
+    pub salt: Salt,
 }
+
+impl CompleteState {
+    pub fn new(token_block: TokenBlock, salt: u64) -> Self {
 
 #[derive(Debug)]
 pub struct RegisteredState {

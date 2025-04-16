@@ -61,7 +61,7 @@ use tokio_util::sync::CancellationToken;
 use tracing as log;
 use xxhash_rust::xxh3;
 
-pub const XXH3_SEED: u64 = 1337;
+pub(crate) const XXH3_SEED: u64 = 1337;
 
 use crate::kv_router::protocols::*;
 
@@ -84,8 +84,15 @@ pub type WorkerId = i64;
 /// A shared reference to a [`RadixBlock`].
 type SharedRadixBlock = Rc<RefCell<RadixBlock>>;
 
-pub fn compute_hash(data: &[u8]) -> u64 {
-    xxh3::xxh3_64_with_seed(data, XXH3_SEED)
+/// Computes a hash of the data using the given seed.
+#[deprecated(since = "0.1.0", note = "Use `compute_hash_v2` instead")]
+pub fn compute_hash(data: &[u8], seed: Option<u64>) -> u64 {
+    xxh3::xxh3_64_with_seed(data, seed.unwrap_or(XXH3_SEED))
+}
+
+/// Computes a hash of the data using the given seed.
+pub fn compute_hash_v2(data: &[u8], seed: u64) -> u64 {
+    xxh3::xxh3_64_with_seed(data, seed)
 }
 
 /// Compute the hash of a local block.
@@ -98,7 +105,7 @@ pub fn compute_hash(data: &[u8]) -> u64 {
 ///
 /// A `LocalBlockHash` representing the computed hash.
 pub fn compute_block_hash(data: &[u8]) -> LocalBlockHash {
-    LocalBlockHash(compute_hash(data))
+    LocalBlockHash(compute_hash(data, None))
 }
 
 // /// Updated version of the `compute_block_hash` function that included the lora_id

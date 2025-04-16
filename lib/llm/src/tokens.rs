@@ -13,19 +13,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::kv_router::indexer::compute_hash;
+use crate::kv_router::indexer::compute_hash_v2;
 use bytemuck::cast_slice;
 use derive_getters::{Dissolve, Getters};
 use rayon::prelude::*;
 
+/// A token is a 32-bit unsigned integer.
 pub type Token = u32;
 
-/// A hash of the only the tokens within a block computed from [compute_hash].
+/// A salt is a vector of bytes.
+pub type Salt = Vec<u8>;
+
+/// A hash of the salt computed from [compute_hash_v2] with a seed of 0.
+pub type SaltHash = u64;
+
+/// A hash of the only the tokens within a block computed from [compute_hash_v2] using the salt hash as the seed.
 pub type BlockHash = u64;
 
 /// A sequence aware hash that combines the previous block's sequence hash with the current block's hash.
 pub type SequenceHash = u64;
 
+/// A collection of tokens.
 #[derive(Debug, Clone, Dissolve, Default)]
 pub struct Tokens(Vec<Token>);
 
@@ -80,8 +88,12 @@ impl From<Tokens> for Vec<Token> {
 }
 
 impl Tokens {
-    pub fn into_sequence(self, block_size: usize) -> TokenSequence {
-        TokenSequence::new(self, block_size)
+    pub fn into_sequence(
+        self,
+        block_size: usize,
+        salt_hash: Option<SaltHash>,
+    ) -> TokenBlockSequence {
+        TokenBlockSequence::new(self, block_size, salt_hash)
     }
 }
 
@@ -89,6 +101,7 @@ impl Tokens {
 pub struct PartialTokenBlock {
     tokens: Tokens,
     block_size: usize,
+    salt_hash: SaltHash,
     parent_sequence_hash: Option<SequenceHash>,
 }
 
@@ -99,21 +112,14 @@ impl PartialTokenBlock {
         assert!(self.tokens.0.len() < self.block_size);
         self.tokens.0.push(token);
         if self.tokens.0.len() == self.block_size {
-            let block = std::mem::take(&mut self.tokens);
-            let block_hash = compute_hash(cast_slice(&block));
+            let tokens = std::mem::take(&mut self.tokens);
+            let chunk = TokenBlockChunk::new(tokens, self.salt_hash);
+            let block = TokenBlock::from_chunk(chunk, self.parent_sequence_hash);
 
-            let sequence_hash = match self.parent_sequence_hash {
-                None => block_hash,
-                Some(parent_sequence_hash) => {
-                    compute_hash(bytemuck::cast_slice(&[block_hash, parent_sequence_hash]))
-                }
-            };
-            Some(TokenBlock {
-                tokens: block,
-                sequence_hash,
-                block_hash,
-                parent_sequence_hash: self.parent_sequence_hash,
-            })
+            // Update the parent sequence hash for the next block
+            self.parent_sequence_hash = Some(block.sequence_hash());
+
+            Some(block)
         } else {
             None
         }
@@ -132,9 +138,41 @@ impl std::ops::Deref for PartialTokenBlock {
     }
 }
 
+/// This is an intermediate structure used to compute the hash of a block.
+/// It is used to compute the chunks independently and possibly in parallel; however, does not
+/// provide the sequence hash.
+struct TokenBlockChunk {
+    tokens: Tokens,
+    salt_hash: SaltHash,
+    block_hash: BlockHash,
+}
+
+impl TokenBlockChunk {
+    fn new(tokens: Tokens, salt_hash: SaltHash) -> Self {
+        let block_hash = compute_hash_v2(cast_slice(&tokens), salt_hash);
+        Self {
+            tokens,
+            salt_hash,
+            block_hash,
+        }
+    }
+
+    fn from_tokens(tokens: &[Token], salt_hash: SaltHash) -> Self {
+        let block_hash = compute_hash_v2(cast_slice(tokens), salt_hash);
+        Self {
+            tokens: tokens.into(),
+            salt_hash,
+            block_hash,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Getters, Default)]
 pub struct TokenBlock {
     tokens: Tokens,
+
+    #[getter(copy)]
+    salt_hash: u64,
 
     #[getter(copy)]
     block_hash: BlockHash,
@@ -146,19 +184,61 @@ pub struct TokenBlock {
     parent_sequence_hash: Option<SequenceHash>,
 }
 
-#[derive(Debug)]
-pub struct TokenSequence {
-    blocks: Vec<TokenBlock>,
-    current_block: PartialTokenBlock,
+impl TokenBlock {
+    fn from_chunk(chunk: TokenBlockChunk, parent_sequence_hash: Option<SequenceHash>) -> Self {
+        match parent_sequence_hash {
+            Some(parent) => {
+                let sequence_hash = compute_hash_v2(
+                    bytemuck::cast_slice(&[parent, chunk.block_hash]),
+                    chunk.salt_hash,
+                );
+                Self {
+                    tokens: chunk.tokens,
+                    salt_hash: chunk.salt_hash,
+                    block_hash: chunk.block_hash,
+                    sequence_hash,
+                    parent_sequence_hash: Some(parent),
+                }
+            }
+            None => Self {
+                tokens: chunk.tokens,
+                salt_hash: chunk.salt_hash,
+                block_hash: chunk.block_hash,
+                sequence_hash: chunk.block_hash,
+                parent_sequence_hash: None,
+            },
+        }
+    }
 }
 
-impl TokenSequence {
-    pub fn new(tokens: Tokens, block_size: usize) -> Self {
-        let (blocks, current_block) = Self::split_tokens(tokens, block_size);
+/// Structure that holds a sequence of tokens broken into blocks where the blocks are hashed.
+///
+/// There are two critical hashes:
+/// - `block_hash`: a hash computed from only the local tokens within the block seeding the hashing function with the `salt_hash`
+/// - `sequence_hash`: a hash computed from the previous block's `sequence_hash` and the current block's `block_hash` using the `salt_hash` as the seed
+///
+/// This object introduces the concept of a salt hash which is used to provide a seed for the hash function.
+///
+/// NOTE: The primary motivation for the `salt_hash` is to differentiate a sequence of tokens that from each other
+/// when the list of tokens is identical, but the underlying representation is different. Examples: a sequence of
+/// tokens from a different model or with a different lora applied to the weights
+///
+#[derive(Debug)]
+pub struct TokenBlockSequence {
+    blocks: Vec<TokenBlock>,
+    current_block: PartialTokenBlock,
+    salt_hash: SaltHash,
+}
+
+impl TokenBlockSequence {
+    pub fn new(tokens: Tokens, block_size: usize, salt_hash: Option<SaltHash>) -> Self {
+        let salt_hash = salt_hash.unwrap_or(0);
+        let (blocks, current_block) = Self::split_tokens(tokens, block_size, salt_hash);
 
         Self {
             blocks,
             current_block,
+            salt_hash,
         }
     }
 
@@ -187,39 +267,46 @@ impl TokenSequence {
         (self.blocks, self.current_block)
     }
 
-    pub fn split_tokens(tokens: Tokens, block_size: usize) -> (Vec<TokenBlock>, PartialTokenBlock) {
-        // Use rayon's parallel iterator to process chunks in parallel
-        let mut blocks: Vec<TokenBlock> = tokens
+    /// Get the salt for the sequence
+    pub fn salt_hash(&self) -> SaltHash {
+        self.salt_hash
+    }
+
+    pub fn split_tokens(
+        tokens: Tokens,
+        block_size: usize,
+        salt_hash: u64,
+    ) -> (Vec<TokenBlock>, PartialTokenBlock) {
+        let chunks: Vec<TokenBlockChunk> = tokens
+            .as_ref()
             .par_chunks_exact(block_size)
-            .map(|chunk| TokenBlock {
-                tokens: chunk.to_vec().into(),
-                sequence_hash: 0,
-                block_hash: compute_hash(cast_slice(chunk)),
-                parent_sequence_hash: None,
-            })
+            .map(|chunk| TokenBlockChunk::from_tokens(chunk, salt_hash))
             .collect();
 
-        blocks[0].sequence_hash = blocks[0].block_hash;
+        let mut result_blocks = Vec::with_capacity(chunks.len());
 
-        // compute the sequence hash for each block
-        // this is the sequence hash of the previous block with the current block's hash
-        for i in 1..blocks.len() {
-            let previous_block = &blocks[i - 1];
-            let parent_sequence_hash = previous_block.sequence_hash;
-            let vals = &[parent_sequence_hash, blocks[i].block_hash];
-            blocks[i].sequence_hash = compute_hash(bytemuck::cast_slice(vals));
-            blocks[i].parent_sequence_hash = Some(parent_sequence_hash);
+        for chunk in chunks {
+            // Get the sequence hash of the previous block, if it exists
+            let last_sequence_hash = result_blocks.last().map(|b: &TokenBlock| b.sequence_hash());
+
+            // Use the constructor which encapsulates the sequence hash logic
+            let new_block = TokenBlock::from_chunk(chunk, last_sequence_hash);
+
+            // Push the new block to the result
+            result_blocks.push(new_block);
         }
 
         let remainder = tokens.chunks_exact(block_size).remainder();
 
-        let next_block = PartialTokenBlock {
+        let current_block = PartialTokenBlock {
             tokens: remainder.into(),
             block_size,
-            parent_sequence_hash: blocks.last().map(|b| b.sequence_hash),
+            salt_hash,
+            // The parent sequence hash for the next partial block is the hash of the last full block
+            parent_sequence_hash: result_blocks.last().map(|b| b.sequence_hash()),
         };
 
-        (blocks, next_block)
+        (result_blocks, current_block)
     }
 }
 
@@ -347,7 +434,9 @@ mod tests {
     #[test]
     fn test_tokens_blocks() {
         let tokens = Tokens(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let sequence = TokenSequence::new(tokens, 4);
+
+        // NOTE: 1337 was the original seed, so we are temporarily using that here to prove the logic has not changed
+        let sequence = TokenBlockSequence::new(tokens, 4, Some(1337 as u64));
 
         assert_eq!(sequence.blocks().len(), 2);
         assert_eq!(sequence.current_block().len(), 2);
@@ -394,5 +483,47 @@ mod tests {
         assert!(new_block.is_some());
         assert_eq!(blocks.len(), 3);
         assert_eq!(current_block.tokens().len(), 0);
+    }
+
+    #[test]
+    fn test_build_sequence() {
+        let mut sequence = TokenBlockSequence::new(Tokens::default(), 4, Some(1337 as u64));
+
+        assert_eq!(sequence.blocks().len(), 0);
+        assert_eq!(sequence.current_block().tokens().len(), 0);
+
+        sequence.push_token(1);
+        assert_eq!(sequence.blocks().len(), 0);
+        assert_eq!(sequence.current_block().tokens().len(), 1);
+
+        sequence.push_token(2);
+        assert_eq!(sequence.blocks().len(), 0);
+        assert_eq!(sequence.current_block().tokens().len(), 2);
+
+        sequence.push_token(3);
+        assert_eq!(sequence.blocks().len(), 0);
+        assert_eq!(sequence.current_block().tokens().len(), 3);
+
+        sequence.push_token(4);
+        assert_eq!(sequence.blocks().len(), 1);
+        assert_eq!(sequence.current_block().tokens().len(), 0);
+        assert_eq!(sequence.blocks()[0].sequence_hash(), 14643705804678351452);
+
+        sequence.push_token(5);
+        assert_eq!(sequence.blocks().len(), 1);
+        assert_eq!(sequence.current_block().tokens().len(), 1);
+
+        sequence.push_token(6);
+        assert_eq!(sequence.blocks().len(), 1);
+        assert_eq!(sequence.current_block().tokens().len(), 2);
+
+        sequence.push_token(7);
+        assert_eq!(sequence.blocks().len(), 1);
+        assert_eq!(sequence.current_block().tokens().len(), 3);
+
+        sequence.push_token(8);
+        assert_eq!(sequence.blocks().len(), 2);
+        assert_eq!(sequence.current_block().tokens().len(), 0);
+        assert_eq!(sequence.blocks()[1].sequence_hash(), 4945711292740353085);
     }
 }

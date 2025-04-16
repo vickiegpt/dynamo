@@ -80,7 +80,7 @@ pub struct InactiveBlockPool<T: Storage, M: BlockMetadata> {
 }
 
 /// Concrete implementation of the ReturnHandle trait for returning
-struct ReturnHandleImpl<T: Storage + 'static, M: BlockMetadata> {
+struct ReturnHandleImpl<T: Storage, M: BlockMetadata> {
     return_tx: mpsc::UnboundedSender<PoolValue<Block<T, M>>>,
 }
 
@@ -135,7 +135,7 @@ impl<M: BlockMetadata> Ord for PriorityKey<M> {
 }
 
 #[derive(Default)]
-pub struct BlockPoolInner<T: Storage + 'static, M: BlockMetadata> {
+pub struct BlockPoolInner<T: Storage, M: BlockMetadata> {
     // Direct lookup by sequence_hash
     lookup_map: HashMap<SequenceHash, PoolValue<Block<T, M>>>,
 
@@ -155,27 +155,27 @@ pub struct BlockPoolInner<T: Storage + 'static, M: BlockMetadata> {
     available_blocks_tx: watch::Sender<u64>,
 }
 #[derive(Dissolve)]
-pub struct MatchSingle<T: Storage + 'static, M: BlockMetadata> {
+pub struct MatchSingle<T: Storage, M: BlockMetadata> {
     hash: SequenceHash,
     return_handle: Arc<ReturnHandleImpl<T, M>>,
     tx: oneshot::Sender<Option<UniqueBlock<T, M>>>,
 }
 
 #[derive(Dissolve)]
-pub struct MatchMultiple<T: Storage + 'static, M: BlockMetadata> {
+pub struct MatchMultiple<T: Storage, M: BlockMetadata> {
     hashes: Vec<SequenceHash>,
     return_handle: Arc<ReturnHandleImpl<T, M>>,
     tx: oneshot::Sender<Vec<UniqueBlock<T, M>>>,
 }
 
 #[derive(Dissolve)]
-pub struct Take<T: Storage + 'static, M: BlockMetadata> {
+pub struct Take<T: Storage, M: BlockMetadata> {
     count: u32,
     return_handle: Arc<ReturnHandleImpl<T, M>>,
     tx: oneshot::Sender<Vec<UniqueBlock<T, M>>>,
 }
 
-pub enum MatchRequest<T: Storage + 'static, M: BlockMetadata> {
+pub enum MatchRequest<T: Storage, M: BlockMetadata> {
     MatchSingle(MatchSingle<T, M>),
     MatchMultiple(MatchMultiple<T, M>),
     Take(Take<T, M>),
@@ -193,7 +193,7 @@ impl<M: BlockMetadata> UpdateBlock<M> {
 }
 
 #[derive(Dissolve)]
-pub struct InsertControl<T: Storage + 'static, M: BlockMetadata> {
+pub struct InsertControl<T: Storage, M: BlockMetadata> {
     block: Block<T, M>,
     tx: oneshot::Sender<()>,
 }
@@ -223,7 +223,7 @@ pub struct ResetAllControl<M: BlockMetadata> {
     _phantom: std::marker::PhantomData<M>,
 }
 
-pub enum ControlRequest<T: Storage + 'static, M: BlockMetadata> {
+pub enum ControlRequest<T: Storage, M: BlockMetadata> {
     Insert(InsertControl<T, M>),
     UpdateSingle(UpdateSingleControl<M>),
     UpdateMultiple(UpdateMultipleControl<M>),
