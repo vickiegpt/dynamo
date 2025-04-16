@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+VERSION 0.8
+
+vllm-build:
+    ARG VLLM_REF="0.7.2"
+    ARG VLLM_PATCH="vllm_v${VLLM_REF}-dynamo-kv-disagg-patch.patch"
+    ARG VLLM_PATCHED_PACKAGE_NAME="ai_dynamo_vllm"
+    ARG VLLM_PATCHED_PACKAGE_VERSION="${VLLM_REF}.post1"
+
+    FROM nvcr.io/nvidia/cuda:12.8.1-runtime-ubuntu24.04
+    WORKDIR /workspace
+
+    # Install minimal required packages
+    RUN apt-get update && \
+        apt-get install -y --no-install-recommends \
+        python3.12 \
+        python3.12-venv \
+        python3-pip \
+        patch \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Create and activate virtual environment
+    RUN python3.12 -m venv /opt/venv
+    ENV VIRTUAL_ENV=/opt/venv
+    ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+
+    # Copy the vllm subdirectory and requirements
+    COPY deps/vllm/ vllm/
+    COPY deps/requirements.txt /tmp/requirements.txt
+
+    # Install minimal requirements
+    RUN pip install --no-cache-dir pip wheel
+
+    RUN mkdir -p /workspace/dist
+    RUN mkdir /tmp/vllm && \
+        pip download --only-binary=:all: --no-deps --dest /tmp/vllm vllm==v${VLLM_REF} && \
+        cd /tmp/vllm && \
+        wheel unpack *.whl && \
+        cd vllm-${VLLM_REF}/ && \
+        patch -p1 < /workspace/vllm/${VLLM_PATCH} && \
+        # Rename the package
+        mv vllm-${VLLM_REF}.dist-info ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info && \
+        sed -i "s/^Name: vllm/Name: ${VLLM_PATCHED_PACKAGE_NAME}/g" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/METADATA && \
+        sed -i "s/^Version: ${VLLM_REF}/Version: ${VLLM_PATCHED_PACKAGE_VERSION}/g" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/METADATA && \
+        # Update wheel tag
+        sed -i 's/Tag: cp38-abi3-linux_x86_64/Tag: cp38-abi3-manylinux1_x86_64/g' ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/WHEEL && \
+        sed -i "s/-cp38-abi3-linux_x86_64.whl/-cp38-abi3-manylinux1_x86_64.whl/g" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/RECORD && \
+        wheel pack . --dest-dir /workspace/dist
+
+    # Save the built wheel as an artifact using a wildcard pattern
+    SAVE ARTIFACT /workspace/dist/ai_dynamo_vllm-*.whl
