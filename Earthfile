@@ -97,8 +97,21 @@ rust-base:
         libclang-dev \
         git
 
-    # Inherit CUDA setup from cuda-base
-    FROM +cuda-base
+    RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
+        apt install -y ./cuda-keyring_1.1-1_all.deb && \
+        apt update && \
+        apt install -y cuda-toolkit nvidia-utils-535 nvidia-driver-535 && \
+        rm cuda-keyring_1.1-1_all.deb
+
+    # Set CUDA compute capability explicitly
+    ENV CUDA_COMPUTE_CAP=80
+
+    ENV CUDA_HOME=/usr/local/cuda
+    ENV CUDA_ROOT=/usr/local/cuda
+    ENV CUDA_PATH=/usr/local/cuda
+    ENV CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda
+    ENV PATH=$CUDA_HOME/bin:$PATH
+    ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
     ENV RUSTUP_HOME=/usr/local/rustup
     ENV CARGO_HOME=/usr/local/cargo
@@ -188,8 +201,19 @@ dynamo-base-docker-llm:
 
     FROM +dynamo-base-docker
 
-    # Inherit CUDA setup from cuda-base
-    FROM +cuda-base
+    # Install CUDA dependencies
+    RUN apt-get update && \
+        apt-get install -y --no-install-recommends \
+        cuda-toolkit-12-8 \
+        cuda-runtime-12-8 \
+        cuda-libraries-12-8 \
+        cuda-libraries-dev-12-8 \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Set CUDA environment variables
+    ENV CUDA_HOME=/usr/local/cuda
+    ENV PATH=${CUDA_HOME}/bin:${PATH}
+    ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
 
     # Copy and install the pre-built vllm wheel
     COPY ./container+vllm-build/ai_dynamo_vllm-*.whl /workspace
