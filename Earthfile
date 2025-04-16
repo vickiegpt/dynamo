@@ -201,7 +201,13 @@ dynamo-base-docker-llm:
 
     FROM +dynamo-base-docker
 
-    # Install CUDA dependencies
+    # Install CUDA dependencies and setup repository
+    RUN apt-get update && \
+        apt-get install -y --no-install-recommends wget ca-certificates && \
+        rm -rf /var/lib/apt/lists/*
+    RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
+        dpkg -i cuda-keyring_1.1-1_all.deb && \
+        rm cuda-keyring_1.1-1_all.deb
     RUN apt-get update && \
         apt-get install -y --no-install-recommends \
         cuda-toolkit-12-8 \
@@ -214,10 +220,12 @@ dynamo-base-docker-llm:
     ENV CUDA_HOME=/usr/local/cuda
     ENV PATH=${CUDA_HOME}/bin:${PATH}
     ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+    ENV CUDA_COMPUTE_CAP=80
 
     # Copy and install the pre-built vllm wheel
     COPY ./container+vllm-build/ai_dynamo_vllm-*.whl /workspace
-    RUN pip install /workspace/ai_dynamo_vllm-*.whl
+    RUN . /opt/dynamo/venv/bin/activate && \
+        pip install /workspace/ai_dynamo_vllm-*.whl
 
     # Verify both Dynamo and vllm are properly installed
     RUN python3 -c "import dynamo; import vllm" || (echo "Failed to import Dynamo or vllm" && exit 1)
