@@ -64,6 +64,10 @@ vllm-build:
     # Save the built wheel as an artifact using a wildcard pattern
     SAVE ARTIFACT /workspace/dist/ai_dynamo_vllm-*.whl
 
+uv-source:
+    FROM ghcr.io/astral-sh/uv:latest
+    SAVE ARTIFACT /uv
+
 nixl-source:
     FROM ubuntu:24.04
     WORKDIR /workspace
@@ -87,35 +91,44 @@ nixl-source:
 nixl-base:
     FROM nvcr.io/nvidia/cuda-dl-base:25.01-cuda12.8-devel-ubuntu24.04
     WORKDIR /opt/nixl
-
-    # Add a cache hint that only changes when the nixl commit changes
     ARG NIXL_COMMIT
-    # This line acts as a cache key - it only changes when NIXL_COMMIT changes
-    RUN echo "NIXL commit: ${NIXL_COMMIT}" > /opt/nixl/commit.txt
-
-    # Copy the nixl source from the nixl-source artifact
-    COPY +nixl-source/nixl ./
 
     # Install build dependencies
     RUN apt-get update && \
         apt-get install -y --no-install-recommends \
         git \
-        build-essential \
+        ca-certificates \
+        cmake \
+        ninja-build \
+        python3 \
+        python3.12 \
+        python3.12-dev \
+        python3.12-venv \
         autoconf \
         automake \
         libtool \
         pkg-config \
-        python3-pip \
-        python3-venv \
-        meson \
-        ninja-build \
-        libnuma-dev \
-        libibverbs-dev \
-        librdmacm-dev \
+        libnuma1 \
+        libibverbs1 \
+        librdmacm1 \
         curl \
+        meson \
         && rm -rf /var/lib/apt/lists/*
 
-    # Install UCX (stable release)
+    # Copy uv from artifact
+    COPY +uv-source/uv /bin/uv
+
+    # Create and activate virtual environment
+    RUN mkdir /opt/dynamo && \
+        uv venv /opt/dynamo/venv --python 3.12 && \
+        . /opt/dynamo/venv/bin/activate && \
+        uv pip install pip
+
+    ENV VIRTUAL_ENV=/opt/dynamo/venv
+    ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+    RUN uv pip install pybind11
+
+    # Build UCX
     ARG UCX_VERSION=v1.18.0
     RUN cd /usr/local/src && \
         curl -fSsL "https://github.com/openucx/ucx/tarball/${UCX_VERSION}" | tar xz && \
@@ -137,6 +150,9 @@ nixl-base:
         make install && \
         ldconfig
 
+    # Copy NIXL source from artifact
+    COPY +nixl-source/nixl ./
+
     # Build NIXL
     RUN mkdir build && \
         meson setup build/ --prefix=/usr/local/nixl && \
@@ -144,7 +160,7 @@ nixl-base:
         ninja && \
         ninja install
 
-    # Save only the necessary artifacts
+    # Save artifacts
     SAVE ARTIFACT /usr/local/nixl /nixl
     SAVE ARTIFACT /opt/nixl /nixl_src
     SAVE ARTIFACT /usr/lib/pkgconfig /pkgconfig
