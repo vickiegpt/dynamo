@@ -205,9 +205,13 @@ dynamo-base-docker-llm:
     RUN apt-get update && \
         apt-get install -y --no-install-recommends wget ca-certificates && \
         rm -rf /var/lib/apt/lists/*
+
+    # Add NVIDIA CUDA repository
     RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
         dpkg -i cuda-keyring_1.1-1_all.deb && \
         rm cuda-keyring_1.1-1_all.deb
+
+    # Install CUDA packages
     RUN apt-get update && \
         apt-get install -y --no-install-recommends \
         cuda-toolkit-12-8 \
@@ -221,6 +225,20 @@ dynamo-base-docker-llm:
     ENV PATH=${CUDA_HOME}/bin:${PATH}
     ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
     ENV CUDA_COMPUTE_CAP=80
+
+    # Copy NIXL setup from nixl-base
+    COPY --from=./container+nixl-base /usr/local/nixl /usr/local/nixl
+    COPY --from=./container+nixl-base /opt/nixl /opt/nixl
+    COPY --from=./container+nixl-base /usr/lib /usr/lib
+    COPY --from=./container+nixl-base /usr/include /usr/include
+    COPY --from=./container+nixl-base /usr/bin /usr/bin
+    COPY --from=./container+nixl-base /usr/lib/pkgconfig /usr/lib/pkgconfig
+
+    # Set NIXL environment variables
+    ENV LD_LIBRARY_PATH=/usr/local/nixl/lib/x86_64-linux-gnu/:${LD_LIBRARY_PATH}
+    ENV PYTHONPATH=/usr/local/nixl/lib/python3/dist-packages/:/opt/nixl/test/python/:${PYTHONPATH}
+    ENV UCX_TLS=^cuda_ipc
+    ENV NIXL_PLUGIN_DIR=/usr/local/nixl/lib/x86_64-linux-gnu/plugins
 
     # Copy and install the pre-built vllm wheel
     COPY ./container+vllm-build/ai_dynamo_vllm-*.whl /workspace
