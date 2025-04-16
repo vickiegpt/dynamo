@@ -34,3 +34,4 @@ transformers
 tritonclient==2.53.0
 types-PyYAML
 uvicorn
+tensorboardX==2.6.2.2

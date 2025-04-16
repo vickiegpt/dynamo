@@ -22,8 +22,10 @@ import os
 import time
 
 import numpy as np
+from datetime import datetime
 from rich.console import Console
 from rich.table import Table
+from tensorboardX import SummaryWriter
 from utils.prefill_queue import PrefillQueue
 
 from dynamo.llm import KvMetricsAggregator
@@ -46,6 +48,13 @@ class Planner:
             "NATS_SERVER", "nats://localhost:4222"
         )
         self._prefill_queue_stream_name = self.args.served_model_name
+        
+        self.p_endpoints = None
+        self.d_endpoints = None
+        
+        if args.log_dir is None:
+            args.log_dir = f"logs/{datetime.now().strftime('%m%d_%H%M%S')}"
+        self.writer = SummaryWriter(args.log_dir)
 
         self.init_time = time.time()
 
@@ -85,6 +94,7 @@ class Planner:
         )
 
         self.p_endpoints, self.d_endpoints = await self.get_workers_info()
+            
         logger.info(
             f"Number of prefill workers: {len(self.p_endpoints)}, number of decode workers: {len(self.d_endpoints)}"
         )
@@ -99,17 +109,23 @@ class Planner:
         logger.info(f"Collecting metrics at t={time.time() - self.init_time:.1f}s")
 
         # collect prefill queue load
-        async with PrefillQueue.get_instance(
-            nats_server=self._prefill_queue_nats_server,
-            stream_name=self._prefill_queue_stream_name,
-        ) as prefill_queue:
-            prefill_queue_size = await prefill_queue.get_queue_size()
-        self.prefill_queue_load.append(prefill_queue_size > 0)
-        logger.info(
-            f"Collected prefill queue size at t={time.time() - self.init_time:.1f}s: {int(prefill_queue_size)}"
-        )
-
+        try:
+            async with PrefillQueue.get_instance(
+                nats_server=self._prefill_queue_nats_server,
+                stream_name=self._prefill_queue_stream_name,
+            ) as prefill_queue:
+                prefill_queue_size = await prefill_queue.get_queue_size()
+                measure_time = time.time() - self.init_time
+            self.prefill_queue_load.append(prefill_queue_size > 0)
+            logger.info(
+                f"Collected prefill queue size at t={measure_time:.1f}s: {int(prefill_queue_size)}"
+            )
+            self.writer.add_scalar("prefill_queue_size", prefill_queue_size, measure_time)
+        except Exception as e:
+            logger.warning(f"Failed to collect prefill queue size metrics: {e}")
+        
         # collect kv load
+        num_queued_requests = 0
         metrics = await self.metrics_aggregator.get_metrics()
         try:
             prev_kv_load_len = len(self.kv_load)
@@ -118,14 +134,28 @@ class Planner:
                 num_requests_waiting = getattr(endpoint, "num_requests_waiting", 0.0)
                 if num_requests_waiting > 0:
                     # if requests are waiting, we assume the needed kv is higher
+                    num_queued_requests += num_requests_waiting
                     kv_load = 1.2
                 self.kv_load.append(kv_load)
+            measure_time = time.time() - self.init_time
             logger.info(
-                f"Collected kv load at t={time.time() - self.init_time:.1f}s: {self.kv_load[prev_kv_load_len:]}"
+                f"Collected kv load at t={measure_time:.1f}s: {self.kv_load[prev_kv_load_len:]}"
             )
+            average_kv_load = np.mean(self.kv_load[prev_kv_load_len:])
+            self.writer.add_scalar("average_kv_load", average_kv_load, measure_time)
+            self.writer.add_scalar("num_queued_requests", num_queued_requests, measure_time)
         except Exception as e:
             logger.warning(f"Failed to collect kv load metrics: {e}")
-
+            
+        p_endpoints, d_endpoints = await self.get_workers_info()
+        self.writer.add_scalar("num_prefill_workers", len(p_endpoints), time.time() - self. init_time)
+        self.writer.add_scalar("num_decode_workers", len(d_endpoints), time.time() - self.init_time)
+        curr_gpu_usage = (
+            len(p_endpoints) * self.args.prefill_engine_num_gpu
+            + len(d_endpoints) * self.args.decode_engine_num_gpu
+        )
+        self.writer.add_scalar("num_gpu", curr_gpu_usage, time.time() - self.init_time)
+        
         self.metrics_collection_time.append(time.time())
 
     async def make_adjustments(self):
@@ -241,7 +271,9 @@ class Planner:
                 current_time - self.last_adjustment_time
                 >= self.args.adjustment_interval
             ):
-                await self.make_adjustments()
+                if not self.args.no_operation:
+                    # blockingly make adjustments to avoid overcompensation
+                    await self.make_adjustments()
                 await self.reset_adjustment_interval()
 
             # Sleep to avoid busy waiting
@@ -289,15 +321,26 @@ if __name__ == "__main__":
         help="Model name that is being served (used for prefill queue name)",
     )
     parser.add_argument(
+        "--no-operation",
+        action="store_true",
+        help="Do not make any adjustments, just observe the metrics",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=str,
+        default=None,
+        help="Tensorboard logging directory",
+    )
+    parser.add_argument(
         "--adjustment-interval",
         type=int,
-        default=300,
+        default=30,
         help="Interval in seconds between scaling adjustments",
     )
     parser.add_argument(
         "--metric-pulling-interval",
         type=int,
-        default=10,
+        default=1,
         help="Interval in seconds between metric pulls",
     )
     parser.add_argument(
