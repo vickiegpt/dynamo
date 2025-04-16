@@ -58,15 +58,15 @@ dynamo-base:
     ENV VIRTUAL_ENV=/opt/dynamo/venv
     ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
-cuda-base:
-    FROM ubuntu:24.04
+SETUP_CUDA:
+    FUNCTION
     RUN apt-get update && \
         apt-get install -y --no-install-recommends wget ca-certificates && \
         rm -rf /var/lib/apt/lists/*
 
     # Install CUDA
-    RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
-        apt-get install -y ./cuda-keyring_1.1-1_all.deb && \
+    RUN wget --tries=3 --waitretry=5 https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
+        dpkg -i cuda-keyring_1.1-1_all.deb && \
         apt-get update && \
         apt-get install -y --no-install-recommends \
         cuda-toolkit-12-8 \
@@ -97,21 +97,7 @@ rust-base:
         libclang-dev \
         git
 
-    RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
-        apt install -y ./cuda-keyring_1.1-1_all.deb && \
-        apt update && \
-        apt install -y cuda-toolkit nvidia-utils-535 nvidia-driver-535 && \
-        rm cuda-keyring_1.1-1_all.deb
-
-    # Set CUDA compute capability explicitly
-    ENV CUDA_COMPUTE_CAP=80
-
-    ENV CUDA_HOME=/usr/local/cuda
-    ENV CUDA_ROOT=/usr/local/cuda
-    ENV CUDA_PATH=/usr/local/cuda
-    ENV CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda
-    ENV PATH=$CUDA_HOME/bin:$PATH
-    ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+    DO +SETUP_CUDA
 
     ENV RUSTUP_HOME=/usr/local/rustup
     ENV CARGO_HOME=/usr/local/cargo
@@ -201,38 +187,12 @@ dynamo-base-docker-llm:
 
     FROM +dynamo-base-docker
 
-    # Install CUDA dependencies and setup repository
-    RUN apt-get update && \
-        apt-get install -y --no-install-recommends wget ca-certificates && \
-        rm -rf /var/lib/apt/lists/*
+    DO +SETUP_CUDA
 
-    # Add NVIDIA CUDA repository
-    RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
-        dpkg -i cuda-keyring_1.1-1_all.deb && \
-        rm cuda-keyring_1.1-1_all.deb
-
-    # Install CUDA packages
-    RUN apt-get update && \
-        apt-get install -y --no-install-recommends \
-        cuda-toolkit-12-8 \
-        cuda-runtime-12-8 \
-        cuda-libraries-12-8 \
-        cuda-libraries-dev-12-8 \
-        && rm -rf /var/lib/apt/lists/*
-
-    # Set CUDA environment variables
-    ENV CUDA_HOME=/usr/local/cuda
-    ENV PATH=${CUDA_HOME}/bin:${PATH}
-    ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
-    ENV CUDA_COMPUTE_CAP=80
-
-    # Copy NIXL setup from nixl-base
-    COPY --from=./container+nixl-base /usr/local/nixl /usr/local/nixl
-    COPY --from=./container+nixl-base /opt/nixl /opt/nixl
-    COPY --from=./container+nixl-base /usr/lib /usr/lib
-    COPY --from=./container+nixl-base /usr/include /usr/include
-    COPY --from=./container+nixl-base /usr/bin /usr/bin
-    COPY --from=./container+nixl-base /usr/lib/pkgconfig /usr/lib/pkgconfig
+    # Copy NIXL setup from artifacts
+    COPY ./container+nixl-base/nixl /usr/local/nixl
+    COPY ./container+nixl-base/nixl_src /opt/nixl
+    COPY ./container+nixl-base/pkgconfig /usr/lib/pkgconfig
 
     # Set NIXL environment variables
     ENV LD_LIBRARY_PATH=/usr/local/nixl/lib/x86_64-linux-gnu/:${LD_LIBRARY_PATH}

@@ -1,5 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 VERSION 0.8
 
@@ -52,67 +64,87 @@ vllm-build:
     # Save the built wheel as an artifact using a wildcard pattern
     SAVE ARTIFACT /workspace/dist/ai_dynamo_vllm-*.whl
 
-nixl-base:
+nixl-source:
     FROM ubuntu:24.04
+    WORKDIR /workspace
 
-    # Install UCX dependencies
+    # Install git and ca-certificates for SSL verification
     RUN apt-get update && \
         apt-get install -y --no-install-recommends \
-        libnuma-dev \
-        numactl \
-        autotools-dev \
-        automake \
-        libtool \
-        libz-dev \
-        libiberty-dev \
-        flex \
-        build-essential \
-        cmake \
-        libibverbs-dev \
+        git \
+        ca-certificates \
         && rm -rf /var/lib/apt/lists/*
 
-    # Install UCX
+    # Clone NIXL
+    ARG NIXL_COMMIT
+    RUN git clone https://github.com/ai-dynamo/nixl.git && \
+        cd nixl && \
+        git checkout ${NIXL_COMMIT}
+
+    # Save NIXL source as artifact
+    SAVE ARTIFACT /workspace/nixl /nixl
+
+nixl-base:
+    FROM nvcr.io/nvidia/cuda-dl-base:25.01-cuda12.8-devel-ubuntu24.04
+    WORKDIR /opt/nixl
+
+    # Add a cache hint that only changes when the nixl commit changes
+    ARG NIXL_COMMIT
+    # This line acts as a cache key - it only changes when NIXL_COMMIT changes
+    RUN echo "NIXL commit: ${NIXL_COMMIT}" > /opt/nixl/commit.txt
+
+    # Copy the nixl source from the nixl-source artifact
+    COPY +nixl-source/nixl ./
+
+    # Install build dependencies
+    RUN apt-get update && \
+        apt-get install -y --no-install-recommends \
+        git \
+        build-essential \
+        autoconf \
+        automake \
+        libtool \
+        pkg-config \
+        python3-pip \
+        python3-venv \
+        meson \
+        ninja-build \
+        libnuma-dev \
+        libibverbs-dev \
+        librdmacm-dev \
+        curl \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install UCX (stable release)
     ARG UCX_VERSION=v1.18.0
     RUN cd /usr/local/src && \
         curl -fSsL "https://github.com/openucx/ucx/tarball/${UCX_VERSION}" | tar xz && \
         cd openucx-ucx* && \
-        ./autogen.sh && ./configure \
-        --enable-shared \
-        --disable-static \
-        --disable-doxygen-doc \
-        --enable-optimizations \
-        --enable-cma \
-        --enable-devel-headers \
-        --with-cuda=/usr/local/cuda \
-        --with-verbs \
-        --with-dm \
-        --with-gdrcopy=/usr/local \
-        --enable-mt \
-        --with-mlx5-dv && \
-        make -j && \
-        make -j install-strip && \
+        ./autogen.sh && \
+        ./configure --prefix=/usr/local \
+                   --enable-shared \
+                   --disable-static \
+                   --disable-doxygen-doc \
+                   --enable-optimizations \
+                   --enable-cma \
+                   --enable-devel-headers \
+                   --with-cuda=/usr/local/cuda-12.8 \
+                   --with-verbs \
+                   --with-dm \
+                   --enable-mt \
+                   --with-mlx5-dv && \
+        make -j$(nproc) && \
+        make install && \
         ldconfig
 
-    # Set UCX environment variables
-    ENV LD_LIBRARY_PATH=/usr/lib:${LD_LIBRARY_PATH}
-    ENV CPATH=/usr/include:${CPATH}
-    ENV PATH=/usr/bin:${PATH}
-    ENV PKG_CONFIG_PATH=/usr/lib/pkgconfig:${PKG_CONFIG_PATH}
-
-    # Install NIXL
-    WORKDIR /opt/nixl
-    COPY --from=./deploy/dynamo/operator+nixl-build /opt/nixl /opt/nixl
-    RUN cd /opt/nixl && \
-        mkdir build && \
+    # Build NIXL
+    RUN mkdir build && \
         meson setup build/ --prefix=/usr/local/nixl && \
         cd build/ && \
         ninja && \
         ninja install
 
-    # Set NIXL environment variables
-    ENV LD_LIBRARY_PATH=/usr/local/nixl/lib/x86_64-linux-gnu/:${LD_LIBRARY_PATH}
-    ENV PYTHONPATH=/usr/local/nixl/lib/python3/dist-packages/:/opt/nixl/test/python/:${PYTHONPATH}
-    ENV UCX_TLS=^cuda_ipc
-    ENV NIXL_PLUGIN_DIR=/usr/local/nixl/lib/x86_64-linux-gnu/plugins
-
-    SAVE IMAGE
+    # Save only the necessary artifacts
+    SAVE ARTIFACT /usr/local/nixl /nixl
+    SAVE ARTIFACT /opt/nixl /nixl_src
+    SAVE ARTIFACT /usr/lib/pkgconfig /pkgconfig
