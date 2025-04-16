@@ -213,16 +213,16 @@ impl TokenBlock {
 
 /// Structure that holds a sequence of tokens broken into blocks where the blocks are hashed.
 ///
+/// The block hashes computed are designed to be used externally from the LLM backend to provide uniqueness which must also
+/// account for the differences in the model architecture, model weights, associated PEFT used to generate the sequence, etc.
+///
+/// To account for these differences, the salt hash is used as the seed for the hash function. One might choose to serialize some
+/// metadata about the model, PEFT, etc, convert it to a byte slice using `serde_json::to_vec` then compute a u64 hash from that object
+/// which can be used as the `salt_hash` for the [TokenBlockSequence].
+///
 /// There are two critical hashes:
 /// - `block_hash`: a hash computed from only the local tokens within the block seeding the hashing function with the `salt_hash`
 /// - `sequence_hash`: a hash computed from the previous block's `sequence_hash` and the current block's `block_hash` using the `salt_hash` as the seed
-///
-/// This object introduces the concept of a salt hash which is used to provide a seed for the hash function.
-///
-/// NOTE: The primary motivation for the `salt_hash` is to differentiate a sequence of tokens that from each other
-/// when the list of tokens is identical, but the underlying representation is different. Examples: a sequence of
-/// tokens from a different model or with a different lora applied to the weights
-///
 #[derive(Debug)]
 pub struct TokenBlockSequence {
     blocks: Vec<TokenBlock>,
