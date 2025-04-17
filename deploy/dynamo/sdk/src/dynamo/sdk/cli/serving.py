@@ -26,9 +26,8 @@ import os
 import pathlib
 import platform
 import shutil
-import socket
 import tempfile
-import typing as t
+import typing
 from typing import Any, Dict, Optional, Protocol, TypeVar
 
 # WARNING: internal
@@ -127,7 +126,7 @@ def create_dynamo_watcher(
 
 
 @inject(squeeze_none=True)
-def serve_http(
+def serve_dynamo_graph(
     bento_identifier: str | AnyService,
     working_dir: str | None = None,
     dependency_map: dict[str, str] | None = None,
@@ -260,7 +259,7 @@ def serve_http(
             else:
                 watcher.env.update(inject_env)
 
-        arbiter_kwargs: dict[str, t.Any] = {
+        arbiter_kwargs: dict[str, Any] = {
             "watchers": watchers,
             "sockets": sockets,
         }
