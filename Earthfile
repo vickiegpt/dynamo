@@ -187,7 +187,13 @@ dynamo-base-docker-llm:
 
     FROM +dynamo-base-docker
 
-    DO +SETUP_CUDA
+    # Install minimal NIXL dependencies
+    RUN apt-get update && \
+        apt-get install -y --no-install-recommends \
+        libnuma1 \
+        libibverbs1 \
+        librdmacm1 \
+        && rm -rf /var/lib/apt/lists/*
 
     # Copy NIXL setup from artifacts
     COPY ./container+nixl-base/nixl /usr/local/nixl
@@ -203,7 +209,8 @@ dynamo-base-docker-llm:
     # Copy and install the pre-built vllm wheel
     COPY ./container+vllm-build/ai_dynamo_vllm-*.whl /workspace
     RUN . /opt/dynamo/venv/bin/activate && \
-        pip install /workspace/ai_dynamo_vllm-*.whl
+        pip install /workspace/ai_dynamo_vllm-*.whl && \
+        rm -rf /workspace/ai_dynamo_vllm-*.whl
 
     # Verify both Dynamo and vllm are properly installed
     RUN python3 -c "import dynamo; import vllm" || (echo "Failed to import Dynamo or vllm" && exit 1)
