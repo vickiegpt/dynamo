@@ -35,7 +35,7 @@ from _bentoml_sdk import Service
 
 # WARNING: internal
 from dynamo.sdk.lib.exceptions import DynamoException
-from dynamo.sdk.cli.circus import Server
+from dynamo.sdk.cli.circus import CircusManager
 from circus.sockets import CircusSocket
 from circus.watcher import Watcher
 from simple_di import Provide, inject
@@ -132,7 +132,7 @@ def serve_dynamo_graph(
     dependency_map: dict[str, str] | None = None,
     service_name: str = "",
     enable_planner: bool = False,
-) -> Server:
+) -> CircusManager:
     from dynamo.sdk.lib.loader import find_and_load_service
     from dynamo.sdk.cli.circus import create_arbiter, create_circus_watcher
     from dynamo.sdk.lib.logging import configure_server_logging
@@ -312,7 +312,7 @@ def serve_dynamo_graph(
                 ),
             ),
         )
-        return Server(arbiter=arbiter)
+        return CircusManager(arbiter=arbiter)
     except Exception:
         shutil.rmtree(uds_path, ignore_errors=True)
         raise
