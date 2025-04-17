@@ -1,4 +1,11 @@
-use crate::{block_manager::events::RegistrationHandle, tokens::{TokenBlock, TokenSequence}};
+use std::sync::Arc;
+
+use derive_getters::Getters;
+
+use crate::{
+    block_manager::events::RegistrationHandle,
+    tokens::{BlockHash, SequenceHash, TokenBlock, TokenBlockSequence},
+};
 
 #[derive(Debug)]
 pub enum BlockState {
@@ -8,55 +15,40 @@ pub enum BlockState {
     Registered(RegisteredState),
 }
 
-pub type Salt = Vec<u8>;
-
-impl BlockState {
-    // pub fn push_token(&mut self, token: Token) -> Result<(), Token> {
-    //     match self {
-    //         BlockState::Unregistered => Err(token),
-    //         BlockState::Partial(partial) => match partial.sequence.push_token(token) {
-    //             None => Ok(()),
-    //             Some(block) => {
-    //                 *self = BlockState::Complete(CompleteState {
-    //                     sequence: partial.sequence,
-    //                 });
-    //                 Ok(())
-    //             }
-    //         },
-    //         BlockState::Complete(_complete) => Err(token),
-    //         BlockState::Registered(_registered) => Err(token),
-    //     }
-    // }
-
-    // pub fn register(&mut self) -> Result<(), BlockError> {
-    //     match self {
-    //         BlockState::Unregistered | BlockState::Partial(_) => Err(BlockError::Unregistered),
-    //         BlockState::Complete(complete) => Ok(BlockState::Registered(RegisteredState {
-    //             sequence_hash: complete.sequence.sequence_hash(),
-    //             block_hash: complete.sequence.block_hash(),
-    //         })),
-    //     }
-    // }
-}
-
 #[derive(Debug)]
 pub struct PartialState {
-    pub sequence: TokenSequence,
-    pub salt: Salt,
+    pub sequence: TokenBlockSequence,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Getters)]
 pub struct CompleteState {
-    pub token_block: TokenBlock,
-    pub salt: Salt,
+    token_block: TokenBlock,
 }
 
 impl CompleteState {
-    pub fn new(token_block: TokenBlock, salt: u64) -> Self {
+    pub fn new(token_block: TokenBlock) -> Self {
+        Self { token_block }
+    }
+}
 
-#[derive(Debug)]
+#[derive(Debug, Getters)]
 pub struct RegisteredState {
-    pub sequence_hash: u64,
-    pub salt: u64,
-    registration_handle: Arc<RegistrationHandle>,
+    #[getter(copy)]
+    block_hash: BlockHash,
+
+    #[getter(copy)]
+    sequence_hash: SequenceHash,
+
+    #[getter(skip)]
+    registration_handle: RegistrationHandle,
+}
+
+impl RegisteredState {
+    pub fn new(complete_state: &CompleteState, registration_handle: RegistrationHandle) -> Self {
+        Self {
+            block_hash: complete_state.token_block().block_hash(),
+            sequence_hash: complete_state.token_block().sequence_hash(),
+            registration_handle,
+        }
+    }
 }

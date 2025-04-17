@@ -19,7 +19,7 @@
 //! distributed LLM inference solutions.
 
 pub mod backend;
-//pub mod block_manager;
+pub mod block_manager;
 pub mod common;
 pub mod disagg_router;
 pub mod engines;

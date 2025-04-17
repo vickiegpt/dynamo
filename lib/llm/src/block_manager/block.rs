@@ -20,6 +20,7 @@ pub use state::BlockState;
 
 use crate::tokens::SequenceHash;
 
+use super::events::EventManager;
 use super::layout::BlockLayout;
 use super::storage::{Storage, StorageError};
 
@@ -54,6 +55,9 @@ pub enum BlockError {
 
     #[error("Unregistered")]
     Unregistered,
+
+    #[error("Failed to register block: {0}")]
+    FailedToRegister(String),
 }
 
 pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync + 'static {
@@ -106,8 +110,8 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
 
     pub fn sequence_hash(&self) -> Result<SequenceHash, BlockError> {
         match self.state() {
-            BlockState::Complete(state) => Ok(state.token_block.sequence_hash()),
-            BlockState::Registered(state) => Ok(state.sequence_hash),
+            BlockState::Complete(state) => Ok(state.token_block().sequence_hash()),
+            BlockState::Registered(state) => Ok(state.sequence_hash()),
             _ => Err(BlockError::InvalidState(
                 "Block is not complete".to_string(),
             )),
@@ -137,6 +141,26 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
     /// Get a mutable reference to the state of the block
     pub(crate) fn state_mut(&mut self) -> &mut BlockState {
         &mut self.state
+    }
+
+    /// Register the block with the event manager
+    pub(crate) fn register(&mut self, events: &dyn EventManager) -> Result<(), BlockError> {
+        match &mut self.state {
+            BlockState::Complete(state) => {
+                let handle = events
+                    .register_block(state.token_block())
+                    .map_err(|e| BlockError::FailedToRegister(e.to_string()))?;
+                self.state = BlockState::Registered(state::RegisteredState::new(state, handle));
+                Ok(())
+            }
+            BlockState::Registered(_) => Ok(()),
+            BlockState::Reset => Err(BlockError::InvalidState(
+                "expected state complete/registered but got reset".to_string(),
+            )),
+            BlockState::Partial(_) => Err(BlockError::InvalidState(
+                "expected state complete/registered but got partial".to_string(),
+            )),
+        }
     }
 
     /// Returns true if the block is empty
