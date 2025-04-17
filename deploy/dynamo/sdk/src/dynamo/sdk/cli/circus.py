@@ -52,7 +52,7 @@ class Arbiter(_Arbiter):
         return super().stop()
 
 @dataclass
-class Server:
+class CircusManager:
     """Simple server wrapper for arbiter lifecycle management."""
     arbiter: Arbiter
 
@@ -63,7 +63,7 @@ class Server:
     def running(self) -> bool:
         return self.arbiter.running
 
-    def __enter__(self) -> Server:
+    def __enter__(self) -> CircusManager:
         return self
 
     def __exit__(self, *_: Any) -> None:
