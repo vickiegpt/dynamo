@@ -35,8 +35,6 @@ from simple_di import inject
 
 from dynamo.sdk.cli.circus import CircusManager
 
-# WARNING: internal
-
 from .allocator import ResourceAllocator
 from .circus import _get_server_socket
 from .utils import (
@@ -45,6 +43,9 @@ from .utils import (
     reserve_free_port,
     save_dynamo_state,
 )
+
+# WARNING: internal
+
 
 # Use Protocol as the base for type alias
 AnyService = TypeVar("AnyService", bound=ServiceProtocol)

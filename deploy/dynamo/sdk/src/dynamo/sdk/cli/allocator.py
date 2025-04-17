@@ -19,20 +19,13 @@ from __future__ import annotations
 
 import logging
 import os
-import warnings
-from typing import Any, Optional
+from typing import Any
 
 from _bentoml_sdk import Service
+from simple_di import inject
 
 # Import our own resource module
-from dynamo.sdk.lib.resource import (
-    system_resources, 
-    NVIDIA_GPU, 
-    GPUManager,
-    ResourceError
-)
-from dynamo.sdk.lib.exceptions import DynamoException
-from simple_di import inject
+from dynamo.sdk.lib.resource import NVIDIA_GPU, GPUManager, system_resources
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +40,7 @@ class ResourceAllocator:
         self.system_resources = system_resources()
         self.gpu_manager = GPUManager()
         self.remaining_gpus = len(self.system_resources[NVIDIA_GPU])
-        
+
         # For compatibility with the old implementation
         self._available_gpus: list[tuple[float, float]] = [
             (1.0, 1.0)  # each item is (remaining, unit)
@@ -57,16 +50,16 @@ class ResourceAllocator:
     def assign_gpus(self, count: float) -> list[int]:
         """
         Assign GPUs for use.
-        
+
         Args:
             count: Number of GPUs to assign (can be fractional)
-            
+
         Returns:
             List of GPU indices that were assigned
         """
         # Use our GPU manager's assign_gpus method
         return self.gpu_manager.assign_gpus(count)
-    
+
     def get_gpu_stats(self) -> list[dict[str, Any]]:
         """Get detailed statistics for all GPUs."""
         return self.gpu_manager.get_gpu_stats()
@@ -78,10 +71,10 @@ class ResourceAllocator:
     ) -> tuple[int, list[dict[str, str]]]:
         """
         Get resource environment variables for a service.
-        
+
         Args:
             service: The service to get resource environment variables for
-            
+
         Returns:
             Tuple of (number of workers, list of environment variables dictionaries)
         """
@@ -101,12 +94,12 @@ class ResourceAllocator:
         num_gpus = 0
         num_workers = 1
         resource_envs: list[dict[str, str]] = []
-        
+
         # Check if service requires GPUs
         if "gpu" in (config.get("resources") or {}):
             num_gpus = config["resources"]["gpu"]  # type: ignore
             logger.info(f"GPU requirement found: {num_gpus}")
-            
+
             # Check if we have enough GPUs
             available_gpus = self.gpu_manager.get_available_gpus()
             if num_gpus > len(available_gpus):
@@ -117,27 +110,20 @@ class ResourceAllocator:
 
         # Determine number of workers
         if config.get("workers"):
-            if (workers := config["workers"]) == "cpu_count":
-                num_workers = int(self.system_resources["cpu"])
-                logger.info(f"Using CPU count for workers: {num_workers}")
-                # don't assign gpus to workers
-                return num_workers, resource_envs
-            else:  # workers is a number
-                num_workers = workers
-                logger.info(f"Using configured worker count: {num_workers}")
+            num_workers = config["workers"]
+            logger.info(f"Using configured worker count: {num_workers}")
 
         # Handle GPU allocation
         if num_gpus and DYN_DISABLE_AUTO_GPU_ALLOCATION not in os.environ:
             logger.info("GPU allocation enabled")
-            
-            
+
             if os.environ.get(DYN_DEPLOYMENT_ENV):
                 logger.info("K8s deployment detected")
                 # K8s replicas: Assumes DYNAMO_DEPLOYMENT_ENV is set
                 # each pod in replicaset will have separate GPU with same CUDA_VISIBLE_DEVICES
                 assigned = self.assign_gpus(num_gpus)
                 logger.info(f"Assigned GPUs for K8s: {assigned}")
-                
+
                 # Generate environment variables for each worker
                 for _ in range(num_workers):
                     env_vars = {"CUDA_VISIBLE_DEVICES": ",".join(map(str, assigned))}
@@ -148,14 +134,15 @@ class ResourceAllocator:
                 for worker_id in range(num_workers):
                     assigned = self.assign_gpus(num_gpus)
                     logger.info(f"Assigned GPUs for worker {worker_id}: {assigned}")
-                    
+
                     # Generate environment variables for this worker
                     env_vars = {"CUDA_VISIBLE_DEVICES": ",".join(map(str, assigned))}
-                    
+
                     # If we have comprehensive GPU stats, log them
                     try:
                         gpu_stats = [
-                            stat for stat in self.get_gpu_stats() 
+                            stat
+                            for stat in self.get_gpu_stats()
                             if stat["index"] in assigned
                         ]
                         for stat in gpu_stats:
@@ -168,18 +155,16 @@ class ResourceAllocator:
                             )
                     except Exception as e:
                         logger.debug(f"Failed to get GPU stats: {e}")
-                    
+
                     resource_envs.append(env_vars)
-        
+
         logger.info(
             f"Final resource allocation - workers: {num_workers}, envs: {resource_envs}"
         )
         return num_workers, resource_envs
-    
+
     def reset_allocations(self):
         """Reset all GPU allocations."""
         self.gpu_manager.reset_allocations()
         # Reset legacy tracking
-        self._available_gpus = [
-            (1.0, 1.0) for _ in range(self.remaining_gpus)
-        ]
+        self._available_gpus = [(1.0, 1.0) for _ in range(self.remaining_gpus)]
