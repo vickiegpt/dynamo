@@ -15,7 +15,7 @@
 
 [project]
 name = "ai-dynamo"
-version = "0.1.1"
+version = "0.1.1.post1"
 description = "Distributed Inference Framework"
 readme = "README.md"
 authors = [
@@ -30,7 +30,7 @@ dependencies = [
     "types-psutil==7.0.0.20250218",
     "kubernetes==32.0.1",
     "ai-dynamo-runtime==0.1.1",
-    distro,
+    "distro",
 ]
 
 classifiers = [
