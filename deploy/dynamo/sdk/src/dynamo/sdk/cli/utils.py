@@ -23,7 +23,7 @@ import os
 import pathlib
 import random
 import socket
-import typing as t
+from typing import Any, Protocol, Optional, Iterator, DefaultDict, Dict, Union, TextIO
 
 import click
 import psutil
@@ -39,11 +39,11 @@ logger = logging.getLogger(__name__)
 DYN_LOCAL_STATE_DIR = "DYN_LOCAL_STATE_DIR"
 
 # Define a Protocol for services to ensure type safety
-class ServiceProtocol(t.Protocol):
+class ServiceProtocol(Protocol):
     name: str
-    inner: t.Any
-    models: list[t.Any]
-    bento: t.Any
+    inner: Any
+    models: list[Any]
+    bento: Any
 
     def is_dynamo_component(self) -> bool:
         ...
@@ -54,7 +54,7 @@ class ServiceProtocol(t.Protocol):
 class DynamoCommandGroup(click.Group):
     """Simplified version of BentoMLCommandGroup for Dynamo CLI"""
 
-    def __init__(self, *args: t.Any, **kwargs: t.Any) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.aliases = kwargs.pop("aliases", [])
         super().__init__(*args, **kwargs)
         self._commands: dict[str, list[str]] = {}
@@ -111,10 +111,10 @@ class DynamoCommandGroup(click.Group):
 def reserve_free_port(
     host: str = "localhost",
     port: int | None = None,
-    prefix: t.Optional[str] = None,
+    prefix: Optional[str] = None,
     max_retry: int = 50,
     enable_so_reuseport: bool = False,
-) -> t.Iterator[int]:
+) -> Iterator[int]:
     """
     detect free port and reserve until exit the context
     """
@@ -152,8 +152,8 @@ def reserve_free_port(
 def save_dynamo_state(
     namespace: str,
     circus_endpoint: str,
-    components: dict[str, t.Any],
-    environment: dict[str, t.Any],
+    components: dict[str, Any],
+    environment: dict[str, Any],
 ):
     state_dir = os.environ.get(
         DYN_LOCAL_STATE_DIR, os.path.expanduser("~/.dynamo/state")
@@ -176,7 +176,7 @@ def save_dynamo_state(
     logger.warning(f"Saved state to {state_file}")
 
 
-def _parse_service_arg(arg_name: str, arg_value: str) -> tuple[str, str, t.Any]:
+def _parse_service_arg(arg_name: str, arg_value: str) -> tuple[str, str, Any]:
     """Parse a single CLI argument into service name, key, and value."""
 
     parts = arg_name.split(".")
@@ -189,7 +189,7 @@ def _parse_service_arg(arg_name: str, arg_value: str) -> tuple[str, str, t.Any]:
         and nested_keys[0] == "ServiceArgs"
         and nested_keys[1] == "envs"
     ):
-        value: t.Union[str, int, float, bool, dict, list] = arg_value
+        value: Union[str, int, float, bool, dict, list] = arg_value
     else:
         # Parse value based on type for non-env vars
         try:
@@ -212,12 +212,12 @@ def _parse_service_arg(arg_name: str, arg_value: str) -> tuple[str, str, t.Any]:
     return service, nested_keys[0], result
 
 
-def _parse_service_args(args: list[str]) -> t.Dict[str, t.Any]:
-    service_configs: t.DefaultDict[str, t.Dict[str, t.Any]] = collections.defaultdict(
+def _parse_service_args(args: list[str]) -> Dict[str, Any]:
+    service_configs: DefaultDict[str, Dict[str, Any]] = collections.defaultdict(
         dict
     )
 
-    def deep_update(d: dict, key: str, value: t.Any):
+    def deep_update(d: dict, key: str, value: Any):
         """
         Recursively updates nested dictionaries. We use this to process arguments like
 
@@ -267,9 +267,9 @@ def _parse_service_args(args: list[str]) -> t.Dict[str, t.Any]:
 
 
 def resolve_service_config(
-    config_file: str | t.TextIO | None = None,
+    config_file: str | TextIO | None = None,
     args: list[str] | None = None,
-) -> dict[str, dict[str, t.Any]]:
+) -> dict[str, dict[str, Any]]:
     """Resolve service configuration from file and command line arguments.
 
     Args:
@@ -279,7 +279,7 @@ def resolve_service_config(
     Returns:
         Dictionary mapping service names to their configurations
     """
-    service_configs: dict[str, dict[str, t.Any]] = {}
+    service_configs: dict[str, dict[str, Any]] = {}
 
     # Check for deployment config first
     if "DYN_DEPLOYMENT_CONFIG" in os.environ:
