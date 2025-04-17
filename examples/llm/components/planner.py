@@ -49,6 +49,8 @@ class Planner:
         )
         self._prefill_queue_stream_name = self.args.served_model_name
         
+        self.prefill_client = None
+        self.decode_client = None
         self.p_endpoints = None
         self.d_endpoints = None
         
@@ -66,24 +68,32 @@ class Planner:
 
     async def get_workers_info(self):
         try:
-            prefill_client = (
-                await self.runtime.namespace(self.namespace)
-                .component("PrefillWorker")
-                .endpoint("mock")
-                .client()
-            )
-            p_endpoints = prefill_client.endpoint_ids()
+            if self.prefill_client is None:
+                self.prefill_client = (
+                    await self.runtime.namespace(self.namespace)
+                    .component("PrefillWorker")
+                    .endpoint("mock")
+                    .client()
+                )
+                # TODO: remove this sleep after rust client() is blocking until watching state
+                await asyncio.sleep(0.1)
+            # TODO: use etcd events instead of pulling endpoints_ids
+            p_endpoints = self.prefill_client.endpoint_ids()
         except Exception:
             p_endpoints = []
             logger.info("No prefill workers found, operating in aggregated mode")
         try:
-            workers_client = (
-                await self.runtime.namespace(self.namespace)
-                .component("VllmWorker")
-                .endpoint("generate")
-                .client()
-            )
-            d_endpoints = workers_client.endpoint_ids()
+            if self.workers_client is None:
+                self.workers_client = (
+                    await self.runtime.namespace(self.namespace)
+                    .component("VllmWorker")
+                    .endpoint("generate")
+                    .client()
+                )
+                # TODO: remove this sleep after rust client() is blocking until watching state
+                await asyncio.sleep(0.1)
+            # TODO: use etcd events instead of pulling endpoints_ids
+            d_endpoints = self.workers_client.endpoint_ids()
         except Exception as e:
             raise RuntimeError(f"Failed to get decode worker endpoints: {e}")
         return p_endpoints, d_endpoints
@@ -132,9 +142,10 @@ class Planner:
             for endpoint in metrics.endpoints:
                 kv_load = getattr(endpoint, "gpu_cache_usage_perc", 0.0)
                 num_requests_waiting = getattr(endpoint, "num_requests_waiting", 0.0)
-                if num_requests_waiting > 0:
-                    # if requests are waiting, we assume the needed kv is higher
-                    num_queued_requests += num_requests_waiting
+                num_queued_requests += num_requests_waiting
+                if kv_load > 0.8 and num_requests_waiting > 0:
+                    # if requests are waiting and kv load is high, we assume the needed kv is higher
+                    # check kv_load first to avoid 
                     kv_load = 1.2
                 self.kv_load.append(kv_load)
             measure_time = time.time() - self.init_time
@@ -311,7 +322,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--namespace",
         type=str,
-        required=True,
+        default="dynamo",
         help="Namespace planner will look at",
     )
     parser.add_argument(
