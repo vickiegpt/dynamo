@@ -75,7 +75,6 @@ def create_dynamo_watcher(
     bento_identifier: str,
     svc: ServiceProtocol,
     uds_path: str,
-    port_stack: contextlib.ExitStack,
     scheduler: ResourceAllocator,
     working_dir: Optional[str] = None,
     env: Optional[Dict[str, str]] = None,
@@ -136,10 +135,7 @@ def serve_http(
     enable_planner: bool = False,
 ) -> Server:
     from dynamo.sdk.lib.loader import find_and_load_service
-
-    # WARNING: internal
     from dynamo.sdk.cli.circus import create_arbiter, create_circus_watcher
-
     from dynamo.sdk.lib.logging import configure_server_logging
 
     from .allocator import ResourceAllocator
