@@ -38,6 +38,18 @@ logger = logging.getLogger(__name__)
 
 DYN_LOCAL_STATE_DIR = "DYN_LOCAL_STATE_DIR"
 
+# Define a Protocol for services to ensure type safety
+class ServiceProtocol(t.Protocol):
+    name: str
+    inner: t.Any
+    models: list[t.Any]
+    bento: t.Any
+
+    def is_dynamo_component(self) -> bool:
+        ...
+
+    def dynamo_address(self) -> tuple[str, str]:
+        ...
 
 class DynamoCommandGroup(click.Group):
     """Simplified version of BentoMLCommandGroup for Dynamo CLI"""
@@ -106,19 +118,12 @@ def reserve_free_port(
     """
     detect free port and reserve until exit the context
     """
-    import psutil
-
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     if enable_so_reuseport:
-        if psutil.WINDOWS:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        elif psutil.MACOS or psutil.FREEBSD:
-            sock.setsockopt(socket.SOL_SOCKET, 0x10000, 1)  # SO_REUSEPORT_LB
-        else:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        if sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT) == 0:
+            raise RuntimeError("Failed to set SO_REUSEPORT.") from None
 
-            if sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT) == 0:
-                raise RuntimeError("Failed to set SO_REUSEPORT.") from None
     if prefix is not None:
         prefix_num = int(prefix) * 10 ** (5 - len(prefix))
         suffix_range = min(65535 - prefix_num, 10 ** (5 - len(prefix)))
@@ -143,25 +148,6 @@ def reserve_free_port(
         yield sock.getsockname()[1]
     finally:
         sock.close()
-
-
-def path_to_uri(path: str) -> str:
-    """
-    Convert a path to a URI.
-
-    Args:
-        path: Path to convert to URI.
-
-    Returns:
-        URI string. (quoted, absolute)
-    """
-    path = os.path.abspath(path)
-    if psutil.WINDOWS:
-        return pathlib.PureWindowsPath(path).as_uri()
-    if psutil.POSIX:
-        return pathlib.PurePosixPath(path).as_uri()
-    raise ValueError("Unsupported OS")
-
 
 def save_dynamo_state(
     namespace: str,

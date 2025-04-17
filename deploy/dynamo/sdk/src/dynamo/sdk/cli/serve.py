@@ -55,14 +55,14 @@ def build_serve_command() -> click.Group:
         type=click.STRING,
         required=False,
         default="",
-        envvar="BENTOML_SERVE_SERVICE_NAME",
+        envvar="DYNAMO_SERVICE_NAME",
         help="Only serve the specified service. Don't serve any dependencies of this service.",
     )
     @click.option(
         "--depends",
         type=click.STRING,
         multiple=True,
-        envvar="BENTOML_SERVE_DEPENDS",
+        envvar="DYNAMO_SERVE_DEPENDS",
         help="list of runners map",
     )
     @click.option(
@@ -70,21 +70,6 @@ def build_serve_command() -> click.Group:
         "--file",
         type=click.Path(exists=True),
         help="Path to YAML config file for service configuration",
-    )
-    @click.option(
-        "-p",
-        "--port",
-        type=click.INT,
-        help="The port to listen on for the REST api server if you are not using a dynamo service",
-        envvar="BENTOML_PORT",
-        show_envvar=True,
-    )
-    @click.option(
-        "--host",
-        type=click.STRING,
-        help="The host to bind for the REST api server if you are not using a dynamo service",
-        envvar="BENTOML_HOST",
-        show_envvar=True,
     )
     @click.option(
         "--working-dir",
@@ -112,18 +97,13 @@ def build_serve_command() -> click.Group:
         service_name: str,
         depends: Optional[list[str]],
         dry_run: bool,
-        port: int,
-        host: str,
         file: str | None,
         working_dir: str | None,
         enable_planner: bool,
         **attrs: t.Any,
     ) -> None:
         """Locally run connected Dynamo services. You can pass service-specific configuration options using --ServiceName.param=value format."""
-        # WARNING: internal
-        # from bentoml._internal.service.loader import load
         from dynamo.sdk.lib.loader import find_and_load_service
-
         from dynamo.sdk.lib.service import LinkedServices
 
         # Resolve service configs from yaml file, command line args into a python dict
@@ -167,8 +147,6 @@ def build_serve_command() -> click.Group:
         serve_http(
             bento,
             working_dir=working_dir,
-            host=host,
-            port=port,
             dependency_map=runner_map_dict,
             service_name=service_name,
             enable_planner=enable_planner,
