@@ -121,7 +121,8 @@ def build_serve_command() -> click.Group:
     ) -> None:
         """Locally run connected Dynamo services. You can pass service-specific configuration options using --ServiceName.param=value format."""
         # WARNING: internal
-        from bentoml._internal.service.loader import load
+        # from bentoml._internal.service.loader import load
+        from dynamo.sdk.lib.loader import find_and_load_service
 
         from dynamo.sdk.lib.service import LinkedServices
 
@@ -154,7 +155,9 @@ def build_serve_command() -> click.Group:
                 working_dir = "."
         if sys.path[0] != working_dir:
             sys.path.insert(0, working_dir)
-        svc = load(bento_identifier=bento, working_dir=working_dir)
+        svc = find_and_load_service(bento, working_dir=working_dir)
+        logger.info(f"Loaded service: {svc.name}")
+        logger.info("Dependencies: %s", [dep.on.name for dep in svc.dependencies.values()])
 
         LinkedServices.remove_unused_edges()
 

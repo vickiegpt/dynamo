@@ -17,15 +17,18 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import warnings
 from typing import Any
 
 from _bentoml_sdk import Service
-from bentoml._internal.configuration.containers import BentoMLContainer
+# from bentoml._internal.configuration.containers import BentoMLContainer
 from bentoml._internal.resource import system_resources
 from bentoml.exceptions import BentoMLConfigException
 from simple_di import Provide, inject
+
+logger = logging.getLogger(__name__)
 
 NVIDIA_GPU = "nvidia.com/gpu"
 DYN_DISABLE_AUTO_GPU_ALLOCATION = "DYN_DISABLE_AUTO_GPU_ALLOCATION"
@@ -101,36 +104,58 @@ class ResourceAllocator:
     def get_resource_envs(
         self,
         service: Service[Any],
-        services: dict[str, Any] = Provide[BentoMLContainer.config.services],
     ) -> tuple[int, list[dict[str, str]]]:
+        logger.info(f"Getting resource envs for service {service.name}")
+        services = service.get_service_configs()
+        if not services:
+            logger.warning(f"No service configs found for {service.name}")
+            return 1, []  # Default to 1 worker, no special resources
+            
+        if service.name not in services:
+            logger.warning(f"No config found for service {service.name}")
+            return 1, []
+
         config = services[service.name]
+        logger.debug(f"Using config for {service.name}: {config}")
 
         num_gpus = 0
         num_workers = 1
         resource_envs: list[dict[str, str]] = []
+        
         if "gpu" in (config.get("resources") or {}):
             num_gpus = config["resources"]["gpu"]  # type: ignore
+            logger.info(f"GPU requirement found: {num_gpus}")
+            
         if config.get("workers"):
             if (workers := config["workers"]) == "cpu_count":
                 num_workers = int(self.system_resources["cpu"])
+                logger.info(f"Using CPU count for workers: {num_workers}")
                 # don't assign gpus to workers
                 return num_workers, resource_envs
             else:  # workers is a number
                 num_workers = workers
+                logger.info(f"Using configured worker count: {num_workers}")
+                
         if num_gpus and DYN_DISABLE_AUTO_GPU_ALLOCATION not in os.environ:
+            logger.info("GPU allocation enabled")
             if os.environ.get(DYN_DEPLOYMENT_ENV):
+                logger.info("K8s deployment detected")
                 # K8s replicas: Assumes DYNAMO_DEPLOYMENT_ENV is set
                 # each pod in replicaset will have separate GPU with same CUDA_VISIBLE_DEVICES
                 assigned = self.assign_gpus(num_gpus)
+                logger.info(f"Assigned GPUs for K8s: {assigned}")
                 resource_envs = [
                     {"CUDA_VISIBLE_DEVICES": ",".join(map(str, assigned))}
                     for _ in range(num_workers)
                 ]
             else:
+                logger.info("Local deployment detected")
                 # local deployment where we split all available GPUs across workers
-                for _ in range(num_workers):
+                for worker_id in range(num_workers):
                     assigned = self.assign_gpus(num_gpus)
+                    logger.info(f"Assigned GPUs for worker {worker_id}: {assigned}")
                     resource_envs.append(
                         {"CUDA_VISIBLE_DEVICES": ",".join(map(str, assigned))}
                     )
+        logger.info(f"Final resource allocation - workers: {num_workers}, envs: {resource_envs}")
         return num_workers, resource_envs
