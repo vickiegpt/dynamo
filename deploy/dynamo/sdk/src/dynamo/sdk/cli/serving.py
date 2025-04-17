@@ -30,7 +30,7 @@ import tempfile
 import typing
 from typing import Any, Dict, Optional, Protocol, TypeVar
 
-# WARNING: internal
+# TODO: WARNING: internal but only for type checking in the deploy path i believe
 from _bentoml_sdk import Service
 
 # WARNING: internal
