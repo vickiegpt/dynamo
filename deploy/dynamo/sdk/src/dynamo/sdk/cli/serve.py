@@ -137,7 +137,9 @@ def build_serve_command() -> click.Group:
             sys.path.insert(0, working_dir)
         svc = find_and_load_service(bento, working_dir=working_dir)
         logger.info(f"Loaded service: {svc.name}")
-        logger.info("Dependencies: %s", [dep.on.name for dep in svc.dependencies.values()])
+        logger.info(
+            "Dependencies: %s", [dep.on.name for dep in svc.dependencies.values()]
+        )
 
         LinkedServices.remove_unused_edges()
 
