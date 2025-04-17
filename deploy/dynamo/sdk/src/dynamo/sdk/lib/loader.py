@@ -16,33 +16,34 @@
 #  Modifications Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES
 
 from __future__ import annotations
+
 import importlib
 import logging
 import os
 import sys
-from typing import Optional, Type, TypeVar, Any
-from pathlib import Path
+from typing import Optional, TypeVar
 
 from dynamo.sdk.lib.service import DynamoService
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=object)
 
+
 def find_and_load_service(
     import_str: str,
     working_dir: Optional[str] = None,
 ) -> DynamoService:
     """Load a DynamoService instance from source code by providing an import string.
-    
+
     Args:
         import_str: String in format "module[:attribute]" or "path/to/file.py[:attribute]"
             Examples:
-                "graphs:disagg:Frontend" 
+                "graphs:disagg:Frontend"
                 "fraud_detector:svc"
                 "./path/to/service.py:MyService"
                 "fraud_detector"  # Will find the root service if only one exists
         working_dir: Optional directory to use as base for imports. Defaults to cwd.
-    
+
     Returns:
         The loaded DynamoService instance
 
@@ -52,7 +53,7 @@ def find_and_load_service(
     """
     logger.info(f"Loading service from import string: {import_str}")
     logger.info(f"Working directory: {working_dir or os.getcwd()}")
-    
+
     sys_path_modified = False
     prev_cwd = None
 
@@ -79,12 +80,13 @@ def find_and_load_service(
             logger.info(f"Restoring working directory to: {prev_cwd}")
             os.chdir(prev_cwd)
 
+
 def _do_import(import_str: str, working_dir: str) -> DynamoService:
     """Internal function to handle the actual import logic"""
-    
+
     import_path, _, attrs_str = import_str.partition(":")
     logger.info(f"Parsed import string - path: {import_path}, attributes: {attrs_str}")
-    
+
     if not import_path:
         raise ValueError(
             f'Invalid import string "{import_str}", must be in format '
@@ -112,7 +114,10 @@ def _do_import(import_str: str, working_dir: str) -> DynamoService:
         while True:
             path, name = os.path.split(path)
             module_parts.append(name)
-            if not os.path.exists(os.path.join(path, "__init__.py")) or path == working_dir:
+            if (
+                not os.path.exists(os.path.join(path, "__init__.py"))
+                or path == working_dir
+            ):
                 break
         module_name = ".".join(module_parts[::-1])
         logger.info(f"Constructed module name from path: {module_name}")
@@ -130,24 +135,27 @@ def _do_import(import_str: str, working_dir: str) -> DynamoService:
     if not attrs_str:
         logger.info("No attributes specified, searching for root service")
         services = [
-            (name, obj) for name, obj in module.__dict__.items() 
+            (name, obj)
+            for name, obj in module.__dict__.items()
             if isinstance(obj, DynamoService)
         ]
         logger.info(f"Found {len(services)} DynamoService instances")
-        
+
         if not services:
-            raise ValueError(f"No DynamoService instances found in module '{module_name}'")
-        
+            raise ValueError(
+                f"No DynamoService instances found in module '{module_name}'"
+            )
+
         # Find root services (those that aren't dependencies of other services)
         dependents = set()
         for _, svc in services:
             for dep in svc.dependencies.values():
                 if dep.on is not None:
                     dependents.add(dep.on)
-        
+
         root_services = [(n, s) for n, s in services if s not in dependents]
         logger.info(f"Found {len(root_services)} root services")
-        
+
         if not root_services:
             raise ValueError(
                 f"No root DynamoService found in module '{module_name}'. "
@@ -159,7 +167,7 @@ def _do_import(import_str: str, working_dir: str) -> DynamoService:
                 f"Multiple root services found in module '{module_name}': {names}. "
                 "Please specify which service to use with '<module>:<service_name>'"
             )
-        
+
         _, instance = root_services[0]
         logger.info(f"Selected root service: {instance}")
     else:
@@ -175,9 +183,7 @@ def _do_import(import_str: str, working_dir: str) -> DynamoService:
                     logger.info(f"Getting attribute: {attr}")
                     instance = getattr(instance, attr)
             except (AttributeError, KeyError):
-                raise ValueError(
-                    f'Attribute "{attr}" not found in "{module_name}"'
-                )
+                raise ValueError(f'Attribute "{attr}" not found in "{module_name}"')
 
     if not isinstance(instance, DynamoService):
         raise ValueError(
@@ -188,9 +194,6 @@ def _do_import(import_str: str, working_dir: str) -> DynamoService:
     if not hasattr(instance, "_import_str"):
         import_str_val = f"{module_name}:{attrs_str}" if attrs_str else module_name
         logger.info(f"Setting _import_str to: {import_str_val}")
-        object.__setattr__(
-            instance, "_import_str", 
-            import_str_val
-        )
+        object.__setattr__(instance, "_import_str", import_str_val)
 
     return instance

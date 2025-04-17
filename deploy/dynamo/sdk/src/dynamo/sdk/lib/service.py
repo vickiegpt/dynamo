@@ -226,7 +226,7 @@ class DynamoService(Service[T]):
 
     def inject_config(self) -> None:
         """Inject configuration from environment into service configs.
-        
+
         This reads from DYNAMO_SERVICE_CONFIG environment variable and merges
         the configuration with any existing service config.
         """
@@ -244,58 +244,60 @@ class DynamoService(Service[T]):
             return
 
         # Store the entire config at class level
-        if not hasattr(DynamoService, '_global_service_configs'):
-            setattr(DynamoService, '_global_service_configs', {})
+        if not hasattr(DynamoService, "_global_service_configs"):
+            setattr(DynamoService, "_global_service_configs", {})
         DynamoService._global_service_configs = service_configs
 
         # Process ServiceArgs for all services
         all_services = self.all_services()
         logger.debug(f"Processing configs for services: {list(all_services.keys())}")
-        
+
         for name, svc in all_services.items():
             if name in service_configs:
                 svc_config = service_configs[name]
                 # Extract ServiceArgs if present
                 if "ServiceArgs" in svc_config:
-                    logger.debug(f"Found ServiceArgs for {name}: {svc_config['ServiceArgs']}")
-                    if not hasattr(svc, '_service_args'):
-                        object.__setattr__(svc, '_service_args', {})
+                    logger.debug(
+                        f"Found ServiceArgs for {name}: {svc_config['ServiceArgs']}"
+                    )
+                    if not hasattr(svc, "_service_args"):
+                        object.__setattr__(svc, "_service_args", {})
                     svc._service_args = svc_config["ServiceArgs"]
                 else:
                     logger.debug(f"No ServiceArgs found for {name}")
                     # Set default config
-                    if not hasattr(svc, '_service_args'):
-                        object.__setattr__(svc, '_service_args', {"workers": 1})
+                    if not hasattr(svc, "_service_args"):
+                        object.__setattr__(svc, "_service_args", {"workers": 1})
 
     def get_service_configs(self) -> Dict[str, Dict[str, Any]]:
         """Get the service configurations for resource allocation.
-        
+
         Returns:
             Dict mapping service names to their configs
         """
         # Get all services in the dependency chain
         all_services = self.all_services()
         result = {}
-        
+
         # If we have global configs, use them to build service configs
-        if hasattr(DynamoService, '_global_service_configs'):
+        if hasattr(DynamoService, "_global_service_configs"):
             for name, svc in all_services.items():
                 # Start with default config
                 config = {"workers": 1}
-                
+
                 # If service has specific args, use them
-                if hasattr(svc, '_service_args'):
+                if hasattr(svc, "_service_args"):
                     config.update(svc._service_args)
-                
+
                 # If there are global configs for this service, get ServiceArgs
                 if name in DynamoService._global_service_configs:
                     svc_config = DynamoService._global_service_configs[name]
                     if "ServiceArgs" in svc_config:
                         config.update(svc_config["ServiceArgs"])
-                
+
                 result[name] = config
                 logger.debug(f"Built config for {name}: {config}")
-        
+
         return result
 
 

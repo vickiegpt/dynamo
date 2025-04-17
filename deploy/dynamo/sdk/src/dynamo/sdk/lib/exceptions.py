@@ -5,6 +5,7 @@ from http import HTTPStatus
 
 class DynamoException(Exception):
     """Base class for all Dynamo SDK errors."""
+
     error_code = HTTPStatus.INTERNAL_SERVER_ERROR
     error_mapping = {}
 

@@ -18,36 +18,33 @@
 from __future__ import annotations
 
 import contextlib
-import ipaddress
 import json
 import logging
 from msilib import schema
 import os
 import pathlib
-import platform
 import shutil
 import tempfile
-import typing
-from typing import Any, Dict, Optional, Protocol, TypeVar
+from typing import Any, Dict, Optional, TypeVar
 
 # TODO: WARNING: internal but only for type checking in the deploy path i believe
 from _bentoml_sdk import Service
-
-# WARNING: internal
-from dynamo.sdk.lib.exceptions import DynamoException
-from dynamo.sdk.cli.circus import CircusManager
 from circus.sockets import CircusSocket
 from circus.watcher import Watcher
-from simple_di import Provide, inject
+from simple_di import inject
+
+from dynamo.sdk.cli.circus import CircusManager
+
+# WARNING: internal
 
 from .allocator import ResourceAllocator
+from .circus import _get_server_socket
 from .utils import (
     DYN_LOCAL_STATE_DIR,
+    ServiceProtocol,
     reserve_free_port,
     save_dynamo_state,
-    ServiceProtocol,
 )
-from .circus import _get_server_socket
 
 # Use Protocol as the base for type alias
 AnyService = TypeVar("AnyService", bound=ServiceProtocol)
@@ -69,6 +66,7 @@ def _get_dynamo_worker_script(bento_identifier: str, svc_name: str) -> list[str]
         "$(CIRCUS.WID)",
     ]
     return args
+
 
 def create_dynamo_watcher(
     bento_identifier: str,
@@ -133,8 +131,8 @@ def serve_dynamo_graph(
     service_name: str = "",
     enable_planner: bool = False,
 ) -> CircusManager:
-    from dynamo.sdk.lib.loader import find_and_load_service
     from dynamo.sdk.cli.circus import create_arbiter, create_circus_watcher
+    from dynamo.sdk.lib.loader import find_and_load_service
     from dynamo.sdk.lib.logging import configure_server_logging
 
     from .allocator import ResourceAllocator

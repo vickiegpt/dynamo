@@ -22,14 +22,12 @@ import contextlib
 import json
 import logging
 import os
-import pathlib
 import random
 import socket
 from typing import Any, Protocol, Optional, Iterator, DefaultDict, Dict, Union, TextIO
 import typing as t
 
 import click
-import psutil
 import yaml
 from click import Command, Context
 
@@ -40,6 +38,7 @@ configure_server_logging()
 logger = logging.getLogger(__name__)
 
 DYN_LOCAL_STATE_DIR = "DYN_LOCAL_STATE_DIR"
+
 
 # Define a Protocol for services to ensure type safety
 class ServiceProtocol(Protocol):
@@ -53,6 +52,7 @@ class ServiceProtocol(Protocol):
 
     def dynamo_address(self) -> tuple[str, str]:
         ...
+
 
 class DynamoCommandGroup(click.Group):
     """Simplified version of BentoMLCommandGroup for Dynamo CLI"""
@@ -152,6 +152,7 @@ def reserve_free_port(
     finally:
         sock.close()
 
+
 def save_dynamo_state(
     namespace: str,
     circus_endpoint: str,
@@ -216,9 +217,7 @@ def _parse_service_arg(arg_name: str, arg_value: str) -> tuple[str, str, Any]:
 
 
 def _parse_service_args(args: list[str]) -> Dict[str, Any]:
-    service_configs: DefaultDict[str, Dict[str, Any]] = collections.defaultdict(
-        dict
-    )
+    service_configs: DefaultDict[str, Dict[str, Any]] = collections.defaultdict(dict)
 
     def deep_update(d: dict, key: str, value: Any):
         """
