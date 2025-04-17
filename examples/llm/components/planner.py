@@ -50,7 +50,7 @@ class Planner:
         self._prefill_queue_stream_name = self.args.served_model_name
         
         self.prefill_client = None
-        self.decode_client = None
+        self.workers_client = None
         self.p_endpoints = None
         self.d_endpoints = None
         
