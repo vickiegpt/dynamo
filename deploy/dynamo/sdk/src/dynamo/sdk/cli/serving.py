@@ -188,7 +188,6 @@ def serve_dynamo_graph(
                             bento_id,
                             dep_svc,
                             uds_path,
-                            port_stack,
                             allocator,
                             str(bento_path.absolute()),
                             env=env,
