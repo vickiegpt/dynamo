@@ -141,10 +141,10 @@ def build_serve_command() -> click.Group:
 
         LinkedServices.remove_unused_edges()
 
-        from dynamo.sdk.cli.serving import serve_http  # type: ignore
+        from dynamo.sdk.cli.serving import serve_dynamo_graph  # type: ignore
 
         svc.inject_config()
-        serve_http(
+        serve_dynamo_graph(
             bento,
             working_dir=working_dir,
             dependency_map=runner_map_dict,
