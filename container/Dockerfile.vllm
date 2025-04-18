@@ -7,7 +7,8 @@ ARG RELEASE_BUILD
 ARG RUNTIME_IMAGE="nvcr.io/nvidia/cuda"
 ARG RUNTIME_IMAGE_TAG="12.8.1-runtime-ubuntu24.04"
 ARG MANYLINUX_IMAGE="quay.io/pypa/manylinux_2_28_x86_64"
-ARG GENAI_PERF_TAG="25d0188713adc47868d6b3f22426375237a90529"
+# TODO: Move to published pypi tags
+ARG GENAI_PERF_TAG="e67e853413a07a778dd78a55e299be7fba9c9c24"
 
 FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS nixl_base
 WORKDIR /opt/nixl
@@ -181,16 +182,12 @@ RUN mkdir /opt/dynamo && \
 ENV VIRTUAL_ENV=/opt/dynamo/venv
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
-# Common dependencies
-RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requirements.txt \
-    uv pip install --requirement /tmp/requirements.txt
-
 # Install patched vllm - keep this early in Dockerfile to avoid
 # rebuilds from unrelated source code changes
-ARG VLLM_REF="0.7.2"
+ARG VLLM_REF="0.8.4"
 ARG VLLM_PATCH="vllm_v${VLLM_REF}-dynamo-kv-disagg-patch.patch"
 ARG VLLM_PATCHED_PACKAGE_NAME="ai_dynamo_vllm"
-ARG VLLM_PATCHED_PACKAGE_VERSION="0.7.2.post1"
+ARG VLLM_PATCHED_PACKAGE_VERSION="0.8.4"
 RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
     mkdir /tmp/vllm && \
     uv pip install pip wheel && \
@@ -210,6 +207,10 @@ RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
     mkdir -p /workspace/dist && \
     wheel pack . --dest-dir /workspace/dist && \
     uv pip install /workspace/dist/${VLLM_PATCHED_PACKAGE_NAME}-*.whl
+
+# Common dependencies
+RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requirements.txt \
+    uv pip install --requirement /tmp/requirements.txt
 
 # Install test dependencies
 RUN --mount=type=bind,source=./container/deps/requirements.test.txt,target=/tmp/requirements.txt \

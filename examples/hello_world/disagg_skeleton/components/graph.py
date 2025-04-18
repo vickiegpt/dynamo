@@ -13,18 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
+from components.frontend import Frontend
+from components.kv_router import Router
+from components.processor import Processor
 
-try:
-    import vllm
-except ImportError:
-    vllm = None  # type: ignore
-
-pytestmark = pytest.mark.pre_merge
-
-
-# TODO: Consider `pytest.mark.vllm` and running tests based on environment
-@pytest.mark.skipif(vllm is None, reason="Skipping vllm tests, vllm not installed")
-def test_version():
-    # Verify that the image has the patched version of vllm
-    assert vllm.__version__.endswith("0.8.4")  # type: ignore
+Frontend.link(Processor).link(Router)
