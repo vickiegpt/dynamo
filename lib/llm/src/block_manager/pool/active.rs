@@ -1,7 +1,6 @@
-use std::sync::Weak;
-
 use super::*;
 
+use std::sync::Weak;
 use tokio::sync::oneshot;
 
 type ActiveRequestSender<S, M> = mpsc::UnboundedSender<RequestType<S, M>>;

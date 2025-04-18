@@ -25,15 +25,24 @@ pub enum BlockStorageManagerError {
     FailedToRegisterBlock(String),
 }
 
+/// Manages the blocks in a specific storage backend
 pub struct BlockStorageManager<S: Storage, M: BlockMetadata> {
     inner: Arc<RwLock<State<S, M>>>,
 }
 
 impl<S: Storage, M: BlockMetadata> BlockStorageManager<S, M> {
+    /// Creates a new [BlockStorageManager] with the given [EventManager]
+    /// On creation, the manager will not have any blocks allocated
     pub fn new(events: Arc<dyn EventManager>) -> Self {
         Self {
             inner: Arc::new(RwLock::new(State::new(events))),
         }
+    }
+
+    /// Adds a list of blocks to the inactive pool
+    pub fn add_blocks(&self, blocks: Vec<Block<S, M>>) {
+        let mut state = self.inner.write().unwrap();
+        state.inactive.add_blocks(blocks);
     }
 
     /// Attempts to allocate a number of blocks from the inactive pool
@@ -46,6 +55,15 @@ impl<S: Storage, M: BlockMetadata> BlockStorageManager<S, M> {
         state.allocate_blocks(count, self.inner.clone())
     }
 
+    /// Registers [MutableBlock] with the [BlockStorageManager]
+    ///
+    /// The result will be an [ImmutableBlock] which may or may not be the same storage block
+    /// that was passed in as a parameter.
+    ///
+    /// This accounts for the inflight cases where two identical blocks are created near in time.
+    /// The first block with a common [SequenceHash] will be registered. Any subsequent blocks with
+    /// the same [SequenceHash] will have its [MutableBlock] returned to the pool
+    /// as an [ImmutableBlock]
     pub fn register_block(
         &mut self,
         block: MutableBlock<S, M>,
@@ -53,7 +71,11 @@ impl<S: Storage, M: BlockMetadata> BlockStorageManager<S, M> {
         self.inner.write().unwrap().register_block(block)
     }
 
+    /// Attempts to match the given [SequenceHash] to an existing block
     ///
+    /// Matches will be attempted in the following order:
+    /// - Active pool
+    /// - Inactive pool
     pub fn match_sequence_hash(
         &mut self,
         sequence_hash: SequenceHash,
@@ -83,7 +105,7 @@ impl<S: Storage, M: BlockMetadata> BlockStorageManager<S, M> {
 
 struct State<S: Storage, M: BlockMetadata> {
     active: ActiveBlockMap<S, M>,
-    inactive: BlockPoolInner<S, M>,
+    inactive: InactiveBlockPool<S, M>,
     events: Arc<dyn EventManager>,
 }
 
@@ -91,7 +113,7 @@ impl<S: Storage, M: BlockMetadata> State<S, M> {
     fn new(events: Arc<dyn EventManager>) -> Self {
         Self {
             active: ActiveBlockMap::new(),
-            inactive: BlockPoolInner::new(),
+            inactive: InactiveBlockPool::new(),
             events,
         }
     }
@@ -101,11 +123,7 @@ impl<S: Storage, M: BlockMetadata> State<S, M> {
         count: usize,
         state: Arc<RwLock<State<S, M>>>,
     ) -> Result<Vec<MutableBlock<S, M>>, BlockStorageManagerError> {
-        let available_blocks = self
-            .inactive
-            .available_blocks_watcher()
-            .borrow_and_update()
-            .clone() as usize;
+        let available_blocks = self.inactive.available_blocks() as usize;
 
         if available_blocks < count {
             tracing::debug!(
@@ -122,7 +140,7 @@ impl<S: Storage, M: BlockMetadata> State<S, M> {
         let mut blocks = Vec::with_capacity(count);
 
         for _ in 0..count {
-            if let Some(block) = self.inactive.acquire_next_free() {
+            if let Some(block) = self.inactive.acquire_free_block() {
                 blocks.push(MutableBlock {
                     block: Some(block),
                     state: state.clone(),

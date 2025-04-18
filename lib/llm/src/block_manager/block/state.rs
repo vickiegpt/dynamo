@@ -51,4 +51,8 @@ impl RegisteredState {
             registration_handle,
         }
     }
+
+    pub fn is_armed(&self) -> bool {
+        self.registration_handle.is_armed()
+    }
 }

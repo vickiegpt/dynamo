@@ -58,6 +58,13 @@ pub struct RegistrationHandle {
     release_manager: Option<Arc<dyn EventReleaseManager>>,
 }
 
+impl RegistrationHandle {
+    /// Returns true if the registration handle will trigger an event when dropped
+    pub fn is_armed(&self) -> bool {
+        self.release_manager.is_some()
+    }
+}
+
 impl std::fmt::Debug for RegistrationHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -93,30 +100,34 @@ struct RegisterBlocksEvent {
     parent_hash: Option<ExternalSequenceBlockHash>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NullEventManager {}
 
 impl EventManager for NullEventManager {
     fn register_block(&self, token_block: &TokenBlock) -> Result<RegistrationHandle> {
+        let release_manager: Arc<dyn EventReleaseManager> = Arc::new(self.clone());
         Ok(RegistrationHandle {
             sequence_hash: token_block.sequence_hash(),
-            release_manager: None,
+            release_manager: Some(release_manager),
         })
     }
 
-    fn register_blocks(&self, token_block: &[TokenBlock]) -> Result<Vec<RegistrationHandle>> {
-        Ok(token_block
+    fn register_blocks(&self, token_blocks: &[TokenBlock]) -> Result<Vec<RegistrationHandle>> {
+        let release_manager: Arc<dyn EventReleaseManager> = Arc::new(self.clone());
+        Ok(token_blocks
             .iter()
             .map(|block| RegistrationHandle {
                 sequence_hash: block.sequence_hash(),
-                release_manager: None,
+                release_manager: Some(release_manager.clone()),
             })
             .collect())
     }
 }
 
 impl EventReleaseManager for NullEventManager {
-    fn block_release(&self, _sequence_hash: SequenceHash) {}
+    fn block_release(&self, _sequence_hash: SequenceHash) {
+        // No-op for the null implementation
+    }
 }
 
 pub enum DynamoPublisher {

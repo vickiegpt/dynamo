@@ -145,20 +145,33 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
 
     /// Register the block with the event manager
     pub(crate) fn register(&mut self, events: &dyn EventManager) -> Result<(), BlockError> {
-        match &mut self.state {
-            BlockState::Complete(state) => {
-                let handle = events
-                    .register_block(state.token_block())
-                    .map_err(|e| BlockError::FailedToRegister(e.to_string()))?;
-                self.state = BlockState::Registered(state::RegisteredState::new(state, handle));
-                Ok(())
-            }
+        match self.state {
             BlockState::Registered(_) => Ok(()),
+            BlockState::Complete(_) => {
+                let current_state = std::mem::replace(&mut self.state, BlockState::Reset);
+
+                if let BlockState::Complete(complete_state) = current_state {
+                    match events.register_block(complete_state.token_block()) {
+                        Ok(handle) => {
+                            let registered_state =
+                                state::RegisteredState::new(&complete_state, handle);
+                            self.state = BlockState::Registered(registered_state);
+                            Ok(())
+                        }
+                        Err(e) => {
+                            self.state = BlockState::Complete(complete_state);
+                            Err(BlockError::FailedToRegister(e.to_string()))
+                        }
+                    }
+                } else {
+                    unreachable!("State was not Complete after std::mem::replace");
+                }
+            }
             BlockState::Reset => Err(BlockError::InvalidState(
-                "expected state complete/registered but got reset".to_string(),
+                "Cannot register a block in Reset state".to_string(),
             )),
             BlockState::Partial(_) => Err(BlockError::InvalidState(
-                "expected state complete/registered but got partial".to_string(),
+                "Cannot register a block in Partial state".to_string(),
             )),
         }
     }
@@ -178,7 +191,7 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
 
     /// Returns true if the block is in the registered state
     pub fn is_registered(&self) -> bool {
-        matches!(self.state, BlockState::Registered(_))
+        matches!(&self.state, BlockState::Registered(state) if state.is_armed())
     }
 
     /// Get a read-only view of a layer
