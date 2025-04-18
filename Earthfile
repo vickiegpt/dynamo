@@ -236,8 +236,8 @@ base-images:
 all-docker:
     ARG DOCKER_SERVER=my-registry
     ARG IMAGE_TAG=latest
-    BUILD ./deploy/dynamo/operator+docker --DOCKER_SERVER=$DOCKER_SERVER --IMAGE_TAG=$IMAGE_TAG
-    BUILD ./deploy/dynamo/api-store+docker --DOCKER_SERVER=$DOCKER_SERVER --IMAGE_TAG=$IMAGE_TAG
+    BUILD +cloud-components --DOCKER_SERVER=$DOCKER_SERVER --IMAGE_TAG=$IMAGE_TAG
+    BUILD +base-images --DOCKER_SERVER=$DOCKER_SERVER --IMAGE_TAG=$IMAGE_TAG
 
 all-lint:
     BUILD ./deploy/dynamo/operator+lint
