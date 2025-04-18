@@ -154,6 +154,7 @@ class VllmWorker:
 
     async def create_metrics_publisher_endpoint(self):
         component = dynamo_context["component"]
+        # TODO: use the same child lease for metrics publisher endpoint and generate endpoint
         await self.metrics_publisher.create_endpoint(component)
 
     def get_remote_prefill_request_callback(self):
@@ -167,6 +168,7 @@ class VllmWorker:
 
         return callback
 
+    # TODO: use the same child lease for metrics publisher endpoint and generate endpoint
     @dynamo_endpoint()
     async def generate(self, request: vLLMGenerateRequest):
         # TODO: consider prefix hit when deciding prefill locally or remotely
