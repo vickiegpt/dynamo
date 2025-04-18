@@ -128,19 +128,20 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
         &self.metadata
     }
 
-    /// Get a mutable reference to the metadata of the block
-    pub fn metadata_mut(&mut self) -> &mut M {
-        &mut self.metadata
+    /// Update the metadata of the block
+    pub fn update_metadata(&mut self, metadata: M) {
+        self.metadata = metadata;
+    }
+
+    /// Update the state of the block
+    #[allow(dead_code)]
+    pub(crate) fn update_state(&mut self, state: BlockState) {
+        self.state = state;
     }
 
     /// Get a reference to the state of the block
     pub fn state(&self) -> &BlockState {
         &self.state
-    }
-
-    /// Get a mutable reference to the state of the block
-    pub(crate) fn state_mut(&mut self) -> &mut BlockState {
-        &mut self.state
     }
 
     /// Register the block with the event manager
@@ -222,6 +223,14 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
     /// Get the inner dimension of the block
     pub fn inner_dim(&self) -> usize {
         self.storage.layout.inner_dim()
+    }
+
+    pub(crate) fn metadata_on_acquired(&mut self) {
+        self.metadata.on_acquired();
+    }
+
+    pub(crate) fn metadata_on_returned(&mut self, tick: u64) {
+        self.metadata.on_returned(tick);
     }
 }
 

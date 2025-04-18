@@ -175,7 +175,7 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
         self.return_tick += 1;
 
         // update the metadata
-        block.metadata_mut().on_returned(self.return_tick);
+        block.metadata_on_returned(self.return_tick);
 
         // insert the block into the pool
         self.insert(block);
@@ -338,7 +338,7 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
         // that have been arranged in the correct order
         if let Some(mut block) = self.uninitialized_set.pop_front() {
             tracing::trace!("Acquired uninitialized block");
-            block.metadata_mut().on_acquired();
+            block.metadata_on_acquired();
             return Some(block);
         }
 
@@ -349,7 +349,7 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
             match self.lookup_map.remove(&key.sequence_hash()) {
                 Some(mut block) => {
                     block.reset();
-                    block.metadata_mut().on_acquired();
+                    block.metadata_on_acquired();
                     Some(block)
                 }
                 None => {
@@ -580,7 +580,7 @@ pub(crate) mod tests {
         // setting the state and registering each one.
         for (block, token_block) in blocks.iter_mut().zip(token_blocks.into_iter()) {
             assert!(block.is_empty()); // Start with empty blocks
-            *block.state_mut() = BlockState::Complete(CompleteState::new(token_block));
+            block.update_state(BlockState::Complete(CompleteState::new(token_block)));
             block
                 .register(&event_manager)
                 .expect("Failed to register block in test helper");
@@ -645,7 +645,7 @@ pub(crate) mod tests {
 
         for (unmatched, token_block) in unmatched_blocks.iter_mut().zip(token_blocks.into_iter()) {
             assert!(unmatched.is_empty());
-            *unmatched.state_mut() = BlockState::Complete(CompleteState::new(token_block));
+            unmatched.update_state(BlockState::Complete(CompleteState::new(token_block)));
             unmatched.register(&event_manager).unwrap();
             assert!(unmatched.is_registered());
         }
