@@ -1,6 +1,12 @@
 use super::*;
+use tracing::instrument;
 
 impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
+    /// Creates a new, empty [`InactiveBlockPool`].
+    ///
+    /// # Returns
+    ///
+    /// A new instance of [`InactiveBlockPool`].
     pub(crate) fn new() -> Self {
         Self {
             lookup_map: HashMap::new(),
@@ -11,77 +17,130 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
         }
     }
 
+    /// Returns the total number of blocks managed by this pool (both available and acquired).
+    ///
+    /// # Returns
+    ///
+    /// The total block count as a [`u64`].
     pub fn total_blocks(&self) -> u64 {
         self.total_blocks
     }
 
+    /// Returns the number of blocks currently available in the pool.
+    ///
+    /// This is calculated dynamically based on the blocks in the [`uninitialized_set`]
+    /// and the [`lookup_map`].
+    ///
+    /// # Returns
+    ///
+    /// The available block count as a [`u64`].
     pub fn available_blocks(&self) -> u64 {
         self.uninitialized_set.len() as u64 + self.lookup_map.len() as u64
     }
 
+    /// Inserts a block into the pool using its sequence hash for potential reuse.
+    ///
+    /// If an entry with the same priority key already exists in the [`priority_set`],
+    /// the block is reset and moved to the [`uninitialized_set`].
+    /// If an entry with the same sequence hash already exists in the [`lookup_map`]
+    /// (but not the priority set - indicating an inconsistency), the block is reset
+    /// and moved to the [`uninitialized_set`].
+    /// Otherwise, the block is added to both the [`lookup_map`] and the [`priority_set`].
+    ///
+    /// # Arguments
+    ///
+    /// * `block` - The block to insert ([`BlockType<T, M>`]).
+    /// * `sequence_hash` - The sequence hash associated with the block's content ([`SequenceHash`]).
+    #[instrument(level = "trace", skip(self, block), fields(sequence_hash = ?sequence_hash))]
     fn insert_with_sequence_hash(&mut self, block: BlockType<T, M>, sequence_hash: SequenceHash) {
         let priority_key = PriorityKey::new(block.metadata().clone(), sequence_hash);
         if self.priority_set.contains(&priority_key) {
-            tracing::debug!("multiple entries with the same priority key, resetting block and inserting into uninitialized set");
+            tracing::trace!("multiple entries with the same priority key, resetting block and inserting into uninitialized set");
             let mut block = block;
             block.reset();
             self.uninitialized_set.push_back(block);
         } else if let std::collections::hash_map::Entry::Vacant(e) =
             self.lookup_map.entry(sequence_hash)
         {
-            tracing::debug!("inserting block to map and priority set");
+            tracing::trace!("inserting block to map and priority set");
             self.priority_set.insert(priority_key);
             e.insert(block);
         } else {
-            tracing::debug!("multiple entries in lookup map with the same sequence hash, inserting into uninitialized set");
+            tracing::trace!("multiple entries in lookup map with the same sequence hash, inserting into uninitialized set");
             let mut block = block;
             block.reset();
             self.uninitialized_set.push_back(block);
         }
     }
 
-    // Insert an item with a given key and sequence_hash
+    /// Internal helper to insert a block into the appropriate internal collection
+    /// based on its current state.
+    ///
+    /// - [`BlockState::Reset`], [`BlockState::Partial`], [`BlockState::Complete`] states result in the block being reset and added
+    ///   to the `uninitialized_set`.
+    /// - [`BlockState::Registered`] state results in the block being added via [`insert_with_sequence_hash`].
+    ///
+    /// # Arguments
+    ///
+    /// * `block` - The block to insert ([`BlockType<T, M>`]).
+    #[instrument(level = "trace", skip(self, block), fields(block_state = ?block.state()))]
     fn insert(&mut self, block: BlockType<T, M>) {
-        tracing::debug!("inserting block into available blocks");
+        tracing::trace!("Inserting block into available pool");
 
         // If we already have an entry for this sequence hash or the block is reset,
         // we need to move it to the uninitialized set
         match block.state() {
             BlockState::Reset => {
-                tracing::debug!("inserted block to uninitialized set");
                 self.uninitialized_set.push_back(block);
             }
             BlockState::Partial(_) => {
-                tracing::debug!("inserted block to uninitialized set");
                 let mut block = block;
                 block.reset();
                 self.uninitialized_set.push_back(block);
             }
             BlockState::Complete(_) => {
-                tracing::debug!("inserting completed/unregistered block to uninitialized set");
                 let mut block = block;
                 block.reset();
                 self.uninitialized_set.push_back(block);
             }
             BlockState::Registered(state) => {
-                tracing::debug!("inserting registered block to map and priority set");
                 let sequence_hash = state.sequence_hash();
                 self.insert_with_sequence_hash(block, sequence_hash);
             }
         }
     }
 
+    /// Adds multiple blocks to the pool.
+    ///
+    /// Each block is reset before being inserted. The total block count is updated.
+    ///
+    /// # Arguments
+    ///
+    /// * `blocks` - A vector of blocks ([`BlockType<T, M>`]) to add.
+    #[instrument(level = "debug", skip(self, blocks))]
     pub fn add_blocks(&mut self, blocks: Vec<BlockType<T, M>>) {
-        let count = blocks.len() as u64;
+        let count = blocks.len();
+        tracing::debug!(count, "Adding blocks to pool");
 
-        for mut block in blocks {
+        for (i, mut block) in blocks.into_iter().enumerate() {
+            tracing::trace!(current = i + 1, total = count, "Processing block");
             block.reset();
+            // Note: The insert method already has its own span and tracing
             self.insert(block);
         }
 
-        self.total_blocks += count;
+        self.total_blocks += count as u64;
     }
 
+    /// Returns a single block to the pool.
+    ///
+    /// Increments the internal return tick, updates the block's metadata,
+    /// and inserts the block back into the appropriate internal collection.
+    ///
+    /// # Arguments
+    ///
+    /// * `block` - The block ([`BlockType<T, M>`]) to return.
+    #[instrument(level = "debug", skip(self, block))]
     pub fn return_block(&mut self, mut block: BlockType<T, M>) {
         // increment the return tick
         self.return_tick += 1;
@@ -93,13 +152,37 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
         self.insert(block);
     }
 
+    /// Returns multiple blocks to the pool.
+    ///
+    /// Iterates through the blocks in reverse order (tail to head) and calls
+    /// `return_block` for each one.
+    ///
+    /// # Arguments
+    ///
+    /// * `blocks` - A vector of blocks ([`BlockType<T, M>`]) to return.
+    #[instrument(level = "debug", skip(self, blocks))]
     pub fn return_blocks(&mut self, blocks: Vec<BlockType<T, M>>) {
+        let count = blocks.len();
+        tracing::debug!(count, "Returning blocks to pool");
         // return the block to the pool from tail to head
-        for block in blocks.into_iter().rev() {
+        for (i, block) in blocks.into_iter().rev().enumerate() {
+            tracing::trace!(current = i + 1, total = count, "Returning block");
+            // Note: return_block has its own instrumentation
             self.return_block(block);
         }
     }
 
+    /// Attempts to remove and return a block associated with the given sequence hash
+    /// from the [`lookup_map`] and [`priority_set`].
+    ///
+    /// # Arguments
+    ///
+    /// * `sequence_hash` - The sequence hash ([`SequenceHash`]) of the block to take.
+    ///
+    /// # Returns
+    ///
+    /// An [`Option<BlockType<T, M>>`] containing the block if found, otherwise `None`.
+    #[instrument(level = "trace", skip(self), fields(sequence_hash = ?sequence_hash))]
     fn take_with_sequence_hash(&mut self, sequence_hash: SequenceHash) -> Option<BlockType<T, M>> {
         match self.lookup_map.remove(&sequence_hash) {
             Some(block) => {
@@ -112,20 +195,51 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
         }
     }
 
+    /// Attempts to find and take a block matching the given sequence hash.
+    ///
+    /// This is a convenience wrapper around `take_with_sequence_hash`.
+    ///
+    /// # Arguments
+    ///
+    /// * `sequence_hash` - The sequence hash ([`SequenceHash`]) to match.
+    ///
+    /// # Returns
+    ///
+    /// An [`Option<BlockType<T, M>>`] containing the block if found, otherwise `None`.
+    #[instrument(level = "debug", skip(self), fields(sequence_hash = ?sequence_hash))]
     pub fn match_sequence_hash(&mut self, sequence_hash: SequenceHash) -> Option<BlockType<T, M>> {
         self.take_with_sequence_hash(sequence_hash)
     }
 
+    /// Attempts to find and take multiple blocks matching a sequence of hashes.
+    ///
+    /// Iterates through the provided hashes and takes blocks using `take_with_sequence_hash`.
+    /// Stops if a hash is not found.
+    ///
+    /// # Arguments
+    ///
+    /// * `sequence_hashes` - A vector of sequence hashes ([`SequenceHash`]) to match.
+    ///
+    /// # Returns
+    ///
+    /// A vector containing the blocks ([`BlockType<T, M>`]) that were successfully matched and taken.
+    /// The vector may be shorter than `sequence_hashes` if not all hashes were found.
+    #[instrument(level = "debug", skip(self, sequence_hashes), fields(num_hashes = sequence_hashes.len()))]
     pub fn match_sequence_hashes(
         &mut self,
         sequence_hashes: Vec<SequenceHash>,
     ) -> Vec<BlockType<T, M>> {
-        let mut matched_blocks = Vec::with_capacity(sequence_hashes.len());
+        let total_hashes = sequence_hashes.len();
+        let mut matched_blocks = Vec::with_capacity(total_hashes);
 
-        for hash in sequence_hashes {
+        for (i, hash) in sequence_hashes.into_iter().enumerate() {
+            tracing::trace!(current = i + 1, total = total_hashes, sequence_hash = ?hash, "Attempting to match sequence hash");
+            // Note: take_with_sequence_hash has its own instrumentation
             if let Some(block) = self.take_with_sequence_hash(hash) {
+                tracing::trace!(current = i + 1, total = total_hashes, sequence_hash = ?hash, "Matched sequence hash");
                 matched_blocks.push(block);
             } else {
+                tracing::trace!(current = i + 1, total = total_hashes, sequence_hash = ?hash, "Sequence hash not found, stopping match");
                 break;
             }
         }
@@ -133,25 +247,69 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
         matched_blocks
     }
 
+    /// Attempts to find and take multiple blocks matching a sequence of `TokenBlock`s.
+    ///
+    /// Extracts sequence hashes from the [`TokenBlock`]s and calls [`take_with_sequence_hash`].
+    /// Stops if a hash is not found.
+    ///
+    /// # Arguments
+    ///
+    /// * `token_blocks` - A slice of [`TokenBlock`]s to match.
+    ///
+    /// # Returns
+    ///
+    /// A vector containing the blocks ([`BlockType<T, M>`]) that were successfully matched and taken.
+    /// The vector may be shorter than `token_blocks` if not all corresponding hashes were found.
+    #[instrument(level = "debug", skip(self, token_blocks), fields(num_token_blocks = token_blocks.len()))]
     pub fn match_token_blocks(&mut self, token_blocks: &[TokenBlock]) -> Vec<BlockType<T, M>> {
-        let mut matched_blocks = Vec::with_capacity(token_blocks.len());
+        let total_blocks = token_blocks.len();
+        let mut matched_blocks = Vec::with_capacity(total_blocks);
 
-        for token_block in token_blocks {
-            if let Some(block) = self.take_with_sequence_hash(token_block.sequence_hash()) {
+        tracing::debug!("Attempting to match {} token blocks", total_blocks);
+
+        for (i, token_block) in token_blocks.iter().enumerate() {
+            let sequence_hash = token_block.sequence_hash();
+            tracing::trace!(sequence_hash = ?sequence_hash, "Attempting to match token block hash {}/{}", i + 1, total_blocks);
+            // Note: take_with_sequence_hash has its own instrumentation
+            if let Some(block) = self.take_with_sequence_hash(sequence_hash) {
+                tracing::trace!(sequence_hash = ?sequence_hash, "Matched token block hash");
                 matched_blocks.push(block);
             } else {
+                tracing::trace!(sequence_hash = ?sequence_hash, "Token block hash not found, stopping match");
                 break;
             }
         }
 
+        tracing::debug!(
+            "Matched {} of {} token blocks",
+            matched_blocks.len(),
+            total_blocks
+        );
+
         matched_blocks
     }
 
+    /// Acquires a single free block from the pool.
+    ///
+    /// Prioritizes blocks from the [`uninitialized_set`] first, then takes the
+    /// lowest priority block from the [`priority_set`] (and [`lookup_map`]).
+    /// If a block is taken from the priority set, it is reset.
+    ///
+    /// # Returns
+    ///
+    /// An [`Option<BlockType<T, M>>`] containing a free block if available, otherwise `None`.
+    ///
+    /// # Panics
+    ///
+    /// This function can panic if there is an inconsistency between the [`priority_set`]
+    /// and [`lookup_map`] (i.e., a key exists in the set but not the map). This indicates
+    /// a bug in the pool's internal logic.
+    #[instrument(level = "debug", skip(self))]
     pub fn acquire_free_block(&mut self) -> Option<BlockType<T, M>> {
         // First try uninitialized blocks - these are often part of sequences
         // that have been arranged in the correct order
         if let Some(mut block) = self.uninitialized_set.pop_front() {
-            tracing::trace!("acquired uninitialized block");
+            tracing::trace!("Acquired uninitialized block");
             block.metadata_mut().on_acquired();
             return Some(block);
         }
@@ -159,7 +317,7 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
         // if we have blocks in the priority set, pop the first (it's sorted by priority)
         // a fatal error will occur if the block is not found in the lookup map
         if let Some(key) = self.priority_set.pop_first() {
-            tracing::trace!("acquired priority/registered block map; resetting block");
+            tracing::trace!("Acquired priority/registered block map; resetting block");
             match self.lookup_map.remove(&key.sequence_hash()) {
                 Some(mut block) => {
                     block.reset();
@@ -184,23 +342,58 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
         }
     }
 
+    /// Acquires a specified number of free blocks from the pool.
+    ///
+    /// Checks if enough blocks are available and then calls [`acquire_free_block`] repeatedly.
+    ///
+    /// # Arguments
+    ///
+    /// * `count` - The number of free blocks to acquire.
+    ///
+    /// # Returns
+    ///
+    /// A [`Result`] containing:
+    /// - `Ok(Vec<BlockType<T, M>>)`: A vector of the acquired blocks if successful.
+    /// - `Err(BlockPoolError::InsufficientBlocksAvailable)`: If the requested number
+    ///   of blocks is not available, or if an inconsistency occurred during acquisition.
+    ///
+    /// # Panics
+    ///
+    /// This function can panic if [`acquire_free_block`] panics due to internal inconsistencies.
+    #[instrument(level = "debug", skip(self))]
     pub fn acquire_free_blocks(
         &mut self,
         count: usize,
     ) -> Result<Vec<BlockType<T, M>>, BlockPoolError> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+
         let mut blocks = Vec::with_capacity(count);
 
         let available_now = self.uninitialized_set.len() + self.lookup_map.len();
+        tracing::debug!(
+            available_now,
+            requested = count,
+            "Attempting to acquire free blocks"
+        );
 
         if count > available_now {
+            tracing::debug!(
+                available_now,
+                requested = count,
+                "Insufficient blocks available"
+            );
             return Err(BlockPoolError::InsufficientBlocksAvailable(
                 count,
                 available_now,
             ));
         }
 
-        for _ in 0..count {
+        for i in 0..count {
+            tracing::trace!(current = i + 1, total = count, "Acquiring free block");
             // Directly call the logic in acquire_free_block
+            // Note: acquire_free_block has its own instrumentation
             if let Some(block) = self.acquire_free_block() {
                 blocks.push(block);
             } else {
@@ -221,8 +414,15 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
             }
         }
 
+        let acquired_count = blocks.len();
+        tracing::debug!(
+            acquired_count,
+            requested = count,
+            "Finished acquiring blocks"
+        );
+
         // Check if we got the requested number of blocks
-        if blocks.len() != count {
+        if acquired_count != count {
             // This path is taken if the loop broke early due to unexpected `None` from acquire_free_block
             // Return an error indicating partial success or failure
             // Depending on the desired behavior, you might return the partial list
@@ -236,138 +436,6 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
 
         Ok(blocks)
     }
-
-    // fn handle_take(&mut self, take: Take<T, M>) {
-    //     let (count, return_handle, tx) = take.dissolve();
-
-    //     let mut taken_blocks = Vec::with_capacity(count as usize);
-
-    //     for _ in 0..count {
-    //         if let Some(block) = self.take() {
-    //             taken_blocks.push(self.create_pool_item(block, return_handle.clone()));
-    //         } else {
-    //             break;
-    //         }
-    //     }
-
-    //     let count = taken_blocks.len() as u64;
-    //     self.available_blocks_tx
-    //         .send_modify(|n| *n = n.saturating_sub(count));
-
-    //     // Send the result back through the channel
-    //     if tx.send(taken_blocks).is_err() {
-    //         tracing::trace!("Failed to send matched blocks to requester");
-    //     }
-    // }
-
-    // fn handle_match_request(&mut self, match_request: MatchRequest<T, M>) {
-    //     match match_request {
-    //         MatchRequest::MatchSingle(match_single) => self.handle_match_single(match_single),
-    //         MatchRequest::MatchMultiple(match_multiple) => {
-    //             self.handle_match_multiple(match_multiple)
-    //         }
-    //         MatchRequest::Take(take) => self.handle_take(take),
-    //     }
-    // }
-
-    // fn handle_control_request(&mut self, control_request: ControlRequest<T, M>) {
-    //     match control_request {
-    //         ControlRequest::Insert(insert) => {
-    //             let (block, tx) = insert.dissolve();
-    //             self.handle_insert(block);
-    //             if tx.send(()).is_err() {
-    //                 tracing::trace!("Failed to send insert ack; receiver dropped");
-    //             }
-    //         }
-    //         ControlRequest::UpdateSingle(update_single) => {
-    //             let (update, tx) = update_single.dissolve();
-    //             self.handle_update_single(update);
-    //             if tx.send(()).is_err() {
-    //                 tracing::trace!("Failed to send update single ack; receiver dropped");
-    //             }
-    //         }
-    //         ControlRequest::UpdateMultiple(update_multiple) => {
-    //             let (updates, tx) = update_multiple.dissolve();
-    //             self.handle_update_multiple(updates);
-    //             if tx.send(()).is_err() {
-    //                 tracing::trace!("Failed to send update multiple ack; receiver dropped");
-    //             }
-    //         }
-    //         ControlRequest::Reset(reset) => {
-    //             let (sequence_hashes, tx, _) = reset.dissolve();
-    //             self.handle_reset(sequence_hashes);
-    //             if tx.send(()).is_err() {
-    //                 tracing::trace!("Failed to send reset ack; receiver dropped");
-    //             }
-    //         }
-    //         ControlRequest::ResetAll(reset_all) => {
-    //             let (tx, _) = reset_all.dissolve();
-    //             self.handle_reset_all();
-    //             if tx.send(()).is_err() {
-    //                 tracing::trace!("Failed to send reset all ack; receiver dropped");
-    //             }
-    //         }
-    //     }
-    // }
-
-    // fn handle_insert(&mut self, block: Block<T, M>) {
-    //     self.available_blocks_tx.send_modify(|n| *n += 1);
-    //     self.total_blocks_tx.send_modify(|n| *n += 1);
-    //     self.return_tick += 1;
-
-    //     self.insert(PoolValue::Direct(block));
-    // }
-
-    // fn handle_return(&mut self, block: BlockType<T, M>) {
-    //     self.available_blocks_tx.send_modify(|n| *n += 1);
-    //     self.return_tick += 1;
-
-    //     self.insert(block);
-    // }
-
-    // fn handle_update_single(&mut self, update: UpdateBlock<M>) {
-    //     self.update_block(vec![update]);
-    // }
-
-    // fn handle_update_multiple(&mut self, updates: Vec<UpdateBlock<M>>) {
-    //     for update in updates {
-    //         if let Some(mut block) = self.take_with_sequence_hash(update.hash) {
-    //             *block.metadata_mut() = update.metadata;
-    //             self.insert(block);
-    //         }
-    //     }
-    // }
-
-    // fn update_block(&mut self, updates: Vec<UpdateBlock<M>>) {
-    //     for update in updates {
-    //         if let Some(mut block) = self.take_with_sequence_hash(update.hash) {
-    //             *block.metadata_mut() = update.metadata;
-    //             self.insert(block);
-    //         }
-    //     }
-    // }
-
-    // fn handle_reset(&mut self, sequence_hashes: Vec<SequenceHash>) {
-    //     for hash in sequence_hashes {
-    //         if let Some(mut block) = self.take_with_sequence_hash(hash) {
-    //             // Reset metadata through deref
-    //             block.metadata_mut().reset_metadata();
-    //             self.insert(block);
-    //         }
-    //     }
-    // }
-
-    // fn handle_reset_all(&mut self) {
-    //     while let Some(priority_key) = self.priority_set.pop_first() {
-    //         if let Some(mut block) = self.lookup_map.remove(&priority_key.sequence_hash()) {
-    //             // reset block -- both state and metadata
-    //             block.reset();
-    //             self.insert(block);
-    //         } else {
-    //             panic!("block from priority set not found in lookup map");
-    //         }
-    //     }
-    // }
 }
 
 #[cfg(test)]
