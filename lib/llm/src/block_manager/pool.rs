@@ -44,8 +44,7 @@ mod inactive;
 
 use derive_getters::Dissolve;
 use dynamo_runtime::{
-    raise,
-    utils::pool::{PoolExt, PoolItem, PoolValue, ReturnHandle, SharedPoolItem},
+    utils::pool::{PoolItem, SharedPoolItem},
     Result,
 };
 use std::{
@@ -53,10 +52,7 @@ use std::{
     ops::Deref,
     sync::Arc,
 };
-use tokio::{
-    sync::{mpsc, oneshot},
-    task::JoinHandle,
-};
+use tokio::sync::mpsc;
 
 use crate::{
     block_manager::block::BlockState,
