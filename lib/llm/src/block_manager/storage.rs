@@ -38,7 +38,8 @@ pub type StorageResult<T> = std::result::Result<T, StorageError>;
 pub enum StorageType {
     Device(Arc<CudaContext>),
     Pinned,
-    System, // todo: for grace
+    System,
+    Null,
 }
 
 pub enum StorageLocality {
@@ -74,6 +75,10 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 
 /// Core storage trait that provides access to memory regions
 pub trait Storage: Debug + Send + Sync + 'static {
+    /// Returns the type of storage
+    fn storage_type(&self) -> StorageType;
+
+    /// Returns the address of the storage
     fn addr(&self) -> u64;
 
     /// Returns the total size of the storage in bytes
@@ -145,6 +150,10 @@ impl Drop for SystemStorage {
 }
 
 impl Storage for SystemStorage {
+    fn storage_type(&self) -> StorageType {
+        StorageType::System
+    }
+
     fn addr(&self) -> u64 {
         self.ptr.as_ptr() as u64
     }
@@ -200,6 +209,10 @@ impl Drop for PinnedStorage {
 }
 
 impl Storage for PinnedStorage {
+    fn storage_type(&self) -> StorageType {
+        StorageType::Pinned
+    }
+
     fn addr(&self) -> u64 {
         self.ptr
     }
@@ -244,6 +257,10 @@ impl DeviceStorage {
 }
 
 impl Storage for DeviceStorage {
+    fn storage_type(&self) -> StorageType {
+        StorageType::Device(self.ctx.clone())
+    }
+
     fn addr(&self) -> u64 {
         self.ptr
     }
@@ -340,27 +357,80 @@ impl Drop for DeviceStorage {
 //     // Implementation details...
 // }
 
-#[derive(Debug, Default)]
-pub struct NullStorage {}
+pub mod tests {
+    use super::*;
 
-impl Storage for NullStorage {
-    fn addr(&self) -> u64 {
-        unimplemented!()
+    #[derive(Debug)]
+    pub struct NullDeviceStorage {
+        size: u64,
     }
 
-    fn size(&self) -> usize {
-        0
+    impl NullDeviceStorage {
+        pub fn new(size: u64) -> Self {
+            Self { size }
+        }
     }
 
-    fn is_host_accessible(&self) -> bool {
-        false
+    impl Storage for NullDeviceStorage {
+        fn storage_type(&self) -> StorageType {
+            StorageType::Null
+        }
+
+        fn addr(&self) -> u64 {
+            0
+        }
+
+        fn size(&self) -> usize {
+            self.size as usize
+        }
+
+        fn is_host_accessible(&self) -> bool {
+            false
+        }
+
+        unsafe fn as_ptr(&self) -> Option<*const u8> {
+            None
+        }
+
+        unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
+            None
+        }
     }
 
-    unsafe fn as_ptr(&self) -> Option<*const u8> {
-        None
+    #[derive(Debug)]
+    pub struct NullHostStorage {
+        size: u64,
     }
 
-    unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
-        None
+    impl NullHostStorage {
+        pub fn new(size: u64) -> Self {
+            Self { size }
+        }
+    }
+
+    impl Storage for NullHostStorage {
+        fn storage_type(&self) -> StorageType {
+            StorageType::Null
+        }
+
+        fn addr(&self) -> u64 {
+            0
+        }
+
+        fn size(&self) -> usize {
+            self.size as usize
+        }
+
+        fn is_host_accessible(&self) -> bool {
+            false
+        }
+
+        unsafe fn as_ptr(&self) -> Option<*const u8> {
+            None
+        }
+
+        unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
+            None
+        }
     }
 }
