@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::block_manager::block::BlockState;
+
 use super::*;
 use tracing::instrument;
 

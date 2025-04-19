@@ -58,10 +58,7 @@ impl<S: Storage, M: BlockMetadata> State<S, M> {
         // - the sequence hash is not already in the inactive pool
 
         let sequence_hash = block.sequence_hash().map_err(|e| {
-            BlockPoolError::InvalidMutableBlock(format!(
-                "block has no sequence hash: {}",
-                e
-            ))
+            BlockPoolError::InvalidMutableBlock(format!("block has no sequence hash: {}", e))
         })?;
 
         if let Some(immutable) = self.active.match_sequence_hash(sequence_hash) {

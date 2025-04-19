@@ -15,11 +15,33 @@
 
 use super::*;
 
+/// Manages active blocks being used by sequences
+pub struct ActiveBlockPool<S: Storage, M: BlockMetadata> {
+    pub(super) map: HashMap<SequenceHash, Weak<MutableBlock<S, M>>>,
+}
+
 impl<S: Storage, M: BlockMetadata> ActiveBlockPool<S, M> {
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),
         }
+    }
+
+    /// Inserts a weak reference to a block into the active pool map.
+    ///
+    /// This is typically used when a block is matched from the inactive pool
+    /// and needs to be tracked as potentially active.
+    ///
+    /// # Arguments
+    ///
+    /// * `sequence_hash` - The sequence hash of the block.
+    /// * `weak_block_ref` - A weak reference ([`Weak<MutableBlock<S, M>>`]) to the block.
+    pub fn insert_weak_block_ref(
+        &mut self,
+        sequence_hash: SequenceHash,
+        weak_block_ref: Weak<MutableBlock<S, M>>,
+    ) {
+        self.map.insert(sequence_hash, weak_block_ref);
     }
 
     pub fn register(

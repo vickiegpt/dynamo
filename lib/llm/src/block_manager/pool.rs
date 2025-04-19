@@ -44,24 +44,26 @@ mod inactive;
 mod priority_key;
 mod state;
 
+use active::ActiveBlockPool;
 use inactive::InactiveBlockPool;
 use priority_key::PriorityKey;
 
-use dynamo_runtime::{
-    utils::pool::{PoolItem, SharedPoolItem},
-    Result,
-};
+use super::block::{Block, BlockMetadata};
+use super::events::EventManager;
+use super::storage::Storage;
+
+use crate::tokens::{SequenceHash, TokenBlock};
+
 use std::{
     collections::{BTreeSet, HashMap, VecDeque},
     ops::{Deref, DerefMut},
     sync::{Arc, Mutex, Weak},
 };
 
-use super::block::*;
-use super::events::*;
-use super::storage::Storage;
-
-use crate::tokens::{SequenceHash, TokenBlock};
+use dynamo_runtime::{
+    utils::pool::{PoolItem, SharedPoolItem},
+    Result,
+};
 
 pub type BlockType<S, M> = Block<S, M>;
 pub type UniqueBlock<S, M> = PoolItem<Block<S, M>>;
@@ -94,10 +96,6 @@ pub struct MutableBlock<S: Storage, M: BlockMetadata> {
 
 pub struct ImmutableBlock<S: Storage, M: BlockMetadata> {
     block: Arc<MutableBlock<S, M>>,
-}
-
-struct ActiveBlockPool<S: Storage, M: BlockMetadata> {
-    map: HashMap<SequenceHash, Weak<MutableBlock<S, M>>>,
 }
 
 struct State<S: Storage, M: BlockMetadata> {
@@ -169,8 +167,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
 
             state
                 .active
-                .map
-                .insert(sequence_hash, Arc::downgrade(&shared));
+                .insert_weak_block_ref(sequence_hash, Arc::downgrade(&shared));
 
             Some(ImmutableBlock { block: shared })
         } else {
