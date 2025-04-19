@@ -16,6 +16,24 @@
 use super::*;
 use tracing::instrument;
 
+#[derive(Default)]
+pub struct InactiveBlockPool<S: Storage, M: BlockMetadata> {
+    // Direct lookup by sequence_hash
+    lookup_map: HashMap<SequenceHash, BlockType<S, M>>,
+
+    // Ordered by timestamp (oldest first)
+    priority_set: BTreeSet<PriorityKey<M>>,
+
+    // Fully Uninitialized
+    uninitialized_set: VecDeque<BlockType<S, M>>,
+
+    // Return Tick
+    return_tick: u64,
+
+    // Total blocks
+    total_blocks: u64,
+}
+
 impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
     /// Creates a new, empty [`InactiveBlockPool`].
     ///
@@ -406,7 +424,7 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
                 requested = count,
                 "Insufficient blocks available"
             );
-            return Err(BlockPoolError::InsufficientBlocksAvailable(
+            return Err(BlockPoolError::NotEnoughBlocksAvailable(
                 count,
                 available_now,
             ));
@@ -450,7 +468,7 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
             // Depending on the desired behavior, you might return the partial list
             // or a more specific error.
             // For consistency with the original check, let's return an error if count wasn't met.
-            return Err(BlockPoolError::InsufficientBlocksAvailable(
+            return Err(BlockPoolError::NotEnoughBlocksAvailable(
                 count,
                 blocks.len(),
             ));
@@ -504,13 +522,13 @@ pub(crate) mod tests {
         return_tick: u64,
         sequence_hash: SequenceHash,
     ) -> TestPriorityKey {
-        TestPriorityKey {
-            metadata: TestMetadata {
+        TestPriorityKey::new(
+            TestMetadata {
                 priority,
                 return_tick,
             },
             sequence_hash,
-        }
+        )
     }
 
     #[test]
@@ -527,19 +545,19 @@ pub(crate) mod tests {
 
         // Test popping from the map to verify ordering
         let first_key = map.pop_first().unwrap();
-        assert_eq!(first_key.metadata.priority, 0);
-        assert_eq!(first_key.metadata.return_tick, 2);
-        assert_eq!(first_key.sequence_hash, hash1);
+        assert_eq!(first_key.metadata().priority, 0);
+        assert_eq!(first_key.metadata().return_tick, 2);
+        assert_eq!(first_key.sequence_hash(), hash1);
 
         let second_key = map.pop_first().unwrap();
-        assert_eq!(second_key.metadata.priority, 0);
-        assert_eq!(second_key.metadata.return_tick, 3);
-        assert_eq!(second_key.sequence_hash, hash3);
+        assert_eq!(second_key.metadata().priority, 0);
+        assert_eq!(second_key.metadata().return_tick, 3);
+        assert_eq!(second_key.sequence_hash(), hash3);
 
         let third_key = map.pop_first().unwrap();
-        assert_eq!(third_key.metadata.priority, 1);
-        assert_eq!(third_key.metadata.return_tick, 1);
-        assert_eq!(third_key.sequence_hash, hash2);
+        assert_eq!(third_key.metadata().priority, 1);
+        assert_eq!(third_key.metadata().return_tick, 1);
+        assert_eq!(third_key.sequence_hash(), hash2);
 
         // Map should now be empty
         assert!(map.is_empty());
@@ -617,7 +635,6 @@ pub(crate) mod tests {
         // these blocks have the same sequence hash as the token_blocks, thus no updates are needed
         let mut matched_blocks = pool.match_token_blocks(&token_blocks);
         let matched_block_count = matched_blocks.len();
-        println!("matched_blocks: {:?}", matched_block_count);
 
         let event_manager = NullEventManager {};
 

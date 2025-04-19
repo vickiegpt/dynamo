@@ -39,28 +39,29 @@
 //!
 //! The [ActiveBlockPool] manages KV blocks that are actively in use.
 
-pub mod active;
+mod active;
 mod inactive;
+mod priority_key;
+mod state;
 
-use derive_getters::Dissolve;
+use inactive::InactiveBlockPool;
+use priority_key::PriorityKey;
+
 use dynamo_runtime::{
     utils::pool::{PoolItem, SharedPoolItem},
     Result,
 };
 use std::{
     collections::{BTreeSet, HashMap, VecDeque},
-    ops::Deref,
-    sync::Arc,
-};
-use tokio::sync::mpsc;
-
-use crate::{
-    block_manager::block::BlockState,
-    tokens::{SequenceHash, TokenBlock},
+    ops::{Deref, DerefMut},
+    sync::{Arc, Mutex, Weak},
 };
 
-use super::block::{Block, BlockMetadata};
-use super::storage::Storage;
+pub use super::block::*;
+pub use super::events::*;
+pub use super::storage::Storage;
+
+use crate::tokens::{SequenceHash, TokenBlock};
 
 pub type BlockType<S, M> = Block<S, M>;
 pub type UniqueBlock<S, M> = PoolItem<Block<S, M>>;
@@ -68,66 +69,154 @@ pub type SharedBlock<S, M> = SharedPoolItem<Block<S, M>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BlockPoolError {
-    #[error("No blocks available: requested {0}, available {1}")]
-    InsufficientBlocksAvailable(usize, usize),
+    #[error("Block is not complete")]
+    BlockNotComplete,
+
+    #[error("Not enough blocks available, requested: {0}, available: {1}")]
+    NotEnoughBlocksAvailable(usize, usize),
+
+    #[error("Invalid MutableBlock: {0}")]
+    InvalidMutableBlock(String),
+
+    #[error("Failed to register block: {0}")]
+    FailedToRegisterBlock(String),
 }
 
-#[derive(Default)]
-pub struct InactiveBlockPool<S: Storage, M: BlockMetadata> {
-    // Direct lookup by sequence_hash
-    lookup_map: HashMap<SequenceHash, BlockType<S, M>>,
-
-    // Ordered by timestamp (oldest first)
-    priority_set: BTreeSet<PriorityKey<M>>,
-
-    // Fully Uninitialized
-    uninitialized_set: VecDeque<BlockType<S, M>>,
-
-    // Return Tick
-    return_tick: u64,
-
-    // Total blocks
-    total_blocks: u64,
+/// Manages the blocks in a specific storage backend
+pub struct BlockPool<S: Storage, M: BlockMetadata> {
+    inner: Arc<Mutex<State<S, M>>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PriorityKey<M: BlockMetadata> {
-    metadata: M,
-    sequence_hash: SequenceHash,
+pub struct MutableBlock<S: Storage, M: BlockMetadata> {
+    block: Option<Block<S, M>>,
+    state: Arc<Mutex<State<S, M>>>,
 }
 
-impl<M: BlockMetadata> PriorityKey<M> {
-    fn new(metadata: M, sequence_hash: SequenceHash) -> Self {
+pub struct ImmutableBlock<S: Storage, M: BlockMetadata> {
+    block: Arc<MutableBlock<S, M>>,
+}
+
+struct ActiveBlockPool<S: Storage, M: BlockMetadata> {
+    map: HashMap<SequenceHash, Weak<MutableBlock<S, M>>>,
+}
+
+struct State<S: Storage, M: BlockMetadata> {
+    active: ActiveBlockPool<S, M>,
+    inactive: InactiveBlockPool<S, M>,
+    events: Arc<dyn EventManager>,
+}
+
+impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
+    /// Creates a new [BlockPool] with the given [EventManager]
+    /// On creation, the manager will not have any blocks allocated
+    pub fn new(events: Arc<dyn EventManager>) -> Self {
         Self {
-            metadata,
-            sequence_hash,
+            inner: Arc::new(Mutex::new(State::new(events))),
         }
     }
 
-    pub fn sequence_hash(&self) -> SequenceHash {
-        self.sequence_hash
+    /// Adds a list of blocks to the inactive pool
+    pub fn add_blocks(&self, blocks: Vec<Block<S, M>>) {
+        let mut state = self.inner.lock().unwrap();
+        state.inactive.add_blocks(blocks);
     }
 
-    pub fn metadata(&self) -> &M {
-        &self.metadata
+    /// Attempts to allocate a number of blocks from the inactive pool
+    /// If there are not enough blocks available, it will return an error
+    pub fn allocate_blocks(
+        &mut self,
+        count: usize,
+    ) -> Result<Vec<MutableBlock<S, M>>, BlockPoolError> {
+        let mut state = self.inner.lock().unwrap();
+        state.allocate_blocks(count, self.inner.clone())
     }
 
-    pub fn update_metadata(&mut self, metadata: M) {
-        self.metadata = metadata;
+    /// Registers [MutableBlock] with the [BlockPool]
+    ///
+    /// The result will be an [ImmutableBlock] which may or may not be the same storage block
+    /// that was passed in as a parameter.
+    ///
+    /// This accounts for the inflight cases where two identical blocks are created near in time.
+    /// The first block with a common [SequenceHash] will be registered. Any subsequent blocks with
+    /// the same [SequenceHash] will have its [MutableBlock] returned to the pool
+    /// as an [ImmutableBlock]
+    pub fn register_block(
+        &mut self,
+        block: MutableBlock<S, M>,
+    ) -> Result<ImmutableBlock<S, M>, BlockPoolError> {
+        self.inner.lock().unwrap().register_block(block)
+    }
+
+    /// Attempts to match the given [SequenceHash] to an existing block
+    ///
+    /// Matches will be attempted in the following order:
+    /// - Active pool
+    /// - Inactive pool
+    pub fn match_sequence_hash(
+        &mut self,
+        sequence_hash: SequenceHash,
+    ) -> Option<ImmutableBlock<S, M>> {
+        let mut state = self.inner.lock().unwrap();
+
+        if let Some(immutable) = state.active.match_sequence_hash(sequence_hash) {
+            return Some(immutable);
+        } else if let Some(block) = state.inactive.match_sequence_hash(sequence_hash) {
+            assert!(block.is_registered(), "block is not registered");
+            let shared = Arc::new(MutableBlock {
+                block: Some(block),
+                state: self.inner.clone(),
+            });
+
+            state
+                .active
+                .map
+                .insert(sequence_hash, Arc::downgrade(&shared));
+
+            Some(ImmutableBlock { block: shared })
+        } else {
+            None
+        }
     }
 }
 
-// customize ord and partial ord for to store first by priority (lowest to highest), then by return_tick (lowest to highest)
-impl<M: BlockMetadata> PartialOrd for PriorityKey<M> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
+impl<S: Storage, M: BlockMetadata> MutableBlock<S, M> {
+    fn into_parts(mut self) -> (Option<Block<S, M>>, Arc<Mutex<State<S, M>>>) {
+        let block = self.block.take();
+        let state = Arc::clone(&self.state);
+        (block, state)
     }
 }
 
-impl<M: BlockMetadata> Ord for PriorityKey<M> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.metadata
-            .cmp(&other.metadata)
-            .then(self.sequence_hash.cmp(&other.sequence_hash))
+impl<S: Storage, M: BlockMetadata> Drop for MutableBlock<S, M> {
+    fn drop(&mut self) {
+        if let Some(block) = self.block.take() {
+            // TODO: move return_block to the state
+            self.state.lock().unwrap().inactive.return_block(block);
+        }
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> Deref for MutableBlock<S, M> {
+    type Target = Block<S, M>;
+
+    fn deref(&self) -> &Self::Target {
+        self.block.as_ref().expect("block was dropped")
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> DerefMut for MutableBlock<S, M> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.block.as_mut().expect("block was dropped")
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> Deref for ImmutableBlock<S, M> {
+    type Target = Block<S, M>;
+    fn deref(&self) -> &Self::Target {
+        self.block
+            .as_ref()
+            .block
+            .as_ref()
+            .expect("block was dropped")
     }
 }
