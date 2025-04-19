@@ -13,31 +13,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # KV Block Pools
+//! # KV Cache Block Pool Management
 //!
-//! The InactiveBlockPool manages KV blocks that are not actively in use but retain their previous state.
+//! This module provides the primary [`BlockPool`] structure for managing KV cache blocks.
+//! It orchestrates the allocation, registration, and reuse of blocks by coordinating
+//! between an [`ActiveBlockPool`] and an [`InactiveBlockPool`].
 //!
-//! ## Key Features:
+//! ## Core Components:
 //!
-//! - **State Preservation**: Blocks in the pool maintain their previous state and can be reused.
+//! - **[`BlockPool`]**: The main entry point for interacting with the block management system.
+//!   It holds the shared state containing both active and inactive pools.
+//! - **[`ActiveBlockPool`]**: Manages blocks that are currently associated with active sequences.
+//!   It primarily uses weak references to track these blocks, allowing them to be potentially
+//!   reclaimed by the inactive pool if no strong references remain.
+//! - **[`InactiveBlockPool`]**: Manages blocks that are not currently in active use. It supports
+//!   block reuse by matching sequence hashes and employs a priority-based eviction strategy
+//!   for acquiring free blocks.
+//! - **[`MutableBlock`]**: Represents a uniquely owned block, typically obtained from allocation.
+//!   It allows modification and is returned to the inactive pool upon being dropped.
+//! - **[`ImmutableBlock`]**: Represents a shared, immutable reference to a block, usually after
+//!   it has been registered or matched. Ensures that multiple sequences can reference the
+//!   same underlying block data.
 //!
-//! - **Priority-Based FIFO**: Blocks are returned in first-in, first-out order within their priority levels.
-//!   Lower priority values are processed first, allowing important blocks to be retained longer.
+//! ## Workflow:
 //!
-//! - **State Matching**: Blocks can be matched against their previous state instead of being taken randomly,
-//!   enabling efficient reuse of blocks with specific sequence hashes.
-//!
-//! - **Priority Management**: Priorities can be applied to blocks based on their sequence hash,
-//!   requiring some external knowledge of the block's characteristics.
-//!
-//! - **State Management**: Blocks can have their states wiped clean/reset individually or in groups.
-//!   The entire pool can also be reset as needed.
-//!
-//! - **Synchronization**: Fence operations ensure all higher priority operations have completed
-//!   before proceeding. Note that this is not a true fence - higher priority operations issued
-//!   after the fence will still be processed before the fence completes.
-//!
-//! The [ActiveBlockPool] manages KV blocks that are actively in use.
+//! 1.  Blocks are initially added to the [`BlockPool`] via [`BlockPool::add_blocks`], populating the
+//!     [`InactiveBlockPool`].
+//! 2.  Sequences request blocks via [`BlockPool::allocate_blocks`], which attempts to acquire them
+//!     from the [`InactiveBlockPool`]. This returns [`MutableBlock`]s.
+//! 3.  Once a [`MutableBlock`] is filled and ready, it's registered using [`BlockPool::register_block`].
+//!     This process checks the both the [`ActiveBlockPool`] and the [`InactiveBlockPool`] for existing blocks
+//!     with the same content hash. It returns an [`ImmutableBlock`] representing the canonical block
+//!     (either the one provided or an existing one).
+//! 4.  Sequences can also try to reuse blocks directly using [`BlockPool::match_sequence_hash`], which
+//!     checks both the active and inactive pools.
+//! 5.  When an [`ImmutableBlock`] is no longer needed by any sequence (its `Arc` count drops to zero),
+//!     the underlying [`MutableBlock`] (if it still exists via the weak reference in the active pool)
+//!     can eventually be returned to the [`InactiveBlockPool`] when its final strong reference (the `Arc`
+//!     within `ImmutableBlock`) is dropped.
+//! 6.  Dropped [`MutableBlock`]s are automatically returned to the [`InactiveBlockPool`].
 
 mod active;
 mod inactive;
@@ -105,22 +119,52 @@ struct State<S: Storage, M: BlockMetadata> {
 }
 
 impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
-    /// Creates a new [BlockPool] with the given [EventManager]
-    /// On creation, the manager will not have any blocks allocated
+    /// Creates a new [`BlockPool`] with the given [`EventManager`].
+    ///
+    /// The pool starts empty and requires blocks to be added via [`add_blocks`].
+    ///
+    /// # Arguments
+    ///
+    /// * `events` - An [`Arc<dyn EventManager>`] used for publishing block registration/removal events.
+    ///
+    /// # Returns
+    ///
+    /// A new [`BlockPool`] instance.
     pub fn new(events: Arc<dyn EventManager>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(State::new(events))),
         }
     }
 
-    /// Adds a list of blocks to the inactive pool
+    /// Adds a vector of [`Block`]s to the [`InactiveBlockPool`].
+    ///
+    /// These blocks are typically created from a [`super::block::BlockStorageCollection`]
+    /// and represent the initial set of available cache blocks.
+    /// Blocks added this way are initially reset.
+    ///
+    /// # Arguments
+    ///
+    /// * `blocks` - A [`Vec<Block<S, M>>`] to add to the inactive pool.
     pub fn add_blocks(&self, blocks: Vec<Block<S, M>>) {
         let mut state = self.inner.lock().unwrap();
         state.inactive.add_blocks(blocks);
     }
 
-    /// Attempts to allocate a number of blocks from the inactive pool
-    /// If there are not enough blocks available, it will return an error
+    /// Attempts to allocate a specified number of free blocks from the [`InactiveBlockPool`].
+    ///
+    /// Blocks acquired this way are returned as [`MutableBlock`]s, granting unique ownership
+    /// and allowing modification. Dropping a [`MutableBlock`] automatically returns it
+    /// to the [`InactiveBlockPool`].
+    ///
+    /// # Arguments
+    ///
+    /// * `count` - The number of blocks to allocate.
+    ///
+    /// # Returns
+    ///
+    /// A [`Result`] containing:
+    /// - `Ok(Vec<MutableBlock<S, M>>)`: If successful, a vector of allocated mutable blocks.
+    /// - `Err(BlockPoolError)`: If not enough blocks are available in the inactive pool.
     pub fn allocate_blocks(
         &mut self,
         count: usize,
@@ -129,15 +173,25 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         state.allocate_blocks(count, self.inner.clone())
     }
 
-    /// Registers [MutableBlock] with the [BlockPool]
+    /// Registers a [`MutableBlock`] (presumably after filling it) with the pool,
+    /// making it potentially available for sharing via the [`ActiveBlockPool`].
     ///
-    /// The result will be an [ImmutableBlock] which may or may not be the same storage block
-    /// that was passed in as a parameter.
+    /// This function checks if a block with the same sequence hash already exists
+    /// in the active pool. If so, it returns an [`ImmutableBlock`] pointing to the
+    /// existing block, and the provided `block` is implicitly dropped (returned to
+    /// the inactive pool). If no matching block exists, the provided `block` is
+    /// added to the active pool (via a weak reference) and an [`ImmutableBlock`]
+    /// pointing to it is returned.
     ///
-    /// This accounts for the inflight cases where two identical blocks are created near in time.
-    /// The first block with a common [SequenceHash] will be registered. Any subsequent blocks with
-    /// the same [SequenceHash] will have its [MutableBlock] returned to the pool
-    /// as an [ImmutableBlock]
+    /// # Arguments
+    ///
+    /// * `block` - The [`MutableBlock<S, M>`] to register.
+    ///
+    /// # Returns
+    ///
+    /// A [`Result`] containing:
+    /// - `Ok(ImmutableBlock<S, M>)`: An immutable, shareable reference to the registered block.
+    /// - `Err(BlockPoolError)`: If the provided block is in an invalid state (e.g., has no sequence hash).
     pub fn register_block(
         &mut self,
         block: MutableBlock<S, M>,
@@ -145,11 +199,24 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         self.inner.lock().unwrap().register_block(block)
     }
 
-    /// Attempts to match the given [SequenceHash] to an existing block
+    /// Attempts to match the given [`SequenceHash`] to an existing block, checking
+    /// both the active and inactive pools.
     ///
-    /// Matches will be attempted in the following order:
-    /// - Active pool
-    /// - Inactive pool
+    /// Checks the [`ActiveBlockPool`] first. If a valid strong reference exists, it returns
+    /// an [`ImmutableBlock`] cloned from it. If the weak reference exists but is stale,
+    /// it's removed.
+    ///
+    /// If not found in the active pool, it checks the [`InactiveBlockPool`]. If found there,
+    /// the block is moved to the active pool (tracked by a weak reference) and returned
+    /// as a new [`ImmutableBlock`].
+    ///
+    /// # Arguments
+    ///
+    /// * `sequence_hash` - The [`SequenceHash`] to look for.
+    ///
+    /// # Returns
+    ///
+    /// An [`Option<ImmutableBlock<S, M>>`] containing the shared block if found, otherwise `None`.
     pub fn match_sequence_hash(
         &mut self,
         sequence_hash: SequenceHash,
