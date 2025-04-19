@@ -150,6 +150,15 @@ impl Client {
             .await?
     }
 
+    // Revoke an etcd lease given its lease id. A wrapper over etcd_client::LeaseClient::revoke
+    pub async fn revoke_lease(&self, lease_id: i64) -> Result<()> {
+        let lease_client = self.client.lease_client();
+        self.runtime
+            .secondary()
+            .spawn(revoke_lease(lease_client, lease_id))
+            .await?
+    }
+
     pub async fn kv_create(
         &self,
         key: String,
