@@ -57,9 +57,9 @@ use std::{
     sync::{Arc, Mutex, Weak},
 };
 
-pub use super::block::*;
-pub use super::events::*;
-pub use super::storage::Storage;
+use super::block::*;
+use super::events::*;
+use super::storage::Storage;
 
 use crate::tokens::{SequenceHash, TokenBlock};
 
@@ -159,7 +159,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         let mut state = self.inner.lock().unwrap();
 
         if let Some(immutable) = state.active.match_sequence_hash(sequence_hash) {
-            return Some(immutable);
+            Some(immutable)
         } else if let Some(block) = state.inactive.match_sequence_hash(sequence_hash) {
             assert!(block.is_registered(), "block is not registered");
             let shared = Arc::new(MutableBlock {
