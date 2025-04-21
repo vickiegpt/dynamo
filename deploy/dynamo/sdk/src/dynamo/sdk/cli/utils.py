@@ -190,6 +190,35 @@ def save_dynamo_state(
     logger.warning(f"Saved state to {state_file}")
 
 
+def append_dynamo_state(namespace: str, component_name: str, data: dict) -> None:
+    """Append additional data to an existing component's state"""
+    state_dir = os.environ.get(
+        DYN_LOCAL_STATE_DIR, os.path.expanduser("~/.dynamo/state")
+    )
+    state_file = os.path.join(state_dir, f"{namespace}.json")
+
+    if not os.path.exists(state_file):
+        logger.warning(
+            f"Skipping append to state file {state_file} because it doesn't exist"
+        )
+        return
+
+    with open(state_file, "r") as f:
+        state = json.load(f)
+
+    target_component = f"{namespace}_{component_name}"
+
+    if "components" not in state:
+        state["components"] = {}
+    if target_component not in state["components"]:
+        state["components"][target_component] = {}
+
+    state["components"][target_component].update(data)
+
+    with open(state_file, "w") as f:
+        json.dump(state, f, indent=2)
+
+
 def _parse_service_arg(arg_name: str, arg_value: str) -> tuple[str, str, t.Any]:
     """Parse a single CLI argument into service name, key, and value."""
 

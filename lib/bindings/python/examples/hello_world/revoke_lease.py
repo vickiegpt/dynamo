@@ -14,12 +14,13 @@
 # limitations under the License.
 
 
-import asyncio
 import argparse
+import asyncio
 
 import uvloop
 
 from dynamo.runtime import DistributedRuntime, dynamo_worker
+
 
 @dynamo_worker(static=False)
 async def worker(runtime: DistributedRuntime):
@@ -28,9 +29,11 @@ async def worker(runtime: DistributedRuntime):
     args = parser.parse_args()
     await init(runtime, "dynamo", args.lease_id)
 
+
 async def init(runtime: DistributedRuntime, ns: str, lease_id: int):
     client = runtime.etcd_client()
     await client.revoke_lease(lease_id)
+
 
 if __name__ == "__main__":
     uvloop.install()

@@ -29,12 +29,11 @@ import click
 import uvloop
 
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
-from dynamo.runtime.logging import configure_logger as configure_dynamo_logger
 from dynamo.sdk import dynamo_context
+from dynamo.sdk.cli.utils import append_dynamo_state
 from dynamo.sdk.lib.service import LinkedServices
 
 logger = logging.getLogger(__name__)
-configure_dynamo_logger()
 
 
 @click.command()
@@ -188,6 +187,10 @@ def main(
                     logger.info(f"Serving {service.name} with primary lease")
                 else:
                     logger.info(f"Serving {service.name} with lease: {lease.id()}")
+                    # Map custom lease to component
+                    append_dynamo_state(
+                        namespace, component_name, {"lease": lease.id()}
+                    )
                 result = await endpoints[0].serve_endpoint(twm[0], lease)
 
             except Exception as e:

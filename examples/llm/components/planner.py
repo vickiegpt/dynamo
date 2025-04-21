@@ -20,22 +20,22 @@ import json
 import logging
 import os
 import time
+from datetime import datetime
 
 import numpy as np
-from datetime import datetime
 from rich.console import Console
 from rich.table import Table
 from tensorboardX import SummaryWriter
+from utils.planner_utils.local_connector import LocalConnector
 from utils.prefill_queue import PrefillQueue
 
 from dynamo.llm import KvMetricsAggregator
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 from dynamo.runtime.logging import configure_logger
 
-from utils.planner_utils.local_connector import LocalConnector
-
 logger = logging.getLogger(__name__)
 configure_logger()
+
 
 class Planner:
     def __init__(self, runtime: DistributedRuntime, args: argparse.Namespace):
@@ -48,12 +48,12 @@ class Planner:
             "NATS_SERVER", "nats://localhost:4222"
         )
         self._prefill_queue_stream_name = self.args.served_model_name
-        
+
         self.prefill_client = None
         self.workers_client = None
         self.p_endpoints = None
         self.d_endpoints = None
-        
+
         if args.log_dir is None:
             args.log_dir = f"logs/{datetime.now().strftime('%m%d_%H%M%S')}"
         self.writer = SummaryWriter(args.log_dir)
@@ -104,7 +104,7 @@ class Planner:
         )
 
         self.p_endpoints, self.d_endpoints = await self.get_workers_info()
-            
+
         logger.info(
             f"Number of prefill workers: {len(self.p_endpoints)}, number of decode workers: {len(self.d_endpoints)}"
         )
@@ -130,10 +130,12 @@ class Planner:
             logger.info(
                 f"Collected prefill queue size at t={measure_time:.1f}s: {int(prefill_queue_size)}"
             )
-            self.writer.add_scalar("prefill_queue_size", prefill_queue_size, measure_time)
+            self.writer.add_scalar(
+                "prefill_queue_size", prefill_queue_size, measure_time
+            )
         except Exception as e:
             logger.warning(f"Failed to collect prefill queue size metrics: {e}")
-        
+
         # collect kv load
         num_queued_requests = 0
         metrics = await self.metrics_aggregator.get_metrics()
@@ -145,7 +147,7 @@ class Planner:
                 num_queued_requests += num_requests_waiting
                 if kv_load > 0.8 and num_requests_waiting > 0:
                     # if requests are waiting and kv load is high, we assume the needed kv is higher
-                    # check kv_load first to avoid 
+                    # check kv_load first to avoid
                     kv_load = 1.2
                 self.kv_load.append(kv_load)
             measure_time = time.time() - self.init_time
@@ -154,19 +156,25 @@ class Planner:
             )
             average_kv_load = np.mean(self.kv_load[prev_kv_load_len:])
             self.writer.add_scalar("average_kv_load", average_kv_load, measure_time)
-            self.writer.add_scalar("num_queued_requests", num_queued_requests, measure_time)
+            self.writer.add_scalar(
+                "num_queued_requests", num_queued_requests, measure_time
+            )
         except Exception as e:
             logger.warning(f"Failed to collect kv load metrics: {e}")
-            
+
         p_endpoints, d_endpoints = await self.get_workers_info()
-        self.writer.add_scalar("num_prefill_workers", len(p_endpoints), time.time() - self. init_time)
-        self.writer.add_scalar("num_decode_workers", len(d_endpoints), time.time() - self.init_time)
+        self.writer.add_scalar(
+            "num_prefill_workers", len(p_endpoints), time.time() - self.init_time
+        )
+        self.writer.add_scalar(
+            "num_decode_workers", len(d_endpoints), time.time() - self.init_time
+        )
         curr_gpu_usage = (
             len(p_endpoints) * self.args.prefill_engine_num_gpu
             + len(d_endpoints) * self.args.decode_engine_num_gpu
         )
         self.writer.add_scalar("num_gpu", curr_gpu_usage, time.time() - self.init_time)
-        
+
         self.metrics_collection_time.append(time.time())
 
     async def make_adjustments(self):

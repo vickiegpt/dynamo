@@ -21,6 +21,8 @@ from typing import Literal
 
 from local_connector import LocalConnector
 
+from dynamo.runtime import DistributedRuntime, dynamo_worker
+
 ComponentType = Literal["VllmWorker", "PrefillWorker"]
 VALID_COMPONENTS = ["VllmWorker", "PrefillWorker"]
 
@@ -84,26 +86,30 @@ async def test_remove_component(
             base_component = f"{connector.namespace}_{component}"
             if base_component in state["components"]:
                 success = await connector.remove_component(component)
-                print(f"{'✓' if success else '✗'} Remove {component} {'successful' if success else 'failed'}")
+                print(
+                    f"{'✓' if success else '✗'} Remove {component} {'successful' if success else 'failed'}"
+                )
                 return success
             else:
                 print(f"✗ No {component} components found to remove")
                 return False
 
         success = await connector.remove_component(component)
-        
+
         # New verification logic: check if GPUs were cleared
         if success:
             new_state = await connector.load_state()
             highest_suffix = max(suffix for suffix, _ in matching_components)
             target_component = f"{base_name}{highest_suffix}"
-            
+
             if target_component in new_state["components"]:
-                resources = new_state["components"][target_component].get("resources", {})
+                resources = new_state["components"][target_component].get(
+                    "resources", {}
+                )
                 if not resources.get("allocated_gpus"):
                     print(f"✓ Successfully removed {target_component} and cleared GPUs")
                     return True
-            
+
         print(f"✗ Failed to remove {component} or clear GPUs")
         return False
 
@@ -112,7 +118,8 @@ async def test_remove_component(
         return False
 
 
-async def main():
+@dynamo_worker()
+async def main(runtime: DistributedRuntime):
     parser = argparse.ArgumentParser(description="Test the LocalConnector")
     parser.add_argument("namespace", help="Dynamo namespace to use")
     parser.add_argument(
@@ -140,7 +147,7 @@ async def main():
         print(f"Error: State file not found: {state_file}")
         return 1
 
-    connector = LocalConnector(args.namespace)
+    connector = LocalConnector(args.namespace, runtime)
 
     tests = {
         "state": lambda: test_state_management(connector),

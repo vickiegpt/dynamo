@@ -19,11 +19,11 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .circusd import CircusController
-from .planner_connector import PlannerConnector
-
 from dynamo.runtime import DistributedRuntime
 from dynamo.runtime.logging import configure_logger
+
+from .circusd import CircusController
+from .planner_connector import PlannerConnector
 
 configure_logger()
 logger = logging.getLogger(__name__)
@@ -180,8 +180,6 @@ class LocalConnector(PlannerConnector):
 
         except Exception as e:
             logger.error(f"Failed to add component {component_name}: {e}")
-            if component_name in ["VllmWorker", "PrefillWorker"]:
-                await self._release_gpus(component_name)
             return False
 
     async def _release_gpus(self, component_name: str) -> bool:
@@ -201,7 +199,9 @@ class LocalConnector(PlannerConnector):
 
             base_name = f"{self.namespace}_{component_name}"
             base_name_with_underscore = f"{base_name}_"
-            logger.debug(f"Looking for components matching {base_name} or {base_name_with_underscore}")
+            logger.debug(
+                f"Looking for components matching {base_name} or {base_name_with_underscore}"
+            )
 
             for watcher_name in state["components"].keys():
                 if watcher_name == base_name:  # Exact match for non-numbered watchers
@@ -212,7 +212,9 @@ class LocalConnector(PlannerConnector):
                         suffix = int(
                             watcher_name.replace(base_name_with_underscore, "")
                         )
-                        logger.debug(f"Found numbered match: {watcher_name} with suffix {suffix}")
+                        logger.debug(
+                            f"Found numbered match: {watcher_name} with suffix {suffix}"
+                        )
                         matching_components[suffix] = watcher_name
                     except ValueError:
                         logger.debug(f"Skipping invalid suffix in {watcher_name}")
@@ -235,7 +237,9 @@ class LocalConnector(PlannerConnector):
                 logger.info("Successfully saved updated state")
                 return True
 
-            logger.error(f"Target watcher {target_watcher} not found in state components")
+            logger.error(
+                f"Target watcher {target_watcher} not found in state components"
+            )
             return False
 
         except Exception as e:
@@ -247,27 +251,17 @@ class LocalConnector(PlannerConnector):
         try:
             logger.info(f"Attempting to remove component {component_name}")
             state = await self.load_state()
-            logger.debug(f"Loaded state for namespace {self.namespace}")
             matching_components = {}
 
             base_name = f"{self.namespace}_{component_name}"
             base_name_with_underscore = f"{base_name}_"
-            logger.debug(f"Looking for components matching {base_name} or {base_name_with_underscore}")
 
             for watcher_name in state["components"].keys():
-                if watcher_name == base_name:  # Exact match for non-numbered watchers
-                    logger.debug(f"Found exact match: {watcher_name}")
+                if watcher_name == base_name:
                     matching_components[0] = watcher_name
                 elif watcher_name.startswith(base_name_with_underscore):
-                    try:
-                        suffix = int(
-                            watcher_name.replace(base_name_with_underscore, "")
-                        )
-                        logger.debug(f"Found numbered match: {watcher_name} with suffix {suffix}")
-                        matching_components[suffix] = watcher_name
-                    except ValueError:
-                        logger.debug(f"Skipping invalid suffix in {watcher_name}")
-                        continue
+                    suffix = int(watcher_name.replace(base_name_with_underscore, ""))
+                    matching_components[suffix] = watcher_name
 
             if not matching_components:
                 logger.error(f"No matching components found for {component_name}")
@@ -275,18 +269,20 @@ class LocalConnector(PlannerConnector):
 
             highest_suffix = max(matching_components.keys())
             target_watcher = matching_components[highest_suffix]
-            logger.info(f"Selected {target_watcher} for removal")
 
-            success = await self.circus.remove_watcher(
-                name=target_watcher,
+            success = await self.circus.remove_watcher(name=target_watcher)
+            logger.info(
+                f"Circus remove_watcher for {target_watcher} {'succeeded' if success else 'failed'}"
             )
-            print("SUCC",success)
-            logger.info(f"Circus remove_watcher for {target_watcher} {'succeeded' if success else 'failed'}")
 
             if success:
-                logger.info(f"Attempting to release GPUs for {component_name}")
-                gpu_release = await self._release_gpus(component_name)
-                logger.info(f"GPU release {'succeeded' if gpu_release else 'failed'}")
+                if highest_suffix > 0:  # Numbered watcher - remove entire entry
+                    if target_watcher in state["components"]:
+                        del state["components"][target_watcher]
+                else:  # Base watcher - just clear resources
+                    if target_watcher in state["components"]:
+                        state["components"][target_watcher]["resources"] = {}
+                await self.save_state(state)
 
             return success
 
