@@ -22,13 +22,18 @@ use thiserror::Error;
 
 use crate::block_manager::storage::{Storage, StorageAllocator};
 use crate::common::dtype::DType;
+use derive_builder::Builder;
 use tracing::instrument;
+use validator::Validate;
 
 /// Errors that can occur during layout operations
 #[derive(Debug, Error)]
 pub enum LayoutError {
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
+
+    #[error("Validation failed: {0}")]
+    ValidationError(#[from] validator::ValidationErrors),
 
     #[error("Invalid block index: {0}")]
     InvalidBlockIndex(usize),
@@ -39,9 +44,6 @@ pub enum LayoutError {
     #[error("Operation failed: {0}")]
     OperationFailed(String),
 }
-
-/// Result type for layout operations
-pub type Result<T> = std::result::Result<T, LayoutError>;
 
 /// Storage pattern for layers
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,96 +81,188 @@ pub trait BlockLayout: Send + Sync + std::fmt::Debug {
     fn inner_dim(&self) -> usize;
 
     /// Get the memory region for a specific page [page_size, inner_dim]
-    fn get_memory_region(&self, block_idx: usize, layer_idx: usize) -> Result<u64>;
+    fn get_memory_region(&self, block_idx: usize, layer_idx: usize) -> Result<u64, LayoutError>;
 
     /// Get the memory region for a specific page [page_size, inner_dim]
     fn memory_region_size(&self) -> usize;
 }
 
 /// Configuration for block layouts
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Builder, Validate)]
 pub struct LayoutConfig {
+    #[validate(range(min = 1))]
     pub num_blocks: usize,
+
+    #[validate(range(min = 1))]
     pub num_layers: usize,
+
+    #[validate(range(min = 1))]
     pub page_size: usize,
+
+    #[validate(range(min = 1))]
     pub inner_dim: usize,
+
+    #[validate(custom(function = "validate_power_of_2"))]
+    #[builder(default = "1")]
+    pub alignment: usize,
+
     pub dtype: DType,
+}
+
+fn is_power_of_2(n: usize) -> bool {
+    // Check if n is not zero and is a power of two.
+    n != 0 && (n & (n - 1)) == 0
+}
+
+/// Validation function for Option<usize> to check if it's Some(power_of_2).
+fn validate_power_of_2(alignment: usize) -> Result<(), validator::ValidationError> {
+    if !is_power_of_2(alignment) {
+        // Return validation error if alignment is not a power of 2
+        return Err(validator::ValidationError::new(
+            "alignment_must_be_power_of_2",
+        ));
+    }
+    // Passes validation if alignment is a power of 2
+    Ok(())
+}
+
+/// Helper to align a value up to the nearest multiple of alignment.
+/// Alignment must be a power of 2.
+fn align_up(value: usize, alignment: usize) -> usize {
+    (value + alignment - 1) & !(alignment - 1)
+}
+
+/// Internal struct to hold calculated layout dimensions specific to FullyContiguous.
+// Module-level, but only used internally by FullyContiguous
+#[derive(Debug, Clone)]
+struct FullyContiguousConfig {
+    inner: LayoutConfig,
+    memory_region_size: usize,
+    layer_stride_in_bytes: usize,
+    natural_block_stride: usize,
+    block_stride_in_bytes: usize, // Aligned if necessary
+    layout_data_bytes: usize,     // Size of the layout data itself (post base offset)
+}
+
+impl FullyContiguousConfig {
+    /// Calculates the core dimensions based on the configuration.
+    /// Returns an error if the configuration is invalid.
+    fn new(config: LayoutConfig) -> Result<Self, LayoutError> {
+        // Validate first, propagating errors via `?`
+        config.validate()?;
+
+        let alignment = config.alignment;
+        let memory_region_size = config.page_size * config.inner_dim * config.dtype.size_in_bytes();
+        let layer_stride_in_bytes = memory_region_size;
+        let natural_block_stride = config.num_layers * layer_stride_in_bytes;
+
+        let block_stride_in_bytes = if alignment > 1 {
+            align_up(natural_block_stride, alignment)
+        } else {
+            natural_block_stride
+        };
+
+        let layout_data_bytes =
+            (config.num_blocks - 1) * block_stride_in_bytes + natural_block_stride;
+
+        Ok(Self {
+            inner: config,
+            memory_region_size,
+            layer_stride_in_bytes,
+            natural_block_stride,
+            block_stride_in_bytes,
+            layout_data_bytes,
+        })
+    }
+
+    /// Calculate the total number of bytes required for allocation, including initial alignment padding.
+    /// Panics if the provided configuration is invalid.
+    pub fn required_allocation_size(&self) -> usize {
+        let initial_padding = if self.inner.alignment > 1 {
+            self.inner.alignment - 1
+        } else {
+            0
+        };
+        self.layout_data_bytes + initial_padding
+    }
 }
 
 /// Contiguous memory layout where all blocks and layers are sequential
 #[derive(Debug)]
 pub struct FullyContiguous<S: Storage> {
-    config: LayoutConfig,
+    config: FullyContiguousConfig,
     storage: S,
-    layer_stride_in_bytes: usize,
-    block_stride_in_bytes: usize,
-    memory_region_size: usize,
+
+    // Offset from storage.addr() to the aligned start of block 0
+    base_offset: usize,
 }
 
 impl<S: Storage> FullyContiguous<S> {
-    /// Calculate the total number of bytes required for a given layout configuration.
-    pub fn calculate_required_bytes(config: &LayoutConfig) -> usize {
-        config.num_blocks
-            * config.num_layers
-            * config.page_size
-            * config.inner_dim
-            * config.dtype.size_in_bytes()
-    }
-
     /// Create a new contiguous layout using the provided configuration and pre-allocated storage.
     #[instrument(level = "debug", skip(storage), fields(config = ?config))]
-    pub fn new(config: LayoutConfig, storage: S) -> Result<Self> {
-        // Validate storage size fits the configuration
-        let required_size_in_bytes = Self::calculate_required_bytes(&config);
+    pub fn new(config: LayoutConfig, storage: S) -> Result<Self, LayoutError> {
+        // Calculate dimensions, which includes validation.
+        // Propagate validation error if it occurs.
+        let config = FullyContiguousConfig::new(config)?;
+
         let provided_size = storage.size();
+        let storage_addr = storage.addr();
+        let alignment = config.inner.alignment;
+
+        // Calculate base offset needed to align the start of block 0
+        let base_offset = if alignment > 1 {
+            align_up(storage_addr as usize, alignment) - storage_addr as usize
+        } else {
+            0
+        };
+
+        let total_required_size_with_offset = base_offset + config.layout_data_bytes;
 
         tracing::debug!(
             provided_size,
-            required_size_in_bytes,
-            dtype_size = config.dtype.size_in_bytes(),
-            "Validating storage size"
+            total_required_size_with_offset,
+            base_offset,
+            required_layout_data_bytes = config.layout_data_bytes,
+            alignment,
+            "Validating storage size with base offset and alignment"
         );
 
-        if provided_size < required_size_in_bytes {
+        // Validate storage size fits the configuration *with base offset and alignment*
+        if provided_size < total_required_size_with_offset {
             tracing::warn!(
                 provided_size,
-                required_size_in_bytes,
-                "Storage size too small"
+                total_required_size_with_offset,
+                "Storage size too small for aligned layout including base offset"
             );
             return Err(LayoutError::InvalidConfig(format!(
-                "Storage size {} is less than required size {}",
-                provided_size, required_size_in_bytes
+                "Storage size {} is less than required size {} (including base offset for alignment)",
+                provided_size,
+                total_required_size_with_offset
             )));
         }
 
-        // Contiguous memory region on which the application uses for its own purposes
-        // [page_size, inner_dim] elements
-        let memory_region = config.page_size * config.inner_dim;
-        let memory_region_size = memory_region * config.dtype.size_in_bytes();
-
-        let layer_stride_in_bytes = memory_region * config.dtype.size_in_bytes();
-        let block_stride_in_bytes = config.num_layers * layer_stride_in_bytes;
-
         tracing::debug!(
-            memory_region_size,
-            layer_stride_in_bytes,
-            block_stride_in_bytes,
-            "Calculated layout strides"
+            config.memory_region_size,
+            config.layer_stride_in_bytes,
+            config.block_stride_in_bytes,
+            config.natural_block_stride,
+            alignment = config.inner.alignment,
+            base_offset,
+            "Calculated layout strides (aligned)"
         );
 
         Ok(Self {
             config,
             storage,
-            layer_stride_in_bytes,
-            block_stride_in_bytes,
-            memory_region_size,
+            base_offset,
         })
     }
 
     /// Allocate storage using the provided allocator and create a new FullyContiguous layout.
     ///
-    /// Calculates the required size based on the configuration, allocates the storage,
-    /// and then constructs the `FullyContiguous` layout instance.
+    /// Calculates the required size based on the configuration, allocates the storage
+    /// (including potential padding for initial alignment), and then constructs the
+    /// `FullyContiguous` layout instance.
     ///
     /// # Type Parameters
     ///
@@ -184,41 +278,52 @@ impl<S: Storage> FullyContiguous<S> {
     /// A `Result` containing the new `FullyContiguous<S>` instance or an error if allocation
     /// or layout creation fails.
     #[instrument(level = "debug", skip(allocator), fields(config = ?config))]
-    pub fn allocate<A: StorageAllocator<S>>(config: LayoutConfig, allocator: &A) -> Result<Self> {
-        let required_bytes = Self::calculate_required_bytes(&config);
+    pub fn allocate<A: StorageAllocator<S>>(
+        config: LayoutConfig,
+        allocator: &A,
+    ) -> Result<Self, LayoutError> {
+        // Calculate total bytes needed. Propagate error if config is invalid.
+        let config = FullyContiguousConfig::new(config)?;
+        let bytes_to_allocate = config.required_allocation_size();
+
         tracing::debug!(
-            required_bytes,
-            "Calculated required storage size for allocation"
+            bytes_to_allocate,
+            alignment = config.inner.alignment,
+            "Calculated storage size for allocation (with alignment padding)"
         );
 
-        let storage = allocator.allocate(required_bytes).map_err(|e| {
+        let storage = allocator.allocate(bytes_to_allocate).map_err(|e| {
             LayoutError::OperationFailed(format!("Storage allocation failed: {}", e))
         })?;
-        tracing::debug!("Storage allocated successfully");
+        tracing::debug!(
+            allocated_size = storage.size(),
+            allocated_addr = storage.addr(),
+            "Storage allocated successfully"
+        );
 
         // Pass the config by value as Self::new takes ownership
-        Self::new(config, storage)
+        Self::new(config.inner, storage)
     }
 }
 
 impl<S: Storage> BlockLayout for FullyContiguous<S> {
     fn num_blocks(&self) -> usize {
-        self.config.num_blocks
+        self.config.inner.num_blocks
     }
 
     fn num_layers(&self) -> usize {
-        self.config.num_layers
+        self.config.inner.num_layers
     }
 
     fn page_size(&self) -> usize {
-        self.config.page_size
+        self.config.inner.page_size
     }
 
     fn inner_dim(&self) -> usize {
-        self.config.inner_dim
+        self.config.inner.inner_dim
     }
 
-    fn get_memory_region(&self, block_idx: usize, layer_idx: usize) -> Result<u64> {
+    fn get_memory_region(&self, block_idx: usize, layer_idx: usize) -> Result<u64, LayoutError> {
         if block_idx >= self.num_blocks() {
             return Err(LayoutError::InvalidBlockIndex(block_idx));
         }
@@ -227,14 +332,20 @@ impl<S: Storage> BlockLayout for FullyContiguous<S> {
             return Err(LayoutError::InvalidLayerIndex(layer_idx));
         }
 
-        let offset =
-            block_idx * self.block_stride_in_bytes + layer_idx * self.layer_stride_in_bytes;
+        // Start from the aligned base address
+        let aligned_start_addr = self.storage.addr() + self.base_offset as u64;
 
-        Ok(self.storage.addr() + offset as u64)
+        // Calculate offset relative to the aligned start using stored config
+        let block_offset = block_idx * self.config.block_stride_in_bytes;
+        let layer_offset = layer_idx * self.config.layer_stride_in_bytes;
+        let final_addr = aligned_start_addr + block_offset as u64 + layer_offset as u64;
+
+        Ok(final_addr)
     }
 
     fn memory_region_size(&self) -> usize {
-        self.memory_region_size
+        // Access via stored dims
+        self.config.memory_region_size
     }
 }
 
@@ -242,12 +353,9 @@ impl<S: Storage> BlockLayout for FullyContiguous<S> {
 pub mod tests {
     use super::*;
     use crate::block_manager::storage::tests::NullDeviceStorage;
-    use crate::block_manager::storage::{
-        StorageAllocator, StorageType, SystemAllocator, SystemStorage,
-    };
+    use crate::block_manager::storage::{StorageType, SystemAllocator};
     use crate::common::dtype::DType;
     use dynamo_runtime::logging::init as init_logging;
-    use std::sync::Arc;
 
     const NUM_BLOCKS: usize = 7;
     const NUM_LAYERS: usize = 5;
@@ -255,45 +363,66 @@ pub mod tests {
     const INNER_DIM: usize = 13;
     const DTYPE: DType = DType::FP32; // Example dtype
 
-    fn setup_layout(storage_size: usize) -> Result<FullyContiguous<NullDeviceStorage>> {
+    // Updated setup_layout: Calculates size internally, uses default alignment for simplicity in non-alignment tests.
+    fn setup_layout(
+        alignment: Option<usize>, // Option to override default alignment
+    ) -> Result<FullyContiguous<NullDeviceStorage>, LayoutError> {
         let config = LayoutConfig {
             num_blocks: NUM_BLOCKS,
             num_layers: NUM_LAYERS,
             page_size: PAGE_SIZE,
             inner_dim: INNER_DIM,
+            alignment: alignment.unwrap_or(1),
             dtype: DTYPE,
         };
-        let storage = NullDeviceStorage::new(storage_size as u64);
-        FullyContiguous::new(config, storage)
-    }
 
-    fn calculate_required_size() -> usize {
-        NUM_BLOCKS * NUM_LAYERS * PAGE_SIZE * INNER_DIM * DTYPE.size_in_bytes()
+        let fc_config = FullyContiguousConfig::new(config.clone())?;
+
+        // Calculate the correct size needed for *this specific config*
+        let required_size = fc_config.required_allocation_size();
+
+        let storage = NullDeviceStorage::new(required_size as u64);
+        FullyContiguous::new(config, storage)
     }
 
     #[test]
     fn test_fc_creation_success() {
-        let required_size = calculate_required_size();
-        let layout_result = setup_layout(required_size);
-        assert!(layout_result.is_ok());
+        // Setup with default (None) alignment
+        let layout_result = setup_layout(None);
+        assert!(
+            layout_result.is_ok(),
+            "Layout creation failed: {:?}",
+            layout_result.err()
+        );
     }
 
     #[test]
     fn test_fc_creation_insufficient_storage() {
         init_logging();
-        let required_size = calculate_required_size();
-        let layout_result = setup_layout(required_size - 1); // One byte less
+        let config = LayoutConfig {
+            num_blocks: NUM_BLOCKS,
+            num_layers: NUM_LAYERS,
+            page_size: PAGE_SIZE,
+            inner_dim: INNER_DIM,
+            alignment: 1,
+            dtype: DTYPE,
+        };
+        // Calculate correct size needed
+        let fc_config = FullyContiguousConfig::new(config.clone()).unwrap();
+        let required_size = fc_config.required_allocation_size();
+        let storage = NullDeviceStorage::new((required_size - 1) as u64);
+        let layout_result = FullyContiguous::new(config, storage);
+
         assert!(layout_result.is_err());
         match layout_result.err().unwrap() {
             LayoutError::InvalidConfig(_) => {} // Expected error
-            _ => panic!("Expected InvalidConfig error"),
+            e => panic!("Expected InvalidConfig error, got {:?}", e),
         }
     }
 
     #[test]
     fn test_fc_accessor_methods() {
-        let required_size = calculate_required_size();
-        let layout = setup_layout(required_size).unwrap();
+        let layout = setup_layout(None).expect("Layout setup failed");
 
         assert_eq!(layout.num_blocks(), NUM_BLOCKS);
         assert_eq!(layout.num_layers(), NUM_LAYERS);
@@ -303,22 +432,19 @@ pub mod tests {
 
     #[test]
     fn test_fc_memory_region_size() {
-        let required_size = calculate_required_size();
-        let layout = setup_layout(required_size).unwrap();
+        let layout = setup_layout(None).expect("Layout setup failed");
         let expected_region_size = PAGE_SIZE * INNER_DIM * DTYPE.size_in_bytes();
         assert_eq!(layout.memory_region_size(), expected_region_size);
     }
 
     #[test]
     fn test_fc_offset_calculation() {
-        let required_size = calculate_required_size();
-        let layout = setup_layout(required_size).unwrap();
+        let layout = setup_layout(None).expect("Layout setup failed");
 
-        let dtype_size = DTYPE.size_in_bytes();
-        let region_elements = PAGE_SIZE * INNER_DIM;
-        let layer_stride = region_elements * dtype_size;
-        let block_stride = NUM_LAYERS * layer_stride;
-        let base_addr = layout.storage.addr(); // Should be 0 for NullDeviceStorage
+        let dims = layout.config.clone();
+        let block_stride = dims.block_stride_in_bytes;
+        let layer_stride = dims.layer_stride_in_bytes;
+        let base_addr = layout.storage.addr() + layout.base_offset as u64;
 
         // Test first block, first layer
         let expected_offset_0_0 = base_addr + (0 * block_stride + 0 * layer_stride) as u64;
@@ -367,8 +493,7 @@ pub mod tests {
 
     #[test]
     fn test_fc_invalid_block_index() {
-        let required_size = calculate_required_size();
-        let layout = setup_layout(required_size).unwrap();
+        let layout = setup_layout(None).expect("Layout setup failed");
         let result = layout.get_memory_region(NUM_BLOCKS, 0); // Index == num_blocks (out of bounds)
         assert!(result.is_err());
         assert!(matches!(
@@ -379,8 +504,7 @@ pub mod tests {
 
     #[test]
     fn test_fc_invalid_layer_index() {
-        let required_size = calculate_required_size();
-        let layout = setup_layout(required_size).unwrap();
+        let layout = setup_layout(None).expect("Layout setup failed");
         let result = layout.get_memory_region(0, NUM_LAYERS); // Index == num_layers (out of bounds)
         assert!(result.is_err());
         assert!(matches!(
@@ -397,6 +521,7 @@ pub mod tests {
             num_layers: NUM_LAYERS,
             page_size: PAGE_SIZE,
             inner_dim: INNER_DIM,
+            alignment: 1,
             dtype: DTYPE,
         };
 
@@ -412,6 +537,105 @@ pub mod tests {
         assert_eq!(layout.page_size(), PAGE_SIZE);
         assert_eq!(layout.inner_dim(), INNER_DIM);
         assert_eq!(layout.storage.storage_type(), StorageType::System);
-        assert_eq!(layout.storage.size(), calculate_required_size());
+        assert_eq!(
+            layout.storage.size(),
+            layout.config.required_allocation_size()
+        );
+
+        assert_eq!(
+            layout.storage.size(),
+            NUM_BLOCKS * NUM_LAYERS * PAGE_SIZE * INNER_DIM * DTYPE.size_in_bytes()
+        );
+    }
+
+    #[test]
+    fn test_fc_alignment() {
+        init_logging();
+        const ALIGNMENT: usize = 256; // Must be power of 2
+
+        let config = LayoutConfig {
+            num_blocks: NUM_BLOCKS,
+            num_layers: NUM_LAYERS,
+            page_size: PAGE_SIZE,
+            inner_dim: INNER_DIM,
+            alignment: ALIGNMENT,
+            dtype: DTYPE,
+        };
+
+        // Calculate expected size needed *for the data layout itself*
+        let memory_region_size = PAGE_SIZE * INNER_DIM * DTYPE.size_in_bytes();
+        assert_eq!(memory_region_size, 208);
+
+        let natural_block_stride = NUM_LAYERS * memory_region_size;
+        assert_eq!(natural_block_stride, 1040);
+
+        let aligned_block_stride = align_up(natural_block_stride, ALIGNMENT);
+        assert_eq!(aligned_block_stride, 1280);
+
+        // Calculate the expected *allocated* size (data + initial padding)
+        let fc_config = FullyContiguousConfig::new(config.clone()).unwrap();
+        let expected_allocated_size = fc_config.required_allocation_size();
+
+        // Use allocate method
+        let allocator = SystemAllocator::default();
+        let layout_result = FullyContiguous::allocate(config.clone(), &allocator);
+
+        assert!(
+            layout_result.is_ok(),
+            "Allocation failed: {:?}",
+            layout_result.err()
+        );
+        let layout = layout_result.unwrap();
+
+        // Verify total *allocated* size matches expectation
+        assert_eq!(
+            layout.storage.size(),
+            expected_allocated_size,
+            "Allocated storage size mismatch"
+        );
+        assert_eq!(
+            layout.config.block_stride_in_bytes, aligned_block_stride,
+            "Stored block stride mismatch"
+        );
+
+        // Check alignment of block starts
+        let addr_block_0 = layout
+            .get_memory_region(0, 0)
+            .expect("Failed to get addr block 0");
+        let addr_block_1 = layout
+            .get_memory_region(1, 0)
+            .expect("Failed to get addr block 1");
+        let addr_block_2 = layout
+            .get_memory_region(2, 0)
+            .expect("Failed to get addr block 2");
+
+        // All blocks should now be aligned due to base_offset adjustment
+        assert_eq!(
+            addr_block_0 % ALIGNMENT as u64,
+            0,
+            "Block 0 start address is not aligned"
+        );
+        assert_eq!(
+            addr_block_1 % ALIGNMENT as u64,
+            0,
+            "Block 1 start address is not aligned"
+        );
+        assert_eq!(
+            addr_block_2 % ALIGNMENT as u64,
+            0,
+            "Block 2 start address is not aligned"
+        );
+
+        // Verify the difference matches the aligned stride
+        assert_eq!(
+            addr_block_1 - addr_block_0,
+            aligned_block_stride as u64,
+            "Stride between block 0 and 1 mismatch"
+        );
+        assert_eq!(
+            addr_block_2 - addr_block_1,
+            aligned_block_stride as u64,
+            "Stride between block 1 and 2 mismatch"
+        );
     }
 }
