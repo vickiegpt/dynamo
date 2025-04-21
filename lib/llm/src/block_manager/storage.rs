@@ -470,6 +470,14 @@ pub mod tests {
         }
     }
 
+    pub struct NullDeviceAllocator;
+
+    impl StorageAllocator<NullDeviceStorage> for NullDeviceAllocator {
+        fn allocate(&self, size: usize) -> Result<NullDeviceStorage> {
+            Ok(NullDeviceStorage::new(size as u64))
+        }
+    }
+
     #[derive(Debug)]
     pub struct NullHostStorage {
         size: u64,
@@ -504,6 +512,14 @@ pub mod tests {
 
         unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
             None
+        }
+    }
+
+    pub struct NullHostAllocator;
+
+    impl StorageAllocator<NullHostStorage> for NullHostAllocator {
+        fn allocate(&self, size: usize) -> Result<NullHostStorage> {
+            Ok(NullHostStorage::new(size as u64))
         }
     }
 }

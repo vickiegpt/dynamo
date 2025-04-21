@@ -486,7 +486,8 @@ pub(crate) mod tests {
         block_manager::{
             block::{state::CompleteState, BlockStorageCollection},
             events::NullEventManager,
-            storage::tests::NullDeviceStorage,
+            layout::{FullyContiguous, LayoutConfigBuilder},
+            storage::tests::{NullDeviceAllocator, NullDeviceStorage},
         },
         tokens::{Token, Tokens},
     };
@@ -570,200 +571,207 @@ pub(crate) mod tests {
         Tokens::from(tokens)
     }
 
-    // /// Creates a vector of Blocks from a token sequence and block size.
-    // /// Each block is initialized to the Complete state and then Registered.
-    // pub fn create_blocks(
-    //     tokens: Tokens,
-    //     block_size: usize,
-    // ) -> Vec<Block<NullDeviceStorage, TestMetadata>> {
-    //     let (token_blocks, _partial_token_block) =
-    //         tokens.into_sequence(block_size, None).into_parts();
-    //     let num_blocks = token_blocks.len();
+    /// Creates a block collection with the given number of blocks.
+    pub fn create_block_collection(
+        num_blocks: usize,
+    ) -> BlockStorageCollection<NullDeviceStorage, TestMetadata> {
+        let config = LayoutConfigBuilder::default()
+            .num_blocks(num_blocks)
+            .num_layers(61)
+            .page_size(16)
+            .inner_dim(576)
+            .build()
+            .unwrap();
 
-    //     if num_blocks == 0 {
-    //         return Vec::new();
-    //     }
+        let layout = FullyContiguous::allocate(config, &NullDeviceAllocator)
+            .expect("Failed to allocate layout/storage");
 
-    //     // Create temporary backing storage and blocks solely for state setup.
-    //     // In a real scenario, these blocks would come from a pool.
-    //     let block_collection = BlockStorageCollection::<NullDeviceStorage, TestMetadata>::new(
-    //         NullLayout::new(num_blocks),
-    //     )
-    //     .expect("Failed to create block collection for test");
-    //     let mut blocks = block_collection
-    //         .into_blocks()
-    //         .expect("Failed to convert collection into blocks for test");
+        let block_collection =
+            BlockStorageCollection::<NullDeviceStorage, TestMetadata>::new(layout).unwrap();
 
-    //     let event_manager = NullEventManager {};
+        block_collection
+    }
 
-    //     // Iterate through the generated TokenBlocks and the template Blocks,
-    //     // setting the state and registering each one.
-    //     for (block, token_block) in blocks.iter_mut().zip(token_blocks.into_iter()) {
-    //         assert!(block.is_empty()); // Start with empty blocks
-    //         block.update_state(BlockState::Complete(CompleteState::new(token_block)));
-    //         block
-    //             .register(&event_manager)
-    //             .expect("Failed to register block in test helper");
-    //         assert!(block.is_registered()); // Ensure registration worked
-    //     }
+    /// Creates a vector of Blocks from a token sequence and block size.
+    /// Each block is initialized to the Complete state and then Registered.
+    pub fn create_blocks(
+        tokens: Tokens,
+        block_size: usize,
+    ) -> Vec<Block<NullDeviceStorage, TestMetadata>> {
+        let (token_blocks, _partial_token_block) =
+            tokens.into_sequence(block_size, None).into_parts();
+        let num_blocks = token_blocks.len();
 
-    //     blocks
-    // }
+        if num_blocks == 0 {
+            return Vec::new();
+        }
 
-    // pub fn create_block_pool(
-    //     num_blocks: usize,
-    // ) -> InactiveBlockPool<NullDeviceStorage, TestMetadata> {
-    //     let mut pool = InactiveBlockPool::new();
+        let mut blocks = create_block_collection(num_blocks).into_blocks().unwrap();
 
-    //     let block_collection = BlockStorageCollection::<NullDeviceStorage, TestMetadata>::new(
-    //         NullLayout::new(num_blocks),
-    //     )
-    //     .unwrap();
+        let event_manager = NullEventManager {};
 
-    //     let blocks = block_collection.into_blocks().unwrap();
-    //     pool.add_blocks(blocks);
+        // Iterate through the generated TokenBlocks and the template Blocks,
+        // setting the state and registering each one.
+        for (block, token_block) in blocks.iter_mut().zip(token_blocks.into_iter()) {
+            assert!(block.is_empty()); // Start with empty blocks
+            block.update_state(BlockState::Complete(CompleteState::new(token_block)));
+            block
+                .register(&event_manager)
+                .expect("Failed to register block in test helper");
+            assert!(block.is_registered()); // Ensure registration worked
+        }
 
-    //     pool
-    // }
+        blocks
+    }
 
-    // pub fn acquire_blocks(
-    //     tokens: Tokens,
-    //     block_size: usize,
-    //     pool: &mut InactiveBlockPool<NullDeviceStorage, TestMetadata>,
-    // ) -> (Vec<Block<NullDeviceStorage, TestMetadata>>, usize) {
-    //     let (mut token_blocks, _partial_token_block) =
-    //         tokens.into_sequence(block_size, None).into_parts();
+    pub fn create_block_pool(
+        num_blocks: usize,
+    ) -> InactiveBlockPool<NullDeviceStorage, TestMetadata> {
+        let mut pool = InactiveBlockPool::new();
+        let blocks = create_block_collection(num_blocks).into_blocks().unwrap();
+        pool.add_blocks(blocks);
 
-    //     let total_complete_blocks = token_blocks.len();
+        pool
+    }
 
-    //     // this will match the token_blocks to any matching blocks in the inactive pool
-    //     // these blocks have the same sequence hash as the token_blocks, thus no updates are needed
-    //     let mut matched_blocks = pool.match_token_blocks(&token_blocks);
-    //     let matched_block_count = matched_blocks.len();
+    pub fn acquire_blocks(
+        tokens: Tokens,
+        block_size: usize,
+        pool: &mut InactiveBlockPool<NullDeviceStorage, TestMetadata>,
+    ) -> (Vec<Block<NullDeviceStorage, TestMetadata>>, usize) {
+        let (mut token_blocks, _partial_token_block) =
+            tokens.into_sequence(block_size, None).into_parts();
 
-    //     let event_manager = NullEventManager {};
+        let total_complete_blocks = token_blocks.len();
 
-    //     // all matched blocks should be in the complete or registered state
-    //     for block in &mut matched_blocks {
-    //         assert!(block.is_registered());
-    //     }
+        // this will match the token_blocks to any matching blocks in the inactive pool
+        // these blocks have the same sequence hash as the token_blocks, thus no updates are needed
+        let mut matched_blocks = pool.match_token_blocks(&token_blocks);
+        let matched_block_count = matched_blocks.len();
 
-    //     // drain the matched blocks from the token_blocks
-    //     token_blocks.drain(0..matched_block_count);
+        let event_manager = NullEventManager {};
 
-    //     assert_eq!(
-    //         token_blocks.len() + matched_blocks.len(),
-    //         total_complete_blocks
-    //     );
+        // all matched blocks should be in the complete or registered state
+        for block in &mut matched_blocks {
+            assert!(block.is_registered());
+        }
 
-    //     // try to acquire the remaining blocks
-    //     let mut unmatched_blocks = pool.acquire_free_blocks(token_blocks.len()).unwrap();
+        // drain the matched blocks from the token_blocks
+        token_blocks.drain(0..matched_block_count);
 
-    //     assert_eq!(unmatched_blocks.len(), token_blocks.len());
+        assert_eq!(
+            token_blocks.len() + matched_blocks.len(),
+            total_complete_blocks
+        );
 
-    //     for unmatched in &unmatched_blocks {
-    //         assert!(unmatched.is_empty());
-    //     }
+        // try to acquire the remaining blocks
+        let mut unmatched_blocks = pool.acquire_free_blocks(token_blocks.len()).unwrap();
 
-    //     for (unmatched, token_block) in unmatched_blocks.iter_mut().zip(token_blocks.into_iter()) {
-    //         assert!(unmatched.is_empty());
-    //         unmatched.update_state(BlockState::Complete(CompleteState::new(token_block)));
-    //         unmatched.register(&event_manager).unwrap();
-    //         assert!(unmatched.is_registered());
-    //     }
+        assert_eq!(unmatched_blocks.len(), token_blocks.len());
 
-    //     let mut blocks = matched_blocks;
-    //     blocks.extend(unmatched_blocks);
-    //     (blocks, matched_block_count)
-    // }
+        for unmatched in &unmatched_blocks {
+            assert!(unmatched.is_empty());
+        }
 
-    // #[test]
-    // fn test_block_pool_lifecycle() {
-    //     dynamo_runtime::logging::init();
+        for (unmatched, token_block) in unmatched_blocks.iter_mut().zip(token_blocks.into_iter()) {
+            assert!(unmatched.is_empty());
+            unmatched.update_state(BlockState::Complete(CompleteState::new(token_block)));
+            unmatched.register(&event_manager).unwrap();
+            assert!(unmatched.is_registered());
+        }
 
-    //     const PAGE_SIZE: usize = 2;
+        let mut blocks = matched_blocks;
+        blocks.extend(unmatched_blocks);
+        (blocks, matched_block_count)
+    }
 
-    //     let mut pool = create_block_pool(10);
-    //     assert_eq!(pool.total_blocks(), 10);
-    //     assert_eq!(pool.available_blocks(), 10);
+    #[test]
+    fn test_block_pool_lifecycle() {
+        dynamo_runtime::logging::init();
 
-    //     let blocks = pool.acquire_free_blocks(10).unwrap();
-    //     assert_eq!(blocks.len(), 10);
-    //     assert_eq!(pool.total_blocks(), 10);
-    //     assert_eq!(pool.available_blocks(), 0);
+        const PAGE_SIZE: usize = 2;
 
-    //     pool.return_blocks(blocks);
+        let mut pool = create_block_pool(10);
+        assert_eq!(pool.total_blocks(), 10);
+        assert_eq!(pool.available_blocks(), 10);
 
-    //     assert_eq!(pool.total_blocks(), 10);
-    //     assert_eq!(pool.available_blocks(), 10);
+        let blocks = pool.acquire_free_blocks(10).unwrap();
+        assert_eq!(blocks.len(), 10);
+        assert_eq!(pool.total_blocks(), 10);
+        assert_eq!(pool.available_blocks(), 0);
 
-    //     let tokens = create_token_sequence(&[1, 2, 3, 4]);
+        pool.return_blocks(blocks);
 
-    //     let (blocks, matched_block_count) = acquire_blocks(tokens.clone(), PAGE_SIZE, &mut pool);
-    //     assert_eq!(blocks.len(), 2);
-    //     assert_eq!(matched_block_count, 0);
-    //     assert_eq!(pool.available_blocks(), 8);
+        assert_eq!(pool.total_blocks(), 10);
+        assert_eq!(pool.available_blocks(), 10);
 
-    //     pool.return_blocks(blocks);
+        let tokens = create_token_sequence(&[1, 2, 3, 4]);
 
-    //     assert_eq!(pool.total_blocks(), 10);
-    //     assert_eq!(pool.available_blocks(), 10);
+        let (blocks, matched_block_count) = acquire_blocks(tokens.clone(), PAGE_SIZE, &mut pool);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(matched_block_count, 0);
+        assert_eq!(pool.available_blocks(), 8);
 
-    //     let (blocks, matched_block_count) = acquire_blocks(tokens.clone(), PAGE_SIZE, &mut pool);
-    //     assert_eq!(blocks.len(), 2);
-    //     assert_eq!(matched_block_count, 2);
-    //     assert_eq!(pool.available_blocks(), 8);
+        pool.return_blocks(blocks);
 
-    //     pool.return_blocks(blocks);
+        assert_eq!(pool.total_blocks(), 10);
+        assert_eq!(pool.available_blocks(), 10);
 
-    //     assert_eq!(pool.total_blocks(), 10);
-    //     assert_eq!(pool.available_blocks(), 10);
+        let (blocks, matched_block_count) = acquire_blocks(tokens.clone(), PAGE_SIZE, &mut pool);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(matched_block_count, 2);
+        assert_eq!(pool.available_blocks(), 8);
 
-    //     let blocks = pool.acquire_free_blocks(10).unwrap();
-    //     for block in &blocks {
-    //         assert!(block.is_empty());
-    //     }
-    // }
+        pool.return_blocks(blocks);
 
-    // #[test]
-    // fn test_basic_sequence_matching() {
-    //     let mut pool = InactiveBlockPool::new();
+        assert_eq!(pool.total_blocks(), 10);
+        assert_eq!(pool.available_blocks(), 10);
 
-    //     // Create a sequence of 4 tokens split into blocks of 2
-    //     let sequence = create_token_sequence(&[1, 2, 3, 4]);
-    //     let blocks = create_blocks(sequence, 2);
-    //     assert_eq!(blocks.len(), 2);
+        let blocks = pool.acquire_free_blocks(10).unwrap();
+        for block in &blocks {
+            assert!(block.is_empty());
+        }
+    }
 
-    //     // Match the blocks in sequence
-    //     let hashes: Vec<_> = blocks
-    //         .iter()
-    //         .map(|b| {
-    //             b.sequence_hash()
-    //                 .expect("Block should have a sequence hash in this test")
-    //         })
-    //         .collect();
+    #[test]
+    fn test_basic_sequence_matching() {
+        let mut pool = InactiveBlockPool::new();
 
-    //     // Insert blocks into pool
-    //     pool.add_blocks_with_state(blocks);
+        // Create a sequence of 4 tokens split into blocks of 2
+        let sequence = create_token_sequence(&[1, 2, 3, 4]);
+        let blocks = create_blocks(sequence, 2);
+        assert_eq!(blocks.len(), 2);
 
-    //     assert_eq!(pool.total_blocks(), 2);
-    //     assert_eq!(pool.available_blocks(), 2);
+        // Match the blocks in sequence
+        let hashes: Vec<_> = blocks
+            .iter()
+            .map(|b| {
+                b.sequence_hash()
+                    .expect("Block should have a sequence hash in this test")
+            })
+            .collect();
 
-    //     // Match the blocks in sequence
-    //     let matched = pool.match_sequence_hashes(hashes.clone());
-    //     assert_eq!(matched.len(), 2);
+        // Insert blocks into pool
+        pool.add_blocks_with_state(blocks);
 
-    //     assert_eq!(pool.total_blocks(), 2);
-    //     assert_eq!(pool.available_blocks(), 0);
+        assert_eq!(pool.total_blocks(), 2);
+        assert_eq!(pool.available_blocks(), 2);
 
-    //     // Validate the blocks are in the correct order and match the sequence hashes
-    //     assert_eq!(matched[0].sequence_hash().unwrap(), hashes[0]);
-    //     assert_eq!(matched[1].sequence_hash().unwrap(), hashes[1]);
+        // Match the blocks in sequence
+        let matched = pool.match_sequence_hashes(hashes.clone());
+        assert_eq!(matched.len(), 2);
 
-    //     // Return blocks in reverse order (tail to root)
-    //     pool.return_blocks(matched);
+        assert_eq!(pool.total_blocks(), 2);
+        assert_eq!(pool.available_blocks(), 0);
 
-    //     assert_eq!(pool.total_blocks(), 2);
-    //     assert_eq!(pool.available_blocks(), 2);
-    // }
+        // Validate the blocks are in the correct order and match the sequence hashes
+        assert_eq!(matched[0].sequence_hash().unwrap(), hashes[0]);
+        assert_eq!(matched[1].sequence_hash().unwrap(), hashes[1]);
+
+        // Return blocks in reverse order (tail to root)
+        pool.return_blocks(matched);
+
+        assert_eq!(pool.total_blocks(), 2);
+        assert_eq!(pool.available_blocks(), 2);
+    }
 }

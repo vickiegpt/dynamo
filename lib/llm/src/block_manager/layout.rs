@@ -106,6 +106,7 @@ pub struct LayoutConfig {
     #[builder(default = "1")]
     pub alignment: usize,
 
+    #[builder(default = "DType::FP16")]
     pub dtype: DType,
 }
 
@@ -352,7 +353,7 @@ impl<S: Storage> BlockLayout for FullyContiguous<S> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::block_manager::storage::tests::NullDeviceStorage;
+    use crate::block_manager::storage::tests::{NullDeviceAllocator, NullDeviceStorage};
     use crate::block_manager::storage::{StorageType, SystemAllocator};
     use crate::common::dtype::DType;
     use dynamo_runtime::logging::init as init_logging;
@@ -376,13 +377,7 @@ pub mod tests {
             dtype: DTYPE,
         };
 
-        let fc_config = FullyContiguousConfig::new(config.clone())?;
-
-        // Calculate the correct size needed for *this specific config*
-        let required_size = fc_config.required_allocation_size();
-
-        let storage = NullDeviceStorage::new(required_size as u64);
-        FullyContiguous::new(config, storage)
+        FullyContiguous::allocate(config, &NullDeviceAllocator)
     }
 
     #[test]
