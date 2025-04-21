@@ -16,10 +16,10 @@ RUN apt-get update && \
 RUN --mount=type=bind,source=./container/deps/,target=/workspace \
     uv venv -p 3.12 /venv && \
     source /venv/bin/activate && \
-    uv pip install -r ./requirements.txt
+    uv pip install dunamai==1.23.1
 
 RUN --mount=type=bind,source=.,target=/workspace \
     source /venv/bin/activate && \
-    versioningit > /version.txt
+    python ./container/version.py > /version.txt
 
 CMD ["cat", "/version.txt"]

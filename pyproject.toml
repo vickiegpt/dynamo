@@ -15,10 +15,8 @@
 
 [project]
 name = "ai-dynamo"
+version = "0.1.1"
 description = "Distributed Inference Framework"
-dynamic = [
- "version",
-]
 readme = "README.md"
 authors = [
     { name = "NVIDIA Inc.", email = "sw-dl-dynamo@nvidia.com" },
@@ -72,22 +70,8 @@ metrics = "dynamo.sdk.cli.run_executable:metrics"
 mock_worker = "dynamo.sdk.cli.run_executable:mock_worker"
 
 [build-system]
-requires = [
-    "hatchling",
-    "versioningit"
-]
+requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[tool.hatch.version]
-source = "versioningit"
-
-[tool.versioningit.format]
-# Format used when there have been commits since the most recent tag:
-distance = "{base_version}+post{distance}.{rev}"
-# Format used when there are uncommitted changes:
-dirty = "{base_version}+d{build_date:%Y%m%d%H%M%S}"
-# Format used when there are both commits and uncommitted changes:
-distance-dirty = "{base_version}+post{distance}.{rev}.d{build_date:%Y%m%d%H%M%S}"
 
 [tool.hatch.build.targets.wheel]
 packages = ["deploy/dynamo/sdk/src/dynamo"]

@@ -38,4 +38,4 @@
 .dockerignore
 **/target/*
 **/*safetensors
-.venv
+**/*venv*
