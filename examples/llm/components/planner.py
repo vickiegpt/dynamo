@@ -26,10 +26,10 @@ import numpy as np
 from rich.console import Console
 from rich.table import Table
 from tensorboardX import SummaryWriter
-from dynamo.planner import LocalConnector
 from utils.prefill_queue import PrefillQueue
 
 from dynamo.llm import KvMetricsAggregator
+from dynamo.planner import LocalConnector
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 from dynamo.runtime.logging import configure_logger
 

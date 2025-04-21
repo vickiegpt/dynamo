@@ -33,7 +33,7 @@ The planner is a component that monitors the state of the system and makes adjus
   * Load-based scaling up/down prefill/decode workers ✅
   * SLA-based scaling up/down prefill/decode workers ❌
   * Adjusting engine knobs ❌
-  
+
 ## Load-based Scaling Up/Down Prefill/Decode Workers
 
 To adjust the number of prefill/decode workers, planner monitors the following metrics:
@@ -52,7 +52,7 @@ python components/planner.py <arguments>
 
 Planner takes the following arguments:
 * `--namespace` (str, default: "dynamo"): Namespace planner will look at
-* `--served-model-name` (str, default: "vllm"): Model name that is being served` 
+* `--served-model-name` (str, default: "vllm"): Model name that is being served`
 * `--no-operation` (flag): Do not make any adjustments, just observe the metrics and log to tensorboard
 * `--log-dir` (str, default: None): Tensorboard logging directory
 * `--adjustment-interval` (int, default: 30): Interval in seconds between scaling adjustments
@@ -80,16 +80,16 @@ We currently support two backends:
 
 ### Local Backend
 
-Circus is a Python program which can be used to monitor and control processes and sockets. Dynamo serve uses circus to start each node in a graph and monitors each subprocesses. We leverage a core feature to do this called `Watcher`. A `Watcher` is the target program that you would like to run (which in our case is `serve_dynamo.py`). When planner decides to scale up or down, it will either add or remove a watcher from the existing `circus`. 
+Circus is a Python program which can be used to monitor and control processes and sockets. Dynamo serve uses circus to start each node in a graph and monitors each subprocesses. We leverage a core feature to do this called `Watcher`. A `Watcher` is the target program that you would like to run (which in our case is `serve_dynamo.py`). When planner decides to scale up or down, it will either add or remove a watcher from the existing `circus`.
 
 > [!NOTE]
 > Although circus allows you to `increment` an existing watcher, it was not designed to allow variables to be passed in which does not allow us to schedule on a GPU. So instead we start a new watcher per process. When planner decdies to add or remove a worker, we have logic to handle this adding/removing and incrementing/decrementing the workers.
 
 #### Statefile
 
-Our statefile looks like the JSON blob above. This state is created when you initially run `dynamo serve` and is filled in with custom leases in `serve_dynamo`. Each worker is called `{namespace}_{component_name}` when it is initially created. The `resources` come from the allocator and allows us to keep track of which GPUs are available. This statefile is read in by the LocalConnector and after each planner update we make the relevant change to the statefile. For now this statefile is locally saved in `~/.dynamo/state/{namespace}.json` (or in `DYN_LOCAL_STATE_DIR `) and is automatically cleaned up when the arbiter dies. It is helpful to debug but is not meant to be used/edited by the user. 
+Our statefile looks like the JSON blob above. This state is created when you initially run `dynamo serve` and is filled in with custom leases in `serve_dynamo`. Each worker is called `{namespace}_{component_name}` when it is initially created. The `resources` come from the allocator and allows us to keep track of which GPUs are available. This statefile is read in by the LocalConnector and after each planner update we make the relevant change to the statefile. For now this statefile is locally saved in `~/.dynamo/state/{namespace}.json` (or in `DYN_LOCAL_STATE_DIR `) and is automatically cleaned up when the arbiter dies. It is helpful to debug but is not meant to be used/edited by the user.
 
-Lets use the following example to motivate this section. Say I've spun up 1 Decode worker to start. Remember, when you first run `dynamo serve`, each worker is saved as `{namespace}_{component_name}`. Our current statefile looks like 
+Lets use the following example to motivate this section. Say I've spun up 1 Decode worker to start. Remember, when you first run `dynamo serve`, each worker is saved as `{namespace}_{component_name}`. Our current statefile looks like
 
 ```json
 {
@@ -97,7 +97,7 @@ Lets use the following example to motivate this section. Say I've spun up 1 Deco
 }
 ```
 
-Lets say I `add` a worker. My statefile now looks like 
+Lets say I `add` a worker. My statefile now looks like
 
 ```json
 {
@@ -126,7 +126,7 @@ Note that we keep the initial non-suffix entry in order to know what cmd we will
 
 > [!NOTE]
 > At the moment - planner work best if your initial replicas per worker are 1. This is because if you specify replicas > 1 when you initially start `dynamo serve`, the current implementation in `serving.py` starts each process in the same watcher. We need to refactor this so that we have a watcher per process
- 
+
 
 # Kubernetes Backend
 

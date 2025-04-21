@@ -15,7 +15,7 @@
 
 #!/bin/bash
 
-# This is a simple load test script for the planner component. To validate 
+# This is a simple load test script for the planner component. To validate
 # 1. Run 1P1D (default disagg router setup)
 # 2. Start planner with python components/planner.py --namespace dynamo --decode-kv-scale-up-threshold 0.2 --decode-kv-scale-down-threshold 0.1 --adjustment-interval 10
 # 3. Run ./load_test.sh 100

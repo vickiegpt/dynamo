@@ -15,7 +15,7 @@
 
 [workspace]
 members = [
-    "components/*",
+    "components/[!planner]*",
     "launch/*",
     "lib/llm",
     "lib/runtime",

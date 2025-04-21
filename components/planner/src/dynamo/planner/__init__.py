@@ -13,9 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Dynamo Planner package."""
+__all__ = ["CircusController", "LocalConnector", "PlannerConnector"]
 
-# Export main classes for direct import
-from dynamo.planner.local_connector import LocalConnector
+# Import the classes
 from dynamo.planner.circusd import CircusController
+from dynamo.planner.local_connector import LocalConnector
 from dynamo.planner.planner_connector import PlannerConnector
