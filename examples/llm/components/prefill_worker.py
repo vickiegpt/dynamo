@@ -75,8 +75,9 @@ class PrefillWorker:
             )
             self.engine_args.enable_prefix_caching = False
 
-        signal.signal(signal.SIGTERM, self.shutdown_vllm_engine)
-        signal.signal(signal.SIGINT, self.shutdown_vllm_engine)
+        self._shutdown_requested = False
+        signal.signal(signal.SIGTERM, self.request_shutdown)
+        signal.signal(signal.SIGINT, self.request_shutdown)
 
     @async_on_start
     async def async_init(self):
@@ -103,6 +104,9 @@ class PrefillWorker:
 
         task.add_done_callback(prefill_queue_handler_cb)
         logger.info("PrefillWorker initialized")
+
+    def request_shutdown(self):
+        self._shutdown_requested = True
 
     def shutdown_vllm_engine(self, signum, frame):
         """Shutdown the background loop"""
@@ -144,6 +148,10 @@ class PrefillWorker:
                     )
                     async for _ in self.generate(prefill_request):
                         pass
+                if self._shutdown_requested:
+                    logger.info("Shutdown requested, exiting prefill queue handler")
+                    self.shutdown_vllm_engine(signal.SIGTERM, None)
+                    break
 
     async def generate(self, request: RemotePrefillRequest):
         sampling_params = request.sampling_params
