@@ -15,13 +15,16 @@
 
 [workspace]
 members = [
-    "components/[!planner]*",
+    "components/*",
     "launch/*",
     "lib/llm",
     "lib/runtime",
     "lib/tokens",
     "lib/bindings/c",
     "lib/engines/*",
+]
+exclude = [
+    "components/planner"
 ]
 resolver = "3"
 
