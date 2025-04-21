@@ -19,8 +19,7 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-from local_connector import LocalConnector
-
+from dynamo.planner import LocalConnector
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 
 ComponentType = Literal["VllmWorker", "PrefillWorker"]
@@ -32,11 +31,11 @@ async def test_state_management(connector: LocalConnector) -> bool:
     print("\n=== Testing State Management ===")
     try:
         # Test load state
-        state = await connector.load_state()
+        state = await connector._load_state()
         print("✓ Load state successful")
 
         # Test save state (with a copy)
-        success = await connector.save_state(state)
+        success = await connector._save_state(state)
         print(
             f"{'✓' if success else '✗'} Save state {'successful' if success else 'failed'}"
         )
@@ -69,7 +68,7 @@ async def test_remove_component(
     """Test removing a component."""
     print(f"\n=== Testing Remove Component: {component} ===")
     try:
-        state = await connector.load_state()
+        state = await connector._load_state()
         base_name = f"{connector.namespace}_{component}_"
 
         # Find all components with numbered suffixes
