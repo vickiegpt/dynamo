@@ -161,9 +161,7 @@ class VllmWorker:
         if lease is None:
             logger.info("Creating metrics publisher endpoint with primary lease")
         else:
-            logger.info(
-                f"Creating metrics publisher endpoint with lease: {lease}"
-            )
+            logger.info(f"Creating metrics publisher endpoint with lease: {lease}")
         await self.metrics_publisher.create_endpoint(component, lease)
 
     def get_remote_prefill_request_callback(self):

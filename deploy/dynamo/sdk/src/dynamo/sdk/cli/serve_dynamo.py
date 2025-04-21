@@ -201,9 +201,7 @@ def main(
                         watcher_name = custom_component_name
                     else:
                         watcher_name = f"{namespace}_{component_name}"
-                    append_dynamo_state(
-                        namespace, watcher_name, {"lease": lease.id()}
-                    )
+                    append_dynamo_state(namespace, watcher_name, {"lease": lease.id()})
                     logger.info(f"Appended lease {lease.id()} to {watcher_name}")
                 result = await endpoints[0].serve_endpoint(twm[0], lease)
 

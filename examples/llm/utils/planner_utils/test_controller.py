@@ -97,13 +97,13 @@ async def test_remove_component(
         # Remember which watcher we're removing
         highest_suffix = max(suffix for suffix, _ in matching_components)
         target_component = f"{base_name}{highest_suffix}"
-        
+
         success = await connector.remove_component(component)
 
         # New verification logic that handles both numbered and base watchers
         if success:
             new_state = await connector.load_state()
-            
+
             # For numbered watchers (with suffix > 0)
             if highest_suffix > 0:
                 # Success if the component is completely removed
@@ -117,18 +117,20 @@ async def test_remove_component(
             else:
                 base_component = f"{connector.namespace}_{component}"
                 if base_component in new_state["components"]:
-                    resources = new_state["components"][base_component].get("resources", {})
+                    resources = new_state["components"][base_component].get(
+                        "resources", {}
+                    )
                     if not resources.get("allocated_gpus"):
                         print(f"✓ Successfully cleared resources for {base_component}")
                         return True
                     else:
                         print(f"✗ Failed to clear resources for {base_component}")
                         return False
-            
+
             # If we get here, neither condition was met
             print(f"✗ Unexpected state after removing {component}")
             return False
-        
+
         print(f"✗ Failed to remove {component}")
         return False
 

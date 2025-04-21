@@ -20,20 +20,20 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from dynamo.runtime import DistributedRuntime
-from dynamo.runtime.logging import configure_logger
-
 from circusd import CircusController
 from planner_connector import PlannerConnector
+
+from dynamo.runtime import DistributedRuntime
+from dynamo.runtime.logging import configure_logger
 
 logger = logging.getLogger(__name__)
 configure_logger(None, None)
 
-class LocalConnector(PlannerConnector):
-    """Local connector for managing Dynamo components using CircusController."""
 
+class LocalConnector(PlannerConnector):
     def __init__(self, namespace: str, runtime: Optional[DistributedRuntime] = None):
-        """Initialize LocalConnector.
+        """
+        Initialize LocalConnector and connect to CircusController.
 
         Args:
             namespace: The Dynamo namespace
@@ -47,7 +47,7 @@ class LocalConnector(PlannerConnector):
         self.prefill_client = None
         self.etcd_client = None
 
-    async def load_state(self) -> Dict[str, Any]:
+    async def _load_state(self) -> Dict[str, Any]:
         """Load state from state file.
 
         Returns:
@@ -59,7 +59,7 @@ class LocalConnector(PlannerConnector):
         with open(self.state_file, "r") as f:
             return json.load(f)
 
-    async def save_state(self, state: Dict[str, Any]) -> bool:
+    async def _save_state(self, state: Dict[str, Any]) -> bool:
         """Save state to state file.
 
         Args:
@@ -82,7 +82,7 @@ class LocalConnector(PlannerConnector):
         Returns:
             List of available GPU IDs
         """
-        state = await self.load_state()
+        state = await self._load_state()
         system_resources = state.get("environment", {}).get("SYSTEM_RESOURCES", {})
         all_gpus = set(str(gpu) for gpu in system_resources.get("gpu_info", []))
 
@@ -97,26 +97,9 @@ class LocalConnector(PlannerConnector):
         logger.info(f"Available GPUs: {available}")
         return available
 
-    # TODO: you might have multple watchers for the same component
-    async def get_component_replicas(self, component_name: str) -> int:
-        """Get the number of replicas for a component.
-
-        Args:
-            component_name: Name of the component
-
-        Returns:
-            Number of replicas
-        """
-        watcher_name = f"{self.namespace}_{component_name}"
-        try:
-            return await self.circus.get_watcher_processes(watcher_name)
-        except Exception as e:
-            logger.error(f"Failed to get replicas for {component_name}: {e}")
-            return 0
-
     async def add_component(self, component_name: str, blocking: bool = True) -> bool:
         """
-        Add a component to the planner. We block on adding the component until it is running.
+        Add a component
 
         Args:
             component_name: Name of the component
@@ -124,7 +107,7 @@ class LocalConnector(PlannerConnector):
         Returns:
             True if successful
         """
-        state = await self.load_state()
+        state = await self._load_state()
         # Find max suffix
         max_suffix = 0
         for watcher_name in state["components"].keys():
@@ -162,19 +145,18 @@ class LocalConnector(PlannerConnector):
         # Build worker env list and command
         worker_env_list = [watcher_env]
         worker_env_arg = json.dumps(worker_env_list)
+        # We add a custom component name to ensure that the lease is attatched to this specific watcher
         full_cmd = f"{base_cmd} --worker-env '{worker_env_arg}' --custom-component-name '{watcher_name}'"
 
         pre_add_endpoint_ids = await self._get_endpoint_ids(component_name)
         logger.info(f"Pre-add endpoint IDs: {pre_add_endpoint_ids}")
 
-        # Add watcher through circus controller
         logger.info(f"Adding watcher {watcher_name}")
         success = await self.circus.add_watcher(
             name=watcher_name, cmd=full_cmd, env=watcher_env, singleton=True
         )
 
         if success:
-            # Update state with new component
             resources = {}
             if component_name in ["VllmWorker", "PrefillWorker"]:
                 resources["allocated_gpus"] = [gpu_id]
@@ -184,7 +166,7 @@ class LocalConnector(PlannerConnector):
                 "cmd": full_cmd,
                 "resources": resources,
             }
-            await self.save_state(state)
+            await self._save_state(state)
             logger.info(
                 f"Succesfully created {watcher_name}. Waiting for worker to start..."
             )
@@ -206,9 +188,20 @@ class LocalConnector(PlannerConnector):
     async def remove_component(
         self, component_name: str, blocking: bool = True
     ) -> bool:
-        """Remove a component from the planner"""
+        """
+        Remove a component. The initial components are not numbered so we simply remove their resources
+        and lease but keep the entry in order to use the cmd. This allows us to re-add the component
+        without having to re-specify the cmd. For components that have been added, we remove their entry
+        entry
+
+        Args:
+            component_name: Name of the component
+
+        Returns:
+            True if successful
+        """
         logger.info(f"Attempting to remove component {component_name}")
-        state = await self.load_state()
+        state = await self._load_state()
         matching_components = {}
 
         base_name = f"{self.namespace}_{component_name}"
@@ -240,9 +233,7 @@ class LocalConnector(PlannerConnector):
             if blocking:
                 required_endpoint_ids = pre_remove_endpoint_ids - 1
                 while True:
-                    current_endpoint_ids = await self._get_endpoint_ids(
-                        component_name
-                    )
+                    current_endpoint_ids = await self._get_endpoint_ids(component_name)
                     if current_endpoint_ids == required_endpoint_ids:
                         break
                     logger.info(
@@ -263,7 +254,7 @@ class LocalConnector(PlannerConnector):
                 if target_watcher in state["components"]:
                     state["components"][target_watcher]["resources"] = {}
                     state["components"][target_watcher]["lease"] = None
-            await self.save_state(state)
+            await self._save_state(state)
 
         return success
 
@@ -302,6 +293,9 @@ class LocalConnector(PlannerConnector):
             raise ValueError(f"Component {component_name} not supported")
 
     async def _revoke_lease(self, lease_id: int) -> bool:
+        """
+        Wrapper function around the etcd client to revoke a lease
+        """
         if self.etcd_client is None:
             self.etcd_client = self.runtime.etcd_client()
         try:

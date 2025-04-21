@@ -13,11 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import json
 import logging
 import os
 from pathlib import Path
-import asyncio
 
 from circus.client import CircusClient
 from circus.exc import CallError
@@ -35,12 +35,12 @@ class CircusController:
             endpoint: The circus endpoint (e.g., tcp://127.0.0.1:54927)
         """
         self.endpoint = endpoint
-        # TODO: should i just use the async client as this might block?
         self.client = CircusClient(endpoint=endpoint, timeout=5.0)
 
     @classmethod
     def from_state_file(cls, namespace: str) -> "CircusController":
-        """Create a CircusController from a Dynamo state file.
+        """
+        Create a CircusController from a Dynamo state file.
 
         Args:
             namespace: The Dynamo namespace
@@ -73,7 +73,8 @@ class CircusController:
     async def add_watcher(
         self, name: str, cmd: str, env: dict = None, **options
     ) -> bool:
-        """Add a new watcher to circus.
+        """
+        Add a new watcher to circus.
 
         Args:
             name: Name of the watcher
@@ -82,28 +83,24 @@ class CircusController:
             **options: Additional watcher options
         """
         try:
-            # Build the watcher options dict
             watcher_options = {
                 "copy_env": True,
                 "stop_children": True,
                 "graceful_timeout": 86400,
             }
 
-            # Add env if provided
             if env:
                 watcher_options["env"] = env
 
-            # Add any additional options
             watcher_options.update(options)
 
-            # Format message exactly as AddWatcher command expects
             response = self.client.send_message(
                 "add",
-                name=name,  # Required property
-                cmd=cmd,  # Required property
-                args=[],  # Optional array of args
-                options=watcher_options,  # Options dict
-                start=True,  # Start immediately
+                name=name,
+                cmd=cmd,
+                args=[],
+                options=watcher_options,
+                start=True,
             )
 
             if response.get("status") != "ok":
@@ -118,59 +115,67 @@ class CircusController:
             return False
 
     async def remove_watcher(
-        self, name: str, nostop: bool = False, waiting: bool = True, 
-        max_retries: int = 3, retry_delay: float = 2.0
+        self,
+        name: str,
+        nostop: bool = False,
+        waiting: bool = True,
+        max_retries: int = 3,
+        retry_delay: float = 2.0,
     ) -> bool:
         """
         Remove a watcher. We add retry logic here to ensure that a worker
-        is removed with reasonable defaults.
-        
+        is properly removed after its process has been killed.
+
         Args:
             name: The name of the watcher to remove
             nostop: Whether to stop the processes or not
             waiting: Whether to wait for completion
             max_retries: Maximum number of retry attempts
             retry_delay: Delay between retries in seconds
-            
+
         Returns:
             True if successful
         """
         for attempt in range(1, max_retries + 1):
-            # check if the watcher exists - we've set an env var to kill the watcher if the process dies
             num_processes = await self._get_watcher_processes(name)
             if num_processes == 0:
-                logger.info(f"Watcher {name} does not exist or has already been removed - skipping")
+                logger.info(
+                    f"Watcher {name} does not exist or has already been removed - skipping"
+                )
                 return True
             try:
-                logger.info(f"Removing watcher {name} (attempt {attempt}/{max_retries})")
+                logger.info(
+                    f"Removing watcher {name} (attempt {attempt}/{max_retries})"
+                )
                 response = self.client.send_message(
                     "rm", name=name, nostop=nostop, waiting=waiting
                 )
-                print("RESPONSE", response)
 
                 if response.get("status") != "ok":
                     error_msg = f"Failed to remove watcher {name}: {response.get('reason', 'unknown error')}"
                     logger.error(error_msg)
-                    
+
                     if attempt < max_retries:
                         logger.info(f"Retrying in {retry_delay} seconds...")
                         await asyncio.sleep(retry_delay)
                         continue
                     return False
-                
+
                 logger.info(f"Successfully removed watcher {name} on attempt {attempt}")
                 return True
-                
+
             except (CallError, Exception) as e:
                 logger.error(f"Failed to remove watcher {name}: {e}")
-                
+
                 if attempt < max_retries:
                     logger.info(f"Retrying in {retry_delay} seconds...")
                     await asyncio.sleep(retry_delay)
                 else:
-                    logger.error(f"All {max_retries} attempts to remove watcher {name} failed")
+                    logger.error(
+                        f"All {max_retries} attempts to remove watcher {name} failed"
+                    )
                     return False
-        
+
         return False
 
     async def _get_watcher_processes(self, name: str) -> int:

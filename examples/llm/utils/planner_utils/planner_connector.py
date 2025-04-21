@@ -19,11 +19,6 @@ from abc import ABC, abstractmethod
 # TODO: add ability to scale component to X replicas
 class PlannerConnector(ABC):
     @abstractmethod
-    async def get_component_replicas(self, component_name):
-        """Get current number of replicas for a component"""
-        pass
-
-    @abstractmethod
     async def add_component(self, component_name):
         """Add a component to the planner"""
         pass
