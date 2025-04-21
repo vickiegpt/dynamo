@@ -136,6 +136,11 @@ class CircusController:
             True if successful
         """
         for attempt in range(1, max_retries + 1):
+            # check if the watcher actually exists - we've set an env var to kill the watcher if the process dies
+            num_processes = await self.get_watcher_processes(name)
+            if num_processes == 0:
+                logger.info(f"Watcher {name} does not exist or has already been removed - skipping")
+                return True
             try:
                 logger.info(f"Removing watcher {name} (attempt {attempt}/{max_retries})")
                 response = self.client.send_message(
