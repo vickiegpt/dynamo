@@ -126,7 +126,7 @@ class Planner:
             ) as prefill_queue:
                 prefill_queue_size = await prefill_queue.get_queue_size()
                 measure_time = time.time() - self.init_time
-            self.prefill_queue_load.append(prefill_queue_size > 0)
+            self.prefill_queue_load.append(prefill_queue_size)
             logger.info(
                 f"Collected prefill queue size at t={measure_time:.1f}s: {int(prefill_queue_size)}"
             )
@@ -145,10 +145,9 @@ class Planner:
                 kv_load = getattr(endpoint, "gpu_cache_usage_perc", 0.0)
                 num_requests_waiting = getattr(endpoint, "num_requests_waiting", 0.0)
                 num_queued_requests += num_requests_waiting
-                if kv_load > 0.8 and num_requests_waiting > 0:
-                    # if requests are waiting and kv load is high, we assume the needed kv is higher
-                    # check kv_load first to avoid
-                    kv_load = 1.2
+                if getattr(endpoint, "request_active_slots", None) and num_queued_requests > 0:
+                    # estimate kv load after waiting requests are scheduled based on current isl/osl
+                    kv_load = kv_load * endpoint.request_active_slots / (endpoint.request_active_slots + num_queued_requests)
                 self.kv_load.append(kv_load)
             measure_time = time.time() - self.init_time
             logger.info(
@@ -389,7 +388,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--prefill-queue-scale-up-threshold",
         type=float,
-        default=0.5,
+        default=5,
         help="Queue utilization threshold to scale up prefill workers",
     )
     parser.add_argument(
