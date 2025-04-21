@@ -55,12 +55,20 @@ logger = logging.getLogger(__name__)
     default=None,
     help="If set, start the server as a bare worker with the given worker ID. Otherwise start a standalone server with a supervisor process.",
 )
+@click.option(
+    "--custom-component-name",
+    required=False,
+    type=click.STRING,
+    default=None,
+    help="If set, use this custom component name instead of the default service name",
+)
 def main(
     bento_identifier: str,
     service_name: str,
     runner_map: str | None,
     worker_env: str | None,
     worker_id: int | None,
+    custom_component_name: str | None,
 ) -> None:
     """Start a worker for the given service - either Dynamo or regular service"""
     from _bentoml_impl.loader import import_service
@@ -188,9 +196,15 @@ def main(
                 else:
                     logger.info(f"Serving {service.name} with lease: {lease.id()}")
                     # Map custom lease to component
+                    watcher_name = None
+                    if custom_component_name:
+                        watcher_name = custom_component_name
+                    else:
+                        watcher_name = f"{namespace}_{component_name}"
                     append_dynamo_state(
-                        namespace, component_name, {"lease": lease.id()}
+                        namespace, watcher_name, {"lease": lease.id()}
                     )
+                    logger.info(f"Appended lease {lease.id()} to {watcher_name}")
                 result = await endpoints[0].serve_endpoint(twm[0], lease)
 
             except Exception as e:

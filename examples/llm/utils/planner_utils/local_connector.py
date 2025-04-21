@@ -23,12 +23,11 @@ from typing import Any, Dict, List, Optional
 from dynamo.runtime import DistributedRuntime
 from dynamo.runtime.logging import configure_logger
 
-from .circusd import CircusController
-from .planner_connector import PlannerConnector
+from circusd import CircusController
+from planner_connector import PlannerConnector
 
-configure_logger()
 logger = logging.getLogger(__name__)
-
+configure_logger(None, None)
 
 class LocalConnector(PlannerConnector):
     """Local connector for managing Dynamo components using CircusController."""
@@ -83,24 +82,20 @@ class LocalConnector(PlannerConnector):
         Returns:
             List of available GPU IDs
         """
-        try:
-            state = await self.load_state()
-            system_resources = state.get("environment", {}).get("SYSTEM_RESOURCES", {})
-            all_gpus = set(str(gpu) for gpu in system_resources.get("gpu_info", []))
+        state = await self.load_state()
+        system_resources = state.get("environment", {}).get("SYSTEM_RESOURCES", {})
+        all_gpus = set(str(gpu) for gpu in system_resources.get("gpu_info", []))
 
-            allocated_gpus = set()
-            for component_info in state.get("components", {}).values():
-                resources = component_info.get("resources", {})
-                gpu_list = resources.get("allocated_gpus", [])
-                allocated_gpus.update(str(gpu) for gpu in gpu_list)
+        allocated_gpus = set()
+        for component_info in state.get("components", {}).values():
+            resources = component_info.get("resources", {})
+            gpu_list = resources.get("allocated_gpus", [])
+            allocated_gpus.update(str(gpu) for gpu in gpu_list)
 
-            logger.info(f"Allocated GPUs: {allocated_gpus}")
-            available = sorted(list(all_gpus - allocated_gpus))
-            logger.info(f"Available GPUs: {available}")
-            return available
-        except Exception as e:
-            logger.error(f"Failed to get available GPUs: {e}")
-            return []
+        logger.info(f"Allocated GPUs: {allocated_gpus}")
+        available = sorted(list(all_gpus - allocated_gpus))
+        logger.info(f"Available GPUs: {available}")
+        return available
 
     # TODO: you might have multple watchers for the same component
     async def get_component_replicas(self, component_name: str) -> int:
@@ -129,145 +124,146 @@ class LocalConnector(PlannerConnector):
         Returns:
             True if successful
         """
-        try:
-            state = await self.load_state()
-            # Find max suffix
-            max_suffix = 0
-            for watcher_name in state["components"].keys():
-                if watcher_name.startswith(f"{self.namespace}_{component_name}_"):
-                    suffix = int(
-                        watcher_name.replace(f"{self.namespace}_{component_name}_", "")
-                    )
-                    max_suffix = max(max_suffix, suffix)
-
-            watcher_name = f"{self.namespace}_{component_name}_{max_suffix + 1}"
-
-            if component_name not in [
-                c.replace(f"{self.namespace}_", "") for c in state["components"]
-            ]:
-                raise ValueError(
-                    f"Component {component_name} not found in state configuration"
+        state = await self.load_state()
+        # Find max suffix
+        max_suffix = 0
+        for watcher_name in state["components"].keys():
+            if watcher_name.startswith(f"{self.namespace}_{component_name}_"):
+                suffix = int(
+                    watcher_name.replace(f"{self.namespace}_{component_name}_", "")
                 )
+                max_suffix = max(max_suffix, suffix)
 
-            # Get base command and config
-            component_info = state["components"][f"{self.namespace}_{component_name}"]
-            base_cmd = component_info["cmd"].split("--worker-env")[0].strip()
-            service_config = state["environment"].get("DYNAMO_SERVICE_CONFIG")
+        watcher_name = f"{self.namespace}_{component_name}_{max_suffix + 1}"
 
-            # Build environment
-            watcher_env = os.environ.copy()
-            if component_name in ["VllmWorker", "PrefillWorker"]:
-                available_gpus = await self._get_available_gpus()
-                if not available_gpus:
-                    raise ValueError("No GPUs available for allocation")
-                gpu_id = available_gpus[0]
-                watcher_env["CUDA_VISIBLE_DEVICES"] = gpu_id
-
-            watcher_env["DYNAMO_SERVICE_CONFIG"] = service_config
-
-            # Build worker env list and command
-            worker_env_list = [watcher_env]
-            worker_env_arg = json.dumps(worker_env_list)
-            full_cmd = f"{base_cmd} --worker-env '{worker_env_arg}'"
-
-            pre_add_endpoint_ids = await self._get_endpoint_ids(component_name)
-
-            # Add watcher through circus controller
-            success = await self.circus.add_watcher(
-                name=watcher_name, cmd=full_cmd, env=watcher_env, singleton=True
+        if component_name not in [
+            c.replace(f"{self.namespace}_", "") for c in state["components"]
+        ]:
+            raise ValueError(
+                f"Component {component_name} not found in state configuration"
             )
 
-            if success:
-                # Update state with new component
-                resources = {}
-                if component_name in ["VllmWorker", "PrefillWorker"]:
-                    resources["allocated_gpus"] = [gpu_id]
+        # Get base command and config
+        component_info = state["components"][f"{self.namespace}_{component_name}"]
+        base_cmd = component_info["cmd"].split("--worker-env")[0].strip()
+        service_config = state["environment"].get("DYNAMO_SERVICE_CONFIG")
 
-                state["components"][watcher_name] = {
-                    "watcher_name": watcher_name,
-                    "cmd": full_cmd,
-                    "resources": resources,
-                }
-                await self.save_state(state)
-                logger.info(f"Succesfully created {watcher_name}. Waiting for for start...")
-            
+        # Build environment
+        watcher_env = os.environ.copy()
+        if component_name in ["VllmWorker", "PrefillWorker"]:
+            available_gpus = await self._get_available_gpus()
+            if not available_gpus:
+                raise ValueError("No GPUs available for allocation")
+            gpu_id = available_gpus[0]
+            watcher_env["CUDA_VISIBLE_DEVICES"] = gpu_id
+
+        watcher_env["DYNAMO_SERVICE_CONFIG"] = service_config
+
+        # Build worker env list and command
+        worker_env_list = [watcher_env]
+        worker_env_arg = json.dumps(worker_env_list)
+        full_cmd = f"{base_cmd} --worker-env '{worker_env_arg}' --custom-component-name '{watcher_name}'"
+
+        pre_add_endpoint_ids = await self._get_endpoint_ids(component_name)
+        logger.info(f"Pre-add endpoint IDs: {pre_add_endpoint_ids}")
+
+        # Add watcher through circus controller
+        logger.info(f"Adding watcher {watcher_name}")
+        success = await self.circus.add_watcher(
+            name=watcher_name, cmd=full_cmd, env=watcher_env, singleton=True
+        )
+
+        if success:
+            # Update state with new component
+            resources = {}
+            if component_name in ["VllmWorker", "PrefillWorker"]:
+                resources["allocated_gpus"] = [gpu_id]
+
+            state["components"][watcher_name] = {
+                "watcher_name": watcher_name,
+                "cmd": full_cmd,
+                "resources": resources,
+            }
+            await self.save_state(state)
+            logger.info(
+                f"Succesfully created {watcher_name}. Waiting for worker to start..."
+            )
+
+        if blocking:
+            required_endpoint_ids = pre_add_endpoint_ids + 1
+            while True:
+                current_endpoint_ids = await self._get_endpoint_ids(component_name)
+                if current_endpoint_ids == required_endpoint_ids:
+                    break
+                await asyncio.sleep(5)
+
+        return success
+
+    async def remove_component(
+        self, component_name: str, blocking: bool = True
+    ) -> bool:
+        """Remove a component from the planner"""
+        logger.info(f"Attempting to remove component {component_name}")
+        state = await self.load_state()
+        matching_components = {}
+
+        base_name = f"{self.namespace}_{component_name}"
+        base_name_with_underscore = f"{base_name}_"
+
+        for watcher_name in state["components"].keys():
+            if watcher_name == base_name:
+                matching_components[0] = watcher_name
+            elif watcher_name.startswith(base_name_with_underscore):
+                suffix = int(watcher_name.replace(base_name_with_underscore, ""))
+                matching_components[suffix] = watcher_name
+
+        if not matching_components:
+            logger.error(f"No matching components found for {component_name}")
+            return False
+
+        highest_suffix = max(matching_components.keys())
+        target_watcher = matching_components[highest_suffix]
+        logger.info(f"Removing watcher {target_watcher}")
+
+        # If VllmWorker, we need to revoke the lease before we remove the watcher in order to ensure graceful shutdown
+        pre_remove_endpoint_ids = await self._get_endpoint_ids(component_name)
+
+        if component_name == "VllmWorker":
+            lease_id = state["components"][target_watcher]["lease"]
+            await self._revoke_lease(lease_id)
+
+            # Poll endpoint to ensure that worker has shut down gracefully and then remove the watcher
             if blocking:
-                required_endpoint_ids = pre_add_endpoint_ids + 1
+                required_endpoint_ids = pre_remove_endpoint_ids - 1
                 while True:
-                    current_endpoint_ids = await self._get_endpoint_ids(component_name)
+                    current_endpoint_ids = await self._get_endpoint_ids(
+                        component_name
+                    )
                     if current_endpoint_ids == required_endpoint_ids:
                         break
+                    logger.info(
+                        f"Waiting for {component_name} to shutdown. Current endpoint IDs: {current_endpoint_ids}, Required endpoint IDs: {required_endpoint_ids}"
+                    )
                     await asyncio.sleep(5)
 
-            return success
+        success = await self.circus.remove_watcher(name=target_watcher)
+        logger.info(
+            f"Circus remove_watcher for {target_watcher} {'succeeded' if success else 'failed'}"
+        )
 
-        except Exception as e:
-            logger.error(f"Failed to add component {component_name}: {e}")
-            return False
+        if success:
+            if highest_suffix > 0:  # Numbered watcher - remove entire entry
+                if target_watcher in state["components"]:
+                    del state["components"][target_watcher]
+            else:  # Base watcher - just clear resources and lease
+                if target_watcher in state["components"]:
+                    state["components"][target_watcher]["resources"] = {}
+                    state["components"][target_watcher]["lease"] = None
+            await self.save_state(state)
 
-    async def remove_component(self, component_name: str, blocking: bool = True) -> bool:
-        """Remove a component from the planner"""
-        try:
-            logger.info(f"Attempting to remove component {component_name}")
-            state = await self.load_state()
-            matching_components = {}
+        return success
 
-            base_name = f"{self.namespace}_{component_name}"
-            base_name_with_underscore = f"{base_name}_"
-
-            for watcher_name in state["components"].keys():
-                if watcher_name == base_name:
-                    matching_components[0] = watcher_name
-                elif watcher_name.startswith(base_name_with_underscore):
-                    suffix = int(watcher_name.replace(base_name_with_underscore, ""))
-                    matching_components[suffix] = watcher_name
-
-            if not matching_components:
-                logger.error(f"No matching components found for {component_name}")
-                return False
-
-            highest_suffix = max(matching_components.keys())
-            target_watcher = matching_components[highest_suffix]
-
-            # If VllmWorker, we need to revoke the lease before we remove the watcher in order to ensure graceful shutdown
-            # The one we want to remove in the state file should have a lease section. We need to use that API to revoke the lease
-            # Poll endpoint to ensure that worker has shut down gracefully and then remove the watcher 
-            pre_remove_endpoint_ids = await self._get_endpoint_ids(component_name)
-
-            if component_name == "VllmWorker":
-                lease_id = state["components"][target_watcher]["lease_id"]
-                await self._revoke_lease(lease_id)
-
-                # Poll endpoint to ensure that worker has shut down gracefully and then remove the watcher 
-                if blocking:
-                    required_endpoint_ids = pre_remove_endpoint_ids - 1
-                    while True:
-                        current_endpoint_ids = await self._get_endpoint_ids(component_name)
-                        if current_endpoint_ids == required_endpoint_ids:
-                            break
-                        await asyncio.sleep(5)
-
-            success = await self.circus.remove_watcher(name=target_watcher)
-            logger.info(
-                f"Circus remove_watcher for {target_watcher} {'succeeded' if success else 'failed'}"
-            )
-
-            if success:
-                if highest_suffix > 0:  # Numbered watcher - remove entire entry
-                    if target_watcher in state["components"]:
-                        del state["components"][target_watcher]
-                else:  # Base watcher - just clear resources
-                    if target_watcher in state["components"]:
-                        state["components"][target_watcher]["resources"] = {}
-                await self.save_state(state)
-
-            return success
-
-        except Exception as e:
-            logger.error(f"Failed to remove component {component_name}: {e}")
-            return False
-
-    async def _get_endpoint_ids(self, component_name: str) -> List[str]:
+    async def _get_endpoint_ids(self, component_name: str) -> int:
         """
         Get the endpoint IDs for a component. We use this to block and ensure that a component is running
         before we complete the add_component call.
@@ -276,7 +272,7 @@ class LocalConnector(PlannerConnector):
             component_name: Name of the component
 
         Returns:
-            Number of endpoint IDs for a component 
+            Number of endpoint IDs for a component
         """
         if component_name == "VllmWorker":
             if self.worker_client is None:
@@ -286,9 +282,8 @@ class LocalConnector(PlannerConnector):
                     .endpoint("generate")
                     .client()
                 )
-            else:
-                worker_ids = self.worker_client.endpoint_ids()
-                return len(worker_ids)
+            worker_ids = self.worker_client.endpoint_ids()
+            return len(worker_ids)
         elif component_name == "PrefillWorker":
             if self.prefill_client is None:
                 self.prefill_client = (
@@ -297,16 +292,21 @@ class LocalConnector(PlannerConnector):
                     .endpoint("generate")
                     .client()
                 )
-            else:
-                prefill_ids = self.prefill_client.endpoint_ids()
-                return len(prefill_ids)
+            prefill_ids = self.prefill_client.endpoint_ids()
+            return len(prefill_ids)
         else:
             raise ValueError(f"Component {component_name} not supported")
 
-    async def _revoke_lease(self, lease_id: int):
+    async def _revoke_lease(self, lease_id: int) -> bool:
         if self.etcd_client is None:
-            self.etcd_client = await self.runtime.etcd_client()
-        await self.etcd_client.revoke_lease(lease_id)
+            self.etcd_client = self.runtime.etcd_client()
+        try:
+            self.etcd_client.revoke_lease(lease_id)
+            logger.info(f"Revoked lease {lease_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to revoke lease {lease_id}: {e}")
+            return False
 
     def __del__(self):
         """Cleanup circus controller connection on deletion."""

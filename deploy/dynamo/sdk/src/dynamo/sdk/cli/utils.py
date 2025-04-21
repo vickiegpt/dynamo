@@ -206,17 +206,17 @@ def append_dynamo_state(namespace: str, component_name: str, data: dict) -> None
     with open(state_file, "r") as f:
         state = json.load(f)
 
-    target_component = f"{namespace}_{component_name}"
-
     if "components" not in state:
         state["components"] = {}
-    if target_component not in state["components"]:
-        state["components"][target_component] = {}
+    if component_name not in state["components"]:
+        state["components"][component_name] = {}
 
-    state["components"][target_component].update(data)
+    state["components"][component_name].update(data)
+
+    logger.warning(f"Appending {data} to {component_name} in {state_file}")
 
     with open(state_file, "w") as f:
-        json.dump(state, f, indent=2)
+        json.dump(state, f)
 
 
 def _parse_service_arg(arg_name: str, arg_value: str) -> tuple[str, str, t.Any]:

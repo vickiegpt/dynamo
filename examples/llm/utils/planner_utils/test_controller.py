@@ -94,23 +94,42 @@ async def test_remove_component(
                 print(f"✗ No {component} components found to remove")
                 return False
 
+        # Remember which watcher we're removing
+        highest_suffix = max(suffix for suffix, _ in matching_components)
+        target_component = f"{base_name}{highest_suffix}"
+        
         success = await connector.remove_component(component)
 
-        # New verification logic: check if GPUs were cleared
+        # New verification logic that handles both numbered and base watchers
         if success:
             new_state = await connector.load_state()
-            highest_suffix = max(suffix for suffix, _ in matching_components)
-            target_component = f"{base_name}{highest_suffix}"
-
-            if target_component in new_state["components"]:
-                resources = new_state["components"][target_component].get(
-                    "resources", {}
-                )
-                if not resources.get("allocated_gpus"):
-                    print(f"✓ Successfully removed {target_component} and cleared GPUs")
+            
+            # For numbered watchers (with suffix > 0)
+            if highest_suffix > 0:
+                # Success if the component is completely removed
+                if target_component not in new_state["components"]:
+                    print(f"✓ Successfully removed {target_component}")
                     return True
-
-        print(f"✗ Failed to remove {component} or clear GPUs")
+                else:
+                    print(f"✗ Failed to remove {target_component} from state")
+                    return False
+            # For base watchers (no suffix)
+            else:
+                base_component = f"{connector.namespace}_{component}"
+                if base_component in new_state["components"]:
+                    resources = new_state["components"][base_component].get("resources", {})
+                    if not resources.get("allocated_gpus"):
+                        print(f"✓ Successfully cleared resources for {base_component}")
+                        return True
+                    else:
+                        print(f"✗ Failed to clear resources for {base_component}")
+                        return False
+            
+            # If we get here, neither condition was met
+            print(f"✗ Unexpected state after removing {component}")
+            return False
+        
+        print(f"✗ Failed to remove {component}")
         return False
 
     except Exception as e:
