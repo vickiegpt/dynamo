@@ -199,10 +199,10 @@ class Planner:
         )
         logger.info(f"Current engines use {curr_gpu_usage} GPUs")
 
-        # check if we need to scale up/down prefill workers
-        # we first check for prefill worker because prefill queueing can also lead
-        # to high kv load on decode workers
+
         avg_prefill_queue_load = np.mean(self.prefill_queue_load)
+        avg_kv_load = np.mean(self.kv_load)
+        # first check if we need to scale down any workers
         if (
             avg_prefill_queue_load < self.args.prefill_queue_scale_down_threshold
             and len(self.p_endpoints) > self.args.min_gpu_budget
@@ -215,26 +215,6 @@ class Planner:
                 curr_gpu_usage -= self.args.prefill_engine_num_gpu
             else:
                 logger.error("Failed to scale down prefill worker")
-        elif (
-            avg_prefill_queue_load > self.args.prefill_queue_scale_up_threshold
-            and curr_gpu_usage + self.args.prefill_engine_num_gpu
-            <= self.args.max_gpu_budget
-        ):
-            logger.info(
-                f"Average prefill queue load ({avg_prefill_queue_load:.2f}) is above threshold ({self.args.prefill_queue_scale_up_threshold:.2f}), scaling up prefill workers"
-            )
-            success = await self.connector.add_component("PrefillWorker")
-            if success:
-                curr_gpu_usage += self.args.prefill_engine_num_gpu
-            else:
-                logger.error("Failed to scale up prefill worker")
-        else:
-            logger.info(
-                f"prefill queue load ({avg_prefill_queue_load:.2f}) is within threshold, no prefill worker scaling needed"
-            )
-
-        # check if we need to scale up/down decode workers
-        avg_kv_load = np.mean(self.kv_load)
         if (
             avg_kv_load < self.args.decode_kv_scale_down_threshold
             and len(self.d_endpoints) > self.args.min_gpu_budget
@@ -247,7 +227,24 @@ class Planner:
                 curr_gpu_usage -= self.args.decode_engine_num_gpu
             else:
                 logger.error("Failed to scale down decode worker")
-        elif (
+        
+        # check if we need to scale up workers
+        # we first check for prefill worker because prefill queueing can also lead
+        # to high kv load on decode workers
+        if (
+            avg_prefill_queue_load > self.args.prefill_queue_scale_up_threshold
+            and curr_gpu_usage + self.args.prefill_engine_num_gpu
+            <= self.args.max_gpu_budget
+        ):
+            logger.info(
+                f"Average prefill queue load ({avg_prefill_queue_load:.2f}) is above threshold ({self.args.prefill_queue_scale_up_threshold:.2f}), scaling up prefill workers"
+            )
+            success = await self.connector.add_component("PrefillWorker")
+            if success:
+                curr_gpu_usage += self.args.prefill_engine_num_gpu
+            else:
+                logger.error("Failed to scale up prefill worker")
+        if (
             avg_kv_load > self.args.decode_kv_scale_up_threshold
             and curr_gpu_usage + self.args.decode_engine_num_gpu
             <= self.args.max_gpu_budget
@@ -260,7 +257,13 @@ class Planner:
                 curr_gpu_usage += self.args.decode_engine_num_gpu
             else:
                 logger.error("Failed to scale up decode worker")
-        else:
+            
+        # no adjustment needed, just log the current metrics
+        if avg_prefill_queue_load > self.args.prefill_queue_scale_down_threshold and avg_prefill_queue_load < self.args.prefill_queue_scale_up_threshold:
+            logger.info(
+                f"prefill queue load ({avg_prefill_queue_load:.2f}) is within threshold, no prefill worker scaling needed"
+            )
+        if avg_kv_load > self.args.decode_kv_scale_down_threshold and avg_kv_load < self.args.decode_kv_scale_up_threshold:
             logger.info(
                 f"kv load ({avg_kv_load:.2f}) is within threshold, no decode worker scaling needed"
             )
@@ -352,7 +355,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--adjustment-interval",
         type=int,
-        default=30,
+        default=10,
         help="Interval in seconds between scaling adjustments",
     )
     parser.add_argument(
