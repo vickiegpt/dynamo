@@ -27,7 +27,7 @@ from dynamo.runtime import DistributedRuntime
 from dynamo.runtime.logging import configure_logger
 
 logger = logging.getLogger(__name__)
-configure_logger()
+configure_logger(None, None)
 
 
 class LocalConnector(PlannerConnector):

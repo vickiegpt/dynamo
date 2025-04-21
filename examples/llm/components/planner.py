@@ -34,7 +34,7 @@ from dynamo.runtime import DistributedRuntime, dynamo_worker
 from dynamo.runtime.logging import configure_logger
 
 logger = logging.getLogger(__name__)
-configure_logger()
+configure_logger(None, None)
 
 
 class Planner:
