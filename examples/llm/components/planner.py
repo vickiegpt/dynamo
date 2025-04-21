@@ -26,7 +26,7 @@ import numpy as np
 from rich.console import Console
 from rich.table import Table
 from tensorboardX import SummaryWriter
-from utils.planner_utils.local_connector import LocalConnector
+from dynamo.planner import LocalConnector
 from utils.prefill_queue import PrefillQueue
 
 from dynamo.llm import KvMetricsAggregator
