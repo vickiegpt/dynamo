@@ -17,6 +17,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import asyncio
 
 from circus.client import CircusClient
 from circus.exc import CallError
@@ -117,30 +118,55 @@ class CircusController:
             return False
 
     async def remove_watcher(
-        self, name: str, nostop: bool = False, waiting: bool = True
+        self, name: str, nostop: bool = False, waiting: bool = True, 
+        max_retries: int = 3, retry_delay: float = 2.0
     ) -> bool:
-        """Remove a watcher from circus.
-
-        Args:
-            name: Name of the watcher
-            nostop: If True, don't stop the processes, just remove the watcher
-            waiting: If True, wait for complete removal before returning
         """
-        try:
-            response = self.client.send_message(
-                "rm", name=name, nostop=nostop, waiting=waiting
-            )
-            print("RESPONSE", response)
-
-            if response.get("status") != "ok":
-                logger.error(
-                    f"Failed to remove watcher {name}: {response.get('reason', 'unknown error')}"
+        Remove a watcher. We add retry logic here to ensure that a worker
+        is removed with reasonable defaults.
+        
+        Args:
+            name: The name of the watcher to remove
+            nostop: Whether to stop the processes or not
+            waiting: Whether to wait for completion
+            max_retries: Maximum number of retry attempts
+            retry_delay: Delay between retries in seconds
+            
+        Returns:
+            True if successful
+        """
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"Removing watcher {name} (attempt {attempt}/{max_retries})")
+                response = self.client.send_message(
+                    "rm", name=name, nostop=nostop, waiting=waiting
                 )
-                return False
-            return True
-        except (CallError, Exception) as e:
-            logger.error(f"Failed to remove watcher {name}: {e}")
-            return False
+                print("RESPONSE", response)
+
+                if response.get("status") != "ok":
+                    error_msg = f"Failed to remove watcher {name}: {response.get('reason', 'unknown error')}"
+                    logger.error(error_msg)
+                    
+                    if attempt < max_retries:
+                        logger.info(f"Retrying in {retry_delay} seconds...")
+                        await asyncio.sleep(retry_delay)
+                        continue
+                    return False
+                
+                logger.info(f"Successfully removed watcher {name} on attempt {attempt}")
+                return True
+                
+            except (CallError, Exception) as e:
+                logger.error(f"Failed to remove watcher {name}: {e}")
+                
+                if attempt < max_retries:
+                    logger.info(f"Retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.error(f"All {max_retries} attempts to remove watcher {name} failed")
+                    return False
+        
+        return False
 
     async def get_watcher_processes(self, name: str) -> int:
         """Get number of processes for a watcher."""
