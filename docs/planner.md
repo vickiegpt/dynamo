@@ -66,7 +66,7 @@ Planner takes the following arguments:
 * `--decode-engine-num-gpu` (int, default: 1): Number of GPUs per decode engine
 * `--prefill-engine-num-gpu` (int, default: 1): Number of GPUs per prefill engine
 
-## Tensorboard
+### Tensorboard
 
 Planner logs to tensorboard to visualize the metrics and the scaling actions. You can start tensorboard with the following command:
 ```bash
