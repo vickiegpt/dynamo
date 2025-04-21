@@ -116,7 +116,7 @@ If scaled to zero, the initial entry is kept without resources to maintain confi
 
 ### Testing
 
-For manual testing, you can use the test_controller.py file to add/remove components after you've run a serve command with `--enable-local-planner`.
+For manual testing, you can use the controller_test.py file to add/remove components after you've run a serve command with `--enable-local-planner`.
 
 ## Kubernetes Backend
 
