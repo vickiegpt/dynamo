@@ -534,7 +534,7 @@ impl EtcdClient {
     fn revoke_lease<'p>(&self, py: Python<'p>, lease_id: i64) -> PyResult<Bound<'p, PyAny>> {
         let client = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let _ = client.revoke_lease(lease_id).await.map_err(to_pyerr)?;
+            client.revoke_lease(lease_id).await.map_err(to_pyerr)?;
             Ok(())
         })
     }
