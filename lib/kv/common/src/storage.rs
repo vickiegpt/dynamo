@@ -1,0 +1,292 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Storage management for block manager.
+//!
+//! This module provides traits and implementations for managing storage of KV blocks.
+//! It handles system memory, pinned memory, device memory, and remote (NIXL) storage,
+//! with a focus on safety and performance.
+
+#[cfg(feature = "cuda")]
+mod cuda;
+
+#[cfg(feature = "cuda")]
+pub use cuda::*;
+
+use std::{
+    alloc::{alloc_zeroed, dealloc, Layout},
+    fmt::Debug,
+    ptr::NonNull,
+    sync::Arc,
+};
+use thiserror::Error;
+
+/// Result type for storage operations
+pub type StorageResult<T> = std::result::Result<T, StorageError>;
+
+/// Represents the type of storage used for a block
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StorageType {
+    #[cfg(feature = "cuda")]
+    Device(Arc<CudaContext>),
+
+    Pinned,
+    System,
+    Null,
+}
+
+pub enum StorageLocality {
+    Local,
+
+    // todo: add a nixl agent/bytes identifier
+    // perhaps this is an enum. other options could be a etcd path to a
+    // keyval object with nixl metadata
+    Remote,
+}
+
+/// Errors that can occur during storage operations
+#[derive(Debug, Error)]
+pub enum StorageError {
+    #[error("Storage allocation failed: {0}")]
+    AllocationFailed(String),
+
+    #[error("Storage not accessible: {0}")]
+    NotAccessible(String),
+
+    #[error("Invalid storage configuration: {0}")]
+    InvalidConfig(String),
+
+    #[error("Storage operation failed: {0}")]
+    OperationFailed(String),
+
+    #[cfg(feature = "cuda")]
+    #[error("CUDA error: {0}")]
+    Cuda(#[from] DriverError),
+}
+
+/// Result type for storage operations
+pub type Result<T> = std::result::Result<T, StorageError>;
+
+/// Core storage trait that provides access to memory regions
+pub trait Storage: Debug + Send + Sync + 'static {
+    /// Returns the type of storage
+    fn storage_type(&self) -> StorageType;
+
+    /// Returns the address of the storage
+    fn addr(&self) -> u64;
+
+    /// Returns the total size of the storage in bytes
+    fn size(&self) -> usize;
+
+    /// Returns true if the storage is accessible by the host/cpu portion
+    /// of the application.
+    fn is_host_accessible(&self) -> bool;
+
+    /// Get a raw pointer to the storage
+    ///
+    /// # Safety
+    /// The caller must ensure:
+    /// - The pointer is not used after the storage is dropped
+    /// - Access patterns respect the storage's thread safety model
+    unsafe fn as_ptr(&self) -> Option<*const u8>;
+
+    /// Get a raw mutable pointer to the storage
+    ///
+    /// # Safety
+    /// The caller must ensure:
+    /// - The pointer is not used after the storage is dropped
+    /// - No other references exist while the pointer is in use
+    /// - Access patterns respect the storage's thread safety model
+    unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8>;
+}
+
+/// Trait for types that can allocate specific Storage implementations.
+pub trait StorageAllocator<S: Storage>: Send + Sync {
+    /// Allocate storage of the specific type `S` with the given size in bytes.
+    fn allocate(&self, size: usize) -> Result<S>;
+}
+
+/// System memory storage implementation using pinned memory
+#[derive(Debug)]
+pub struct SystemStorage {
+    ptr: NonNull<u8>,
+    layout: Layout,
+    len: usize,
+}
+
+unsafe impl Send for SystemStorage {}
+unsafe impl Sync for SystemStorage {}
+
+impl SystemStorage {
+    /// Create a new system storage with the given size
+    ///
+    /// # Safety
+    /// This function allocates memory that will be freed when the SystemStorage is dropped.
+    pub fn new(size: usize) -> Result<Self> {
+        // Create layout for the allocation, ensuring proper alignment
+        let layout =
+            Layout::array::<u8>(size).map_err(|e| StorageError::AllocationFailed(e.to_string()))?;
+
+        // Allocate zeroed memory
+        let ptr = unsafe {
+            NonNull::new(alloc_zeroed(layout))
+                .ok_or_else(|| StorageError::AllocationFailed("memory allocation failed".into()))?
+        };
+
+        Ok(Self {
+            ptr,
+            layout,
+            len: size,
+        })
+    }
+}
+
+impl Drop for SystemStorage {
+    fn drop(&mut self) {
+        unsafe {
+            dealloc(self.ptr.as_ptr(), self.layout);
+        }
+    }
+}
+
+impl Storage for SystemStorage {
+    fn storage_type(&self) -> StorageType {
+        StorageType::System
+    }
+
+    fn addr(&self) -> u64 {
+        self.ptr.as_ptr() as u64
+    }
+
+    fn size(&self) -> usize {
+        self.len
+    }
+
+    fn is_host_accessible(&self) -> bool {
+        true
+    }
+
+    unsafe fn as_ptr(&self) -> Option<*const u8> {
+        Some(self.ptr.as_ptr())
+    }
+
+    unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
+        Some(self.ptr.as_ptr())
+    }
+}
+
+/// Allocator for SystemStorage
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SystemAllocator;
+
+impl StorageAllocator<SystemStorage> for SystemAllocator {
+    fn allocate(&self, size: usize) -> Result<SystemStorage> {
+        SystemStorage::new(size)
+    }
+}
+
+pub mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    pub struct NullDeviceStorage {
+        size: u64,
+    }
+
+    impl NullDeviceStorage {
+        pub fn new(size: u64) -> Self {
+            Self { size }
+        }
+    }
+
+    impl Storage for NullDeviceStorage {
+        fn storage_type(&self) -> StorageType {
+            StorageType::Null
+        }
+
+        fn addr(&self) -> u64 {
+            0
+        }
+
+        fn size(&self) -> usize {
+            self.size as usize
+        }
+
+        fn is_host_accessible(&self) -> bool {
+            false
+        }
+
+        unsafe fn as_ptr(&self) -> Option<*const u8> {
+            None
+        }
+
+        unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
+            None
+        }
+    }
+
+    pub struct NullDeviceAllocator;
+
+    impl StorageAllocator<NullDeviceStorage> for NullDeviceAllocator {
+        fn allocate(&self, size: usize) -> Result<NullDeviceStorage> {
+            Ok(NullDeviceStorage::new(size as u64))
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct NullHostStorage {
+        size: u64,
+    }
+
+    impl NullHostStorage {
+        pub fn new(size: u64) -> Self {
+            Self { size }
+        }
+    }
+
+    impl Storage for NullHostStorage {
+        fn storage_type(&self) -> StorageType {
+            StorageType::Null
+        }
+
+        fn addr(&self) -> u64 {
+            0
+        }
+
+        fn size(&self) -> usize {
+            self.size as usize
+        }
+
+        fn is_host_accessible(&self) -> bool {
+            false
+        }
+
+        unsafe fn as_ptr(&self) -> Option<*const u8> {
+            None
+        }
+
+        unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
+            None
+        }
+    }
+
+    pub struct NullHostAllocator;
+
+    impl StorageAllocator<NullHostStorage> for NullHostAllocator {
+        fn allocate(&self, size: usize) -> Result<NullHostStorage> {
+            Ok(NullHostStorage::new(size as u64))
+        }
+    }
+}
