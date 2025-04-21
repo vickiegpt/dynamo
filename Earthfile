@@ -147,8 +147,8 @@ dynamo-build:
 
 dynamo-base-docker:
     ARG IMAGE=dynamo-base-docker
-    ARG CI_REGISTRY_IMAGE=my-registry
-    ARG CI_COMMIT_SHA=latest
+    ARG DOCKER_SERVER=my-registry
+    ARG IMAGE_TAG=latest
 
     FROM ubuntu:24.04
     WORKDIR /workspace
@@ -178,12 +178,12 @@ dynamo-base-docker:
         uv pip install /tmp/wheels/*.whl && \
         rm -rf /tmp/wheels
 
-    SAVE IMAGE --push $CI_REGISTRY_IMAGE/$IMAGE:$CI_COMMIT_SHA
+    SAVE IMAGE --push $DOCKER_SERVER/$IMAGE:$IMAGE_TAG
 
 dynamo-base-docker-llm:
     ARG IMAGE=dynamo-base-docker-llm
-    ARG CI_REGISTRY_IMAGE=my-registry
-    ARG CI_COMMIT_SHA=latest
+    ARG DOCKER_SERVER=my-registry
+    ARG IMAGE_TAG=latest
 
     FROM +dynamo-base-docker
 
@@ -215,7 +215,7 @@ dynamo-base-docker-llm:
     # Verify both Dynamo and vllm are properly installed
     RUN python3 -c "import dynamo; import vllm" || (echo "Failed to import Dynamo or vllm" && exit 1)
 
-    SAVE IMAGE --push $CI_REGISTRY_IMAGE/$IMAGE:$CI_COMMIT_SHA
+    SAVE IMAGE --push $DOCKER_SERVER/$IMAGE:$IMAGE_TAG
 
 ############### ALL TARGETS ##############################
 all-test:
