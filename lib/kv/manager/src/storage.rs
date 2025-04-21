@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Storage management for block manager.
+//! ## Storage management for block manager.
 //!
 //! This module provides traits and implementations for managing storage of KV blocks.
 //! It handles system memory, pinned memory, device memory, and remote (NIXL) storage,
@@ -40,24 +40,22 @@ pub type StorageResult<T> = std::result::Result<T, StorageError>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageType {
     #[cfg(feature = "cuda")]
+    /// CUDA device storage
     Device(Arc<CudaContext>),
 
+    /// Pinned host storage
     Pinned,
+
+    /// System memory storage
     System,
+
+    /// Null storage (for testing)
     Null,
-}
-
-pub enum StorageLocality {
-    Local,
-
-    // todo: add a nixl agent/bytes identifier
-    // perhaps this is an enum. other options could be a etcd path to a
-    // keyval object with nixl metadata
-    Remote,
 }
 
 /// Errors that can occur during storage operations
 #[derive(Debug, Error)]
+#[allow(missing_docs)]
 pub enum StorageError {
     #[error("Storage allocation failed: {0}")]
     AllocationFailed(String),
@@ -118,7 +116,7 @@ pub trait StorageAllocator<S: Storage>: Send + Sync {
     fn allocate(&self, size: usize) -> Result<S>;
 }
 
-/// System memory storage implementation using pinned memory
+/// System memory storage implementation using [alloc_zeroed]
 #[derive(Debug)]
 pub struct SystemStorage {
     ptr: NonNull<u8>,
@@ -197,9 +195,12 @@ impl StorageAllocator<SystemStorage> for SystemAllocator {
     }
 }
 
+/// Test utilities for storage implementations
 pub mod tests {
+    #![allow(missing_docs)]
     use super::*;
 
+    /// Null device storage implementation
     #[derive(Debug)]
     pub struct NullDeviceStorage {
         size: u64,

@@ -13,10 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![deny(missing_docs)]
+
 //! Storage management for block manager.
 //!
 //! This module provides traits and implementations for managing storage of KV blocks.
 //! It handles system memory, pinned memory, device memory, and remote (NIXL) storage,
 //! with a focus on safety and performance.
 
+pub mod dtype;
+pub mod layout;
 pub mod storage;

@@ -30,7 +30,13 @@ default = ["cuda"]
 cuda = ["dep:cudarc", "dep:ndarray"]
 
 [dependencies]
+derive_builder = {workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
+validator = { workspace = true }
 
 cudarc = { version = "0.16.0", features = ["cuda-12040"], optional = true }
 ndarray = { version = "0.16", optional = true }
+
+[dev-dependencies]
+dynamo-runtime = { workspace = true }

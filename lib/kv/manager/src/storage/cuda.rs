@@ -76,15 +76,12 @@ impl Storage for PinnedStorage {
     }
 }
 
+/// Pinned host memory allocator
+#[derive(Debug, Default)]
 pub struct PinnedAllocator {}
 
-impl Default for PinnedAllocator {
-    fn default() -> Self {
-        Self {}
-    }
-}
-
 impl PinnedAllocator {
+    /// Create a new pinned allocator
     pub fn try_new(_: usize) -> Result<Self> {
         Ok(Self {})
     }
@@ -156,6 +153,7 @@ impl Drop for DeviceStorage {
     }
 }
 
+/// CUDA device memory allocator
 pub struct DeviceAllocator {
     ctx: Arc<CudaContext>,
 }
@@ -169,6 +167,7 @@ impl Default for DeviceAllocator {
 }
 
 impl DeviceAllocator {
+    /// Create a new device allocator for the given device id
     pub fn try_new(device_id: usize) -> Result<Self> {
         Ok(Self {
             ctx: CudaContext::new(device_id).map_err(StorageError::Cuda)?,
