@@ -101,7 +101,7 @@ async def test_remove_component(
 
         # New verification logic that handles both numbered and base watchers
         if success:
-            new_state = await connector.load_state()
+            new_state = await connector._load_state()
 
             # For numbered watchers (with suffix > 0)
             if highest_suffix > 0:
