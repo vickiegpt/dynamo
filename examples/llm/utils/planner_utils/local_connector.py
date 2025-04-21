@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import json
 import logging
 import os
@@ -43,6 +44,8 @@ class LocalConnector(PlannerConnector):
         self.runtime = runtime
         self.state_file = Path.home() / ".dynamo" / "state" / f"{namespace}.json"
         self.circus = CircusController.from_state_file(namespace)
+        self.worker_client = None
+        self.prefill_client = None
 
     async def load_state(self) -> Dict[str, Any]:
         """Load state from state file.
@@ -84,7 +87,6 @@ class LocalConnector(PlannerConnector):
             system_resources = state.get("environment", {}).get("SYSTEM_RESOURCES", {})
             all_gpus = set(str(gpu) for gpu in system_resources.get("gpu_info", []))
 
-            # Get allocated GPUs
             allocated_gpus = set()
             for component_info in state.get("components", {}).values():
                 resources = component_info.get("resources", {})
@@ -99,6 +101,7 @@ class LocalConnector(PlannerConnector):
             logger.error(f"Failed to get available GPUs: {e}")
             return []
 
+    # TODO: you might have multple watchers for the same component
     async def get_component_replicas(self, component_name: str) -> int:
         """Get the number of replicas for a component.
 
@@ -115,8 +118,16 @@ class LocalConnector(PlannerConnector):
             logger.error(f"Failed to get replicas for {component_name}: {e}")
             return 0
 
-    async def add_component(self, component_name: str) -> bool:
-        """Add a component to the planner"""
+    async def add_component(self, component_name: str, blocking: bool = True) -> bool:
+        """
+        Add a component to the planner. We block on adding the component until it is running.
+
+        Args:
+            component_name: Name of the component
+
+        Returns:
+            True if successful
+        """
         try:
             state = await self.load_state()
             # Find max suffix
@@ -158,6 +169,8 @@ class LocalConnector(PlannerConnector):
             worker_env_arg = json.dumps(worker_env_list)
             full_cmd = f"{base_cmd} --worker-env '{worker_env_arg}'"
 
+            pre_add_endpoint_ids = await self._get_endpoint_ids(component_name)
+
             # Add watcher through circus controller
             success = await self.circus.add_watcher(
                 name=watcher_name, cmd=full_cmd, env=watcher_env, singleton=True
@@ -175,75 +188,20 @@ class LocalConnector(PlannerConnector):
                     "resources": resources,
                 }
                 await self.save_state(state)
+                logger.info(f"Succesfully created {watcher_name}. Waiting for for start...")
+            
+            if blocking:
+                required_endpoint_ids = pre_add_endpoint_ids + 1
+                while True:
+                    current_endpoint_ids = await self._get_endpoint_ids(component_name)
+                    if current_endpoint_ids == required_endpoint_ids:
+                        break
+                    await asyncio.sleep(5)
 
             return success
 
         except Exception as e:
             logger.error(f"Failed to add component {component_name}: {e}")
-            return False
-
-    async def _release_gpus(self, component_name: str) -> bool:
-        """Release GPUs allocated to a component.
-
-        Args:
-            component_name: Name of the component to release GPUs from
-
-        Returns:
-            True if GPUs were released successfully
-        """
-        try:
-            logger.info(f"Attempting to release GPUs for component {component_name}")
-            state = await self.load_state()
-            logger.debug(f"Loaded state for namespace {self.namespace}")
-            matching_components = {}
-
-            base_name = f"{self.namespace}_{component_name}"
-            base_name_with_underscore = f"{base_name}_"
-            logger.debug(
-                f"Looking for components matching {base_name} or {base_name_with_underscore}"
-            )
-
-            for watcher_name in state["components"].keys():
-                if watcher_name == base_name:  # Exact match for non-numbered watchers
-                    logger.debug(f"Found exact match: {watcher_name}")
-                    matching_components[0] = watcher_name
-                elif watcher_name.startswith(base_name_with_underscore):
-                    try:
-                        suffix = int(
-                            watcher_name.replace(base_name_with_underscore, "")
-                        )
-                        logger.debug(
-                            f"Found numbered match: {watcher_name} with suffix {suffix}"
-                        )
-                        matching_components[suffix] = watcher_name
-                    except ValueError:
-                        logger.debug(f"Skipping invalid suffix in {watcher_name}")
-                        continue
-
-            if not matching_components:
-                logger.error(f"No matching components found for {component_name}")
-                return False
-
-            highest_suffix = max(matching_components.keys())
-            target_watcher = matching_components[highest_suffix]
-            logger.info(f"Selected {target_watcher} for GPU release")
-
-            if target_watcher in state["components"]:
-                component_info = state["components"][target_watcher]
-                if "resources" in component_info:
-                    component_info["resources"] = {"allocated_gpus": []}
-                    logger.info(f"Cleared GPU allocations for {target_watcher}")
-                await self.save_state(state)
-                logger.info("Successfully saved updated state")
-                return True
-
-            logger.error(
-                f"Target watcher {target_watcher} not found in state components"
-            )
-            return False
-
-        except Exception as e:
-            logger.error(f"Failed to release GPUs for {component_name}: {e}")
             return False
 
     async def remove_component(self, component_name: str) -> bool:
@@ -289,6 +247,42 @@ class LocalConnector(PlannerConnector):
         except Exception as e:
             logger.error(f"Failed to remove component {component_name}: {e}")
             return False
+
+    async def _get_endpoint_ids(self, component_name: str) -> List[str]:
+        """
+        Get the endpoint IDs for a component. We use this to block and ensure that a component is running
+        before we complete the add_component call.
+
+        Args:
+            component_name: Name of the component
+
+        Returns:
+            Number of endpoint IDs for a component 
+        """
+        if component_name == "VllmWorker":
+            if self.worker_client is None:
+                self.worker_client = (
+                    await self.runtime.namespace(self.namespace)
+                    .component(component_name)
+                    .endpoint("generate")
+                    .client()
+                )
+            else:
+                worker_ids = self.worker_client.endpoint_ids()
+                return len(worker_ids)
+        elif component_name == "PrefillWorker":
+            if self.prefill_client is None:
+                self.prefill_client = (
+                    await self.runtime.namespace(self.namespace)
+                    .component(component_name)
+                    .endpoint("generate")
+                    .client()
+                )
+            else:
+                prefill_ids = self.prefill_client.endpoint_ids()
+                return len(prefill_ids)
+        else:
+            raise ValueError(f"Component {component_name} not supported")
 
     def __del__(self):
         """Cleanup circus controller connection on deletion."""
