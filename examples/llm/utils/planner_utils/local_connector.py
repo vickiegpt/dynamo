@@ -46,6 +46,7 @@ class LocalConnector(PlannerConnector):
         self.circus = CircusController.from_state_file(namespace)
         self.worker_client = None
         self.prefill_client = None
+        self.etcd_client = None
 
     async def load_state(self) -> Dict[str, Any]:
         """Load state from state file.
@@ -204,7 +205,7 @@ class LocalConnector(PlannerConnector):
             logger.error(f"Failed to add component {component_name}: {e}")
             return False
 
-    async def remove_component(self, component_name: str) -> bool:
+    async def remove_component(self, component_name: str, blocking: bool = True) -> bool:
         """Remove a component from the planner"""
         try:
             logger.info(f"Attempting to remove component {component_name}")
@@ -227,6 +228,24 @@ class LocalConnector(PlannerConnector):
 
             highest_suffix = max(matching_components.keys())
             target_watcher = matching_components[highest_suffix]
+
+            # If VllmWorker, we need to revoke the lease before we remove the watcher in order to ensure graceful shutdown
+            # The one we want to remove in the state file should have a lease section. We need to use that API to revoke the lease
+            # Poll endpoint to ensure that worker has shut down gracefully and then remove the watcher 
+            pre_remove_endpoint_ids = await self._get_endpoint_ids(component_name)
+
+            if component_name == "VllmWorker":
+                lease_id = state["components"][target_watcher]["lease_id"]
+                await self._revoke_lease(lease_id)
+
+            # Poll endpoint to ensure that worker has shut down gracefully and then remove the watcher 
+            if blocking:
+                required_endpoint_ids = pre_remove_endpoint_ids - 1
+                while True:
+                    current_endpoint_ids = await self._get_endpoint_ids(component_name)
+                    if current_endpoint_ids == required_endpoint_ids:
+                        break
+                    await asyncio.sleep(5)
 
             success = await self.circus.remove_watcher(name=target_watcher)
             logger.info(
@@ -283,6 +302,11 @@ class LocalConnector(PlannerConnector):
                 return len(prefill_ids)
         else:
             raise ValueError(f"Component {component_name} not supported")
+
+    async def _revoke_lease(self, lease_id: int):
+        if self.etcd_client is None:
+            self.etcd_client = await self.runtime.etcd_client()
+        await self.etcd_client.revoke_lease(lease_id)
 
     def __del__(self):
         """Cleanup circus controller connection on deletion."""

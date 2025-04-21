@@ -249,6 +249,10 @@ def serve_http(
     service_name: str = "",
     enable_local_planner: bool = False,
 ) -> Server:
+    # WAR to ensure a crashed process does not keep restarting in a loop
+    # We need to own this :(
+    os.environ["BENTOML_CONTAINERIZED"] = "true"
+
     # WARNING: internal
     from _bentoml_impl.loader import load
 
