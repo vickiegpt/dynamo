@@ -106,6 +106,12 @@ pub trait Storage: Debug + Send + Sync + 'static {
     unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8>;
 }
 
+/// Trait for types that can allocate specific Storage implementations.
+pub trait StorageAllocator<S: Storage>: Send + Sync {
+    /// Allocate storage of the specific type `S` with the given size in bytes.
+    fn allocate(&self, size: usize) -> Result<S>;
+}
+
 /// System memory storage implementation using pinned memory
 #[derive(Debug)]
 pub struct SystemStorage {
@@ -175,6 +181,16 @@ impl Storage for SystemStorage {
     }
 }
 
+/// Allocator for SystemStorage
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SystemAllocator;
+
+impl StorageAllocator<SystemStorage> for SystemAllocator {
+    fn allocate(&self, size: usize) -> Result<SystemStorage> {
+        SystemStorage::new(size)
+    }
+}
+
 /// Pinned host memory storage using CUDA page-locked memory
 #[derive(Debug)]
 pub struct PinnedStorage {
@@ -234,6 +250,32 @@ impl Storage for PinnedStorage {
     }
 }
 
+pub struct PinnedAllocator {
+    ctx: Arc<CudaContext>,
+}
+
+impl Default for PinnedAllocator {
+    fn default() -> Self {
+        Self {
+            ctx: CudaContext::new(0).expect("Failed to create CUDA context"),
+        }
+    }
+}
+
+impl PinnedAllocator {
+    pub fn try_new(device_id: usize) -> Result<Self> {
+        Ok(Self {
+            ctx: CudaContext::new(device_id).map_err(StorageError::Cuda)?,
+        })
+    }
+}
+
+impl StorageAllocator<PinnedStorage> for PinnedAllocator {
+    fn allocate(&self, size: usize) -> Result<PinnedStorage> {
+        PinnedStorage::new(&self.ctx, size)
+    }
+}
+
 /// CUDA device memory storage
 #[derive(Debug)]
 pub struct DeviceStorage {
@@ -244,10 +286,15 @@ pub struct DeviceStorage {
 
 impl DeviceStorage {
     /// Create a new device storage with the given size
-    pub fn new(ctx: Arc<CudaContext>, size: usize) -> Result<Self> {
+    pub fn new(ctx: &Arc<CudaContext>, size: usize) -> Result<Self> {
+        ctx.bind_to_thread().map_err(StorageError::Cuda)?;
         let ptr = unsafe { cudarc::driver::result::malloc_sync(size).map_err(StorageError::Cuda)? };
 
-        Ok(Self { ptr, size, ctx })
+        Ok(Self {
+            ptr,
+            size,
+            ctx: ctx.clone(),
+        })
     }
 
     /// Get the CUDA context
@@ -286,6 +333,32 @@ impl Storage for DeviceStorage {
 impl Drop for DeviceStorage {
     fn drop(&mut self) {
         unsafe { cudarc::driver::result::free_sync(self.ptr as _) }.unwrap();
+    }
+}
+
+pub struct DeviceAllocator {
+    ctx: Arc<CudaContext>,
+}
+
+impl Default for DeviceAllocator {
+    fn default() -> Self {
+        Self {
+            ctx: CudaContext::new(0).expect("Failed to create CUDA context"),
+        }
+    }
+}
+
+impl DeviceAllocator {
+    pub fn try_new(device_id: usize) -> Result<Self> {
+        Ok(Self {
+            ctx: CudaContext::new(device_id).map_err(StorageError::Cuda)?,
+        })
+    }
+}
+
+impl StorageAllocator<DeviceStorage> for DeviceAllocator {
+    fn allocate(&self, size: usize) -> Result<DeviceStorage> {
+        DeviceStorage::new(&self.ctx, size)
     }
 }
 

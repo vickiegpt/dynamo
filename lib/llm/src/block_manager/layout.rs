@@ -20,7 +20,7 @@
 
 use thiserror::Error;
 
-use crate::block_manager::storage::Storage;
+use crate::block_manager::storage::{Storage, StorageAllocator};
 use crate::common::dtype::DType;
 use tracing::instrument;
 
@@ -106,20 +106,26 @@ pub struct FullyContiguous<S: Storage> {
 }
 
 impl<S: Storage> FullyContiguous<S> {
-    /// Create a new contiguous layout
+    /// Calculate the total number of bytes required for a given layout configuration.
+    pub fn calculate_required_bytes(config: &LayoutConfig) -> usize {
+        config.num_blocks
+            * config.num_layers
+            * config.page_size
+            * config.inner_dim
+            * config.dtype.size_in_bytes()
+    }
+
+    /// Create a new contiguous layout using the provided configuration and pre-allocated storage.
     #[instrument(level = "debug", skip(storage), fields(config = ?config))]
     pub fn new(config: LayoutConfig, storage: S) -> Result<Self> {
-        // Validate storage size fits [n_blocks, n_layers, page_size, inner_dim]
-        let required_size_in_elements =
-            config.num_blocks * config.num_layers * config.page_size * config.inner_dim;
-        let dtype_size = config.dtype.size_in_bytes();
-        let required_size_in_bytes = required_size_in_elements * dtype_size;
+        // Validate storage size fits the configuration
+        let required_size_in_bytes = Self::calculate_required_bytes(&config);
         let provided_size = storage.size();
 
         tracing::debug!(
             provided_size,
             required_size_in_bytes,
-            dtype_size,
+            dtype_size = config.dtype.size_in_bytes(),
             "Validating storage size"
         );
 
@@ -157,6 +163,41 @@ impl<S: Storage> FullyContiguous<S> {
             block_stride_in_bytes,
             memory_region_size,
         })
+    }
+
+    /// Allocate storage using the provided allocator and create a new FullyContiguous layout.
+    ///
+    /// Calculates the required size based on the configuration, allocates the storage,
+    /// and then constructs the `FullyContiguous` layout instance.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `A`: The type of the storage allocator, implementing `StorageAllocator<S>`.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The layout configuration.
+    /// * `allocator` - A reference to the storage allocator.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the new `FullyContiguous<S>` instance or an error if allocation
+    /// or layout creation fails.
+    #[instrument(level = "debug", skip(allocator), fields(config = ?config))]
+    pub fn allocate<A: StorageAllocator<S>>(config: LayoutConfig, allocator: &A) -> Result<Self> {
+        let required_bytes = Self::calculate_required_bytes(&config);
+        tracing::debug!(
+            required_bytes,
+            "Calculated required storage size for allocation"
+        );
+
+        let storage = allocator.allocate(required_bytes).map_err(|e| {
+            LayoutError::OperationFailed(format!("Storage allocation failed: {}", e))
+        })?;
+        tracing::debug!("Storage allocated successfully");
+
+        // Pass the config by value as Self::new takes ownership
+        Self::new(config, storage)
     }
 }
 
@@ -201,6 +242,9 @@ impl<S: Storage> BlockLayout for FullyContiguous<S> {
 pub mod tests {
     use super::*;
     use crate::block_manager::storage::tests::NullDeviceStorage;
+    use crate::block_manager::storage::{
+        StorageAllocator, StorageType, SystemAllocator, SystemStorage,
+    };
     use crate::common::dtype::DType;
     use dynamo_runtime::logging::init as init_logging;
     use std::sync::Arc;
@@ -343,5 +387,31 @@ pub mod tests {
             result.err().unwrap(),
             LayoutError::InvalidLayerIndex(NUM_LAYERS)
         ));
+    }
+
+    #[test]
+    fn test_fc_allocation_system() {
+        init_logging();
+        let config = LayoutConfig {
+            num_blocks: NUM_BLOCKS,
+            num_layers: NUM_LAYERS,
+            page_size: PAGE_SIZE,
+            inner_dim: INNER_DIM,
+            dtype: DTYPE,
+        };
+
+        let allocator = SystemAllocator::default();
+        let layout_result = FullyContiguous::allocate(config, &allocator);
+
+        assert!(layout_result.is_ok());
+        let layout = layout_result.unwrap();
+
+        // Basic checks on the allocated layout
+        assert_eq!(layout.num_blocks(), NUM_BLOCKS);
+        assert_eq!(layout.num_layers(), NUM_LAYERS);
+        assert_eq!(layout.page_size(), PAGE_SIZE);
+        assert_eq!(layout.inner_dim(), INNER_DIM);
+        assert_eq!(layout.storage.storage_type(), StorageType::System);
+        assert_eq!(layout.storage.size(), calculate_required_size());
     }
 }
