@@ -136,8 +136,8 @@ class CircusController:
             True if successful
         """
         for attempt in range(1, max_retries + 1):
-            # check if the watcher actually exists - we've set an env var to kill the watcher if the process dies
-            num_processes = await self.get_watcher_processes(name)
+            # check if the watcher exists - we've set an env var to kill the watcher if the process dies
+            num_processes = await self._get_watcher_processes(name)
             if num_processes == 0:
                 logger.info(f"Watcher {name} does not exist or has already been removed - skipping")
                 return True
@@ -173,7 +173,7 @@ class CircusController:
         
         return False
 
-    async def get_watcher_processes(self, name: str) -> int:
+    async def _get_watcher_processes(self, name: str) -> int:
         """Get number of processes for a watcher."""
         try:
             response = self.client.send_message("numprocesses", name=name)
@@ -182,7 +182,7 @@ class CircusController:
             logger.error(f"Failed to get process count for {name}: {e}")
             return 0
 
-    async def list_watchers(self) -> list[str]:
+    async def _list_watchers(self) -> list[str]:
         """List all watchers managed by circus."""
         try:
             response = self.client.send_message("list")

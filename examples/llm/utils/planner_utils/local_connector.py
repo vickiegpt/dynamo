@@ -189,12 +189,16 @@ class LocalConnector(PlannerConnector):
                 f"Succesfully created {watcher_name}. Waiting for worker to start..."
             )
 
-        if blocking:
+        # Prefill pulls from queue so does not need to block
+        if blocking and component_name != "PrefillWorker":
             required_endpoint_ids = pre_add_endpoint_ids + 1
             while True:
                 current_endpoint_ids = await self._get_endpoint_ids(component_name)
                 if current_endpoint_ids == required_endpoint_ids:
                     break
+                logger.info(
+                    f"Waiting for {component_name} to start. Current endpoint IDs: {current_endpoint_ids}, Required endpoint IDs: {required_endpoint_ids}"
+                )
                 await asyncio.sleep(5)
 
         return success

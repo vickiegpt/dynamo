@@ -141,7 +141,6 @@ class VllmWorker:
         else:
             self.disaggregated_router = None
 
-        self.lease = dynamo_context.get("lease")
         logger.info("VllmWorker has been initialized")
 
     def shutdown_vllm_engine(self, signum, frame):
@@ -158,13 +157,14 @@ class VllmWorker:
 
     async def create_metrics_publisher_endpoint(self):
         component = dynamo_context["component"]
-        if self.lease is None:
+        lease = dynamo_context["lease"]
+        if lease is None:
             logger.info("Creating metrics publisher endpoint with primary lease")
         else:
             logger.info(
-                f"Creating metrics publisher endpoint with lease: {self.lease.id()}"
+                f"Creating metrics publisher endpoint with lease: {lease}"
             )
-        await self.metrics_publisher.create_endpoint(component, self.lease)
+        await self.metrics_publisher.create_endpoint(component, lease)
 
     def get_remote_prefill_request_callback(self):
         # TODO: integrate prefill_queue to dynamo endpoint
