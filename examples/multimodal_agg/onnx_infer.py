@@ -146,16 +146,37 @@ def run_inference(image_source: str, params: dict):
     # --- 1. Load ONNX Sessions ---
     logger.info("Loading ONNX inference sessions...")
     try:
-        # Ensure CUDA provider options if using GPU
-        provider_options = [{'device_id': 0}] if DEVICE == 'cuda' else [] # Example, adjust device_id if needed
-        providers = [('CUDAExecutionProvider', provider_options[0])] if DEVICE == 'cuda' else ['CPUExecutionProvider']
-        # providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if DEVICE == 'cuda' else ['CPUExecutionProvider'] # Original
-        logger.info(f"Using providers: {providers} with options: {provider_options}")
+        # Configure Execution Providers (TensorRT, CUDA, CPU)
+        providers = [
+            ('TensorrtExecutionProvider', {
+                'device_id': 0, # Or appropriate GPU ID
+                'trt_fp16_enable': True, # Enable FP16 precision
+                'trt_engine_cache_enable': True, # Enable engine caching
+                'trt_engine_cache_path': os.path.join(ONNX_MODEL_DIR, "trt_cache"), # Cache directory
+                # Add other TRT options if needed (e.g., int8, workspace size)
+            }),
+            ('CUDAExecutionProvider', {
+                'device_id': 0, # Or appropriate GPU ID
+                # Add other CUDA options if needed
+            }),
+            'CPUExecutionProvider' # Fallback
+        ]
+
+        # Ensure the cache directory exists
+        trt_cache_path = os.path.join(ONNX_MODEL_DIR, "trt_cache")
+        if not os.path.exists(trt_cache_path):
+            os.makedirs(trt_cache_path)
+            logger.info(f"Created TensorRT engine cache directory: {trt_cache_path}")
+
+        # Remove provider options here as they are now inline with providers
+        # provider_options = [{'device_id': 0}] if DEVICE == 'cuda' else []
+        # logger.info(f"Using providers: {providers} with options: {provider_options}")
+        logger.info(f"Attempting to load sessions with providers: {providers}")
 
         vision_sess = ort.InferenceSession(VISION_TOWER_ONNX_PATH, providers=providers)
-        logger.info(f"Loaded Vision Tower from {VISION_TOWER_ONNX_PATH}. Providers: {vision_sess.get_providers()}")
+        logger.info(f"Loaded Vision Tower from {VISION_TOWER_ONNX_PATH}. Effective providers: {vision_sess.get_providers()}")
         proj_sess = ort.InferenceSession(PROJECTOR_ONNX_PATH, providers=providers)
-        logger.info(f"Loaded Projector from {PROJECTOR_ONNX_PATH}. Providers: {proj_sess.get_providers()}")
+        logger.info(f"Loaded Projector from {PROJECTOR_ONNX_PATH}. Effective providers: {proj_sess.get_providers()}")
 
         # Get input/output names and shapes/types
         vision_input_meta = vision_sess.get_inputs()[0]
