@@ -8,6 +8,11 @@ import logging
 import torch
 from transformers import LlavaProcessor # Needed to get preprocessing details
 import json
+from onnxruntime import OrtValue, IOBinding # Import necessary classes
+import torch.utils.dlpack
+
+
+print(f"ONNX Runtime version in use: {ort.__version__}") # Add version print
 
 # --- Configuration ---
 # Path to the directory containing the exported ONNX models
@@ -25,6 +30,7 @@ IMAGE_SOURCE = "view.jpg" # Use local image
 
 # Use "cuda" if GPU is available and configured, otherwise "cpu"
 DEVICE = "cuda" # Assume GPU is always present
+ORT_DEVICE = "cuda" if DEVICE == "cuda" else "cpu" # Device string for OrtValue should just be 'cuda'
 
 # --- Setup Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -132,64 +138,133 @@ def preprocess_image(image: Image.Image, params: dict) -> np.ndarray:
     return img_array
 
 def run_inference(image_source: str, params: dict):
-    """Loads ONNX models, preprocesses image, and runs inference."""
+    """
+    Loads ONNX models, preprocesses image, and runs inference using I/O Binding
+    to keep outputs on the GPU. Returns the final embeddings as an OrtValue on the GPU.
+    """
 
     # --- 1. Load ONNX Sessions ---
     logger.info("Loading ONNX inference sessions...")
     try:
-        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if DEVICE == 'cuda' else ['CPUExecutionProvider']
-        logger.info(f"Using providers: {providers}")
+        # Ensure CUDA provider options if using GPU
+        provider_options = [{'device_id': 0}] if DEVICE == 'cuda' else [] # Example, adjust device_id if needed
+        providers = [('CUDAExecutionProvider', provider_options[0])] if DEVICE == 'cuda' else ['CPUExecutionProvider']
+        # providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if DEVICE == 'cuda' else ['CPUExecutionProvider'] # Original
+        logger.info(f"Using providers: {providers} with options: {provider_options}")
 
         vision_sess = ort.InferenceSession(VISION_TOWER_ONNX_PATH, providers=providers)
         logger.info(f"Loaded Vision Tower from {VISION_TOWER_ONNX_PATH}. Providers: {vision_sess.get_providers()}")
         proj_sess = ort.InferenceSession(PROJECTOR_ONNX_PATH, providers=providers)
         logger.info(f"Loaded Projector from {PROJECTOR_ONNX_PATH}. Providers: {proj_sess.get_providers()}")
 
-        # Get input/output names (essential for feeding data)
-        vision_input_name = vision_sess.get_inputs()[0].name
-        vision_output_name = vision_sess.get_outputs()[0].name # Assumes first output is needed
-        proj_input_name = proj_sess.get_inputs()[0].name
-        proj_output_name = proj_sess.get_outputs()[0].name
+        # Get input/output names and shapes/types
+        vision_input_meta = vision_sess.get_inputs()[0]
+        vision_output_meta = vision_sess.get_outputs()[0]
+        proj_input_meta = proj_sess.get_inputs()[0]
+        proj_output_meta = proj_sess.get_outputs()[0]
 
-        logger.info(f"Vision Tower I/O names: Input='{vision_input_name}', Output='{vision_output_name}'")
-        logger.info(f"Projector I/O names: Input='{proj_input_name}', Output='{proj_output_name}'")
+        vision_input_name = vision_input_meta.name
+        vision_output_name = vision_output_meta.name
+        proj_input_name = proj_input_meta.name
+        proj_output_name = proj_output_meta.name
+
+        # Note: Shapes might contain symbolic dimensions (e.g., 'batch_size', 'sequence_length')
+        # We'll need to provide concrete shapes when allocating buffers. Assume batch size 1 for now.
+        # Type mapping might be needed (e.g., 'tensor(float16)' -> np.float16)
+        type_map = {"tensor(float16)": np.float16, "tensor(float)": np.float32} # Add more as needed
+        vision_output_type = type_map.get(vision_output_meta.type, np.float32)
+        proj_output_type = type_map.get(proj_output_meta.type, np.float32)
+
+        logger.info(f"Vision Tower I/O: Input='{vision_input_name}' ({vision_input_meta.type}, {vision_input_meta.shape}), Output='{vision_output_name}' ({vision_output_meta.type}, {vision_output_meta.shape})")
+        logger.info(f"Projector I/O: Input='{proj_input_name}' ({proj_input_meta.type}, {proj_input_meta.shape}), Output='{proj_output_name}' ({proj_output_meta.type}, {proj_output_meta.shape})")
 
     except Exception as e:
-        logger.error(f"Failed to load ONNX models: {e}")
-        return None
+        logger.error(f"Failed to load ONNX models or get metadata: {e}")
+        raise # Re-raise after logging
 
     # --- 2. Load and Preprocess Image ---
     try:
-        dummy_image_source = "https://llava-vl.github.io/static/images/view.jpg"
-        image = load_image(dummy_image_source)
-        preprocessed_image = preprocess_image(image, params)
+        # Using the actual image source provided
+        # dummy_image_source = "https://llava-vl.github.io/static/images/view.jpg" # Keep original dummy for testing if needed
+        image = load_image(image_source)
+        preprocessed_image_np = preprocess_image(image, params) # NumPy array on CPU
+
+        # Wrap NumPy input with OrtValue. This transfers data to the specified device if needed.
+        # For GPU, the copy happens here (CPU -> GPU).
+        preprocessed_image_ortvalue = OrtValue.ortvalue_from_numpy(preprocessed_image_np, ORT_DEVICE)
+        logger.info(f"Input image OrtValue created on device: {preprocessed_image_ortvalue.device_name()}")
+
     except Exception as e:
         logger.error(f"Failed during image loading or preprocessing: {e}")
-        return None
+        raise # Re-raise after logging
 
-    # --- 3. Run Vision Tower Inference ---
-    logger.info("Running ONNX Vision Tower inference...")
+    # --- 3. Allocate Output Buffers & Run Vision Tower Inference with IOBinding ---
+    logger.info("Preparing IOBinding for ONNX Vision Tower inference...")
     try:
-        vision_inputs = {vision_input_name: preprocessed_image}
-        vision_outputs = vision_sess.run([vision_output_name], vision_inputs)
-        vision_features = vision_outputs[0] # Output corresponding to 'hidden_states'
-        logger.info(f"Vision Tower ONNX output shape: {vision_features.shape}")
-    except Exception as e:
-        logger.error(f"ONNX Vision Tower inference failed: {e}")
-        return None
+        # Determine concrete output shape (replace symbolic dims if necessary)
+        # Assuming vision tower output shape is like [batch_size, sequence_length, hidden_size]
+        # Example: using preprocessed_image shape for batch_size=1, assuming fixed seq_len/hidden_size from model
+        # This might need adjustment based on the actual model's output shapes
+        # For Llava-1.5 vision tower, output is typically (batch_size, num_patches+1, hidden_size), e.g. (1, 577, 1024)
+        # Let's try getting it dynamically, assuming batch size is 1
+        vision_output_shape = [1 if isinstance(d, str) else d for d in vision_output_meta.shape]
+        logger.info(f"Attempting to allocate vision output with shape: {vision_output_shape} and type: {vision_output_type}")
 
-    # --- 4. Run Projector Inference ---
-    logger.info("Running ONNX Projector inference...")
+        # Create an OrtValue on the target device (GPU or CPU)
+        vision_output_ortvalue = OrtValue.ortvalue_from_shape_and_type(vision_output_shape, vision_output_type, ORT_DEVICE)
+        logger.info(f"Vision Tower output buffer allocated on device: {vision_output_ortvalue.device_name()}")
+
+        # Create IOBinding
+        io_binding_vision = vision_sess.io_binding()
+
+        # Bind input OrtValue
+        io_binding_vision.bind_ortvalue_input(vision_input_name, preprocessed_image_ortvalue)
+
+        # Bind output OrtValue
+        io_binding_vision.bind_ortvalue_output(vision_output_name, vision_output_ortvalue)
+
+        logger.info("Running Vision Tower inference with IOBinding...")
+        vision_sess.run_with_iobinding(io_binding_vision)
+        logger.info("Vision Tower inference complete. Output is in pre-allocated buffer.")
+        # The result is now in vision_output_ortvalue (on GPU/CPU as specified)
+
+    except Exception as e:
+        logger.error(f"ONNX Vision Tower inference with IOBinding failed: {e}")
+        raise # Re-raise after logging
+
+    # --- 4. Allocate Output Buffers & Run Projector Inference with IOBinding ---
+    logger.info("Preparing IOBinding for ONNX Projector inference...")
     try:
-        proj_inputs = {proj_input_name: vision_features} # Use vision tower output
-        proj_outputs = proj_sess.run([proj_output_name], proj_inputs)
-        final_embeddings = proj_outputs[0]
-        logger.info(f"Projector ONNX output shape (final embeddings): {final_embeddings.shape}")
-    except Exception as e:
-        logger.error(f"ONNX Projector inference failed: {e}")
-        return None
+        # Determine projector output shape (e.g., [1, 577, 4096] for Llava-1.5)
+        proj_output_shape = [1 if isinstance(d, str) else d for d in proj_output_meta.shape]
+        # We need the sequence length from the *actual* vision output
+        proj_output_shape[1] = vision_output_ortvalue.shape()[1] # Update sequence length dynamically
+        logger.info(f"Attempting to allocate projector output with shape: {proj_output_shape} and type: {proj_output_type}")
 
-    return final_embeddings
+
+        # Create the output OrtValue on the target device
+        final_embeddings_ortvalue = OrtValue.ortvalue_from_shape_and_type(proj_output_shape, proj_output_type, ORT_DEVICE)
+        logger.info(f"Projector output buffer allocated on device: {final_embeddings_ortvalue.device_name()}")
+
+        # Create IOBinding
+        io_binding_proj = proj_sess.io_binding()
+
+        # Bind input (output of vision tower, already an OrtValue on the correct device)
+        io_binding_proj.bind_ortvalue_input(proj_input_name, vision_output_ortvalue)
+
+        # Bind output
+        io_binding_proj.bind_ortvalue_output(proj_output_name, final_embeddings_ortvalue)
+
+        logger.info("Running Projector inference with IOBinding...")
+        proj_sess.run_with_iobinding(io_binding_proj)
+        logger.info("Projector inference complete. Final embeddings are in pre-allocated buffer.")
+
+    except Exception as e:
+        logger.error(f"ONNX Projector inference with IOBinding failed: {e}")
+        raise # Re-raise after logging
+
+    # Return the final embeddings as an OrtValue on the GPU/CPU
+    return final_embeddings_ortvalue
 
 
 # --- Main Execution ---
@@ -203,28 +278,110 @@ if __name__ == "__main__":
             # Get necessary preprocessing info from the original processor
             preprocessing_params = get_preprocessing_params(ORIGINAL_MODEL_PATH)
 
-            # Run the full inference pipeline
-            embeddings = run_inference(IMAGE_SOURCE, preprocessing_params)
+            # Run the full inference pipeline using I/O binding
+            # Returns an OrtValue, potentially on GPU
+            final_embeddings_ortvalue = run_inference(IMAGE_SOURCE, preprocessing_params)
 
-            if embeddings is not None:
-                logger.info("Inference finished successfully.")
-                # You can now use the 'embeddings' NumPy array
-                # Example: print shape and first few values
-                print("\n--- Final Embeddings ---")
-                print(f"Shape: {embeddings.shape}")
-                print(f"Data type: {embeddings.dtype}")
+            if final_embeddings_ortvalue is not None:
+                logger.info("Inference finished successfully. Result is an OrtValue.")
+                # Accessing data requires copying to CPU if it's on GPU
+                # We do the copy here for printing/saving, but it was avoided during inference pipeline
+                if final_embeddings_ortvalue.device_name() == 'cuda':
+                    logger.info("Copying final embeddings from GPU to CPU for inspection/saving...")
+                    embeddings_np = final_embeddings_ortvalue.numpy()
+                else:
+                     embeddings_np = final_embeddings_ortvalue.numpy() # Already on CPU or just get numpy
+
+
+                print("\n--- Final Embeddings (from OrtValue) ---")
+                print(f"Device: {final_embeddings_ortvalue.device_name()}")
+                print(f"GPU Address (data_ptr): {final_embeddings_ortvalue.data_ptr()}") # Print the data pointer
+                print(f"Shape: {embeddings_np.shape}") # Use numpy shape
+                print(f"Data type: {embeddings_np.dtype}") # Use numpy dtype
+                # Calculate size in bytes
+                num_elements = np.prod(embeddings_np.shape)
+                element_size_bytes = embeddings_np.itemsize
+                total_size_bytes = num_elements * element_size_bytes
+                print(f"Total Size (bytes): {total_size_bytes}") # Print the total size in bytes
                 print("First few values of the first embedding vector:")
-                print(embeddings[0, 0, :5]) # Print first 5 values of the first token embedding
+                print(embeddings_np[0, 0, :5])
 
                 # --- Add JSON Output ---
                 print("\n--- Final Embeddings (JSON) ---")
                 try:
-                    embeddings_list = embeddings.tolist() # Convert NumPy array to Python list
-                    embeddings_json = json.dumps(embeddings_list, indent=2) # Serialize list to JSON string with indentation
-                    print(embeddings_json)
+                    # Convert the NumPy array (copied from OrtValue if needed) to list
+                    embeddings_list = embeddings_np.tolist()
+                    embeddings_json = json.dumps(embeddings_list, indent=2)
                 except Exception as e:
                     logger.error(f"Failed to convert embeddings to JSON: {e}")
                 # --- End JSON Output ---
 
+                # --- Verification using Manual CUDA Array Interface (UNSAFE) ---
+                if final_embeddings_ortvalue.device_name() == 'cuda':
+                    logger.warning("Attempting UNSAFE tensor reconstruction from raw GPU pointer...")
+                    try:
+                        import torch
+
+                        # Define a wrapper class with the __cuda_array_interface__ attribute
+                        class CudaArrayInterfaceWrapper:
+                            def __init__(self, interface_dict):
+                                self.__cuda_array_interface__ = interface_dict
+
+                        # 1. Get necessary metadata
+                        pointer = final_embeddings_ortvalue.data_ptr()
+                        shape = tuple(embeddings_np.shape) # Use shape from numpy array
+                        np_dtype = embeddings_np.dtype
+
+                        # 2. Map NumPy dtype to typestr
+                        typestr_map = {np.dtype(np.float16): '<f2', np.dtype(np.float32): '<f4', np.dtype(np.float64): '<f8'}
+                        if np_dtype not in typestr_map:
+                            raise TypeError(f"Unsupported NumPy dtype for CUDA Array Interface: {np_dtype}")
+                        typestr = typestr_map[np_dtype]
+
+                        # 3. Calculate strides (assuming C-contiguous)
+                        element_size = np_dtype.itemsize
+                        strides = None # None implies C-contiguous
+
+                        # 4. Construct the interface dictionary
+                        cuda_array_interface_dict = {
+                            'shape': shape,
+                            'typestr': typestr,
+                            'data': (pointer, False), # (pointer, read-only flag)
+                            'version': 3,
+                            'strides': strides
+                        }
+                        logger.info(f"Constructed __cuda_array_interface__ dict: {cuda_array_interface_dict}")
+
+                        # 5. Create a wrapper object instance
+                        interface_wrapper = CudaArrayInterfaceWrapper(cuda_array_interface_dict)
+
+                        # 6. Create PyTorch tensor from the wrapper object (zero-copy view)
+                        reconstructed_tensor_pt = torch.as_tensor(interface_wrapper)
+                        # Explicitly set device, as_tensor might not infer it correctly
+                        # reconstructed_tensor_pt = reconstructed_tensor_pt.cuda() # Might not be needed if as_tensor infers from interface
+                        logger.info(f"Reconstructed PyTorch tensor on device: {reconstructed_tensor_pt.device}")
+                        # Check if it's actually on CUDA
+                        if not reconstructed_tensor_pt.is_cuda:
+                             logger.warning("Warning: Reconstructed tensor is NOT on CUDA device despite using interface. Trying manual move...")
+                             reconstructed_tensor_pt = reconstructed_tensor_pt.cuda()
+                             logger.info(f"Tensor moved to device: {reconstructed_tensor_pt.device}")
+
+
+                        # 7. Copy the reconstructed tensor to CPU for comparison
+                        reconstructed_tensor_cpu = reconstructed_tensor_pt.cpu().numpy()
+
+                        # 8. Compare with the original NumPy array
+                        if np.allclose(embeddings_np, reconstructed_tensor_cpu):
+                            logger.info("Verification SUCCESS (unsafe method): Reconstructed tensor matches original.")
+
+                    except ImportError:
+                        logger.warning("PyTorch not installed. Skipping unsafe verification.")
+                    except Exception as e:
+                        logger.error(f"An error occurred during UNSAFE verification: {e}")
+                else:
+                    logger.info("Skipping verification as the tensor is not on CUDA GPU.")
+                # --- End Verification --- 
+
         except Exception as e:
-            logger.error(f"An error occurred during the inference process: {e}")
+            # Catch exceptions raised from run_inference or get_preprocessing_params
+            logger.error(f"An error occurred during the IOBinding inference process: {e}")
