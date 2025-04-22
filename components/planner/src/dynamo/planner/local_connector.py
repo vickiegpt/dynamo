@@ -176,7 +176,7 @@ class LocalConnector(PlannerConnector):
             )
 
         # Prefill pulls from queue so does not need to block
-        if blocking and component_name != "PrefillWorker":
+        if blocking:
             required_endpoint_ids = pre_add_endpoint_ids + 1
             while True:
                 current_endpoint_ids = await self._get_endpoint_ids(component_name)
@@ -288,7 +288,7 @@ class LocalConnector(PlannerConnector):
                 self.prefill_client = (
                     await self.runtime.namespace(self.namespace)
                     .component(component_name)
-                    .endpoint("generate")
+                    .endpoint("mock")
                     .client()
                 )
             prefill_ids = self.prefill_client.endpoint_ids()
