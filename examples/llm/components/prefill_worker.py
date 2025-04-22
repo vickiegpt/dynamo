@@ -110,7 +110,7 @@ class PrefillWorker:
 
     def shutdown_vllm_engine(self):
         """Shutdown the background loop"""
-        logger.info(f"Shutting down")
+        logger.info(f"Shutting down vllm engine")
         loop = asyncio.get_event_loop()
         try:
             self.engine_client.close()
@@ -149,7 +149,12 @@ class PrefillWorker:
                     async for _ in self.generate(prefill_request):
                         pass
                 if self._shutdown_requested:
-                    logger.info("Shutdown requested, exiting prefill queue handler")
+                    logger.info("Shutdown requested, checking if engine has any pending prefill sending requests")
+                    while True:
+                        if not await self.engine_client.has_pending_prefill_requests():
+                            break
+                        logger.info(f"Engine has pending prefill sending requests, rechecking in 1 second...")
+                        await asyncio.sleep(1)
                     self.shutdown_vllm_engine(signal.SIGTERM, None)
                     break
 
