@@ -71,54 +71,75 @@ class CircusController:
         return cls(endpoint)
 
     async def add_watcher(
-        self, name: str, cmd: str, env: dict = None, **options
+        self, 
+        name: str, 
+        cmd: str, 
+        env: dict = None, 
+        max_retries: int = 3,
+        base_delay: float = 2.0,
+        **options
     ) -> bool:
         """
-        Add a new watcher to circus.
+        Add a new watcher to circus with retry logic.
 
         Args:
             name: Name of the watcher
             cmd: Command to run
             env: Environment variables
+            max_retries: Maximum number of retry attempts
+            base_delay: Base delay for exponential backoff
             **options: Additional watcher options
         """
-        try:
-            watcher_options = {
-                "copy_env": True,
-                "stop_children": True,
-                "graceful_timeout": 86400,
-            }
+        watcher_options = {
+            "copy_env": True,
+            "stop_children": True,
+            "graceful_timeout": 86400,
+        }
+        if env:
+            watcher_options["env"] = env
+        watcher_options.update(options)
 
-            if env:
-                watcher_options["env"] = env
+        for attempt in range(max_retries):
+            try:
+                delay = base_delay * (2 ** attempt)  # Exponential backoff
+                if attempt > 0:
+                    logger.info(f"Retrying add_watcher for {name} (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(delay)
 
-            watcher_options.update(options)
-
-            response = self.client.send_message(
-                "add",
-                name=name,
-                cmd=cmd,
-                args=[],
-                options=watcher_options,
-                start=True,
-            )
-
-            if response.get("status") != "ok":
-                logger.error(
-                    f"Failed to add watcher {name}: {response.get('reason', 'unknown error')}"
+                response = self.client.send_message(
+                    "add",
+                    name=name,
+                    cmd=cmd,
+                    args=[],
+                    options=watcher_options,
+                    start=True,
                 )
-                return False
-            return True
 
-        except (CallError, Exception) as e:
-            logger.error(f"Failed to add watcher {name}: {e}")
-            return False
+                if response.get("status") == "ok":
+                    logger.info(f"Successfully added watcher {name} on attempt {attempt + 1}")
+                    return True
+
+                error = response.get('reason', 'unknown error')
+                if "arbiter is already running" in str(error):
+                    logger.warning(f"Arbiter busy, will retry: {error}")
+                    continue
+
+                logger.error(f"Failed to add watcher {name}: {error}")
+                return False
+
+            except (CallError, Exception) as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to add watcher {name} after {max_retries} attempts: {e}")
+                    return False
+                logger.warning(f"Error adding watcher {name}: {e}")
+
+        return False
 
     async def remove_watcher(
         self,
         name: str,
         nostop: bool = False,
-        waiting: bool = False,
+        waiting: bool = True,
         max_retries: int = 3,
         retry_delay: float = 2.0,
     ) -> bool:

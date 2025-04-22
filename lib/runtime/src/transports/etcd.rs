@@ -74,6 +74,13 @@ impl Lease {
     pub fn revoke(&self) {
         self.cancel_token.cancel();
     }
+
+    /// Check if the lease is still valid (not revoked)
+    pub async fn is_valid(&self) -> Result<bool> {
+        // A lease is valid if its cancellation token has not been triggered
+        // We can use try_cancelled which returns immediately with a boolean
+        Ok(!self.cancel_token.is_cancelled())
+    }
 }
 
 impl Client {
