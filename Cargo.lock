@@ -729,7 +729,7 @@ dependencies = [
  "byteorder",
  "candle-kernels",
  "candle-metal-kernels",
- "cudarc 0.13.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cudarc 0.13.9",
  "float8",
  "gemm",
  "half",
@@ -1190,8 +1190,9 @@ dependencies = [
 
 [[package]]
 name = "cudarc"
-version = "0.13.9"
-source = "git+https://github.com/coreylowman/cudarc.git?rev=2ddd39e829a619ea5b95bcf40135dd9387a20135#2ddd39e829a619ea5b95bcf40135dd9387a20135"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de8af7773407c3e19b72e7b88be9bfc578fc904e8b837ea0de95ce3696a03ad0"
 dependencies = [
  "libloading",
 ]
@@ -1511,7 +1512,7 @@ dependencies = [
  "bytes",
  "chrono",
  "cmake",
- "cudarc 0.13.9 (git+https://github.com/coreylowman/cudarc.git?rev=2ddd39e829a619ea5b95bcf40135dd9387a20135)",
+ "cudarc 0.16.0",
  "derive-getters",
  "derive_builder",
  "dynamo-runtime",
@@ -1943,7 +1944,7 @@ version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a14d1c3d88fdab81b5886c34b2a424b3fba5123564ea415ff98b160cf44c432f"
 dependencies = [
- "cudarc 0.13.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cudarc 0.13.9",
  "half",
  "num-traits",
  "rand 0.8.5",

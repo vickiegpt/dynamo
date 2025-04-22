@@ -64,7 +64,7 @@ use priority_key::PriorityKey;
 
 use super::block::{Block, BlockMetadata};
 use super::events::EventManager;
-use super::storage::Storage;
+use super::layout::BlockLayout;
 
 use crate::tokens::{SequenceHash, TokenBlock};
 
@@ -99,26 +99,42 @@ pub enum BlockPoolError {
 }
 
 /// Manages the blocks in a specific storage backend
-pub struct BlockPool<S: Storage, M: BlockMetadata> {
+pub struct BlockPool<S: BlockLayout, M: BlockMetadata> {
     inner: Arc<Mutex<State<S, M>>>,
 }
 
-pub struct MutableBlock<S: Storage, M: BlockMetadata> {
+pub struct MutableBlock<S: BlockLayout, M: BlockMetadata> {
     block: Option<Block<S, M>>,
     state: Arc<Mutex<State<S, M>>>,
 }
 
-pub struct ImmutableBlock<S: Storage, M: BlockMetadata> {
+impl<S: BlockLayout, M: BlockMetadata> MutableBlock<S, M> {
+    fn new(block: Block<S, M>, state: Arc<Mutex<State<S, M>>>) -> Self {
+        Self {
+            block: Some(block),
+            state,
+        }
+    }
+}
+
+impl<S: BlockLayout, M: BlockMetadata> std::fmt::Debug for MutableBlock<S, M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MutableBlock {{ block: {:?} }}", self.block)
+    }
+}
+
+#[derive(Debug)]
+pub struct ImmutableBlock<S: BlockLayout, M: BlockMetadata> {
     block: Arc<MutableBlock<S, M>>,
 }
 
-struct State<S: Storage, M: BlockMetadata> {
+struct State<S: BlockLayout, M: BlockMetadata> {
     active: ActiveBlockPool<S, M>,
     inactive: InactiveBlockPool<S, M>,
     events: Arc<dyn EventManager>,
 }
 
-impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
+impl<S: BlockLayout, M: BlockMetadata> BlockPool<S, M> {
     /// Creates a new [`BlockPool`] with the given [`EventManager`].
     ///
     /// The pool starts empty and requires blocks to be added via [`add_blocks`].
@@ -138,7 +154,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
 
     /// Adds a vector of [`Block`]s to the [`InactiveBlockPool`].
     ///
-    /// These blocks are typically created from a [`super::block::BlockStorageCollection`]
+    /// These blocks are typically created from a [`super::block::Blocks`]
     /// and represent the initial set of available cache blocks.
     /// Blocks added this way are initially reset.
     ///
@@ -196,7 +212,32 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         &mut self,
         block: MutableBlock<S, M>,
     ) -> Result<ImmutableBlock<S, M>, BlockPoolError> {
-        self.inner.lock().unwrap().register_block(block)
+        self.register_blocks(vec![block])?
+            .pop()
+            .ok_or(BlockPoolError::FailedToRegisterBlock("".to_string()))
+    }
+
+    /// Registers a vector of [`MutableBlock`]s (presumably after filling them) with the pool,
+    /// making them available for sharing via the [`ActiveBlockPool`].
+    ///
+    /// This function checks if any of the blocks have the same sequence hash as an existing block
+    /// in the active pool. If so, it returns an [`ImmutableBlock`] pointing to the existing block,
+    /// and the provided `block` is implicitly dropped (returned to the [`InactiveBlockPool`]).
+    pub fn register_blocks(
+        &mut self,
+        blocks: Vec<MutableBlock<S, M>>,
+    ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
+        self.inner
+            .lock()
+            .unwrap()
+            .register_blocks(blocks, self.inner.clone())
+            .map_err(|e| {
+                BlockPoolError::FailedToRegisterBlock(format!(
+                    "failed to register blocks: {} registered / {} failed",
+                    e.immutable_count(),
+                    e.mutable_count()
+                ))
+            })
     }
 
     /// Attempts to match the given [`SequenceHash`] to an existing block, checking
@@ -243,7 +284,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> MutableBlock<S, M> {
+impl<S: BlockLayout, M: BlockMetadata> MutableBlock<S, M> {
     fn into_parts(mut self) -> (Option<Block<S, M>>, Arc<Mutex<State<S, M>>>) {
         let block = self.block.take();
         let state = Arc::clone(&self.state);
@@ -251,16 +292,16 @@ impl<S: Storage, M: BlockMetadata> MutableBlock<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> Drop for MutableBlock<S, M> {
+impl<S: BlockLayout, M: BlockMetadata> Drop for MutableBlock<S, M> {
     fn drop(&mut self) {
         if let Some(block) = self.block.take() {
             // TODO: move return_block to the state
-            self.state.lock().unwrap().inactive.return_block(block);
+            self.state.lock().unwrap().return_block(block);
         }
     }
 }
 
-impl<S: Storage, M: BlockMetadata> Deref for MutableBlock<S, M> {
+impl<S: BlockLayout, M: BlockMetadata> Deref for MutableBlock<S, M> {
     type Target = Block<S, M>;
 
     fn deref(&self) -> &Self::Target {
@@ -268,13 +309,13 @@ impl<S: Storage, M: BlockMetadata> Deref for MutableBlock<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> DerefMut for MutableBlock<S, M> {
+impl<S: BlockLayout, M: BlockMetadata> DerefMut for MutableBlock<S, M> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.block.as_mut().expect("block was dropped")
     }
 }
 
-impl<S: Storage, M: BlockMetadata> Deref for ImmutableBlock<S, M> {
+impl<S: BlockLayout, M: BlockMetadata> Deref for ImmutableBlock<S, M> {
     type Target = Block<S, M>;
     fn deref(&self) -> &Self::Target {
         self.block
@@ -282,5 +323,24 @@ impl<S: Storage, M: BlockMetadata> Deref for ImmutableBlock<S, M> {
             .block
             .as_ref()
             .expect("block was dropped")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::block::{BasicMetadata, Blocks};
+    use super::super::events::NullEventManager;
+    use super::super::layout::tests::setup_layout;
+    use super::super::storage::tests::NullDeviceStorage;
+    use super::*;
+
+    #[test]
+    fn test_block_pool() {
+        let layout = setup_layout(None).unwrap();
+        let blocks = Blocks::<_, BasicMetadata>::new(layout)
+            .unwrap()
+            .into_blocks()
+            .unwrap();
+        // let pool = BlockPool::new(Arc::new(NullEventManager::default()));
     }
 }

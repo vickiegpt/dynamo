@@ -47,7 +47,7 @@ pub enum LayoutError {
 
 /// Storage pattern for layers
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LayerConfiguration {
+pub enum LayoutType {
     /// All layers are contiguous in memory [n_layers, ...]
     FullyContiguous,
 
@@ -67,7 +67,16 @@ pub enum LayerConfiguration {
 }
 
 /// Core trait for block layouts
-pub trait BlockLayout: Send + Sync + std::fmt::Debug {
+pub trait BlockLayout:
+    BlockLayoutConfig + BlockLayoutLookup + Send + Sync + std::fmt::Debug
+{
+    /// The type of storage this layout uses
+    type StorageType: Storage;
+}
+
+pub trait BlockLayoutConfig {
+    fn layout_type(&self) -> LayoutType;
+
     /// Returns the total number of blocks this layout manages
     fn num_blocks(&self) -> usize;
 
@@ -79,7 +88,9 @@ pub trait BlockLayout: Send + Sync + std::fmt::Debug {
 
     /// Returns the inner dimension size
     fn inner_dim(&self) -> usize;
+}
 
+pub trait BlockLayoutLookup {
     /// Get the memory region for a specific page [page_size, inner_dim]
     fn get_memory_region(&self, block_idx: usize, layer_idx: usize) -> Result<u64, LayoutError>;
 
@@ -308,6 +319,14 @@ impl<S: Storage> FullyContiguous<S> {
 }
 
 impl<S: Storage> BlockLayout for FullyContiguous<S> {
+    type StorageType = S;
+}
+
+impl<S: Storage> BlockLayoutConfig for FullyContiguous<S> {
+    fn layout_type(&self) -> LayoutType {
+        LayoutType::FullyContiguous
+    }
+
     fn num_blocks(&self) -> usize {
         self.config.inner.num_blocks
     }
@@ -323,7 +342,9 @@ impl<S: Storage> BlockLayout for FullyContiguous<S> {
     fn inner_dim(&self) -> usize {
         self.config.inner.inner_dim
     }
+}
 
+impl<S: Storage> BlockLayoutLookup for FullyContiguous<S> {
     fn get_memory_region(&self, block_idx: usize, layer_idx: usize) -> Result<u64, LayoutError> {
         if block_idx >= self.num_blocks() {
             return Err(LayoutError::InvalidBlockIndex(block_idx));
@@ -365,7 +386,7 @@ pub mod tests {
     const DTYPE: DType = DType::FP32; // Example dtype
 
     // Updated setup_layout: Calculates size internally, uses default alignment for simplicity in non-alignment tests.
-    fn setup_layout(
+    pub fn setup_layout(
         alignment: Option<usize>, // Option to override default alignment
     ) -> Result<FullyContiguous<NullDeviceStorage>, LayoutError> {
         let config = LayoutConfig {

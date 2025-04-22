@@ -19,19 +19,19 @@
 //! and their storage. It handles the relationship between storage, layout,
 //! and individual blocks.
 
-use super::{BlockData, BlockError, Storage};
+use super::{BlockData, BlockError, BlockLayout};
 
 /// Storage view that provides safe access to a region of storage
 #[derive(Debug)]
-pub struct BlockView<'a, S: Storage> {
-    _block_storage: &'a BlockData<S>,
+pub struct BlockView<'a, L: BlockLayout> {
+    _block_data: &'a BlockData<L>,
     addr: usize,
     size: usize,
 }
 
-impl<'a, S> BlockView<'a, S>
+impl<'a, L> BlockView<'a, L>
 where
-    S: Storage,
+    L: BlockLayout,
 {
     /// Create a new storage view
     ///
@@ -40,12 +40,12 @@ where
     /// - addr + size <= storage.size()
     /// - The view does not outlive the storage
     pub(crate) unsafe fn new(
-        _block_storage: &'a BlockData<S>,
+        _block_data: &'a BlockData<L>,
         addr: usize,
         size: usize,
     ) -> Result<Self, BlockError> {
         Ok(Self {
-            _block_storage,
+            _block_data,
             addr,
             size,
         })
@@ -69,13 +69,13 @@ where
 
 /// Mutable storage view that provides exclusive access to a region of storage
 #[derive(Debug)]
-pub struct BlockViewMut<'a, S: Storage> {
-    _block_storage: &'a mut BlockData<S>,
+pub struct BlockViewMut<'a, L: BlockLayout> {
+    _block_data: &'a mut BlockData<L>,
     addr: usize,
     size: usize,
 }
 
-impl<'a, S: Storage> BlockViewMut<'a, S> {
+impl<'a, L: BlockLayout> BlockViewMut<'a, L> {
     /// Create a new mutable storage view
     ///
     /// # Safety
@@ -84,12 +84,12 @@ impl<'a, S: Storage> BlockViewMut<'a, S> {
     /// - The view does not outlive the storage
     /// - No other views exist for this region
     pub(crate) unsafe fn new(
-        _block_storage: &'a mut BlockData<S>,
+        _block_data: &'a mut BlockData<L>,
         addr: usize,
         size: usize,
     ) -> Result<Self, BlockError> {
         Ok(Self {
-            _block_storage,
+            _block_data,
             addr,
             size,
         })

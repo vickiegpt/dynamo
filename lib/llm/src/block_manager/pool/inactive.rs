@@ -19,7 +19,7 @@ use super::*;
 use tracing::instrument;
 
 #[derive(Default)]
-pub struct InactiveBlockPool<S: Storage, M: BlockMetadata> {
+pub struct InactiveBlockPool<S: BlockLayout, M: BlockMetadata> {
     // Direct lookup by sequence_hash
     lookup_map: HashMap<SequenceHash, BlockType<S, M>>,
 
@@ -36,7 +36,7 @@ pub struct InactiveBlockPool<S: Storage, M: BlockMetadata> {
     total_blocks: u64,
 }
 
-impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
+impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
     /// Creates a new, empty [`InactiveBlockPool`].
     ///
     /// # Returns
@@ -358,7 +358,8 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
         // that have been arranged in the correct order
         if let Some(mut block) = self.uninitialized_set.pop_front() {
             tracing::trace!("Acquired uninitialized block");
-            block.metadata_on_acquired();
+            self.return_tick += 1;
+            block.metadata_on_acquired(self.return_tick);
             return Some(block);
         }
 
@@ -369,7 +370,8 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
             match self.lookup_map.remove(&key.sequence_hash()) {
                 Some(mut block) => {
                     block.reset();
-                    block.metadata_on_acquired();
+                    self.return_tick += 1;
+                    block.metadata_on_acquired(self.return_tick);
                     Some(block)
                 }
                 None => {
@@ -484,7 +486,7 @@ impl<T: Storage, M: BlockMetadata> InactiveBlockPool<T, M> {
 pub(crate) mod tests {
     use crate::{
         block_manager::{
-            block::{state::CompleteState, BlockStorageCollection},
+            block::{state::CompleteState, Blocks},
             events::NullEventManager,
             layout::{FullyContiguous, LayoutConfigBuilder},
             storage::tests::{NullDeviceAllocator, NullDeviceStorage},
@@ -497,23 +499,21 @@ pub(crate) mod tests {
     #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
     pub struct TestMetadata {
         priority: u32,
-        return_tick: u64,
+        returned_tick: u64,
+        acquired_tick: u64,
     }
 
     impl BlockMetadata for TestMetadata {
-        fn on_acquired(&mut self) {}
-
-        fn on_returned(&mut self, tick: u64) {
-            self.return_tick = tick;
+        fn on_acquired(&mut self, tick: u64) {
+            self.acquired_tick = tick;
         }
 
-        fn is_reset(&self) -> bool {
-            self.priority == 0 && self.return_tick == 0
+        fn on_returned(&mut self, tick: u64) {
+            self.returned_tick = tick;
         }
 
         fn reset_metadata(&mut self) {
             self.priority = 0;
-            self.return_tick = 0;
         }
     }
 
@@ -521,13 +521,14 @@ pub(crate) mod tests {
 
     fn make_priority_key(
         priority: u32,
-        return_tick: u64,
+        returned_tick: u64,
         sequence_hash: SequenceHash,
     ) -> TestPriorityKey {
         TestPriorityKey::new(
             TestMetadata {
                 priority,
-                return_tick,
+                returned_tick,
+                acquired_tick: 0,
             },
             sequence_hash,
         )
@@ -548,17 +549,17 @@ pub(crate) mod tests {
         // Test popping from the map to verify ordering
         let first_key = map.pop_first().unwrap();
         assert_eq!(first_key.metadata().priority, 0);
-        assert_eq!(first_key.metadata().return_tick, 2);
+        assert_eq!(first_key.metadata().returned_tick, 2);
         assert_eq!(first_key.sequence_hash(), hash1);
 
         let second_key = map.pop_first().unwrap();
         assert_eq!(second_key.metadata().priority, 0);
-        assert_eq!(second_key.metadata().return_tick, 3);
+        assert_eq!(second_key.metadata().returned_tick, 3);
         assert_eq!(second_key.sequence_hash(), hash3);
 
         let third_key = map.pop_first().unwrap();
         assert_eq!(third_key.metadata().priority, 1);
-        assert_eq!(third_key.metadata().return_tick, 1);
+        assert_eq!(third_key.metadata().returned_tick, 1);
         assert_eq!(third_key.sequence_hash(), hash2);
 
         // Map should now be empty
@@ -574,7 +575,7 @@ pub(crate) mod tests {
     /// Creates a block collection with the given number of blocks.
     pub fn create_block_collection(
         num_blocks: usize,
-    ) -> BlockStorageCollection<NullDeviceStorage, TestMetadata> {
+    ) -> Blocks<FullyContiguous<NullDeviceStorage>, TestMetadata> {
         let config = LayoutConfigBuilder::default()
             .num_blocks(num_blocks)
             .num_layers(61)
@@ -587,7 +588,7 @@ pub(crate) mod tests {
             .expect("Failed to allocate layout/storage");
 
         let block_collection =
-            BlockStorageCollection::<NullDeviceStorage, TestMetadata>::new(layout).unwrap();
+            Blocks::<FullyContiguous<NullDeviceStorage>, TestMetadata>::new(layout).unwrap();
 
         block_collection
     }
@@ -597,7 +598,7 @@ pub(crate) mod tests {
     pub fn create_blocks(
         tokens: Tokens,
         block_size: usize,
-    ) -> Vec<Block<NullDeviceStorage, TestMetadata>> {
+    ) -> Vec<Block<FullyContiguous<NullDeviceStorage>, TestMetadata>> {
         let (token_blocks, _partial_token_block) =
             tokens.into_sequence(block_size, None).into_parts();
         let num_blocks = token_blocks.len();
@@ -626,7 +627,7 @@ pub(crate) mod tests {
 
     pub fn create_block_pool(
         num_blocks: usize,
-    ) -> InactiveBlockPool<NullDeviceStorage, TestMetadata> {
+    ) -> InactiveBlockPool<FullyContiguous<NullDeviceStorage>, TestMetadata> {
         let mut pool = InactiveBlockPool::new();
         let blocks = create_block_collection(num_blocks).into_blocks().unwrap();
         pool.add_blocks(blocks);
@@ -637,8 +638,11 @@ pub(crate) mod tests {
     pub fn acquire_blocks(
         tokens: Tokens,
         block_size: usize,
-        pool: &mut InactiveBlockPool<NullDeviceStorage, TestMetadata>,
-    ) -> (Vec<Block<NullDeviceStorage, TestMetadata>>, usize) {
+        pool: &mut InactiveBlockPool<FullyContiguous<NullDeviceStorage>, TestMetadata>,
+    ) -> (
+        Vec<Block<FullyContiguous<NullDeviceStorage>, TestMetadata>>,
+        usize,
+    ) {
         let (mut token_blocks, _partial_token_block) =
             tokens.into_sequence(block_size, None).into_parts();
 

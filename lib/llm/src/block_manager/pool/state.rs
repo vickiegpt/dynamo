@@ -1,6 +1,6 @@
 use super::*;
 
-impl<S: Storage, M: BlockMetadata> State<S, M> {
+impl<S: BlockLayout, M: BlockMetadata> State<S, M> {
     pub fn new(events: Arc<dyn EventManager>) -> Self {
         Self {
             active: ActiveBlockPool::new(),
@@ -42,59 +42,123 @@ impl<S: Storage, M: BlockMetadata> State<S, M> {
         Ok(blocks)
     }
 
-    pub fn register_block(
+    pub fn register_blocks(
         &mut self,
-        block: MutableBlock<S, M>,
-    ) -> Result<ImmutableBlock<S, M>, BlockPoolError> {
-        let (mut block, state) = block.into_parts();
+        blocks: Vec<MutableBlock<S, M>>,
+        state: Arc<Mutex<State<S, M>>>,
+    ) -> Result<Vec<ImmutableBlock<S, M>>, RegisterResult<S, M>> {
+        let mut blocks = RegisterResult::new(blocks).map_err(|e| e)?;
 
-        let mut block = block.take().ok_or(BlockPoolError::InvalidMutableBlock(
-            "inner block was dropped".to_string(),
-        ))?;
+        while let Some((idx, sequence_hash, block)) = blocks.mutable.pop_front() {
+            if let Some(immutable) = self.active.match_sequence_hash(sequence_hash) {
+                blocks.immutable.push(immutable);
+                blocks.ok_to_drop.push(block);
+            } else if let Some(raw_block) = self.inactive.match_sequence_hash(sequence_hash) {
+                let registration = self
+                    .active
+                    .register_v2(MutableBlock::new(raw_block, state.clone()));
 
-        // need to validate that the block is in a complete with a valid sequence hash
-        // next, we need to ensure there were no mid-air collisions with the sequence hash, meaning:
-        // - the sequence hash is not already in the active map
-        // - the sequence hash is not already in the inactive pool
-
-        let sequence_hash = block.sequence_hash().map_err(|e| {
-            BlockPoolError::InvalidMutableBlock(format!("block has no sequence hash: {}", e))
-        })?;
-
-        if let Some(immutable) = self.active.match_sequence_hash(sequence_hash) {
-            self.return_block(block);
-            return Ok(immutable);
+                match registration.into_result() {
+                    Ok(immutable) => {
+                        blocks.immutable.push(immutable);
+                        blocks.ok_to_drop.push(block);
+                    }
+                    Err(raw) => {
+                        tracing::error!("failed to register block {idx}; inactive match found, but failed to promote");
+                        blocks.mutable.push_front((idx, sequence_hash, block));
+                        blocks.ok_to_drop.push(raw);
+                        return Err(blocks);
+                    }
+                }
+            } else {
+                // we need to re-insert the block into the deque to ensure it is processed
+                blocks.mutable.push_front((idx, sequence_hash, block));
+                break;
+            }
         }
 
-        if let Some(mutable) = self.inactive.match_sequence_hash(sequence_hash) {
-            self.return_block(block);
-            let block = MutableBlock {
-                block: Some(mutable),
-                state,
-            };
-            return self.active.register(block);
-        }
-
-        // the block is not in the active or inactive pool; now we can register it with the event manager
-        // and add it to the active pool
-
-        block
-            .register(self.events.as_ref())
-            .map_err(|e| BlockPoolError::FailedToRegisterBlock(e.to_string()))?;
-
-        assert!(block.is_registered(), "block is not registered");
-
-        let mutable = MutableBlock {
-            block: Some(block),
-            state,
-        };
-
-        self.active.register(mutable)
+        blocks.into_result()
     }
 
     /// Returns a block to the inactive pool
     pub fn return_block(&mut self, mut block: Block<S, M>) {
         self.active.remove(&mut block);
         self.inactive.return_block(block);
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct RegisterResult<S: BlockLayout, M: BlockMetadata> {
+    immutable: Vec<ImmutableBlock<S, M>>,
+    mutable: VecDeque<(usize, SequenceHash, MutableBlock<S, M>)>,
+    ok_to_drop: Vec<MutableBlock<S, M>>,
+}
+
+impl<S: BlockLayout, M: BlockMetadata> RegisterResult<S, M> {
+    fn new(blocks: Vec<MutableBlock<S, M>>) -> Result<Self, Self> {
+        let immutable = Vec::new();
+        let ok_to_drop = Vec::new();
+        let mut mutable = VecDeque::new();
+        let mut errors = Vec::new();
+
+        if blocks.is_empty() {
+            return Ok(Self {
+                immutable,
+                mutable,
+                ok_to_drop,
+            });
+        }
+
+        for (idx, block) in blocks.into_iter().enumerate() {
+            if !block.is_complete() {
+                errors.push(BlockPoolError::InvalidMutableBlock(format!(
+                    "block {} is not complete",
+                    idx
+                )));
+            }
+
+            let sequence_hash = block
+                .sequence_hash()
+                .map_err(|e| {
+                    errors.push(BlockPoolError::InvalidMutableBlock(format!(
+                        "block {} has no sequence hash: {}",
+                        idx, e
+                    )));
+                })
+                .ok()
+                .unwrap_or(0);
+
+            mutable.push_back((idx, sequence_hash, block));
+        }
+
+        if errors.is_empty() {
+            Ok(Self {
+                immutable,
+                mutable,
+                ok_to_drop,
+            })
+        } else {
+            Err(Self {
+                immutable,
+                mutable,
+                ok_to_drop,
+            })
+        }
+    }
+
+    pub fn into_result(self) -> Result<Vec<ImmutableBlock<S, M>>, Self> {
+        if self.mutable.is_empty() {
+            Ok(self.immutable)
+        } else {
+            Err(self)
+        }
+    }
+
+    pub fn immutable_count(&self) -> usize {
+        self.immutable.len()
+    }
+
+    pub fn mutable_count(&self) -> usize {
+        self.mutable.len()
     }
 }

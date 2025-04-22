@@ -115,7 +115,7 @@ struct RegisterBlocksEvent {
     parent_hash: Option<ExternalSequenceBlockHash>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NullEventManager {}
 
 impl EventManager for NullEventManager {

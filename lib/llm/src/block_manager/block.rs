@@ -27,7 +27,6 @@ use super::storage::{Storage, StorageError};
 use std::sync::Arc;
 use thiserror::Error;
 
-use dynamo_runtime::utils::pool::Returnable;
 
 /// Result type for Block operations
 pub type BlockResult<T> = std::result::Result<T, BlockError>;
@@ -62,7 +61,7 @@ pub enum BlockError {
 
 pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync + 'static {
     /// Called when the block is acquired from the pool
-    fn on_acquired(&mut self);
+    fn on_acquired(&mut self, tick: u64);
 
     /// Called when the block is returned to the pool
     fn on_returned(&mut self, tick: u64);
@@ -70,25 +69,21 @@ pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync +
     /// Resets the metadata to the default value
     /// If called, the [BlockMetadata::is_reset()] should return true
     fn reset_metadata(&mut self);
-
-    // NOTE: we might not need this
-    /// Returns true if the metadata is reset
-    fn is_reset(&self) -> bool;
 }
 
 /// A block with storage and associated metadata/state
 #[derive(Debug)]
-pub struct Block<S: Storage, M: BlockMetadata> {
-    storage: BlockData<S>,
+pub struct Block<L: BlockLayout, M: BlockMetadata> {
+    data: BlockData<L>,
     metadata: M,
     state: BlockState,
 }
 
-impl<S: Storage, M: BlockMetadata> Block<S, M> {
+impl<L: BlockLayout, M: BlockMetadata> Block<L, M> {
     /// Create a new block with default metadata/state
-    pub fn new(storage: BlockData<S>, metadata: M) -> BlockResult<Self> {
+    pub fn new(data: BlockData<L>, metadata: M) -> BlockResult<Self> {
         Ok(Self {
-            storage,
+            data,
             metadata,
             state: BlockState::Reset,
         })
@@ -196,37 +191,37 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
     }
 
     /// Get a read-only view of a layer
-    pub fn layer_view(&self, layer_idx: usize) -> BlockResult<view::BlockView<S>> {
-        self.storage.layer_view(layer_idx)
+    pub fn layer_view(&self, layer_idx: usize) -> BlockResult<view::BlockView<L>> {
+        self.data.layer_view(layer_idx)
     }
 
     /// Get a mutable view of a layer
-    pub fn layer_view_mut(&mut self, layer_idx: usize) -> BlockResult<view::BlockViewMut<S>> {
-        self.storage.layer_view_mut(layer_idx)
+    pub fn layer_view_mut(&mut self, layer_idx: usize) -> BlockResult<view::BlockViewMut<L>> {
+        self.data.layer_view_mut(layer_idx)
     }
 
     /// Get the number of blocks in the block
     pub fn num_blocks(&self) -> usize {
-        self.storage.layout.num_blocks()
+        self.data.layout.num_blocks()
     }
 
     /// Get the number of layers in the block
     pub fn num_layers(&self) -> usize {
-        self.storage.layout.num_layers()
+        self.data.layout.num_layers()
     }
 
     /// Get the size of each block in the block
     pub fn page_size(&self) -> usize {
-        self.storage.layout.page_size()
+        self.data.layout.page_size()
     }
 
     /// Get the inner dimension of the block
     pub fn inner_dim(&self) -> usize {
-        self.storage.layout.inner_dim()
+        self.data.layout.inner_dim()
     }
 
-    pub(crate) fn metadata_on_acquired(&mut self) {
-        self.metadata.on_acquired();
+    pub(crate) fn metadata_on_acquired(&mut self, tick: u64) {
+        self.metadata.on_acquired(tick);
     }
 
     pub(crate) fn metadata_on_returned(&mut self, tick: u64) {
@@ -234,30 +229,21 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> Returnable for Block<S, M> {
-    fn on_return(&mut self) {}
-}
-
 /// Individual block storage - cannot be cloned to ensure uniqueness
 #[derive(Debug)]
-pub struct BlockData<S: Storage> {
-    layout: Arc<dyn BlockLayout>,
+pub struct BlockData<L: BlockLayout> {
+    layout: Arc<L>,
     block_idx: usize,
-    storage: std::marker::PhantomData<S>,
 }
 
-impl<S: Storage> BlockData<S> {
+impl<L: BlockLayout> BlockData<L> {
     /// Create a new block storage
-    fn new(layout: Arc<dyn BlockLayout>, block_idx: usize) -> Self {
-        Self {
-            layout,
-            block_idx,
-            storage: std::marker::PhantomData,
-        }
+    fn new(layout: Arc<L>, block_idx: usize) -> Self {
+        Self { layout, block_idx }
     }
 
     /// Get a read-only view of this block's storage for a layer
-    pub fn layer_view(&self, layer_idx: usize) -> BlockResult<view::BlockView<S>> {
+    pub fn layer_view(&self, layer_idx: usize) -> BlockResult<view::BlockView<L>> {
         let offset = self
             .layout
             .get_memory_region(self.block_idx, layer_idx)
@@ -275,7 +261,7 @@ impl<S: Storage> BlockData<S> {
     /// - No other views of this block are concurrently accessed
     /// - This is enforced in Rust by BlockView requiring unique access
     /// - Cannot be enforced when using with Python bindings or CUDA kernels
-    pub fn layer_view_mut(&mut self, layer_idx: usize) -> BlockResult<view::BlockViewMut<S>> {
+    pub fn layer_view_mut(&mut self, layer_idx: usize) -> BlockResult<view::BlockViewMut<L>> {
         let offset = self
             .layout
             .get_memory_region(self.block_idx, layer_idx)
@@ -287,32 +273,50 @@ impl<S: Storage> BlockData<S> {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
+pub struct BasicMetadata {
+    priority: u32,
+    returned_tick: u64,
+    acquired_tick: u64,
+}
+
+impl BlockMetadata for BasicMetadata {
+    fn on_acquired(&mut self, tick: u64) {
+        self.acquired_tick = tick;
+    }
+
+    fn on_returned(&mut self, tick: u64) {
+        self.returned_tick = tick;
+    }
+
+    fn reset_metadata(&mut self) {
+        self.priority = 0;
+    }
+}
 /// Collection that holds shared storage and layout
 #[derive(Debug)]
-pub struct BlockStorageCollection<S: Storage, M: BlockMetadata> {
-    layout: Arc<dyn BlockLayout>,
-    storage: std::marker::PhantomData<S>,
+pub struct Blocks<L: BlockLayout, M: BlockMetadata> {
+    layout: Arc<L>,
     metadata: std::marker::PhantomData<M>,
 }
 
-impl<S: Storage, M: BlockMetadata> BlockStorageCollection<S, M> {
+impl<L: BlockLayout, M: BlockMetadata> Blocks<L, M> {
     /// Create a new block storage collection
-    pub fn new(layout: impl BlockLayout + 'static) -> BlockResult<Self> {
+    pub fn new(layout: L) -> BlockResult<Self> {
         let layout = Arc::new(layout);
 
         Ok(Self {
             layout,
-            storage: std::marker::PhantomData,
             metadata: std::marker::PhantomData,
         })
     }
 
     /// Convert collection into Vec<Block> with default metadata/state
-    pub fn into_blocks(self) -> BlockResult<Vec<Block<S, M>>> {
+    pub fn into_blocks(self) -> BlockResult<Vec<Block<L, M>>> {
         (0..self.layout.num_blocks())
             .map(|idx| {
-                let storage = BlockData::new(self.layout.clone(), idx);
-                Block::new(storage, M::default())
+                let data = BlockData::new(self.layout.clone(), idx);
+                Block::new(data, M::default())
             })
             .collect()
     }
@@ -324,7 +328,7 @@ impl<S: Storage, M: BlockMetadata> BlockStorageCollection<S, M> {
     // {
     //     (0..self.layout.num_blocks())
     //         .map(|idx| {
-    //             let storage = BlockData::new(self.storage.clone(), self.layout.clone(), idx);
+    //             let storage = BlockData::new(self.data.clone(), self.layout.clone(), idx);
     //             let (metadata, state) = f(idx);
     //             Block::with_metadata_state(storage, metadata, state)
     //         })
