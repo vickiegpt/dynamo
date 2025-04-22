@@ -21,14 +21,16 @@ use tokio::runtime::Runtime;
 
 #[pyclass]
 pub struct KvManager {
-    inner: Arc<dynamo_kv_manager::layout::LayerConfiguration>,
+    // Using Arc<dyn BlockLayout> to hold any type that implements BlockLayout
+    inner: Arc<dyn dynamo_kv_manager::layout::BlockLayout + Send + Sync>,
 }
 
 #[pymethods]
 impl KvManager {
     #[new]
-    #[pyo3(signature = (device))]
-    fn new(device: String) -> PyResult<Self> {
+    #[pyo3(signature = (device, pin_memory=false))]
+    fn new(device: String, pin_memory: bool) -> PyResult<Self> {
+        // TODO: Should this be provided by the user? The values are from contiguous.rs tests.
         let layout_config = dynamo_kv_manager::layout::LayoutConfig {
             num_blocks: 7,
             num_layers: 5,
@@ -38,41 +40,36 @@ impl KvManager {
             dtype: dynamo_kv_manager::dtype::DType::FP32,
         };
 
-        let layer_configuration = match device.as_str() {
-            d if d == "CPU" => {
-                // Create a PinnedAllocator for CPU
-                let allocator = dynamo_kv_manager::storage::cuda::PinnedAllocator::try_new(0)
+        let inner = match device.as_str() {
+            d if d == "CUDA_PINNED" => {  // TODO: Use the pin_memory flag with device arg, this should be CPU memory.
+                // Use PinnedAllocator for CPU
+                let allocator = dynamo_kv_manager::storage::PinnedAllocator::try_new(0)
                     .map_err(|e| PyRuntimeError::new_err(format!("Failed to create PinnedAllocator: {}", e)))?;
 
-                // Use allocate function instead of new
-                dynamo_kv_manager::layout::contiguous::FullyContiguous::allocate(layout_config, &allocator)
-                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to allocate FullyContiguous layout: {}", e)))?
+                // Create the concrete layout with PinnedStorage
+                let layout = dynamo_kv_manager::layout::contiguous::FullyContiguous::allocate(layout_config, &allocator)
+                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to allocate PinnedStorage layout: {}", e)))?;
+
+                // Return the layout as a trait object
+                Arc::new(layout) as Arc<dyn dynamo_kv_manager::layout::BlockLayout + Send + Sync>
             }
             d if d.starts_with("CUDA") => {
-                // Extract device ID if in format "CUDA:N"
-                let device_id = if d.contains(':') {
-                    // Split by ':' and try to parse the second part as usize
-                    let parts: Vec<&str> = d.split(':').collect();
-                    if parts.len() >= 2 {
-                        // Try to parse the second part as usize
-                        match parts[1].parse::<usize>() {
-                            Ok(id) => id,
-                            Err(_) => 0, // Default to 0 if parsing fails
-                        }
-                    } else {
-                        0 // Default to 0 if no second part
-                    }
-                } else {
-                    0 // Default to 0 if no ':' in the string
-                };
+                // Extract device ID for CUDA
+                let device_id = d.split(':')
+                    .nth(1)
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(0);
 
-                // Create a DeviceAllocator for CUDA with the specific device ID
-                let allocator = dynamo_kv_manager::storage::cuda::DeviceAllocator::try_new(device_id)
+                // Use DeviceAllocator for CUDA
+                let allocator = dynamo_kv_manager::storage::DeviceAllocator::try_new(device_id)
                     .map_err(|e| PyRuntimeError::new_err(format!("Failed to create DeviceAllocator for device {}: {}", device_id, e)))?;
 
-                // Use allocate function with the device allocator
-                dynamo_kv_manager::layout::contiguous::FullyContiguous::allocate(layout_config, &allocator)
-                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to allocate FullyContiguous layout on CUDA device {}: {}", device_id, e)))?
+                // Create the concrete layout with DeviceStorage
+                let layout = dynamo_kv_manager::layout::contiguous::FullyContiguous::allocate(layout_config, &allocator)
+                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to allocate DeviceStorage layout: {}", e)))?;
+
+                // Return the layout as a trait object
+                Arc::new(layout) as Arc<dyn dynamo_kv_manager::layout::BlockLayout + Send + Sync>
             }
             _ => {
                 // Default case - return error for unsupported device
@@ -80,8 +77,6 @@ impl KvManager {
             }
         };
 
-        Ok(KvManager {
-            inner: Arc::new(layer_configuration),
-        })
+        Ok(KvManager { inner })
     }
 }

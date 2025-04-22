@@ -20,6 +20,7 @@ from dynamo._core import HttpError as HttpError
 from dynamo._core import HttpService as HttpService
 from dynamo._core import KvEventPublisher as KvEventPublisher
 from dynamo._core import KvIndexer as KvIndexer
+from dynamo._core import KvManager as KvManager
 from dynamo._core import KvMetricsAggregator as KvMetricsAggregator
 from dynamo._core import KvMetricsPublisher as KvMetricsPublisher
 from dynamo._core import KvRecorder as KvRecorder

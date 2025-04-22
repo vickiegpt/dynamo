@@ -585,3 +585,15 @@ class HttpAsyncEngine:
     """
 
     ...
+
+class KvManager:
+    """
+    A KV cache manager
+    """
+
+    ...
+
+    def __init__(self, device: str, pin_memory: bool) -> None:
+        """
+        Create a `KvManager` object
+        """
