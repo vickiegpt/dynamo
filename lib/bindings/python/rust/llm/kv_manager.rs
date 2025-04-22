@@ -21,7 +21,6 @@ use tokio::runtime::Runtime;
 
 #[pyclass]
 pub struct KvManager {
-    // Using Arc<dyn BlockLayout> to hold any type that implements BlockLayout
     inner: Arc<dyn dynamo_kv_manager::layout::BlockLayout + Send + Sync>,
 }
 
@@ -40,43 +39,48 @@ impl KvManager {
             dtype: dynamo_kv_manager::dtype::DType::FP32,
         };
 
-        let inner = match device.as_str() {
-            d if d == "CUDA_PINNED" => {  // TODO: Use the pin_memory flag with device arg, this should be CPU memory.
-                // Use PinnedAllocator for CPU
-                let allocator = dynamo_kv_manager::storage::PinnedAllocator::try_new(0)
-                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to create PinnedAllocator: {}", e)))?;
+        let block_layout = match device.as_str() {
+            d if d.to_uppercase() == "CPU" => {
+                // Use System Allocator
+                let allocator = dynamo_kv_manager::storage::SystemAllocator {};
 
-                // Create the concrete layout with PinnedStorage
                 let layout = dynamo_kv_manager::layout::contiguous::FullyContiguous::allocate(layout_config, &allocator)
-                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to allocate PinnedStorage layout: {}", e)))?;
+                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to allocate SystemStorage layout: {}", e)))?;
 
-                // Return the layout as a trait object
                 Arc::new(layout) as Arc<dyn dynamo_kv_manager::layout::BlockLayout + Send + Sync>
             }
-            d if d.starts_with("CUDA") => {
-                // Extract device ID for CUDA
-                let device_id = d.split(':')
+            d if d.to_uppercase().starts_with("CUDA") => {
+                if pin_memory {
+                    // Use PinnedAllocator
+                    let allocator = dynamo_kv_manager::storage::PinnedAllocator {};
+
+                    let layout = dynamo_kv_manager::layout::contiguous::FullyContiguous::allocate(layout_config, &allocator)
+                        .map_err(|e| PyRuntimeError::new_err(format!("Failed to allocate PinnedStorage layout: {}", e)))?;
+
+                    Arc::new(layout) as Arc<dyn dynamo_kv_manager::layout::BlockLayout + Send + Sync>
+                } else {
+                    // Extract CUDA device ID
+                    let device_id = d.split(':')
                     .nth(1)
                     .and_then(|s| s.parse::<usize>().ok())
                     .unwrap_or(0);
 
-                // Use DeviceAllocator for CUDA
-                let allocator = dynamo_kv_manager::storage::DeviceAllocator::try_new(device_id)
+                    // Use DeviceAllocator
+                    let allocator = dynamo_kv_manager::storage::DeviceAllocator::try_new(device_id)
                     .map_err(|e| PyRuntimeError::new_err(format!("Failed to create DeviceAllocator for device {}: {}", device_id, e)))?;
 
-                // Create the concrete layout with DeviceStorage
-                let layout = dynamo_kv_manager::layout::contiguous::FullyContiguous::allocate(layout_config, &allocator)
-                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to allocate DeviceStorage layout: {}", e)))?;
+                    let layout = dynamo_kv_manager::layout::contiguous::FullyContiguous::allocate(layout_config, &allocator)
+                        .map_err(|e| PyRuntimeError::new_err(format!("Failed to allocate DeviceStorage layout: {}", e)))?;
 
-                // Return the layout as a trait object
-                Arc::new(layout) as Arc<dyn dynamo_kv_manager::layout::BlockLayout + Send + Sync>
+                    Arc::new(layout) as Arc<dyn dynamo_kv_manager::layout::BlockLayout + Send + Sync>
+                }
             }
             _ => {
-                // Default case - return error for unsupported device
+                // Unsupported device
                 return Err(PyRuntimeError::new_err(format!("Unsupported device: {}", device)));
             }
         };
 
-        Ok(KvManager { inner })
+        Ok(KvManager { inner: block_layout })
     }
 }

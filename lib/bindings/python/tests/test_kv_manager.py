@@ -22,7 +22,14 @@ from dynamo.llm import KvManager
 
 
 async def test_initialization():
+    kv_manager = KvManager("CPU")
+    kv_manager = KvManager("cpu")
     kv_manager = KvManager("CUDA")
+    kv_manager = KvManager("cuda")
+    kv_manager = KvManager("CUDA:0")
+    kv_manager = KvManager("cuda:0")
+    # kv_manager = KvManager("CUDA", pin_memory=True)
+    print(kv_manager)
 
 
 if __name__ == "__main__":
