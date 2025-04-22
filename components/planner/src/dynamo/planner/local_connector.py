@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import filelock
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -42,6 +43,8 @@ class LocalConnector(PlannerConnector):
         self.runtime = runtime
         self.state_file = Path.home() / ".dynamo" / "state" / f"{namespace}.json"
         self.circus = CircusController.from_state_file(namespace)
+        self._lockfile = self.state_file.with_suffix(".lock")
+        self._file_lock = filelock.FileLock(self._lockfile)
         self.worker_client = None
         self.prefill_client = None
         self.etcd_client = None
@@ -55,8 +58,9 @@ class LocalConnector(PlannerConnector):
         if not self.state_file.exists():
             raise FileNotFoundError(f"State file not found: {self.state_file}")
 
-        with open(self.state_file, "r") as f:
-            return json.load(f)
+        with self._file_lock:
+            with open(self.state_file, "r") as f:
+                return json.load(f)
 
     async def _save_state(self, state: Dict[str, Any]) -> bool:
         """Save state to state file.
@@ -68,8 +72,9 @@ class LocalConnector(PlannerConnector):
             True if successful
         """
         try:
-            with open(self.state_file, "w") as f:
-                json.dump(state, f, indent=2)
+            with self._file_lock:
+                with open(self.state_file, "w") as f:
+                    json.dump(state, f, indent=2)
             return True
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
