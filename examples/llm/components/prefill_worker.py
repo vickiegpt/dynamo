@@ -105,12 +105,12 @@ class PrefillWorker:
         task.add_done_callback(prefill_queue_handler_cb)
         logger.info("PrefillWorker initialized")
 
-    def request_shutdown(self):
+    def request_shutdown(self, signum, frame):
         self._shutdown_requested = True
 
-    def shutdown_vllm_engine(self, signum, frame):
+    def shutdown_vllm_engine(self):
         """Shutdown the background loop"""
-        logger.info(f"Received signal {signum}, shutting down")
+        logger.info(f"Shutting down")
         loop = asyncio.get_event_loop()
         try:
             self.engine_client.close()
