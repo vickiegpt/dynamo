@@ -47,7 +47,7 @@ class Router:
     worker = depends(DummyWorker)
 
     def __init__(self):
-        self.min_workers = 1
+        self.min_workers = 2
 
     @async_on_start
     async def async_init(self):

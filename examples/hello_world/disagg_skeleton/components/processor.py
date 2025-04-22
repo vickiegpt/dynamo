@@ -46,7 +46,7 @@ class Processor(Protocol):
 
     def __init__(self):
         self.router_mode = "kv"
-        self.min_workers = 1
+        self.min_workers = 2
 
     @async_on_start
     async def async_init(self):
