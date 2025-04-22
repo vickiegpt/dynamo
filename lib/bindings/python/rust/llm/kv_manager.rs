@@ -27,16 +27,25 @@ pub struct KvManager {
 #[pymethods]
 impl KvManager {
     #[new]
-    #[pyo3(signature = (device, pin_memory=false))]
-    fn new(device: String, pin_memory: bool) -> PyResult<Self> {
-        // TODO: Should this be provided by the user? The values are from contiguous.rs tests.
+    #[pyo3(signature = (num_blocks, num_layers, page_size, inner_dim, alignment, dtype, device, pin_memory=false))]
+    fn new(
+        num_blocks: usize,
+        num_layers: usize,
+        page_size: usize,
+        inner_dim: usize,
+        alignment: usize,
+        dtype: String,
+        device: String,
+        pin_memory: bool
+    ) -> PyResult<Self> {
         let layout_config = dynamo_kv_manager::layout::LayoutConfig {
-            num_blocks: 7,
-            num_layers: 5,
-            page_size: 4,
-            inner_dim: 13,
-            alignment: 1,
-            dtype: dynamo_kv_manager::dtype::DType::FP32,
+            num_blocks,
+            num_layers,
+            page_size,
+            inner_dim,
+            alignment,
+            dtype: dynamo_kv_manager::dtype::DType::from_str(&dtype)
+                .ok_or_else(|| PyRuntimeError::new_err(format!("Invalid dtype: {}", dtype)))?,
         };
 
         let block_layout = match device.as_str() {

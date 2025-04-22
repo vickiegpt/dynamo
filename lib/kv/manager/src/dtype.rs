@@ -56,4 +56,24 @@ impl DType {
             DType::I64 => 8,
         }
     }
+
+    /// Create a DType from a string representation
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_uppercase().as_str() {
+            "FP8" => Some(DType::FP8),
+            "FP16" => Some(DType::FP16),
+            "BF16" => Some(DType::BF16),
+            "FP32" => Some(DType::FP32),
+            "FP64" => Some(DType::FP64),
+            "U8" => Some(DType::U8),
+            "U16" => Some(DType::U16),
+            "U32" => Some(DType::U32),
+            "U64" => Some(DType::U64),
+            "I8" => Some(DType::I8),
+            "I16" => Some(DType::I16),
+            "I32" => Some(DType::I32),
+            "I64" => Some(DType::I64),
+            _ => None,
+        }
+    }
 }

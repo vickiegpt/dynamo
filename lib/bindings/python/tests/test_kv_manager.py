@@ -21,15 +21,50 @@ from dynamo.llm import KvManager
 # pytestmark = pytest.mark.pre_merge
 
 
+NUM_BLOCKS = 7
+NUM_LAYERS = 5
+PAGE_SIZE = 4
+INNER_DIM = 13
+ALIGNMENT = 1
+DTYPE = "FP32"
+
+
 async def test_initialization():
-    kv_manager = KvManager("CPU")
-    kv_manager = KvManager("cpu")
-    kv_manager = KvManager("CUDA")
-    kv_manager = KvManager("cuda")
-    kv_manager = KvManager("CUDA:0")
-    kv_manager = KvManager("cuda:0")
-    # kv_manager = KvManager("CUDA", pin_memory=True)
-    print(kv_manager)
+    # Test with default device
+    KvManager(
+        NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="CPU"
+    )
+    # Test with lowercase device
+    KvManager(
+        NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="cpu"
+    )
+    # Test with CUDA device
+    KvManager(
+        NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="CUDA"
+    )
+    # Test with lowercase cuda device
+    KvManager(
+        NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="cuda"
+    )
+    # Test with specific CUDA device
+    KvManager(
+        NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="CUDA:0"
+    )
+    # Test with lowercase specific cuda device
+    KvManager(
+        NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="cuda:0"
+    )
+    # Test with pinned memory
+    # KvManager(
+    #    NUM_BLOCKS,
+    #    NUM_LAYERS,
+    #    PAGE_SIZE,
+    #    INNER_DIM,
+    #    ALIGNMENT,
+    #    DTYPE,
+    #    device="CUDA",
+    #    pin_memory=True,
+    # )
 
 
 if __name__ == "__main__":
