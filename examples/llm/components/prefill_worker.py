@@ -151,7 +151,7 @@ class PrefillWorker:
                 if self._shutdown_requested:
                     logger.info("Shutdown requested, checking if engine has any pending prefill sending requests")
                     while True:
-                        if not await self.engine_client.has_pending_prefill_requests():
+                        if not await self.engine_client.has_unfinished_requests():
                             break
                         logger.info(f"Engine has pending prefill sending requests, rechecking in 1 second...")
                         await asyncio.sleep(1)
