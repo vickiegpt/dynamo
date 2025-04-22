@@ -31,6 +31,7 @@ from vllm.inputs.data import TokensPrompt
 from vllm.remote_prefill import RemotePrefillParams, RemotePrefillRequest
 
 from dynamo.sdk import async_on_start, dynamo_context, dynamo_endpoint, service
+from dynamo.sdk.lib.service import LeaseConfig
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class RequestType(BaseModel):
     dynamo={
         "enabled": True,
         "namespace": "dynamo",
+        "custom_lease": LeaseConfig(ttl=1),  # 1 second
     },
     resources={"gpu": 1, "cpu": "10", "memory": "20Gi"},
     workers=1,
@@ -74,10 +76,7 @@ class PrefillWorker:
                 "Prefix caching is not supported yet in prefill worker, setting to False"
             )
             self.engine_args.enable_prefix_caching = False
-
-        self._shutdown_requested = False
-        signal.signal(signal.SIGTERM, self.request_shutdown)
-        signal.signal(signal.SIGINT, self.request_shutdown)
+        
 
     @async_on_start
     async def async_init(self):
@@ -92,7 +91,7 @@ class PrefillWorker:
         metadata = self.engine_client.nixl_metadata
         self._metadata_store = NixlMetadataStore("dynamo", runtime)
         await self._metadata_store.put(metadata.engine_id, metadata)
-        task = asyncio.create_task(self.prefill_queue_handler())
+        self.task = asyncio.create_task(self.prefill_queue_handler())
 
         def prefill_queue_handler_cb(fut):
             try:
@@ -102,12 +101,10 @@ class PrefillWorker:
                 logger.error(f"[ERROR] prefill queue handler failed: {e!r}")
                 sys.exit(1)
 
-        task.add_done_callback(prefill_queue_handler_cb)
+        self.task.add_done_callback(prefill_queue_handler_cb)
+        self.lease = dynamo_context["lease"]
         logger.info("PrefillWorker initialized")
-
-    def request_shutdown(self, signum, frame):
-        self._shutdown_requested = True
-
+        
     def shutdown_vllm_engine(self):
         """Shutdown the background loop"""
         logger.info(f"Shutting down vllm engine")
@@ -148,14 +145,15 @@ class PrefillWorker:
                     )
                     async for _ in self.generate(prefill_request):
                         pass
-                if self._shutdown_requested:
+                is_valid = await self.lease.is_valid()
+                if not is_valid:
                     logger.info("Shutdown requested, checking if engine has any pending prefill sending requests")
                     while True:
                         if not await self.engine_client.has_unfinished_requests():
                             break
                         logger.info(f"Engine has pending prefill sending requests, rechecking in 1 second...")
                         await asyncio.sleep(1)
-                    self.shutdown_vllm_engine(signal.SIGTERM, None)
+                    self.shutdown_vllm_engine()
                     break
 
     async def generate(self, request: RemotePrefillRequest):

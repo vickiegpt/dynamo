@@ -204,6 +204,8 @@ def main(
                     append_dynamo_state(namespace, watcher_name, {"lease": lease.id()})
                     logger.info(f"Appended lease {lease.id()} to {watcher_name}")
                 result = await endpoints[0].serve_endpoint(twm[0], lease)
+                if class_instance.__class__.__name__ == "PrefillWorker":
+                    await asyncio.wait_for(class_instance.task, timeout=None)
 
             except Exception as e:
                 logger.error(f"Error in Dynamo component setup: {str(e)}")
