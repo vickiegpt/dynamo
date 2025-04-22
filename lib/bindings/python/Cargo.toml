@@ -38,6 +38,7 @@ crate-type = ["cdylib"]
 dynamo-llm = { path = "../../llm" }
 dynamo-runtime = { path = "../../runtime" }
 dynamo-engine-python = { path = "../../engines/python" }
+dynamo-kv-manager = { path = "../../kv/manager" }
 
 futures = { version = "0.3" }
 once_cell = { version = "1.20.3" }
