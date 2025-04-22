@@ -118,7 +118,7 @@ class CircusController:
         self,
         name: str,
         nostop: bool = False,
-        waiting: bool = True,
+        waiting: bool = False,
         max_retries: int = 3,
         retry_delay: float = 2.0,
     ) -> bool:
