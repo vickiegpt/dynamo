@@ -13,24 +13,60 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use derive_getters::Getters;
 
-use crate::{
-    block_manager::events::RegistrationHandle,
-    tokens::{BlockHash, SequenceHash, TokenBlock, TokenBlockSequence},
-};
+use super::registry::RegistrationHandle;
+use crate::tokens::{PartialTokenBlock, SaltHash, Token, TokenBlock};
+
+#[derive(Debug, thiserror::Error)]
+#[error("Block state is invalid: {0}")]
+pub struct BlockStateInvalid(String);
 
 #[derive(Debug)]
 pub enum BlockState {
     Reset,
     Partial(PartialState),
     Complete(CompleteState),
-    Registered(RegisteredState),
+    Registered(Arc<RegistrationHandle>),
+}
+
+impl BlockState {
+    pub fn initialize_sequence(
+        &mut self,
+        page_size: usize,
+        salt_hash: SaltHash,
+    ) -> Result<(), BlockStateInvalid> {
+        if !matches!(self, BlockState::Reset) {
+            return Err(BlockStateInvalid("Block is not reset".to_string()));
+        }
+
+        let block = PartialTokenBlock::create_sequence_root(page_size, salt_hash);
+        *self = BlockState::Partial(PartialState::new(block));
+        Ok(())
+    }
+
+    // pub fn add_token(&mut self, token: Token) -> Result<(), BlockStateInvalid> {
+    //     match self {
+    //         BlockState::Partial(state) => {
+    //             state.block.try_add_token(token)
+    //         _ => {
+    //             return Err(BlockStateInvalid("Block is not partial".to_string()));
+    //         }
+    //     }
+    // }
 }
 
 #[derive(Debug)]
 pub struct PartialState {
-    pub sequence: TokenBlockSequence,
+    block: PartialTokenBlock,
+}
+
+impl PartialState {
+    pub fn new(block: PartialTokenBlock) -> Self {
+        Self { block }
+    }
 }
 
 #[derive(Debug, Getters)]
@@ -41,31 +77,5 @@ pub struct CompleteState {
 impl CompleteState {
     pub fn new(token_block: TokenBlock) -> Self {
         Self { token_block }
-    }
-}
-
-#[derive(Debug, Getters)]
-pub struct RegisteredState {
-    #[getter(copy)]
-    block_hash: BlockHash,
-
-    #[getter(copy)]
-    sequence_hash: SequenceHash,
-
-    #[getter(skip)]
-    registration_handle: RegistrationHandle,
-}
-
-impl RegisteredState {
-    pub fn new(complete_state: &CompleteState, registration_handle: RegistrationHandle) -> Self {
-        Self {
-            block_hash: complete_state.token_block().block_hash(),
-            sequence_hash: complete_state.token_block().sequence_hash(),
-            registration_handle,
-        }
-    }
-
-    pub fn is_armed(&self) -> bool {
-        self.registration_handle.is_armed()
     }
 }

@@ -178,6 +178,7 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
         let count = blocks.len();
         tracing::debug!(count, "Adding blocks to pool");
         self.total_blocks += count as u64;
+        // self.available_blocks += count as u64;
         self.return_blocks(blocks);
     }
 
@@ -199,6 +200,8 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
 
         // insert the block into the pool
         self.insert(block);
+
+        // self.available_blocks += 1;
     }
 
     /// Returns multiple blocks to the pool.
@@ -486,7 +489,7 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
 pub(crate) mod tests {
     use crate::{
         block_manager::{
-            block::{state::CompleteState, Blocks},
+            block::{registry::BlockRegistry, state::CompleteState, Blocks, PrivateBlockExt},
             events::NullEventManager,
             layout::{FullyContiguous, LayoutConfigBuilder},
             storage::tests::{NullDeviceAllocator, NullDeviceStorage},
@@ -609,7 +612,8 @@ pub(crate) mod tests {
 
         let mut blocks = create_block_collection(num_blocks).into_blocks().unwrap();
 
-        let event_manager = NullEventManager {};
+        let event_manager = NullEventManager::new();
+        let mut registry = BlockRegistry::new(event_manager);
 
         // Iterate through the generated TokenBlocks and the template Blocks,
         // setting the state and registering each one.
@@ -617,7 +621,7 @@ pub(crate) mod tests {
             assert!(block.is_empty()); // Start with empty blocks
             block.update_state(BlockState::Complete(CompleteState::new(token_block)));
             block
-                .register(&event_manager)
+                .register(&mut registry)
                 .expect("Failed to register block in test helper");
             assert!(block.is_registered()); // Ensure registration worked
         }
@@ -653,7 +657,8 @@ pub(crate) mod tests {
         let mut matched_blocks = pool.match_token_blocks(&token_blocks);
         let matched_block_count = matched_blocks.len();
 
-        let event_manager = NullEventManager {};
+        let event_manager = NullEventManager::new();
+        let mut registry = BlockRegistry::new(event_manager);
 
         // all matched blocks should be in the complete or registered state
         for block in &mut matched_blocks {
@@ -680,7 +685,7 @@ pub(crate) mod tests {
         for (unmatched, token_block) in unmatched_blocks.iter_mut().zip(token_blocks.into_iter()) {
             assert!(unmatched.is_empty());
             unmatched.update_state(BlockState::Complete(CompleteState::new(token_block)));
-            unmatched.register(&event_manager).unwrap();
+            unmatched.register(&mut registry).unwrap();
             assert!(unmatched.is_registered());
         }
 

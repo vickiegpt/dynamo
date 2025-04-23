@@ -27,102 +27,53 @@ impl<S: BlockLayout, M: BlockMetadata> ActiveBlockPool<S, M> {
         }
     }
 
-    /// Inserts a weak reference to a block into the active pool map.
-    ///
-    /// This is typically used when a block is matched from the inactive pool
-    /// and needs to be tracked as potentially active.
-    ///
-    /// # Arguments
-    ///
-    /// * `sequence_hash` - The sequence hash of the block.
-    /// * `weak_block_ref` - A weak reference ([`Weak<MutableBlock<S, M>>`]) to the block.
-    pub fn insert_weak_block_ref(
-        &mut self,
-        sequence_hash: SequenceHash,
-        weak_block_ref: Weak<MutableBlock<S, M>>,
-    ) {
-        self.map.insert(sequence_hash, weak_block_ref);
-    }
-
-    // pub fn register(
+    // /// Inserts a weak reference to a block into the active pool map.
+    // ///
+    // /// This is typically used when a block is matched from the inactive pool
+    // /// and needs to be tracked as potentially active.
+    // ///
+    // /// # Arguments
+    // ///
+    // /// * `sequence_hash` - The sequence hash of the block.
+    // /// * `weak_block_ref` - A weak reference ([`Weak<MutableBlock<S, M>>`]) to the block.
+    // pub fn insert_weak_block_ref(
     //     &mut self,
-    //     block: MutableBlock<S, M>,
-    // ) -> Result<ImmutableBlock<S, M>, BlockPoolError> {
-    //     if !block.is_registered() {
-    //         return Err(BlockPoolError::InvalidMutableBlock(
-    //             "block is not registered".to_string(),
-    //         ));
-    //     }
-
-    //     let sequence_hash = block.sequence_hash().map_err(|_| {
-    //         BlockPoolError::InvalidMutableBlock("block has no sequence hash".to_string())
-    //     })?;
-
-    //     let shared = Arc::new(block);
-
-    //     match self.map.entry(sequence_hash) {
-    //         std::collections::hash_map::Entry::Occupied(mut entry) => {
-    //             let weak = entry.get();
-    //             if let Some(arc) = weak.upgrade() {
-    //                 Ok(ImmutableBlock { block: arc })
-    //             } else {
-    //                 // Weak reference is no longer alive, update it in the map
-    //                 entry.insert(Arc::downgrade(&shared));
-    //                 Ok(ImmutableBlock { block: shared })
-    //             }
-    //         }
-    //         std::collections::hash_map::Entry::Vacant(entry) => {
-    //             entry.insert(Arc::downgrade(&shared));
-    //             Ok(ImmutableBlock { block: shared })
-    //         }
-    //     }
+    //     sequence_hash: SequenceHash,
+    //     weak_block_ref: Weak<MutableBlock<S, M>>,
+    // ) {
+    //     self.map.insert(sequence_hash, weak_block_ref);
     // }
 
-    pub fn register_v2(&mut self, block: MutableBlock<S, M>) -> RegisterResult<S, M> {
-        let mut state = RegisterResult::new(block);
-
-        if !state
-            .mutable
-            .as_ref()
-            .map_or(false, |block| block.is_registered())
-        {
-            return state;
+    pub fn register(
+        &mut self,
+        block: MutableBlock<S, M>,
+    ) -> Result<ImmutableBlock<S, M>, BlockPoolError> {
+        if !block.is_registered() {
+            return Err(BlockPoolError::InvalidMutableBlock(
+                "block is not registered".to_string(),
+            ));
         }
 
-        let sequence_hash = match state.mutable.as_ref() {
-            Some(block) => match block.sequence_hash() {
-                Ok(hash) => hash,
-                Err(_) => return state,
-            },
-            None => return state,
-        };
+        let sequence_hash = block.sequence_hash().map_err(|_| {
+            BlockPoolError::InvalidMutableBlock("block has no sequence hash".to_string())
+        })?;
+
+        let shared = Arc::new(block);
 
         match self.map.entry(sequence_hash) {
             std::collections::hash_map::Entry::Occupied(mut entry) => {
                 let weak = entry.get();
-                if let Some(shared) = weak.upgrade() {
-                    state.immutable = Some(shared);
-                    state
+                if let Some(arc) = weak.upgrade() {
+                    Ok(ImmutableBlock { block: arc })
                 } else {
-                    let shared = if state.mutable.is_none() {
-                        return state;
-                    } else {
-                        Arc::new(state.mutable.take().unwrap())
-                    };
+                    // Weak reference is no longer alive, update it in the map
                     entry.insert(Arc::downgrade(&shared));
-                    state.immutable = Some(shared);
-                    state
+                    Ok(ImmutableBlock { block: shared })
                 }
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
-                let shared = if state.mutable.is_none() {
-                    return state;
-                } else {
-                    Arc::new(state.mutable.take().unwrap())
-                };
                 entry.insert(Arc::downgrade(&shared));
-                state.immutable = Some(shared);
-                state
+                Ok(ImmutableBlock { block: shared })
             }
         }
     }
@@ -134,8 +85,8 @@ impl<S: BlockLayout, M: BlockMetadata> ActiveBlockPool<S, M> {
                     block.reset();
                     return;
                 }
+                self.map.remove(&sequence_hash);
             }
-            self.map.remove(&sequence_hash);
         }
     }
 
@@ -153,30 +104,6 @@ impl<S: BlockLayout, M: BlockMetadata> ActiveBlockPool<S, M> {
             }
         } else {
             None
-        }
-    }
-}
-
-pub(crate) struct RegisterResult<S: BlockLayout, M: BlockMetadata> {
-    mutable: Option<MutableBlock<S, M>>,
-    immutable: Option<Arc<MutableBlock<S, M>>>,
-}
-
-impl<S: BlockLayout, M: BlockMetadata> RegisterResult<S, M> {
-    fn new(mutable: MutableBlock<S, M>) -> Self {
-        Self {
-            mutable: Some(mutable),
-            immutable: None,
-        }
-    }
-
-    pub fn into_result(self) -> Result<ImmutableBlock<S, M>, MutableBlock<S, M>> {
-        if let Some(immutable) = self.immutable {
-            Ok(ImmutableBlock { block: immutable })
-        } else {
-            Err(self
-                .mutable
-                .expect("invalid result state; this should never happen"))
         }
     }
 }

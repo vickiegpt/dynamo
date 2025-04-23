@@ -97,6 +97,10 @@ impl Tokens {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("TokenBlock is full")]
+pub struct ErrorTokenBlockFull;
+
 #[derive(Debug)]
 pub struct PartialTokenBlock {
     tokens: Tokens,
@@ -106,6 +110,15 @@ pub struct PartialTokenBlock {
 }
 
 impl PartialTokenBlock {
+    pub fn create_sequence_root(block_size: usize, salt_hash: SaltHash) -> Self {
+        Self {
+            tokens: Tokens::default(),
+            block_size,
+            salt_hash,
+            parent_sequence_hash: None,
+        }
+    }
+
     /// Push a token onto the block, if the block is full, return a new [TokenBlock]
     /// and reset the incomplete block
     pub fn push_token(&mut self, token: Token) -> Option<TokenBlock> {
@@ -123,6 +136,16 @@ impl PartialTokenBlock {
         } else {
             None
         }
+    }
+
+    /// Attempt to push a token onto the block, if the block is full, return an error
+    pub fn try_push_token(&mut self, token: &Token) -> Result<(), ErrorTokenBlockFull> {
+        if self.tokens.0.len() >= self.block_size {
+            return Err(ErrorTokenBlockFull);
+        }
+
+        self.tokens.0.push(*token);
+        Ok(())
     }
 
     pub fn tokens(&self) -> &Tokens {

@@ -13,26 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::kv_router::{
-    indexer::RouterEvent,
-    protocols::{
-        ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData,
-        KvCacheStoreData, KvCacheStoredBlockData, LocalBlockHash,
-    },
-    KV_EVENT_SUBJECT,
-};
-use derive_getters::Dissolve;
-use dynamo_runtime::traits::events::EventPublisher;
-use dynamo_runtime::{
-    component::{Component, Namespace},
-    raise, Result,
-};
 use std::sync::Arc;
-use tokio::sync::mpsc;
 
-use crate::tokens::{SequenceHash, TokenBlock};
-
-pub type WorkerIdentifier = u64;
+use super::block::registry::RegistrationHandle;
 
 /// The [EventManager] is not responsible for managing the history of the blocks, nor what
 /// events have been published.
@@ -51,13 +34,96 @@ pub type WorkerIdentifier = u64;
 ///
 /// The [RegistrationHandle] associated from [EventManager::block_register] call is an RAII object
 /// which will trigger a `Remove` event on being dropped.
-pub trait EventManager: Send + Sync + std::fmt::Debug {
-    fn register_block(&self, token_block: &TokenBlock) -> Result<RegistrationHandle>;
-    fn register_blocks(&self, token_block: &[TokenBlock]) -> Result<Vec<RegistrationHandle>>;
+pub trait EventManager: EventPublisher + EventReleaseManager + Send + Sync {
+    // fn register_block(&self, token_block: &TokenBlock) -> PublishHandle;
+    // fn publisher(&self) -> Publisher;
 }
 
-trait EventReleaseManager: Send + Sync {
-    fn block_release(&self, sequence_hash: SequenceHash);
+pub trait EventPublisher: Send + Sync {
+    fn publish(&self, handles: Vec<Arc<RegistrationHandle>>);
+}
+
+pub trait EventReleaseManager: Send + Sync {
+    fn block_release(&self, registration_handle: &RegistrationHandle);
+}
+
+/// A handle to a registered block.
+///
+/// Ensures that the register event published before the release event by
+/// holding an [Arc] to the [RegistrationHandle], which by extension holds
+/// issues the release event when dropped.
+///
+/// Ownership of the [PublishHandle] transferred to a [Publisher] object
+/// which is responsible for coordinating the publication of multiple
+/// registration events.
+pub struct PublishHandle {
+    handle: Arc<RegistrationHandle>,
+    publisher: Option<Arc<dyn EventPublisher>>,
+}
+
+impl PublishHandle {
+    pub fn new(handle: RegistrationHandle, publisher: Arc<dyn EventPublisher>) -> Self {
+        let handle = Arc::new(handle);
+        let publisher = Some(publisher);
+        Self { handle, publisher }
+    }
+
+    pub fn handle(&self) -> Arc<RegistrationHandle> {
+        self.handle.clone()
+    }
+
+    fn disarm(&mut self) {
+        self.publisher = None;
+    }
+}
+
+impl Drop for PublishHandle {
+    fn drop(&mut self) {
+        if let Some(publisher) = self.publisher.take() {
+            publisher.publish(vec![self.handle.clone()]);
+        }
+    }
+}
+
+/// Responsible for publishing multiple registration events.
+///
+/// Because [EventPublisher::publish] takes a list of shared [RegistrationHandles][RegistrationHandle]
+/// this allows the [EventPublisher] logic to optimize the number of events published
+/// by consoldiate multiple registration events with additional sequence logic.
+///
+/// The behavior of the [EventPublisher] is left entirely up to the the implementor.
+#[derive(Clone)]
+pub struct Publisher {
+    handles: Vec<Arc<RegistrationHandle>>,
+    publisher: Arc<dyn EventPublisher>,
+}
+
+impl Publisher {
+    pub fn new(publisher: Arc<dyn EventPublisher>) -> Self {
+        Self {
+            handles: Vec::new(),
+            publisher,
+        }
+    }
+
+    pub fn take_handle(&mut self, publish_handle: PublishHandle) -> Arc<RegistrationHandle> {
+        let handle = publish_handle.handle();
+        self.handles.push(handle.clone());
+        let mut publish_handle = publish_handle;
+        publish_handle.disarm();
+        handle
+    }
+
+    pub fn publish(&mut self) {
+        let handles = std::mem::take(&mut self.handles);
+        self.publisher.publish(handles);
+    }
+}
+
+impl Drop for Publisher {
+    fn drop(&mut self) {
+        self.publish();
+    }
 }
 
 // Implementation notes:
@@ -67,255 +133,20 @@ trait EventReleaseManager: Send + Sync {
 //
 // - Registration events are can be batched by the nature of the [EventManager::register_blocks] call.
 
-pub struct RegistrationHandle {
-    sequence_hash: SequenceHash,
-    // memory_type: MemoryType,
-    release_manager: Option<Arc<dyn EventReleaseManager>>,
-}
+pub struct NullEventManager;
 
-impl RegistrationHandle {
-    /// Returns true if the registration handle will trigger an event when dropped
-    pub fn is_armed(&self) -> bool {
-        self.release_manager.is_some()
+impl NullEventManager {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {})
     }
 }
 
-impl std::fmt::Debug for RegistrationHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "RegistrationHandle {{ sequence_hash: {} }}",
-            self.sequence_hash
-        )
-    }
-}
+impl EventManager for NullEventManager {}
 
-impl Drop for RegistrationHandle {
-    fn drop(&mut self) {
-        if let Some(release_manager) = self.release_manager.take() {
-            release_manager.block_release(self.sequence_hash)
-        }
-    }
-}
-
-enum Event {
-    StoreSingle(RegisterBlockEvent),
-    StoreMultiple(RegisterBlocksEvent),
-    RemoveSingle(SequenceHash),
-}
-
-struct RegisterBlockEvent {
-    block_hash: LocalBlockHash,
-    sequence_hash: ExternalSequenceBlockHash,
-    parent_hash: Option<ExternalSequenceBlockHash>,
-}
-
-struct RegisterBlocksEvent {
-    hashes: Vec<(LocalBlockHash, ExternalSequenceBlockHash)>,
-    parent_hash: Option<ExternalSequenceBlockHash>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct NullEventManager {}
-
-impl EventManager for NullEventManager {
-    fn register_block(&self, token_block: &TokenBlock) -> Result<RegistrationHandle> {
-        let release_manager: Arc<dyn EventReleaseManager> = Arc::new(self.clone());
-        Ok(RegistrationHandle {
-            sequence_hash: token_block.sequence_hash(),
-            release_manager: Some(release_manager),
-        })
-    }
-
-    fn register_blocks(&self, token_blocks: &[TokenBlock]) -> Result<Vec<RegistrationHandle>> {
-        let release_manager: Arc<dyn EventReleaseManager> = Arc::new(self.clone());
-        Ok(token_blocks
-            .iter()
-            .map(|block| RegistrationHandle {
-                sequence_hash: block.sequence_hash(),
-                release_manager: Some(release_manager.clone()),
-            })
-            .collect())
-    }
+impl EventPublisher for NullEventManager {
+    fn publish(&self, _handles: Vec<Arc<RegistrationHandle>>) {}
 }
 
 impl EventReleaseManager for NullEventManager {
-    fn block_release(&self, _sequence_hash: SequenceHash) {
-        // No-op for the null implementation
-    }
-}
-
-pub enum DynamoPublisher {
-    Component(Component),
-    Namespace(Namespace),
-}
-
-impl DynamoPublisher {
-    pub async fn publish(&self, event: RouterEvent) -> Result<()> {
-        match self {
-            DynamoPublisher::Component(component) => {
-                component.publish(KV_EVENT_SUBJECT, &event).await
-            }
-            DynamoPublisher::Namespace(namespace) => {
-                namespace.publish(KV_EVENT_SUBJECT, &event).await
-            }
-        }
-    }
-}
-
-struct EventChannel {
-    tx: mpsc::UnboundedSender<Event>,
-}
-
-impl EventReleaseManager for EventChannel {
-    // Generalize sequence_hash
-    fn block_release(&self, sequence_hash: SequenceHash) {
-        if self.tx.send(Event::RemoveSingle(sequence_hash)).is_err() {
-            tracing::warn!("Failed to send remove block event");
-        }
-    }
-}
-
-pub struct NatsEventManager {
-    event_channel: Arc<EventChannel>,
-}
-
-impl NatsEventManager {
-    // todo - generalize identifier
-    pub async fn new(publisher: DynamoPublisher, worker_identifier: u64) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let state = NatsEventsManagerState {
-            rx,
-            publisher,
-            worker_identifier,
-        };
-
-        tokio::spawn(progress_engine(state));
-
-        Self {
-            event_channel: Arc::new(EventChannel { tx }),
-        }
-    }
-}
-
-impl std::fmt::Debug for NatsEventManager {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NatsEventManager")
-    }
-}
-
-impl EventManager for NatsEventManager {
-    fn register_block(&self, token_block: &TokenBlock) -> Result<RegistrationHandle> {
-        let event = Event::StoreSingle(RegisterBlockEvent {
-            block_hash: LocalBlockHash(token_block.block_hash()),
-            sequence_hash: ExternalSequenceBlockHash(token_block.sequence_hash()),
-            parent_hash: token_block
-                .parent_sequence_hash()
-                .map(ExternalSequenceBlockHash),
-        });
-        if self.event_channel.tx.send(event).is_err() {
-            tracing::warn!("Failed to send store block event");
-            raise!("Failed to send store block event");
-        }
-        Ok(RegistrationHandle {
-            sequence_hash: token_block.sequence_hash(),
-            release_manager: Some(self.event_channel.clone()),
-        })
-    }
-
-    fn register_blocks(&self, token_blocks: &[TokenBlock]) -> Result<Vec<RegistrationHandle>> {
-        let event = Event::StoreMultiple(RegisterBlocksEvent {
-            hashes: token_blocks
-                .iter()
-                .map(|block| {
-                    (
-                        LocalBlockHash(block.block_hash()),
-                        ExternalSequenceBlockHash(block.sequence_hash()),
-                    )
-                })
-                .collect(),
-            parent_hash: token_blocks
-                .first()
-                .and_then(|block| block.parent_sequence_hash().map(ExternalSequenceBlockHash)),
-        });
-
-        let handles = token_blocks
-            .iter()
-            .map(|block| RegistrationHandle {
-                sequence_hash: block.sequence_hash(),
-                release_manager: Some(self.event_channel.clone()),
-            })
-            .collect();
-
-        if self.event_channel.tx.send(event).is_err() {
-            tracing::warn!("Failed to send store block event");
-            raise!("Failed to send store block event");
-        }
-
-        Ok(handles)
-    }
-}
-
-#[derive(Dissolve)]
-struct NatsEventsManagerState {
-    rx: mpsc::UnboundedReceiver<Event>,
-    publisher: DynamoPublisher,
-    worker_identifier: WorkerIdentifier,
-}
-
-async fn progress_engine(state: NatsEventsManagerState) {
-    let (mut rx, publisher, worker_identifier) = state.dissolve();
-
-    let mut event_id = 0;
-
-    while let Some(event) = rx.recv().await {
-        match event {
-            Event::StoreSingle(event) => {
-                let store_data = KvCacheStoreData {
-                    blocks: vec![KvCacheStoredBlockData {
-                        block_hash: event.sequence_hash,
-                        tokens_hash: event.block_hash,
-                    }],
-                    parent_hash: event.parent_hash,
-                };
-                let data = KvCacheEventData::Stored(store_data);
-                let event = KvCacheEvent { event_id, data };
-                let event = RouterEvent::new(worker_identifier as i64, event);
-                if publisher.publish(event).await.is_err() {
-                    tracing::warn!("Failed to publish store event");
-                }
-            }
-            Event::StoreMultiple(event) => {
-                let store_data = KvCacheStoreData {
-                    blocks: event
-                        .hashes
-                        .iter()
-                        .map(|(local_hash, external_hash)| KvCacheStoredBlockData {
-                            block_hash: *external_hash,
-                            tokens_hash: *local_hash,
-                        })
-                        .collect(),
-                    parent_hash: event.parent_hash,
-                };
-                let data = KvCacheEventData::Stored(store_data);
-                let event = KvCacheEvent { event_id, data };
-                let event = RouterEvent::new(worker_identifier as i64, event);
-                if publisher.publish(event).await.is_err() {
-                    tracing::warn!("Failed to publish store event");
-                }
-            }
-            Event::RemoveSingle(sequence_hash) => {
-                let remove_data = KvCacheRemoveData {
-                    block_hashes: vec![ExternalSequenceBlockHash(sequence_hash)],
-                };
-                let data = KvCacheEventData::Removed(remove_data);
-                let event = KvCacheEvent { event_id, data };
-                let event = RouterEvent::new(worker_identifier as i64, event);
-                if publisher.publish(event).await.is_err() {
-                    tracing::warn!("Failed to publish remove event");
-                }
-            }
-        }
-        event_id += 1;
-    }
+    fn block_release(&self, _registration_handle: &RegistrationHandle) {}
 }

@@ -13,20 +13,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod registry;
 pub mod state;
 pub mod view;
 
 pub use state::BlockState;
 
-use crate::tokens::SequenceHash;
+use crate::tokens::{PartialTokenBlock, SaltHash, SequenceHash, Token, TokenBlock};
 
-use super::events::EventManager;
-use super::layout::BlockLayout;
-use super::storage::{Storage, StorageError};
+use super::events::{EventManager, PublishHandle};
+use super::layout::{BlockLayout, LayoutError};
 
 use std::sync::Arc;
 use thiserror::Error;
-
 
 /// Result type for Block operations
 pub type BlockResult<T> = std::result::Result<T, BlockError>;
@@ -34,29 +33,11 @@ pub type BlockResult<T> = std::result::Result<T, BlockError>;
 /// Errors specific to block storage operations
 #[derive(Debug, Error)]
 pub enum BlockError {
-    #[error("Storage error: {0}")]
-    Storage(#[from] StorageError),
-
-    #[error("Invalid block index: {0}")]
-    InvalidBlockIndex(usize),
-
-    #[error("Invalid layer index: {0}")]
-    InvalidLayerIndex(usize),
-
-    #[error("Operation failed: {0}")]
-    OperationFailed(String),
-
-    #[error("Lock error: {0}")]
-    LockError(String),
+    #[error(transparent)]
+    Layout(#[from] LayoutError),
 
     #[error("Invalid state: {0}")]
     InvalidState(String),
-
-    #[error("Unregistered")]
-    Unregistered,
-
-    #[error("Failed to register block: {0}")]
-    FailedToRegister(String),
 }
 
 pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync + 'static {
@@ -139,39 +120,6 @@ impl<L: BlockLayout, M: BlockMetadata> Block<L, M> {
         &self.state
     }
 
-    /// Register the block with the event manager
-    pub(crate) fn register(&mut self, events: &dyn EventManager) -> Result<(), BlockError> {
-        match self.state {
-            BlockState::Registered(_) => Ok(()),
-            BlockState::Complete(_) => {
-                let current_state = std::mem::replace(&mut self.state, BlockState::Reset);
-
-                if let BlockState::Complete(complete_state) = current_state {
-                    match events.register_block(complete_state.token_block()) {
-                        Ok(handle) => {
-                            let registered_state =
-                                state::RegisteredState::new(&complete_state, handle);
-                            self.state = BlockState::Registered(registered_state);
-                            Ok(())
-                        }
-                        Err(e) => {
-                            self.state = BlockState::Complete(complete_state);
-                            Err(BlockError::FailedToRegister(e.to_string()))
-                        }
-                    }
-                } else {
-                    unreachable!("State was not Complete after std::mem::replace");
-                }
-            }
-            BlockState::Reset => Err(BlockError::InvalidState(
-                "Cannot register a block in Reset state".to_string(),
-            )),
-            BlockState::Partial(_) => Err(BlockError::InvalidState(
-                "Cannot register a block in Partial state".to_string(),
-            )),
-        }
-    }
-
     /// Returns true if the block is empty
     pub fn is_empty(&self) -> bool {
         matches!(self.state, BlockState::Reset)
@@ -187,7 +135,7 @@ impl<L: BlockLayout, M: BlockMetadata> Block<L, M> {
 
     /// Returns true if the block is in the registered state
     pub fn is_registered(&self) -> bool {
-        matches!(&self.state, BlockState::Registered(state) if state.is_armed())
+        matches!(&self.state, BlockState::Registered(_state))
     }
 
     /// Get a read-only view of a layer
@@ -229,6 +177,66 @@ impl<L: BlockLayout, M: BlockMetadata> Block<L, M> {
     }
 }
 
+pub(crate) trait PrivateBlockExt {
+    fn register(
+        &mut self,
+        registry: &mut registry::BlockRegistry,
+    ) -> Result<PublishHandle, registry::BlockRegistationError>;
+}
+
+impl<L: BlockLayout, M: BlockMetadata> PrivateBlockExt for Block<L, M> {
+    fn register(
+        &mut self,
+        registry: &mut registry::BlockRegistry,
+    ) -> Result<PublishHandle, registry::BlockRegistationError> {
+        registry.register_block(&mut self.state)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BlockTokenError {}
+
+pub trait BlockExt {
+    /// Reset the state of the block
+    fn reset(&mut self);
+
+    /// Initialize a sequence on the block
+    ///
+    /// The block must be in the [BlockState::Reset] state.
+    ///
+    /// After initialization, the block will be in the [BlockState::Partial] state.
+    fn initialize_sequence(&mut self, salt_hash: SaltHash) -> Result<(), state::BlockStateInvalid>;
+
+    /// Add a token to the block
+    /// If Ok, returns the number of remaining tokens in the block
+    fn add_token(&mut self, token: Token) -> Result<usize, BlockTokenError>;
+
+    /// Apply a [TokenBlock] to the block
+    /// The block must be [BlockState::Reset].
+    ///
+    /// Additionally, the [TokenBlock] must match the [BlockLayout::page_size()]
+    fn apply_token_block(&mut self, token_block: &TokenBlock) -> Result<(), BlockTokenError>;
+}
+
+impl<L: BlockLayout, M: BlockMetadata> BlockExt for Block<L, M> {
+    fn reset(&mut self) {
+        self.reset();
+    }
+
+    fn initialize_sequence(&mut self, salt_hash: SaltHash) -> Result<(), state::BlockStateInvalid> {
+        self.state.initialize_sequence(self.page_size(), salt_hash)
+    }
+
+    fn add_token(&mut self, token: Token) -> Result<usize, BlockTokenError> {
+        // self.state.add_token(token)
+        unimplemented!()
+    }
+
+    fn apply_token_block(&mut self, token_block: &TokenBlock) -> Result<(), BlockTokenError> {
+        unimplemented!()
+    }
+}
+
 /// Individual block storage - cannot be cloned to ensure uniqueness
 #[derive(Debug)]
 pub struct BlockData<L: BlockLayout> {
@@ -244,12 +252,7 @@ impl<L: BlockLayout> BlockData<L> {
 
     /// Get a read-only view of this block's storage for a layer
     pub fn layer_view(&self, layer_idx: usize) -> BlockResult<view::BlockView<L>> {
-        let offset = self
-            .layout
-            .get_memory_region(self.block_idx, layer_idx)
-            .map_err(|e| {
-                BlockError::OperationFailed(format!("Failed to get layer region: {}", e))
-            })?;
+        let offset = self.layout.get_memory_region(self.block_idx, layer_idx)?;
 
         unsafe { view::BlockView::new(self, offset as usize, self.layout.memory_region_size()) }
     }
@@ -262,12 +265,7 @@ impl<L: BlockLayout> BlockData<L> {
     /// - This is enforced in Rust by BlockView requiring unique access
     /// - Cannot be enforced when using with Python bindings or CUDA kernels
     pub fn layer_view_mut(&mut self, layer_idx: usize) -> BlockResult<view::BlockViewMut<L>> {
-        let offset = self
-            .layout
-            .get_memory_region(self.block_idx, layer_idx)
-            .map_err(|e| {
-                BlockError::OperationFailed(format!("Failed to get layer region: {}", e))
-            })?;
+        let offset = self.layout.get_memory_region(self.block_idx, layer_idx)?;
 
         unsafe { view::BlockViewMut::new(self, offset as usize, self.layout.memory_region_size()) }
     }
@@ -320,18 +318,4 @@ impl<L: BlockLayout, M: BlockMetadata> Blocks<L, M> {
             })
             .collect()
     }
-
-    // /// Convert collection into Vec<Block> with custom metadata/state
-    // pub fn into_blocks_with<F, M, St>(self, f: F) -> BlockResult<Vec<Block<S>>>
-    // where
-    //     F: Fn(usize) -> (M, St),
-    // {
-    //     (0..self.layout.num_blocks())
-    //         .map(|idx| {
-    //             let storage = BlockData::new(self.data.clone(), self.layout.clone(), idx);
-    //             let (metadata, state) = f(idx);
-    //             Block::with_metadata_state(storage, metadata, state)
-    //         })
-    //         .collect()
-    // }
 }
