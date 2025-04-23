@@ -20,7 +20,6 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-from msilib import schema
 import os
 import pathlib
 import shutil

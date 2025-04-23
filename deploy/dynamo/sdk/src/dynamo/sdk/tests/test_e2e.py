@@ -64,7 +64,7 @@ async def test_pipeline():
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    "http://localhost:3000/generate",
+                    "http://localhost:8000/generate",
                     json={"text": "federer-is-the-greatest-tennis-player-of-all-time"},
                     headers={"accept": "text/event-stream"},
                 ) as resp:

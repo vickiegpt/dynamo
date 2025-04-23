@@ -295,8 +295,8 @@ def main(
                 else:
                     logger.warning("No API routes found, not starting FastAPI server")
                     # Keep the process running until interrupted
+                    logger.info("Service is running, press Ctrl+C to stop")
                     while True:
-                        logger.info("Service is running, press Ctrl+C to stop")
                         try:
                             # Sleep in small increments to respond to signals quickly
                             time.sleep(0.1)
