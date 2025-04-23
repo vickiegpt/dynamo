@@ -240,7 +240,7 @@ def main(
                 # Run startup hooks before setting up endpoints
                 for name, member in vars(class_instance.__class__).items():
                     if callable(member) and getattr(
-                        member, "__bentoml_startup_hook__", False
+                        member, "__dynamo_startup_hook__", False
                     ):
                         logger.debug(f"Running startup hook: {name}")
                         result = getattr(class_instance, name)()

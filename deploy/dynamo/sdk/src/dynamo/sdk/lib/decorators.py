@@ -19,7 +19,6 @@ import typing as t
 from functools import wraps
 from typing import Any, get_type_hints
 
-import bentoml
 from pydantic import BaseModel
 
 
@@ -87,5 +86,5 @@ def dynamo_endpoint(
 def async_on_start(func: t.Callable) -> t.Callable:
     """Decorator for async onstart functions."""
     # Mark the function as a startup hook
-    setattr(func, "__bentoml_startup_hook__", True)
-    return bentoml.on_startup(func)
+    setattr(func, "__dynamo_startup_hook__", True)
+    return func
