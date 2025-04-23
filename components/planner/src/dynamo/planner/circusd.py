@@ -142,6 +142,7 @@ class CircusController:
         waiting: bool = True,
         max_retries: int = 3,
         retry_delay: float = 2.0,
+        timeout: int = 600, # 10 minutes
     ) -> bool:
         """
         Remove a watcher. We add retry logic here to ensure that a worker
@@ -158,12 +159,28 @@ class CircusController:
             True if successful
         """
         try:
-            num_processes = await self._get_watcher_processes(name)
-            if num_processes == 0:
-                logger.info(
-                    f"Watcher {name} does not exist or has already been removed - skipping"
-                )
-                return True
+            start_time = asyncio.get_event_loop().time()
+            while True:
+                # Check if we've exceeded the timeout
+                elapsed_time = asyncio.get_event_loop().time() - start_time
+                if elapsed_time > timeout:
+                    logger.warning(
+                        f"Timeout ({timeout}s) reached waiting for {name} to exit gracefully. "
+                        f"Proceeding with forced removal."
+                    )
+                    break
+                
+                # wait until the process exit gracefully by itself
+                num_processes = await self._get_watcher_processes(name)
+                logger.warning(f"num_processes: {num_processes}")
+                if num_processes == 0:
+                    break
+                else:
+                    logger.info(
+                        f"Worker process still alive, waiting for it to exit gracefully "
+                        f"({int(elapsed_time)}s/{timeout}s elapsed)"
+                    )
+                await asyncio.sleep(1)
 
             logger.info(f"Removing watcher {name}")
             response = self.client.send_message(

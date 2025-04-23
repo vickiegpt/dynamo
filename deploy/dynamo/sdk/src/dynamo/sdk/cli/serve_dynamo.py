@@ -70,6 +70,9 @@ def main(
     worker_id: int | None,
     custom_component_name: str | None,
 ) -> None:
+    # hack to avoid bentoml from respawning the workers after their leases are revoked
+    os.environ["BENTOML_CONTAINERIZED"] = "true"
+
     """Start a worker for the given service - either Dynamo or regular service"""
     from _bentoml_impl.loader import import_service
     from bentoml._internal.container import BentoMLContainer

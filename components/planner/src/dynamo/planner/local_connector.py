@@ -229,7 +229,7 @@ class LocalConnector(PlannerConnector):
         # If VllmWorker, we need to revoke the lease before we remove the watcher in order to ensure graceful shutdown
         pre_remove_endpoint_ids = await self._get_endpoint_ids(component_name)
 
-        if component_name == "VllmWorker":
+        if component_name == "VllmWorker" or component_name == "PrefillWorker":
             lease_id = state["components"][target_watcher]["lease"]
             await self._revoke_lease(lease_id)
 
@@ -303,7 +303,7 @@ class LocalConnector(PlannerConnector):
         if self.etcd_client is None:
             self.etcd_client = self.runtime.etcd_client()
         try:
-            self.etcd_client.revoke_lease(lease_id)
+            await self.etcd_client.revoke_lease(lease_id)
             logger.info(f"Revoked lease {lease_id}")
             return True
         except Exception as e:
