@@ -94,6 +94,7 @@ class CircusController:
             "copy_env": True,
             "stop_children": True,
             "graceful_timeout": 86400,
+            "respawn": False
         }
         if env:
             watcher_options["env"] = env
