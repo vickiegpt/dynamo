@@ -13,11 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This is a simple example of a pipeline that uses Dynamo to deploy a backend, middle, and frontend service. Use this to test
-# changes made to CLI, SDK, etc
+# This is a simple example of a pipeline that uses Dynamo to deploy a backend, middle, and frontend service.
+# Use this to test changes made to CLI, SDK, etc
 
 
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from dynamo.sdk import depends, dynamo_endpoint, service
@@ -137,6 +138,7 @@ class Middle:
 @service(
     resources={"cpu": "1"},
     traffic={"timeout": 60},
+    dynamo={"enabled": True, "namespace": "inference"},
     app=app,
 )
 class Frontend:
@@ -147,12 +149,12 @@ class Frontend:
         print("Starting frontend")
 
     @dynamo_endpoint(is_api=True)
-    async def generate(self, text):
+    async def generate(self, request: RequestType):
         """Stream results from the pipeline."""
-        print(f"Frontend received: {text}")
-        print(f"Frontend received type: {type(text)}")
-        txt = RequestType(text=text)
-        print(f"Frontend sending: {type(txt)}")
-        async for mid_resp in self.middle.generate(txt.model_dump_json()):
-            print(f"Frontend received mid_resp: {mid_resp}")
-            yield f"Frontend: {mid_resp}"
+        print(f"Frontend received: {request.text}")
+
+        async def content_generator():
+            async for response in self.middle.generate(request.model_dump_json()):
+                yield f"Frontend: {response}"
+
+        return StreamingResponse(content_generator())
