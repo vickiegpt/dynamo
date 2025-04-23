@@ -308,7 +308,7 @@ def service(
     inner: Optional[type[T]] = None,
     /,
     *,
-    image: Optional[Image] = None,
+    image: Optional[str] = None,
     envs: Optional[list[dict[str, Any]]] = None,
     dynamo: Optional[Union[Dict[str, Any], DynamoConfig]] = None,
     app: Optional[FastAPI] = None,
