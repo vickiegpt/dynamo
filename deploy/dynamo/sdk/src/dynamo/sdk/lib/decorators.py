@@ -84,18 +84,6 @@ def dynamo_endpoint(
     return decorator
 
 
-def dynamo_api(func: t.Callable) -> t.Callable:
-    """Decorator for BentoML API endpoints.
-
-    Args:
-        func: The function to be decorated.
-
-    Returns:
-        The decorated function.
-    """
-    return bentoml.api(func)
-
-
 def async_on_start(func: t.Callable) -> t.Callable:
     """Decorator for async onstart functions."""
     # Mark the function as a startup hook
