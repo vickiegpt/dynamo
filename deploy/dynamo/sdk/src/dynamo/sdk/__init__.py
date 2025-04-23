@@ -15,7 +15,6 @@
 
 from typing import Any
 
-from bentoml import api  # type: ignore
 from bentoml import on_shutdown as async_on_shutdown
 from bentoml._internal.context import server_context  # type: ignore
 
@@ -28,7 +27,6 @@ dynamo_context: dict[str, Any] = {}
 
 __all__ = [
     "DYNAMO_IMAGE",
-    "api",
     "async_on_shutdown",
     "async_on_start",
     "depends",
