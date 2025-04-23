@@ -111,3 +111,5 @@ The benchmark results are:
 | 2p2d          | 166            | 3648           |
 | 3p1d          | 639            | 7352           |
 | Planner       | ?              | ?              |
+
+<add tensorboard screenshot and some text explaining the results here>
