@@ -35,7 +35,7 @@ The code for the pipeline looks like this:
 ```python
 # filename: pipeline.py
 
-from dynamo.sdk import service, dynamo_endpoint, depends, api
+from dynamo.sdk import service, dynamo_endpoint, depends
 from pydantic import BaseModel
 
 class RequestType(BaseModel):

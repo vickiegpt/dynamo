@@ -17,9 +17,10 @@
 # changes made to CLI, SDK, etc
 
 
+from fastapi import FastAPI
 from pydantic import BaseModel
 
-from dynamo.sdk import api, depends, dynamo_endpoint, service
+from dynamo.sdk import depends, dynamo_endpoint, service
 
 """
 Pipeline Architecture:
@@ -52,6 +53,9 @@ class ResponseType(BaseModel):
 
 
 GPU_ENABLED = False
+
+
+app = FastAPI(title="Hello World!")
 
 
 @service(
@@ -130,7 +134,11 @@ class Middle:
                 yield f"Frontend: {back_resp}"
 
 
-@service(resources={"cpu": "1"}, traffic={"timeout": 60})
+@service(
+    resources={"cpu": "1"},
+    traffic={"timeout": 60},
+    app=app,
+)
 class Frontend:
     middle = depends(Middle)
     backend = depends(Backend)
@@ -138,7 +146,7 @@ class Frontend:
     def __init__(self) -> None:
         print("Starting frontend")
 
-    @api
+    @dynamo_endpoint(is_api=True)
     async def generate(self, text):
         """Stream results from the pipeline."""
         print(f"Frontend received: {text}")
