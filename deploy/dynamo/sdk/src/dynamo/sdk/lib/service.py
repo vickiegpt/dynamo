@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, TypeVar, Union
 from _bentoml_sdk import Service, ServiceConfig
 from _bentoml_sdk.images import Image
 from _bentoml_sdk.service.config import validate
+from fastapi import FastAPI
 
 from dynamo.sdk.lib.decorators import DynamoEndpoint
 
@@ -86,9 +87,11 @@ class DynamoService(Service[T]):
         image: Optional[Image] = None,
         envs: Optional[list[dict[str, Any]]] = None,
         dynamo_config: Optional[DynamoConfig] = None,
+        app: Optional[FastAPI] = None,
     ):
         service_name = inner.__name__
         service_args = self._get_service_args(service_name)
+        self.app = app
 
         if service_args:
             # Validate and merge service args with existing config
@@ -308,6 +311,7 @@ def service(
     image: Optional[Image] = None,
     envs: Optional[list[dict[str, Any]]] = None,
     dynamo: Optional[Union[Dict[str, Any], DynamoConfig]] = None,
+    app: Optional[FastAPI] = None,
     **kwargs: Any,
 ) -> Any:
     """Enhanced service decorator that supports Dynamo configuration
@@ -338,6 +342,7 @@ def service(
             image=image,
             envs=envs or [],
             dynamo_config=dynamo_config,
+            app=app,
         )
 
     return decorator(inner) if inner is not None else decorator
