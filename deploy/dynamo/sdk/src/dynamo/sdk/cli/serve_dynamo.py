@@ -26,13 +26,59 @@ import typing as t
 from typing import Any
 
 import click
+import uvicorn
 import uvloop
+from fastapi.responses import StreamingResponse
 
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 from dynamo.sdk import dynamo_context
 from dynamo.sdk.lib.service import LinkedServices
 
 logger = logging.getLogger(__name__)
+
+
+def add_fastapi_routes(app, service, class_instance):
+    """
+    Add FastAPI routes for Dynamo endpoints marked with is_api=True.
+
+    Args:
+        app: FastAPI app instance
+        service: Dynamo service instance
+        class_instance: Instance of the service class
+    """
+
+    added_routes = []
+    for name, endpoint in service.get_dynamo_endpoints().items():
+        if endpoint.is_api:
+            path = name if name.startswith("/") else f"/{name}"
+            # Bind the method to the class instance
+            bound_method = endpoint.func.__get__(class_instance)
+
+            # Check if the method is a generator or async generator
+            is_streaming = inspect.isasyncgenfunction(
+                bound_method
+            ) or inspect.isgeneratorfunction(bound_method)
+
+            # Set up appropriate response model and response class
+            if is_streaming:
+                logger.info(f"Registering streaming endpoint {path}")
+                app.add_api_route(
+                    path,
+                    bound_method,
+                    methods=["POST"],
+                    response_class=StreamingResponse,
+                )
+            else:
+                logger.info(f"Registering regular endpoint {path}")
+                app.add_api_route(
+                    path,
+                    bound_method,
+                    methods=["POST"],
+                )
+
+            added_routes.append(path)
+            logger.info(f"Added API route {path} to FastAPI app")
+    return added_routes
 
 
 @click.command()
@@ -192,8 +238,31 @@ def main(
                 logger.error(f"Error in Dynamo component setup: {str(e)}")
                 raise
 
+        # if the service has a FastAPI app, add the worker as an event handler
+        def web_worker():
+            if not service.app:
+                return
+
+            # Create the class instance
+            class_instance = service.inner()
+            # TODO: init hooks
+            # Add API routes to the FastAPI app
+            added_routes = add_fastapi_routes(service.app, service, class_instance)
+
+            if added_routes:
+                # Start the FastAPI server
+                logger.info(
+                    f"Starting FastAPI server on 0.0.0.0:8000 with routes: {added_routes}"
+                )
+                uvicorn.run(service.app, host="0.0.0.0", port=8000)
+            else:
+                logger.warning("No API routes found, not starting FastAPI server")
+
         uvloop.install()
-        asyncio.run(worker())
+        if service.app:
+            web_worker()
+        else:
+            asyncio.run(worker())
 
 
 if __name__ == "__main__":

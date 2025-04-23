@@ -26,11 +26,11 @@ from pydantic import BaseModel
 class DynamoEndpoint:
     """Decorator class for Dynamo endpoints"""
 
-    def __init__(self, func: t.Callable, name: str | None = None):
+    def __init__(self, func: t.Callable, name: str | None = None, is_api: bool = False):
         self.func = func
         self.name = name or func.__name__
         self.is_dynamo_endpoint = True
-
+        self.is_api = is_api
         # Extract request type from hints
         hints = get_type_hints(func)
         args = list(hints.items())
@@ -60,11 +60,13 @@ class DynamoEndpoint:
 
 def dynamo_endpoint(
     name: str | None = None,
+    is_api: bool = False,
 ) -> t.Callable[[t.Callable], DynamoEndpoint]:
     """Decorator for Dynamo endpoints.
 
     Args:
         name: Optional name for the endpoint. Defaults to function name.
+        is_api: Whether to expose the endpoint as an API. Defaults to False.
 
     Example:
         @dynamo_endpoint()
@@ -77,7 +79,7 @@ def dynamo_endpoint(
     """
 
     def decorator(func: t.Callable) -> DynamoEndpoint:
-        return DynamoEndpoint(func, name)
+        return DynamoEndpoint(func, name, is_api)
 
     return decorator
 
