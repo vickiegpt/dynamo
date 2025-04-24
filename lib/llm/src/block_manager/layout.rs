@@ -121,14 +121,15 @@ pub struct LayoutConfig {
     pub dtype: DType,
 }
 
-fn is_power_of_2(n: usize) -> bool {
-    // Check if n is not zero and is a power of two.
-    n != 0 && (n & (n - 1)) == 0
+impl LayoutConfig {
+    pub fn builder() -> LayoutConfigBuilder {
+        LayoutConfigBuilder::default()
+    }
 }
 
 /// Validation function for Option<usize> to check if it's Some(power_of_2).
 fn validate_power_of_2(alignment: usize) -> Result<(), validator::ValidationError> {
-    if !is_power_of_2(alignment) {
+    if !alignment.is_power_of_two() {
         // Return validation error if alignment is not a power of 2
         return Err(validator::ValidationError::new(
             "alignment_must_be_power_of_2",
@@ -399,6 +400,20 @@ pub mod tests {
         };
 
         FullyContiguous::allocate(config, &NullDeviceAllocator)
+    }
+
+    #[test]
+    fn test_fc_creation_invalid_alignment() {
+        let config = LayoutConfig::builder()
+            .num_blocks(NUM_BLOCKS)
+            .num_layers(NUM_LAYERS)
+            .page_size(PAGE_SIZE)
+            .inner_dim(INNER_DIM)
+            .alignment(3)
+            .build()
+            .unwrap();
+
+        assert!(config.validate().is_err());
     }
 
     #[test]
