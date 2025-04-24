@@ -45,8 +45,8 @@ Every `metric-pulling-interval`, planner will gather the aforementioned metrics.
 To scale up a prefill/decode worker, planner just need to launch the worker in the correct namespace. The auto-discovery mechanism will pick up the workers and add them to the routers. To scale down a prefill worker, planner send a SIGTERM signal to the prefill worker. The prefill worker store the signal and exit when it finishes the current request pulled from the prefill queue. This ensures that no remote prefill request is dropped. To scale down a decode worker, currently, planner revoke the etcd lease of the decode worker. When the etcd lease is revoked, the corresponding decode worker will be immediately removed from the router and will not get any new requests. The decode worker will then finish all the current requests in their original stream and exit gracefully.
 
 There are two additional rules set by planner to prevent over-compensation:
-1. After a new decode worker is added, since it needs time to populate the kv cache, planner will not scale down the number of decode workers in the next `NEW_DECODE_WORKER_GRACE_PERIOD=3` adjustment intervals. 
-1. We do not scale up prefill worker if the prefill queue size is estimated to reduce below the `--prefill-queue-scale-up-threshold` within the next `NEW_PREFILL_WORKER_QUEUE_BUFFER_PERIOD=3` adjustment intervals following the trend observed in the current adjustment interval. 
+1. After a new decode worker is added, since it needs time to populate the kv cache, planner will not scale down the number of decode workers in the next `NEW_DECODE_WORKER_GRACE_PERIOD=3` adjustment intervals.
+1. We do not scale up prefill worker if the prefill queue size is estimated to reduce below the `--prefill-queue-scale-up-threshold` within the next `NEW_PREFILL_WORKER_QUEUE_BUFFER_PERIOD=3` adjustment intervals following the trend observed in the current adjustment interval.
 
 ## Usage
 After you've deployed a dynamo graph - you can start the planner with the following command:
@@ -90,7 +90,7 @@ Circus is a Python program which can be used to monitor and control processes an
 
 #### Statefile
 
-The statefile is a json file created when initially running `dynamo serve` and is filled in with custom leases in `serve_dynamo`. Each worker is named `{namespace}_{component_name}` when it is initially created. The `resources` come from the allocator and allows us to keep track of which GPUs are available. This statefile is read in by the LocalConnector and after each planner update we make the relevant change to the statefile. Currently, this statefile is locally saved in `~/.dynamo/state/{namespace}.json` (or in `DYN_LOCAL_STATE_DIR `) and is automatically cleaned up when the arbiter dies. 
+The statefile is a json file created when initially running `dynamo serve` and is filled in with custom leases in `serve_dynamo`. Each worker is named `{namespace}_{component_name}` when it is initially created. The `resources` come from the allocator and allows us to keep track of which GPUs are available. This statefile is read in by the LocalConnector and after each planner update we make the relevant change to the statefile. Currently, this statefile is locally saved in `~/.dynamo/state/{namespace}.json` (or in `DYN_LOCAL_STATE_DIR `) and is automatically cleaned up when the arbiter dies.
 
 When one Decode worker is spun up, the statefile looks like:
 

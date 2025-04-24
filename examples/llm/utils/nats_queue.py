@@ -79,7 +79,7 @@ class NATSQueue:
             if cls._instance:
                 await cls._instance.close()
                 cls._instance = None
-                
+
     async def connect(self):
         """Establish connection and create stream if needed"""
         try:

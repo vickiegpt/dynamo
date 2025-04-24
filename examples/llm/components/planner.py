@@ -43,9 +43,10 @@ NEW_DECODE_WORKER_GRACE_PERIOD = 3
 
 # we do not scale up prefill worker if the prefill queue size is estimated to reduce within
 # --prefill-queue-scale-up-threshold within the next NEW_PREFILL_WORKER_QUEUE_BUFFER_PERIOD
-# adjustment intervals following the trend observed in the current adjustment interval. 
+# adjustment intervals following the trend observed in the current adjustment interval.
 # this is to account for the time for prefill workers to start.
 NEW_PREFILL_WORKER_QUEUE_BUFFER_PERIOD = 3
+
 
 class Planner:
     def __init__(self, runtime: DistributedRuntime, args: argparse.Namespace):
@@ -259,20 +260,33 @@ class Planner:
             <= self.args.max_gpu_budget
         ):
             logger.info(
-                f"Average prefill queue load ({avg_prefill_queue_load:.2f}) is above threshold ({self.args.prefill_queue_scale_up_threshold:.2f})", end=""
+                f"Average prefill queue load ({avg_prefill_queue_load:.2f}) is above threshold ({self.args.prefill_queue_scale_up_threshold:.2f})",
+                end="",
             )
             # check prefill queue size trend:
-            prefill_queue_size_change = self.prefill_queue_load[-1] - self.prefill_queue_load[0]
-            predicted_prefill_future_queue_size = self.prefill_queue_load[-1] + prefill_queue_size_change * NEW_PREFILL_WORKER_QUEUE_BUFFER_PERIOD
-            if predicted_prefill_future_queue_size > self.args.prefill_queue_scale_up_threshold:
-                logger.info(f", predicted future prefill queue size ({predicted_prefill_future_queue_size:.2f}) is also above threshold ({self.args.prefill_queue_scale_up_threshold:.2f}), scaling up prefill workers")
+            prefill_queue_size_change = (
+                self.prefill_queue_load[-1] - self.prefill_queue_load[0]
+            )
+            predicted_prefill_future_queue_size = (
+                self.prefill_queue_load[-1]
+                + prefill_queue_size_change * NEW_PREFILL_WORKER_QUEUE_BUFFER_PERIOD
+            )
+            if (
+                predicted_prefill_future_queue_size
+                > self.args.prefill_queue_scale_up_threshold
+            ):
+                logger.info(
+                    f", predicted future prefill queue size ({predicted_prefill_future_queue_size:.2f}) is also above threshold ({self.args.prefill_queue_scale_up_threshold:.2f}), scaling up prefill workers"
+                )
                 success = await self.connector.add_component("PrefillWorker")
                 if success:
                     curr_gpu_usage += self.args.prefill_engine_num_gpu
                 else:
                     logger.info("Failed to scale up prefill worker")
             else:
-                logger.info(f", but predicted future prefill queue size ({predicted_prefill_future_queue_size:.2f}) is below threshold ({self.args.prefill_queue_scale_up_threshold:.2f}), skipping prefill worker scaling")
+                logger.info(
+                    f", but predicted future prefill queue size ({predicted_prefill_future_queue_size:.2f}) is below threshold ({self.args.prefill_queue_scale_up_threshold:.2f}), skipping prefill worker scaling"
+                )
         if (
             avg_kv_load > self.args.decode_kv_scale_up_threshold
             and curr_gpu_usage + self.args.decode_engine_num_gpu
