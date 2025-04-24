@@ -78,9 +78,8 @@ tensorboard --logdir=<path-to-tensorboard-log-dir>
 ```
 
 ## Backends
-We currently support two backends:
+We currently only support one backend:
 1. `local` - uses circus to start/stop worker subprocesses
-2. `kuberentes` - uses the kuberentes api to adjust replicas of each component's resource definition
 
 ### Local Backend
 
@@ -91,9 +90,9 @@ Circus is a Python program which can be used to monitor and control processes an
 
 #### Statefile
 
-Our statefile looks like the JSON blob above. This state is created when you initially run `dynamo serve` and is filled in with custom leases in `serve_dynamo`. Each worker is called `{namespace}_{component_name}` when it is initially created. The `resources` come from the allocator and allows us to keep track of which GPUs are available. This statefile is read in by the LocalConnector and after each planner update we make the relevant change to the statefile. For now this statefile is locally saved in `~/.dynamo/state/{namespace}.json` (or in `DYN_LOCAL_STATE_DIR `) and is automatically cleaned up when the arbiter dies. It is helpful to debug but is not meant to be used/edited by the user.
+The statefile is a json file created when initially running `dynamo serve` and is filled in with custom leases in `serve_dynamo`. Each worker is named `{namespace}_{component_name}` when it is initially created. The `resources` come from the allocator and allows us to keep track of which GPUs are available. This statefile is read in by the LocalConnector and after each planner update we make the relevant change to the statefile. Currently, this statefile is locally saved in `~/.dynamo/state/{namespace}.json` (or in `DYN_LOCAL_STATE_DIR `) and is automatically cleaned up when the arbiter dies. 
 
-Lets use the following example to motivate this section. Say I've spun up 1 Decode worker to start. Remember, when you first run `dynamo serve`, each worker is saved as `{namespace}_{component_name}`. Our current statefile looks like
+When one Decode worker is spun up, the statefile looks like:
 
 ```json
 {
@@ -101,7 +100,7 @@ Lets use the following example to motivate this section. Say I've spun up 1 Deco
 }
 ```
 
-Lets say I `add` a worker. My statefile now looks like
+Now another decode worker is added:
 
 ```json
 {
@@ -110,7 +109,7 @@ Lets say I `add` a worker. My statefile now looks like
 }
 ```
 
-Lets say I now `remove`. My statefile looks will look like the following because we remove the max suffix
+Then one decode worker is removed:
 
 ```json
 {
@@ -118,7 +117,7 @@ Lets say I now `remove`. My statefile looks will look like the following because
 }
 ```
 
-If we remove again (think about this as "scale to 0"), our statefile will look like
+If the last decode worker is removed, the statefile looks like:
 
 ```json
 {
@@ -129,9 +128,4 @@ If we remove again (think about this as "scale to 0"), our statefile will look l
 Note that we keep the initial non-suffix entry in order to know what cmd we will need to spin up another worker. This is the same for prefill workers as well.
 
 > [!NOTE]
-> At the moment - planner work best if your initial replicas per worker are 1. This is because if you specify replicas > 1 when you initially start `dynamo serve`, the current implementation in `serving.py` starts each process in the same watcher. We need to refactor this so that we have a watcher per process
-
-
-# Kubernetes Backend
-
-TODO
+> At the moment - planner work best if your initial replicas per worker are 1. This is because if you specify replicas > 1 when you initially start `dynamo serve`, the current implementation in `serving.py` starts each process in the same watcher.
