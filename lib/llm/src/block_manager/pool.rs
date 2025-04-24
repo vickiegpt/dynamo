@@ -382,6 +382,16 @@ impl<S: BlockLayout, M: BlockMetadata> BlockPool<S, M> {
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
     }
 
+    /// Blocking version of [`BlockPool::allocate_blocks`].
+    pub fn allocate_blocks_blocking(
+        &self,
+        count: usize,
+    ) -> Result<Vec<MutableBlock<S, M>>, BlockPoolError> {
+        self.runtime
+            .handle()
+            .block_on(async move { self.allocate_blocks(count).await })
+    }
+
     // /// Registers a [`MutableBlock`] (presumably after filling it) with the pool,
     // /// making it potentially available for sharing via the [`ActiveBlockPool`].
     // ///
@@ -418,7 +428,7 @@ impl<S: BlockLayout, M: BlockMetadata> BlockPool<S, M> {
     /// in the active pool. If so, it returns an [`ImmutableBlock`] pointing to the existing block,
     /// and the provided `block` is implicitly dropped (returned to the [`InactiveBlockPool`]).
     pub async fn register_blocks(
-        &mut self,
+        &self,
         blocks: Vec<MutableBlock<S, M>>,
     ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
         // Make the request
@@ -434,6 +444,16 @@ impl<S: BlockLayout, M: BlockMetadata> BlockPool<S, M> {
         resp_rx
             .await
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
+    }
+
+    /// Blocking version of [`BlockPool::register_blocks`].
+    pub fn register_blocks_blocking(
+        &self,
+        blocks: Vec<MutableBlock<S, M>>,
+    ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
+        self.runtime
+            .handle()
+            .block_on(async move { self.register_blocks(blocks).await })
     }
 
     /// Attempts to match the given [`SequenceHash`] to an existing block, checking
@@ -455,7 +475,7 @@ impl<S: BlockLayout, M: BlockMetadata> BlockPool<S, M> {
     ///
     /// An [`Option<ImmutableBlock<S, M>>`] containing the shared block if found, otherwise `None`.
     pub async fn match_sequence_hashes(
-        &mut self,
+        &self,
         sequence_hashes: &[SequenceHash],
     ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
         // Create the request
@@ -471,6 +491,16 @@ impl<S: BlockLayout, M: BlockMetadata> BlockPool<S, M> {
         Ok(resp_rx
             .await
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?)
+    }
+
+    /// Blocking version of [`BlockPool::match_sequence_hashes`].
+    pub fn match_sequence_hashes_blocking(
+        &self,
+        sequence_hashes: &[SequenceHash],
+    ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
+        self.runtime
+            .handle()
+            .block_on(async move { self.match_sequence_hashes(sequence_hashes).await })
     }
 }
 
@@ -580,7 +610,7 @@ mod tests {
 
         let mut block = blocks.pop().unwrap();
 
-        block.initialize_sequence(1337).unwrap();
+        block.init_sequence(1337).unwrap();
         block.add_token(1).unwrap();
         block.add_token(2).unwrap();
         block.add_token(3).unwrap();
@@ -620,5 +650,74 @@ mod tests {
         assert_eq!(progress.state.inactive.available_blocks(), 6);
         progress.step().await;
         assert_eq!(progress.state.inactive.available_blocks(), 7);
+    }
+
+    #[test]
+    fn test_block_pool_blocking() {
+        const EXPECTED_SEQUENCE_HASH: u64 = 14643705804678351452;
+
+        // Create a new layout
+        let layout = setup_layout(None).unwrap();
+
+        // Create the Blocks
+        let blocks = Blocks::<_, BasicMetadata>::new(layout)
+            .unwrap()
+            .into_blocks()
+            .unwrap();
+
+        // Create the BlockPool and add the blocks
+        let pool = BlockPool::builder().blocks(blocks).build().unwrap();
+
+        // All blocks should be in the Reset/Empty state
+        // No blocks should match the expected sequence hash
+        let matched_blocks = pool
+            .match_sequence_hashes_blocking(&[EXPECTED_SEQUENCE_HASH])
+            .unwrap();
+        assert_eq!(matched_blocks.len(), 0);
+
+        // Allocate a single block from the pool
+        let mut mutable_blocks = pool.allocate_blocks_blocking(1).unwrap();
+        assert_eq!(mutable_blocks.len(), 1);
+        let mut block = mutable_blocks.pop().unwrap();
+
+        // Initialize the sequence on the block with a salt hash
+        block.init_sequence(1337).unwrap();
+
+        // Add some tokens to the block - our page_size is 4
+        block.add_token(1).unwrap();
+        block.add_token(2).unwrap();
+        block.add_token(3).unwrap();
+        block.add_token(4).unwrap();
+
+        // Should fail because we don't have space in the block
+        assert!(block.add_token(5).is_err());
+
+        // Commit the block - this will generate a sequence hash
+        // This will put the block in a Complete state
+        block.commit().unwrap();
+        assert!(block.is_complete()); // perhaps renamed to Commited
+
+        let sequence_hash = block.sequence_hash().unwrap();
+        assert_eq!(sequence_hash, EXPECTED_SEQUENCE_HASH);
+
+        // Register the block
+        // We provide a mutable block to the register_blocks function
+        // This will take ownership of the block and return an immutable block
+        let mut immutable_blocks = pool.register_blocks_blocking(vec![block]).unwrap();
+        let block = immutable_blocks.pop().unwrap();
+        assert!(block.is_registered());
+        assert_eq!(block.sequence_hash().unwrap(), sequence_hash);
+
+        // Dropping the immutable block should return the block to the pool
+        // However, the block should remain in the BlockPool as an inactive block until it is reused
+        // or promoted back to an immutable block by being matched with a sequence hash
+        drop(block);
+
+        // Get the list of ImmutableBlocks that match the sequence hash
+        let matched = pool
+            .match_sequence_hashes_blocking(&[sequence_hash])
+            .unwrap();
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].sequence_hash().unwrap(), sequence_hash);
     }
 }

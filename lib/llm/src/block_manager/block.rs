@@ -201,16 +201,21 @@ pub trait BlockExt {
     /// Reset the state of the block
     fn reset(&mut self);
 
-    /// Initialize a sequence on the block
+    /// Initialize a sequence on the block using a [SaltHash]
     ///
     /// The block must be in the [BlockState::Reset] state.
     ///
     /// After initialization, the block will be in the [BlockState::Partial] state.
-    fn initialize_sequence(&mut self, salt_hash: SaltHash) -> Result<()>;
+    fn init_sequence(&mut self, salt_hash: SaltHash) -> Result<()>;
 
     /// Add a token to the block
     /// If Ok, returns the number of remaining tokens in the block
     fn add_token(&mut self, token: Token) -> Result<()>;
+
+    /// Commit the block
+    /// The block must be in the [BlockState::Partial] state and the block must be full/complete.
+    /// If successful, the block will be in the [BlockState::Complete] state after the commit.
+    fn commit(&mut self) -> Result<()>;
 
     /// Apply a [TokenBlock] to the block
     /// The block must be [BlockState::Reset].
@@ -224,14 +229,18 @@ impl<L: BlockLayout, M: BlockMetadata> BlockExt for Block<L, M> {
         self.reset();
     }
 
-    fn initialize_sequence(&mut self, salt_hash: SaltHash) -> Result<()> {
+    fn init_sequence(&mut self, salt_hash: SaltHash) -> Result<()> {
         Ok(self
             .state
             .initialize_sequence(self.page_size(), salt_hash)?)
     }
 
     fn add_token(&mut self, token: Token) -> Result<()> {
-        Ok(self.state.add_token(&token)?)
+        self.state.add_token(&token)
+    }
+
+    fn commit(&mut self) -> Result<()> {
+        self.state.commit()
     }
 
     fn apply_token_block(&mut self, _token_block: &TokenBlock) -> Result<()> {

@@ -58,6 +58,19 @@ impl BlockState {
             }
         }
     }
+
+    pub fn commit(&mut self) -> Result<()> {
+        match self {
+            BlockState::Partial(state) => {
+                let token_block = state.block.commit()?;
+                *self = BlockState::Complete(CompleteState::new(token_block));
+                Ok(())
+            }
+            _ => {
+                return Err(BlockStateInvalid("Block is not partial".to_string()))?;
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -70,7 +83,7 @@ impl PartialState {
         Self { block }
     }
 
-    pub fn add_token(&mut self, token: &Token) -> Result<()> {
+    fn add_token(&mut self, token: &Token) -> Result<()> {
         Ok(self.block.push_token(*token)?)
     }
 }
