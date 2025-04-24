@@ -231,7 +231,7 @@ impl<S: BlockLayout, M: BlockMetadata> ProgressEngine<S, M> {
         ctrl_rx: tokio::sync::mpsc::UnboundedReceiver<ControlRequest<S, M>>,
         cancel_token: CancellationToken,
     ) -> Self {
-        let (return_tx, mut return_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (return_tx, return_rx) = tokio::sync::mpsc::unbounded_channel();
         let state = State::<S, M>::new(event_manager.clone(), return_tx);
 
         Self {
@@ -300,16 +300,16 @@ impl<S: BlockLayout, M: BlockMetadata> ProgressEngine<S, M> {
 //     }
 // }
 
-pub(crate) async fn progress_engine_v2<S: BlockLayout, M: BlockMetadata>(
-    event_manager: Arc<dyn EventManager>,
-    priority_rx: tokio::sync::mpsc::UnboundedReceiver<PriorityRequest<S, M>>,
-    ctrl_rx: tokio::sync::mpsc::UnboundedReceiver<ControlRequest<S, M>>,
-    cancel_token: CancellationToken,
-) {
-    let mut progress_engine =
-        ProgressEngine::<S, M>::new(event_manager, priority_rx, ctrl_rx, cancel_token);
+// pub(crate) async fn progress_engine_v2<S: BlockLayout, M: BlockMetadata>(
+//     event_manager: Arc<dyn EventManager>,
+//     priority_rx: tokio::sync::mpsc::UnboundedReceiver<PriorityRequest<S, M>>,
+//     ctrl_rx: tokio::sync::mpsc::UnboundedReceiver<ControlRequest<S, M>>,
+//     cancel_token: CancellationToken,
+// ) {
+//     let mut progress_engine =
+//         ProgressEngine::<S, M>::new(event_manager, priority_rx, ctrl_rx, cancel_token);
 
-    while progress_engine.step().await {
-        tracing::trace!("progress engine step");
-    }
-}
+//     while progress_engine.step().await {
+//         tracing::trace!("progress engine step");
+//     }
+// }

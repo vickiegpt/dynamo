@@ -20,9 +20,9 @@ pub mod view;
 pub use anyhow::Result;
 pub use state::BlockState;
 
-use crate::tokens::{PartialTokenBlock, SaltHash, SequenceHash, Token, TokenBlock};
+use crate::tokens::{SaltHash, SequenceHash, Token, TokenBlock};
 
-use super::events::{EventManager, PublishHandle};
+use super::events::PublishHandle;
 use super::layout::{BlockLayout, LayoutError};
 
 use std::sync::Arc;

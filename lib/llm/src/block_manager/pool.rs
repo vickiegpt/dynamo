@@ -339,21 +339,6 @@ impl<S: BlockLayout, M: BlockMetadata> BlockPool<S, M> {
     /// # Arguments
     ///
     /// * `blocks` - A [`Vec<Block<S, M>>`] to add to the inactive pool.
-    pub fn add_blocks_blocking(&self, blocks: Vec<Block<S, M>>) -> Result<(), BlockPoolError> {
-        self.runtime
-            .handle()
-            .block_on(async move { self.add_blocks(blocks).await })
-    }
-
-    /// Adds a vector of [`Block`]s to the [`InactiveBlockPool`].
-    ///
-    /// These blocks are typically created from a [`super::block::Blocks`]
-    /// and represent the initial set of available cache blocks.
-    /// Blocks added this way are initially reset.
-    ///
-    /// # Arguments
-    ///
-    /// * `blocks` - A [`Vec<Block<S, M>>`] to add to the inactive pool.
     pub async fn add_blocks(&self, blocks: Vec<Block<S, M>>) -> Result<(), BlockPoolError> {
         // Create the request
         let (req, resp_rx) = Unary::<_, ()>::make_request(blocks);
@@ -368,6 +353,13 @@ impl<S: BlockLayout, M: BlockMetadata> BlockPool<S, M> {
             .await
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
         Ok(())
+    }
+
+    /// Blocking version of [`BlockPool::add_blocks`].
+    pub fn add_blocks_blocking(&self, blocks: Vec<Block<S, M>>) -> Result<(), BlockPoolError> {
+        self.runtime
+            .handle()
+            .block_on(async move { self.add_blocks(blocks).await })
     }
 
     /// Attempts to allocate a specified number of free blocks from the [`InactiveBlockPool`].
@@ -566,7 +558,7 @@ mod tests {
             .into_blocks()
             .unwrap();
 
-        let (pool, mut progress) = BlockPool::builder()
+        let (_pool, mut progress) = BlockPool::builder()
             .blocks(blocks)
             .build_with_progress_engine()
             .unwrap();

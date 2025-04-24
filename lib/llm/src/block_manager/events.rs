@@ -68,7 +68,7 @@ impl PublishHandle {
         Self { handle, publisher }
     }
 
-    pub fn handle(&self) -> Arc<RegistrationHandle> {
+    pub fn remove_handle(&self) -> Arc<RegistrationHandle> {
         self.handle.clone()
     }
 
@@ -107,7 +107,7 @@ impl Publisher {
     }
 
     pub fn take_handle(&mut self, publish_handle: PublishHandle) -> Arc<RegistrationHandle> {
-        let handle = publish_handle.handle();
+        let handle = publish_handle.remove_handle();
         self.handles.push(handle.clone());
         let mut publish_handle = publish_handle;
         publish_handle.disarm();
@@ -116,7 +116,9 @@ impl Publisher {
 
     pub fn publish(&mut self) {
         let handles = std::mem::take(&mut self.handles);
-        self.publisher.publish(handles);
+        if !handles.is_empty() {
+            self.publisher.publish(handles);
+        }
     }
 }
 
@@ -149,4 +151,54 @@ impl EventPublisher for NullEventManager {
 
 impl EventReleaseManager for NullEventManager {
     fn block_release(&self, _registration_handle: &RegistrationHandle) {}
+}
+
+#[cfg(test)]
+pub mod tests {
+    use crate::tokens::SequenceHash;
+
+    use super::*;
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum EventType {
+        Register(SequenceHash),
+        Remove(SequenceHash),
+    }
+
+    pub struct MockEventManager {
+        tx: tokio::sync::mpsc::UnboundedSender<Vec<EventType>>,
+    }
+
+    impl MockEventManager {
+        pub fn new() -> (
+            Arc<Self>,
+            tokio::sync::mpsc::UnboundedReceiver<Vec<EventType>>,
+        ) {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            (Arc::new(Self { tx }), rx)
+        }
+
+        pub fn publisher(self: &Arc<Self>) -> Publisher {
+            Publisher::new(self.clone())
+        }
+    }
+
+    impl EventManager for MockEventManager {}
+
+    impl EventPublisher for MockEventManager {
+        fn publish(&self, handles: Vec<Arc<RegistrationHandle>>) {
+            let events = handles
+                .iter()
+                .map(|handle| EventType::Register(handle.sequence_hash()))
+                .collect::<Vec<_>>();
+            self.tx.send(events).unwrap();
+        }
+    }
+
+    impl EventReleaseManager for MockEventManager {
+        fn block_release(&self, registration_handle: &RegistrationHandle) {
+            let events = vec![EventType::Remove(registration_handle.sequence_hash())];
+            self.tx.send(events).unwrap();
+        }
+    }
 }

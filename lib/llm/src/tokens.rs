@@ -544,7 +544,7 @@ mod tests {
         assert_eq!(sequence.current_block().tokens().len(), 0);
         println!("blocks[2]: {:?}", sequence.blocks()[2]);
 
-        let (blocks, mut current_block) = sequence.into_parts();
+        let (_blocks, mut current_block) = sequence.into_parts();
 
         let new_block = current_block.push_token(13);
         assert!(new_block.is_ok());
