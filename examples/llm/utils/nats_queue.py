@@ -79,7 +79,7 @@ class NATSQueue:
             if cls._instance:
                 await cls._instance.close()
                 cls._instance = None
-
+                
     async def connect(self):
         """Establish connection and create stream if needed"""
         try:
@@ -92,7 +92,10 @@ class NATSQueue:
                     await self._js.stream_info(self._stream_name)
                 except NotFoundError:
                     await self._js.add_stream(
-                        name=self._stream_name, subjects=[self._subject]
+                        name=self._stream_name,
+                        subjects=[self._subject],
+                        max_bytes=1073741824,  # 1GB total storage limit
+                        max_msgs=1000000,  # 1 million messages limit
                     )
                 # Create persistent subscriber
                 self._subscriber = await self._js.pull_subscribe(
