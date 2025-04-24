@@ -134,6 +134,7 @@ get_options() {
                 shift
             else
                 missing_requirement "$1"
+            fi
             ;;
         --target)
             if [ "$2" ]; then
