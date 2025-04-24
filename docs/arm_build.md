@@ -2,9 +2,7 @@
 
 This document describes how to build Dynamo for ARM 64-bit architecture using PyTorch container 25.03. This works for GB200 machines.
 
-
 ## Building Dynamo for ARM with PyTorch container 25.03
-
 
 Let's assume that you will used ``/tmp/dynamo`` as a source directory for Dynamo
 
