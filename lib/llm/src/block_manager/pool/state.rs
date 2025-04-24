@@ -232,10 +232,9 @@ impl<S: BlockLayout, M: BlockMetadata> ProgressEngine<S, M> {
         cancel_token: CancellationToken,
     ) -> Self {
         let (return_tx, return_rx) = tokio::sync::mpsc::unbounded_channel();
-        let state = State::<S, M>::new(event_manager.clone(), return_tx);
+        let state = State::<S, M>::new(event_manager, return_tx);
 
         Self {
-            event_manager,
             priority_rx,
             ctrl_rx,
             cancel_token,

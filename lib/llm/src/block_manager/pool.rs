@@ -72,7 +72,6 @@ use super::block::{registry::BlockRegistry, Block, BlockMetadata};
 use super::events::{EventManager, NullEventManager};
 use super::layout::BlockLayout;
 
-use crate::block_manager::block::BlockState;
 use crate::tokens::{SequenceHash, TokenBlock};
 
 use std::{
@@ -136,19 +135,6 @@ impl<S: BlockLayout, M: BlockMetadata> BlockPoolArgsBuilder<S, M> {
         let pool = BlockPool::new(event_manager, runtime, cancel_token);
         pool.add_blocks_blocking(blocks)?;
         Ok(pool)
-    }
-
-    pub fn build_with_progress_engine(
-        self,
-    ) -> anyhow::Result<(BlockPool<S, M>, ProgressEngine<S, M>)> {
-        let args = self.build_internal()?;
-        let (runtime, event_manager, cancel_token, blocks) = args.dissolve();
-        let (pool, mut progress_engine) =
-            BlockPool::with_progress_engine(event_manager, runtime, cancel_token);
-
-        progress_engine.state.inactive.add_blocks(blocks);
-
-        Ok((pool, progress_engine))
     }
 }
 /// Manages the blocks in a specific storage backenda
@@ -522,7 +508,6 @@ struct State<S: BlockLayout, M: BlockMetadata> {
 }
 
 struct ProgressEngine<S: BlockLayout, M: BlockMetadata> {
-    event_manager: Arc<dyn EventManager>,
     priority_rx: tokio::sync::mpsc::UnboundedReceiver<PriorityRequest<S, M>>,
     ctrl_rx: tokio::sync::mpsc::UnboundedReceiver<ControlRequest<S, M>>,
     cancel_token: CancellationToken,
@@ -537,6 +522,22 @@ mod tests {
     use super::super::block::{BasicMetadata, Blocks};
     use super::super::layout::tests::setup_layout;
     use super::*;
+
+    /// Helper method to build a [`BlockPool`] with a [`ProgressEngine`] for unit testing
+    impl<S: BlockLayout, M: BlockMetadata> BlockPoolArgsBuilder<S, M> {
+        fn build_with_progress_engine(
+            self,
+        ) -> anyhow::Result<(BlockPool<S, M>, ProgressEngine<S, M>)> {
+            let args = self.build_internal()?;
+            let (runtime, event_manager, cancel_token, blocks) = args.dissolve();
+            let (pool, mut progress_engine) =
+                BlockPool::with_progress_engine(event_manager, runtime, cancel_token);
+
+            progress_engine.state.inactive.add_blocks(blocks);
+
+            Ok((pool, progress_engine))
+        }
+    }
 
     #[tokio::test]
     async fn test_default_runtime_async() {

@@ -124,38 +124,18 @@ impl PartialTokenBlock {
         }
     }
 
-    fn next_block(
-        block_size: usize,
-        salt_hash: SaltHash,
-        parent_sequence_hash: SequenceHash,
-    ) -> Self {
-        Self {
-            tokens: Tokens::default(),
-            block_size,
-            salt_hash,
-            parent_sequence_hash: Some(parent_sequence_hash),
+    /// Attempt to push a token onto the block, if the block is full, return an error
+    pub fn push_token(&mut self, token: Token) -> Result<(), TokenBlockError> {
+        if self.tokens.0.len() >= self.block_size {
+            return Err(TokenBlockError::Full);
         }
+
+        self.tokens.0.push(token);
+        Ok(())
     }
 
-    // /// Push a token onto the block, if the block is full, return a new [TokenBlock]
-    // /// and reset the incomplete block
-    // pub fn push_token(&mut self, token: Token) -> Option<TokenBlock> {
-    //     assert!(self.tokens.0.len() < self.block_size);
-    //     self.tokens.0.push(token);
-    //     if self.tokens.0.len() == self.block_size {
-    //         let tokens = std::mem::take(&mut self.tokens);
-    //         let chunk = TokenBlockChunk::new(tokens, self.salt_hash);
-    //         let block = TokenBlock::from_chunk(chunk, self.parent_sequence_hash);
-
-    //         // Update the parent sequence hash for the next block
-    //         self.parent_sequence_hash = Some(block.sequence_hash());
-
-    //         Some(block)
-    //     } else {
-    //         None
-    //     }
-    // }
-
+    /// Commits the current [PartialTokenBlock] to generate a new [TokenBlock], then
+    /// resets the current [PartialTokenBlock] to be a downstream block of the new [TokenBlock].
     pub fn commit(&mut self) -> Result<TokenBlock, TokenBlockError> {
         let len = self.tokens.0.len();
         if len < self.block_size {
@@ -170,16 +150,6 @@ impl PartialTokenBlock {
         *self = block.next_block();
 
         Ok(block)
-    }
-
-    /// Attempt to push a token onto the block, if the block is full, return an error
-    pub fn push_token(&mut self, token: Token) -> Result<(), TokenBlockError> {
-        if self.tokens.0.len() >= self.block_size {
-            return Err(TokenBlockError::Full);
-        }
-
-        self.tokens.0.push(token);
-        Ok(())
     }
 
     pub fn remaining(&self) -> usize {
@@ -251,7 +221,12 @@ pub struct TokenBlock {
 
 impl TokenBlock {
     pub fn next_block(&self) -> PartialTokenBlock {
-        PartialTokenBlock::next_block(self.tokens.len(), self.salt_hash, self.sequence_hash)
+        PartialTokenBlock {
+            tokens: Tokens::default(),
+            block_size: self.tokens.len(),
+            salt_hash: self.salt_hash,
+            parent_sequence_hash: Some(self.sequence_hash),
+        }
     }
 
     fn from_chunk(chunk: TokenBlockChunk, parent_sequence_hash: Option<SequenceHash>) -> Self {

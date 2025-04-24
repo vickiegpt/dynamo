@@ -234,7 +234,7 @@ impl<L: BlockLayout, M: BlockMetadata> BlockExt for Block<L, M> {
         Ok(self.state.add_token(&token)?)
     }
 
-    fn apply_token_block(&mut self, token_block: &TokenBlock) -> Result<()> {
+    fn apply_token_block(&mut self, _token_block: &TokenBlock) -> Result<()> {
         unimplemented!()
     }
 }
