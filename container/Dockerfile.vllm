@@ -84,9 +84,9 @@ RUN if [ "$ARCH" = "amd64" ]; then \
         wget ${NSYS_URL}${NSYS_PKG} &&\
         apt install -y ./${NSYS_PKG} &&\
         rm ${NSYS_PKG}; \
-    else ; \
-        echo "Skipping NSYS installation for $ARCH" ; \
-    fi ;
+    else \
+        echo "Skipping NSYS installation for $ARCH"; \
+    fi
 
 RUN cd /usr/local/src && \
     curl -fSsL "https://content.mellanox.com/ofed/MLNX_OFED-${MOFED_VERSION}/MLNX_OFED_LINUX-${MOFED_VERSION}-ubuntu24.04-${ARCH_ALT}.tgz" -o mofed.tgz && \
