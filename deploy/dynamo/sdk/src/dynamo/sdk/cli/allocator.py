@@ -34,6 +34,16 @@ DYN_DISABLE_AUTO_GPU_ALLOCATION = "DYN_DISABLE_AUTO_GPU_ALLOCATION"
 DYN_DEPLOYMENT_ENV = "DYN_DEPLOYMENT_ENV"
 
 
+def format_memory_gb(memory_bytes: float) -> str:
+    """Convert memory from bytes to formatted GB string.
+    Args:
+        memory_bytes: Memory size in bytes
+    Returns:
+        Formatted string with memory size in GB with 1 decimal place
+    """
+    return f"{memory_bytes/1024/1024/1024:.1f}GB"
+
+
 class ResourceAllocator:
     def __init__(self) -> None:
         """Initialize the resource allocator."""
@@ -144,8 +154,8 @@ class ResourceAllocator:
                         for stat in gpu_stats:
                             logger.info(
                                 f"GPU {stat['index']} ({stat['name']}): "
-                                f"Memory: {stat['free_memory']/1024/1024/1024:.1f}GB free / "
-                                f"{stat['total_memory']/1024/1024/1024:.1f}GB total, "
+                                f"Memory: {format_memory_gb(stat['free_memory'])} free / "
+                                f"{format_memory_gb(stat['total_memory'])} total, "
                                 f"Utilization: {stat['gpu_utilization']}%, "
                                 f"Temperature: {stat['temperature']}°C"
                             )
