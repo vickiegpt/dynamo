@@ -80,13 +80,9 @@ class ResourceAllocator:
         """
         logger.info(f"Getting resource envs for service {service.name}")
         services = service.get_service_configs()
-        if not services:
+        if service.name not in services:
             logger.warning(f"No service configs found for {service.name}")
             return 1, []  # Default to 1 worker, no special resources
-
-        if service.name not in services:
-            logger.warning(f"No config found for service {service.name}")
-            return 1, []
 
         config = services[service.name]
         logger.debug(f"Using config for {service.name}: {config}")

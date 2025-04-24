@@ -15,7 +15,4 @@
 
 import os
 
-# TODO: "dynamo:latest-vllm-dev" image will not be available to image builder in k8s
-# so We'd consider publishing the base image for releases to public registry (docker hub or nvcr.io).
-
-DYNAMO_IMAGE = os.getenv("DYNAMO_IMAGE", "dynamo:latest-vllm-dev")
+DYNAMO_IMAGE = os.getenv("DYNAMO_IMAGE", "dynamo:latest-vllm")

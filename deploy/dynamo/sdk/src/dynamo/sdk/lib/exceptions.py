@@ -19,7 +19,7 @@ from http import HTTPStatus
 
 
 class DynamoException(Exception):
-    """Base class for all Dynamo SDK errors."""
+    """Base class for all Dynamo SDK Exception."""
 
     error_code = HTTPStatus.INTERNAL_SERVER_ERROR
     error_mapping: dict[HTTPStatus, type[DynamoException]] = {}

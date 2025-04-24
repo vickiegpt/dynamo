@@ -179,20 +179,22 @@ def serve_dynamo_graph(
                         continue
                     if name in dependency_map:
                         continue
-                    # Check if this is a Dynamo service. TODO: they all should and will be
-                    if (
+                    if not (
                         hasattr(dep_svc, "is_dynamo_component")
                         and dep_svc.is_dynamo_component()
                     ):
-                        new_watcher, new_socket, uri = create_dynamo_watcher(
-                            bento_id,
-                            dep_svc,
-                            uds_path,
-                            allocator,
-                            str(bento_path.absolute()),
-                            env=env,
+                        raise RuntimeError(
+                            f"Service {dep_svc.name} is not a Dynamo component"
                         )
-                        namespace, _ = dep_svc.dynamo_address()
+                    new_watcher, new_socket, uri = create_dynamo_watcher(
+                        bento_id,
+                        dep_svc,
+                        uds_path,
+                        allocator,
+                        str(bento_path.absolute()),
+                        env=env,
+                    )
+                    namespace, _ = dep_svc.dynamo_address()
                     watchers.append(new_watcher)
                     sockets.append(new_socket)
                     dependency_map[name] = uri
@@ -209,7 +211,6 @@ def serve_dynamo_graph(
             "$(CIRCUS.WID)",
         ]
 
-        # Check if this is a Dynamo service. TODO: they all should and will be
         if hasattr(svc, "is_dynamo_component") and svc.is_dynamo_component():
             # resource_envs is the resource allocation (ie CUDA_VISIBLE_DEVICES) for each worker created by the allocator
             # these resource_envs are passed to each individual worker's environment which is set in serve_dynamo
