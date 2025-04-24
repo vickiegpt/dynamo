@@ -53,7 +53,7 @@ BUILD_CONTEXT=$(dirname "$(readlink -f "$SOURCE_DIR")")
 
 # Base Images
 TENSORRTLLM_BASE_IMAGE=tensorrt_llm/release
-TENSORRTLLM_BASE_IMAGE_TAG=latest
+TENSORRTLLM_BASE_IMAGE_TAG=latest_squashed
 TENSORRTLLM_PIP_WHEEL_PATH=""
 
 VLLM_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
@@ -321,6 +321,10 @@ if [[ $FRAMEWORK == "VLLM" ]]; then
 
     # Add NIXL_COMMIT as a build argument to enable caching
     BUILD_ARGS+=" --build-arg NIXL_COMMIT=${NIXL_COMMIT} "
+fi
+
+if [[ $TARGET == "local-dev" ]]; then
+    BUILD_ARGS+=" --build-arg USER_UID=$(id -u) --build-arg USER_GID=$(id -g) "
 fi
 
 # BUILD DEV IMAGE

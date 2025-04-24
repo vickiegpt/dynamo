@@ -21,7 +21,7 @@ limitations under the License.
 [![GitHub Release](https://img.shields.io/github/v/release/ai-dynamo/dynamo)](https://github.com/ai-dynamo/dynamo/releases/latest)
 [![Discord](https://dcbadge.limes.pink/api/server/D92uqZRjCZ?style=flat)](https://discord.gg/nvidia-dynamo)
 
-| **[Support Matrix](support_matrix.md)** | **[Guides](docs/guides)** | **[Architecture and Features](docs/architecture.md)** | **[APIs](lib/bindings/python/README.md)** | **[SDK](deploy/dynamo/sdk/README.md)** |
+| **[Roadmap](https://github.com/ai-dynamo/dynamo/issues/762)** | **[Support Matrix](support_matrix.md)** | **[Guides](docs/guides)** | **[Architecture and Features](docs/architecture.md)** | **[APIs](lib/bindings/python/README.md)** | **[SDK](deploy/dynamo/sdk/README.md)** |
 
 NVIDIA Dynamo is a high-throughput low-latency inference framework designed for serving generative AI and reasoning models in multi-node distributed environments. Dynamo is designed to be inference engine agnostic (supports TRT-LLM, vLLM, SGLang or others) and captures LLM-specific capabilities such as:
 
@@ -46,19 +46,32 @@ source venv/bin/activate
 
 pip install ai-dynamo[all]
 ```
+> [!NOTE]
+> To ensure compatibility, please refer to the examples in the release branch or tag that matches the version you installed.
 
-### Development Environment
+### Building the Dynamo Base Image
 
-For a consistent development environment, you can use the provided devcontainer configuration. This requires:
-- [Docker](https://www.docker.com/products/docker-desktop)
-- [VS Code](https://code.visualstudio.com/) with the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+Although not needed for local development, deploying your Dynamo pipelines to Kubernetes will require you to build and push a Dynamo base image to your container registry. You can use any container registry of your choice, such as:
+- Docker Hub (docker.io)
+- NVIDIA NGC Container Registry (nvcr.io)
+- Any private registry
 
-To use the devcontainer:
-1. Open the project in VS Code
-2. Click on the button in the bottom-left corner
-3. Select "Reopen in Container"
+Here's how to build it:
 
-This will build and start a container with all the necessary dependencies for Dynamo development.
+```bash
+./container/build.sh
+docker tag dynamo:latest-vllm <your-registry>/dynamo-base:latest-vllm
+docker login <your-registry>
+docker push <your-registry>/dynamo-base:latest-vllm
+```
+
+After building, you can use this image by setting the `DYNAMO_IMAGE` environment variable to point to your built image:
+```bash
+export DYNAMO_IMAGE=<your-registry>/dynamo-base:latest-vllm
+```
+
+> [!NOTE]
+> We are working on leaner base images that can be built using the targets in the top-level Earthfile.
 
 ### Running and Interacting with an LLM Locally
 
@@ -97,7 +110,6 @@ First start the Dynamo Distributed Runtime services:
 ```bash
 docker compose -f deploy/docker-compose.yml up -d
 ```
-
 #### Start Dynamo LLM Serving Components
 
 Next serve a minimal configuration with an http server, basic
@@ -126,7 +138,9 @@ curl localhost:8000/v1/chat/completions   -H "Content-Type: application/json"   
 
 ### Local Development
 
-To develop locally, we recommend working inside of the container
+If you use vscode or cursor, we have a .devcontainer folder built on [Microsofts Extension](https://code.visualstudio.com/docs/devcontainers/containers). For instructions see the [ReadMe](.devcontainer/README.md) for more details.
+
+Otherwise, to develop locally, we recommend working inside of the container
 
 ```bash
 ./container/build.sh
@@ -139,4 +153,29 @@ cp /workspace/target/release/llmctl /workspace/deploy/dynamo/sdk/src/dynamo/sdk/
 cp /workspace/target/release/dynamo-run /workspace/deploy/dynamo/sdk/src/dynamo/sdk/cli/bin
 
 uv pip install -e .
+```
+
+
+#### Conda Environment
+
+Alternately, you can use a conda environment
+
+```bash
+conda activate <ENV_NAME>
+
+pip install nixl # Or install https://github.com/ai-dynamo/nixl from source
+
+cargo build --release
+
+# To install ai-dynamo-runtime from source
+cd lib/bindings/python
+pip install .
+
+cd ../../../
+pip install .[all]
+
+# To test
+docker compose -f deploy/docker-compose.yml up -d
+cd examples/llm
+dynamo serve graphs.agg:Frontend -f configs/agg.yaml
 ```

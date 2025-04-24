@@ -46,6 +46,10 @@ pub struct Flags {
     #[arg(long)]
     pub model_name: Option<String>,
 
+    /// Verbose output (-v for debug, -vv for trace)
+    #[arg(short = 'v', action = clap::ArgAction::Count, default_value_t = 0)]
+    pub verbosity: u8,
+
     /// llamacpp only
     ///
     /// The path to the tokenizer and model config because:
@@ -55,7 +59,7 @@ pub struct Flags {
     #[arg(long)]
     pub model_config: Option<PathBuf>,
 
-    /// sglang, vllm, trtllm
+    /// sglang, vllm
     ///
     /// How many GPUs to use at once, total across all nodes.
     /// This must divide by num_nodes, and each node must use the same number of GPUs.

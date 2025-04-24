@@ -25,6 +25,14 @@ This directory contains examples and reference implementations for deploying Lar
 See [deployment architectures](../llm/README.md#deployment-architectures) to learn about the general idea of the architecture.
 Note that this TensorRT-LLM version does not support all the options yet.
 
+Note: TensorRT-LLM disaggregation does not support conditional disaggregation yet. You can only configure the deployment to always use aggregate or disaggregated serving.
+
+## Getting Started
+
+1. Choose a deployment architecture based on your requirements
+2. Configure the components as needed
+3. Deploy using the provided scripts
+
 ### Prerequisites
 
 Start required services (etcd and NATS) using [Docker Compose](../../deploy/docker-compose.yml)
@@ -42,6 +50,13 @@ See [here](https://nvidia.github.io/TensorRT-LLM/installation/linux.html) for mo
 Use the helper script to build a TensorRT-LLM container base image. The script uses a specific commit id from TensorRT-LLM main branch.
 
 ```bash
+# TensorRT-LLM uses git-lfs, which needs to be installed in advance.
+apt-get update && apt-get -y install git git-lfs
+
+# The script uses python packages like docker-squash to squash image
+# layers within trtllm base image
+DEBIAN_FRONTEND=noninteractive TZ=America/Los_Angeles apt-get -y install python3 python3-pip python3-venv
+
 ./container/build_trtllm_base_image.sh
 ```
 
@@ -56,6 +71,7 @@ If you already have a TensorRT-LLM container image, you can skip this step.
 
 This build script internally points to the base container image built with step 1. If you skipped previous step because you already have the container image available, you can run the build script with that image as a base.
 
+
 ```bash
 # Build dynamo image with other TRTLLM base image.
 ./container/build.sh --framework TENSORRTLLM --base-image <trtllm-base-image> --base-image-tag <trtllm-base-image-tag>
@@ -67,6 +83,29 @@ This build script internally points to the base container image built with step 
 ./container/run.sh --framework tensorrtllm -it
 ```
 ## Run Deployment
+
+This figure shows an overview of the major components to deploy:
+
+
+
+```
+
++------+      +-----------+      +------------------+             +---------------+
+| HTTP |----->| processor |----->|      Worker      |------------>|     Prefill   |
+|      |<-----|           |<-----|                  |<------------|     Worker    |
++------+      +-----------+      +------------------+             +---------------+
+                  |    ^                  |
+       query best |    | return           | publish kv events
+           worker |    | worker_id        v
+                  |    |         +------------------+
+                  |    +---------|     kv-router    |
+                  +------------->|                  |
+                                 +------------------+
+
+```
+
+Note: The above architecture illustrates all the components. The final components
+that get spawned depend upon the chosen graph.
 
 ### Example architectures
 
@@ -82,21 +121,23 @@ cd /workspace/examples/tensorrt_llm
 dynamo serve graphs.agg_router:Frontend -f ./configs/agg_router.yaml
 ```
 
-<!--
-This is work in progress and will be enabled soon.
-
 #### Disaggregated serving
 ```bash
-cd /workspace/examples/llm
+cd /workspace/examples/tensorrt_llm
 dynamo serve graphs.disagg:Frontend -f ./configs/disagg.yaml
 ```
 
+We are defining TRTLLM_USE_UCX_KVCACHE so that TRTLLM uses UCX for transfering the KV
+cache between the context and generation workers.
+
 #### Disaggregated serving with KV Routing
 ```bash
-cd /workspace/examples/llm
+cd /workspace/examples/tensorrt_llm
 dynamo serve graphs.disagg_router:Frontend -f ./configs/disagg_router.yaml
 ```
--->
+
+We are defining TRTLLM_USE_UCX_KVCACHE so that TRTLLM uses UCX for transfering the KV
+cache between the context and generation workers.
 
 ### Client
 
@@ -108,10 +149,10 @@ See [close deployment](../../docs/guides/dynamo_serve.md#close-deployment) secti
 
 Remaining tasks:
 
-- [ ] Add support for the disaggregated serving.
+- [x] Add support for the disaggregated serving.
 - [ ] Add integration test coverage.
 - [ ] Add instructions for benchmarking.
 - [ ] Add multi-node support.
 - [ ] Merge the code base with llm example to reduce the code duplication.
 - [ ] Use processor from dynamo-llm framework.
-- [ ] Explore NIXL integration with TensorRT-LLM.
+- [ ] Enable NIXL integration with TensorRT-LLM once available. Currently, TensorRT-LLM uses UCX to transfer KV cache.
