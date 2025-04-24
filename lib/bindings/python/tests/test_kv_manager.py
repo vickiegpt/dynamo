@@ -75,6 +75,27 @@ async def test_cpu_tensor():
     )
     tensor = kv_manager.tensor(0, 0)
     assert isinstance(tensor, torch.Tensor)
+    assert tensor.get_device() == -1  # CPU
+    assert tensor.shape == (PAGE_SIZE, INNER_DIM)
+    assert tensor.dtype == torch.float32  # DTYPE
+    # print(tensor)
+    tensor[0][0] = 1.0
+    tensor[PAGE_SIZE - 1][INNER_DIM - 1] = 1.0
+    # print(tensor)
+    tensor_ = kv_manager.tensor(0, 0)
+    assert tensor is not tensor_
+    assert tensor.shape == tensor_.shape
+    assert tensor.dtype == tensor_.dtype
+    assert torch.allclose(tensor, tensor_)
+
+
+async def test_cuda_tensor():
+    kv_manager = KvManager(
+        NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="CUDA"
+    )
+    tensor = kv_manager.tensor(0, 0)
+    assert isinstance(tensor, torch.Tensor)
+    assert tensor.get_device() == 0  # CUDA:0
     assert tensor.shape == (PAGE_SIZE, INNER_DIM)
     assert tensor.dtype == torch.float32  # DTYPE
     # print(tensor)
@@ -91,6 +112,7 @@ async def test_cpu_tensor():
 async def main():
     await test_initialization()
     await test_cpu_tensor()
+    await test_cuda_tensor()
 
 
 if __name__ == "__main__":

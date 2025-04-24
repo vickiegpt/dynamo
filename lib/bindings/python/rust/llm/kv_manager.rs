@@ -102,7 +102,30 @@ impl KvManager {
 
         let torch_tensor = match self.inner.storage_type() {
             dynamo_kv_manager::storage::StorageType::Device(_) => {
-                return Err(PyRuntimeError::new_err("Device memory tensor retrieval not implemented"));
+                Python::with_gil(|py| -> PyResult<PyObject> {
+                    let cupy = py.import("cupy")?;
+                    let cupy_type = match dtype {
+                        dynamo_kv_manager::dtype::DType::FP8 => cupy.getattr("uint8")?,
+                        dynamo_kv_manager::dtype::DType::FP16 => cupy.getattr("float16")?,
+                        dynamo_kv_manager::dtype::DType::BF16 => cupy.getattr("float16")?,
+                        dynamo_kv_manager::dtype::DType::FP32 => cupy.getattr("float32")?,
+                        dynamo_kv_manager::dtype::DType::FP64 => cupy.getattr("float64")?,
+                        dynamo_kv_manager::dtype::DType::U8 => cupy.getattr("uint8")?,
+                        dynamo_kv_manager::dtype::DType::U16 => cupy.getattr("uint16")?,
+                        dynamo_kv_manager::dtype::DType::U32 => cupy.getattr("uint32")?,
+                        dynamo_kv_manager::dtype::DType::U64 => cupy.getattr("uint64")?,
+                        dynamo_kv_manager::dtype::DType::I8 => cupy.getattr("int8")?,
+                        dynamo_kv_manager::dtype::DType::I16 => cupy.getattr("int16")?,
+                        dynamo_kv_manager::dtype::DType::I32 => cupy.getattr("int32")?,
+                        dynamo_kv_manager::dtype::DType::I64 => cupy.getattr("int64")?,
+                    };
+                    let cupy_mem = cupy.getattr("cuda")?.getattr("UnownedMemory")?.call1((memory_region, region_size, py.None()))?;
+                    let cupy_ptr = cupy.getattr("cuda")?.getattr("MemoryPointer")?.call1((cupy_mem, 0))?;
+                    let cupy_array = cupy.getattr("ndarray")?.call1((region_shape, cupy_type, cupy_ptr))?;
+                    let torch = py.import("torch")?;
+                    let torch_tensor = torch.getattr("from_dlpack")?.call1((cupy_array,))?;
+                    Ok(torch_tensor.into())
+                })?
             }
             dynamo_kv_manager::storage::StorageType::Pinned => {
                 return Err(PyRuntimeError::new_err("Pinned memory tensor retrieval not implemented"));
