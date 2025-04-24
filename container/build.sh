@@ -126,6 +126,7 @@ get_options() {
                 shift
             else
                 missing_requirement "$1"
+            fi
             ;;
         --runtime-image-tag)
             if [ "$2" ]; then

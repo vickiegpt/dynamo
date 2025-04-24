@@ -266,6 +266,7 @@ show_help() {
     echo "  [--gpus gpus to enable, default is 'all', 'none' disables gpu support]"
     echo "  [-v add volume mount]"
     echo "  [-e add environment variable]"
+    echo "  [--mount-other-volumes add other volume mounts]"
     echo "  [--mount-workspace set up for local development]"
     echo "  [-- stop processing and pass remaining args as command to docker run]"
     exit 0

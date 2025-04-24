@@ -47,7 +47,12 @@ index aaad9e1b..80472be2 100644
 Build the Dynamo container for custom architecture and docker container:
 
 ```bash
-bash container/build.sh --platform linux/arm64 --framework vllm
+bash container/build.sh --platform linux/arm64 \
+    --framework vllm \
+    --base-image nvcr.io/nvidia/pytorch \
+    --base-image-tag 25.03-py3 \
+    --runtime-image nvcr.io/nvidia/pytorch \
+    --runtime-image-tag 25.03-py3
 ```
 
 
@@ -73,6 +78,16 @@ Apply the patch:
 ```
 patch -p1 < /tmp/dynamo/container/deps/vllm/vllm_v0.8.4-dynamo-kv-disagg-patch.patch
 ```
+
+### Run interactive container
+
+
+Run the container with the following command to mount the source directories. You can't use workspace volume mount because it will hide folder ``/workspace/dist`` with pre-built vLLM wheel, which you need to install at system level instead of uv venv to use PyTorch from 25.03 container.
+
+```
+bash container/run.sh -it -v /tmp:/tmp
+```
+
 
 ### Prepare vLLm for 25.03 PyTorch container
 
