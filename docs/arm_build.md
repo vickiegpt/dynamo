@@ -53,7 +53,8 @@ bash container/build.sh --platform linux/arm64 \
     --base-image-tag 25.03-py3 \
     --runtime-image nvcr.io/nvidia/pytorch \
     --runtime-image-tag 25.03-py3 \
-    --manylinux-image quay.io/pypa/manylinux_2_31_aarch64
+    --manylinux-image quay.io/pypa/manylinux_2_31_aarch64 \
+    --build-arg MOFED_VERSION=24.10-2.1.8.0
 ```
 
 
