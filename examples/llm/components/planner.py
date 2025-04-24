@@ -32,8 +32,10 @@ from utils.prefill_queue import PrefillQueue
 from dynamo.llm import KvMetricsAggregator
 from dynamo.planner import LocalConnector
 from dynamo.runtime import DistributedRuntime, dynamo_worker
+from dynamo.sdk.lib.logging import configure_server_logging
 
-logger = logging.getLogger("planner")
+configure_server_logging()
+logger = logging.getLogger(__name__)
 
 # will not decrease decode worker number within 3 adjustment interval after a new decode worker
 # is added. this is to leave time for the new decode worker to populate its kv cache.
@@ -62,7 +64,7 @@ class Planner:
             args.log_dir = f"logs/{datetime.now().strftime('%m%d_%H%M%S')}"
         self.writer = SummaryWriter(args.log_dir)
 
-        print(f"Components present in namespace: {args.namespace}")
+        logger.info(f"Components present in namespace: {args.namespace}")
 
         self.init_time = time.time()
 
@@ -87,7 +89,7 @@ class Planner:
             p_endpoints = self.prefill_client.endpoint_ids()
         except Exception:
             p_endpoints = []
-            print("No prefill workers found, operating in aggregated mode")
+            logger.info("No prefill workers found, operating in aggregated mode")
         try:
             if self.workers_client is None:
                 self.workers_client = (
@@ -105,13 +107,13 @@ class Planner:
         return p_endpoints, d_endpoints
 
     async def reset_adjustment_interval(self):
-        print(
+        logger.info(
             f"Reset metrics for new adjustment interval at t={time.time() - self.init_time:.1f}s"
         )
 
         self.p_endpoints, self.d_endpoints = await self.get_workers_info()
 
-        print(
+        logger.info(
             f"Number of prefill workers: {len(self.p_endpoints)}, number of decode workers: {len(self.d_endpoints)}"
         )
 
@@ -122,7 +124,7 @@ class Planner:
         self.last_adjustment_time = time.time()
 
     async def collect_metrics(self):
-        print(f"Collecting metrics at t={time.time() - self.init_time:.1f}s")
+        logger.info(f"Collecting metrics at t={time.time() - self.init_time:.1f}s")
 
         # collect prefill queue load
         try:
@@ -133,14 +135,14 @@ class Planner:
                 prefill_queue_size = await prefill_queue.get_queue_size()
                 measure_time = time.time() - self.init_time
             self.prefill_queue_load.append(prefill_queue_size)
-            print(
+            logger.info(
                 f"Collected prefill queue size at t={measure_time:.1f}s: {int(prefill_queue_size)}"
             )
             self.writer.add_scalar(
                 "prefill_queue_size", prefill_queue_size, measure_time
             )
         except Exception as e:
-            print(f"Failed to collect prefill queue size metrics: {e}")
+            logger.info(f"Failed to collect prefill queue size metrics: {e}")
 
         # collect kv load
         total_active_requests: int = 0
@@ -163,7 +165,7 @@ class Planner:
                         kv_load = kv_load + 0.02 * num_requests_waiting
                 self.kv_load.append(kv_load)
             measure_time = time.time() - self.init_time
-            print(
+            logger.info(
                 f"Collected kv load at t={measure_time:.1f}s: {self.kv_load[prev_kv_load_len:]} (act/pnd req: {total_active_requests}/{total_queued_requests})"
             )
             average_kv_load = np.mean(self.kv_load[prev_kv_load_len:])
@@ -172,7 +174,7 @@ class Planner:
                 "total_queued_requests", total_queued_requests, measure_time
             )
         except Exception as e:
-            print(f"Failed to collect kv load metrics: {e}")
+            logger.info(f"Failed to collect kv load metrics: {e}")
 
         p_endpoints, d_endpoints = await self.get_workers_info()
         self.writer.add_scalar(
@@ -192,7 +194,7 @@ class Planner:
     async def make_adjustments(self):
         # Note: all adjustments are blocking. Non-blocking adjustment and metric pulling
         # make the optimization problem too complex and should not be needed in most cases.
-        print(f"Making adjustments at t={time.time() - self.init_time:.1f}s")
+        logger.info(f"Making adjustments at t={time.time() - self.init_time:.1f}s")
 
         # check if decode/prefill workers is still the same
         # note that we only check length as endpoint ids might change
@@ -200,7 +202,7 @@ class Planner:
         if len(new_p_endpoints) != len(self.p_endpoints) or len(new_d_endpoints) != len(
             self.d_endpoints
         ):
-            print("Decode/prefill workers changed, no adjustments will be made")
+            logger.info("Decode/prefill workers changed, no adjustments will be made")
             return
 
         # compute current gpu usage
@@ -208,7 +210,7 @@ class Planner:
             len(self.p_endpoints) * self.args.prefill_engine_num_gpu
             + len(self.d_endpoints) * self.args.decode_engine_num_gpu
         )
-        print(f"Current engines use {curr_gpu_usage} GPUs")
+        logger.info(f"Current engines use {curr_gpu_usage} GPUs")
 
         avg_prefill_queue_load = np.mean(self.prefill_queue_load)
         avg_kv_load = np.mean(self.kv_load)
@@ -217,31 +219,31 @@ class Planner:
             avg_prefill_queue_load < self.args.prefill_queue_scale_down_threshold
             and len(self.p_endpoints) > self.args.min_gpu_budget
         ):
-            print(
+            logger.info(
                 f"Average prefill queue load ({avg_prefill_queue_load:.2f}) is below threshold ({self.args.prefill_queue_scale_down_threshold:.2f}), scaling down prefill workers"
             )
             success = await self.connector.remove_component("PrefillWorker")
             if success:
                 curr_gpu_usage -= self.args.prefill_engine_num_gpu
             else:
-                print("Failed to scale down prefill worker")
+                logger.info("Failed to scale down prefill worker")
         if (
             avg_kv_load < self.args.decode_kv_scale_down_threshold
             and len(self.d_endpoints) > self.args.min_gpu_budget
         ):
             if self.decode_worker_remaining_grace_period > 0:
-                print(
+                logger.info(
                     f"Decode worker remaining grace period is {self.decode_worker_remaining_grace_period}, skipping scale down"
                 )
             else:
-                print(
+                logger.info(
                     f"Average kv load ({avg_kv_load:.2f}) is below threshold ({self.args.decode_kv_scale_down_threshold:.2f}), scaling down decode workers"
                 )
                 success = await self.connector.remove_component("VllmWorker")
                 if success:
                     curr_gpu_usage -= self.args.decode_engine_num_gpu
                 else:
-                    print("Failed to scale down decode worker")
+                    logger.info("Failed to scale down decode worker")
 
         # check if we need to scale up workers
         # we first check for prefill worker because prefill queueing can also lead
@@ -251,20 +253,20 @@ class Planner:
             and curr_gpu_usage + self.args.prefill_engine_num_gpu
             <= self.args.max_gpu_budget
         ):
-            print(
+            logger.info(
                 f"Average prefill queue load ({avg_prefill_queue_load:.2f}) is above threshold ({self.args.prefill_queue_scale_up_threshold:.2f}), scaling up prefill workers"
             )
             success = await self.connector.add_component("PrefillWorker")
             if success:
                 curr_gpu_usage += self.args.prefill_engine_num_gpu
             else:
-                print("Failed to scale up prefill worker")
+                logger.info("Failed to scale up prefill worker")
         if (
             avg_kv_load > self.args.decode_kv_scale_up_threshold
             and curr_gpu_usage + self.args.decode_engine_num_gpu
             <= self.args.max_gpu_budget
         ):
-            print(
+            logger.info(
                 f"Average kv load ({avg_kv_load:.2f}) is above threshold ({self.args.decode_kv_scale_up_threshold:.2f}), scaling up decode workers"
             )
             success = await self.connector.add_component("VllmWorker")
@@ -274,25 +276,25 @@ class Planner:
                     NEW_DECODE_WORKER_GRACE_PERIOD
                 )
             else:
-                print("Failed to scale up decode worker")
+                logger.info("Failed to scale up decode worker")
 
         # no adjustment needed, just log the current metrics
         if (
             avg_prefill_queue_load > self.args.prefill_queue_scale_down_threshold
             and avg_prefill_queue_load < self.args.prefill_queue_scale_up_threshold
         ):
-            print(
+            logger.info(
                 f"Average prefill queue load ({avg_prefill_queue_load:.2f}) is within threshold, no prefill worker scaling needed"
             )
         if (
             avg_kv_load > self.args.decode_kv_scale_down_threshold
             and avg_kv_load < self.args.decode_kv_scale_up_threshold
         ):
-            print(
+            logger.info(
                 f"Average kv load ({avg_kv_load:.2f}) is within threshold, no decode worker scaling needed"
             )
 
-        print(f"Engines after adjustment use {curr_gpu_usage} GPUs")
+        logger.info(f"Engines after adjustment use {curr_gpu_usage} GPUs")
 
         if self.decode_worker_remaining_grace_period > 0:
             self.decode_worker_remaining_grace_period -= 1
