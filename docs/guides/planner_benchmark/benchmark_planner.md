@@ -26,8 +26,8 @@ We first generate synthetic data with varying request rate from 0.75 to 3 using 
 ```bash
 python sin_synth.py \
     --time-duration 600 \
-    --request-rate-min 0.75 \
-    --request-rate-max 3 \
+    --request-rate-min 5 \
+    --request-rate-max 20 \
     --request-rate-period 150 \
     --isl1 3000 \
     --osl1 150 \
@@ -44,7 +44,7 @@ For other models and GPU SKUs, adjust the request rate ranges accordingly to mat
 
 ## Run the Benchmark
 
-To measure the performance of dynamo with planner, we start from a 1p1d deployment and set planner to make adjustments every 15 seconds:
+To measure the performance of dynamo with planner, we start from a 1p1d deployment and set planner to make adjustments every 10 seconds:
 
 ```bash
 cd examples/llm
@@ -52,11 +52,12 @@ dynamo serve graphs.disagg:Frontend -f <path to disagg_1p1d.yml in this folder> 
 
 # in terminal 2
 python components/planner.py \
-    --adjustment-interval 15 \
+    --metric-pulling-interval 1 \
+    --adjustment-interval 10 \
     --prefill-queue-scale-down-threshold 0.2 \
     --prefill-queue-scale-up-threshold 10 \
-    --decode-kv-scale-down-threshold 0.4 \
-    --decode-kv-scale-up-threshold 0.8 \
+    --decode-kv-scale-down-threshold 0.3 \
+    --decode-kv-scale-up-threshold 0.6 \
     --log-dir log/planner
 
 # in terminal 3
@@ -67,7 +68,7 @@ genai-perf profile \
     --endpoint-type chat \
     --url http://localhost:8000 \
     --streaming \
-    --input-file payload:sin_b512_t600_rr3.0-12.0-150.0_io3000150-3000150-0.2-0.8-10.jsonl
+    --input-file payload:sin_b512_t600_rr5.0-20.0-150.0_io3000150-3000150-0.2-0.8-10.jsonl
 ```
 
 To view the performance metrics and planner decisions, launch tensorboard with
@@ -87,28 +88,24 @@ and open `http://localhost:6006` in your browser. The following metrics are avai
 
 The benchmark results will be printed out in terminal 3 that runs the `genai-perf` command.
 
-In this example, we use three baselines: 1p3d, 2p2d, and 3p1d. Their dynamo configuration is also provided in this folder. To run the benchmark for these baselines, planner provides a `--no-operation` flag to just watch and log the metrics without making any adjustments:
+In this example, we use a fixed 2p2d engine as baseline. Planner provides a `--no-operation` flag to watch and log the metrics without making any adjustments:
 
 ```bash
 # in terminal 1
-dynamo serve --enable-local-planner graphs.disagg:Frontend -f disagg_<x>p<y>d.yml
+dynamo serve --enable-local-planner graphs.disagg:Frontend -f disagg_2p2d.yml
 
 # in terminal 2 (optional)
-python components/planner.py --no-operation --log-dir log/<x>p<y>d
+python components/planner.py --no-operation --log-dir log/2p2d
 
 # in terminal 3
-genai-perf profile --tokenizer deepseek-ai/DeepSeek-R1-Distill-Llama-8B -m deepseek-ai/DeepSeek-R1-Distill-Llama-8B --service-kind openai --endpoint-type chat --url http://localhost:8000 --streaming --input-file payload:sin_b512_t600_rr3.0-12.0-150.0_io3000150-3000150-0.2-0.8-10.jsonl
+genai-perf profile --tokenizer deepseek-ai/DeepSeek-R1-Distill-Llama-8B -m deepseek-ai/DeepSeek-R1-Distill-Llama-8B --service-kind openai --endpoint-type chat --url http://localhost:8000 --streaming --input-file payload:sin_b512_t600_rr5.0-20.0-150.0_io3000150-3000150-0.2-0.8-10.jsonl
 ```
 
 ## Results
 
-The benchmark results are:
+The below two figures show the performance comparison between planner and the baseline 2p2d deployment. Planner achieves 1.5x speedup while using 7.4% less GPU resources.
 
-| Configuration | Avg Seq Lat. (s)  | GPU Usage (\|GPU\|*s) |
-|---------------|-------------------|------------------|
-| 1p3d          | 347            | 5320           |
-| 2p2d          | 166            | 3648           |
-| 3p1d          | 639            | 7352           |
-| Planner       | ?              | ?              |
+![Planner Performance Comparison](./images/planner_perf.png)
 
-<add tensorboard screenshot and some text explaining the results here>
+![Planner Tensorboard](./images/planner_tensorboard.png)
+
