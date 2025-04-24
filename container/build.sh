@@ -62,8 +62,8 @@ VLLM_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
 NONE_BASE_IMAGE="ubuntu"
 NONE_BASE_IMAGE_TAG="24.04"
 
-NIXL_COMMIT=3aa8133369566e9ce61301f7eb56ad79b7f4fd92
-NIXL_REPO=ai-dynamo/nixl.git
+NIXL_COMMIT_DEFAULT=3aa8133369566e9ce61301f7eb56ad79b7f4fd92
+NIXL_REPO_DEFAULT=ai-dynamo/nixl.git
 
 get_options() {
     while :; do
@@ -123,6 +123,22 @@ get_options() {
         --build-arg)
             if [ "$2" ]; then
                 BUILD_ARGS+="--build-arg $2 "
+                shift
+            else
+                missing_requirement "$1"
+            fi
+            ;;
+        --nixl-commit)
+            if [ "$2" ]; then
+                NIXL_COMMIT=$2
+                shift
+            else
+                missing_requirement "$1"
+            fi
+            ;;
+        --nixl-repo)
+            if [ "$2" ]; then
+                NIXL_REPO=$2
                 shift
             else
                 missing_requirement "$1"
@@ -305,6 +321,12 @@ if [[ $FRAMEWORK == "VLLM" ]]; then
         echo "Warning: $NIXL_DIR already exists, skipping clone"
     else
         if [ -n "${GITHUB_TOKEN}" ]; then
+            if [ -z "${NIXL_REPO}" ]; then
+                NIXL_REPO=$NIXL_REPO_DEFAULT
+            fi
+            if [ -z "${NIXL_COMMIT}" ]; then
+                NIXL_COMMIT=$NIXL_COMMIT_DEFAULT
+            fi
             git clone "https://oauth2:${GITHUB_TOKEN}@github.com/${NIXL_REPO}" "$NIXL_DIR"
         else
             # Try HTTPS first with credential prompting disabled, fall back to SSH if it fails
