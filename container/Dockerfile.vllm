@@ -83,10 +83,10 @@ RUN apt install -y libglib2.0-0
 RUN if [ "$ARCH" = "amd64" ]; then \
         wget ${NSYS_URL}${NSYS_PKG} &&\
         apt install -y ./${NSYS_PKG} &&\
-        rm ${NSYS_PKG} \
-    else \
-        echo "Skipping NSYS installation for $ARCH" \
-    fi
+        rm ${NSYS_PKG}; \
+    else ; \
+        echo "Skipping NSYS installation for $ARCH" ; \
+    fi ;
 
 RUN cd /usr/local/src && \
     curl -fSsL "https://content.mellanox.com/ofed/MLNX_OFED-${MOFED_VERSION}/MLNX_OFED_LINUX-${MOFED_VERSION}-ubuntu24.04-${ARCH_ALT}.tgz" -o mofed.tgz && \
@@ -214,9 +214,9 @@ RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
         mkdir -p /workspace/dist && \
         wheel pack . --dest-dir /workspace/dist && \
         uv pip install /workspace/dist/${VLLM_PATCHED_PACKAGE_NAME}-*.whl \
-    else \
-        echo "Skipping vllm installation for $ARCH" \
-    fi
+    else ; \
+        echo "Skipping vllm installation for $ARCH" ; \
+    fi ;
 
 # Common dependencies
 RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requirements.txt \
@@ -255,12 +255,12 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 
 RUN wget --tries=3 --waitretry=5 "https://static.rust-lang.org/rustup/archive/1.28.1/${RUSTARCH}/rustup-init" && \
     if [ "$ARCH" = "amd64" ]; then \
-        echo "a3339fb004c3d0bb9862ba0bce001861fe5cbde9c10d16591eb3f39ee6cd3e7f *rustup-init" | sha256sum -c - && \
+        echo "a3339fb004c3d0bb9862ba0bce001861fe5cbde9c10d16591eb3f39ee6cd3e7f *rustup-init" | sha256sum -c - || exit 1 ; \
     else if [ "$ARCH" = "arm64" ]; then \
-        echo "c64b33db2c6b9385817ec0e49a84bcfe018ed6e328fe755c3c809580cc70ce7a *rustup-init" | sha256sum -c - && \
-    else \
-        echo "Skipping rustup-init checksum for $ARCH" \
-    fi && \
+        echo "c64b33db2c6b9385817ec0e49a84bcfe018ed6e328fe755c3c809580cc70ce7a *rustup-init" | sha256sum -c - || exit 1 ; \
+    else ; \
+        ech o "Skipping rustup-init checksum for $ARCH" ; \
+    fi ; \
     chmod +x rustup-init && \
     ./rustup-init -y --no-modify-path --profile minimal --default-toolchain $RUST_VERSION --default-host ${RUSTARCH} && \
     rm rustup-init && \
