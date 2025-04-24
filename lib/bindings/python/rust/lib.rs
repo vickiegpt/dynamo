@@ -713,6 +713,7 @@ async fn process_stream(
         // Send the PyObject through the channel or log an error
         if let Err(e) = tx.send(annotated).await {
             tracing::error!("Failed to send response: {:?}", e);
+            break;
         }
 
         if is_error {
