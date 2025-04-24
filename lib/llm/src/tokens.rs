@@ -98,8 +98,13 @@ impl Tokens {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("TokenBlock is full")]
-pub struct ErrorTokenBlockFull;
+pub enum TokenBlockError {
+    #[error("TokenBlock is full")]
+    Full,
+
+    #[error("TokenBlock is incomplete")]
+    Incomplete,
+}
 
 #[derive(Debug)]
 pub struct PartialTokenBlock {
@@ -119,33 +124,70 @@ impl PartialTokenBlock {
         }
     }
 
-    /// Push a token onto the block, if the block is full, return a new [TokenBlock]
-    /// and reset the incomplete block
-    pub fn push_token(&mut self, token: Token) -> Option<TokenBlock> {
-        assert!(self.tokens.0.len() < self.block_size);
-        self.tokens.0.push(token);
-        if self.tokens.0.len() == self.block_size {
-            let tokens = std::mem::take(&mut self.tokens);
-            let chunk = TokenBlockChunk::new(tokens, self.salt_hash);
-            let block = TokenBlock::from_chunk(chunk, self.parent_sequence_hash);
-
-            // Update the parent sequence hash for the next block
-            self.parent_sequence_hash = Some(block.sequence_hash());
-
-            Some(block)
-        } else {
-            None
+    fn next_block(
+        block_size: usize,
+        salt_hash: SaltHash,
+        parent_sequence_hash: SequenceHash,
+    ) -> Self {
+        Self {
+            tokens: Tokens::default(),
+            block_size,
+            salt_hash,
+            parent_sequence_hash: Some(parent_sequence_hash),
         }
     }
 
-    /// Attempt to push a token onto the block, if the block is full, return an error
-    pub fn try_push_token(&mut self, token: &Token) -> Result<(), ErrorTokenBlockFull> {
-        if self.tokens.0.len() >= self.block_size {
-            return Err(ErrorTokenBlockFull);
+    // /// Push a token onto the block, if the block is full, return a new [TokenBlock]
+    // /// and reset the incomplete block
+    // pub fn push_token(&mut self, token: Token) -> Option<TokenBlock> {
+    //     assert!(self.tokens.0.len() < self.block_size);
+    //     self.tokens.0.push(token);
+    //     if self.tokens.0.len() == self.block_size {
+    //         let tokens = std::mem::take(&mut self.tokens);
+    //         let chunk = TokenBlockChunk::new(tokens, self.salt_hash);
+    //         let block = TokenBlock::from_chunk(chunk, self.parent_sequence_hash);
+
+    //         // Update the parent sequence hash for the next block
+    //         self.parent_sequence_hash = Some(block.sequence_hash());
+
+    //         Some(block)
+    //     } else {
+    //         None
+    //     }
+    // }
+
+    pub fn commit(&mut self) -> Result<TokenBlock, TokenBlockError> {
+        let len = self.tokens.0.len();
+        if len < self.block_size {
+            return Err(TokenBlockError::Incomplete);
         }
 
-        self.tokens.0.push(*token);
+        assert_eq!(self.tokens.0.len(), self.block_size);
+        let tokens = std::mem::take(&mut self.tokens);
+
+        let chunk = TokenBlockChunk::new(tokens, self.salt_hash);
+        let block = TokenBlock::from_chunk(chunk, self.parent_sequence_hash);
+        *self = block.next_block();
+
+        Ok(block)
+    }
+
+    /// Attempt to push a token onto the block, if the block is full, return an error
+    pub fn push_token(&mut self, token: Token) -> Result<(), TokenBlockError> {
+        if self.tokens.0.len() >= self.block_size {
+            return Err(TokenBlockError::Full);
+        }
+
+        self.tokens.0.push(token);
         Ok(())
+    }
+
+    pub fn remaining(&self) -> usize {
+        self.block_size - self.tokens.0.len()
+    }
+
+    pub fn len(&self) -> usize {
+        self.tokens.0.len()
     }
 
     pub fn tokens(&self) -> &Tokens {
@@ -208,6 +250,10 @@ pub struct TokenBlock {
 }
 
 impl TokenBlock {
+    pub fn next_block(&self) -> PartialTokenBlock {
+        PartialTokenBlock::next_block(self.tokens.len(), self.salt_hash, self.sequence_hash)
+    }
+
     fn from_chunk(chunk: TokenBlockChunk, parent_sequence_hash: Option<SequenceHash>) -> Self {
         match parent_sequence_hash {
             Some(parent) => {
@@ -266,22 +312,32 @@ impl TokenBlockSequence {
     }
 
     pub fn push_token(&mut self, token: Token) -> Option<&TokenBlock> {
-        if let Some(block) = self.current_block.push_token(token) {
-            self.blocks.push(block);
+        let remaining = self.current_block.remaining();
+        assert_ne!(self.current_block.remaining(), 0);
+        self.current_block
+            .push_token(token)
+            .expect("TokenBlock is full");
+
+        // 1 indicates that the block is now full after the push
+        if remaining == 1 {
+            let token_block = self
+                .current_block
+                .commit()
+                .expect("TokenBlock is not complete");
+            self.blocks.push(token_block);
             self.blocks.last()
         } else {
             None
         }
     }
 
-    pub fn last(&self) -> Option<&TokenBlock> {
-        self.blocks.last()
-    }
-
     pub fn blocks(&self) -> &[TokenBlock] {
         &self.blocks
     }
 
+    pub fn last_complete_block(&self) -> Option<&TokenBlock> {
+        self.blocks.last()
+    }
     pub fn current_block(&self) -> &PartialTokenBlock {
         &self.current_block
     }
@@ -491,21 +547,30 @@ mod tests {
         let (blocks, mut current_block) = sequence.into_parts();
 
         let new_block = current_block.push_token(13);
-        assert!(new_block.is_none());
+        assert!(new_block.is_ok());
         assert_eq!(current_block.tokens().len(), 1);
 
         let new_block = current_block.push_token(14);
-        assert!(new_block.is_none());
+        assert!(new_block.is_ok());
         assert_eq!(current_block.tokens().len(), 2);
 
         let new_block = current_block.push_token(15);
-        assert!(new_block.is_none());
+        assert!(new_block.is_ok());
         assert_eq!(current_block.tokens().len(), 3);
 
         let new_block = current_block.push_token(16);
-        assert!(new_block.is_some());
-        assert_eq!(blocks.len(), 3);
+        assert!(new_block.is_ok());
+        assert_eq!(current_block.tokens().len(), 4);
+
+        let new_block = current_block.commit().expect("TokenBlock is not complete");
+        assert_eq!(new_block.tokens().len(), 4);
+        assert_eq!(
+            Some(new_block.sequence_hash()),
+            current_block.parent_sequence_hash
+        );
         assert_eq!(current_block.tokens().len(), 0);
+        assert_eq!(current_block.block_size, 4);
+        assert_eq!(current_block.salt_hash, 1337);
     }
 
     #[test]

@@ -17,6 +17,7 @@ pub mod registry;
 pub mod state;
 pub mod view;
 
+pub use anyhow::Result;
 pub use state::BlockState;
 
 use crate::tokens::{PartialTokenBlock, SaltHash, SequenceHash, Token, TokenBlock};
@@ -205,17 +206,17 @@ pub trait BlockExt {
     /// The block must be in the [BlockState::Reset] state.
     ///
     /// After initialization, the block will be in the [BlockState::Partial] state.
-    fn initialize_sequence(&mut self, salt_hash: SaltHash) -> Result<(), state::BlockStateInvalid>;
+    fn initialize_sequence(&mut self, salt_hash: SaltHash) -> Result<()>;
 
     /// Add a token to the block
     /// If Ok, returns the number of remaining tokens in the block
-    fn add_token(&mut self, token: Token) -> Result<usize, BlockTokenError>;
+    fn add_token(&mut self, token: Token) -> Result<()>;
 
     /// Apply a [TokenBlock] to the block
     /// The block must be [BlockState::Reset].
     ///
     /// Additionally, the [TokenBlock] must match the [BlockLayout::page_size()]
-    fn apply_token_block(&mut self, token_block: &TokenBlock) -> Result<(), BlockTokenError>;
+    fn apply_token_block(&mut self, token_block: &TokenBlock) -> Result<()>;
 }
 
 impl<L: BlockLayout, M: BlockMetadata> BlockExt for Block<L, M> {
@@ -223,16 +224,17 @@ impl<L: BlockLayout, M: BlockMetadata> BlockExt for Block<L, M> {
         self.reset();
     }
 
-    fn initialize_sequence(&mut self, salt_hash: SaltHash) -> Result<(), state::BlockStateInvalid> {
-        self.state.initialize_sequence(self.page_size(), salt_hash)
+    fn initialize_sequence(&mut self, salt_hash: SaltHash) -> Result<()> {
+        Ok(self
+            .state
+            .initialize_sequence(self.page_size(), salt_hash)?)
     }
 
-    fn add_token(&mut self, token: Token) -> Result<usize, BlockTokenError> {
-        // self.state.add_token(token)
-        unimplemented!()
+    fn add_token(&mut self, token: Token) -> Result<()> {
+        Ok(self.state.add_token(&token)?)
     }
 
-    fn apply_token_block(&mut self, token_block: &TokenBlock) -> Result<(), BlockTokenError> {
+    fn apply_token_block(&mut self, token_block: &TokenBlock) -> Result<()> {
         unimplemented!()
     }
 }

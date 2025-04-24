@@ -587,10 +587,13 @@ mod tests {
 
         let mut block = blocks.pop().unwrap();
 
-        // assert_eq!(block.add_token(1).unwrap(), 3);
-        // assert_eq!(block.add_token(2).unwrap(), 2);
-        // assert_eq!(block.add_token(3).unwrap(), 1);
-        // assert_eq!(block.add_token(4).unwrap(), 0);
+        block.initialize_sequence(1337).unwrap();
+        block.add_token(1).unwrap();
+        block.add_token(2).unwrap();
+        block.add_token(3).unwrap();
+        block.add_token(4).unwrap();
+
+        assert!(block.add_token(5).is_err());
     }
 
     #[tokio::test]

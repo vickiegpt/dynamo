@@ -18,6 +18,7 @@ use std::sync::Arc;
 use derive_getters::Getters;
 
 use super::registry::RegistrationHandle;
+use super::Result;
 use crate::tokens::{PartialTokenBlock, SaltHash, Token, TokenBlock};
 
 #[derive(Debug, thiserror::Error)]
@@ -47,15 +48,16 @@ impl BlockState {
         Ok(())
     }
 
-    // pub fn add_token(&mut self, token: Token) -> Result<(), BlockStateInvalid> {
-    //     match self {
-    //         BlockState::Partial(state) => {
-    //             state.block.try_add_token(token)
-    //         _ => {
-    //             return Err(BlockStateInvalid("Block is not partial".to_string()));
-    //         }
-    //     }
-    // }
+    pub fn add_token(&mut self, token: &Token) -> Result<()> {
+        match self {
+            BlockState::Partial(state) => {
+                return Ok(state.add_token(token)?);
+            }
+            _ => {
+                return Err(BlockStateInvalid("Block is not partial".to_string()))?;
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -66,6 +68,10 @@ pub struct PartialState {
 impl PartialState {
     pub fn new(block: PartialTokenBlock) -> Self {
         Self { block }
+    }
+
+    pub fn add_token(&mut self, token: &Token) -> Result<()> {
+        Ok(self.block.push_token(*token)?)
     }
 }
 
