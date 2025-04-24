@@ -52,7 +52,8 @@ bash container/build.sh --platform linux/arm64 \
     --base-image nvcr.io/nvidia/pytorch \
     --base-image-tag 25.03-py3 \
     --runtime-image nvcr.io/nvidia/pytorch \
-    --runtime-image-tag 25.03-py3
+    --runtime-image-tag 25.03-py3 \
+    --manylinux-image quay.io/pypa/manylinux_2_31_aarch64
 ```
 
 

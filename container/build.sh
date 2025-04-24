@@ -407,8 +407,8 @@ fi
 # Automatically set ARCH and ARCH_ALT if PLATFORM is linux/arm64
 if [[ "$PLATFORM" == *"linux/arm64"* ]]; then
     BUILD_ARGS+=" --build-arg ARCH=arm64 --build-arg ARCH_ALT=aarch64 "
-    if [[ -x "$MANYLINUX_IMAGE" ]]; then
-        BUILD_ARGS+=" --build-arg MANYLINUX_IMAGE=manylinux_2_31_aarch64 "
+    if [[ -z "$MANYLINUX_IMAGE" ]]; then
+        BUILD_ARGS+=" --build-arg MANYLINUX_IMAGE=quay.io/pypa/manylinux_2_31_aarch64 "
     fi
 fi
 
