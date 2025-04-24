@@ -240,6 +240,14 @@ impl<S: Storage> BlockLayout for FullyContiguous<S> {
         // Access via stored dims
         self.config.memory_region_size
     }
+
+    fn dtype(&self) -> crate::dtype::DType {
+        self.config.inner.dtype
+    }
+
+    fn storage_type(&self) -> crate::storage::StorageType {
+        self.storage.storage_type()
+    }
 }
 
 #[cfg(test)]

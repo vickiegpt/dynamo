@@ -21,6 +21,7 @@
 pub mod contiguous;
 
 use crate::dtype::DType;
+use crate::storage::StorageType;
 
 use derive_builder::Builder;
 use thiserror::Error;
@@ -87,6 +88,12 @@ pub trait BlockLayout: Send + Sync + std::fmt::Debug {
 
     /// Get the memory region for a specific page [page_size, inner_dim]
     fn memory_region_size(&self) -> usize;
+
+    /// Returns the data type of the layout
+    fn dtype(&self) -> DType;
+
+    /// Returns the storage type of the layout
+    fn storage_type(&self) -> StorageType;
 }
 
 /// Configuration for block layouts

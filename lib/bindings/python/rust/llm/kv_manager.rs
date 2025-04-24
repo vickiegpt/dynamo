@@ -92,4 +92,53 @@ impl KvManager {
 
         Ok(KvManager { inner: block_layout })
     }
+
+    fn tensor(&self, block_idx: usize, layer_idx: usize) -> PyResult<PyObject> {
+        let memory_region = self.inner.get_memory_region(block_idx, layer_idx)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to get memory region: {}", e)))?;
+        let region_size = self.inner.memory_region_size();
+        let region_shape = vec![self.inner.page_size(), self.inner.inner_dim()];
+        let dtype = self.inner.dtype();
+
+        let torch_tensor = match self.inner.storage_type() {
+            dynamo_kv_manager::storage::StorageType::Device(_) => {
+                return Err(PyRuntimeError::new_err("Device memory tensor retrieval not implemented"));
+            }
+            dynamo_kv_manager::storage::StorageType::Pinned => {
+                return Err(PyRuntimeError::new_err("Pinned memory tensor retrieval not implemented"));
+            }
+            dynamo_kv_manager::storage::StorageType::System => {
+                Python::with_gil(|py| -> PyResult<PyObject> {
+                    let ctypes = py.import("ctypes")?;
+                    let ctypes_type = match dtype {
+                        dynamo_kv_manager::dtype::DType::FP8 => ctypes.getattr("c_ubyte")?,
+                        dynamo_kv_manager::dtype::DType::FP16 => ctypes.getattr("c_ushort")?,
+                        dynamo_kv_manager::dtype::DType::BF16 => ctypes.getattr("c_ushort")?,
+                        dynamo_kv_manager::dtype::DType::FP32 => ctypes.getattr("c_float")?,
+                        dynamo_kv_manager::dtype::DType::FP64 => ctypes.getattr("c_double")?,
+                        dynamo_kv_manager::dtype::DType::U8 => ctypes.getattr("c_uint8")?,
+                        dynamo_kv_manager::dtype::DType::U16 => ctypes.getattr("c_uint16")?,
+                        dynamo_kv_manager::dtype::DType::U32 => ctypes.getattr("c_uint32")?,
+                        dynamo_kv_manager::dtype::DType::U64 => ctypes.getattr("c_uint64")?,
+                        dynamo_kv_manager::dtype::DType::I8 => ctypes.getattr("c_int8")?,
+                        dynamo_kv_manager::dtype::DType::I16 => ctypes.getattr("c_int16")?,
+                        dynamo_kv_manager::dtype::DType::I32 => ctypes.getattr("c_int32")?,
+                        dynamo_kv_manager::dtype::DType::I64 => ctypes.getattr("c_int64")?,
+                    };
+                    let ctypes_ptr_type = ctypes.getattr("POINTER")?.call1((ctypes_type,))?;
+                    let ctypes_ptr = ctypes.getattr("cast")?.call1((memory_region, ctypes_ptr_type))?;
+                    let np = py.import("numpy")?;
+                    let np_array = np.getattr("ctypeslib")?.getattr("as_array")?.call1((ctypes_ptr, region_shape))?;
+                    let torch = py.import("torch")?;
+                    let torch_tensor = torch.getattr("from_dlpack")?.call1((np_array,))?;
+                    Ok(torch_tensor.into())
+                })?
+            }
+            _ => {
+                return Err(PyRuntimeError::new_err("Unsupported storage type"));
+            }
+        };
+
+        Ok(torch_tensor)
+    }
 }

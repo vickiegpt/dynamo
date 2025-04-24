@@ -13,7 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import AsyncGenerator, AsyncIterator, Callable, Dict, List, Optional, Union
+from typing import (
+    Any,
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Union,
+)
 
 def log_message(level: str, message: str, module: str, file: str, line: int) -> None:
     """
@@ -597,3 +606,9 @@ class KvManager:
         """
         Create a `KvManager` object
         """
+
+    def tensor(self, block_idx: int, layer_idx: int) -> Any:
+        """
+        Get a torch tensor from the KV cache
+        """
+        ...

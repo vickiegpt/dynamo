@@ -16,6 +16,8 @@
 
 import asyncio
 
+import torch
+
 from dynamo.llm import KvManager
 
 # pytestmark = pytest.mark.pre_merge
@@ -67,5 +69,29 @@ async def test_initialization():
     # )
 
 
+async def test_cpu_tensor():
+    kv_manager = KvManager(
+        NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="CPU"
+    )
+    tensor = kv_manager.tensor(0, 0)
+    assert isinstance(tensor, torch.Tensor)
+    assert tensor.shape == (PAGE_SIZE, INNER_DIM)
+    assert tensor.dtype == torch.float32  # DTYPE
+    # print(tensor)
+    tensor[0][0] = 1.0
+    tensor[PAGE_SIZE - 1][INNER_DIM - 1] = 1.0
+    # print(tensor)
+    tensor_ = kv_manager.tensor(0, 0)
+    assert tensor is not tensor_
+    assert tensor.shape == tensor_.shape
+    assert tensor.dtype == tensor_.dtype
+    assert torch.allclose(tensor, tensor_)
+
+
+async def main():
+    await test_initialization()
+    await test_cpu_tensor()
+
+
 if __name__ == "__main__":
-    asyncio.run(test_initialization())
+    asyncio.run(main())
