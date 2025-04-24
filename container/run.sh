@@ -14,16 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+#!/usr/bin/env bash
+
 set -e
 
 RUN_PREFIX=
 
 # Frameworks
-#
-# Each framework has a corresponding base image.  Additional
-# dependencies are specified in the /container/deps folder and
-# installed within framework specific sections of the Dockerfile.
-
 declare -A FRAMEWORKS=(["VLLM"]=1 ["TENSORRTLLM"]=2)
 DEFAULT_FRAMEWORK=VLLM
 
@@ -43,140 +40,136 @@ INTERACTIVE=
 get_options() {
     while :; do
         case $1 in
-        -h | -\? | --help)
-            show_help
-            exit
-            ;;
-	--framework)
-            if [ "$2" ]; then
-                FRAMEWORK=$2
+            -h | -\? | --help)
+                show_help
+                exit
+                ;;
+            --framework)
+                if [ "$2" ]; then
+                    FRAMEWORK=$2
+                    shift
+                else
+                    missing_requirement "$1"
+                fi
+                ;;
+            --image)
+                if [ "$2" ]; then
+                    IMAGE=$2
+                    shift
+                else
+                    missing_requirement "$1"
+                fi
+                ;;
+            --target)
+                if [ "$2" ]; then
+                    TARGET=$2
+                    shift
+                else
+                    missing_requirement "$1"
+                fi
+                ;;
+            --name)
+                if [ "$2" ]; then
+                    NAME=$2
+                    shift
+                else
+                    missing_requirement "$1"
+                fi
+                ;;
+            --hf-cache)
+                if [ "$2" ]; then
+                    HF_CACHE=$2
+                    shift
+                else
+                    missing_requirement "$1"
+                fi
+                ;;
+            --gpus)
+                if [ "$2" ]; then
+                    GPUS=$2
+                    shift
+                else
+                    missing_requirement "$1"
+                fi
+                ;;
+            --entrypoint)
+                if [ "$2" ]; then
+                    ENTRYPOINT=$2
+                    shift
+                else
+                    missing_requirement "$1"
+                fi
+                ;;
+            --privileged)
+                if [ "$2" ]; then
+                    PRIVILEGED=$2
+                    shift
+                else
+                    missing_requirement "$1"
+                fi
+                ;;
+            --rm)
+                if [ "$2" ]; then
+                    RM=$2
+                    shift
+                else
+                    missing_requirement "$1"
+                fi
+                ;;
+            -v)
+                if [ "$2" ]; then
+                    VOLUME_MOUNTS+=" -v $2 "
+                    shift
+                else
+                    missing_requirement "$1"
+                fi
+                ;;
+            -e)
+                if [ "$2" ]; then
+                    ENVIRONMENT_VARIABLES+=" -e $2 "
+                    shift
+                else
+                    missing_requirement "$1"
+                fi
+                ;;
+            -it)
+                INTERACTIVE=" -it "
+                ;;
+            --mount-workspace)
+                MOUNT_WORKSPACE=TRUE
+                ;;
+            --dry-run)
+                RUN_PREFIX="echo"
+                echo ""
+                echo "=============================="
+                echo "DRY RUN: COMMANDS PRINTED ONLY"
+                echo "=============================="
+                echo ""
+                ;;
+            --)
                 shift
-            else
-		missing_requirement "$1"
-            fi
-            ;;
-        --image)
-            if [ "$2" ]; then
-                IMAGE=$2
-                shift
-            else
-		missing_requirement "$1"
-            fi
-            ;;
-        --target)
-            if [ "$2" ]; then
-                TARGET=$2
-                shift
-            else
-                missing_requirement "$1"
-            fi
-            ;;
-	--name)
-            if [ "$2" ]; then
-                NAME=$2
-                shift
-            else
-		missing_requirement "$1"
-            fi
-            ;;
-	--hf-cache)
-            if [ "$2" ]; then
-                HF_CACHE=$2
-                shift
-            else
-		missing_requirement "$1"
-            fi
-            ;;
-
-	--gpus)
-            if [ "$2" ]; then
-                GPUS=$2
-                shift
-            else
-		missing_requirement "$1"
-            fi
-            ;;
-	--entrypoint)
-            if [ "$2" ]; then
-                ENTRYPOINT=$2
-                shift
-            else
-		missing_requirement "$1"
-            fi
-            ;;
-	--privileged)
-            if [ "$2" ]; then
-                PRIVILEGED=$2
-                shift
-            else
-		missing_requirement "$1"
-            fi
-            ;;
-	--rm)
-            if [ "$2" ]; then
-                RM=$2
-                shift
-            else
-		missing_requirement "$1"
-            fi
-            ;;
-	-v)
-            if [ "$2" ]; then
-                VOLUME_MOUNTS+=" -v $2 "
-                shift
-            else
-		missing_requirement "$1"
-            fi
-            ;;
-	-e)
-            if [ "$2" ]; then
-                ENVIRONMENT_VARIABLES+=" -e $2 "
-                shift
-            else
-		missing_requirement "$1"
-            fi
-            ;;
-	-it)
-	    INTERACTIVE=" -it "
-	    ;;
-	--mount-workspace)
-	    MOUNT_WORKSPACE=TRUE
-	    ;;
-        --dry-run)
-            RUN_PREFIX="echo"
-            echo ""
-            echo "=============================="
-            echo "DRY RUN: COMMANDS PRINTED ONLY"
-            echo "=============================="
-            echo ""
-            ;;
-        --)
-            shift
-            break
-            ;;
-         -?*)
-	    error 'ERROR: Unknown option: ' "$1"
-            ;;
-	 ?*)
-	    error 'ERROR: Unknown option: ' "$1"
-            ;;
-        *)
-            break
-            ;;
+                break
+                ;;
+            -?*)
+                error 'ERROR: Unknown option: ' "$1"
+                ;;
+            ?*)
+                error 'ERROR: Unknown option: ' "$1"
+                ;;
+            *)
+                break
+                ;;
         esac
-
         shift
     done
 
     if [ -z "$FRAMEWORK" ]; then
-	FRAMEWORK=$DEFAULT_FRAMEWORK
+        FRAMEWORK=$DEFAULT_FRAMEWORK
     fi
 
-    if [ -n "$FRAMEWORK" ]; then
-	FRAMEWORK=${FRAMEWORK^^}
-	if [[ -z "${FRAMEWORKS[$FRAMEWORK]}" ]]; then
-	    error 'ERROR: Unknown framework: ' "$FRAMEWORK"
-	fi
+    FRAMEWORK=${FRAMEWORK^^}
+    if [[ -z "${FRAMEWORKS[$FRAMEWORK]}" ]]; then
+        error "ERROR: Unknown framework: $FRAMEWORK"
     fi
 
     if [ -z "$IMAGE" ]; then
@@ -187,87 +180,89 @@ get_options() {
     fi
 
     if [[ ${GPUS^^} == "NONE" ]]; then
-	GPU_STRING=""
+        GPU_STRING=""
     else
-	GPU_STRING="--gpus ${GPUS}"
+        GPU_STRING="--gpus ${GPUS}"
     fi
 
     if [[ ${NAME^^} == "" ]]; then
-	NAME_STRING=""
+        NAME_STRING=""
     else
-	NAME_STRING="--name ${NAME}"
+        NAME_STRING="--name ${NAME}"
     fi
 
     if [[ ${ENTRYPOINT^^} == "" ]]; then
-	ENTRYPOINT_STRING=""
+        ENTRYPOINT_STRING=""
     else
-	ENTRYPOINT_STRING="--entrypoint ${ENTRYPOINT}"
+        ENTRYPOINT_STRING="--entrypoint ${ENTRYPOINT}"
     fi
 
     if [ -n "$MOUNT_WORKSPACE" ]; then
-	VOLUME_MOUNTS+=" -v ${SOURCE_DIR}/..:/workspace "
-	VOLUME_MOUNTS+=" -v /tmp:/tmp "
-	VOLUME_MOUNTS+=" -v /mnt/:/mnt "
+        # Typical volume mounts for local dev
+        VOLUME_MOUNTS+=" -v ${SOURCE_DIR}/..:/workspace "
+        VOLUME_MOUNTS+=" -v /tmp:/tmp "
+        VOLUME_MOUNTS+=" -v /mnt/:/mnt "
 
-	if [ -z "$HF_CACHE" ]; then
-	    HF_CACHE=$DEFAULT_HF_CACHE
-	fi
+        if [ -z "$HF_CACHE" ]; then
+            HF_CACHE=$DEFAULT_HF_CACHE
+        fi
 
-	if [ -z "${PRIVILEGED}" ]; then
-	    PRIVILEGED="TRUE"
-	fi
+        if [ -z "${PRIVILEGED}" ]; then
+            PRIVILEGED="TRUE"
+        fi
 
-	ENVIRONMENT_VARIABLES+=" -e HF_TOKEN"
-
-	INTERACTIVE=" -it "
+        ENVIRONMENT_VARIABLES+=" -e HF_TOKEN"
+        INTERACTIVE=" -it "
     fi
 
     if [[ ${HF_CACHE^^} == "NONE" ]]; then
-	HF_CACHE=
+        HF_CACHE=
     fi
 
     if [ -n "$HF_CACHE" ]; then
-	mkdir -p "$HF_CACHE"
-	VOLUME_MOUNTS+=" -v $HF_CACHE:/root/.cache/huggingface"
+        mkdir -p "$HF_CACHE"
+        VOLUME_MOUNTS+=" -v $HF_CACHE:/root/.cache/huggingface"
     fi
 
     if [ -z "${PRIVILEGED}" ]; then
-	PRIVILEGED="FALSE"
+        PRIVILEGED="FALSE"
     fi
 
     if [ -z "${RM}" ]; then
-	RM="TRUE"
+        RM="TRUE"
     fi
 
     if [[ ${PRIVILEGED^^} == "FALSE" ]]; then
-	PRIVILEGED_STRING=""
+        PRIVILEGED_STRING=""
     else
-	PRIVILEGED_STRING="--privileged"
+        PRIVILEGED_STRING="--privileged"
     fi
 
     if [[ ${RM^^} == "FALSE" ]]; then
-	RM_STRING=""
+        RM_STRING=""
     else
-	RM_STRING=" --rm "
+        RM_STRING=" --rm "
     fi
-
 
     REMAINING_ARGS=("$@")
 }
 
 show_help() {
-    echo "usage: run.sh"
-    echo "  [--image image]"
-    echo "  [--framework framework one of ${!FRAMEWORKS[*]}]"
-    echo "  [--name name for launched container, default NONE] "
-    echo "  [--privileged whether to launch in privileged mode, default FALSE unless mounting workspace]"
-    echo "  [--dry-run print docker commands without running]"
-    echo "  [--hf-cache directory to volume mount as the hf cache, default is NONE unless mounting workspace]"
-    echo "  [--gpus gpus to enable, default is 'all', 'none' disables gpu support]"
-    echo "  [-v add volume mount]"
-    echo "  [-e add environment variable]"
-    echo "  [--mount-workspace set up for local development]"
-    echo "  [-- stop processing and pass remaining args as command to docker run]"
+    echo "usage: run.sh [options]"
+    echo "  [--image <image> ]"
+    echo "  [--framework vllm|tensorrtllm ]"
+    echo "  [--target <dockerfile-stage>] "
+    echo "  [--name container_name]"
+    echo "  [--privileged <TRUE|FALSE>]"
+    echo "  [--rm <TRUE|FALSE>] default TRUE"
+    echo "  [--hf-cache /path/to/huggingface/cache ]"
+    echo "  [--gpus <all|none|count> ] default=all"
+    echo "  [-v <mount> ] additional volume mount"
+    echo "  [-e <VAR=VALUE>] environment variable"
+    echo "  [-it] run interactively"
+    echo "  [--mount-workspace ] mount local workspace for dev"
+    echo "  [--dry-run] only print the command"
+    echo "  [-- stops processing and passes remainder to docker run]"
     exit 0
 }
 
@@ -282,12 +277,32 @@ error() {
 
 get_options "$@"
 
-# RUN the image
-
+# RUN the container
 if [ -z "$RUN_PREFIX" ]; then
     set -x
 fi
 
-${RUN_PREFIX} docker run ${GPU_STRING} ${INTERACTIVE} ${RM_STRING} --network host --shm-size=10G --ulimit memlock=-1 --ulimit stack=67108864 ${ENVIRONMENT_VARIABLES} ${VOLUME_MOUNTS} -w /workspace --cap-add CAP_SYS_PTRACE --ipc host ${PRIVILEGED_STRING} ${NAME_STRING} ${ENTRYPOINT_STRING} ${IMAGE} "${REMAINING_ARGS[@]}"
+${RUN_PREFIX} docker run \
+    ${GPU_STRING} \
+    ${INTERACTIVE} \
+    ${RM_STRING} \
+    --network host \
+    --shm-size=10G \
+    --ulimit memlock=-1 \
+    --ulimit stack=67108864 \
+    ${ENVIRONMENT_VARIABLES} \
+    ${VOLUME_MOUNTS} \
+    -w /workspace \
+    --cap-add CAP_SYS_PTRACE \
+    --ipc host \
+    ${PRIVILEGED_STRING} \
+    ${NAME_STRING} \
+    ${ENTRYPOINT_STRING} \
+    ${IMAGE} \
+    "${REMAINING_ARGS[@]}"
 
+{ set +x; } 2>/dev/null
+if [ -z "$RUN_PREFIX" ]; then
+    set -x
+fi
 { set +x; } 2>/dev/null

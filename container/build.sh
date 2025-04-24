@@ -22,7 +22,7 @@ fi
 VERSION=v${current_tag:-$latest_tag.dev.$commit_id}
 PYTHON_PACKAGE_VERSION=${current_tag:-$latest_tag.dev+$commit_id}
 
-# Frameworks
+# Define frameworks array
 declare -A FRAMEWORKS=(["VLLM"]=1 ["TENSORRTLLM"]=2 ["NONE"]=3)
 DEFAULT_FRAMEWORK=VLLM
 
@@ -30,7 +30,7 @@ SOURCE_DIR=$(dirname "$(readlink -f "$0")")
 DOCKERFILE=${SOURCE_DIR}/Dockerfile
 BUILD_CONTEXT=$(dirname "$(readlink -f "$SOURCE_DIR")")
 
-# Base images for each framework (defaults)
+# Default base images
 TENSORRTLLM_BASE_IMAGE=tensorrt_llm/release
 TENSORRTLLM_BASE_IMAGE_TAG=latest
 TENSORRTLLM_PIP_WHEEL_PATH=""
@@ -170,47 +170,41 @@ get_options() {
         shift
     done
 
+    # Determine or default the framework
     if [ -z "$FRAMEWORK" ]; then
         FRAMEWORK=$DEFAULT_FRAMEWORK
     fi
-
-    # Normalize to uppercase for indexing in the FRAMEWORKS array
     FRAMEWORK=${FRAMEWORK^^}
-
     if [[ -z "${FRAMEWORKS[$FRAMEWORK]}" ]]; then
-        error 'ERROR: Unknown framework: ' "$FRAMEWORK"
+        error "ERROR: Unknown framework: $FRAMEWORK"
     fi
 
     # If user hasn't specified base image or tag, fallback to default for the chosen framework
     if [ -z "$BASE_IMAGE_TAG" ]; then
-        BASE_IMAGE_TAG=${FRAMEWORK}_BASE_IMAGE_TAG
-        BASE_IMAGE_TAG=${!BASE_IMAGE_TAG}
+        BASE_IMAGE_TAG_VAR=${FRAMEWORK}_BASE_IMAGE_TAG
+        BASE_IMAGE_TAG=${!BASE_IMAGE_TAG_VAR}
     fi
-
     if [ -z "$BASE_IMAGE" ]; then
-        BASE_IMAGE=${FRAMEWORK}_BASE_IMAGE
-        BASE_IMAGE=${!BASE_IMAGE}
+        BASE_IMAGE_VAR=${FRAMEWORK}_BASE_IMAGE
+        BASE_IMAGE=${!BASE_IMAGE_VAR}
     fi
-
     if [ -z "$BASE_IMAGE" ]; then
         error "ERROR: Framework $FRAMEWORK without BASE_IMAGE"
     fi
 
-    # If user requested arm64 platform, override to ARM defaults
-    # + pass architecture build-args for the Dockerfile
+    # If user requested ARM64, override to ARM defaults + pass ARCH build-args
     if [[ "$PLATFORM" == *"linux/arm64"* ]]; then
-        # Example: override to your known ARM base image & tag if not explicitly set
+        # If user hasn't explicitly set base, we do our known ARM defaults
         if [[ -z "$BASE_IMAGE" ]]; then
             BASE_IMAGE="nvcr.io/nvidia/pytorch"
         fi
         if [[ -z "$BASE_IMAGE_TAG" ]]; then
             BASE_IMAGE_TAG="25.03-py3"
         fi
-
-        # Also add arch build args for the Dockerfile
         BUILD_ARGS+=" --build-arg ARCH=arm64 --build-arg ARCH_ALT=aarch64 "
     fi
 
+    # If no user-specified tag, we create a default tag
     if [ -z "$TAG" ]; then
         TAG="--tag dynamo:${VERSION}-${FRAMEWORK,,}"
         if [ -n "${TARGET}" ]; then
@@ -218,10 +212,12 @@ get_options() {
         fi
     fi
 
+    # Convert platform to Docker CLI style if present
     if [ -n "$PLATFORM" ]; then
         PLATFORM="--platform ${PLATFORM}"
     fi
 
+    # If a target is provided, pass it to Docker build, else default "dev"
     if [ -n "$TARGET" ]; then
         TARGET_STR="--target ${TARGET}"
     else
@@ -249,17 +245,17 @@ show_help() {
     echo "usage: build.sh"
     echo "  [--base base image]"
     echo "  [--base-image-tag base image tag]"
-    echo "  [--platform platform for docker build (e.g. linux/amd64, linux/arm64)]"
-    echo "  [--framework framework one of ${!FRAMEWORKS[*]}]"
+    echo "  [--platform <platform> (e.g. linux/amd64, linux/arm64)]"
+    echo "  [--framework one of ${!FRAMEWORKS[*]}]"
     echo "  [--tensorrtllm-pip-wheel-path path to tensorrtllm pip wheel]"
     echo "  [--build-arg additional build args to pass to docker build]"
-    echo "  [--cache-from cache location to start from]"
-    echo "  [--cache-to location where to cache the build output]"
-    echo "  [--tag tag for image]"
-    echo "  [--no-cache disable docker build cache]"
-    echo "  [--dry-run print docker commands without running]"
+    echo "  [--cache-from <cache>]"
+    echo "  [--cache-to <cache>]"
+    echo "  [--tag <tag> for the built image]"
+    echo "  [--no-cache] disable docker build cache"
+    echo "  [--dry-run] only print commands"
     echo "  [--build-context name=path to add build context]"
-    echo "  [--release-build set build to release mode]"
+    echo "  [--release-build] set build to release mode"
     exit 0
 }
 
@@ -274,7 +270,7 @@ error() {
 
 get_options "$@"
 
-# Update DOCKERFILE based on framework
+# Choose Dockerfile based on framework
 if [[ $FRAMEWORK == "VLLM" ]]; then
     DOCKERFILE=${SOURCE_DIR}/Dockerfile.vllm
 elif [[ $FRAMEWORK == "TENSORRTLLM" ]]; then
@@ -286,7 +282,6 @@ fi
 # Possibly clone NIXL if needed for VLLM
 if [[ $FRAMEWORK == "VLLM" ]]; then
     NIXL_DIR="/tmp/nixl/nixl_src"
-
     if [ -d "$NIXL_DIR" ]; then
         echo "Warning: $NIXL_DIR already exists, skipping clone"
     else
@@ -373,7 +368,7 @@ if [[ $FRAMEWORK == "TENSORRTLLM" ]]; then
 fi
 
 $RUN_PREFIX docker build \
-    -f $DOCKERFILE \
+    -f "$DOCKERFILE" \
     $TARGET_STR \
     $PLATFORM \
     $BUILD_ARGS \
@@ -382,13 +377,11 @@ $RUN_PREFIX docker build \
     $TAG \
     $LATEST_TAG \
     $BUILD_CONTEXT_ARG \
-    $BUILD_CONTEXT \
+    "$BUILD_CONTEXT" \
     $NO_CACHE
 
 { set +x; } 2>/dev/null
-
 if [ -z "$RUN_PREFIX" ]; then
     set -x
 fi
-
 { set +x; } 2>/dev/null

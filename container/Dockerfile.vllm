@@ -1,445 +1,465 @@
 # -----------------------------------------------------------------------------
 # Unified Dockerfile for vLLM container supporting both x86_64 and ARM64.
-#   - Defaults: ARCH=amd64, ARCH_ALT=x86_64 (x86_64 / manylinux_2_28_x86_64).
+#   - Defaults: ARCH=amd64, ARCH_ALT=x86_64 (manylinux_2_28_x86_64).
 #   - For ARM64: ARCH=arm64, ARCH_ALT=aarch64 (manylinux_2_28_aarch64).
 #
-# Usage example for ARM:
-#   docker buildx build --platform=linux/arm64 \
-#     --build-arg ARCH=arm64 --build-arg ARCH_ALT=aarch64 \
-#     -f Dockerfile.vllm -t dynamo:vllm-arm64 .
+# Usage (example):
+#   docker buildx build \
+#       --platform=linux/arm64 \
+#       --build-arg ARCH=arm64 \
+#       --build-arg ARCH_ALT=aarch64 \
+#       -f Dockerfile.vllm \
+#       -t dynamo:vllm-arm64 .
+#
+# By default (x86_64):
+#   docker build -f Dockerfile.vllm -t dynamo:vllm .
 # -----------------------------------------------------------------------------
 
-    ARG BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
-    ARG BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
-    ARG RUNTIME_IMAGE="nvcr.io/nvidia/cuda"
-    ARG RUNTIME_IMAGE_TAG="12.8.1-runtime-ubuntu24.04"
-
-    ARG RELEASE_BUILD
-
-    #
-    # Architecture arguments:
-    #   ARCH:     for package suffixes (amd64 / arm64)
-    #   ARCH_ALT: for Rust target, manylinux suffix (x86_64 / aarch64)
-    #
-    ARG ARCH=amd64
-    ARG ARCH_ALT=x86_64
-
-    # Provide a fallback manylinux (you can override if needed)
-    # We'll rely on dynamic FROM with "quay.io/pypa/manylinux_2_28_${ARCH_ALT}" later.
-    ARG MANYLINUX_IMAGE="quay.io/pypa/manylinux_2_28_x86_64"
-
-    # Possibly used for perf analyzer
-    ARG GENAI_PERF_TAG="e67e853413a07a778dd78a55e299be7fba9c9c24"
-
-    ###############################################################################
-    # NIXL_BASE: Copy from an existing container image or “nixl” stage
-    ###############################################################################
-    FROM scratch AS nixl
-    # In your real flow, you might do: FROM <some where>
-    # For now, we assume an external image or a base that has /opt/nixl.
-
-    ###############################################################################
-    # This stage simulates the “nixl” source. (Replace with your real logic.)
-    ###############################################################################
-    FROM nixl AS nixl_base
-    ARG NIXL_COMMIT
-    WORKDIR /opt/nixl
-    RUN echo "NIXL commit: ${NIXL_COMMIT}" > /opt/nixl/commit.txt
-
-    ###############################################################################
-    # BASE STAGE: The main dev environment for building vLLM & dependencies
-    ###############################################################################
-    FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS base
-
-    USER root
-
-    # Re-declare build args so they're visible in this stage:
-    ARG ARCH
-    ARG ARCH_ALT
-    ARG RELEASE_BUILD
-
-    # Show debug info
-    RUN echo "Starting vLLM Dockerfile build with ARCH=${ARCH}, ARCH_ALT=${ARCH_ALT}"
-
-    ################################
-    # Install packages / dependencies
-    ################################
-
-    RUN apt-get update -y && apt-get -y install \
-        git \
-        wget \
-        curl \
-        nvtop \
-        tmux \
-        vim \
-        # Additional dev tools
-        autotools-dev \
-        automake \
-        libtool \
-        build-essential \
-        cmake \
-        meson \
-        ninja-build \
-        gdb \
-        libclang-dev \
-        libz-dev \
-        libiberty-dev \
-        flex \
-        libnuma-dev \
-        numactl \
-        libgtest-dev \
-        libssl-dev \
-        python3-full \
-        python3-pip \
-        python3-dev \
-        python3-numpy \
-        libjsoncpp-dev \
-        # For grpc & proto
-        libprotobuf-dev \
-        protobuf-compiler-grpc \
-        libgrpc-dev \
-        libgrpc++-dev \
-        # HPC packages
-        libibverbs-dev \
-        ibverbs-utils \
-        libibmad-dev \
-        # Misc
-        etcd-server \
-        net-tools \
-        pciutils \
-        libpci-dev \
-        screen \
-        dkms \
-        linux-headers-generic \
-        linux-tools-common \
-        linux-tools-generic \
-        uuid-dev \
-        libboost-all-dev \
-        # For glib
-        libglib2.0-0
-
-    ##########################################################
-    # Example: Installing NATS with arch suffix in package name
-    ##########################################################
-
-    RUN wget --tries=3 --waitretry=5 \
-          "https://github.com/nats-io/nats-server/releases/download/v2.10.24/nats-server-v2.10.24-${ARCH}.deb" && \
-        dpkg -i "nats-server-v2.10.24-${ARCH}.deb" && \
-        rm "nats-server-v2.10.24-${ARCH}.deb"
-
-    #############################################################
-    # Example: Installing etcd with arch suffix in tar name
-    #############################################################
-    ENV ETCD_VERSION="v3.5.18"
-    RUN wget --tries=3 --waitretry=5 \
-          "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-${ARCH}.tar.gz" \
-          -O /tmp/etcd.tar.gz && \
-        mkdir -p /usr/local/bin/etcd && \
-        tar -xvf /tmp/etcd.tar.gz -C /usr/local/bin/etcd --strip-components=1 && \
-        rm /tmp/etcd.tar.gz
-
-    #################################################
-    # NIXL: Copy from nixl_base
-    #################################################
-    COPY --from=nixl_base /opt/nixl /opt/nixl
-    WORKDIR /opt/nixl
-    # Example meson build for NIXL
-    RUN mkdir build && \
-        meson setup build/ --prefix=/usr/local/nixl && \
-        cd build && \
-        ninja && \
-        ninja install
-
-    ENV LD_LIBRARY_PATH=/usr/local/nixl/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
-    ENV PYTHONPATH=/usr/local/nixl/lib/python3/dist-packages:/opt/nixl/test/python:$PYTHONPATH
-
-    ################################################
-    # Setup a python venv using uv
-    ################################################
-
-    COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-    RUN mkdir /opt/dynamo && uv venv /opt/dynamo/venv --python 3.12
-
-    ENV VIRTUAL_ENV=/opt/dynamo/venv
-    ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
-
-    ################################################
-    # vLLM patch only on x86
-    ################################################
-
-    ARG VLLM_REF="0.8.4"
-    ARG VLLM_PATCH="vllm_v${VLLM_REF}-dynamo-kv-disagg-patch.patch"
-    ARG VLLM_PATCHED_PACKAGE_NAME="ai_dynamo_vllm"
-    ARG VLLM_PATCHED_PACKAGE_VERSION="0.8.4"
-
-    RUN if [ "${ARCH}" = "amd64" ]; then \
-          echo "Patching & installing vLLM for x86_64..." && \
-          mkdir /tmp/vllm && \
-          uv pip install pip wheel && \
-          python -m pip download --only-binary=:all: --no-deps --dest /tmp/vllm vllm==v${VLLM_REF} && \
-          cd /tmp/vllm && \
-          wheel unpack *.whl && \
-          cd vllm-${VLLM_REF} && \
-          patch -p1 < /tmp/deps/vllm/${VLLM_PATCH} && \
-          mv vllm-${VLLM_REF}.dist-info ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info && \
-          sed -i "s/^Name: vllm/Name: ${VLLM_PATCHED_PACKAGE_NAME}/" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/METADATA && \
-          sed -i "s/^Version: ${VLLM_REF}/Version: ${VLLM_PATCHED_PACKAGE_VERSION}/" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/METADATA && \
-          sed -i 's/Tag: cp38-abi3-linux_x86_64/Tag: cp38-abi3-manylinux1_x86_64/' ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/WHEEL && \
-          sed -i "s/-cp38-abi3-linux_x86_64.whl/-cp38-abi3-manylinux1_x86_64.whl/" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/RECORD && \
-          mkdir -p /workspace/dist && \
-          wheel pack . --dest-dir /workspace/dist && \
-          uv pip install /workspace/dist/${VLLM_PATCHED_PACKAGE_NAME}-*.whl; \
-        else \
-          echo "Skipping vLLM installation on ARM64 (no official wheels)."; \
-        fi
-
-    #########################################################
-    # Common Python dependencies from container/deps
-    #########################################################
-
-    RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requirements.txt \
-        uv pip install --requirement /tmp/requirements.txt
-
-    RUN --mount=type=bind,source=./container/deps/requirements.test.txt,target=/tmp/requirements.txt \
-        uv pip install --requirement /tmp/requirements.txt
-
-    # Quick pyright check
-    RUN pyright --help > /dev/null 2>&1 || true
-
-    # Link /bin/sh -> /bin/bash
-    RUN ln -sf /bin/bash /bin/sh
-
-    #########################################################
-    # Rust installation
-    #########################################################
-    ENV RUSTUP_HOME=/usr/local/rustup \
-        CARGO_HOME=/usr/local/cargo \
-        PATH=/usr/local/cargo/bin:$PATH \
-        RUST_VERSION=1.86.0
-
-    # We'll define the Rust target triple from ARCH_ALT
-    ARG RUSTARCH=${ARCH_ALT}-unknown-linux-gnu
-
-    RUN echo "Installing Rust with RUSTARCH=${RUSTARCH}" && \
-        wget --tries=3 --waitretry=5 "https://static.rust-lang.org/rustup/archive/1.28.1/${RUSTARCH}/rustup-init" && \
-        # FIXME: Add different sha256 checks for different $RUSTARCH if desired
-        chmod +x rustup-init && \
-        ./rustup-init -y --no-modify-path --profile minimal --default-toolchain $RUST_VERSION --default-host ${RUSTARCH} && \
-        rm rustup-init && \
-        chmod -R a+w $RUSTUP_HOME $CARGO_HOME
-
-    #######################################
-    # local-dev stage
-    #######################################
-    FROM base AS local-dev
-
-    ENV USERNAME=ubuntu
-    ARG USER_UID=1000
-    ARG USER_GID=1000
-
-    RUN apt-get update && apt-get install -y sudo gnupg2 gnupg1 \
-        && echo "$USERNAME ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME \
-        && chmod 0440 /etc/sudoers.d/$USERNAME \
-        && mkdir -p /home/$USERNAME \
-        && chown -R $USERNAME:$USERNAME /home/$USERNAME \
-        && rm -rf /var/lib/apt/lists/* \
-        && chsh -s /bin/bash $USERNAME
-
-    # Copy venv from base to local-dev
-    COPY --from=base --chown=$USER_UID:$USER_GID /opt/dynamo/venv /opt/dynamo/venv
-    RUN chown $USER_UID:$USER_GID /opt/dynamo/venv
-    COPY --from=base --chown=$USER_UID:$USER_GID /usr/local/bin /usr/local/bin
-
-    USER $USERNAME
-    ENV HOME=/home/$USERNAME
-    WORKDIR $HOME
-
-    RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=$HOME/.commandhistory/.bash_history" \
-        && mkdir -p $HOME/.commandhistory \
-        && touch $HOME/.commandhistory/.bash_history \
-        && echo "$SNIPPET" >> "$HOME/.bashrc"
-
-    ENV VLLM_KV_CAPI_PATH=$HOME/dynamo/.build/target/debug/libdynamo_llm_capi.so
-
-    ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
-
-    ##################################
-    # build stage
-    ##################################
-    FROM base AS build
-
-    WORKDIR /workspace
-
-    # Copy Python wheel configuration, cargo files, etc.
-    COPY pyproject.toml /workspace/
-    COPY README.md /workspace/
-    COPY LICENSE /workspace/
-    COPY Cargo.toml /workspace/
-    COPY Cargo.lock /workspace/
-    COPY rust-toolchain.toml /workspace/
-    COPY hatch_build.py /workspace/
-    COPY lib/ /workspace/lib/
-    COPY components /workspace/components
-    COPY launch /workspace/launch
-
-    ARG CARGO_BUILD_JOBS
-    ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-16}
-    ENV CARGO_TARGET_DIR=/workspace/target
-
-    RUN cargo build --release --locked --features mistralrs,sglang,vllm,python && \
-        cargo doc --no-deps && \
-        cp target/release/dynamo-run /usr/local/bin && \
-        cp target/release/http /usr/local/bin && \
-        cp target/release/llmctl /usr/local/bin && \
-        cp target/release/metrics /usr/local/bin && \
-        cp target/release/mock_worker /usr/local/bin
-
-    COPY deploy/dynamo/sdk /workspace/deploy/dynamo/sdk
-    COPY deploy/dynamo/api-store /workspace/deploy/dynamo/api-store
-
-    # Set up KV path
-    ENV VLLM_KV_CAPI_PATH="/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
-
-    # Launch banner
-    RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/launch_message.txt \
-        sed '/^#\s/d' /workspace/launch_message.txt > ~/.launch_screen && \
-        echo "cat ~/.launch_screen" >> ~/.bashrc
-
-    CMD []
-
-    ###################################
-    # WHEEL BUILD STAGE
-    ###################################
-    FROM quay.io/pypa/manylinux_2_28_${ARCH_ALT} AS wheel_builder
-
-    ARG ARCH
-    ARG ARCH_ALT
-    ARG RELEASE_BUILD
-    ARG CARGO_BUILD_JOBS
-    ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-16}
-    ENV RUSTUP_HOME=/usr/local/rustup
-    ENV CARGO_HOME=/usr/local/cargo
-    ENV PATH=/usr/local/cargo/bin:$PATH
-    ENV CARGO_TARGET_DIR=/workspace/target
-
-    WORKDIR /workspace
-
-    RUN yum update -y \
-        && yum install -y python3.12-devel protobuf-compiler \
-        && yum clean all \
-        && rm -rf /var/cache/yum
-
-    # Copy from build stage
-    COPY --from=build /workspace /workspace
-    COPY --from=build $RUSTUP_HOME $RUSTUP_HOME
-    COPY --from=build $CARGO_HOME $CARGO_HOME
-
-    # Re-create minimal virtualenv to build wheels
-    COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-    RUN mkdir /opt/dynamo && uv venv /opt/dynamo/venv --python 3.12
-    ENV VIRTUAL_ENV=/opt/dynamo/venv
-    ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
-
-    RUN uv build --wheel --out-dir /workspace/dist && \
-        cd /workspace/lib/bindings/python && \
-        uv build --wheel --out-dir /workspace/dist --python 3.12 && \
-        if [ "${RELEASE_BUILD}" = "true" ]; then \
-          uv build --wheel --out-dir /workspace/dist --python 3.11 && \
-          uv build --wheel --out-dir /workspace/dist --python 3.10; \
-        fi
-
-    ###################################
-    # CI Minimum stage
-    ###################################
-    FROM build AS ci_minimum
-
-    ENV DYNAMO_HOME=/workspace
-
-    COPY . /workspace
-    COPY --from=wheel_builder /workspace/dist/ /workspace/dist/
-
-    # Add the generated wheels, if any, into /opt/dynamo/bindings
-    RUN mkdir -p /opt/dynamo/bindings/wheels && \
-        mkdir /opt/dynamo/bindings/lib && \
-        cp dist/ai_dynamo*cp312*.whl /opt/dynamo/bindings/wheels/ 2>/dev/null || true && \
-        cp target/release/libdynamo_llm_capi.so /opt/dynamo/bindings/lib/ 2>/dev/null || true && \
-        cp -r lib/bindings/c/include /opt/dynamo/bindings/.
-
-    # Install wheels in the container environment
-    RUN uv pip install /workspace/dist/ai_dynamo_runtime*cp312*.whl 2>/dev/null || true && \
-        uv pip install /workspace/dist/ai_dynamo*any.whl 2>/dev/null || true
-
-    ##########################################
-    # Perf Analyzer Image
-    ##########################################
-    FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS perf_analyzer
-
-    ARG GENAI_PERF_TAG
-    WORKDIR /workspace
-
-    RUN apt-get update -y && apt-get -y install cmake g++ libssl-dev python3 rapidjson-dev zlib1g-dev
-    RUN git clone https://github.com/triton-inference-server/perf_analyzer.git
-    RUN git -C perf_analyzer checkout ${GENAI_PERF_TAG}
-    RUN mkdir perf_analyzer/build
-    RUN cmake -B perf_analyzer/build -S perf_analyzer -D TRITON_ENABLE_PERF_ANALYZER_OPENAI=ON
-    RUN cmake --build perf_analyzer/build -- -j8
-    RUN mkdir bin && cp -r perf_analyzer/build/perf_analyzer/src/perf-analyzer-build /workspace/bin/
-
-    ########################################
-    # Development Image
-    ########################################
-    FROM ci_minimum AS dev
-    ARG GENAI_PERF_TAG
-
-    COPY --from=perf_analyzer /workspace/bin/perf-analyzer-build/ /perf/bin
-    COPY --from=perf_analyzer /workspace/perf_analyzer /perf_analyzer
-    ENV PATH="/perf/bin:${PATH}"
-
-    RUN uv pip install "git+https://github.com/triton-inference-server/perf_analyzer.git@${GENAI_PERF_TAG}#subdirectory=genai-perf"
-    RUN uv pip uninstall -y tritonclient || true
-
-    COPY . /workspace
-
-    ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
-    CMD []
-
-    ####################################
-    # Runtime Image
-    ####################################
-    FROM ${RUNTIME_IMAGE}:${RUNTIME_IMAGE_TAG} AS runtime
-
-    ARG ARCH
-    ARG ARCH_ALT
-    WORKDIR /workspace
-    ENV DYNAMO_HOME=/workspace
-    ENV VIRTUAL_ENV=/opt/dynamo/venv
-
-    # Copy NIXL from the build stage
-    COPY --from=build /usr/local/nixl /usr/local/nixl
-
-    # Put uv in place so we can create a new venv
-    COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-    RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        python3-dev && \
-        rm -rf /var/lib/apt/lists/* && \
-        uv venv $VIRTUAL_ENV --python 3.12 && \
-        echo "source $VIRTUAL_ENV/bin/activate" >> ~/.bashrc
-
-    # Copy and install final wheels
-    COPY --from=wheel_builder /workspace/dist/*.whl wheelhouse/ 2>/dev/null || true
-    RUN uv pip install ai-dynamo[vllm] --find-links wheelhouse 2>/dev/null || true && \
-        rm -rf wheelhouse
-
-    # vLLM C API
-    ENV VLLM_KV_CAPI_PATH="/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
-
-    # Copy optional launch banner
-    RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/launch_message.txt \
-        sed '/^#\s/d' /workspace/launch_message.txt > ~/.launch_screen && \
-        echo "cat ~/.launch_screen" >> ~/.bashrc
-
-    # Copy sample examples
-    COPY ./examples examples/
-
-    ENTRYPOINT [ "/usr/bin/bash" ]
-    CMD []
+###############################################################################
+# Global Args (overridden by build.sh or by user at build time)
+###############################################################################
+ARG BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
+ARG BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
+ARG RUNTIME_IMAGE="nvcr.io/nvidia/cuda"
+ARG RUNTIME_IMAGE_TAG="12.8.1-runtime-ubuntu24.04"
+
+ARG RELEASE_BUILD
+
+# Architecture arguments:
+#   ARCH: for package suffixes like "amd64" / "arm64"
+#   ARCH_ALT: for Rust triple, e.g. "x86_64" / "aarch64"
+ARG ARCH=amd64
+ARG ARCH_ALT=x86_64
+
+# For manylinux: the base portion is "quay.io/pypa/manylinux_2_28" plus "_${ARCH_ALT}"
+ARG MANYLINUX_IMAGE="quay.io/pypa/manylinux_2_28"
+
+# Possibly used for perf analyzer
+ARG GENAI_PERF_TAG="e67e853413a07a778dd78a55e299be7fba9c9c24"
+
+###############################################################################
+# Stage: NIXL
+#   This stage simulates pulling some NIXL source or container. Real flow
+#   might be FROM <some registry> instead of FROM scratch.
+###############################################################################
+FROM scratch AS nixl
+
+###############################################################################
+# Stage: nixl_base
+#   Copy the NIXL directory from the above stage, store commit, etc.
+###############################################################################
+FROM nixl AS nixl_base
+ARG NIXL_COMMIT
+WORKDIR /opt/nixl
+RUN echo "NIXL commit: ${NIXL_COMMIT}" > /opt/nixl/commit.txt
+
+###############################################################################
+# Stage: base
+#   Main dev environment for building vLLM & dependencies
+###############################################################################
+FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS base
+
+USER root
+
+# Re-declare build args so they're visible in this stage:
+ARG ARCH
+ARG ARCH_ALT
+ARG RELEASE_BUILD
+
+RUN echo "Starting Dockerfile.vllm build with ARCH=${ARCH}, ARCH_ALT=${ARCH_ALT}"
+
+################################
+# Install packages / dependencies
+################################
+RUN apt-get update -y && apt-get -y install \
+    git \
+    wget \
+    curl \
+    nvtop \
+    tmux \
+    vim \
+    # Additional dev tools
+    autotools-dev \
+    automake \
+    libtool \
+    build-essential \
+    cmake \
+    meson \
+    ninja-build \
+    gdb \
+    libclang-dev \
+    libz-dev \
+    libiberty-dev \
+    flex \
+    libnuma-dev \
+    numactl \
+    libgtest-dev \
+    libssl-dev \
+    python3-full \
+    python3-pip \
+    python3-dev \
+    python3-numpy \
+    libjsoncpp-dev \
+    # For grpc & proto
+    libprotobuf-dev \
+    protobuf-compiler-grpc \
+    libgrpc-dev \
+    libgrpc++-dev \
+    # HPC packages
+    libibverbs-dev \
+    ibverbs-utils \
+    libibmad-dev \
+    # Misc
+    etcd-server \
+    net-tools \
+    pciutils \
+    libpci-dev \
+    screen \
+    dkms \
+    linux-headers-generic \
+    linux-tools-common \
+    linux-tools-generic \
+    uuid-dev \
+    libboost-all-dev \
+    # For glib
+    libglib2.0-0
+
+##########################################################
+# Example: Installing NATS with arch suffix in package name
+##########################################################
+
+RUN wget --tries=3 --waitretry=5 \
+      "https://github.com/nats-io/nats-server/releases/download/v2.10.24/nats-server-v2.10.24-${ARCH}.deb" && \
+    dpkg -i "nats-server-v2.10.24-${ARCH}.deb" && \
+    rm "nats-server-v2.10.24-${ARCH}.deb"
+
+#############################################################
+# Example: Installing etcd with arch suffix in tar name
+#############################################################
+ENV ETCD_VERSION="v3.5.18"
+RUN wget --tries=3 --waitretry=5 \
+      "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-${ARCH}.tar.gz" \
+      -O /tmp/etcd.tar.gz && \
+    mkdir -p /usr/local/bin/etcd && \
+    tar -xvf /tmp/etcd.tar.gz -C /usr/local/bin/etcd --strip-components=1 && \
+    rm /tmp/etcd.tar.gz
+
+#################################################
+# NIXL: Copy from nixl_base
+#################################################
+COPY --from=nixl_base /opt/nixl /opt/nixl
+WORKDIR /opt/nixl
+# Example meson build for NIXL
+RUN mkdir build && \
+    meson setup build/ --prefix=/usr/local/nixl && \
+    cd build && \
+    ninja && \
+    ninja install
+
+ENV LD_LIBRARY_PATH=/usr/local/nixl/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+ENV PYTHONPATH=/usr/local/nixl/lib/python3/dist-packages:/opt/nixl/test/python:$PYTHONPATH
+
+################################################
+# Setup a python venv using uv
+################################################
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+RUN mkdir /opt/dynamo && uv venv /opt/dynamo/venv --python 3.12
+
+ENV VIRTUAL_ENV=/opt/dynamo/venv
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+
+################################################
+# vLLM patch only on x86
+################################################
+
+ARG VLLM_REF="0.8.4"
+ARG VLLM_PATCH="vllm_v${VLLM_REF}-dynamo-kv-disagg-patch.patch"
+ARG VLLM_PATCHED_PACKAGE_NAME="ai_dynamo_vllm"
+ARG VLLM_PATCHED_PACKAGE_VERSION="0.8.4"
+
+RUN if [ "${ARCH}" = "amd64" ]; then \
+      echo "Patching & installing vLLM for x86_64..." && \
+      mkdir /tmp/vllm && \
+      uv pip install pip wheel && \
+      python -m pip download --only-binary=:all: --no-deps --dest /tmp/vllm vllm==v${VLLM_REF} && \
+      cd /tmp/vllm && \
+      wheel unpack *.whl && \
+      cd vllm-${VLLM_REF} && \
+      patch -p1 < /tmp/deps/vllm/${VLLM_PATCH} && \
+      mv vllm-${VLLM_REF}.dist-info ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info && \
+      sed -i "s/^Name: vllm/Name: ${VLLM_PATCHED_PACKAGE_NAME}/" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/METADATA && \
+      sed -i "s/^Version: ${VLLM_REF}/Version: ${VLLM_PATCHED_PACKAGE_VERSION}/" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/METADATA && \
+      sed -i 's/Tag: cp38-abi3-linux_x86_64/Tag: cp38-abi3-manylinux1_x86_64/' ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/WHEEL && \
+      sed -i "s/-cp38-abi3-linux_x86_64.whl/-cp38-abi3-manylinux1_x86_64.whl/" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/RECORD && \
+      mkdir -p /workspace/dist && \
+      wheel pack . --dest-dir /workspace/dist && \
+      uv pip install /workspace/dist/${VLLM_PATCHED_PACKAGE_NAME}-*.whl; \
+    else \
+      echo "Skipping vLLM installation on ARM64 (no official wheels)."; \
+    fi
+
+#########################################################
+# Common Python dependencies from container/deps
+#########################################################
+
+RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requirements.txt \
+    uv pip install --requirement /tmp/requirements.txt
+
+RUN --mount=type=bind,source=./container/deps/requirements.test.txt,target=/tmp/requirements.txt \
+    uv pip install --requirement /tmp/requirements.txt
+
+# Quick pyright check
+RUN pyright --help > /dev/null 2>&1 || true
+
+# Link /bin/sh -> /bin/bash
+RUN ln -sf /bin/bash /bin/sh
+
+#########################################################
+# Rust installation with arch-based SHA (example)
+#########################################################
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH \
+    RUST_VERSION=1.86.0
+
+# If you want separate sha checks, do them in if/else
+RUN if [ "${ARCH}" = "amd64" ]; then \
+      RUSTARCH="x86_64-unknown-linux-gnu"; \
+      RUST_SHA="a3339fb004c3d0bb9862ba0bce001861fe5cbde9c10d16591eb3f39ee6cd3e7f"; \
+      echo "Downloading Rust for x86_64 with SHA $RUST_SHA"; \
+      wget --tries=3 --waitretry=5 "https://static.rust-lang.org/rustup/archive/1.28.1/${RUSTARCH}/rustup-init" && \
+      echo "${RUST_SHA} *rustup-init" | sha256sum -c - && \
+      chmod +x rustup-init && \
+      ./rustup-init -y --no-modify-path --profile minimal --default-toolchain ${RUST_VERSION} --default-host ${RUSTARCH} && \
+      rm rustup-init && \
+      chmod -R a+w /usr/local/rustup /usr/local/cargo; \
+    else \
+      RUSTARCH="aarch64-unknown-linux-gnu"; \
+      RUST_SHA="c64b33db2c6b9385817ec0e49a84bcfe018ed6e328fe755c3c809580cc70ce7a"; \
+      echo "Downloading Rust for arm64 with SHA $RUST_SHA"; \
+      wget --tries=3 --waitretry=5 "https://static.rust-lang.org/rustup/archive/1.28.1/${RUSTARCH}/rustup-init" && \
+      echo "${RUST_SHA} *rustup-init" | sha256sum -c - && \
+      chmod +x rustup-init && \
+      ./rustup-init -y --no-modify-path --profile minimal --default-toolchain ${RUST_VERSION} --default-host ${RUSTARCH} && \
+      rm rustup-init && \
+      chmod -R a+w /usr/local/rustup /usr/local/cargo; \
+    fi
+
+#######################################
+# local-dev stage
+#######################################
+FROM base AS local-dev
+
+ENV USERNAME=ubuntu
+ARG USER_UID=1000
+ARG USER_GID=1000
+
+RUN apt-get update && apt-get install -y sudo gnupg2 gnupg1 \
+    && echo "$USERNAME ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME \
+    && chmod 0440 /etc/sudoers.d/$USERNAME \
+    && mkdir -p /home/$USERNAME \
+    && chown -R $USERNAME:$USERNAME /home/$USERNAME \
+    && rm -rf /var/lib/apt/lists/* \
+    && chsh -s /bin/bash $USERNAME
+
+# Copy venv from base to local-dev
+COPY --from=base --chown=$USER_UID:$USER_GID /opt/dynamo/venv /opt/dynamo/venv
+RUN chown $USER_UID:$USER_GID /opt/dynamo/venv
+
+# Also copy /usr/local/bin
+COPY --from=base --chown=$USER_UID:$USER_GID /usr/local/bin /usr/local/bin
+
+USER $USERNAME
+ENV HOME=/home/$USERNAME
+WORKDIR $HOME
+
+RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=$HOME/.commandhistory/.bash_history" \
+    && mkdir -p $HOME/.commandhistory \
+    && touch $HOME/.commandhistory/.bash_history \
+    && echo "$SNIPPET" >> "$HOME/.bashrc"
+
+ENV VLLM_KV_CAPI_PATH=$HOME/dynamo/.build/target/debug/libdynamo_llm_capi.so
+
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+
+##################################
+# build stage
+##################################
+FROM base AS build
+
+WORKDIR /workspace
+
+# Copy Python wheel configuration, cargo files, etc.
+COPY pyproject.toml /workspace/
+COPY README.md /workspace/
+COPY LICENSE /workspace/
+COPY Cargo.toml /workspace/
+COPY Cargo.lock /workspace/
+COPY rust-toolchain.toml /workspace/
+COPY hatch_build.py /workspace/
+COPY lib/ /workspace/lib/
+COPY components /workspace/components
+COPY launch /workspace/launch
+
+ARG CARGO_BUILD_JOBS
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-16}
+ENV CARGO_TARGET_DIR=/workspace/target
+
+RUN cargo build --release --locked --features mistralrs,sglang,vllm,python && \
+    cargo doc --no-deps && \
+    cp target/release/dynamo-run /usr/local/bin && \
+    cp target/release/http /usr/local/bin && \
+    cp target/release/llmctl /usr/local/bin && \
+    cp target/release/metrics /usr/local/bin && \
+    cp target/release/mock_worker /usr/local/bin
+
+COPY deploy/dynamo/sdk /workspace/deploy/dynamo/sdk
+COPY deploy/dynamo/api-store /workspace/deploy/dynamo/api-store
+
+# Set up KV path
+ENV VLLM_KV_CAPI_PATH="/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
+
+# Launch banner
+RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/launch_message.txt \
+    sed '/^#\s/d' /workspace/launch_message.txt > ~/.launch_screen && \
+    echo "cat ~/.launch_screen" >> ~/.bashrc
+
+CMD []
+
+###################################
+# WHEEL BUILD STAGE
+###################################
+FROM ${MANYLINUX_IMAGE}_${ARCH_ALT} AS wheel_builder
+
+ARG ARCH
+ARG ARCH_ALT
+ARG RELEASE_BUILD
+ARG CARGO_BUILD_JOBS
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-16}
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:$PATH
+ENV CARGO_TARGET_DIR=/workspace/target
+
+WORKDIR /workspace
+
+RUN yum update -y \
+    && yum install -y python3.12-devel protobuf-compiler \
+    && yum clean all \
+    && rm -rf /var/cache/yum
+
+# Copy from build stage
+COPY --from=build /workspace /workspace
+COPY --from=build $RUSTUP_HOME $RUSTUP_HOME
+COPY --from=build $CARGO_HOME $CARGO_HOME
+
+# Re-create minimal virtualenv to build wheels
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+RUN mkdir /opt/dynamo && uv venv /opt/dynamo/venv --python 3.12
+ENV VIRTUAL_ENV=/opt/dynamo/venv
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+
+RUN uv build --wheel --out-dir /workspace/dist && \
+    cd /workspace/lib/bindings/python && \
+    uv build --wheel --out-dir /workspace/dist --python 3.12 && \
+    if [ "${RELEASE_BUILD}" = "true" ]; then \
+      uv build --wheel --out-dir /workspace/dist --python 3.11 && \
+      uv build --wheel --out-dir /workspace/dist --python 3.10; \
+    fi
+
+###################################
+# CI Minimum stage
+###################################
+FROM build AS ci_minimum
+
+ENV DYNAMO_HOME=/workspace
+
+COPY . /workspace
+COPY --from=wheel_builder /workspace/dist/ /workspace/dist/
+
+# Add the generated wheels, if any, into /opt/dynamo/bindings
+RUN mkdir -p /opt/dynamo/bindings/wheels && \
+    mkdir /opt/dynamo/bindings/lib && \
+    cp dist/ai_dynamo*cp312*.whl /opt/dynamo/bindings/wheels/ 2>/dev/null || true && \
+    cp target/release/libdynamo_llm_capi.so /opt/dynamo/bindings/lib/ 2>/dev/null || true && \
+    cp -r lib/bindings/c/include /opt/dynamo/bindings/.
+
+# Install wheels in the container environment
+RUN uv pip install /workspace/dist/ai_dynamo_runtime*cp312*.whl 2>/dev/null || true && \
+    uv pip install /workspace/dist/ai_dynamo*any.whl 2>/dev/null || true
+
+##########################################
+# Perf Analyzer Image
+##########################################
+FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS perf_analyzer
+
+ARG GENAI_PERF_TAG
+WORKDIR /workspace
+
+RUN apt-get update -y && apt-get -y install cmake g++ libssl-dev python3 rapidjson-dev zlib1g-dev
+RUN git clone https://github.com/triton-inference-server/perf_analyzer.git
+RUN git -C perf_analyzer checkout ${GENAI_PERF_TAG}
+RUN mkdir perf_analyzer/build
+RUN cmake -B perf_analyzer/build -S perf_analyzer -D TRITON_ENABLE_PERF_ANALYZER_OPENAI=ON
+RUN cmake --build perf_analyzer/build -- -j8
+RUN mkdir bin && cp -r perf_analyzer/build/perf_analyzer/src/perf-analyzer-build /workspace/bin/
+
+########################################
+# Development Image
+########################################
+FROM ci_minimum AS dev
+ARG GENAI_PERF_TAG
+
+COPY --from=perf_analyzer /workspace/bin/perf-analyzer-build/ /perf/bin
+COPY --from=perf_analyzer /workspace/perf_analyzer /perf_analyzer
+ENV PATH="/perf/bin:${PATH}"
+
+RUN uv pip install "git+https://github.com/triton-inference-server/perf_analyzer.git@${GENAI_PERF_TAG}#subdirectory=genai-perf"
+RUN uv pip uninstall -y tritonclient || true
+
+COPY . /workspace
+
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+CMD []
+
+####################################
+# Runtime Image
+####################################
+FROM ${RUNTIME_IMAGE}:${RUNTIME_IMAGE_TAG} AS runtime
+
+ARG ARCH
+ARG ARCH_ALT
+WORKDIR /workspace
+ENV DYNAMO_HOME=/workspace
+ENV VIRTUAL_ENV=/opt/dynamo/venv
+
+# Copy NIXL from the build stage
+COPY --from=build /usr/local/nixl /usr/local/nixl
+
+# Put uv in place so we can create a new venv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    python3-dev && \
+    rm -rf /var/lib/apt/lists/* && \
+    uv venv $VIRTUAL_ENV --python 3.12 && \
+    echo "source $VIRTUAL_ENV/bin/activate" >> ~/.bashrc
+
+# Copy and install final wheels
+COPY --from=wheel_builder /workspace/dist/*.whl wheelhouse/ 2>/dev/null || true
+RUN uv pip install ai-dynamo[vllm] --find-links wheelhouse 2>/dev/null || true && \
+    rm -rf wheelhouse
+
+# vLLM C API
+ENV VLLM_KV_CAPI_PATH="/opt/dynamo/bindings/lib/libdynamo_llm_capi.so"
+
+# Copy optional launch banner
+RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/launch_message.txt \
+    sed '/^#\s/d' /workspace/launch_message.txt > ~/.launch_screen && \
+    echo "cat ~/.launch_screen" >> ~/.bashrc
+
+# Copy sample examples
+COPY ./examples examples/
+
+ENTRYPOINT [ "/usr/bin/bash" ]
+CMD []
