@@ -112,6 +112,28 @@ get_options() {
                 missing_requirement "$1"
             fi
             ;;
+        --manylinux-image)
+            if [ "$2" ]; then
+                MANYLINUX_IMAGE=$2
+                shift
+            else
+                missing_requirement "$1"
+            fi
+            ;;
+        --runtime-image)
+            if [ "$2" ]; then
+                RUNTIME_IMAGE=$2
+                shift
+            else
+                missing_requirement "$1"
+            ;;
+        --runtime-image-tag)
+            if [ "$2" ]; then
+                RUNTIME_IMAGE_TAG=$2
+                shift
+            else
+                missing_requirement "$1"
+            ;;
         --target)
             if [ "$2" ]; then
                 TARGET=$2
@@ -259,6 +281,7 @@ show_help() {
     echo "usage: build.sh"
     echo "  [--base base image]"
     echo "  [--base-image-tag base image tag]"
+    echo "  [--manylinux-image manylinux image]"
     echo "  [--platform platform for docker build"
     echo "  [--framework framework one of ${!FRAMEWORKS[*]}]"
     echo "  [--tensorrtllm-pip-wheel-path path to tensorrtllm pip wheel]"
@@ -362,6 +385,33 @@ LATEST_TAG="--tag dynamo:latest-${FRAMEWORK,,}"
 if [ -n "${TARGET}" ]; then
     LATEST_TAG="${LATEST_TAG}-${TARGET}"
 fi
+
+if [ -z "$MANYLINUX_IMAGE" ]; then
+    BUILD_ARGS+=" --build-arg MANYLINUX_IMAGE=${MANYLINUX_IMAGE} "
+fi
+
+if [ -z "$RUNTIME_IMAGE" ]; then
+    BUILD_ARGS+=" --build-arg RUNTIME_IMAGE=${RUNTIME_IMAGE} "
+fi
+
+if [ -z "$RUNTIME_IMAGE_TAG" ]; then
+    BUILD_ARGS+=" --build-arg RUNTIME_IMAGE_TAG=${RUNTIME_IMAGE_TAG} "
+fi
+
+if [ -z "$GENAI_PERF_TAG" ]; then
+    BUILD_ARGS+=" --build-arg GENAI_PERF_TAG=${GENAI_PERF_TAG} "
+fi
+
+# Automatically set ARCH and ARCH_ALT if PLATFORM is linux/arm64
+if [[ "$PLATFORM" == *"linux/arm64"* ]]; then
+    BUILD_ARGS+=" --build-arg ARCH=arm64 --build-arg ARCH_ALT=aarch64 "
+    if [[ -x "$MANYLINUX_IMAGE" ]]; then
+        BUILD_ARGS+=" --build-arg MANYLINUX_IMAGE=manylinux_2_31_aarch64 "
+    fi
+fi
+
+
+
 
 show_image_options
 
