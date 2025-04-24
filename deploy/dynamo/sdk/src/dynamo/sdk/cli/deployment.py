@@ -23,12 +23,12 @@ import re
 import sys
 import typing as t
 from http import HTTPStatus
+from typing import Any, Dict, List, Optional, TextIO
 
-import click
+import typer
 from bentoml._internal.cloud.base import Spinner
 from bentoml._internal.cloud.deployment import Deployment, DeploymentConfigParameters
 from bentoml._internal.configuration.containers import BentoMLContainer
-from bentoml._internal.utils import add_experimental_docstring
 from bentoml.exceptions import BentoMLException
 from rich.console import Console
 from simple_di import Provide, inject
@@ -44,12 +44,15 @@ configure_server_logging()
 
 logger = logging.getLogger(__name__)
 
+app = typer.Typer(
+    help="Deploy Dynamo applications to Kubernetes cluster",
+    add_completion=True,
+    no_args_is_help=True,
+)
+console = Console(highlight=False)
+
 if t.TYPE_CHECKING:
     from bentoml._internal.cloud import BentoCloudClient
-
-    TupleStrAny = tuple[str, ...]
-else:
-    TupleStrAny = tuple
 
 
 def raise_deployment_config_error(err: BentoMLException, action: str) -> t.NoReturn:
@@ -62,207 +65,15 @@ def raise_deployment_config_error(err: BentoMLException, action: str) -> t.NoRet
     ) from None
 
 
-@click.command(name="deploy")
-@click.argument(
-    "bento",
-    type=click.STRING,
-    required=False,
-)
-@click.option(
-    "-n",
-    "--name",
-    type=click.STRING,
-    help="Deployment name",
-)
-@click.option(
-    "-f",
-    "--config-file",
-    type=click.File(),
-    help="Configuration file path",
-    default=None,
-)
-@click.option(
-    "--wait/--no-wait",
-    type=click.BOOL,
-    is_flag=True,
-    help="Do not wait for deployment to be ready",
-    default=True,
-)
-@click.option(
-    "--timeout",
-    type=click.INT,
-    default=3600,
-    help="Timeout for deployment to be ready in seconds",
-)
-@click.pass_context
-@add_experimental_docstring
-def deploy_command(
-    ctx: click.Context,
-    bento: str | None,
-    name: str | None,
-    config_file: str | t.TextIO | None,
-    wait: bool,
-    timeout: int,
-) -> None:
-    """Create a deployment on BentoCloud.
-
-    \b
-    Create a deployment using parameters, or using config yaml file.
-    """
-    create_deployment(
-        bento=bento,
-        name=name,
-        config_file=config_file,
-        wait=wait,
-        timeout=timeout,
-        args=ctx.args,
-    )
-
-
-def build_deployment_command() -> click.Group:
-    @click.group(name="deployment")
-    @add_experimental_docstring
-    def deployment_command():
-        """Deploy Dynamo applications to Kubernetes cluster"""
-
-    @deployment_command.command()
-    @click.argument(
-        "bento",
-        type=click.STRING,
-        required=False,
-    )
-    @click.option(
-        "-n",
-        "--name",
-        type=click.STRING,
-        help="Deployment name",
-    )
-    @click.option(
-        "-f",
-        "--config-file",
-        type=click.File(),
-        help="Configuration file path",
-        default=None,
-    )
-    @click.option(
-        "--wait/--no-wait",
-        type=click.BOOL,
-        is_flag=True,
-        help="Do not wait for deployment to be ready",
-        default=True,
-    )
-    @click.option(
-        "--timeout",
-        type=click.INT,
-        default=3600,
-        help="Timeout for deployment to be ready in seconds",
-    )
-    @click.pass_context
-    def create(
-        ctx: click.Context,
-        bento: str | None,
-        name: str | None,
-        config_file: str | t.TextIO | None,
-        wait: bool,
-        timeout: int,
-    ) -> None:
-        """Create a deployment on Dynamo Cloud.
-
-        \b
-        Create a deployment using parameters, or using config yaml file.
-        """
-        create_deployment(
-            bento=bento,
-            name=name,
-            config_file=config_file,
-            wait=wait,
-            timeout=timeout,
-            args=ctx.args,
-        )
-
-    @deployment_command.command()
-    @click.argument("name", type=click.STRING)
-    @click.option(
-        "--cluster",
-        type=click.STRING,
-        help="Cluster name",
-        default=None,
-    )
-    def get(name: str, cluster: str | None) -> None:
-        """Get deployment details from Dynamo Cloud.
-
-        \b
-        Get deployment details by name.
-        """
-        get_deployment(name, cluster=cluster)
-
-    @deployment_command.command()
-    @click.option(
-        "--cluster",
-        type=click.STRING,
-        help="Cluster name",
-        default=None,
-    )
-    @click.option(
-        "--search",
-        type=click.STRING,
-        help="Search query",
-        default=None,
-    )
-    @click.option(
-        "--dev",
-        is_flag=True,
-        help="List development deployments",
-        default=False,
-    )
-    @click.option(
-        "-q",
-        "--query",
-        type=click.STRING,
-        help="Advanced query string",
-        default=None,
-    )
-    def list(
-        cluster: str | None, search: str | None, dev: bool, query: str | None
-    ) -> None:
-        """List all deployments from Dynamo Cloud.
-
-        \b
-        List and filter deployments.
-        """
-        list_deployments(cluster=cluster, search=search, dev=dev, q=query)
-
-    @deployment_command.command()
-    @click.argument("name", type=click.STRING)
-    @click.option(
-        "--cluster",
-        type=click.STRING,
-        help="Cluster name",
-        default=None,
-    )
-    def delete(name: str, cluster: str | None) -> None:
-        """Delete a deployment from Dynamo Cloud.
-
-        \b
-        Delete deployment by name.
-        """
-        delete_deployment(name, cluster=cluster)
-
-    return deployment_command
-
-
-deployment_command = build_deployment_command()
-
-
 @inject
 def create_deployment(
-    bento: str | None = None,
-    name: str | None = None,
-    config_file: str | t.TextIO | None = None,
+    bento: Optional[str] = None,
+    name: Optional[str] = None,
+    config_file: Optional[TextIO] = None,
     wait: bool = True,
     timeout: int = 3600,
     dev: bool = False,
-    args: list[str] | None = None,
+    args: Optional[List[str]] = None,
     _cloud_client: BentoCloudClient = Provide[BentoMLContainer.bentocloud_client],
 ) -> Deployment:
     # Load config from file and serialize to env
@@ -288,7 +99,6 @@ def create_deployment(
         print(f"Error: {str(e)}")
         sys.exit(1)
 
-    console = Console(highlight=False)
     with Spinner(console=console) as spinner:
         try:
             # Create deployment with initial status message
@@ -330,7 +140,7 @@ def create_deployment(
             sys.exit(1)
 
 
-def _get_urls(deployment: Deployment) -> list[str]:
+def _get_urls(deployment: Deployment) -> List[str]:
     """Get URLs from deployment."""
     latest = deployment._client.v2.get_deployment(deployment.name, deployment.cluster)
     urls = latest.urls if hasattr(latest, "urls") else None
@@ -367,11 +177,10 @@ def _display_deployment_info(spinner: Spinner, deployment: Deployment) -> None:
 @inject
 def get_deployment(
     name: str,
-    cluster: str | None = None,
+    cluster: Optional[str] = None,
     _cloud_client: BentoCloudClient = Provide[BentoMLContainer.bentocloud_client],
 ) -> Deployment:
     """Get deployment details from Dynamo Cloud."""
-    console = Console(highlight=False)
     with Spinner(console=console) as spinner:
         try:
             spinner.update(f'Getting deployment "{name}" from Dynamo Cloud...')
@@ -399,11 +208,10 @@ def get_deployment(
 @inject
 def delete_deployment(
     name: str,
-    cluster: str | None = None,
+    cluster: Optional[str] = None,
     _cloud_client: BentoCloudClient = Provide[BentoMLContainer.bentocloud_client],
 ) -> None:
     """Delete a deployment from Dynamo Cloud."""
-    console = Console(highlight=False)
     with Spinner(console=console) as spinner:
         try:
             spinner.update(f'Deleting deployment "{name}" from Dynamo Cloud...')
@@ -426,15 +234,14 @@ def delete_deployment(
 
 @inject
 def list_deployments(
-    cluster: str | None = None,
-    search: str | None = None,
+    cluster: Optional[str] = None,
+    search: Optional[str] = None,
     dev: bool = False,
-    q: str | None = None,
-    labels: t.List[dict[str, t.Any]] | None = None,
+    q: Optional[str] = None,
+    labels: Optional[List[Dict[str, Any]]] = None,
     _cloud_client: BentoCloudClient = Provide[BentoMLContainer.bentocloud_client],
 ) -> None:
     """List all deployments from Dynamo Cloud."""
-    console = Console(highlight=False)
     with Spinner(console=console) as spinner:
         try:
             # Handle label-based filtering
@@ -467,3 +274,100 @@ def list_deployments(
                 sys.exit(1)
             spinner.log(f"[red]:x: Error:[/] Failed to list deployments: {str(e)}")
             sys.exit(1)
+
+
+@app.command()
+def create(
+    ctx: typer.Context,
+    bento: Optional[str] = typer.Argument(None, help="Bento to deploy"),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="Deployment name"),
+    config_file: Optional[typer.FileText] = typer.Option(
+        None, "--config-file", "-f", help="Configuration file path"
+    ),
+    wait: bool = typer.Option(
+        True, "--wait/--no-wait", help="Do not wait for deployment to be ready"
+    ),
+    timeout: int = typer.Option(
+        3600, "--timeout", help="Timeout for deployment to be ready in seconds"
+    ),
+) -> None:
+    """Create a deployment on Dynamo Cloud.
+
+    Create a deployment using parameters, or using config yaml file.
+    """
+    create_deployment(
+        bento=bento,
+        name=name,
+        config_file=config_file,
+        wait=wait,
+        timeout=timeout,
+        args=ctx.args if hasattr(ctx, "args") else None,
+    )
+
+
+@app.command()
+def get(
+    name: str = typer.Argument(..., help="Deployment name"),
+    cluster: Optional[str] = typer.Option(None, "--cluster", help="Cluster name"),
+) -> None:
+    """Get deployment details from Dynamo Cloud.
+
+    Get deployment details by name.
+    """
+    get_deployment(name, cluster=cluster)
+
+
+@app.command()
+def list(
+    cluster: Optional[str] = typer.Option(None, "--cluster", help="Cluster name"),
+    search: Optional[str] = typer.Option(None, "--search", help="Search query"),
+    dev: bool = typer.Option(False, "--dev", help="List development deployments"),
+    query: Optional[str] = typer.Option(
+        None, "--query", "-q", help="Advanced query string"
+    ),
+) -> None:
+    """List all deployments from Dynamo Cloud.
+
+    List and filter deployments.
+    """
+    list_deployments(cluster=cluster, search=search, dev=dev, q=query)
+
+
+@app.command()
+def delete(
+    name: str = typer.Argument(..., help="Deployment name"),
+    cluster: Optional[str] = typer.Option(None, "--cluster", help="Cluster name"),
+) -> None:
+    """Delete a deployment from Dynamo Cloud.
+
+    Delete deployment by name.
+    """
+    delete_deployment(name, cluster=cluster)
+
+
+def deploy(
+    ctx: typer.Context,
+    bento: Optional[str] = typer.Argument(None, help="Bento to deploy"),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="Deployment name"),
+    config_file: Optional[typer.FileText] = typer.Option(
+        None, "--config-file", "-f", help="Configuration file path"
+    ),
+    wait: bool = typer.Option(
+        True, "--wait/--no-wait", help="Do not wait for deployment to be ready"
+    ),
+    timeout: int = typer.Option(
+        3600, "--timeout", help="Timeout for deployment to be ready in seconds"
+    ),
+) -> None:
+    """Create a deployment on Dynamo Cloud.
+
+    Create a deployment using parameters, or using config yaml file.
+    """
+    create_deployment(
+        bento=bento,
+        name=name,
+        config_file=config_file,
+        wait=wait,
+        timeout=timeout,
+        args=ctx.args if hasattr(ctx, "args") else None,
+    )
