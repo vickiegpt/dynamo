@@ -1,0 +1,29 @@
+Frontend:
+  served_model_name: meta-llama/Llama-3.1-8B-Instruct
+  endpoint: dynamo.Processor.chat/completions
+  port: 8000
+
+Processor:
+  engine_args: "benchmark/llm_api_config.yaml"
+  router: round-robin
+  remote-prefill: true
+
+TensorRTLLMWorker:
+  engine_args: "benchmark/llm_api_config.yaml"
+  llmapi-disaggregated-config: "benchmark/single_node_config.yaml"
+  remote-prefill: true
+  min-prefill-workers: 1
+  router: round-robin
+  ServiceArgs:
+    workers: 1
+    resources:
+      gpu: 1
+
+TensorRTLLMPrefillWorker:
+  engine_args: "benchmark/llm_api_config.yaml"
+  llmapi-disaggregated-config: "benchmark/single_node_config.yaml"
+  router: round-robin
+  ServiceArgs:
+    workers: 1
+    resources:
+      gpu: 1

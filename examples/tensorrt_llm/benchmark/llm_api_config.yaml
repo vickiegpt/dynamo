@@ -1,0 +1,13 @@
+model_name: "meta-llama/Llama-3.1-8B-Instruct"
+model_path: null
+tensor_parallel_size: 1
+trust_remote_code: true
+backend: pytorch
+
+kv_cache_config:
+  free_gpu_memory_fraction: 0.85
+  enable_block_reuse: false
+
+pytorch_backend_config:
+  enable_overlap_scheduler: true
+  use_cuda_graph: true
