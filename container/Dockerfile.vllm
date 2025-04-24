@@ -27,6 +27,10 @@ COPY --from=nixl . .
 
 FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS base
 
+# Redeclare ARG ARCH and ARCH_ALT to be used in the build stage
+ARG ARCH
+ARG ARCH_ALT
+
 USER root
 
 ### NIXL SETUP ###
@@ -278,6 +282,10 @@ ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-16}
 
 FROM base AS local-dev
 
+# Redeclare ARG ARCH and ARCH_ALT to be used in the build stage
+ARG ARCH
+ARG ARCH_ALT
+
 # https://code.visualstudio.com/remote/advancedcontainers/add-nonroot-user
 # Will use the default ubuntu user, but give sudo access
 # Needed so files permissions aren't set to root ownership when writing from inside container
@@ -323,6 +331,10 @@ ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
 
 # Build the wheel in the manylinux environment
 FROM ${MANYLINUX_IMAGE} AS wheel_builder
+
+# Redeclare ARG ARCH and ARCH_ALT to be used in the build stage
+ARG ARCH
+ARG ARCH_ALT
 
 ARG CARGO_BUILD_JOBS
 # Set CARGO_BUILD_JOBS to 16 if not provided
@@ -390,6 +402,10 @@ RUN uv build --wheel --out-dir /workspace/dist && \
 #######################################
 FROM base AS ci_minimum
 
+# Redeclare ARG ARCH and ARCH_ALT to be used in the build stage
+ARG ARCH
+ARG ARCH_ALT
+
 ENV DYNAMO_HOME=/workspace
 ENV CARGO_TARGET_DIR=/workspace/target
 
@@ -436,6 +452,11 @@ RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/la
 ##########################################
 FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS perf_analyzer
 
+# Redeclare ARG ARCH and ARCH_ALT to be used in the build stage
+ARG ARCH
+ARG ARCH_ALT
+
+
 ARG GENAI_PERF_TAG
 
 WORKDIR /workspace
@@ -454,6 +475,10 @@ RUN mkdir bin &&  \
 ########## Development Image ###########
 ########################################
 FROM ci_minimum AS dev
+
+# Redeclare ARG ARCH and ARCH_ALT to be used in the build stage
+ARG ARCH
+ARG ARCH_ALT
 
 ARG GENAI_PERF_TAG
 
@@ -476,6 +501,10 @@ CMD []
 ####################################
 
 FROM ${RUNTIME_IMAGE}:${RUNTIME_IMAGE_TAG} AS runtime
+
+# Redeclare ARG ARCH and ARCH_ALT to be used in the build stage
+ARG ARCH
+ARG ARCH_ALT
 
 WORKDIR /workspace
 ENV DYNAMO_HOME=/workspace

@@ -58,6 +58,12 @@ bash container/build.sh --platform linux/arm64 \
 ```
 
 
+wget https://content.mellanox.com/ofed/MLNX_OFED-24.10-2.1.8.0/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu24.04-aarch64.tgz
+
+
+    "https://content.mellanox.com/ofed/MLNX_OFED-24.10-2.1.8.0/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu24.04-${ARCH_ALT}.tgz"
+
+
 ## Using Dynamo vLLM patch in custom vLLM build
 
 ### Prepare Dynamo version of vLLM
