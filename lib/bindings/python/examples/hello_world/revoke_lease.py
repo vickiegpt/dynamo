@@ -30,7 +30,7 @@ async def worker(runtime: DistributedRuntime):
     await init(runtime, "dynamo", args.lease_id)
 
 
-async def init(runtime: DistributedRuntime, ns: str, lease_id: int):
+async def init(runtime: DistributedRuntime, lease_id: int):
     client = runtime.etcd_client()
     await client.revoke_lease(lease_id)
 
