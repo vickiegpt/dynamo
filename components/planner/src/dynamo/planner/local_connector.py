@@ -17,9 +17,10 @@ import asyncio
 import json
 import logging
 import os
-import filelock
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+
+import filelock
 
 from dynamo.planner.circusd import CircusController
 from dynamo.planner.planner_connector import PlannerConnector
@@ -31,7 +32,7 @@ configure_logger(None, None)
 
 
 class LocalConnector(PlannerConnector):
-    def __init__(self, namespace: str, runtime: Optional[DistributedRuntime] = None):
+    def __init__(self, namespace: str, runtime: DistributedRuntime):
         """
         Initialize LocalConnector and connect to CircusController.
 
@@ -45,9 +46,9 @@ class LocalConnector(PlannerConnector):
         self.circus = CircusController.from_state_file(namespace)
         self._lockfile = self.state_file.with_suffix(".lock")
         self._file_lock = filelock.FileLock(self._lockfile)
-        self.worker_client = None
-        self.prefill_client = None
-        self.etcd_client = None
+        self.worker_client: Any | None = None
+        self.prefill_client: Any | None = None
+        self.etcd_client: Any | None = None
 
     async def _load_state(self) -> Dict[str, Any]:
         """Load state from state file.
@@ -90,7 +91,7 @@ class LocalConnector(PlannerConnector):
         system_resources = state.get("environment", {}).get("SYSTEM_RESOURCES", {})
         all_gpus = set(str(gpu) for gpu in system_resources.get("gpu_info", []))
 
-        allocated_gpus = set()
+        allocated_gpus: set[str] = set()
         for component_info in state.get("components", {}).values():
             resources = component_info.get("resources", {})
             gpu_list = resources.get("allocated_gpus", [])
@@ -103,7 +104,12 @@ class LocalConnector(PlannerConnector):
 
     async def add_component(self, component_name: str, blocking: bool = True) -> bool:
         """
-        Add a component
+        Add a component. The steps are as follows:
+
+        1. Load state
+        2. Find max suffix to create unique watcher name
+        3. Built environment and command for watcher
+        4. Block until component is running
 
         Args:
             component_name: Name of the component
@@ -175,7 +181,6 @@ class LocalConnector(PlannerConnector):
                 f"Succesfully created {watcher_name}. Waiting for worker to start..."
             )
 
-        # Prefill pulls from queue so does not need to block
         if blocking:
             required_endpoint_ids = pre_add_endpoint_ids + 1
             while True:
@@ -226,7 +231,6 @@ class LocalConnector(PlannerConnector):
         target_watcher = matching_components[highest_suffix]
         logger.info(f"Removing watcher {target_watcher}")
 
-        # If VllmWorker, we need to revoke the lease before we remove the watcher in order to ensure graceful shutdown
         pre_remove_endpoint_ids = await self._get_endpoint_ids(component_name)
 
         if component_name == "VllmWorker" or component_name == "PrefillWorker":
@@ -264,8 +268,7 @@ class LocalConnector(PlannerConnector):
 
     async def _get_endpoint_ids(self, component_name: str) -> int:
         """
-        Get the endpoint IDs for a component. We use this to block and ensure that a component is running
-        before we complete the add_component call.
+        Get the endpoint IDs for a component.
 
         Args:
             component_name: Name of the component
@@ -299,9 +302,15 @@ class LocalConnector(PlannerConnector):
     async def _revoke_lease(self, lease_id: int) -> bool:
         """
         Wrapper function around the etcd client to revoke a lease
+
+        Args:
+            lease_id: Lease ID to revoke
+
+        Returns:
+            True if successful
         """
         if self.etcd_client is None:
-            self.etcd_client = self.runtime.etcd_client()
+            self.etcd_client = self.runtime.etcd_client()  # type: ignore
         try:
             await self.etcd_client.revoke_lease(lease_id)
             logger.info(f"Revoked lease {lease_id}")
