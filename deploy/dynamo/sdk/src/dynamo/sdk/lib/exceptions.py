@@ -22,7 +22,7 @@ class DynamoException(Exception):
     """Base class for all Dynamo SDK errors."""
 
     error_code = HTTPStatus.INTERNAL_SERVER_ERROR
-    error_mapping = {}
+    error_mapping: dict[HTTPStatus, type[DynamoException]] = {}
 
     def __init_subclass__(cls) -> None:
         if "error_code" in cls.__dict__:
