@@ -20,12 +20,12 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 #[pyclass]
-pub struct KvManager {
+pub struct BlockManager {
     inner: Arc<dyn dynamo_kv_manager::layout::BlockLayout + Send + Sync>,
 }
 
 #[pymethods]
-impl KvManager {
+impl BlockManager {
     #[new]
     #[pyo3(signature = (num_blocks, num_layers, page_size, inner_dim, alignment, dtype, device, pin_memory=false))]
     fn new(
@@ -90,7 +90,7 @@ impl KvManager {
             }
         };
 
-        Ok(KvManager { inner: block_layout })
+        Ok(BlockManager { inner: block_layout })
     }
 
     fn tensor(&self, block_idx: usize, layer_idx: usize) -> PyResult<PyObject> {

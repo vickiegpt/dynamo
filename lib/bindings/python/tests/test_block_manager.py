@@ -18,7 +18,7 @@ import asyncio
 
 import torch
 
-from dynamo.llm import KvManager
+from dynamo.llm import BlockManager
 
 # pytestmark = pytest.mark.pre_merge
 
@@ -33,31 +33,31 @@ DTYPE = "FP32"
 
 async def test_initialization():
     # Test with default device
-    KvManager(
+    BlockManager(
         NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="CPU"
     )
     # Test with lowercase device
-    KvManager(
+    BlockManager(
         NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="cpu"
     )
     # Test with CUDA device
-    KvManager(
+    BlockManager(
         NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="CUDA"
     )
     # Test with lowercase cuda device
-    KvManager(
+    BlockManager(
         NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="cuda"
     )
     # Test with specific CUDA device
-    KvManager(
+    BlockManager(
         NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="CUDA:0"
     )
     # Test with lowercase specific cuda device
-    KvManager(
+    BlockManager(
         NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="cuda:0"
     )
     # Test with pinned memory
-    # KvManager(
+    # BlockManager(
     #    NUM_BLOCKS,
     #    NUM_LAYERS,
     #    PAGE_SIZE,
@@ -70,10 +70,10 @@ async def test_initialization():
 
 
 async def test_cpu_tensor():
-    kv_manager = KvManager(
+    block_manager = BlockManager(
         NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="CPU"
     )
-    tensor = kv_manager.tensor(0, 0)
+    tensor = block_manager.tensor(0, 0)
     assert isinstance(tensor, torch.Tensor)
     assert tensor.get_device() == -1  # CPU
     assert tensor.shape == (PAGE_SIZE, INNER_DIM)
@@ -82,7 +82,7 @@ async def test_cpu_tensor():
     tensor[0][0] = 1.0
     tensor[PAGE_SIZE - 1][INNER_DIM - 1] = 1.0
     # print(tensor)
-    tensor_ = kv_manager.tensor(0, 0)
+    tensor_ = block_manager.tensor(0, 0)
     assert tensor is not tensor_
     assert tensor.shape == tensor_.shape
     assert tensor.dtype == tensor_.dtype
@@ -90,10 +90,10 @@ async def test_cpu_tensor():
 
 
 async def test_cuda_tensor():
-    kv_manager = KvManager(
+    block_manager = BlockManager(
         NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="CUDA"
     )
-    tensor = kv_manager.tensor(0, 0)
+    tensor = block_manager.tensor(0, 0)
     assert isinstance(tensor, torch.Tensor)
     assert tensor.get_device() == 0  # CUDA:0
     assert tensor.shape == (PAGE_SIZE, INNER_DIM)
@@ -102,7 +102,7 @@ async def test_cuda_tensor():
     tensor[0][0] = 1.0
     tensor[PAGE_SIZE - 1][INNER_DIM - 1] = 1.0
     # print(tensor)
-    tensor_ = kv_manager.tensor(0, 0)
+    tensor_ = block_manager.tensor(0, 0)
     assert tensor is not tensor_
     assert tensor.shape == tensor_.shape
     assert tensor.dtype == tensor_.dtype

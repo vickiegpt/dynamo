@@ -595,7 +595,7 @@ class HttpAsyncEngine:
 
     ...
 
-class KvManager:
+class BlockManager:
     """
     A KV cache manager
     """
@@ -604,7 +604,7 @@ class KvManager:
 
     def __init__(self, device: str, pin_memory: bool) -> None:
         """
-        Create a `KvManager` object
+        Create a `BlockManager` object
         """
 
     def tensor(self, block_idx: int, layer_idx: int) -> Any:
