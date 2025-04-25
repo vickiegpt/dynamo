@@ -517,8 +517,6 @@ class BaseTensorrtLLMEngine:
                 ).model_dump_json(exclude_unset=True)
             end_time = time.time()
             self._generation_time += (end_time - start_time)
-            logger.info(f"token generated: {self._token_generated}")
-            logger.info(f"time spent: {self._generation_time}")
 
         except CppExecutorError:
             signal.raise_signal(signal.SIGINT)

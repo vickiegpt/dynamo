@@ -338,8 +338,6 @@ class ChatProcessor(BaseChatProcessor):
         request,
         conversation,
     ):
-        self._on_going_postprocessing += 1
-        logger.info(f"chat_processor start on_going_postprocessng: {self._on_going_postprocessing}")
         first_iteration = True
         last_text_len = 0
         last_token_ids_len = 0
@@ -378,9 +376,6 @@ class ChatProcessor(BaseChatProcessor):
             first_iteration = False
             logger.debug(f"[postprocessor] Response: {response_data}")
             yield response_data
-        
-        self._on_going_postprocessing -= 1
-        logger.info(f"chat_processor finished on_going_postprocessng: {self._on_going_postprocessing}")
 
 
 class CompletionsProcessor:
