@@ -244,7 +244,12 @@ Install etcd:
 tar -xvf etcd-v3.5.18-linux-arm64.tar.gz
 ```
 
-#### Start services for Dynamo
+### Build and install NIXL
+
+
+
+
+### Start services for Dynamo
 
 Start nats-server:
 
