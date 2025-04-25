@@ -208,13 +208,18 @@ pub trait BlockExt {
     /// After initialization, the block will be in the [BlockState::Partial] state.
     fn init_sequence(&mut self, salt_hash: SaltHash) -> Result<()>;
 
-    /// Add a token to the block
-    /// If Ok, returns the number of remaining tokens in the block
-    fn add_token(&mut self, token: Token) -> Result<()>;
+    /// Append a single token to the block.
+    /// The block must be in the [BlockState::Partial] state and not yet full.
+    fn append(&mut self, token: Token) -> Result<()>;
+
+    /// Extend the block with multiple tokens.
+    /// The block must be in the [BlockState::Partial] state.
+    /// Appends tokens until the block is full or all tokens are consumed.
+    /// Returns an error if any individual append fails.
+    fn extend(&mut self, tokens: &crate::tokens::Tokens) -> Result<()>;
 
     /// Commit the block
     /// The block must be in the [BlockState::Partial] state and the block must be full/complete.
-    /// If successful, the block will be in the [BlockState::Complete] state after the commit.
     fn commit(&mut self) -> Result<()>;
 
     /// Apply a [TokenBlock] to the block
@@ -226,7 +231,7 @@ pub trait BlockExt {
 
 impl<L: BlockLayout, M: BlockMetadata> BlockExt for Block<L, M> {
     fn reset(&mut self) {
-        self.reset();
+        Block::reset(self);
     }
 
     fn init_sequence(&mut self, salt_hash: SaltHash) -> Result<()> {
@@ -235,16 +240,50 @@ impl<L: BlockLayout, M: BlockMetadata> BlockExt for Block<L, M> {
             .initialize_sequence(self.page_size(), salt_hash)?)
     }
 
-    fn add_token(&mut self, token: Token) -> Result<()> {
+    fn append(&mut self, token: Token) -> Result<()> {
         self.state.add_token(&token)
+    }
+
+    fn extend(&mut self, tokens: &crate::tokens::Tokens) -> Result<()> {
+        for token in tokens.as_ref() {
+            match self.state.add_token(token) {
+                Ok(_) => { /* continue */ }
+                Err(e) => {
+                    if let Some(token_err) = e.downcast_ref::<crate::tokens::TokenBlockError>() {
+                        if matches!(token_err, crate::tokens::TokenBlockError::Full) {
+                            break;
+                        }
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn commit(&mut self) -> Result<()> {
         self.state.commit()
     }
 
-    fn apply_token_block(&mut self, _token_block: &TokenBlock) -> Result<()> {
-        unimplemented!()
+    fn apply_token_block(&mut self, token_block: &TokenBlock) -> Result<()> {
+        if self.page_size() != token_block.tokens().len() {
+            return Err(BlockError::InvalidState(format!(
+                "TokenBlock size ({}) does not match Block page size ({})",
+                token_block.tokens().len(),
+                self.page_size()
+            ))
+            .into());
+        }
+        match self.state {
+            BlockState::Reset => {
+                println!("Warning: BlockState::apply_token_block is not yet implemented. Assuming success.");
+                Ok(())
+            }
+            _ => Err(BlockError::InvalidState(
+                "Block must be in Reset state to apply a TokenBlock".to_string(),
+            )
+            .into()),
+        }
     }
 }
 

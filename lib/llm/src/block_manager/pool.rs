@@ -611,12 +611,12 @@ mod tests {
         let mut block = blocks.pop().unwrap();
 
         block.init_sequence(1337).unwrap();
-        block.add_token(1).unwrap();
-        block.add_token(2).unwrap();
-        block.add_token(3).unwrap();
-        block.add_token(4).unwrap();
+        block.append(1).unwrap();
+        block.append(2).unwrap();
+        block.append(3).unwrap();
+        block.append(4).unwrap();
 
-        assert!(block.add_token(5).is_err());
+        assert!(block.append(5).is_err());
     }
 
     #[tokio::test]
@@ -684,13 +684,13 @@ mod tests {
         block.init_sequence(1337).unwrap();
 
         // Add some tokens to the block - our page_size is 4
-        block.add_token(1).unwrap();
-        block.add_token(2).unwrap();
-        block.add_token(3).unwrap();
-        block.add_token(4).unwrap();
+        block.append(1).unwrap();
+        block.append(2).unwrap();
+        block.append(3).unwrap();
+        block.append(4).unwrap();
 
         // Should fail because we don't have space in the block
-        assert!(block.add_token(5).is_err());
+        assert!(block.append(5).is_err());
 
         // Commit the block - this will generate a sequence hash
         // This will put the block in a Complete state

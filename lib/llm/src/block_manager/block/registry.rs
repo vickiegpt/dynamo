@@ -194,13 +194,13 @@ mod tests {
         assert_eq!(sequence.blocks().len(), 2);
         assert_eq!(sequence.current_block().len(), 2);
 
-        assert_eq!(sequence.blocks()[0].tokens(), vec![1, 2, 3, 4]);
+        assert_eq!(sequence.blocks()[0].tokens(), &vec![1, 2, 3, 4]);
         assert_eq!(sequence.blocks()[0].sequence_hash(), 14643705804678351452);
 
-        assert_eq!(sequence.blocks()[1].tokens(), vec![5, 6, 7, 8]);
+        assert_eq!(sequence.blocks()[1].tokens(), &vec![5, 6, 7, 8]);
         assert_eq!(sequence.blocks()[1].sequence_hash(), 4945711292740353085);
 
-        assert_eq!(sequence.current_block().tokens(), vec![9, 10]);
+        assert_eq!(sequence.current_block().tokens(), &vec![9, 10]);
 
         sequence
     }
