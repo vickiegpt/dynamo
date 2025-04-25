@@ -135,7 +135,7 @@ class CircusController:
                     f"Failed to add watcher {name}: {response.get('reason', 'unknown error')}"
                 )
                 return False
-            except (CallError, Exception) as e:
+            except Exception as e:
                 if "arbiter is already running" in str(e):
                     if attempt == max_retries - 1:
                         logger.error(
@@ -209,7 +209,7 @@ class CircusController:
 
                 logger.error(f"Failed to remove watcher {name}: {response}")
                 return False
-            except (CallError, Exception) as e:
+            except Exception as e:
                 if "arbiter is already running" in str(e):
                     if attempt == max_retries - 1:
                         logger.error(
