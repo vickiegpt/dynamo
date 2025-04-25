@@ -24,7 +24,7 @@ from components.prefill_worker import PrefillWorker
 from utils.nixl import NixlMetadataStore
 from utils.prefill_queue import PrefillQueue
 from utils.protocol import MyRequestOutput, vLLMGenerateRequest
-from utils.vllm import parse_vllm_args
+from utils.vllm import parse_vllm_args, RouterType
 from vllm.entrypoints.openai.api_server import (
     build_async_engine_client_from_engine_args,
 )
@@ -82,7 +82,7 @@ class VllmWorker:
                 logger.info("Pipeline parallel size is not supported yet, setting to 1")
                 self.engine_args.pipeline_parallel_size = 1
 
-        if self.engine_args.router == "kv":
+        if self.engine_args.router == RouterType.KV:
             if not self.engine_args.enable_prefix_caching:
                 logger.info(
                     "When using KV router, prefix caching must be enabled, setting to True"

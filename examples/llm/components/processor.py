@@ -24,7 +24,7 @@ from transformers import AutoTokenizer
 from utils.chat_processor import ChatProcessor, CompletionsProcessor, ProcessMixIn
 from utils.logging import check_required_workers
 from utils.protocol import MyRequestOutput, Tokens, vLLMGenerateRequest
-from utils.vllm import parse_vllm_args
+from utils.vllm import parse_vllm_args, RouterType
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.entrypoints.openai.protocol import ChatCompletionRequest, CompletionRequest
 from vllm.outputs import RequestOutput
@@ -95,7 +95,7 @@ class Processor(ProcessMixIn):
             .client()
         )
 
-        if self.engine_args.router == "kv":
+        if self.engine_args.router == RouterType.KV:
             router_ns, router_name = Router.dynamo_address()  # type: ignore
             self.router_client = (
                 await runtime.namespace(router_ns)
@@ -148,7 +148,7 @@ class Processor(ProcessMixIn):
         ) = await self._parse_raw_request(raw_request)
         # TODO: queue request at processor when engines are full
         router_mode = (await self.etcd_kv_cache.get("router")).decode()
-        if router_mode == "kv":
+        if router_mode == RouterType.KV:
             router_generator = await self.router_client.generate(
                 Tokens(tokens=engine_prompt["prompt_token_ids"]).model_dump_json()
             )
@@ -179,7 +179,7 @@ class Processor(ProcessMixIn):
                     ).model_dump_json(),
                     int(worker_id),
                 )
-        elif router_mode == "random":
+        elif router_mode == RouterType.RANDOM:
             engine_generator = await self.worker_client.generate(
                 vLLMGenerateRequest(
                     engine_prompt=engine_prompt,
@@ -187,7 +187,7 @@ class Processor(ProcessMixIn):
                     request_id=request_id,
                 ).model_dump_json()
             )
-        elif router_mode == "round-robin":
+        elif router_mode == RouterType.ROUND_ROBIN:
             engine_generator = await self.worker_client.round_robin(
                 vLLMGenerateRequest(
                     engine_prompt=engine_prompt,
@@ -195,7 +195,7 @@ class Processor(ProcessMixIn):
                     request_id=request_id,
                 ).model_dump_json()
             )
-        elif router_mode == "kv-load":
+        elif router_mode == RouterType.KV_LOAD:
             # route to worker with least kv load
             # TODO: move the router to a separate file and clean up processor.py
             try:

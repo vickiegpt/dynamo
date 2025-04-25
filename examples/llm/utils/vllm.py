@@ -19,6 +19,11 @@ from vllm.utils import FlexibleArgumentParser
 
 from dynamo.sdk.lib.config import ServiceConfig
 
+class RouterType:
+    RANDOM = "random"
+    ROUND_ROBIN = "round-robin"
+    KV = "kv"
+    KV_LOAD = "kv-load"
 
 def parse_vllm_args(service_name, prefix) -> AsyncEngineArgs:
     config = ServiceConfig.get_instance()
@@ -27,8 +32,8 @@ def parse_vllm_args(service_name, prefix) -> AsyncEngineArgs:
     parser.add_argument(
         "--router",
         type=str,
-        choices=["random", "round-robin", "kv", "kv-load"],
-        default="random",
+        choices=[RouterType.RANDOM, RouterType.ROUND_ROBIN, RouterType.KV, RouterType.KV_LOAD],
+        default=RouterType.RANDOM,
         help="Router type to use for scheduling requests to workers",
     )
     parser.add_argument(
