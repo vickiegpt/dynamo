@@ -360,8 +360,6 @@ class BaseTensorrtLLMEngine:
             finally:
                 if "llm" in locals():
                     # Run shutdown in a thread to avoid blocking
-                    logger.info(f"token generated: {self._token_generated}")
-                    logger.info(f"time spent: {self._generation_time}")
                     await loop.run_in_executor(None, llm.shutdown)
 
         try:
@@ -378,6 +376,9 @@ class BaseTensorrtLLMEngine:
 
                 # Wait for the engine shutdown signal.
                 await self._llm_engine_shutdown_event.wait()
+
+                print(f"token generated: {self._token_generated}")
+                print(f"time spent: {self._generation_time}")
 
                 # Stop the publishing threads
                 if self.publish_stats_thread and self.publish_stats_thread.is_alive():
