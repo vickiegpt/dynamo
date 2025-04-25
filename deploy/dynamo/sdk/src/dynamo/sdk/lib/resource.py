@@ -95,8 +95,6 @@ class GPUManager:
         # Each item is (gpu_index, fraction_used, fraction_size)
         # E.g. (0, 0.5, 0.5) means GPU 0 has 0.5 used with fraction size of 0.5
         self._gpu_fractions: list[tuple[int, float, float]] = []
-        # Track allocations by service name
-        self._service_gpu_allocations: dict[str, list[int]] = {}
         self._init_nvml()
 
     def _init_nvml(self):
