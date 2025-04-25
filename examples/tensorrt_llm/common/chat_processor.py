@@ -169,6 +169,8 @@ class ChatProcessor(BaseChatProcessor):
     ):
         super().__init__(model, tokenizer)
         self.using_engine_generator = using_engine_generator
+        self._on_going_preprocessing = 0
+        self._on_going_postprocessing = 0
 
     def yield_first_chat(
         self,
@@ -301,6 +303,9 @@ class ChatProcessor(BaseChatProcessor):
         return "data: [DONE]\n\n"
 
     async def preprocess(self, request):
+        self._on_going_preprocessing += 1
+        logger.info(f"chat_processor start on_going_preprocessng: {self._on_going_preprocessing}")
+
         conversation: List[Any] = []
         for message in request.messages:
             conversation.extend(parse_chat_message_content(message))
@@ -320,6 +325,9 @@ class ChatProcessor(BaseChatProcessor):
         )
         sampling_params = request.to_sampling_params()
 
+        self._on_going_preprocessing -= 1
+        logger.info(f"chat_processor finished on_going_preprocessng: {self._on_going_preprocessing}")
+
         return TRTLLMWorkerRequest(
             id=request.id,
             model=request.model,
@@ -337,6 +345,8 @@ class ChatProcessor(BaseChatProcessor):
         request,
         conversation,
     ):
+        self._on_going_postprocessing += 1
+        logger.info(f"chat_processor start on_going_postprocessng: {self._on_going_postprocessing}")
         first_iteration = True
         last_text_len = 0
         last_token_ids_len = 0
@@ -375,6 +385,9 @@ class ChatProcessor(BaseChatProcessor):
             first_iteration = False
             logger.debug(f"[postprocessor] Response: {response_data}")
             yield response_data
+        
+        self._on_going_postprocessing -= 1
+        logger.info(f"chat_processor finished on_going_postprocessng: {self._on_going_postprocessing}")
 
 
 class CompletionsProcessor:

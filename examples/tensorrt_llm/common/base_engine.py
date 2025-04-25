@@ -455,6 +455,9 @@ class BaseTensorrtLLMEngine:
             raise self._error_queue.get()
 
         self._ongoing_request_count += 1
+        logger.info(
+            f"Worker add ongoing_request_count: {self._ongoing_request_count}!!"
+        )
 
         try:
             worker_inputs = request.tokens.tokens
@@ -515,3 +518,6 @@ class BaseTensorrtLLMEngine:
 
         self._start_threads()
         self._ongoing_request_count -= 1
+        logger.info(
+            f"Worker finished ongoing_request_count: {self._ongoing_request_count}!!"
+        )
