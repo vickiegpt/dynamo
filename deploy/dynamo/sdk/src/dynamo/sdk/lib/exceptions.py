@@ -13,6 +13,22 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import os
+from __future__ import annotations
 
-DYNAMO_IMAGE = os.getenv("DYNAMO_IMAGE", "dynamo:latest-vllm")
+from http import HTTPStatus
+
+
+class DynamoException(Exception):
+    """Base class for all Dynamo SDK Exception."""
+
+    error_code = HTTPStatus.INTERNAL_SERVER_ERROR
+    error_mapping: dict[HTTPStatus, type[DynamoException]] = {}
+
+    def __init_subclass__(cls) -> None:
+        if "error_code" in cls.__dict__:
+            cls.error_mapping[cls.error_code] = cls
+
+    def __init__(self, message: str, error_code: HTTPStatus | None = None):
+        super().__init__(message)
+        self.message = message
+        self.error_code = error_code or self.error_code

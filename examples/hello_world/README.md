@@ -79,7 +79,7 @@ The `dynamo serve` command deploys the entire service graph, automatically handl
 
 ```bash
 curl -X 'POST' \
-  'http://localhost:3000/generate' \
+  'http://localhost:8000/generate' \
   -H 'accept: text/event-stream' \
   -H 'Content-Type: application/json' \
   -d '{
@@ -173,10 +173,10 @@ Once you create the Dynamo deployment, a pod prefixed with `yatai-dynamonim-imag
 
 ```bash
 # Forward the service port to localhost
-kubectl -n ${KUBE_NS} port-forward svc/${HELM_RELEASE}-frontend 3000:3000
+kubectl -n ${KUBE_NS} port-forward svc/${HELM_RELEASE}-frontend 8000:8000
 
 # Test the API endpoint
-curl -X 'POST' 'http://localhost:3000/generate' \
+curl -X 'POST' 'http://localhost:8000/generate' \
     -H 'accept: text/event-stream' \
     -H 'Content-Type: application/json' \
     -d '{"text": "test"}'
