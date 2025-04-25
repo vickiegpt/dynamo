@@ -94,6 +94,7 @@ class NATSQueue:
                     await self._js.add_stream(
                         name=self._stream_name,
                         subjects=[self._subject],
+                        # TODO: make these configurable and add guide to set these values 
                         max_bytes=1073741824,  # 1GB total storage limit
                         max_msgs=1000000,  # 1 million messages limit
                     )

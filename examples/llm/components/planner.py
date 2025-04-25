@@ -223,7 +223,7 @@ class Planner:
         # first check if we need to scale down any workers
         if (
             avg_prefill_queue_load < self.args.prefill_queue_scale_down_threshold
-            and len(self.p_endpoints) > self.args.min_gpu_budget
+            and len(self.p_endpoints) > self.args.min_endpoint
         ):
             logger.info(
                 f"Average prefill queue load ({avg_prefill_queue_load:.2f}) is below threshold ({self.args.prefill_queue_scale_down_threshold:.2f}), scaling down prefill workers"
@@ -235,7 +235,7 @@ class Planner:
                 logger.info("Failed to scale down prefill worker")
         if (
             avg_kv_load < self.args.decode_kv_scale_down_threshold
-            and len(self.d_endpoints) > self.args.min_gpu_budget
+            and len(self.d_endpoints) > self.args.min_endpoint
         ):
             if self.decode_worker_remaining_grace_period > 0:
                 logger.info(
@@ -424,10 +424,10 @@ if __name__ == "__main__":
         help="Maximum number of GPUs to use",
     )
     parser.add_argument(
-        "--min-gpu-budget",
+        "--min-endpoint",
         type=int,
         default=1,
-        help="Minimum number of GPUs to use for both prefill and decode",
+        help="Minimum number of endpoints to keep for prefill/decode workers",
     )
     parser.add_argument(
         "--decode-kv-scale-up-threshold",

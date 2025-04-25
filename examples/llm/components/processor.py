@@ -146,6 +146,7 @@ class Processor(ProcessMixIn):
             engine_prompt,
             sampling_params,
         ) = await self._parse_raw_request(raw_request)
+        # TODO: queue request at processor when engines are full
         router_mode = (await self.etcd_kv_cache.get("router")).decode()
         if router_mode == "kv":
             router_generator = await self.router_client.generate(
@@ -196,6 +197,7 @@ class Processor(ProcessMixIn):
             )
         elif router_mode == "kv-load":
             # route to worker with least kv load
+            # TODO: move the router to a separate file and clean up processor.py
             try:
                 kv_load = await self._get_kv_load()
                 best_worker_id = min(kv_load, key=kv_load.get)
