@@ -313,6 +313,11 @@ RUN yum update -y \
     && yum clean all \
     && rm -rf /var/cache/yum
 
+COPY README.md /workspace/
+COPY LICENSE /workspace/
+COPY Cargo.toml /workspace/
+COPY Cargo.lock /workspace/
+COPY rust-toolchain.toml /workspace/
 COPY lib/ /workspace/lib/
 
 ENV RUSTUP_HOME=/usr/local/rustup \
