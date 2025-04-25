@@ -590,10 +590,7 @@ pub(crate) mod tests {
         let layout = FullyContiguous::allocate(config, &NullDeviceAllocator)
             .expect("Failed to allocate layout/storage");
 
-        let block_collection =
-            Blocks::<FullyContiguous<NullDeviceStorage>, TestMetadata>::new(layout).unwrap();
-
-        block_collection
+        Blocks::<FullyContiguous<NullDeviceStorage>, TestMetadata>::new(layout).unwrap()
     }
 
     /// Creates a vector of Blocks from a token sequence and block size.

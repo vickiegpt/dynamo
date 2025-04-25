@@ -67,16 +67,12 @@ impl BlockRegistry {
         block_state: &mut BlockState,
     ) -> Result<PublishHandle, BlockRegistationError> {
         match block_state {
-            BlockState::Reset => {
-                return Err(BlockRegistationError::InvalidState(
-                    "Block is in Reset state".to_string(),
-                ));
-            }
-            BlockState::Partial(_partial) => {
-                return Err(BlockRegistationError::InvalidState(
-                    "Block is in Partial state".to_string(),
-                ));
-            }
+            BlockState::Reset => Err(BlockRegistationError::InvalidState(
+                "Block is in Reset state".to_string(),
+            )),
+            BlockState::Partial(_partial) => Err(BlockRegistationError::InvalidState(
+                "Block is in Partial state".to_string(),
+            )),
 
             BlockState::Complete(state) => {
                 let sequence_hash = state.token_block().sequence_hash();
@@ -98,13 +94,11 @@ impl BlockRegistry {
                 // Update the [BlockState] to [BlockState::Registered]
                 let _ = std::mem::replace(block_state, BlockState::Registered(reg_handle));
 
-                return Ok(publish_handle);
+                Ok(publish_handle)
             }
-            BlockState::Registered(registered) => {
-                return Err(BlockRegistationError::BlockAlreadyRegistered(
-                    registered.sequence_hash(),
-                ));
-            }
+            BlockState::Registered(registered) => Err(
+                BlockRegistationError::BlockAlreadyRegistered(registered.sequence_hash()),
+            ),
         }
     }
 
@@ -128,8 +122,8 @@ impl BlockRegistry {
         event_manager: Arc<dyn EventManager>,
     ) -> PublishHandle {
         let reg_handle = RegistrationHandle::from_token_block(token_block, event_manager.clone());
-        let publish_handle = PublishHandle::new(reg_handle, event_manager);
-        publish_handle
+
+        PublishHandle::new(reg_handle, event_manager)
     }
 }
 

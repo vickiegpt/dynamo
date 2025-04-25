@@ -234,8 +234,8 @@ impl PartialTokenBlock {
     ///
     /// # Returns
     ///
-    /// * [`Tokens`] - A new [`Tokens`] object containing any tokens that did not fit.
-    ///                 Returns an empty [`Tokens`] if all input tokens were added.
+    /// A new [`Tokens`] object containing any tokens that did not fit,
+    /// if all tokens were added, the returned object will be empty.
     pub(crate) fn push_tokens(&mut self, tokens: Tokens) -> Tokens {
         let remaining_space = self.remaining();
 
@@ -634,8 +634,7 @@ impl TokenBlockSequence {
                 let tokens_to_pop_from_blocks = n - current_len;
 
                 // Calculate how many blocks are affected (including the one partially popped)
-                let num_blocks_to_affect =
-                    (tokens_to_pop_from_blocks + block_size - 1) / block_size;
+                let num_blocks_to_affect = tokens_to_pop_from_blocks.div_ceil(block_size);
 
                 // Check if we need to pop more blocks than available (should be prevented by initial len check)
                 if num_blocks_to_affect > self.blocks.len() {

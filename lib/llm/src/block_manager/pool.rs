@@ -173,11 +173,12 @@ impl<Req, Resp> Unary<Req, Resp> {
     }
 }
 
+pub type MutableBlocks<S, M> = Vec<MutableBlock<S, M>>;
+pub type ImmutableBlocks<S, M> = Vec<ImmutableBlock<S, M>>;
+
 enum PriorityRequest<S: BlockLayout, M: BlockMetadata> {
     AllocateBlocks(Unary<usize, Result<Vec<MutableBlock<S, M>>, BlockPoolError>>),
-    RegisterBlocks(
-        Unary<Vec<MutableBlock<S, M>>, Result<Vec<ImmutableBlock<S, M>>, BlockPoolError>>,
-    ),
+    RegisterBlocks(Unary<MutableBlocks<S, M>, Result<ImmutableBlocks<S, M>, BlockPoolError>>),
     MatchSequenceHashes(Unary<Vec<SequenceHash>, Vec<ImmutableBlock<S, M>>>),
 }
 
@@ -194,7 +195,7 @@ pub enum Runtime {
 impl Default for Runtime {
     fn default() -> Self {
         // detect if we are running in a tokio runtime
-        if let Ok(_) = tokio::runtime::Handle::try_current() {
+        if tokio::runtime::Handle::try_current().is_ok() {
             Self::current_thread()
         } else {
             Self::single_threaded()
@@ -488,9 +489,9 @@ impl<S: BlockLayout, M: BlockMetadata> BlockPool<S, M> {
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
 
         // Await a response
-        Ok(resp_rx
+        resp_rx
             .await
-            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?)
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)
     }
 
     /// Blocking version of [`BlockPool::match_sequence_hashes`].

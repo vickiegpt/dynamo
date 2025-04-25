@@ -50,12 +50,8 @@ impl BlockState {
 
     pub fn add_token(&mut self, token: Token) -> Result<()> {
         match self {
-            BlockState::Partial(state) => {
-                return Ok(state.block.push_token(token)?);
-            }
-            _ => {
-                return Err(BlockStateInvalid("Block is not partial".to_string()))?;
-            }
+            BlockState::Partial(state) => Ok(state.block.push_token(token)?),
+            _ => Err(BlockStateInvalid("Block is not partial".to_string()))?,
         }
     }
 
@@ -72,9 +68,7 @@ impl BlockState {
                 state.block.pop_token()?;
                 Ok(())
             }
-            _ => {
-                return Err(BlockStateInvalid("Block is not partial".to_string()))?;
-            }
+            _ => Err(BlockStateInvalid("Block is not partial".to_string()))?,
         }
     }
 
@@ -84,9 +78,7 @@ impl BlockState {
                 state.block.pop_tokens(count)?;
                 Ok(())
             }
-            _ => {
-                return Err(BlockStateInvalid("Block is not partial".to_string()))?;
-            }
+            _ => Err(BlockStateInvalid("Block is not partial".to_string()))?,
         }
     }
 
@@ -97,9 +89,7 @@ impl BlockState {
                 *self = BlockState::Complete(CompleteState::new(token_block));
                 Ok(())
             }
-            _ => {
-                return Err(BlockStateInvalid("Block is not partial".to_string()))?;
-            }
+            _ => Err(BlockStateInvalid("Block is not partial".to_string()))?,
         }
     }
 
@@ -109,9 +99,7 @@ impl BlockState {
                 *self = BlockState::Complete(CompleteState::new(token_block));
                 Ok(())
             }
-            _ => {
-                return Err(BlockStateInvalid("Block is not reset".to_string()))?;
-            }
+            _ => Err(BlockStateInvalid("Block is not reset".to_string()))?,
         }
     }
 
@@ -147,7 +135,7 @@ impl BlockState {
     pub fn tokens(&self) -> Option<&Tokens> {
         match self {
             BlockState::Reset | BlockState::Registered(_) => None,
-            BlockState::Partial(state) => Some(&state.block.tokens()),
+            BlockState::Partial(state) => Some(state.block.tokens()),
             BlockState::Complete(state) => Some(state.token_block.tokens()),
         }
     }

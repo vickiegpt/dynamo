@@ -386,6 +386,17 @@ pub mod tests {
     const INNER_DIM: usize = 13;
     const DTYPE: DType = DType::FP32; // Example dtype
 
+    /// Helper function to calculate expected memory offset
+    fn calculate_expected_offset(
+        base_addr: u64,
+        block_idx: usize,
+        layer_idx: usize,
+        block_stride: usize,
+        layer_stride: usize,
+    ) -> u64 {
+        base_addr + (block_idx * block_stride + layer_idx * layer_stride) as u64
+    }
+
     // Updated setup_layout: Calculates size internally, uses default alignment for simplicity in non-alignment tests.
     pub fn setup_layout(
         alignment: Option<usize>, // Option to override default alignment
@@ -478,13 +489,14 @@ pub mod tests {
         let base_addr = layout.storage.addr() + layout.base_offset as u64;
 
         // Test first block, first layer
-        let expected_offset_0_0 = base_addr + (0 * block_stride + 0 * layer_stride) as u64;
+        let expected_offset_0_0 =
+            calculate_expected_offset(base_addr, 0, 0, block_stride, layer_stride);
         assert_eq!(layout.get_memory_region(0, 0).unwrap(), expected_offset_0_0);
 
         // Test first block, last layer
         let last_layer_idx = NUM_LAYERS - 1;
         let expected_offset_0_last =
-            base_addr + (0 * block_stride + last_layer_idx * layer_stride) as u64;
+            calculate_expected_offset(base_addr, 0, last_layer_idx, block_stride, layer_stride);
         assert_eq!(
             layout.get_memory_region(0, last_layer_idx).unwrap(),
             expected_offset_0_last
@@ -493,15 +505,20 @@ pub mod tests {
         // Test last block, first layer
         let last_block_idx = NUM_BLOCKS - 1;
         let expected_offset_last_0 =
-            base_addr + (last_block_idx * block_stride + 0 * layer_stride) as u64;
+            calculate_expected_offset(base_addr, last_block_idx, 0, block_stride, layer_stride);
         assert_eq!(
             layout.get_memory_region(last_block_idx, 0).unwrap(),
             expected_offset_last_0
         );
 
         // Test last block, last layer
-        let expected_offset_last_last =
-            base_addr + (last_block_idx * block_stride + last_layer_idx * layer_stride) as u64;
+        let expected_offset_last_last = calculate_expected_offset(
+            base_addr,
+            last_block_idx,
+            last_layer_idx,
+            block_stride,
+            layer_stride,
+        );
         assert_eq!(
             layout
                 .get_memory_region(last_block_idx, last_layer_idx)
@@ -512,8 +529,13 @@ pub mod tests {
         // Test intermediate block/layer
         let mid_block_idx = NUM_BLOCKS / 2;
         let mid_layer_idx = NUM_LAYERS / 2;
-        let expected_offset_mid_mid =
-            base_addr + (mid_block_idx * block_stride + mid_layer_idx * layer_stride) as u64;
+        let expected_offset_mid_mid = calculate_expected_offset(
+            base_addr,
+            mid_block_idx,
+            mid_layer_idx,
+            block_stride,
+            layer_stride,
+        );
         assert_eq!(
             layout
                 .get_memory_region(mid_block_idx, mid_layer_idx)
@@ -556,7 +578,7 @@ pub mod tests {
             dtype: DTYPE,
         };
 
-        let allocator = SystemAllocator::default();
+        let allocator = SystemAllocator;
         let layout_result = FullyContiguous::allocate(config, &allocator);
 
         assert!(layout_result.is_ok());
@@ -608,7 +630,7 @@ pub mod tests {
         let expected_allocated_size = fc_config.required_allocation_size();
 
         // Use allocate method
-        let allocator = SystemAllocator::default();
+        let allocator = SystemAllocator;
         let layout_result = FullyContiguous::allocate(config.clone(), &allocator);
 
         assert!(
