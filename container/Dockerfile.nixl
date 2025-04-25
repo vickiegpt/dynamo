@@ -5,6 +5,10 @@ ARG ARCH=arm64
 ARG ARCH_ALT=aarch64
 ARG BASE_IMAGE="nvcr.io/nvidia/pytorch"
 ARG BASE_IMAGE_TAG="25.03-py3"
+ARG MOFED_VERSION=24.10-1.1.4.0
+ARG PYTHON_VERSION=3.12
+ARG NSYS_URL=https://developer.nvidia.com/downloads/assets/tools/secure/nsight-systems/2025_1/
+ARG NSYS_PKG=NsightSystems-linux-cli-public-2025.1.1.131-3554042.deb
 
 FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS nixl_base
 
@@ -12,10 +16,6 @@ USER root
 
 ### NIXL SETUP ###
 
-ARG MOFED_VERSION=24.10-1.1.4.0
-ARG PYTHON_VERSION=3.12
-ARG NSYS_URL=https://developer.nvidia.com/downloads/assets/tools/secure/nsight-systems/2025_1/
-ARG NSYS_PKG=NsightSystems-linux-cli-public-2025.1.1.131-3554042.deb
 
 RUN apt-get update -y && apt-get -y install curl \
     git \
@@ -125,9 +125,10 @@ ENV PATH=/usr/local/ompi/bin:$PATH
 ENV PKG_CONFIG_PATH=/usr/local/ompi/lib/pkgconfig:$PKG_CONFIG_PATH
 
 # Copy nixl source, and use commit hash as cache hint
-COPY --from=nixl_base /opt/nixl /opt/nixl
-COPY --from=nixl_base /opt/nixl/commit.txt /opt/nixl/commit.txt
-RUN cd /opt/nixl && \
+
+RUN git clone https://github.com/piotrm-nvidia/nixl.git /opt/nixl && \
+    git checkout 8c4dcc1399c951632b6083303ce2e95dc7dcc7b9 && \
+    cd /opt/nixl && \
     mkdir build && \
     meson setup build/ --prefix=/usr/local/nixl && \
     cd build/ && \
