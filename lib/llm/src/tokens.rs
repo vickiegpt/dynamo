@@ -104,6 +104,12 @@ pub enum TokenBlockError {
 
     #[error("TokenBlock is incomplete")]
     Incomplete,
+
+    #[error("TokenBlock is empty")]
+    Empty,
+
+    #[error("TokenBlock has insufficient tokens")]
+    InsufficientTokens,
 }
 
 #[derive(Debug)]
@@ -134,6 +140,47 @@ impl PartialTokenBlock {
         Ok(())
     }
 
+    /// Attempt to push a slice of tokens onto the block, when the block is full,
+    /// a vec of remaining tokens is returned
+    pub fn push_tokens(&mut self, tokens: Tokens) -> Tokens {
+        let remaining_space = self.block_size - self.tokens.0.len();
+
+        if remaining_space == 0 {
+            return tokens;
+        }
+
+        if tokens.0.len() <= remaining_space {
+            // All tokens fit in the block
+            self.tokens.0.extend(tokens.0);
+            return Tokens::default();
+        } else {
+            // Only some tokens fit, return the rest
+            let (to_add, remaining) = tokens.0.split_at(remaining_space);
+            self.tokens.0.extend_from_slice(to_add);
+            return Tokens(remaining.to_vec());
+        }
+    }
+
+    /// Attempt to pop a token from the end of the block, if the block is empty, return an error
+    pub fn pop_token(&mut self) -> Result<(), TokenBlockError> {
+        if self.tokens.0.is_empty() {
+            return Err(TokenBlockError::Empty);
+        }
+
+        self.tokens.0.pop();
+        Ok(())
+    }
+
+    /// Attempt to pop a specified number of tokens from the end of the block,
+    /// if the block has insufficient tokens, return an error
+    pub fn pop_tokens(&mut self, count: usize) -> Result<(), TokenBlockError> {
+        if self.tokens.0.len() < count {
+            return Err(TokenBlockError::InsufficientTokens);
+        }
+
+        self.tokens.0.truncate(self.tokens.0.len() - count);
+        Ok(())
+    }
     /// Commits the current [PartialTokenBlock] to generate a new [TokenBlock], then
     /// resets the current [PartialTokenBlock] to be a downstream block of the new [TokenBlock].
     pub fn commit(&mut self) -> Result<TokenBlock, TokenBlockError> {
@@ -152,14 +199,17 @@ impl PartialTokenBlock {
         Ok(block)
     }
 
+    /// Get the number of tokens remaining in the block
     pub fn remaining(&self) -> usize {
         self.block_size - self.tokens.0.len()
     }
 
+    /// Get the number of tokens in the block
     pub fn len(&self) -> usize {
         self.tokens.0.len()
     }
 
+    /// Get the tokens in the block
     pub fn tokens(&self) -> &Tokens {
         &self.tokens
     }
@@ -588,5 +638,16 @@ mod tests {
         assert_eq!(sequence.blocks().len(), 2);
         assert_eq!(sequence.current_block().tokens().len(), 0);
         assert_eq!(sequence.blocks()[1].sequence_hash(), 4945711292740353085);
+    }
+
+    #[test]
+    fn test_push_tokens() {
+        let mut partial = PartialTokenBlock::create_sequence_root(4, 1337);
+
+        let tokens = Tokens(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+        let remaining = partial.push_tokens(tokens);
+        assert_eq!(partial.tokens().len(), 4);
+        assert_eq!(remaining.len(), 6);
     }
 }

@@ -19,7 +19,7 @@ use derive_getters::Getters;
 
 use super::registry::RegistrationHandle;
 use super::Result;
-use crate::tokens::{PartialTokenBlock, SaltHash, Token, TokenBlock};
+use crate::tokens::{PartialTokenBlock, SaltHash, Token, TokenBlock, Tokens};
 
 #[derive(Debug, thiserror::Error)]
 #[error("Block state is invalid: {0}")]
@@ -51,7 +51,38 @@ impl BlockState {
     pub fn add_token(&mut self, token: &Token) -> Result<()> {
         match self {
             BlockState::Partial(state) => {
-                return Ok(state.add_token(token)?);
+                return Ok(state.block.push_token(*token)?);
+            }
+            _ => {
+                return Err(BlockStateInvalid("Block is not partial".to_string()))?;
+            }
+        }
+    }
+
+    pub fn add_tokens(&mut self, tokens: Tokens) -> Result<Tokens> {
+        match self {
+            BlockState::Partial(state) => Ok(state.block.push_tokens(tokens)),
+            _ => Err(BlockStateInvalid("Block is not partial".to_string()))?,
+        }
+    }
+
+    pub fn pop_token(&mut self) -> Result<()> {
+        match self {
+            BlockState::Partial(state) => {
+                state.block.pop_token()?;
+                Ok(())
+            }
+            _ => {
+                return Err(BlockStateInvalid("Block is not partial".to_string()))?;
+            }
+        }
+    }
+
+    pub fn pop_tokens(&mut self, count: usize) -> Result<()> {
+        match self {
+            BlockState::Partial(state) => {
+                state.block.pop_tokens(count)?;
+                Ok(())
             }
             _ => {
                 return Err(BlockStateInvalid("Block is not partial".to_string()))?;
@@ -81,10 +112,6 @@ pub struct PartialState {
 impl PartialState {
     pub fn new(block: PartialTokenBlock) -> Self {
         Self { block }
-    }
-
-    fn add_token(&mut self, token: &Token) -> Result<()> {
-        Ok(self.block.push_token(*token)?)
     }
 }
 
