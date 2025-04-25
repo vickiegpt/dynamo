@@ -128,8 +128,8 @@ ENV PKG_CONFIG_PATH=/usr/local/ompi/lib/pkgconfig:$PKG_CONFIG_PATH
 # Copy nixl source, and use commit hash as cache hint
 
 RUN git clone https://github.com/piotrm-nvidia/nixl.git /opt/nixl && \
-    git checkout 8c4dcc1399c951632b6083303ce2e95dc7dcc7b9 && \
     cd /opt/nixl && \
+    git checkout 8c4dcc1399c951632b6083303ce2e95dc7dcc7b9 && \
     mkdir build && \
     meson setup build/ --prefix=/usr/local/nixl && \
     cd build/ && \

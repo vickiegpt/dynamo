@@ -73,17 +73,27 @@ bash container/build.sh --platform linux/arm64 \
 
 Run the container with the following command to mount the source directories. You can't use workspace volume mount because it will hide folder ``/workspace/dist`` with pre-built vLLM wheel, which you need to install at system level instead of uv venv to use PyTorch from 25.03 container.
 
-```
+```bash
 bash container/run.sh -it -v /tmp:/tmp
 ```
 
 Copy the vLLM wheel to the host machine:
 
-```
+```bash
 cp -r /workspace/dist /tmp/arm_wheels
 ```
 
 Dynamo container creates its own virtual environment, which is active in the container. This can't work for you because only system level environment in container includes valid PyTorch working in ARM64 GB200 machine. Dynamo virtual environment includes only custom Dynamo dependencies not PyTorch.
+
+
+## Building PyTorch 25.03 container with NIXL
+
+You can build PyTorch 25.03 container with NIXL by running the following command:
+
+```bash
+docker build -f container/Dockerfile.nixl --tag dynamo-nixl .
+```
+
 
 
 ## Using Dynamo vLLM patch in custom vLLM build
@@ -94,7 +104,7 @@ Dynamo container creates its own virtual environment, which is active in the con
 
 You need to compile vLLM in the same container with PyTorch 25.03.
 
-Run the following command to start the container:
+You can run the container with NIXL and PyTorch 25.03 with the following command:
 
 ```bash
 docker run -ti \
@@ -107,7 +117,7 @@ docker run -ti \
     --cap-add=SYS_PTRACE \
     --shm-size 2G \
     -v /tmp:/tmp \
-    nvcr.io/nvidia/pytorch:25.03-py3  bash
+    dynamo-nixl bash
 ```
 
 #### Prepare Dynamo version of vLLM
