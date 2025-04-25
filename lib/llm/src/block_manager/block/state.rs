@@ -19,11 +19,11 @@ use derive_getters::Getters;
 
 use super::registry::RegistrationHandle;
 use super::Result;
-use crate::tokens::{PartialTokenBlock, SaltHash, Token, TokenBlock, Tokens};
+use crate::tokens::{PartialTokenBlock, SaltHash, Token, TokenBlock, TokenBlockError, Tokens};
 
 #[derive(Debug, thiserror::Error)]
 #[error("Block state is invalid: {0}")]
-pub struct BlockStateInvalid(String);
+pub struct BlockStateInvalid(pub String);
 
 #[derive(Debug)]
 pub enum BlockState {
@@ -48,10 +48,10 @@ impl BlockState {
         Ok(())
     }
 
-    pub fn add_token(&mut self, token: &Token) -> Result<()> {
+    pub fn add_token(&mut self, token: Token) -> Result<()> {
         match self {
             BlockState::Partial(state) => {
-                return Ok(state.block.push_token(*token)?);
+                return Ok(state.block.push_token(token)?);
             }
             _ => {
                 return Err(BlockStateInvalid("Block is not partial".to_string()))?;
@@ -101,6 +101,70 @@ impl BlockState {
                 return Err(BlockStateInvalid("Block is not partial".to_string()))?;
             }
         }
+    }
+
+    pub fn apply_token_block(&mut self, token_block: TokenBlock) -> Result<()> {
+        match self {
+            BlockState::Reset => {
+                *self = BlockState::Complete(CompleteState::new(token_block));
+                Ok(())
+            }
+            _ => {
+                return Err(BlockStateInvalid("Block is not reset".to_string()))?;
+            }
+        }
+    }
+
+    /// Returns the number of tokens currently in the block.
+    pub fn len(&self) -> Option<usize> {
+        match self {
+            BlockState::Reset => Some(0),
+            BlockState::Partial(state) => Some(state.block.len()),
+            BlockState::Complete(state) => Some(state.token_block.tokens().len()),
+            BlockState::Registered(_) => None,
+        }
+    }
+
+    /// Returns the number of additional tokens that can be added.
+    pub fn remaining(&self) -> usize {
+        match self {
+            BlockState::Partial(state) => state.block.remaining(),
+            _ => 0, // Reset, Complete, Registered have 0 remaining capacity
+        }
+    }
+
+    /// Returns true if the block contains no tokens.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            BlockState::Reset => true,
+            BlockState::Partial(state) => state.block.is_empty(),
+            BlockState::Complete(_) => false,   // Always full
+            BlockState::Registered(_) => false, // Always full
+        }
+    }
+
+    /// Returns a reference to the underlying TokenBlock if the state is Complete or Registered.
+    pub fn tokens(&self) -> Option<&Tokens> {
+        match self {
+            BlockState::Reset | BlockState::Registered(_) => None,
+            BlockState::Partial(state) => Some(&state.block.tokens()),
+            BlockState::Complete(state) => Some(state.token_block.tokens()),
+        }
+    }
+
+    /// Returns true if the block is empty
+    pub fn is_reset(&self) -> bool {
+        matches!(self, BlockState::Reset)
+    }
+
+    /// Returns true if the block is in the complete or registered state
+    pub fn is_complete(&self) -> bool {
+        matches!(self, BlockState::Complete(_) | BlockState::Registered(_))
+    }
+
+    /// Returns true if the block is in the registered state
+    pub fn is_registered(&self) -> bool {
+        matches!(self, BlockState::Registered(_state))
     }
 }
 

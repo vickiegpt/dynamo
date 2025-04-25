@@ -618,12 +618,12 @@ pub(crate) mod tests {
         // Iterate through the generated TokenBlocks and the template Blocks,
         // setting the state and registering each one.
         for (block, token_block) in blocks.iter_mut().zip(token_blocks.into_iter()) {
-            assert!(block.is_empty()); // Start with empty blocks
+            assert!(block.state().is_reset()); // Start with empty blocks
             block.update_state(BlockState::Complete(CompleteState::new(token_block)));
             block
                 .register(&mut registry)
                 .expect("Failed to register block in test helper");
-            assert!(block.is_registered()); // Ensure registration worked
+            assert!(block.state().is_registered()); // Ensure registration worked
         }
 
         blocks
@@ -662,7 +662,7 @@ pub(crate) mod tests {
 
         // all matched blocks should be in the complete or registered state
         for block in &mut matched_blocks {
-            assert!(block.is_registered());
+            assert!(block.state().is_registered());
         }
 
         // drain the matched blocks from the token_blocks
@@ -679,14 +679,14 @@ pub(crate) mod tests {
         assert_eq!(unmatched_blocks.len(), token_blocks.len());
 
         for unmatched in &unmatched_blocks {
-            assert!(unmatched.is_empty());
+            assert!(unmatched.state().is_reset());
         }
 
         for (unmatched, token_block) in unmatched_blocks.iter_mut().zip(token_blocks.into_iter()) {
-            assert!(unmatched.is_empty());
+            assert!(unmatched.state().is_reset());
             unmatched.update_state(BlockState::Complete(CompleteState::new(token_block)));
             unmatched.register(&mut registry).unwrap();
-            assert!(unmatched.is_registered());
+            assert!(unmatched.state().is_registered());
         }
 
         let mut blocks = matched_blocks;
@@ -738,7 +738,7 @@ pub(crate) mod tests {
 
         let blocks = pool.acquire_free_blocks(10).unwrap();
         for block in &blocks {
-            assert!(block.is_empty());
+            assert!(block.state().is_reset());
         }
     }
 

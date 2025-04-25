@@ -48,7 +48,7 @@ impl<S: BlockLayout, M: BlockMetadata> ActiveBlockPool<S, M> {
         &mut self,
         block: MutableBlock<S, M>,
     ) -> Result<ImmutableBlock<S, M>, BlockPoolError> {
-        if !block.is_registered() {
+        if !block.state().is_registered() {
             return Err(BlockPoolError::InvalidMutableBlock(
                 "block is not registered".to_string(),
             ));

@@ -399,7 +399,7 @@ impl TokenBlock {
     /// Creates a new [`PartialTokenBlock`] representing the block immediately following this one.
     ///
     /// The new partial block will have the correct `parent_sequence_hash` set.
-    pub(crate) fn next_block(&self) -> PartialTokenBlock {
+    pub fn next_block(&self) -> PartialTokenBlock {
         PartialTokenBlock {
             tokens: Tokens::default(),
             block_size: self.tokens.len(), // Should be == self.block_size

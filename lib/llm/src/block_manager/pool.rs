@@ -611,12 +611,12 @@ mod tests {
         let mut block = blocks.pop().unwrap();
 
         block.init_sequence(1337).unwrap();
-        block.append(1).unwrap();
-        block.append(2).unwrap();
-        block.append(3).unwrap();
-        block.append(4).unwrap();
+        block.add_token(1).unwrap();
+        block.add_token(2).unwrap();
+        block.add_token(3).unwrap();
+        block.add_token(4).unwrap();
 
-        assert!(block.append(5).is_err());
+        assert!(block.add_token(5).is_err());
     }
 
     #[tokio::test]
@@ -684,18 +684,18 @@ mod tests {
         block.init_sequence(1337).unwrap();
 
         // Add some tokens to the block - our page_size is 4
-        block.append(1).unwrap();
-        block.append(2).unwrap();
-        block.append(3).unwrap();
-        block.append(4).unwrap();
+        block.add_token(1).unwrap();
+        block.add_token(2).unwrap();
+        block.add_token(3).unwrap();
+        block.add_token(4).unwrap();
 
         // Should fail because we don't have space in the block
-        assert!(block.append(5).is_err());
+        assert!(block.add_token(5).is_err());
 
         // Commit the block - this will generate a sequence hash
         // This will put the block in a Complete state
         block.commit().unwrap();
-        assert!(block.is_complete()); // perhaps renamed to Commited
+        assert!(block.state().is_complete()); // perhaps renamed to Commited
 
         let sequence_hash = block.sequence_hash().unwrap();
         assert_eq!(sequence_hash, EXPECTED_SEQUENCE_HASH);
@@ -705,7 +705,7 @@ mod tests {
         // This will take ownership of the block and return an immutable block
         let mut immutable_blocks = pool.register_blocks_blocking(vec![block]).unwrap();
         let block = immutable_blocks.pop().unwrap();
-        assert!(block.is_registered());
+        assert!(block.state().is_registered());
         assert_eq!(block.sequence_hash().unwrap(), sequence_hash);
 
         // Dropping the immutable block should return the block to the pool
