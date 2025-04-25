@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+import time
 import asyncio
 import copy
 import logging
@@ -101,6 +101,8 @@ class BaseTensorrtLLMEngine:
         self._prefill_client = None
         self._error_queue: Queue = Queue()
         self._kv_metrics_publisher = None
+        self._generation_time = 0
+        self._token_generated = 0
 
         if self._remote_prefill or self._server_type == ServerType.CTX:
             self._min_workers = min_workers
@@ -358,6 +360,8 @@ class BaseTensorrtLLMEngine:
             finally:
                 if "llm" in locals():
                     # Run shutdown in a thread to avoid blocking
+                    logger.info(f"token generated: {self._token_generated}")
+                    logger.info(f"time spent: {self._generation_time}")
                     await loop.run_in_executor(None, llm.shutdown)
 
         try:
@@ -456,7 +460,7 @@ class BaseTensorrtLLMEngine:
 
         self._ongoing_request_count += 1
         logger.info(
-            f"Worker add ongoing_request_count: {self._ongoing_request_count}!!"
+            f"Worker add ongoing_request_count: {self._ongoing_request_count}!"
         )
 
         try:
@@ -488,6 +492,7 @@ class BaseTensorrtLLMEngine:
             )
 
             sampling_params = get_sampling_params(request.sampling_params)
+            start_time = time.time()
             async for response in self._llm_engine.generate_async(
                 inputs=worker_inputs,
                 sampling_params=sampling_params,
@@ -504,12 +509,16 @@ class BaseTensorrtLLMEngine:
                     response.outputs[0].disaggregated_params
                 )
 
+                ot = asdict(response.outputs[0])
+                self._token_generated += len(ot["token_ids"])
                 yield TRTLLMWorkerResponse(
                     request_id=request.id,
                     prompt_token_ids=response.prompt_token_ids,
-                    outputs=[asdict(response.outputs[0])],
+                    outputs=[ot],
                     finished=response.finished,
                 ).model_dump_json(exclude_unset=True)
+            end_time = time.time()
+            self._generation_time += (end_time - start_time)
 
         except CppExecutorError:
             signal.raise_signal(signal.SIGINT)
@@ -519,5 +528,5 @@ class BaseTensorrtLLMEngine:
         self._start_threads()
         self._ongoing_request_count -= 1
         logger.info(
-            f"Worker finished ongoing_request_count: {self._ongoing_request_count}!!"
+            f"Worker finished ongoing_request_count: {self._ongoing_request_count}!"
         )
