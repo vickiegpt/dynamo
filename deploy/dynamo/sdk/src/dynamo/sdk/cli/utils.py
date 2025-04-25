@@ -22,10 +22,10 @@ import contextlib
 import json
 import logging
 import os
+import pathlib
 import random
 import socket
-from typing import Any, Protocol, Optional, Iterator, DefaultDict, Dict, Union, TextIO
-import typing as t
+from typing import Any, DefaultDict, Dict, Iterator, Optional, Protocol, TextIO, Union
 
 import click
 import yaml
@@ -269,7 +269,7 @@ def _parse_service_args(args: list[str]) -> Dict[str, Any]:
 
 
 def resolve_service_config(
-    config_file: pathlib.Path | t.TextIO | None = None,
+    config_file: pathlib.Path | TextIO | None = None,
     args: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Resolve service configuration from file and command line arguments.

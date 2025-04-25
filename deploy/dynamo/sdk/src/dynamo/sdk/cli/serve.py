@@ -111,51 +111,11 @@ def serve(
             )
             raise typer.Exit(code=1)
 
-<<<<<<< HEAD
     if dry_run:
         console.print("[bold green]Service Configuration:[/bold green]")
         console.print_json(json.dumps(service_configs))
         console.print(
             "\n[bold green]Environment Variable that would be set:[/bold green]"
-=======
-        if dry_run:
-            rich.print("[bold]Service Configuration:[/bold]")
-            rich.print(json.dumps(service_configs, indent=2))
-            rich.print("\n[bold]Environment Variable that would be set:[/bold]")
-            rich.print(f"DYNAMO_SERVICE_CONFIG={json.dumps(service_configs)}")
-            sys.exit(0)
-
-        configure_server_logging(service_name=service_name)
-        # Set environment variable with service configuration
-        if service_configs:
-            logger.info(f"Running dynamo serve with service configs {service_configs}")
-            os.environ["DYNAMO_SERVICE_CONFIG"] = json.dumps(service_configs)
-
-        if working_dir is None:
-            if os.path.isdir(os.path.expanduser(bento)):
-                working_dir = os.path.expanduser(bento)
-            else:
-                working_dir = "."
-        if sys.path[0] != working_dir:
-            sys.path.insert(0, working_dir)
-        svc = find_and_load_service(bento, working_dir=working_dir)
-        logger.info(f"Loaded service: {svc.name}")
-        logger.info(
-            "Dependencies: %s", [dep.on.name for dep in svc.dependencies.values()]
-        )
-
-        LinkedServices.remove_unused_edges()
-
-        from dynamo.sdk.cli.serving import serve_dynamo_graph  # type: ignore
-
-        svc.inject_config()
-        serve_dynamo_graph(
-            bento,
-            working_dir=working_dir,
-            dependency_map=runner_map_dict,
-            service_name=service_name,
-            enable_planner=enable_planner,
->>>>>>> 184744ce (moar)
         )
         console.print(f"DYNAMO_SERVICE_CONFIG={json.dumps(service_configs)}")
         raise typer.Exit()
@@ -182,7 +142,7 @@ def serve(
 
     LinkedServices.remove_unused_edges()
 
-    from dynamo.sdk.cli.serving import serve_http  # type: ignore
+    from dynamo.sdk.cli.serving import serve_dynamo_graph  # type: ignore
 
     svc.inject_config()
 
@@ -195,11 +155,11 @@ def serve(
         )
     )
 
-    serve_http(
+    serve_dynamo_graph(
         dynamo_pipeline,
         working_dir=working_dir_str,
-        host=host,
-        port=port,
+        # host=host,
+        # port=port,
         dependency_map=runner_map_dict,
         service_name=service_name,
         enable_planner=enable_planner,
