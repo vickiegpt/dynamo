@@ -111,9 +111,9 @@ pub trait Storage: Debug + Send + Sync + 'static {
 }
 
 /// Trait for types that can allocate specific Storage implementations.
-pub trait StorageAllocator<S: Storage>: Send + Sync {
-    /// Allocate storage of the specific type `S` with the given size in bytes.
-    fn allocate(&self, size: usize) -> Result<S>;
+pub trait StorageAllocator: Send + Sync {
+    /// Allocate storage of a specific storage variant with the given size in bytes.
+    fn allocate(&self, size: usize) -> Result<Box<dyn Storage>>;
 }
 
 /// System memory storage implementation using [alloc_zeroed]
@@ -189,9 +189,10 @@ impl Storage for SystemStorage {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemAllocator;
 
-impl StorageAllocator<SystemStorage> for SystemAllocator {
-    fn allocate(&self, size: usize) -> Result<SystemStorage> {
-        SystemStorage::new(size)
+impl StorageAllocator for SystemAllocator {
+    fn allocate(&self, size: usize) -> Result<Box<dyn Storage>> {
+        let storage = SystemStorage::new(size)?;
+        Ok(Box::new(storage))
     }
 }
 
@@ -240,9 +241,9 @@ pub mod tests {
 
     pub struct NullDeviceAllocator;
 
-    impl StorageAllocator<NullDeviceStorage> for NullDeviceAllocator {
-        fn allocate(&self, size: usize) -> Result<NullDeviceStorage> {
-            Ok(NullDeviceStorage::new(size as u64))
+    impl StorageAllocator for NullDeviceAllocator {
+        fn allocate(&self, size: usize) -> Result<Box<dyn Storage>> {
+            Ok(Box::new(NullDeviceStorage::new(size as u64)))
         }
     }
 
@@ -285,9 +286,9 @@ pub mod tests {
 
     pub struct NullHostAllocator;
 
-    impl StorageAllocator<NullHostStorage> for NullHostAllocator {
-        fn allocate(&self, size: usize) -> Result<NullHostStorage> {
-            Ok(NullHostStorage::new(size as u64))
+    impl StorageAllocator for NullHostAllocator {
+        fn allocate(&self, size: usize) -> Result<Box<dyn Storage>> {
+            Ok(Box::new(NullHostStorage::new(size as u64)))
         }
     }
 }

@@ -48,40 +48,26 @@ impl BlockManager {
                 .ok_or_else(|| PyRuntimeError::new_err(format!("Invalid dtype: {}", dtype)))?,
         };
 
-        let block_layout = match device.as_str() {
+        // Create allocator based on device type
+        let allocator: Box<dyn dynamo_kv_manager::storage::StorageAllocator + Send + Sync> = match device.as_str() {
             d if d.to_uppercase() == "CPU" => {
                 // Use System Allocator
-                let allocator = dynamo_kv_manager::storage::SystemAllocator {};
-
-                let layout = dynamo_kv_manager::layout::contiguous::FullyContiguous::allocate(layout_config, &allocator)
-                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to allocate SystemStorage layout: {}", e)))?;
-
-                Arc::new(layout) as Arc<dyn dynamo_kv_manager::layout::BlockLayout + Send + Sync>
+                Box::new(dynamo_kv_manager::storage::SystemAllocator {})
             }
             d if d.to_uppercase().starts_with("CUDA") => {
                 if pin_memory {
                     // Use PinnedAllocator
-                    let allocator = dynamo_kv_manager::storage::PinnedAllocator {};
-
-                    let layout = dynamo_kv_manager::layout::contiguous::FullyContiguous::allocate(layout_config, &allocator)
-                        .map_err(|e| PyRuntimeError::new_err(format!("Failed to allocate PinnedStorage layout: {}", e)))?;
-
-                    Arc::new(layout) as Arc<dyn dynamo_kv_manager::layout::BlockLayout + Send + Sync>
+                    Box::new(dynamo_kv_manager::storage::PinnedAllocator {})
                 } else {
                     // Extract CUDA device ID
                     let device_id = d.split(':')
-                    .nth(1)
-                    .and_then(|s| s.parse::<usize>().ok())
-                    .unwrap_or(0);
+                        .nth(1)
+                        .and_then(|s| s.parse::<usize>().ok())
+                        .unwrap_or(0);
 
                     // Use DeviceAllocator
-                    let allocator = dynamo_kv_manager::storage::DeviceAllocator::try_new(device_id)
-                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to create DeviceAllocator for device {}: {}", device_id, e)))?;
-
-                    let layout = dynamo_kv_manager::layout::contiguous::FullyContiguous::allocate(layout_config, &allocator)
-                        .map_err(|e| PyRuntimeError::new_err(format!("Failed to allocate DeviceStorage layout: {}", e)))?;
-
-                    Arc::new(layout) as Arc<dyn dynamo_kv_manager::layout::BlockLayout + Send + Sync>
+                    Box::new(dynamo_kv_manager::storage::DeviceAllocator::try_new(device_id)
+                        .map_err(|e| PyRuntimeError::new_err(format!("Failed to create DeviceAllocator for device {}: {}", device_id, e)))?)
                 }
             }
             _ => {
@@ -90,7 +76,11 @@ impl BlockManager {
             }
         };
 
-        Ok(BlockManager { inner: block_layout })
+        // Create layout with the selected allocator
+        let block_layout = dynamo_kv_manager::layout::contiguous::FullyContiguous::allocate(layout_config, &*allocator)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to allocate storage layout: {}", e)))?;
+
+        Ok(BlockManager { inner: Arc::from(block_layout) })
     }
 
     fn tensor(&self, block_idx: usize, layer_idx: usize) -> PyResult<PyObject> {

@@ -87,9 +87,10 @@ impl PinnedAllocator {
     }
 }
 
-impl StorageAllocator<PinnedStorage> for PinnedAllocator {
-    fn allocate(&self, size: usize) -> Result<PinnedStorage> {
-        PinnedStorage::new(size)
+impl StorageAllocator for PinnedAllocator {
+    fn allocate(&self, size: usize) -> Result<Box<dyn Storage>> {
+        let storage = PinnedStorage::new(size)?;
+        Ok(Box::new(storage))
     }
 }
 
@@ -175,8 +176,9 @@ impl DeviceAllocator {
     }
 }
 
-impl StorageAllocator<DeviceStorage> for DeviceAllocator {
-    fn allocate(&self, size: usize) -> Result<DeviceStorage> {
-        DeviceStorage::new(&self.ctx, size)
+impl StorageAllocator for DeviceAllocator {
+    fn allocate(&self, size: usize) -> Result<Box<dyn Storage>> {
+        let storage = DeviceStorage::new(&self.ctx, size)?;
+        Ok(Box::new(storage))
     }
 }

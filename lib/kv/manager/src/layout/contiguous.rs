@@ -82,18 +82,18 @@ impl FullyContiguousConfig {
 
 /// Contiguous memory layout where all blocks and layers are sequential
 #[derive(Debug)]
-pub struct FullyContiguous<S: Storage> {
+pub struct FullyContiguous {
     config: FullyContiguousConfig,
-    storage: S,
+    storage: Box<dyn Storage>,
 
     // Offset from storage.addr() to the aligned start of block 0
     base_offset: usize,
 }
 
-impl<S: Storage> FullyContiguous<S> {
+impl FullyContiguous {
     /// Create a new contiguous layout using the provided configuration and pre-allocated storage.
     #[instrument(level = "debug", skip(storage), fields(config = ?config))]
-    pub fn new(config: LayoutConfig, storage: S) -> Result<Self, LayoutError> {
+    pub fn new(config: LayoutConfig, storage: Box<dyn Storage>) -> Result<Self, LayoutError> {
         // Calculate dimensions, which includes validation.
         // Propagate validation error if it occurs.
         let config = FullyContiguousConfig::new(config)?;
@@ -157,10 +157,6 @@ impl<S: Storage> FullyContiguous<S> {
     /// (including potential padding for initial alignment), and then constructs the
     /// `FullyContiguous` layout instance.
     ///
-    /// # Type Parameters
-    ///
-    /// * `A`: The type of the storage allocator, implementing `StorageAllocator<S>`.
-    ///
     /// # Arguments
     ///
     /// * `config` - The layout configuration.
@@ -168,12 +164,12 @@ impl<S: Storage> FullyContiguous<S> {
     ///
     /// # Returns
     ///
-    /// A `Result` containing the new `FullyContiguous<S>` instance or an error if allocation
+    /// A `Result` containing the new `FullyContiguous` instance or an error if allocation
     /// or layout creation fails.
     #[instrument(level = "debug", skip(allocator), fields(config = ?config))]
-    pub fn allocate<A: StorageAllocator<S>>(
+    pub fn allocate(
         config: LayoutConfig,
-        allocator: &A,
+        allocator: &dyn StorageAllocator,
     ) -> Result<Self, LayoutError> {
         // Calculate total bytes needed. Propagate error if config is invalid.
         let config = FullyContiguousConfig::new(config)?;
@@ -199,7 +195,7 @@ impl<S: Storage> FullyContiguous<S> {
     }
 }
 
-impl<S: Storage> BlockLayout for FullyContiguous<S> {
+impl BlockLayout for FullyContiguous {
     fn num_blocks(&self) -> usize {
         self.config.inner.num_blocks
     }
@@ -267,7 +263,7 @@ mod tests {
     // Updated setup_layout: Calculates size internally, uses default alignment for simplicity in non-alignment tests.
     fn setup_layout(
         alignment: Option<usize>, // Option to override default alignment
-    ) -> Result<FullyContiguous<NullDeviceStorage>, LayoutError> {
+    ) -> Result<FullyContiguous, LayoutError> {
         let config = LayoutConfig {
             num_blocks: NUM_BLOCKS,
             num_layers: NUM_LAYERS,
