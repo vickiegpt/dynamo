@@ -377,9 +377,6 @@ class BaseTensorrtLLMEngine:
                 # Wait for the engine shutdown signal.
                 await self._llm_engine_shutdown_event.wait()
 
-                print(f"token generated: {self._token_generated}")
-                print(f"time spent: {self._generation_time}")
-
                 # Stop the publishing threads
                 if self.publish_stats_thread and self.publish_stats_thread.is_alive():
                     self.publish_stats_thread.stop()
@@ -520,6 +517,8 @@ class BaseTensorrtLLMEngine:
                 ).model_dump_json(exclude_unset=True)
             end_time = time.time()
             self._generation_time += (end_time - start_time)
+            logger.info(f"token generated: {self._token_generated}")
+            logger.info(f"time spent: {self._generation_time}")
 
         except CppExecutorError:
             signal.raise_signal(signal.SIGINT)
