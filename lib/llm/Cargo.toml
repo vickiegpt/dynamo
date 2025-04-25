@@ -31,7 +31,7 @@ vllm = ["dep:async_zmq"]
 python = ["dep:pyo3-async-runtimes", "dep:pythonize"]
 trtllm = []
 cuda_kv = ["dep:cudarc", "dep:ndarray"]
-block_manager = ["dep:cudarc", "dep:ndarray"]
+block_manager = ["dep:cudarc", "dep:ndarray", "dep:nixl-sys"]
 
 cuda = ["mistralrs/cuda", "llama-cpp-2/cuda"]
 metal = ["mistralrs/metal", "llama-cpp-2/metal"]
@@ -40,6 +40,9 @@ vulkan = ["llama-cpp-2/vulkan"]
 [dependencies]
 # repo
 dynamo-runtime = { workspace = true }
+
+# block manager
+nixl-sys = { git = "https://github.com/ai-dynamo/nixl.git",  branch = "ryan/kvbm", optional = true }
 
 # workspace
 anyhow = { workspace = true }

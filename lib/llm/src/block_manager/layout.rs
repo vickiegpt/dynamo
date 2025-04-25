@@ -18,6 +18,8 @@
 //! This module provides traits and implementations for managing how blocks
 //! are arranged in storage, including both contiguous and non-contiguous layouts.
 
+pub mod nixl;
+
 use thiserror::Error;
 
 use crate::block_manager::storage::{Storage, StorageAllocator};
@@ -72,6 +74,12 @@ pub trait BlockLayout:
 {
     /// The type of storage this layout uses
     type StorageType: Storage;
+
+    /// Get the memory regions for all blocks and layers
+    fn storage(&self) -> Vec<&Self::StorageType>;
+
+    /// Get the mutable memory regions for all blocks and layers
+    fn storage_mut(&mut self) -> Vec<&mut Self::StorageType>;
 }
 
 pub trait BlockLayoutConfig {
@@ -321,6 +329,14 @@ impl<S: Storage> FullyContiguous<S> {
 
 impl<S: Storage> BlockLayout for FullyContiguous<S> {
     type StorageType = S;
+
+    fn storage(&self) -> Vec<&Self::StorageType> {
+        vec![&self.storage]
+    }
+
+    fn storage_mut(&mut self) -> Vec<&mut Self::StorageType> {
+        vec![&mut self.storage]
+    }
 }
 
 impl<S: Storage> BlockLayoutConfig for FullyContiguous<S> {

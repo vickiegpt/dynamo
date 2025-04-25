@@ -19,6 +19,8 @@
 //! It handles system memory, pinned memory, device memory, and remote (NIXL) storage,
 //! with a focus on safety and performance.
 
+pub mod nixl;
+
 use std::{
     alloc::{alloc_zeroed, dealloc, Layout},
     fmt::Debug,
@@ -106,6 +108,56 @@ pub trait Storage: Debug + Send + Sync + 'static {
     unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8>;
 }
 
+pub trait RegistationHandle: Send + Sync + 'static {
+    fn deregister(&mut self);
+}
+
+pub trait RegisterableStorage: Storage + Send + Sync + 'static {
+    fn register(&mut self, handle: Box<dyn RegistationHandle>);
+}
+
+#[derive(Default)]
+struct RegistrationHandles {
+    handles: Vec<Box<dyn RegistationHandle>>,
+}
+
+impl RegistrationHandles {
+    fn new() -> Self {
+        Self {
+            handles: Vec::new(),
+        }
+    }
+
+    fn register(&mut self, handle: Box<dyn RegistationHandle>) {
+        self.handles.push(handle);
+    }
+
+    fn release(&mut self) {
+        for handle in self.handles.iter_mut() {
+            handle.deregister();
+        }
+        self.handles.clear();
+    }
+}
+
+impl std::fmt::Debug for RegistrationHandles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "RegistrationHandles {{ count: {:?} }}",
+            self.handles.len()
+        )
+    }
+}
+
+impl Drop for RegistrationHandles {
+    fn drop(&mut self) {
+        if self.handles.len() > 0 {
+            panic!("RegistrationHandles dropped with {} handles remaining; RegistrationHandles::release() needs to be explicitly called", self.handles.len());
+        }
+    }
+}
+
 /// Trait for types that can allocate specific Storage implementations.
 pub trait StorageAllocator<S: Storage>: Send + Sync {
     /// Allocate storage of the specific type `S` with the given size in bytes.
@@ -118,6 +170,7 @@ pub struct SystemStorage {
     ptr: NonNull<u8>,
     layout: Layout,
     len: usize,
+    handles: RegistrationHandles,
 }
 
 unsafe impl Send for SystemStorage {}
@@ -143,12 +196,14 @@ impl SystemStorage {
             ptr,
             layout,
             len: size,
+            handles: RegistrationHandles::new(),
         })
     }
 }
 
 impl Drop for SystemStorage {
     fn drop(&mut self) {
+        self.handles.release();
         unsafe {
             dealloc(self.ptr.as_ptr(), self.layout);
         }
@@ -181,6 +236,12 @@ impl Storage for SystemStorage {
     }
 }
 
+impl RegisterableStorage for SystemStorage {
+    fn register(&mut self, handle: Box<dyn RegistationHandle>) {
+        self.handles.register(handle);
+    }
+}
+
 /// Allocator for SystemStorage
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemAllocator;
@@ -196,6 +257,7 @@ impl StorageAllocator<SystemStorage> for SystemAllocator {
 pub struct PinnedStorage {
     ptr: u64,
     size: usize,
+    handles: RegistrationHandles,
 }
 
 impl PinnedStorage {
@@ -213,13 +275,18 @@ impl PinnedStorage {
             assert!(size < isize::MAX as usize);
 
             let ptr = ptr as u64;
-            Ok(Self { ptr, size })
+            Ok(Self {
+                ptr,
+                size,
+                handles: RegistrationHandles::new(),
+            })
         }
     }
 }
 
 impl Drop for PinnedStorage {
     fn drop(&mut self) {
+        self.handles.release();
         unsafe { cudarc::driver::result::free_host(self.ptr as _) }.unwrap();
     }
 }
@@ -250,6 +317,13 @@ impl Storage for PinnedStorage {
     }
 }
 
+impl RegisterableStorage for PinnedStorage {
+    fn register(&mut self, handle: Box<dyn RegistationHandle>) {
+        self.handles.register(handle);
+    }
+}
+
+/// Allocator for PinnedStorage
 pub struct PinnedAllocator {
     ctx: Arc<CudaContext>,
 }
@@ -282,6 +356,7 @@ pub struct DeviceStorage {
     ptr: u64,
     size: usize,
     ctx: Arc<CudaContext>,
+    handles: RegistrationHandles,
 }
 
 impl DeviceStorage {
@@ -294,6 +369,7 @@ impl DeviceStorage {
             ptr,
             size,
             ctx: ctx.clone(),
+            handles: RegistrationHandles::new(),
         })
     }
 
@@ -332,7 +408,14 @@ impl Storage for DeviceStorage {
 
 impl Drop for DeviceStorage {
     fn drop(&mut self) {
+        self.handles.release();
         unsafe { cudarc::driver::result::free_sync(self.ptr as _) }.unwrap();
+    }
+}
+
+impl RegisterableStorage for DeviceStorage {
+    fn register(&mut self, handle: Box<dyn RegistationHandle>) {
+        self.handles.register(handle);
     }
 }
 
