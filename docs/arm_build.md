@@ -95,12 +95,11 @@ docker build -f container/Dockerfile.nixl --tag dynamo-nixl .
 ```
 
 
-
 ## Using Dynamo vLLM patch in custom vLLM build
 
 ### Compile vLLM in PyTorch 25.03 container
 
-#### Start container
+#### Start NIXL+PyTorch 25.03 container
 
 You need to compile vLLM in the same container with PyTorch 25.03.
 
@@ -220,7 +219,7 @@ This takes a while because CUDA kernels are compiled.
 
 ## Prepare Dynamo environment
 
-You should use PyTorch 25.03 container executed above to install Dynamo wheels and dependencies with environment containing vLLM compiled for ARM64.
+You should use PyTorch 25.03 + NIXL container executed above to install Dynamo wheels and dependencies with environment containing vLLM compiled for ARM64.
 
 ### Install dynamo wheels and dependencies
 
@@ -254,10 +253,6 @@ Install etcd:
 tar -xvf etcd-v3.5.18-linux-arm64.tar.gz
 ```
 
-### Build and install NIXL
-
-
-
 
 ### Start services for Dynamo
 
@@ -279,13 +274,14 @@ etcd-v3.5.18-linux-arm64/etcd
 
 You can run disaggregated inference in containe which includes both Dynamo and vLLM compiled for ARM and CUDA.
 
-Dynamo repo contains folder ``examples/llm`` with example of disaggregated inference.
+Start disaggregated inference:
 
+```bash
+cd $DYNAMO_HOME/examples/llm
+dynamo serve graphs.disagg:Frontend -f ./configs/disagg.yaml
 ```
-cd examples/llm
-```
 
-
+See [README.md](./examples/llm/README.md) for more details.
 
 
 
