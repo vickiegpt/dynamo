@@ -169,7 +169,6 @@ class ChatProcessor(BaseChatProcessor):
     ):
         super().__init__(model, tokenizer)
         self.using_engine_generator = using_engine_generator
-        self._on_going_postprocessing = 0
 
     def yield_first_chat(
         self,
