@@ -205,13 +205,13 @@ class CircusController:
 
                 # Check for the specific arbiter busy message
                 reason = response.get('reason', '')
-                if "arbiter is already running manage_watchers command" in reason:
+                if "arbiter is already running" in reason:
                     if attempt == max_retries - 1:
                         logger.error(
                             f"Failed to remove watcher {name} after {max_retries} attempts: arbiter busy"
                         )
                         return False
-                    logger.warning(f"Arbiter busy with manage_watchers command, will retry removing watcher {name}")
+                    logger.warning(f"Arbiter is already running, will retry removing watcher {name}")
                     await asyncio.sleep(retry_delay * (2**attempt))
                     continue
                     
