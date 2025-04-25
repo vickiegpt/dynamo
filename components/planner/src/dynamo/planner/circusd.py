@@ -203,8 +203,20 @@ class CircusController:
                     )
                     break
 
+                # Check for the specific arbiter busy message
+                reason = response.get('reason', '')
+                if "arbiter is already running manage_watchers command" in reason:
+                    if attempt == max_retries - 1:
+                        logger.error(
+                            f"Failed to remove watcher {name} after {max_retries} attempts: arbiter busy"
+                        )
+                        return False
+                    logger.warning(f"Arbiter busy with manage_watchers command, will retry removing watcher {name}")
+                    await asyncio.sleep(retry_delay * (2**attempt))
+                    continue
+                    
                 logger.error(
-                    f"Failed to remove watcher {name}: {response.get('reason', 'unknown error')}"
+                    f"Failed to remove watcher {name}: {reason or 'unknown error'}"
                 )
                 return False
             except ConflictError as e:
@@ -215,6 +227,16 @@ class CircusController:
                     return False
                 logger.warning(f"Arbiter busy, will retry removing watcher {name}: {e}")
             except (CallError, Exception) as e:
+                # Check if the exception message contains the arbiter busy text
+                if "arbiter is already running manage_watchers command" in str(e):
+                    if attempt == max_retries - 1:
+                        logger.error(
+                            f"Failed to remove watcher {name} after {max_retries} attempts: arbiter busy"
+                        )
+                        return False
+                    logger.warning(f"Arbiter busy with manage_watchers command, will retry removing watcher {name}")
+                    continue
+                    
                 if attempt == max_retries - 1:
                     logger.error(
                         f"Failed to remove watcher {name} after {max_retries} attempts: {e}"
