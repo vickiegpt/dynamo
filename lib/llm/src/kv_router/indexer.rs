@@ -104,7 +104,8 @@ pub fn compute_hash_v2(data: &[u8], seed: u64) -> u64 {
 ///
 /// A `LocalBlockHash` representing the computed hash.
 pub fn compute_block_hash(data: &[u8]) -> LocalBlockHash {
-    LocalBlockHash(compute_hash(data, None))
+    // LocalBlockHash(compute_hash(data, None))
+    LocalBlockHash(compute_hash_v2(data, XXH3_SEED))
 }
 
 // /// Updated version of the `compute_block_hash` function that included the lora_id

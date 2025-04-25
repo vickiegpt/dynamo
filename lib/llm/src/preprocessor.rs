@@ -15,8 +15,7 @@
 
 //! The Preprocessor consists of the following modules
 //!
-//! - `translation`: This module converts the allowed Ingress message types to the corresponding
-//!    internal representation.
+//! - `translation`: This module converts the allowed Ingress message types to the corresponding internal representation.
 //! - `apply`: This module applies ModelConfig defaults to any empty optional fields specified
 //! - `prompt`: This module applies any prompt template logic to the internal Request object.
 //! - `tokenize`: This module tokenizes the formatted prompt string and returns the token ids.
