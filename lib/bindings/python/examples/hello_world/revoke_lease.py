@@ -27,7 +27,7 @@ async def worker(runtime: DistributedRuntime):
     parser = argparse.ArgumentParser()
     parser.add_argument("lease_id", type=int, help="Lease ID to revoke")
     args = parser.parse_args()
-    await init(runtime, "dynamo", args.lease_id)
+    await init(runtime, args.lease_id)
 
 
 async def init(runtime: DistributedRuntime, lease_id: int):

@@ -135,14 +135,18 @@ class CircusController:
                     f"Failed to add watcher {name}: {response.get('reason', 'unknown error')}"
                 )
                 return False
-            except ConflictError as e:
-                if attempt == max_retries - 1:
-                    logger.error(
-                        f"Failed to add watcher {name} after {max_retries} attempts: {e}"
-                    )
-                    return False
-                logger.warning(f"Arbiter busy, will retry adding watcher {name}: {e}")
             except (CallError, Exception) as e:
+                if "arbiter is already running" in str(e):
+                    if attempt == max_retries - 1:
+                        logger.error(
+                            f"Failed to remove watcher {name} after {max_retries} attempts: arbiter busy"
+                        )
+                        return False
+                    logger.warning(
+                        f"Arbiter busy with manage_watchers command, will retry removing watcher {name}"
+                    )
+                    continue
+
                 if attempt == max_retries - 1:
                     logger.error(
                         f"Failed to add watcher {name} after {max_retries} attempts: {e}"
@@ -203,9 +207,7 @@ class CircusController:
                     )
                     break
 
-                logger.error(
-                    f"Failed to remove watcher {name}: {response}"
-                )
+                logger.error(f"Failed to remove watcher {name}: {response}")
                 return False
             except (CallError, Exception) as e:
                 if "arbiter is already running" in str(e):
@@ -214,9 +216,11 @@ class CircusController:
                             f"Failed to remove watcher {name} after {max_retries} attempts: arbiter busy"
                         )
                         return False
-                    logger.warning(f"Arbiter busy with manage_watchers command, will retry removing watcher {name}")
+                    logger.warning(
+                        f"Arbiter busy with manage_watchers command, will retry removing watcher {name}"
+                    )
                     continue
-                    
+
                 if attempt == max_retries - 1:
                     logger.error(
                         f"Failed to remove watcher {name} after {max_retries} attempts: {e}"
