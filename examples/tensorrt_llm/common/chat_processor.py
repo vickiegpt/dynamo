@@ -169,7 +169,6 @@ class ChatProcessor(BaseChatProcessor):
     ):
         super().__init__(model, tokenizer)
         self.using_engine_generator = using_engine_generator
-        self._on_going_preprocessing = 0
         self._on_going_postprocessing = 0
 
     def yield_first_chat(
@@ -303,9 +302,6 @@ class ChatProcessor(BaseChatProcessor):
         return "data: [DONE]\n\n"
 
     async def preprocess(self, request):
-        self._on_going_preprocessing += 1
-        logger.info(f"chat_processor start on_going_preprocessng: {self._on_going_preprocessing}")
-
         conversation: List[Any] = []
         for message in request.messages:
             conversation.extend(parse_chat_message_content(message))
@@ -324,9 +320,6 @@ class ChatProcessor(BaseChatProcessor):
             **(request.chat_template_kwargs or {}),
         )
         sampling_params = request.to_sampling_params()
-
-        self._on_going_preprocessing -= 1
-        logger.info(f"chat_processor finished on_going_preprocessng: {self._on_going_preprocessing}")
 
         return TRTLLMWorkerRequest(
             id=request.id,

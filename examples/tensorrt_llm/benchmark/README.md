@@ -86,7 +86,7 @@ bash -x ./benchmark/perf.sh
 ### Run Dynamo Tensorrt LLM Aggregated benchmark in TP2
 
 ```bash
-dynamo serve graphs.disagg:Frontend -f ./benchmark/agg_1_tp2.yaml &
+dynamo serve graphs.agg:Frontend -f ./benchmark/agg_1_tp2.yaml &
 ```
 
 After the server started, we can kick off the perf benchmark:
@@ -117,7 +117,7 @@ For Dyanmo Aggregated in TP2, please follow the [Run Dynamo Tensorrt LLM Aggrega
 ### Run Dynamo Tensorrt LLM Aggregated benchmark in TP1 But 2 workers
 
 ```bash
-dynamo serve graphs.disagg:Frontend -f ./benchmark/agg_2_tp1.yaml &
+dynamo serve graphs.agg:Frontend -f ./benchmark/agg_2_tp1.yaml &
 ```
 
 After the server started, we can kick off the perf benchmark:
