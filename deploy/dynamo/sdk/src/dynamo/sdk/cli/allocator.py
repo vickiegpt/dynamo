@@ -51,16 +51,6 @@ def format_memory_gb(memory_bytes: float) -> str:
     return f"{memory_bytes/1024/1024/1024:.1f}GB"
 
 
-def format_memory_gb(memory_bytes: float) -> str:
-    """Convert memory from bytes to formatted GB string.
-    Args:
-        memory_bytes: Memory size in bytes
-    Returns:
-        Formatted string with memory size in GB with 1 decimal place
-    """
-    return f"{memory_bytes/1024/1024/1024:.1f}GB"
-
-
 class ResourceAllocator:
     def __init__(self) -> None:
         """Initialize the resource allocator."""
