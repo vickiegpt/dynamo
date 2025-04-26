@@ -16,8 +16,69 @@
 use super::*;
 
 use pyo3::exceptions::PyRuntimeError;
+use dlpark::prelude::*;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
+
+struct DlPackTensor {
+    memory_region: u64,
+    region_size: usize,
+    region_shape: Vec<usize>,
+    dtype: dynamo_kv_manager::dtype::DType,
+    storage_type: dynamo_kv_manager::storage::StorageType,
+}
+
+impl ToTensor for DlPackTensor {
+    fn data_ptr(&self) -> *mut std::ffi::c_void {
+        self.memory_region as *mut std::ffi::c_void
+    }
+
+    fn byte_offset(&self) -> u64 {
+        0
+    }
+
+    fn device(&self) -> Device {
+        match self.storage_type {
+            dynamo_kv_manager::storage::StorageType::Device(_) => Device {
+                device_type: dlpark::ffi::DeviceType::Cuda,
+                device_id: 0,
+            },
+            dynamo_kv_manager::storage::StorageType::Pinned => Device {
+                device_type: dlpark::ffi::DeviceType::CudaHost,
+                device_id: 0,
+            },
+            dynamo_kv_manager::storage::StorageType::System => Device {
+                device_type: dlpark::ffi::DeviceType::Cpu,
+                device_id: 0,
+            },
+            _ => panic!("Unsupported storage type"),
+        }
+    }
+
+    fn dtype(&self) -> DataType {
+        match self.dtype {
+            dynamo_kv_manager::dtype::DType::FP8 => dlpark::ffi::DataType::U8,
+            dynamo_kv_manager::dtype::DType::FP16 => dlpark::ffi::DataType::F16,
+            dynamo_kv_manager::dtype::DType::BF16 => dlpark::ffi::DataType::BF16,
+            dynamo_kv_manager::dtype::DType::FP32 => dlpark::ffi::DataType::F32,
+            dynamo_kv_manager::dtype::DType::FP64 => dlpark::ffi::DataType::F64,
+            dynamo_kv_manager::dtype::DType::U8 => dlpark::ffi::DataType::U8,
+            dynamo_kv_manager::dtype::DType::U16 => dlpark::ffi::DataType::U16,
+            dynamo_kv_manager::dtype::DType::U32 => dlpark::ffi::DataType::U32,
+            dynamo_kv_manager::dtype::DType::U64 => dlpark::ffi::DataType::U64,
+            dynamo_kv_manager::dtype::DType::I8 => dlpark::ffi::DataType::I8,
+            dynamo_kv_manager::dtype::DType::I16 => dlpark::ffi::DataType::I16,
+            dynamo_kv_manager::dtype::DType::I32 => dlpark::ffi::DataType::I32,
+            dynamo_kv_manager::dtype::DType::I64 => dlpark::ffi::DataType::I64,
+            _ => panic!("Unsupported dtype"),
+        }
+    }
+
+    fn shape_and_strides(&self) -> ShapeAndStrides {
+        let shape_i64: Vec<i64> = self.region_shape.iter().map(|x| *x as i64).collect();
+        ShapeAndStrides::new_contiguous(&shape_i64)
+    }
+}
 
 #[pyclass]
 pub struct BlockManager {
@@ -84,74 +145,28 @@ impl BlockManager {
     }
 
     fn tensor(&self, block_idx: usize, layer_idx: usize) -> PyResult<PyObject> {
+        // Get memory region and metadata for tensor construction
         let memory_region = self.inner.get_memory_region(block_idx, layer_idx)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to get memory region: {}", e)))?;
+            .expect(&format!("Failed to get memory region for block {}, layer {}", block_idx, layer_idx));
         let region_size = self.inner.memory_region_size();
         let region_shape = vec![self.inner.page_size(), self.inner.inner_dim()];
         let dtype = self.inner.dtype();
+        let storage_type = self.inner.storage_type();
 
-        let torch_tensor = match self.inner.storage_type() {
-            dynamo_kv_manager::storage::StorageType::Device(_) => {
-                Python::with_gil(|py| -> PyResult<PyObject> {
-                    let cupy = py.import("cupy")?;
-                    let cupy_type = match dtype {
-                        dynamo_kv_manager::dtype::DType::FP8 => cupy.getattr("uint8")?,
-                        dynamo_kv_manager::dtype::DType::FP16 => cupy.getattr("float16")?,
-                        dynamo_kv_manager::dtype::DType::BF16 => cupy.getattr("float16")?,
-                        dynamo_kv_manager::dtype::DType::FP32 => cupy.getattr("float32")?,
-                        dynamo_kv_manager::dtype::DType::FP64 => cupy.getattr("float64")?,
-                        dynamo_kv_manager::dtype::DType::U8 => cupy.getattr("uint8")?,
-                        dynamo_kv_manager::dtype::DType::U16 => cupy.getattr("uint16")?,
-                        dynamo_kv_manager::dtype::DType::U32 => cupy.getattr("uint32")?,
-                        dynamo_kv_manager::dtype::DType::U64 => cupy.getattr("uint64")?,
-                        dynamo_kv_manager::dtype::DType::I8 => cupy.getattr("int8")?,
-                        dynamo_kv_manager::dtype::DType::I16 => cupy.getattr("int16")?,
-                        dynamo_kv_manager::dtype::DType::I32 => cupy.getattr("int32")?,
-                        dynamo_kv_manager::dtype::DType::I64 => cupy.getattr("int64")?,
-                    };
-                    let cupy_mem = cupy.getattr("cuda")?.getattr("UnownedMemory")?.call1((memory_region, region_size, py.None()))?;
-                    let cupy_ptr = cupy.getattr("cuda")?.getattr("MemoryPointer")?.call1((cupy_mem, 0))?;
-                    let cupy_array = cupy.getattr("ndarray")?.call1((region_shape, cupy_type, cupy_ptr))?;
-                    let torch = py.import("torch")?;
-                    let torch_tensor = torch.getattr("from_dlpack")?.call1((cupy_array,))?;
-                    Ok(torch_tensor.into())
-                })?
-            }
-            dynamo_kv_manager::storage::StorageType::Pinned => {
-                return Err(PyRuntimeError::new_err("Pinned memory tensor retrieval not implemented"));
-            }
-            dynamo_kv_manager::storage::StorageType::System => {
-                Python::with_gil(|py| -> PyResult<PyObject> {
-                    let ctypes = py.import("ctypes")?;
-                    let ctypes_type = match dtype {
-                        dynamo_kv_manager::dtype::DType::FP8 => ctypes.getattr("c_ubyte")?,
-                        dynamo_kv_manager::dtype::DType::FP16 => ctypes.getattr("c_ushort")?,
-                        dynamo_kv_manager::dtype::DType::BF16 => ctypes.getattr("c_ushort")?,
-                        dynamo_kv_manager::dtype::DType::FP32 => ctypes.getattr("c_float")?,
-                        dynamo_kv_manager::dtype::DType::FP64 => ctypes.getattr("c_double")?,
-                        dynamo_kv_manager::dtype::DType::U8 => ctypes.getattr("c_uint8")?,
-                        dynamo_kv_manager::dtype::DType::U16 => ctypes.getattr("c_uint16")?,
-                        dynamo_kv_manager::dtype::DType::U32 => ctypes.getattr("c_uint32")?,
-                        dynamo_kv_manager::dtype::DType::U64 => ctypes.getattr("c_uint64")?,
-                        dynamo_kv_manager::dtype::DType::I8 => ctypes.getattr("c_int8")?,
-                        dynamo_kv_manager::dtype::DType::I16 => ctypes.getattr("c_int16")?,
-                        dynamo_kv_manager::dtype::DType::I32 => ctypes.getattr("c_int32")?,
-                        dynamo_kv_manager::dtype::DType::I64 => ctypes.getattr("c_int64")?,
-                    };
-                    let ctypes_ptr_type = ctypes.getattr("POINTER")?.call1((ctypes_type,))?;
-                    let ctypes_ptr = ctypes.getattr("cast")?.call1((memory_region, ctypes_ptr_type))?;
-                    let np = py.import("numpy")?;
-                    let np_array = np.getattr("ctypeslib")?.getattr("as_array")?.call1((ctypes_ptr, region_shape))?;
-                    let torch = py.import("torch")?;
-                    let torch_tensor = torch.getattr("from_dlpack")?.call1((np_array,))?;
-                    Ok(torch_tensor.into())
-                })?
-            }
-            _ => {
-                return Err(PyRuntimeError::new_err("Unsupported storage type"));
-            }
+        // Create a DlPackTensor instance
+        let dlpack_tensor = DlPackTensor {
+            memory_region,
+            region_size,
+            region_shape,
+            dtype,
+            storage_type,
         };
 
-        Ok(torch_tensor)
+        // Convert to Python object using into_py
+        let manager_ctx = ManagerCtx::new(dlpack_tensor);
+        let py_capsule = Python::with_gil(|py| {
+            manager_ctx.into_py(py)
+        });
+        Ok(py_capsule)
     }
 }
