@@ -305,7 +305,7 @@ impl<L: BlockLayout> BlockData<L> {
 
     /// Get a read-only view of this block's storage for a layer
     pub fn layer_view(&self, layer_idx: usize) -> BlockResult<view::BlockView<L>> {
-        let offset = self.layout.get_memory_region(self.block_idx, layer_idx)?;
+        let offset = self.layout.memory_region_addr(self.block_idx, layer_idx)?;
 
         unsafe { view::BlockView::new(self, offset as usize, self.layout.memory_region_size()) }
     }
@@ -318,7 +318,7 @@ impl<L: BlockLayout> BlockData<L> {
     /// - This is enforced in Rust by BlockView requiring unique access
     /// - Cannot be enforced when using with Python bindings or CUDA kernels
     pub fn layer_view_mut(&mut self, layer_idx: usize) -> BlockResult<view::BlockViewMut<L>> {
-        let offset = self.layout.get_memory_region(self.block_idx, layer_idx)?;
+        let offset = self.layout.memory_region_addr(self.block_idx, layer_idx)?;
 
         unsafe { view::BlockViewMut::new(self, offset as usize, self.layout.memory_region_size()) }
     }
@@ -371,6 +371,21 @@ impl<L: BlockLayout, M: BlockMetadata> Blocks<L, M> {
             })
             .collect()
     }
+}
+
+mod nixl {
+
+    use super::Blocks;
+
+    // impl<L: BlockLayout, M: BlockMetadata> Blocks<L, M> {
+    //     pub fn export_nixl_descriptors(
+    //         &self,
+    //         worker_id: u64,
+    //         block_set_id: u8,
+    //     ) -> Vec<NixlDescriptor> {
+    //         unimplemented!()
+    //     }
+    // }
 }
 
 #[cfg(test)]

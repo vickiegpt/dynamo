@@ -111,3 +111,80 @@ impl<'a, L: BlockLayout> BlockViewMut<'a, L> {
         self.size
     }
 }
+
+mod nixl {
+    use super::*;
+
+    pub use nixl_sys::{
+        Agent as NixlAgent, MemType, MemoryRegion, NixlDescriptor, OptArgs,
+        RegistrationHandle as NixlRegistrationHandle,
+    };
+
+    impl<'a, L: BlockLayout> MemoryRegion for BlockView<'a, L> {
+        unsafe fn as_ptr(&self) -> *const u8 {
+            self.addr as *const u8
+        }
+
+        fn size(&self) -> usize {
+            self.size()
+        }
+    }
+
+    impl<'a, L> NixlDescriptor for BlockView<'a, L>
+    where
+        L: BlockLayout,
+        L::StorageType: NixlDescriptor,
+    {
+        fn mem_type(&self) -> MemType {
+            self._block_data
+                .layout
+                .storage()
+                .first()
+                .expect("no storage")
+                .mem_type()
+        }
+
+        fn device_id(&self) -> u64 {
+            self._block_data
+                .layout
+                .storage()
+                .first()
+                .expect("no storage")
+                .device_id()
+        }
+    }
+
+    impl<'a, L: BlockLayout> MemoryRegion for BlockViewMut<'a, L> {
+        unsafe fn as_ptr(&self) -> *const u8 {
+            self.addr as *const u8
+        }
+
+        fn size(&self) -> usize {
+            self.size()
+        }
+    }
+
+    impl<'a, L> NixlDescriptor for BlockViewMut<'a, L>
+    where
+        L: BlockLayout,
+        L::StorageType: NixlDescriptor,
+    {
+        fn mem_type(&self) -> MemType {
+            self._block_data
+                .layout
+                .storage()
+                .first()
+                .expect("no storage")
+                .mem_type()
+        }
+
+        fn device_id(&self) -> u64 {
+            self._block_data
+                .layout
+                .storage()
+                .first()
+                .expect("no storage")
+                .device_id()
+        }
+    }
+}

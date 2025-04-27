@@ -25,6 +25,7 @@ use thiserror::Error;
 use crate::block_manager::storage::{Storage, StorageAllocator};
 use crate::common::dtype::DType;
 use derive_builder::Builder;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use validator::Validate;
 
@@ -48,7 +49,7 @@ pub enum LayoutError {
 }
 
 /// Storage pattern for layers
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LayoutType {
     /// All layers are contiguous in memory [n_layers, ...]
     FullyContiguous,
@@ -100,14 +101,14 @@ pub trait BlockLayoutConfig {
 
 pub trait BlockLayoutLookup {
     /// Get the memory region for a specific page [page_size, inner_dim]
-    fn get_memory_region(&self, block_idx: usize, layer_idx: usize) -> Result<u64, LayoutError>;
+    fn memory_region_addr(&self, block_idx: usize, layer_idx: usize) -> Result<u64, LayoutError>;
 
     /// Get the memory region for a specific page [page_size, inner_dim]
     fn memory_region_size(&self) -> usize;
 }
 
 /// Configuration for block layouts
-#[derive(Debug, Clone, Builder, Validate)]
+#[derive(Debug, Clone, Builder, Validate, Serialize, Deserialize)]
 pub struct LayoutConfig {
     #[validate(range(min = 1))]
     pub num_blocks: usize,
@@ -155,7 +156,7 @@ fn align_up(value: usize, alignment: usize) -> usize {
 
 /// Internal struct to hold calculated layout dimensions specific to FullyContiguous.
 // Module-level, but only used internally by FullyContiguous
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FullyContiguousConfig {
     inner: LayoutConfig,
     memory_region_size: usize,
@@ -362,7 +363,7 @@ impl<S: Storage> BlockLayoutConfig for FullyContiguous<S> {
 }
 
 impl<S: Storage> BlockLayoutLookup for FullyContiguous<S> {
-    fn get_memory_region(&self, block_idx: usize, layer_idx: usize) -> Result<u64, LayoutError> {
+    fn memory_region_addr(&self, block_idx: usize, layer_idx: usize) -> Result<u64, LayoutError> {
         if block_idx >= self.num_blocks() {
             return Err(LayoutError::InvalidBlockIndex(block_idx));
         }
