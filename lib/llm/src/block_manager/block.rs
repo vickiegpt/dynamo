@@ -373,20 +373,76 @@ impl<L: BlockLayout, M: BlockMetadata> Blocks<L, M> {
     }
 }
 
-mod nixl {
+// mod nixl {
+//     use crate::block_manager::layout::{
+//         BlockLayout, FullyContiguous, SerializableFullyContiguous, SerializableLayout,
+//     };
+//     use crate::block_manager::storage::Storage;
+//     use serde::{Deserialize, Serialize};
+//     use std::sync::Arc;
 
-    use super::Blocks;
+//     /// Represents a set of blocks managed by NIXL, holding the serializable layout configuration.
+//     /// The actual storage and BlockLayout instance are reconstructed at runtime.
+//     #[derive(Debug, Clone, Serialize, Deserialize)]
+//     pub struct NixlBlockSet {
+//         // Holds the enum representing the specific layout's configuration
+//         serializable_layout: SerializableLayout,
+//         // We might need other NIXL-specific metadata here later, e.g., worker_id, block_set_id?
+//     }
 
-    // impl<L: BlockLayout, M: BlockMetadata> Blocks<L, M> {
-    //     pub fn export_nixl_descriptors(
-    //         &self,
-    //         worker_id: u64,
-    //         block_set_id: u8,
-    //     ) -> Vec<NixlDescriptor> {
-    //         unimplemented!()
-    //     }
-    // }
-}
+//     impl NixlBlockSet {
+//         // Placeholder for the reconstruction logic
+//         // This would likely take a NixlAllocator or similar context
+//         // pub fn reconstruct<A: StorageAllocator<NixlStorage>>(&self, allocator: &A) -> Result<Arc<dyn BlockLayout>> {
+//         //     match &self.serializable_layout {
+//         //         SerializableLayout::FullyContiguous(fc_config) => {
+//         //              // 1. Use fc_config.config and allocator to create NixlStorage
+//         //              // 2. Construct FullyContiguous<NixlStorage> using config, storage, base_offset
+//         //              // 3. Return Arc::new(fully_contiguous_instance)
+//         //              unimplemented!("Reconstruction requires an allocator for FullyContiguous")
+//         //         }
+//         //         // Handle other layout types here
+//         //     }
+//         // }
+
+//         // Constructor for FullyContiguous layout
+//         pub fn new_fully_contiguous<S: Storage>(layout: &FullyContiguous<S>) -> Self {
+//             // Get NIXL descriptors, assume they exist for this constructor
+//             // FullyContiguous returns a single storage element.
+//             let storage = layout
+//                 .storage()
+//                 .first()
+//                 .expect("FullyContiguous layout must have exactly one storage element");
+//             let storage_descriptors = storage
+//                 .get_nixl_descriptors()
+//                 .expect("Layout provided to NixlBlockSet must have NIXL storage descriptors");
+
+//             let serializable_fc = SerializableFullyContiguous {
+//                 config: layout.config().clone(),
+//                 base_offset: layout.base_offset(),
+//                 storage_descriptors,
+//             };
+//             Self {
+//                 serializable_layout: SerializableLayout::FullyContiguous(serializable_fc),
+//             }
+//         }
+
+//         // Add constructors for other layout types as needed, e.g.:
+//         // pub fn new_layer_contiguous<S: Storage>(layout: &LayerContiguous<S>) -> Self { ... }
+//     }
+
+//     // Previous commented-out code:
+//     // use super::Blocks;
+//     // impl<L: BlockLayout, M: BlockMetadata> Blocks<L, M> {
+//     //     pub fn export_nixl_descriptors(
+//     //         &self,
+//     //         worker_id: u64,
+//     //         block_set_id: u8,
+//     //     ) -> Vec<NixlDescriptor> {
+//     //         unimplemented!()
+//     //     }
+//     // }
+// }
 
 #[cfg(test)]
 mod tests {

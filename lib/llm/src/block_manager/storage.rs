@@ -23,6 +23,7 @@ pub mod nixl;
 
 use std::{
     alloc::{alloc_zeroed, dealloc, Layout},
+    collections::HashMap,
     fmt::Debug,
     ptr::NonNull,
     sync::Arc,
@@ -42,6 +43,8 @@ pub enum StorageType {
     Pinned,
     System,
     Null,
+
+    Nixl,
 }
 
 pub enum StorageLocality {
@@ -70,10 +73,13 @@ pub enum StorageError {
 
     #[error("CUDA error: {0}")]
     Cuda(#[from] DriverError),
-}
 
-/// Result type for storage operations
-pub type Result<T> = std::result::Result<T, StorageError>;
+    #[error("Registration key already exists: {0}")]
+    RegistrationKeyExists(String),
+
+    #[error("Handle not found for key: {0}")]
+    HandleNotFound(String),
+}
 
 /// Core storage trait that provides access to memory regions
 pub trait Storage: Debug + Send + Sync + 'static {
@@ -113,30 +119,61 @@ pub trait RegistationHandle: Send + Sync + 'static {
 }
 
 pub trait RegisterableStorage: Storage + Send + Sync + 'static {
-    fn register(&mut self, handle: Box<dyn RegistationHandle>);
+    /// Register a handle with a key
+    /// If a handle with the same key already exists, an error is returned
+    fn register(
+        &mut self,
+        key: &str,
+        handle: Box<dyn RegistationHandle>,
+    ) -> Result<(), StorageError>;
+
+    /// Check if a handle is registered with a key
+    fn is_registered(&self, key: &str) -> bool;
 }
 
 #[derive(Default)]
 struct RegistrationHandles {
-    handles: Vec<Box<dyn RegistationHandle>>,
+    handles: HashMap<String, Box<dyn RegistationHandle>>,
 }
 
 impl RegistrationHandles {
     fn new() -> Self {
         Self {
-            handles: Vec::new(),
+            handles: HashMap::new(),
         }
     }
 
-    fn register(&mut self, handle: Box<dyn RegistationHandle>) {
-        self.handles.push(handle);
+    fn register(
+        &mut self,
+        key: &str,
+        handle: Box<dyn RegistationHandle>,
+    ) -> Result<(), StorageError> {
+        let key = key.to_string();
+        if self.handles.contains_key(&key) {
+            return Err(StorageError::RegistrationKeyExists(key));
+        }
+        self.handles.insert(key, handle);
+        Ok(())
     }
 
     fn release(&mut self) {
-        for handle in self.handles.iter_mut() {
+        for handle in self.handles.values_mut() {
             handle.deregister();
         }
         self.handles.clear();
+    }
+
+    fn deregister(&mut self, key: &str) -> Result<(), StorageError> {
+        if let Some(mut handle) = self.handles.remove(key) {
+            handle.deregister();
+            Ok(())
+        } else {
+            Err(StorageError::HandleNotFound(key.to_string()))
+        }
+    }
+
+    fn is_registered(&self, key: &str) -> bool {
+        self.handles.contains_key(key)
     }
 }
 
@@ -161,7 +198,7 @@ impl Drop for RegistrationHandles {
 /// Trait for types that can allocate specific Storage implementations.
 pub trait StorageAllocator<S: Storage>: Send + Sync {
     /// Allocate storage of the specific type `S` with the given size in bytes.
-    fn allocate(&self, size: usize) -> Result<S>;
+    fn allocate(&self, size: usize) -> Result<S, StorageError>;
 }
 
 /// System memory storage implementation using pinned memory
@@ -181,7 +218,7 @@ impl SystemStorage {
     ///
     /// # Safety
     /// This function allocates memory that will be freed when the SystemStorage is dropped.
-    pub fn new(size: usize) -> Result<Self> {
+    pub fn new(size: usize) -> Result<Self, StorageError> {
         // Create layout for the allocation, ensuring proper alignment
         let layout =
             Layout::array::<u8>(size).map_err(|e| StorageError::AllocationFailed(e.to_string()))?;
@@ -237,8 +274,16 @@ impl Storage for SystemStorage {
 }
 
 impl RegisterableStorage for SystemStorage {
-    fn register(&mut self, handle: Box<dyn RegistationHandle>) {
-        self.handles.register(handle);
+    fn register(
+        &mut self,
+        key: &str,
+        handle: Box<dyn RegistationHandle>,
+    ) -> Result<(), StorageError> {
+        self.handles.register(key, handle)
+    }
+
+    fn is_registered(&self, key: &str) -> bool {
+        self.handles.is_registered(key)
     }
 }
 
@@ -247,7 +292,7 @@ impl RegisterableStorage for SystemStorage {
 pub struct SystemAllocator;
 
 impl StorageAllocator<SystemStorage> for SystemAllocator {
-    fn allocate(&self, size: usize) -> Result<SystemStorage> {
+    fn allocate(&self, size: usize) -> Result<SystemStorage, StorageError> {
         SystemStorage::new(size)
     }
 }
@@ -262,7 +307,7 @@ pub struct PinnedStorage {
 
 impl PinnedStorage {
     /// Create a new pinned storage with the given size
-    pub fn new(ctx: &Arc<CudaContext>, size: usize) -> Result<Self> {
+    pub fn new(ctx: &Arc<CudaContext>, size: usize) -> Result<Self, StorageError> {
         unsafe {
             ctx.bind_to_thread().map_err(StorageError::Cuda)?;
 
@@ -318,8 +363,16 @@ impl Storage for PinnedStorage {
 }
 
 impl RegisterableStorage for PinnedStorage {
-    fn register(&mut self, handle: Box<dyn RegistationHandle>) {
-        self.handles.register(handle);
+    fn register(
+        &mut self,
+        key: &str,
+        handle: Box<dyn RegistationHandle>,
+    ) -> Result<(), StorageError> {
+        self.handles.register(key, handle)
+    }
+
+    fn is_registered(&self, key: &str) -> bool {
+        self.handles.is_registered(key)
     }
 }
 
@@ -337,7 +390,7 @@ impl Default for PinnedAllocator {
 }
 
 impl PinnedAllocator {
-    pub fn try_new(device_id: usize) -> Result<Self> {
+    pub fn try_new(device_id: usize) -> Result<Self, StorageError> {
         Ok(Self {
             ctx: CudaContext::new(device_id).map_err(StorageError::Cuda)?,
         })
@@ -345,7 +398,7 @@ impl PinnedAllocator {
 }
 
 impl StorageAllocator<PinnedStorage> for PinnedAllocator {
-    fn allocate(&self, size: usize) -> Result<PinnedStorage> {
+    fn allocate(&self, size: usize) -> Result<PinnedStorage, StorageError> {
         PinnedStorage::new(&self.ctx, size)
     }
 }
@@ -361,7 +414,7 @@ pub struct DeviceStorage {
 
 impl DeviceStorage {
     /// Create a new device storage with the given size
-    pub fn new(ctx: &Arc<CudaContext>, size: usize) -> Result<Self> {
+    pub fn new(ctx: &Arc<CudaContext>, size: usize) -> Result<Self, StorageError> {
         ctx.bind_to_thread().map_err(StorageError::Cuda)?;
         let ptr = unsafe { cudarc::driver::result::malloc_sync(size).map_err(StorageError::Cuda)? };
 
@@ -414,8 +467,16 @@ impl Drop for DeviceStorage {
 }
 
 impl RegisterableStorage for DeviceStorage {
-    fn register(&mut self, handle: Box<dyn RegistationHandle>) {
-        self.handles.register(handle);
+    fn register(
+        &mut self,
+        key: &str,
+        handle: Box<dyn RegistationHandle>,
+    ) -> Result<(), StorageError> {
+        self.handles.register(key, handle)
+    }
+
+    fn is_registered(&self, key: &str) -> bool {
+        self.handles.is_registered(key)
     }
 }
 
@@ -432,7 +493,7 @@ impl Default for DeviceAllocator {
 }
 
 impl DeviceAllocator {
-    pub fn try_new(device_id: usize) -> Result<Self> {
+    pub fn try_new(device_id: usize) -> Result<Self, StorageError> {
         Ok(Self {
             ctx: CudaContext::new(device_id).map_err(StorageError::Cuda)?,
         })
@@ -440,7 +501,7 @@ impl DeviceAllocator {
 }
 
 impl StorageAllocator<DeviceStorage> for DeviceAllocator {
-    fn allocate(&self, size: usize) -> Result<DeviceStorage> {
+    fn allocate(&self, size: usize) -> Result<DeviceStorage, StorageError> {
         DeviceStorage::new(&self.ctx, size)
     }
 }
@@ -488,7 +549,7 @@ pub mod tests {
     pub struct NullDeviceAllocator;
 
     impl StorageAllocator<NullDeviceStorage> for NullDeviceAllocator {
-        fn allocate(&self, size: usize) -> Result<NullDeviceStorage> {
+        fn allocate(&self, size: usize) -> Result<NullDeviceStorage, StorageError> {
             Ok(NullDeviceStorage::new(size as u64))
         }
     }
@@ -533,7 +594,7 @@ pub mod tests {
     pub struct NullHostAllocator;
 
     impl StorageAllocator<NullHostStorage> for NullHostAllocator {
-        fn allocate(&self, size: usize) -> Result<NullHostStorage> {
+        fn allocate(&self, size: usize) -> Result<NullHostStorage, StorageError> {
             Ok(NullHostStorage::new(size as u64))
         }
     }

@@ -83,7 +83,7 @@ pub trait BlockLayout:
     fn storage_mut(&mut self) -> Vec<&mut Self::StorageType>;
 }
 
-pub trait BlockLayoutConfig {
+pub trait BlockLayoutConfig: std::fmt::Debug {
     fn layout_type(&self) -> LayoutType;
 
     /// Returns the total number of blocks this layout manages
@@ -209,6 +209,28 @@ impl FullyContiguousConfig {
     }
 }
 
+impl BlockLayoutConfig for FullyContiguousConfig {
+    fn layout_type(&self) -> LayoutType {
+        LayoutType::FullyContiguous
+    }
+
+    fn num_blocks(&self) -> usize {
+        self.inner.num_blocks
+    }
+
+    fn num_layers(&self) -> usize {
+        self.inner.num_layers
+    }
+
+    fn page_size(&self) -> usize {
+        self.inner.page_size
+    }
+
+    fn inner_dim(&self) -> usize {
+        self.inner.inner_dim
+    }
+}
+
 /// Contiguous memory layout where all blocks and layers are sequential
 #[derive(Debug)]
 pub struct FullyContiguous<S: Storage> {
@@ -221,10 +243,10 @@ pub struct FullyContiguous<S: Storage> {
 
 impl<S: Storage> FullyContiguous<S> {
     /// Create a new contiguous layout using the provided configuration and pre-allocated storage.
+    /// Performs validation and calculates strides/offsets.
     #[instrument(level = "debug", skip(storage), fields(config = ?config))]
     pub fn new(config: LayoutConfig, storage: S) -> Result<Self, LayoutError> {
         // Calculate dimensions, which includes validation.
-        // Propagate validation error if it occurs.
         let config = FullyContiguousConfig::new(config)?;
 
         let provided_size = storage.size();
@@ -273,6 +295,23 @@ impl<S: Storage> FullyContiguous<S> {
             "Calculated layout strides (aligned)"
         );
 
+        Ok(Self {
+            config,
+            storage,
+            base_offset,
+        })
+    }
+
+    /// Internal constructor used for reconstruction from serialized parts.
+    /// Assumes the provided config, storage, and base_offset are consistent
+    /// and skips size/alignment validation against the storage.
+    pub(crate) fn new_internal(
+        config: FullyContiguousConfig,
+        storage: S,
+        base_offset: usize,
+    ) -> Result<Self, LayoutError> {
+        // Basic check: Ensure the storage address matches expectations based on offset if possible?
+        // Maybe not strictly necessary if we trust the serialized data.
         Ok(Self {
             config,
             storage,

@@ -19,7 +19,17 @@
 //! and their storage. It handles the relationship between storage, layout,
 //! and individual blocks.
 
-use super::{BlockData, BlockError, BlockLayout};
+use super::{BlockData, BlockError};
+use crate::block_manager::{
+    layout::{
+        nixl::{self as nixl_layout, NixlLayout},
+        BlockLayout,
+    },
+    storage::{
+        nixl::{self as nixl_storage, NixlEnabledStorage},
+        Storage,
+    },
+};
 
 /// Storage view that provides safe access to a region of storage
 #[derive(Debug)]
