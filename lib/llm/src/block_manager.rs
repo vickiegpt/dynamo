@@ -24,3 +24,20 @@ pub mod events;
 pub mod layout;
 pub mod pool;
 pub mod storage;
+
+pub use block::{Block, BlockMetadata};
+pub use layout::BlockLayout;
+pub use pool::BlockPool;
+
+pub struct KvBlockManager<
+    DeviceLayout: BlockLayout,
+    DeviceMetadata: BlockMetadata,
+    HostLayout: BlockLayout,
+    HostMetadata: BlockMetadata,
+    LocalStorageLayout: BlockLayout,
+    LocalStorageMetadata: BlockMetadata,
+> {
+    device_pool: BlockPool<DeviceLayout, DeviceMetadata>,
+    host_pool: BlockPool<HostLayout, HostMetadata>,
+    local_storage_pool: BlockPool<LocalStorageLayout, LocalStorageMetadata>,
+}

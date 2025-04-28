@@ -169,8 +169,8 @@ mod tests {
         tracing::info!("Layout registered");
 
         let serialized = layout.serialize().unwrap();
-        let nixl_storage = SerializedNixlBlockLayout::deserialize(&serialized).unwrap();
-        println!("Nixl storage: {:?}", nixl_storage);
+        let nixl_layout = SerializedNixlBlockLayout::deserialize(&serialized).unwrap();
+        println!("Nixl layout: {:?}", nixl_layout);
 
         drop(layout);
         tracing::info!("Layout dropped");
