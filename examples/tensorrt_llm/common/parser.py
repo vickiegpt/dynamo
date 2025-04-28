@@ -21,7 +21,7 @@ from typing import Any, Dict, Tuple
 
 import yaml
 from tensorrt_llm._torch.pyexecutor.config import PyTorchConfig
-from tensorrt_llm.llmapi import KvCacheConfig
+from tensorrt_llm.llmapi import EagleDecodingConfig, KvCacheConfig, MTPDecodingConfig
 
 
 @dataclass
@@ -38,6 +38,7 @@ class LLMAPIConfig:
         self.model_path = model_path
         self.pytorch_backend_config = pytorch_backend_config
         self.kv_cache_config = kv_cache_config
+        self.speculative_decoding_config = None
         self.extra_args = kwargs
 
         # Hardcoded to skip tokenizer init for now.
@@ -51,6 +52,7 @@ class LLMAPIConfig:
         data = {
             "pytorch_backend_config": self.pytorch_backend_config,
             "kv_cache_config": self.kv_cache_config,
+            "speculative_config": self.speculative_decoding_config,
         }
         if self.extra_args:
             data.update(self.extra_args)
@@ -66,6 +68,35 @@ class LLMAPIConfig:
         if "kv_cache_config" in other_config:
             self.kv_cache_config = KvCacheConfig(**other_config["kv_cache_config"])
             self.extra_args.pop("kv_cache_config", None)
+
+        if "speculative_decoding_config" in other_config:
+            spec_dec_mode = other_config["speculative_decoding_config"].get(
+                "mode", None
+            )
+            if spec_dec_mode == "eagle3":
+                self.speculative_decoding_config = EagleDecodingConfig(
+                    speculative_model=other_config["speculative_decoding_config"].get(
+                        "draft_model", None
+                    ),
+                    pytorch_eagle_weights_path=other_config[
+                        "speculative_decoding_config"
+                    ].get("draft_model_dir", None),
+                    max_draft_len=other_config["speculative_decoding_config"].get(
+                        "max_draft_tokens", 3
+                    ),
+                )
+            elif spec_dec_mode == "mtp":
+                self.speculative_decoding_config = MTPDecodingConfig(
+                    num_nextn_predict_layers=other_config[
+                        "speculative_decoding_config"
+                    ].get("mtp_nextn", 1),
+                )
+            else:
+                raise ValueError(
+                    f"Invalid speculative decoding mode: {spec_dec_mode}. Only 'eagle3' and 'mtp' are supported."
+                )
+
+            self.extra_args.pop("speculative_decoding_config", None)
 
 
 def _get_llm_args(engine_config):

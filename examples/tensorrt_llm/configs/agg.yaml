@@ -19,11 +19,11 @@ Frontend:
   port: 8000
 
 Processor:
-  engine_args: "configs/llm_api_config.yaml"
+  engine_args: "configs/llm_api_config_specdec.yaml"
   router: round-robin
 
 TensorRTLLMWorker:
-  engine_args: "configs/llm_api_config.yaml"
+  engine_args: "configs/llm_api_config_specdec.yaml"
   router: round-robin
   ServiceArgs:
     workers: 1
