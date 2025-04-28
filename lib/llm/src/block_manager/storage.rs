@@ -115,7 +115,13 @@ pub trait Storage: Debug + Send + Sync + 'static {
 }
 
 pub trait RegistationHandle: Send + Sync + 'static {
-    fn deregister(&mut self);
+    /// Release the [RegistationHandle].
+    /// This should be called when the external registration of this storage
+    /// is no longer needed.
+    ///
+    /// Note: All [RegistrationHandle]s should be explicitly released before
+    /// the [Storage] is dropped.
+    fn release(&mut self);
 }
 
 pub trait RegisterableStorage: Storage + Send + Sync + 'static {
@@ -132,18 +138,18 @@ pub trait RegisterableStorage: Storage + Send + Sync + 'static {
 }
 
 #[derive(Default)]
-struct RegistrationHandles {
+pub struct RegistrationHandles {
     handles: HashMap<String, Box<dyn RegistationHandle>>,
 }
 
 impl RegistrationHandles {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             handles: HashMap::new(),
         }
     }
 
-    fn register(
+    pub fn register(
         &mut self,
         key: &str,
         handle: Box<dyn RegistationHandle>,
@@ -158,18 +164,9 @@ impl RegistrationHandles {
 
     fn release(&mut self) {
         for handle in self.handles.values_mut() {
-            handle.deregister();
+            handle.release();
         }
         self.handles.clear();
-    }
-
-    fn deregister(&mut self, key: &str) -> Result<(), StorageError> {
-        if let Some(mut handle) = self.handles.remove(key) {
-            handle.deregister();
-            Ok(())
-        } else {
-            Err(StorageError::HandleNotFound(key.to_string()))
-        }
     }
 
     fn is_registered(&self, key: &str) -> bool {
@@ -189,7 +186,7 @@ impl std::fmt::Debug for RegistrationHandles {
 
 impl Drop for RegistrationHandles {
     fn drop(&mut self) {
-        if self.handles.len() > 0 {
+        if !self.handles.is_empty() {
             panic!("RegistrationHandles dropped with {} handles remaining; RegistrationHandles::release() needs to be explicitly called", self.handles.len());
         }
     }

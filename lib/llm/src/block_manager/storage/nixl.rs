@@ -1,0 +1,170 @@
+pub use nixl_sys::{
+    Agent as NixlAgent, MemType, MemoryRegion, NixlDescriptor, OptArgs,
+    RegistrationHandle as NixlRegistrationHandle,
+};
+
+use serde::{Deserialize, Serialize};
+
+use super::{
+    DeviceStorage, PinnedStorage, RegistationHandle, RegisterableStorage, Storage,
+    StorageType, SystemStorage,
+};
+
+use anyhow::Result;
+
+impl RegistationHandle for NixlRegistrationHandle {
+    fn release(&mut self) {
+        if let Err(e) = self.deregister() {
+            tracing::error!("Failed to deregister Nixl storage: {}", e);
+        }
+    }
+}
+
+pub trait NixlEnabledStorage: RegisterableStorage + NixlDescriptor + Sized {
+    /// Register the storage with the NIXL agent.
+    fn nixl_register(&mut self, agent: &NixlAgent, opt_args: Option<&OptArgs>) -> Result<()> {
+        let handle = Box::new(agent.register_memory(self, opt_args)?);
+        // Assuming PinnedStorage has `handles: RegistrationHandles`
+        Ok(self.register("nixl", handle)?)
+    }
+
+    /// Check if the storage is registered with the NIXL agent.
+    fn is_nixl_registered(&self) -> bool {
+        self.is_registered("nixl")
+    }
+
+    /// If the underlying storage is NIXL-compatible, return descriptions of the NIXL memory regions.
+    /// This is used for serialization/deserialization of NIXL-specific layouts.
+    fn get_nixl_descriptors(&self) -> Option<NixlStorage> {
+        if self.is_nixl_registered() {
+            Some(NixlStorage {
+                addr: self.addr(),
+                size: MemoryRegion::size(self),
+                mem_type: self.mem_type(),
+                device_id: self.device_id(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NixlStorage {
+    addr: u64,
+    size: usize,
+    mem_type: MemType,
+    device_id: u64,
+}
+
+impl Storage for NixlStorage {
+    fn storage_type(&self) -> StorageType {
+        StorageType::Nixl
+    }
+
+    fn addr(&self) -> u64 {
+        self.addr
+    }
+
+    fn size(&self) -> usize {
+        self.size
+    }
+
+    fn is_host_accessible(&self) -> bool {
+        false
+    }
+
+    unsafe fn as_ptr(&self) -> Option<*const u8> {
+        Some(self.addr as *const u8)
+    }
+
+    unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
+        Some(self.addr as *mut u8)
+    }
+}
+
+impl MemoryRegion for NixlStorage {
+    unsafe fn as_ptr(&self) -> *const u8 {
+        self.addr as *const u8
+    }
+
+    fn size(&self) -> usize {
+        self.size
+    }
+}
+
+impl NixlDescriptor for NixlStorage {
+    fn mem_type(&self) -> MemType {
+        self.mem_type
+    }
+
+    fn device_id(&self) -> u64 {
+        self.device_id
+    }
+}
+
+impl NixlEnabledStorage for SystemStorage {}
+
+impl MemoryRegion for SystemStorage {
+    unsafe fn as_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
+    }
+
+    fn size(&self) -> usize {
+        self.len
+    }
+}
+
+impl NixlDescriptor for SystemStorage {
+    fn mem_type(&self) -> MemType {
+        MemType::Dram
+    }
+
+    fn device_id(&self) -> u64 {
+        0
+    }
+}
+
+impl NixlEnabledStorage for PinnedStorage {}
+
+impl MemoryRegion for PinnedStorage {
+    unsafe fn as_ptr(&self) -> *const u8 {
+        self.ptr as *const u8
+    }
+
+    fn size(&self) -> usize {
+        self.size
+    }
+}
+
+impl NixlDescriptor for PinnedStorage {
+    fn mem_type(&self) -> MemType {
+        MemType::Dram
+    }
+
+    fn device_id(&self) -> u64 {
+        0
+    }
+}
+
+impl NixlEnabledStorage for DeviceStorage {}
+
+impl MemoryRegion for DeviceStorage {
+    unsafe fn as_ptr(&self) -> *const u8 {
+        self.ptr as *const u8
+    }
+
+    fn size(&self) -> usize {
+        self.size
+    }
+}
+
+impl NixlDescriptor for DeviceStorage {
+    fn mem_type(&self) -> MemType {
+        MemType::Vram
+    }
+
+    fn device_id(&self) -> u64 {
+        self.ctx.cu_device() as u64
+    }
+}

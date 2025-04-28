@@ -46,6 +46,9 @@ pub enum LayoutError {
 
     #[error("Operation failed: {0}")]
     OperationFailed(String),
+
+    #[error("Serialization error: {0}")]
+    SerdeError(#[from] serde_json::Error),
 }
 
 /// Storage pattern for layers
@@ -157,7 +160,7 @@ fn align_up(value: usize, alignment: usize) -> usize {
 /// Internal struct to hold calculated layout dimensions specific to FullyContiguous.
 // Module-level, but only used internally by FullyContiguous
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct FullyContiguousConfig {
+pub(crate) struct FullyContiguousConfig {
     inner: LayoutConfig,
     memory_region_size: usize,
     layer_stride_in_bytes: usize,
@@ -547,14 +550,17 @@ pub mod tests {
         // Test first block, first layer
         let expected_offset_0_0 =
             calculate_expected_offset(base_addr, 0, 0, block_stride, layer_stride);
-        assert_eq!(layout.get_memory_region(0, 0).unwrap(), expected_offset_0_0);
+        assert_eq!(
+            layout.memory_region_addr(0, 0).unwrap(),
+            expected_offset_0_0
+        );
 
         // Test first block, last layer
         let last_layer_idx = NUM_LAYERS - 1;
         let expected_offset_0_last =
             calculate_expected_offset(base_addr, 0, last_layer_idx, block_stride, layer_stride);
         assert_eq!(
-            layout.get_memory_region(0, last_layer_idx).unwrap(),
+            layout.memory_region_addr(0, last_layer_idx).unwrap(),
             expected_offset_0_last
         );
 
@@ -563,7 +569,7 @@ pub mod tests {
         let expected_offset_last_0 =
             calculate_expected_offset(base_addr, last_block_idx, 0, block_stride, layer_stride);
         assert_eq!(
-            layout.get_memory_region(last_block_idx, 0).unwrap(),
+            layout.memory_region_addr(last_block_idx, 0).unwrap(),
             expected_offset_last_0
         );
 
@@ -577,7 +583,7 @@ pub mod tests {
         );
         assert_eq!(
             layout
-                .get_memory_region(last_block_idx, last_layer_idx)
+                .memory_region_addr(last_block_idx, last_layer_idx)
                 .unwrap(),
             expected_offset_last_last
         );
@@ -594,7 +600,7 @@ pub mod tests {
         );
         assert_eq!(
             layout
-                .get_memory_region(mid_block_idx, mid_layer_idx)
+                .memory_region_addr(mid_block_idx, mid_layer_idx)
                 .unwrap(),
             expected_offset_mid_mid
         );
@@ -603,7 +609,7 @@ pub mod tests {
     #[test]
     fn test_fc_invalid_block_index() {
         let layout = setup_layout(None).expect("Layout setup failed");
-        let result = layout.get_memory_region(NUM_BLOCKS, 0); // Index == num_blocks (out of bounds)
+        let result = layout.memory_region_addr(NUM_BLOCKS, 0); // Index == num_blocks (out of bounds)
         assert!(result.is_err());
         assert!(matches!(
             result.err().unwrap(),
@@ -614,7 +620,7 @@ pub mod tests {
     #[test]
     fn test_fc_invalid_layer_index() {
         let layout = setup_layout(None).expect("Layout setup failed");
-        let result = layout.get_memory_region(0, NUM_LAYERS); // Index == num_layers (out of bounds)
+        let result = layout.memory_region_addr(0, NUM_LAYERS); // Index == num_layers (out of bounds)
         assert!(result.is_err());
         assert!(matches!(
             result.err().unwrap(),
@@ -709,13 +715,13 @@ pub mod tests {
 
         // Check alignment of block starts
         let addr_block_0 = layout
-            .get_memory_region(0, 0)
+            .memory_region_addr(0, 0)
             .expect("Failed to get addr block 0");
         let addr_block_1 = layout
-            .get_memory_region(1, 0)
+            .memory_region_addr(1, 0)
             .expect("Failed to get addr block 1");
         let addr_block_2 = layout
-            .get_memory_region(2, 0)
+            .memory_region_addr(2, 0)
             .expect("Failed to get addr block 2");
 
         // All blocks should now be aligned due to base_offset adjustment

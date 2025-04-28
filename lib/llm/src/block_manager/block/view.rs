@@ -20,16 +20,7 @@
 //! and individual blocks.
 
 use super::{BlockData, BlockError};
-use crate::block_manager::{
-    layout::{
-        nixl::{self as nixl_layout, NixlLayout},
-        BlockLayout,
-    },
-    storage::{
-        nixl::{self as nixl_storage, NixlEnabledStorage},
-        Storage,
-    },
-};
+use crate::block_manager::layout::BlockLayout;
 
 /// Storage view that provides safe access to a region of storage
 #[derive(Debug)]
@@ -125,12 +116,9 @@ impl<'a, L: BlockLayout> BlockViewMut<'a, L> {
 mod nixl {
     use super::*;
 
-    pub use nixl_sys::{
-        Agent as NixlAgent, MemType, MemoryRegion, NixlDescriptor, OptArgs,
-        RegistrationHandle as NixlRegistrationHandle,
-    };
+    pub use nixl_sys::{MemType, MemoryRegion, NixlDescriptor};
 
-    impl<'a, L: BlockLayout> MemoryRegion for BlockView<'a, L> {
+    impl<L: BlockLayout> MemoryRegion for BlockView<'_, L> {
         unsafe fn as_ptr(&self) -> *const u8 {
             self.addr as *const u8
         }
@@ -140,7 +128,7 @@ mod nixl {
         }
     }
 
-    impl<'a, L> NixlDescriptor for BlockView<'a, L>
+    impl<L> NixlDescriptor for BlockView<'_, L>
     where
         L: BlockLayout,
         L::StorageType: NixlDescriptor,
@@ -164,7 +152,7 @@ mod nixl {
         }
     }
 
-    impl<'a, L: BlockLayout> MemoryRegion for BlockViewMut<'a, L> {
+    impl<L: BlockLayout> MemoryRegion for BlockViewMut<'_, L> {
         unsafe fn as_ptr(&self) -> *const u8 {
             self.addr as *const u8
         }
@@ -174,7 +162,7 @@ mod nixl {
         }
     }
 
-    impl<'a, L> NixlDescriptor for BlockViewMut<'a, L>
+    impl<L> NixlDescriptor for BlockViewMut<'_, L>
     where
         L: BlockLayout,
         L::StorageType: NixlDescriptor,
