@@ -13,16 +13,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Silence warnings about deprecated features (like pyo3::IntoPy::into_py)
+#![allow(deprecated)]
+
 use super::*;
 
-use pyo3::exceptions::PyRuntimeError;
-use dlpark::prelude::*;
+use pyo3::{exceptions::PyRuntimeError, Python, PyObject, PyResult};
+use crate::dlpack::{ffi, ManagerCtx, ShapeAndStrides, ToTensor};
 use std::sync::Arc;
-use tokio::runtime::Runtime;
 
 struct DlPackTensor {
     memory_region: u64,
-    region_size: usize,
     region_shape: Vec<usize>,
     dtype: dynamo_kv_manager::dtype::DType,
     storage_type: dynamo_kv_manager::storage::StorageType,
@@ -37,40 +38,39 @@ impl ToTensor for DlPackTensor {
         0
     }
 
-    fn device(&self) -> Device {
+    fn device(&self) -> ffi::Device {
         match self.storage_type {
-            dynamo_kv_manager::storage::StorageType::Device(_) => Device {
-                device_type: dlpark::ffi::DeviceType::Cuda,
+            dynamo_kv_manager::storage::StorageType::Device(_) => ffi::Device {
+                device_type: ffi::DeviceType::Cuda,
                 device_id: 0,
             },
-            dynamo_kv_manager::storage::StorageType::Pinned => Device {
-                device_type: dlpark::ffi::DeviceType::CudaHost,
+            dynamo_kv_manager::storage::StorageType::Pinned => ffi::Device {
+                device_type: ffi::DeviceType::CudaHost,
                 device_id: 0,
             },
-            dynamo_kv_manager::storage::StorageType::System => Device {
-                device_type: dlpark::ffi::DeviceType::Cpu,
+            dynamo_kv_manager::storage::StorageType::System => ffi::Device {
+                device_type: ffi::DeviceType::Cpu,
                 device_id: 0,
             },
             _ => panic!("Unsupported storage type"),
         }
     }
 
-    fn dtype(&self) -> DataType {
+    fn dtype(&self) -> ffi::DataType {
         match self.dtype {
-            dynamo_kv_manager::dtype::DType::FP8 => dlpark::ffi::DataType::U8,
-            dynamo_kv_manager::dtype::DType::FP16 => dlpark::ffi::DataType::F16,
-            dynamo_kv_manager::dtype::DType::BF16 => dlpark::ffi::DataType::BF16,
-            dynamo_kv_manager::dtype::DType::FP32 => dlpark::ffi::DataType::F32,
-            dynamo_kv_manager::dtype::DType::FP64 => dlpark::ffi::DataType::F64,
-            dynamo_kv_manager::dtype::DType::U8 => dlpark::ffi::DataType::U8,
-            dynamo_kv_manager::dtype::DType::U16 => dlpark::ffi::DataType::U16,
-            dynamo_kv_manager::dtype::DType::U32 => dlpark::ffi::DataType::U32,
-            dynamo_kv_manager::dtype::DType::U64 => dlpark::ffi::DataType::U64,
-            dynamo_kv_manager::dtype::DType::I8 => dlpark::ffi::DataType::I8,
-            dynamo_kv_manager::dtype::DType::I16 => dlpark::ffi::DataType::I16,
-            dynamo_kv_manager::dtype::DType::I32 => dlpark::ffi::DataType::I32,
-            dynamo_kv_manager::dtype::DType::I64 => dlpark::ffi::DataType::I64,
-            _ => panic!("Unsupported dtype"),
+            dynamo_kv_manager::dtype::DType::FP8 => ffi::DataType::U8,
+            dynamo_kv_manager::dtype::DType::FP16 => ffi::DataType::F16,
+            dynamo_kv_manager::dtype::DType::BF16 => ffi::DataType::BF16,
+            dynamo_kv_manager::dtype::DType::FP32 => ffi::DataType::F32,
+            dynamo_kv_manager::dtype::DType::FP64 => ffi::DataType::F64,
+            dynamo_kv_manager::dtype::DType::U8 => ffi::DataType::U8,
+            dynamo_kv_manager::dtype::DType::U16 => ffi::DataType::U16,
+            dynamo_kv_manager::dtype::DType::U32 => ffi::DataType::U32,
+            dynamo_kv_manager::dtype::DType::U64 => ffi::DataType::U64,
+            dynamo_kv_manager::dtype::DType::I8 => ffi::DataType::I8,
+            dynamo_kv_manager::dtype::DType::I16 => ffi::DataType::I16,
+            dynamo_kv_manager::dtype::DType::I32 => ffi::DataType::I32,
+            dynamo_kv_manager::dtype::DType::I64 => ffi::DataType::I64,
         }
     }
 
@@ -148,7 +148,6 @@ impl BlockManager {
         // Get memory region and metadata for tensor construction
         let memory_region = self.inner.get_memory_region(block_idx, layer_idx)
             .expect(&format!("Failed to get memory region for block {}, layer {}", block_idx, layer_idx));
-        let region_size = self.inner.memory_region_size();
         let region_shape = vec![self.inner.page_size(), self.inner.inner_dim()];
         let dtype = self.inner.dtype();
         let storage_type = self.inner.storage_type();
@@ -156,7 +155,6 @@ impl BlockManager {
         // Create a DlPackTensor instance
         let dlpack_tensor = DlPackTensor {
             memory_region,
-            region_size,
             region_shape,
             dtype,
             storage_type,

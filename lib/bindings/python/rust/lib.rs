@@ -37,6 +37,8 @@ mod engine;
 mod http;
 mod llm;
 
+pub(crate) mod dlpack;
+
 type JsonServerStreamingIngress =
     Ingress<SingleIn<serde_json::Value>, ManyOut<RsAnnotated<serde_json::Value>>>;
 
