@@ -72,15 +72,29 @@ Follow instructions:
 
 ##### tensorrtllm
 
+[tensorrtllm](../examples/tensorrt_llm/README.md)
+
 ### Benchmarks
 
 ##### vllm
 
+[vllm](../examples/llm/benchmarks/README.md)
+
 ##### planner
+
+[planner](../docs/guides/planner_benchmark/benchmark_planner.md)
 
 ## Dynamo Deploy
 
 ### Helm chart
 
+Uses microk8s
+
+[manual](../docs/guides/dynamo_deploy/manual_helm_deployment.md)
+
 ### Deploy Operator
+
+Uses minikube
+
+[operator](../docs/guides/dynamo_deploy/operator_deployment.md)
 
