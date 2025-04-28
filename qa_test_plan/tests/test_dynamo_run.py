@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 from io import StringIO
+from typing import Optional
 
 # test_dynamo_run.py
 import pytest
@@ -38,8 +39,8 @@ class DynamoRunProcess:
         self.output_buffer = StringIO()
         self._output_thread = None
         self._prompt_ready = threading.Event()
-        self.parent_fd = None
-        self.child_fd = None
+        self.parent_fd: Optional[int] = None
+        self.child_fd: Optional[int] = None
         self._timeout = timeout
 
     def start(self):
@@ -78,6 +79,8 @@ class DynamoRunProcess:
         self._wait_for_ready(self._timeout)
 
     def _capture_pty_output(self):
+        assert self.parent_fd
+        assert self.process
         while True:
             try:
                 data = os.read(self.parent_fd, 1024).decode(errors="replace")
@@ -93,6 +96,7 @@ class DynamoRunProcess:
     def send_input(self, text):
         if self.input_type != "text":
             raise RuntimeError("send_input() only available in text mode")
+        assert self.parent_fd
         os.write(self.parent_fd, f"{text}\n".encode())
 
     def _wait_for_ready(self, timeout=100):
@@ -195,7 +199,8 @@ def test_basic(dynamo_run, backend, model, input_type, prompt, stream, timeout):
                         assert "content" in completion["choices"][0]["delta"]
                         chunks.append(completion["choices"][0]["delta"]["content"])
 
-            chunks.remove(None)
+            if None in chunks:
+                chunks.remove(None)
             content = "".join(chunks)
 
         else:
