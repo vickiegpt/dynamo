@@ -60,7 +60,7 @@ After running container
 
 ```
 cd qa_test_plan
-pytest -s -v
+pytest -s -v test_dynamo_run.py
 ```
 
 ### Dynamo Serve
@@ -70,6 +70,11 @@ pytest -s -v
 Follow instructions:
 
 [vllm](../examples/llm/README.md)
+
+```
+cd qa_test_plan
+pytest -s -v test_dynamo_serve.py
+```
 
 ##### tensorrtllm
 
