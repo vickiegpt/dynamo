@@ -102,6 +102,8 @@ class DynamoRunProcess:
             while True:
                 try:
                     response = requests.get(f"{self.url}/v1/models", timeout=1)
+                    model_list = response.json()
+                    print(model_list)
                     if response.status_code == 200:
                         return
                 except Exception:
@@ -190,7 +192,7 @@ def test_basic(dynamo_run, backend, model, input_type, prompt, stream, timeout):
                         assert "choices" in completion
                         assert len(completion["choices"]) > 0
                         assert "delta" in completion["choices"][0]
-                        assert "content" in completion["choices"][0]["message"]
+                        assert "content" in completion["choices"][0]["delta"]
                         chunks.append(completion["choices"][0]["delta"]["content"])
 
             chunks.remove(None)

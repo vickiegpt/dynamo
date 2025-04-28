@@ -6,10 +6,11 @@
 
 #### Build
 
+
 Build:
 
 ```
-docker run -it --name dynamo_pip_install -v$PWD/container/deps:/deps ubuntu:24.04 bash -c "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -yq python3-dev python3-pip python3-venv libucx0 && python3 -m venv /venv && /venv/bin/pip install ai-dynamo[all] && /venv/bin/pip install -r /deps/requirements.test.txt " && docker commit dynamo_pip_install dynamo:latest-pip && docker rm dynamo_pip_install
+docker run -it --name dynamo_pip_install -v$PWD/container/deps:/deps ubuntu:24.04 bash -c "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -yq python3-dev python3-pip python3-venv libucx0 && python3 -m venv /venv && /venv/bin/pip install --extra-index-url https://urm.nvidia.com/artifactory/api/pypi/sw-dl-triton-pypi/simple ai-dynamo[all] && /venv/bin/pip install -r /deps/requirements.test.txt " && docker commit dynamo_pip_install dynamo:latest-pip && docker rm dynamo_pip_install
 ```
 
 Run:
