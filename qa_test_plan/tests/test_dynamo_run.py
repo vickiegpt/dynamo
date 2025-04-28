@@ -134,7 +134,7 @@ class DynamoRunProcess:
         return self.output_buffer.getvalue()
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="function", autouse=True)
 def kill_dynamo_processes():
     yield
     subprocess.run(["pkill", "-f", ".*dynamo-run.*|.*multiprocessing.*"], check=False)
