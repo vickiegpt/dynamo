@@ -73,8 +73,7 @@ async def test_cpu_tensor():
     block_manager = BlockManager(
         NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="CPU"
     )
-    tensor = block_manager.tensor(0, 0)
-    assert isinstance(tensor, torch.Tensor)
+    tensor = torch.from_dlpack(block_manager.py_capsule(0, 0))
     assert tensor.get_device() == -1  # CPU
     assert tensor.shape == (PAGE_SIZE, INNER_DIM)
     assert tensor.dtype == torch.float32  # DTYPE
@@ -82,7 +81,7 @@ async def test_cpu_tensor():
     tensor[0][0] = 1.0
     tensor[PAGE_SIZE - 1][INNER_DIM - 1] = 1.0
     # print(tensor)
-    tensor_ = block_manager.tensor(0, 0)
+    tensor_ = torch.from_dlpack(block_manager.py_capsule(0, 0))
     assert tensor is not tensor_
     assert tensor.shape == tensor_.shape
     assert tensor.dtype == tensor_.dtype
@@ -93,8 +92,7 @@ async def test_cuda_tensor():
     block_manager = BlockManager(
         NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="CUDA"
     )
-    tensor = block_manager.tensor(0, 0)
-    assert isinstance(tensor, torch.Tensor)
+    tensor = torch.from_dlpack(block_manager.py_capsule(0, 0))
     assert tensor.get_device() == 0  # CUDA:0
     assert tensor.shape == (PAGE_SIZE, INNER_DIM)
     assert tensor.dtype == torch.float32  # DTYPE
@@ -102,7 +100,7 @@ async def test_cuda_tensor():
     tensor[0][0] = 1.0
     tensor[PAGE_SIZE - 1][INNER_DIM - 1] = 1.0
     # print(tensor)
-    tensor_ = block_manager.tensor(0, 0)
+    tensor_ = torch.from_dlpack(block_manager.py_capsule(0, 0))
     assert tensor is not tensor_
     assert tensor.shape == tensor_.shape
     assert tensor.dtype == tensor_.dtype

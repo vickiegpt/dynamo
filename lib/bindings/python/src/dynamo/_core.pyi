@@ -607,8 +607,8 @@ class BlockManager:
         Create a `BlockManager` object
         """
 
-    def tensor(self, block_idx: int, layer_idx: int) -> Any:
+    def py_capsule(self, block_idx: int, layer_idx: int) -> Any:
         """
-        Get a torch tensor from the KV cache
+        Get a dlpack capsule from the KV cache
         """
         ...

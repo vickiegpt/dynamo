@@ -144,7 +144,7 @@ impl BlockManager {
         Ok(BlockManager { inner: Arc::from(block_layout) })
     }
 
-    fn tensor(&self, block_idx: usize, layer_idx: usize) -> PyResult<PyObject> {
+    fn py_capsule(&self, block_idx: usize, layer_idx: usize) -> PyResult<PyObject> {
         // Get memory region and metadata for tensor construction
         let memory_region = self.inner.get_memory_region(block_idx, layer_idx)
             .expect(&format!("Failed to get memory region for block {}, layer {}", block_idx, layer_idx));
