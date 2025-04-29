@@ -508,6 +508,12 @@ impl Default for DeviceAllocator {
 }
 
 impl DeviceAllocator {
+    pub fn new(device_id: usize) -> Result<Self, StorageError> {
+        Ok(Self {
+            ctx: CudaContext::new(device_id).map_err(StorageError::Cuda)?,
+        })
+    }
+
     pub fn try_new(device_id: usize) -> Result<Self, StorageError> {
         Ok(Self {
             ctx: CudaContext::new(device_id).map_err(StorageError::Cuda)?,

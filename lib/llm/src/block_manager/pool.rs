@@ -133,8 +133,9 @@ impl<S: Storage, M: BlockMetadata> BlockPoolArgsBuilder<S, M> {
         let args = self.build_internal()?;
         let (runtime, event_manager, cancel_token, blocks) = args.dissolve();
 
-        let pool = BlockPool::new(event_manager, runtime, cancel_token);
-        pool.add_blocks_blocking(blocks)?;
+        tracing::info!("building block pool");
+        let pool = BlockPool::new(event_manager, runtime, cancel_token, blocks);
+
         Ok(pool)
     }
 }
@@ -205,11 +206,11 @@ impl Default for Runtime {
 }
 
 impl Runtime {
-    fn current_thread() -> Self {
+    pub fn current_thread() -> Self {
         Self::Handle(tokio::runtime::Handle::current())
     }
 
-    fn single_threaded() -> Self {
+    pub fn single_threaded() -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .max_blocking_threads(1)
             .worker_threads(1)
@@ -283,12 +284,14 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         event_manager: Arc<dyn EventManager>,
         runtime: Runtime,
         cancel_token: CancellationToken,
+        blocks: Vec<Block<S, M>>,
     ) -> Self {
         let (pool, progress_engine) =
-            Self::with_progress_engine(event_manager, runtime, cancel_token);
+            Self::with_progress_engine(event_manager, runtime, cancel_token, blocks);
 
         pool.runtime.handle().spawn(async move {
             let mut progress_engine = progress_engine;
+            tracing::debug!("starting progress engine");
             while progress_engine.step().await {
                 tracing::trace!("progress engine step");
             }
@@ -301,12 +304,13 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         event_manager: Arc<dyn EventManager>,
         runtime: Runtime,
         cancel_token: CancellationToken,
+        blocks: Vec<Block<S, M>>,
     ) -> (Self, ProgressEngine<S, M>) {
         let (priority_tx, priority_rx) = tokio::sync::mpsc::unbounded_channel();
         let (ctrl_tx, ctrl_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let progress_engine =
-            ProgressEngine::<S, M>::new(event_manager, priority_rx, ctrl_rx, cancel_token);
+            ProgressEngine::<S, M>::new(event_manager, priority_rx, ctrl_rx, cancel_token, blocks);
 
         (
             Self {
@@ -563,9 +567,7 @@ mod tests {
             let args = self.build_internal()?;
             let (runtime, event_manager, cancel_token, blocks) = args.dissolve();
             let (pool, mut progress_engine) =
-                BlockPool::with_progress_engine(event_manager, runtime, cancel_token);
-
-            progress_engine.state.inactive.add_blocks(blocks);
+                BlockPool::with_progress_engine(event_manager, runtime, cancel_token, blocks);
 
             Ok((pool, progress_engine))
         }

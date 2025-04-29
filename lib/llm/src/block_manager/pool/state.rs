@@ -230,9 +230,13 @@ impl<S: Storage, M: BlockMetadata> ProgressEngine<S, M> {
         priority_rx: tokio::sync::mpsc::UnboundedReceiver<PriorityRequest<S, M>>,
         ctrl_rx: tokio::sync::mpsc::UnboundedReceiver<ControlRequest<S, M>>,
         cancel_token: CancellationToken,
+        blocks: Vec<Block<S, M>>,
     ) -> Self {
         let (return_tx, return_rx) = tokio::sync::mpsc::unbounded_channel();
-        let state = State::<S, M>::new(event_manager, return_tx);
+        let mut state = State::<S, M>::new(event_manager, return_tx);
+
+        tracing::debug!(count = blocks.len(), "adding blocks to inactive pool");
+        state.inactive.add_blocks(blocks);
 
         Self {
             priority_rx,

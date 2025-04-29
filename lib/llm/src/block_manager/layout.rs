@@ -56,20 +56,19 @@ pub enum LayoutError {
 pub enum LayoutType {
     /// All layers are contiguous in memory [n_layers, ...]
     FullyContiguous,
+    // /// Each layer is stored separately with a common stride between blocks
+    // /// in different layers
+    // LayerContiguousWithCommonStride,
 
-    /// Each layer is stored separately with a common stride between blocks
-    /// in different layers
-    LayerContiguousWithCommonStride,
+    // /// Each layer is stored separately with no guaranteed stride
+    // LayerContiguousWithSeparateStride,
 
-    /// Each layer is stored separately with no guaranteed stride
-    LayerContiguousWithSeparateStride,
+    // /// Each page is stored separately with no guaranteed stride
+    // PageContiguousWithSeparateStride,
 
-    /// Each page is stored separately with no guaranteed stride
-    PageContiguousWithSeparateStride,
-
-    /// NullLayout
-    /// Used for testing and debugging
-    Null,
+    // /// NullLayout
+    // /// Used for testing and debugging
+    // Null,
 }
 
 /// Core trait for block layouts
@@ -350,9 +349,9 @@ impl<S: Storage> FullyContiguous<S> {
     /// A `Result` containing the new `FullyContiguous<S>` instance or an error if allocation
     /// or layout creation fails.
     #[instrument(level = "debug", skip(allocator), fields(config = ?config))]
-    pub fn allocate<A: StorageAllocator<S>>(
+    pub fn allocate(
         config: LayoutConfig,
-        allocator: &A,
+        allocator: &dyn StorageAllocator<S>,
     ) -> Result<Self, LayoutError> {
         // Calculate total bytes needed. Propagate error if config is invalid.
         let config = FullyContiguousConfig::new(config)?;

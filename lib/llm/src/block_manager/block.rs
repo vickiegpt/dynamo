@@ -317,7 +317,7 @@ where
     S: Storage,
 {
     /// Create a new block storage
-    fn new(
+    pub(crate) fn new(
         layout: Arc<dyn BlockLayout<StorageType = S>>,
         block_idx: usize,
         block_set_idx: usize,
@@ -422,14 +422,20 @@ impl<L: BlockLayout + 'static, M: BlockMetadata> Blocks<L, M> {
     pub fn into_blocks(self) -> BlockResult<Vec<Block<L::StorageType, M>>> {
         // convert box to arc
         let layout: Arc<dyn BlockLayout<StorageType = L::StorageType>> = Arc::new(*self.layout);
-
-        (0..layout.num_blocks())
-            .map(|idx| {
-                let data = BlockData::new(layout.clone(), idx, self.block_set_idx);
-                Block::new(data, M::default())
-            })
-            .collect()
+        layout_to_blocks(layout, self.block_set_idx)
     }
+}
+
+pub(crate) fn layout_to_blocks<S: Storage, M: BlockMetadata>(
+    layout: Arc<dyn BlockLayout<StorageType = S>>,
+    block_set_idx: usize,
+) -> BlockResult<Vec<Block<S, M>>> {
+    (0..layout.num_blocks())
+        .map(|idx| {
+            let data = BlockData::new(layout.clone(), idx, block_set_idx);
+            Block::new(data, M::default())
+        })
+        .collect()
 }
 
 mod nixl {

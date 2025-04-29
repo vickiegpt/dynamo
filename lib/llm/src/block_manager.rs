@@ -26,8 +26,8 @@ pub mod pool;
 pub mod storage;
 
 pub use crate::common::dtype::DType;
-pub use block::{BasicMetadata, BlockMetadata};
-pub use layout::{LayoutConfig, LayoutType};
+pub use block::{BasicMetadata, BlockMetadata, Blocks};
+pub use layout::{nixl::NixlLayout, LayoutConfig, LayoutConfigBuilder, LayoutError, LayoutType};
 pub use pool::BlockPool;
 pub use storage::{
     nixl::NixlEnabledStorage, DeviceStorage, PinnedStorage, Storage, StorageAllocator,
@@ -40,7 +40,8 @@ use nixl_sys::Agent as NixlAgent;
 use std::sync::Arc;
 use validator::Validate;
 
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Clone, Builder, Validate)]
+#[builder(pattern = "owned")]
 pub struct KvManagerRuntimeConfig {
     worker_id: u64,
 
@@ -51,7 +52,14 @@ pub struct KvManagerRuntimeConfig {
     enable_nixl: bool,
 }
 
+impl KvManagerRuntimeConfig {
+    pub fn builder() -> KvManagerRuntimeConfigBuilder {
+        KvManagerRuntimeConfigBuilder::default()
+    }
+}
+
 #[derive(Debug, Clone, Builder, Validate)]
+#[builder(pattern = "owned")]
 pub struct KvManagerModelConfig {
     #[validate(range(min = 1))]
     pub num_layers: usize,
@@ -66,8 +74,14 @@ pub struct KvManagerModelConfig {
     pub dtype: DType,
 }
 
-#[derive(Clone, Builder, Validate)]
-#[builder(build_fn(validate = "Self::validate"))]
+impl KvManagerModelConfig {
+    pub fn builder() -> KvManagerModelConfigBuilder {
+        KvManagerModelConfigBuilder::default()
+    }
+}
+
+#[derive(Builder, Validate)]
+#[builder(pattern = "owned", build_fn(validate = "Self::validate"))]
 pub struct KvManagerLayoutConfig<S: Storage + NixlEnabledStorage> {
     #[validate(range(min = 1))]
     pub num_blocks: usize,
@@ -87,11 +101,17 @@ pub struct KvManagerLayoutConfig<S: Storage + NixlEnabledStorage> {
     pub allocator: Option<Arc<dyn StorageAllocator<S>>>,
 }
 
+impl<S: Storage + NixlEnabledStorage> KvManagerLayoutConfig<S> {
+    pub fn builder() -> KvManagerLayoutConfigBuilder<S> {
+        KvManagerLayoutConfigBuilder::default()
+    }
+}
+
 // Implement the validation and build functions on the generated builder type
 // Note: derive_builder generates KvManagerBlockConfigBuilder<S>
 impl<S: Storage + NixlEnabledStorage> KvManagerLayoutConfigBuilder<S> {
     /// Custom setter for the `allocator` field
-    fn allocator(&mut self, allocator: impl StorageAllocator<S> + 'static) -> &mut Self {
+    fn allocator(mut self, allocator: impl StorageAllocator<S> + 'static) -> Self {
         self.allocator = Some(Some(Arc::new(allocator)));
         self
     }
@@ -108,7 +128,7 @@ impl<S: Storage + NixlEnabledStorage> KvManagerLayoutConfigBuilder<S> {
 
 #[derive(Builder, Validate)]
 #[builder(pattern = "owned")]
-pub struct KvManagerPoolConfig {
+pub struct KvBlockManagerConfig {
     runtime: KvManagerRuntimeConfig,
     model: KvManagerModelConfig,
 
@@ -118,6 +138,14 @@ pub struct KvManagerPoolConfig {
     #[builder(default, setter(strip_option))]
     host_layout: Option<KvManagerLayoutConfig<PinnedStorage>>,
 }
+
+impl KvBlockManagerConfig {
+    pub fn builder() -> KvBlockManagerConfigBuilder {
+        KvBlockManagerConfigBuilder::default()
+    }
+}
+
+pub type ReferenceBlockManager = KvBlockManager<BasicMetadata, BasicMetadata>;
 
 // When we construct the pool:
 // 1. instantiate the runtime,
@@ -132,58 +160,169 @@ pub struct KvBlockManager<HostMetadata: BlockMetadata, DeviceMetadata: BlockMeta
 
     nixl_agent: Option<NixlAgent>,
 
-    host_blocks: BlockPool<PinnedStorage, HostMetadata>,
-    device_blocks: BlockPool<DeviceStorage, DeviceMetadata>,
+    host_pool: Option<BlockPool<PinnedStorage, HostMetadata>>,
+    device_pool: Option<BlockPool<DeviceStorage, DeviceMetadata>>,
 }
 
-// impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
-//     KvBlockManager<HostMetadata, DeviceMetadata>
-// {
-//     pub fn new(config: KvManagerPoolConfig) -> Result<Self> {
-//         config
-//             .runtime
-//             .validate()
-//             .context("Validating runtime config")?;
+impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
+    KvBlockManager<HostMetadata, DeviceMetadata>
+{
+    pub fn new(config: KvBlockManagerConfig) -> Result<Self> {
+        config
+            .runtime
+            .validate()
+            .context("Validating runtime config")?;
 
-//         config.model.validate().context("Validating model config")?;
+        config.model.validate().context("Validating model config")?;
 
-//         let worker_id = config.runtime.worker_id;
-//         let cancellation_token = config.runtime.cancellation_token;
+        let worker_id = config.runtime.worker_id;
+        let cancellation_token = config.runtime.cancellation_token;
 
-//         let nixl_agent = if config.runtime.enable_nixl {
-//             Some(NixlAgent::new(&worker_id.to_string())?)
-//         } else {
-//             None
-//         };
+        let nixl_agent = if config.runtime.enable_nixl {
+            Some(NixlAgent::new(&worker_id.to_string())?)
+        } else {
+            None
+        };
 
-//         let model = &config.model;
-//         let mut layout_builder = LayoutConfig::builder();
+        let model = &config.model;
+        let mut layout_builder = LayoutConfig::builder();
 
-//         layout_builder
-//             .num_layers(model.num_layers)
-//             .page_size(model.page_size)
-//             .inner_dim(model.inner_dim)
-//             .dtype(model.dtype);
+        layout_builder
+            .num_layers(model.num_layers)
+            .page_size(model.page_size)
+            .inner_dim(model.inner_dim)
+            .dtype(model.dtype);
 
-//         if let Some(host_layout) = &config.host_layout {
-//             let layout = layout_builder
-//                 .clone()
-//                 .num_blocks(host_layout.num_blocks)
-//                 .build()?;
+        let mut next_block_set_idx = 0;
 
-//             if let Some(storage) = &host_layout.storage {
-//             }
-//         }
+        let host_pool = if let Some(layout) = config.host_layout {
+            tracing::debug!("Constructing host pool.");
+            let layout = create_layout(layout_builder.clone(), layout, nixl_agent.as_ref())?;
+            let block_pool = create_block_pool::<_, HostMetadata>(
+                layout,
+                next_block_set_idx,
+                cancellation_token.clone(),
+            )?;
+            next_block_set_idx += 1;
+            Some(block_pool)
+        } else {
+            tracing::debug!("No host layout provided; will not allocate host blocks.");
+            None
+        };
 
-//         let host_layout = layout_builder
-//             .clone()
-//             .num_blocks(config.host_layout.num_blocks);
+        let device_pool = if let Some(layout) = config.device_layout {
+            tracing::debug!("Constructing device pool.");
+            let layout = create_layout(layout_builder.clone(), layout, nixl_agent.as_ref())?;
+            let block_pool = create_block_pool::<_, DeviceMetadata>(
+                layout,
+                next_block_set_idx,
+                cancellation_token.clone(),
+            )?;
+            next_block_set_idx += 1;
+            Some(block_pool)
+        } else {
+            tracing::debug!("No device layout provided; will not allocate device blocks.");
+            None
+        };
 
-//         if let Some(host_layout) = &config.host_layout {
-//             host_builder
-//                 .num_blocks(host_layout.num_blocks)
-//                 .page_size(host_layout.page_size)
-//                 .inner_dim(host_layout.inner_dim)
-//         }
-//     }
-// }
+        Ok(Self {
+            worker_id,
+            cancellation_token,
+            nixl_agent,
+            host_pool,
+            device_pool,
+        })
+    }
+}
+
+impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata> Drop
+    for KvBlockManager<HostMetadata, DeviceMetadata>
+{
+    fn drop(&mut self) {
+        self.cancellation_token.cancel();
+    }
+}
+
+fn create_layout<S: Storage + NixlEnabledStorage>(
+    mut builder: LayoutConfigBuilder,
+    config: KvManagerLayoutConfig<S>,
+    nixl_agent: Option<&NixlAgent>,
+) -> Result<Arc<dyn NixlLayout<StorageType = S>>> {
+    let layout = builder.num_blocks(config.num_blocks).build()?;
+    if let Some(storage) = config.storage {
+        let mut layout = layout.create_layout(config.layout_type, storage)?;
+        if let Some(nixl_agent) = nixl_agent {
+            layout.nixl_register(nixl_agent, None)?;
+        }
+        return Ok(Arc::new(layout));
+    }
+
+    if let Some(allocator) = config.allocator {
+        let mut layout = layout.allocate_layout(config.layout_type, allocator)?;
+        if let Some(nixl_agent) = nixl_agent {
+            layout.nixl_register(nixl_agent, None)?;
+        }
+        return Ok(Arc::new(layout));
+    }
+
+    anyhow::bail!("failed to create layout");
+}
+
+fn create_block_pool<S: Storage + NixlEnabledStorage, M: BlockMetadata>(
+    layout: Arc<dyn NixlLayout<StorageType = S>>,
+    block_set_idx: usize,
+    cancellation_token: CancellationToken,
+) -> Result<BlockPool<S, M>> {
+    let blocks = block::layout_to_blocks::<_, M>(layout, block_set_idx)?;
+    Ok(BlockPool::builder()
+        .blocks(blocks)
+        .cancel_token(cancellation_token)
+        .build()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_reference_block_manager() -> ReferenceBlockManager {
+        let config = KvBlockManagerConfig::builder()
+            .runtime(
+                KvManagerRuntimeConfig::builder()
+                    .worker_id(1337)
+                    .build()
+                    .unwrap(),
+            )
+            .model(
+                KvManagerModelConfig::builder()
+                    .num_layers(3)
+                    .page_size(4)
+                    .inner_dim(16)
+                    .build()
+                    .unwrap(),
+            )
+            .host_layout(
+                KvManagerLayoutConfig::builder()
+                    .num_blocks(128)
+                    .allocator(storage::PinnedAllocator::default())
+                    .build()
+                    .unwrap(),
+            )
+            .device_layout(
+                KvManagerLayoutConfig::builder()
+                    .num_blocks(16)
+                    .allocator(storage::DeviceAllocator::try_new(0).unwrap())
+                    .build()
+                    .unwrap(),
+            )
+            .build()
+            .unwrap();
+
+        ReferenceBlockManager::new(config).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_reference_block_manager() {
+        dynamo_runtime::logging::init();
+        let block_manager = create_reference_block_manager();
+    }
+}

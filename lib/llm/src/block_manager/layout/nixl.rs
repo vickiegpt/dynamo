@@ -1,6 +1,9 @@
-use super::{BlockLayout, BlockLayoutConfig, LayoutError, Storage};
+use super::{BlockLayout, BlockLayoutConfig, LayoutConfig, LayoutError, LayoutType};
 
-use super::super::storage::nixl::{MemType, NixlAgent, NixlEnabledStorage, NixlStorage, OptArgs};
+use super::super::storage::{
+    nixl::{MemType, NixlAgent, NixlEnabledStorage, NixlStorage, OptArgs},
+    Storage, StorageAllocator,
+};
 use super::{FullyContiguous, FullyContiguousConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -37,15 +40,29 @@ where
     }
 }
 
-// impl LayoutConfig {
-//     pub fn create_layout<S: Storage + NixlEnabledStorage>(
-//         &self,
-//         storage: Vec<S>,
-//     ) -> Result<impl NixlLayout<StorageType = S>, LayoutError> {
-//         let layout = FullyContiguous::new(self, storage)?;
-//         Ok(Box::new(layout))
-//     }
-// }
+impl LayoutConfig {
+    pub fn create_layout<S: Storage + NixlEnabledStorage>(
+        &self,
+        layout_type: LayoutType,
+        storage: Vec<S>,
+    ) -> Result<impl NixlLayout<StorageType = S>, LayoutError> {
+        match layout_type {
+            LayoutType::FullyContiguous => FullyContiguous::new(self.clone(), storage),
+        }
+    }
+
+    pub fn allocate_layout<S: Storage + NixlEnabledStorage>(
+        &self,
+        layout_type: LayoutType,
+        allocator: Arc<dyn StorageAllocator<S>>,
+    ) -> Result<impl NixlLayout<StorageType = S>, LayoutError> {
+        match layout_type {
+            LayoutType::FullyContiguous => {
+                FullyContiguous::allocate(self.clone(), allocator.as_ref())
+            }
+        }
+    }
+}
 
 /// Trait to convert a BlockLayout instance into its NIXL-specific serializable representation.
 pub trait ToSerializedNixlBlockLayout: BlockLayout<StorageType: NixlEnabledStorage> {
