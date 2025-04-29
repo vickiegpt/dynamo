@@ -50,8 +50,8 @@ use crate::protocols::{
     TokenIdType,
 };
 use crate::tokenizers::{DecodeStream, HuggingFaceTokenizer, Tokenizer};
-use tokenizers::Tokenizer as HfTokenizer;
 use tokenizers::models::bpe::BPE;
+use tokenizers::Tokenizer as HfTokenizer;
 /// Represents the output stream from the execution engine
 pub type ExecutionOutputStream = Annotated<LLMEngineOutput>;
 

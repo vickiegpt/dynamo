@@ -47,6 +47,7 @@ async fn test_tokenizer_from_hf_like_local_repo() {
     match mdc.tokenizer.unwrap() {
         TokenizerKind::HfTokenizerJson(_) => (),
         TokenizerKind::GGUF(_) => (),
+        TokenizerKind::HfTokenizerBPE(_, _) => (),
     }
 }
 

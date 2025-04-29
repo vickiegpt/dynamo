@@ -149,10 +149,14 @@ impl TokenizerKind {
     async fn try_is_hf_repo(repo: &str) -> anyhow::Result<Self> {
         // First try checking for tokenizer.json
         match check_for_file(repo, "tokenizer.json").await {
-            Ok(path) => return Ok(Self::HfTokenizerJson(path)),
+            Ok(path) => Ok(Self::HfTokenizerJson(path)),
             Err(_) => {
                 // If tokenizer.json is not found, try vocab.json and merges.txt
-                let files = check_for_files(repo, vec!["vocab.json".to_string(), "merges.txt".to_string()]).await?;
+                let files = check_for_files(
+                    repo,
+                    vec!["vocab.json".to_string(), "merges.txt".to_string()],
+                )
+                .await?;
 
                 if files.contains_key("vocab.json") && files.contains_key("merges.txt") {
                     return Ok(Self::HfTokenizerBPE(
@@ -162,7 +166,10 @@ impl TokenizerKind {
                 }
 
                 // If neither approach worked, return an error
-                anyhow::bail!("Neither tokenizer.json nor vocab.json+merges.txt found in {}", repo)
+                anyhow::bail!(
+                    "Neither tokenizer.json nor vocab.json+merges.txt found in {}",
+                    repo
+                )
             }
         }
     }

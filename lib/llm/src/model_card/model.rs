@@ -37,8 +37,8 @@ use dynamo_runtime::slug::Slug;
 use dynamo_runtime::transports::nats;
 use either::Either;
 use serde::{Deserialize, Serialize};
-use tokenizers::Tokenizer as HfTokenizer;
 use tokenizers::models::bpe::BPE;
+use tokenizers::Tokenizer as HfTokenizer;
 use url::Url;
 
 use crate::gguf::{Content, ContentConfig};
@@ -227,7 +227,11 @@ impl ModelDeploymentCard {
             }
             Some(TokenizerKind::GGUF(t)) => Ok(*t.clone()),
             Some(TokenizerKind::HfTokenizerBPE(vocab, merges)) => {
-                tracing::debug!("Loading BPE tokenizer from vocab: {}, merges: {}", vocab, merges);
+                tracing::debug!(
+                    "Loading BPE tokenizer from vocab: {}, merges: {}",
+                    vocab,
+                    merges
+                );
                 let bpe_builder = BPE::from_file(vocab, merges);
                 let bpe = bpe_builder.build().map_err(anyhow::Error::msg)?;
                 let tokenizer = HfTokenizer::new(bpe);
