@@ -45,6 +45,7 @@ class RequestType(BaseModel):
 class Frontend:
     middle = depends(Middle)
 
+    #TODO: bis: update docs with final version of decorator.
     @api
     async def generate(self, text: str):
         request = RequestType(text=text)

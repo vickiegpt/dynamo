@@ -55,7 +55,9 @@ logger = logging.getLogger(__name__)
 _DYNAMO_WORKER_SCRIPT = "dynamo.sdk.cli.serve_dynamo"
 
 
-def _get_dynamo_worker_script(bento_identifier: str, svc_name: str) -> list[str]:
+def _get_dynamo_worker_script(
+    bento_identifier: str, svc_name: str, target: str
+) -> list[str]:
     args = [
         "-m",
         _DYNAMO_WORKER_SCRIPT,
@@ -64,6 +66,8 @@ def _get_dynamo_worker_script(bento_identifier: str, svc_name: str) -> list[str]
         svc_name,
         "--worker-id",
         "$(CIRCUS.WID)",
+        "--target",
+        target,
     ]
     return args
 
@@ -75,19 +79,19 @@ def create_dynamo_watcher(
     scheduler: ResourceAllocator,
     working_dir: Optional[str] = None,
     env: Optional[Dict[str, str]] = None,
+    target: str = "local",
 ) -> tuple[Watcher, CircusSocket, str]:
     """Create a watcher for a Dynamo service in the dependency graph"""
     from dynamo.sdk.cli.circus import create_circus_watcher
 
     num_workers, resource_envs = scheduler.get_resource_envs(svc)
     uri, socket = _get_server_socket(svc, uds_path)
-    args = _get_dynamo_worker_script(bento_identifier, svc.name)
+    args = _get_dynamo_worker_script(bento_identifier, svc.name, target)
     if resource_envs:
         args.extend(["--worker-env", json.dumps(resource_envs)])
 
     # Update env to include ServiceConfig and service-specific environment variables
     worker_env = env.copy() if env else {}
-
     # Pass through the main service config
     if "DYNAMO_SERVICE_CONFIG" in os.environ:
         worker_env["DYNAMO_SERVICE_CONFIG"] = os.environ["DYNAMO_SERVICE_CONFIG"]
@@ -130,6 +134,7 @@ def serve_dynamo_graph(
     dependency_map: dict[str, str] | None = None,
     service_name: str = "",
     enable_local_planner: bool = False,
+    target: str = "local",
 ) -> CircusRunner:
     from dynamo.sdk.cli.circus import create_arbiter, create_circus_watcher
     from dynamo.sdk.lib.loader import find_and_load_service
@@ -166,7 +171,6 @@ def serve_dynamo_graph(
     if service_name:
         logger.info(f"Service '{service_name}' running in standalone mode")
         standalone = True
-
     if service_name and service_name != svc.name:
         svc = svc.find_dependent_by_name(service_name)
     num_workers, resource_envs = allocator.get_resource_envs(svc)
@@ -174,18 +178,13 @@ def serve_dynamo_graph(
     try:
         if not service_name and not standalone:
             with contextlib.ExitStack() as port_stack:
-                for name, dep_svc in svc.all_services().items():
+                # breakpoint()
+                services = svc.all_services()
+                for name, dep_svc in services.items():
                     if name == svc.name:
                         continue
                     if name in dependency_map:
                         continue
-                    if not (
-                        hasattr(dep_svc, "is_dynamo_component")
-                        and dep_svc.is_dynamo_component()
-                    ):
-                        raise RuntimeError(
-                            f"Service {dep_svc.name} is not a Dynamo component"
-                        )
                     new_watcher, new_socket, uri = create_dynamo_watcher(
                         bento_id,
                         dep_svc,
@@ -193,6 +192,7 @@ def serve_dynamo_graph(
                         allocator,
                         str(bento_path.absolute()),
                         env=env,
+                        target=target,
                     )
                     namespace, _ = dep_svc.dynamo_address()
                     watchers.append(new_watcher)
@@ -211,7 +211,7 @@ def serve_dynamo_graph(
             "$(CIRCUS.WID)",
         ]
 
-        if hasattr(svc, "is_dynamo_component") and svc.is_dynamo_component():
+        if True:
             # resource_envs is the resource allocation (ie CUDA_VISIBLE_DEVICES) for each worker created by the allocator
             # these resource_envs are passed to each individual worker's environment which is set in serve_dynamo
             if resource_envs:

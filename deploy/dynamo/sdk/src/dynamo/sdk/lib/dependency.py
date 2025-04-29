@@ -24,6 +24,8 @@ from _bentoml_sdk.service.dependency import Dependency
 
 from dynamo.sdk.lib.service import DynamoService
 
+debugging = False
+
 T = TypeVar("T")
 
 
@@ -174,7 +176,10 @@ class DynamoDependency(Dependency[T]):
 
     def get(self, *args: Any, **kwargs: Any) -> T | Any:
         # If this is a Dynamo-enabled service, return the Dynamo client
-        if isinstance(self.on, DynamoService) and self.on.is_dynamo_component():
+        # print("Current call stack:")
+        # for line in traceback.format_stack():
+        #     print(line.strip())
+        if isinstance(self.on, DynamoService):
             if self._dynamo_client is None:
                 self._dynamo_client = DynamoClient(self.on)
                 if self._runtime:

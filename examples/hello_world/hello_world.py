@@ -15,15 +15,17 @@
 
 import logging
 
-from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from dynamo.sdk import DYNAMO_IMAGE, depends, dynamo_endpoint, service
+from dynamo.sdk.core.decorators.endpoint import dynamo_endpoint
+from dynamo.sdk.core.lib import DYNAMO_IMAGE, depends, service
+from dynamo.sdk.core.service.interface import DynamoTransport
 from dynamo.sdk.lib.config import ServiceConfig
 from dynamo.sdk.lib.logging import configure_server_logging
 
 logger = logging.getLogger(__name__)
+
 
 """
 Pipeline Architecture:
@@ -66,6 +68,7 @@ class Backend:
     def __init__(self) -> None:
         logger.info("Starting backend")
         config = ServiceConfig.get_instance()
+        # config = {}
         self.message = config.get("Backend", {}).get("message", "back")
         logger.info(f"Backend config message: {self.message}")
 
@@ -104,13 +107,13 @@ class Middle:
             yield f"Middle: {response}"
 
 
-app = FastAPI(title="Hello World!")
+# app = FastAPI(title="Hello World!")
 
 
 @service(
     dynamo={"enabled": True, "namespace": "inference"},
     image=DYNAMO_IMAGE,
-    app=app,
+    # app=app,
 )
 class Frontend:
     """A simple frontend HTTP API that forwards requests to the dynamo graph."""
@@ -128,7 +131,7 @@ class Frontend:
         logger.info(f"Frontend config message: {self.message}")
         logger.info(f"Frontend config port: {self.port}")
 
-    @dynamo_endpoint(is_api=True)
+    @dynamo_endpoint(transports=[DynamoTransport.HTTP])
     async def generate(self, request: RequestType):
         """Stream results from the pipeline."""
         logger.info(f"Frontend received: {request.text}")

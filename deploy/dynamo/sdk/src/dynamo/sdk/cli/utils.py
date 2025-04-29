@@ -351,3 +351,19 @@ def resolve_service_config(
 
     logger.debug(f"Final resolved config: {service_configs}")
     return service_configs
+
+
+def set_deployment_target(target: str):
+    from dynamo.sdk.core.lib import set_target
+
+    if target == "kubernetes":
+        from dynamo.sdk.core.targets.kubernetes import K8sDeploymentTarget
+
+        target = K8sDeploymentTarget()
+    elif target == "local":
+        from dynamo.sdk.core.targets.local import LocalDeploymentTarget
+
+        target = LocalDeploymentTarget()
+    else:
+        raise ValueError(f"Invalid target: {target}")
+    set_target(target)

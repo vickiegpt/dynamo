@@ -85,6 +85,11 @@ def serve(
         False,
         help="Save a snapshot of your service state to a file that allows planner to edit your deployment configuration",
     ),
+    target: str = typer.Option(
+        "local",
+        help="Specify the deployment target: 'kubernetes' for Kubernetes cluster or 'local' for local execution.",
+        case_sensitive=False,
+    ),
 ):
     """Locally serve a Dynamo pipeline.
 
@@ -92,10 +97,13 @@ def serve(
     """
 
     # Warning: internal
+    from dynamo.sdk.core.service.interface import LinkedServices
     from dynamo.sdk.lib.loader import find_and_load_service
     from dynamo.sdk.lib.logging import configure_server_logging
-    from dynamo.sdk.lib.service import LinkedServices
 
+    from .utils import set_deployment_target
+
+    set_deployment_target(target)
     # Extract extra arguments not captured by typer
     service_configs = resolve_service_config(config_file, ctx.args)
 
@@ -139,7 +147,7 @@ def serve(
 
     svc = find_and_load_service(dynamo_pipeline, working_dir=working_dir)
     logger.info(f"Loaded service: {svc.name}")
-    logger.info("Dependencies: %s", [dep.on.name for dep in svc.dependencies.values()])
+    # logger.info("Dependencies: %s", [dep.on.name for dep in svc.dependencies.values()])
     LinkedServices.remove_unused_edges()
 
     from dynamo.sdk.cli.serving import serve_dynamo_graph  # type: ignore
@@ -163,4 +171,5 @@ def serve(
         dependency_map=runner_map_dict,
         service_name=service_name,
         enable_local_planner=enable_local_planner,
+        target=target,
     )
