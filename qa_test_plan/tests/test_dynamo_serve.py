@@ -15,6 +15,7 @@
 
 
 import os
+import shutil
 import subprocess
 import time
 from contextlib import contextmanager
@@ -66,10 +67,11 @@ def is_port_open(port):
         return s.connect_ex(("localhost", port)) == 0
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture()
 def etcd_server():
     etcd_env = os.environ.copy()
     etcd_env["ALLOW_NONE_AUTHENTICATION"] = "yes"
+    shutil.rmtree("/tmp/etcd-test-data", ignore_errors=True)
     with managed_process(
         [
             "etcd",
@@ -77,6 +79,8 @@ def etcd_server():
             "http://0.0.0.0:2379",
             "--advertise-client-urls",
             "http://0.0.0.0:2379",
+            "--data-dir",
+            "/tmp/etcd-test-data",
         ],
         env=etcd_env,
         check_ports=[2379],
@@ -84,9 +88,13 @@ def etcd_server():
         yield proc
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture()
 def nats_server():
-    with managed_process(["nats-server", "-js", "--trace"], check_ports=[4222]) as proc:
+    shutil.rmtree("/tmp/nats/jetstream", ignore_errors=True)
+    with managed_process(
+        ["nats-server", "-js", "--trace", "--store_dir", "/tmp/nats/jetstream"],
+        check_ports=[4222],
+    ) as proc:
         yield proc
 
 
@@ -132,7 +140,7 @@ def test_deployment(etcd_server, nats_server, deployment_config):
             "messages": [
                 {
                     "role": "user",
-                    "content": "Explain the concept of quantum entanglement in 20 words",
+                    "content": "In the heart of Eldoria, an ancient land of boundless magic and mysterious creatures, lies the long-forgotten city of Aeloria. Once a beacon of knowledge and power, Aeloria was buried beneath the shifting sands of time, lost to the world for centuries. You are an intrepid explorer, known for your unparalleled curiosity and courage, who has stumbled upon an ancient map hinting at ests that Aeloria holds a secret so profound that it has the potential to reshape the very fabric of reality. Your journey will take you through treacherous deserts, enchanted forests, and across perilous mountain ranges. Your Task: Character Background: Develop a detailed background for your character. Describe their motivations for seeking out Aeloria, their skills and weaknesses, and any personal connections to the ancient city or its legends. Are they driven by a quest for knowledge, a search for lost familt clue is hidden.",
                 }
             ],
             "max_tokens": 500,
@@ -150,7 +158,8 @@ def test_deployment(etcd_server, nats_server, deployment_config):
             except requests.ConnectionError:
                 time.sleep(1)
         else:
-            pytest.fail("Service failed to start within timeout")
+            if response.status_code != 200:
+                pytest.fail("Service failed to start within timeout")
 
         assert response.status_code == 200
         result = response.json()
