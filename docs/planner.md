@@ -51,7 +51,7 @@ There are two additional rules set by planner to prevent over-compensation:
 ## Usage
 After you've deployed a dynamo graph - you can start the planner with the following command (served_graph_id is a UUID that can be found in the logs of the `dynamo serve` command):
 ```bash
-python components/planner.py <arguments> --served-graph-id <served_graph_id>
+PYTHONPATH=/workspace/examples/llm python components/planner.py <arguments> --served-graph-id <served_graph_id>
 ```
 
 Planner takes the following arguments:
