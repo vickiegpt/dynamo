@@ -130,6 +130,13 @@ def setup_signal_handlers():
     default=None,
     help="If set, use this custom component name instead of the default service name",
 )
+@click.option(
+    "--served-graph-id",
+    required=False,
+    type=click.STRING,
+    default=None,
+    help="If set, use this id as a unique identifier for the components in this graph",
+)
 def main(
     bento_identifier: str,
     service_name: str,
@@ -137,6 +144,7 @@ def main(
     worker_env: str | None,
     worker_id: int | None,
     custom_component_name: str | None,
+    served_graph_id: str | None,
 ) -> None:
     # hack to avoid bentoml from respawning the workers after their leases are revoked
     os.environ["BENTOML_CONTAINERIZED"] = "true"
@@ -155,6 +163,7 @@ def main(
     dynamo_context["service_name"] = service_name
     dynamo_context["runner_map"] = runner_map
     dynamo_context["worker_id"] = worker_id
+    dynamo_context["served_graph_id"] = served_graph_id
 
     # Ensure environment variables are set before we initialize
     if worker_env:

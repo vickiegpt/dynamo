@@ -24,6 +24,7 @@ import os
 import pathlib
 import shutil
 import tempfile
+import uuid
 from typing import Any, Dict, Optional, TypeVar
 
 # TODO: WARNING: internal but only for type checking in the deploy path i believe
@@ -75,6 +76,7 @@ def create_dynamo_watcher(
     scheduler: ResourceAllocator,
     working_dir: Optional[str] = None,
     env: Optional[Dict[str, str]] = None,
+    served_graph_id: Optional[str] = None,
 ) -> tuple[Watcher, CircusSocket, str]:
     """Create a watcher for a Dynamo service in the dependency graph"""
     from dynamo.sdk.cli.circus import create_circus_watcher
@@ -82,6 +84,8 @@ def create_dynamo_watcher(
     num_workers, resource_envs = scheduler.get_resource_envs(svc)
     uri, socket = _get_server_socket(svc, uds_path)
     args = _get_dynamo_worker_script(bento_identifier, svc.name)
+    if served_graph_id: 
+        args.extend(["--served-graph-id", served_graph_id])
     if resource_envs:
         args.extend(["--worker-env", json.dumps(resource_envs)])
 
@@ -139,6 +143,8 @@ def serve_dynamo_graph(
 
     configure_dynamo_logging(service_name=service_name)
 
+    served_graph_id = str(uuid.uuid4())
+    logger.info(f"Serving graph with id: {served_graph_id}")
     bento_id: str = ""
     namespace: str = ""
     env: dict[str, Any] = {}
@@ -193,6 +199,7 @@ def serve_dynamo_graph(
                         allocator,
                         str(bento_path.absolute()),
                         env=env,
+                        served_graph_id=served_graph_id,
                     )
                     namespace, _ = dep_svc.dynamo_address()
                     watchers.append(new_watcher)
@@ -224,6 +231,7 @@ def serve_dynamo_graph(
                 worker_env["DYNAMO_SERVICE_CONFIG"] = os.environ[
                     "DYNAMO_SERVICE_CONFIG"
                 ]
+            worker_env["DYNAMO_SERVED_GRAPH_ID"] = served_graph_id
 
             # Get service-specific environment variables from DYNAMO_SERVICE_ENVS
             if "DYNAMO_SERVICE_ENVS" in os.environ:

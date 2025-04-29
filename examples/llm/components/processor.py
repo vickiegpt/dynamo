@@ -110,9 +110,11 @@ class Processor(ProcessMixIn):
         await kv_listener.create_service()
         self.metrics_aggregator = KvMetricsAggregator(kv_listener)
 
+        served_graph_id = dynamo_context["served_graph_id"]
+        logger.info(f"Processor EtcdKvCache path: /dynamo/{served_graph_id}/processor/")
         self.etcd_kv_cache = await EtcdKvCache.create(
             runtime.etcd_client(),
-            "/dynamo/processor/",
+            f"/dynamo/{served_graph_id}/processor/",
             {"router": self.engine_args.router},
         )
 
