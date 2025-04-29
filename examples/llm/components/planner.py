@@ -385,13 +385,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--namespace",
         type=str,
-        help="Namespace planner will look at (format: dynamo-<UUID>)",
+        default="dynamo",
+        help="Namespace planner will look at",
     )
     # TODO: wrap planner with dynamo-serve to avoid manually entering the served_graph_id
     parser.add_argument(
         "--served-graph-id",
         type=str,
-        help="Served graph ID (format: dynamo-<UUID>)",
+        help="Served graph ID (UUID that can be found in the logs of the `dynamo serve` command)",
     )
     parser.add_argument(
         "--served-model-name",
