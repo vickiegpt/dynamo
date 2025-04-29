@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import time
 from contextlib import contextmanager
+from typing import Optional
 
 import pytest
 import requests
@@ -29,8 +30,8 @@ def managed_process(
     command, env=None, check_ports=[], timeout=600, cwd=None, output=False
 ):
     print(" ".join(command))
-    _input = subprocess.DEVNULL
-    _output = subprocess.DEVNULL
+    _input: Optional[int] = subprocess.DEVNULL
+    _output: Optional[int] = subprocess.DEVNULL
     if output:
         _input = None
         _output = None
