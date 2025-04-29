@@ -51,7 +51,7 @@ use crate::protocols::{
 };
 use crate::tokenizers::{DecodeStream, HuggingFaceTokenizer, Tokenizer};
 use tokenizers::Tokenizer as HfTokenizer;
-
+use tokenizers::models::bpe::BPE;
 /// Represents the output stream from the execution engine
 pub type ExecutionOutputStream = Annotated<LLMEngineOutput>;
 
@@ -90,6 +90,11 @@ impl Backend {
                 HfTokenizer::from_file(file).map_err(Error::msg)?
             }
             Some(TokenizerKind::GGUF(t)) => *t.clone(),
+            Some(TokenizerKind::HfTokenizerBPE(vocab, merges)) => {
+                let bpe_builder = BPE::from_file(vocab, merges);
+                let bpe = bpe_builder.build().map_err(anyhow::Error::msg)?;
+                HfTokenizer::new(bpe)
+            }
             None => {
                 return Ok(Arc::new(Self {
                     tokenizer: None,

@@ -77,7 +77,8 @@ impl OpenAIPreprocessor {
             Some(TokenizerKind::HfTokenizerJson(file)) => HuggingFaceTokenizer::from_file(file)?,
             Some(TokenizerKind::GGUF(tokenizer)) => {
                 HuggingFaceTokenizer::from_tokenizer(*tokenizer.clone())
-            }
+            },
+            Some(TokenizerKind::HfTokenizerBPE(vocab, merges)) => todo!(),
             None => {
                 anyhow::bail!(
                     "Blank ModelDeploymentCard cannot be used for pre-processing, no tokenizer"
