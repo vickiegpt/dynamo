@@ -248,9 +248,17 @@ impl<S: Storage> FullyContiguous<S> {
     /// Create a new contiguous layout using the provided configuration and pre-allocated storage.
     /// Performs validation and calculates strides/offsets.
     #[instrument(level = "debug", skip(storage), fields(config = ?config))]
-    pub fn new(config: LayoutConfig, storage: S) -> Result<Self, LayoutError> {
+    pub fn new(config: LayoutConfig, storage: Vec<S>) -> Result<Self, LayoutError> {
         // Calculate dimensions, which includes validation.
         let config = FullyContiguousConfig::new(config)?;
+
+        if storage.len() != 1 {
+            return Err(LayoutError::InvalidConfig(
+                "FullyContiguous layout requires exactly one storage region".to_string(),
+            ));
+        }
+        let mut storage = storage;
+        let storage = storage.remove(0);
 
         let provided_size = storage.size();
         let storage_addr = storage.addr();
@@ -366,7 +374,7 @@ impl<S: Storage> FullyContiguous<S> {
         );
 
         // Pass the config by value as Self::new takes ownership
-        Self::new(config.inner, storage)
+        Self::new(config.inner, vec![storage])
     }
 }
 
@@ -512,7 +520,7 @@ pub mod tests {
         let fc_config = FullyContiguousConfig::new(config.clone()).unwrap();
         let required_size = fc_config.required_allocation_size();
         let storage = NullDeviceStorage::new((required_size - 1) as u64);
-        let layout_result = FullyContiguous::new(config, storage);
+        let layout_result = FullyContiguous::new(config, vec![storage]);
 
         assert!(layout_result.is_err());
         match layout_result.err().unwrap() {

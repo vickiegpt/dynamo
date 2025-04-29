@@ -37,6 +37,16 @@ where
     }
 }
 
+// impl LayoutConfig {
+//     pub fn create_layout<S: Storage + NixlEnabledStorage>(
+//         &self,
+//         storage: Vec<S>,
+//     ) -> Result<impl NixlLayout<StorageType = S>, LayoutError> {
+//         let layout = FullyContiguous::new(self, storage)?;
+//         Ok(Box::new(layout))
+//     }
+// }
+
 /// Trait to convert a BlockLayout instance into its NIXL-specific serializable representation.
 pub trait ToSerializedNixlBlockLayout: BlockLayout<StorageType: NixlEnabledStorage> {
     /// Converts the layout into a serializable format, ensuring it's backed by NIXL storage.

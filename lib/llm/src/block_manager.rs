@@ -34,21 +34,11 @@ pub use storage::{
 };
 pub use tokio_util::sync::CancellationToken;
 
+use anyhow::{Context, Result};
 use derive_builder::Builder;
 use nixl_sys::Agent as NixlAgent;
 use std::sync::Arc;
 use validator::Validate;
-
-pub struct KvBlockManagerBuilder<
-    DeviceMetadata: BlockMetadata,
-    HostMetadata: BlockMetadata,
-    // LocalStorageMetadata: BlockMetadata,
-> {
-    host_pool: Option<BlockPool<PinnedStorage, HostMetadata>>,
-    device_pool: Option<BlockPool<DeviceStorage, DeviceMetadata>>,
-    // local_storage_pool: Option<BlockPool<LocalStorageLayout, LocalStorageMetadata>>,
-    nixl_agent: Option<NixlAgent>,
-}
 
 #[derive(Debug, Clone, Builder)]
 pub struct KvManagerRuntimeConfig {
@@ -78,7 +68,7 @@ pub struct KvManagerModelConfig {
 
 #[derive(Clone, Builder, Validate)]
 #[builder(build_fn(validate = "Self::validate"))]
-pub struct KvManagerBlockConfig<S: Storage + NixlEnabledStorage> {
+pub struct KvManagerLayoutConfig<S: Storage + NixlEnabledStorage> {
     #[validate(range(min = 1))]
     pub num_blocks: usize,
 
@@ -99,7 +89,7 @@ pub struct KvManagerBlockConfig<S: Storage + NixlEnabledStorage> {
 
 // Implement the validation and build functions on the generated builder type
 // Note: derive_builder generates KvManagerBlockConfigBuilder<S>
-impl<S: Storage> KvManagerBlockConfigBuilder<S> {
+impl<S: Storage + NixlEnabledStorage> KvManagerLayoutConfigBuilder<S> {
     /// Custom setter for the `allocator` field
     fn allocator(&mut self, allocator: impl StorageAllocator<S> + 'static) -> &mut Self {
         self.allocator = Some(Some(Arc::new(allocator)));
@@ -116,7 +106,84 @@ impl<S: Storage> KvManagerBlockConfigBuilder<S> {
     }
 }
 
-#[derive(Debug, Clone, Builder, Validate)]
+#[derive(Builder, Validate)]
+#[builder(pattern = "owned")]
 pub struct KvManagerPoolConfig {
-    model_config: KvManagerModelConfig,
+    runtime: KvManagerRuntimeConfig,
+    model: KvManagerModelConfig,
+
+    #[builder(default, setter(strip_option))]
+    device_layout: Option<KvManagerLayoutConfig<DeviceStorage>>,
+
+    #[builder(default, setter(strip_option))]
+    host_layout: Option<KvManagerLayoutConfig<PinnedStorage>>,
 }
+
+// When we construct the pool:
+// 1. instantiate the runtime,
+// 2. build layout::LayoutConfigs for each of the requested storage types
+// 3. register the layouts with the NIXL agent if enabled
+// 4. construct a Blocks object for each layout providing a unique block_set_idx
+//    for each layout type.
+// 5. initialize the pools for each set of blocks
+pub struct KvBlockManager<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata> {
+    worker_id: u64,
+    cancellation_token: CancellationToken,
+
+    nixl_agent: Option<NixlAgent>,
+
+    host_blocks: BlockPool<PinnedStorage, HostMetadata>,
+    device_blocks: BlockPool<DeviceStorage, DeviceMetadata>,
+}
+
+// impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
+//     KvBlockManager<HostMetadata, DeviceMetadata>
+// {
+//     pub fn new(config: KvManagerPoolConfig) -> Result<Self> {
+//         config
+//             .runtime
+//             .validate()
+//             .context("Validating runtime config")?;
+
+//         config.model.validate().context("Validating model config")?;
+
+//         let worker_id = config.runtime.worker_id;
+//         let cancellation_token = config.runtime.cancellation_token;
+
+//         let nixl_agent = if config.runtime.enable_nixl {
+//             Some(NixlAgent::new(&worker_id.to_string())?)
+//         } else {
+//             None
+//         };
+
+//         let model = &config.model;
+//         let mut layout_builder = LayoutConfig::builder();
+
+//         layout_builder
+//             .num_layers(model.num_layers)
+//             .page_size(model.page_size)
+//             .inner_dim(model.inner_dim)
+//             .dtype(model.dtype);
+
+//         if let Some(host_layout) = &config.host_layout {
+//             let layout = layout_builder
+//                 .clone()
+//                 .num_blocks(host_layout.num_blocks)
+//                 .build()?;
+
+//             if let Some(storage) = &host_layout.storage {
+//             }
+//         }
+
+//         let host_layout = layout_builder
+//             .clone()
+//             .num_blocks(config.host_layout.num_blocks);
+
+//         if let Some(host_layout) = &config.host_layout {
+//             host_builder
+//                 .num_blocks(host_layout.num_blocks)
+//                 .page_size(host_layout.page_size)
+//                 .inner_dim(host_layout.inner_dim)
+//         }
+//     }
+// }
