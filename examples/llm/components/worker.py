@@ -64,7 +64,7 @@ class VllmWorker:
         self._prefill_queue_nats_server = os.getenv(
             "NATS_SERVER", "nats://localhost:4222"
         )
-        self._prefill_queue_stream_name = self.model_name
+        self._prefill_queue_stream_name = f"prefill_queue_{dynamo_context['served_graph_id']}"
         logger.info(
             f"Prefill queue: {self._prefill_queue_nats_server}:{self._prefill_queue_stream_name}"
         )

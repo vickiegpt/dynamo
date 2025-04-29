@@ -58,7 +58,7 @@ class Planner:
         self._prefill_queue_nats_server = os.getenv(
             "NATS_SERVER", "nats://localhost:4222"
         )
-        self._prefill_queue_stream_name = self.args.served_model_name
+        self._prefill_queue_stream_name = f"prefill_queue_{self.args.served_graph_id}"
 
         self.prefill_client: Any | None = None
         self.workers_client: Any | None = None
@@ -385,8 +385,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--namespace",
         type=str,
-        default="dynamo",
-        help="Namespace planner will look at",
+        help="Namespace planner will look at (format: dynamo-<UUID>)",
+    )
+    # TODO: wrap planner with dynamo-serve to avoid manually entering the served_graph_id
+    parser.add_argument(
+        "--served-graph-id",
+        type=str,
+        help="Served graph ID (format: dynamo-<UUID>)",
     )
     parser.add_argument(
         "--served-model-name",

@@ -120,11 +120,7 @@ class PrefillWorker:
     async def prefill_queue_handler(self):
         logger.info("Prefill queue handler entered")
         prefill_queue_nats_server = os.getenv("NATS_SERVER", "nats://localhost:4222")
-        prefill_queue_stream_name = (
-            self.engine_args.served_model_name
-            if self.engine_args.served_model_name is not None
-            else "vllm"
-        )
+        prefill_queue_stream_name = f"prefill_queue_{dynamo_context['served_graph_id']}"
         logger.info(
             f"Prefill queue: {prefill_queue_nats_server}:{prefill_queue_stream_name}"
         )
