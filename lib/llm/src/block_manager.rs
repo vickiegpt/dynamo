@@ -22,7 +22,7 @@
 pub mod block;
 pub mod events;
 pub mod layout;
-// pub mod pool;
+pub mod pool;
 pub mod storage;
 
 // pub use block::{Block, BlockMetadata};

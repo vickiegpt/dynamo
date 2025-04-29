@@ -282,6 +282,12 @@ impl<S: Storage, M: BlockMetadata> BlockExt for Block<S, M> {
 }
 
 pub trait BlockDataExt<S: Storage> {
+    /// Returns the index of the block in the block set
+    fn block_idx(&self) -> usize;
+
+    /// Returns the index of the block set
+    fn block_set_idx(&self) -> usize;
+
     /// Returns true if the block data is fully contiguous
     fn is_fully_contiguous(&self) -> bool;
 
@@ -303,6 +309,7 @@ pub trait BlockDataExt<S: Storage> {
 pub struct BlockData<S: Storage> {
     layout: Arc<dyn BlockLayout<StorageType = S>>,
     block_idx: usize,
+    block_set_idx: usize,
 }
 
 impl<S> BlockData<S>
@@ -310,12 +317,28 @@ where
     S: Storage,
 {
     /// Create a new block storage
-    fn new(layout: Arc<dyn BlockLayout<StorageType = S>>, block_idx: usize) -> Self {
-        Self { layout, block_idx }
+    fn new(
+        layout: Arc<dyn BlockLayout<StorageType = S>>,
+        block_idx: usize,
+        block_set_idx: usize,
+    ) -> Self {
+        Self {
+            layout,
+            block_idx,
+            block_set_idx,
+        }
     }
 }
 
 impl<S: Storage> BlockDataExt<S> for BlockData<S> {
+    fn block_idx(&self) -> usize {
+        self.block_idx
+    }
+
+    fn block_set_idx(&self) -> usize {
+        self.block_set_idx
+    }
+
     fn is_fully_contiguous(&self) -> bool {
         self.layout.layout_type() == LayoutType::FullyContiguous
     }
@@ -380,16 +403,18 @@ impl BlockMetadata for BasicMetadata {
 pub struct Blocks<L: BlockLayout, M: BlockMetadata> {
     layout: Box<L>,
     metadata: std::marker::PhantomData<M>,
+    block_set_idx: usize,
 }
 
 impl<L: BlockLayout + 'static, M: BlockMetadata> Blocks<L, M> {
     /// Create a new block storage collection
-    pub fn new(layout: L) -> BlockResult<Self> {
+    pub fn new(layout: L, block_set_idx: usize) -> BlockResult<Self> {
         let layout = Box::new(layout);
 
         Ok(Self {
             layout,
             metadata: std::marker::PhantomData,
+            block_set_idx,
         })
     }
 
@@ -400,7 +425,7 @@ impl<L: BlockLayout + 'static, M: BlockMetadata> Blocks<L, M> {
 
         (0..layout.num_blocks())
             .map(|idx| {
-                let data = BlockData::new(layout.clone(), idx);
+                let data = BlockData::new(layout.clone(), idx, self.block_set_idx);
                 Block::new(data, M::default())
             })
             .collect()
@@ -586,30 +611,66 @@ mod nixl {
 
     pub struct RemoteBlocks {
         layout: Arc<dyn BlockLayout<StorageType = NixlStorage>>,
+        block_set_idx: usize,
     }
 
     impl RemoteBlocks {
-        pub fn new(layout: Arc<dyn BlockLayout<StorageType = NixlStorage>>) -> Self {
-            Self { layout }
+        pub fn new(
+            layout: Arc<dyn BlockLayout<StorageType = NixlStorage>>,
+            block_set_idx: usize,
+        ) -> Self {
+            Self {
+                layout,
+                block_set_idx,
+            }
+        }
+
+        pub fn block(&self, block_idx: usize) -> BlockResult<RemoteBlock> {
+            if block_idx >= self.layout.num_blocks() {
+                return Err(BlockError::InvalidState(format!(
+                    "block index out of bounds: {} >= {}",
+                    block_idx,
+                    self.layout.num_blocks()
+                )));
+            }
+            Ok(RemoteBlock::new(
+                self.layout.clone(),
+                block_idx,
+                self.block_set_idx,
+            ))
         }
     }
 
     pub struct RemoteBlock {
         data: BlockData<NixlStorage>,
         block_idx: usize,
+        block_set_idx: usize,
     }
 
     impl RemoteBlock {
         pub fn new(
             layout: Arc<dyn BlockLayout<StorageType = NixlStorage>>,
             block_idx: usize,
+            block_set_idx: usize,
         ) -> Self {
-            let data = BlockData::new(layout, block_idx);
-            Self { data, block_idx }
+            let data = BlockData::new(layout, block_idx, block_set_idx);
+            Self {
+                data,
+                block_idx,
+                block_set_idx,
+            }
         }
     }
 
     impl BlockDataExt<NixlStorage> for RemoteBlock {
+        fn block_idx(&self) -> usize {
+            self.data.block_idx()
+        }
+
+        fn block_set_idx(&self) -> usize {
+            self.data.block_set_idx()
+        }
+
         fn is_fully_contiguous(&self) -> bool {
             self.data.is_fully_contiguous()
         }
@@ -686,7 +747,7 @@ mod tests {
     // Helper to create a default reset block
     fn create_reset_block() -> Block<impl Storage, BasicMetadata> {
         let layout = setup_layout(None).unwrap();
-        let data = BlockData::new(Arc::new(layout), 0);
+        let data = BlockData::new(Arc::new(layout), 0, 42);
         Block::new(data, BasicMetadata::default()).unwrap()
     }
 
@@ -909,18 +970,22 @@ mod tests {
         let serialized = layout.serialize().unwrap();
         let layout = Arc::new(layout);
 
-        let data = BlockData::new(layout.clone(), 0);
+        let data = BlockData::new(layout.clone(), 0, 42);
+        assert_eq!(data.block_idx(), 0);
+        assert_eq!(data.block_set_idx(), 42);
         let block_desc = data.as_block_descriptor().unwrap();
         println!("Block descriptor: {:?}", block_desc);
 
-        let data = BlockData::new(layout.clone(), 1);
+        let data = BlockData::new(layout.clone(), 1, 42);
+        assert_eq!(data.block_idx(), 1);
+        assert_eq!(data.block_set_idx(), 42);
         let block_desc = data.as_block_descriptor().unwrap();
         println!("Block descriptor: {:?}", block_desc);
 
         let remote_layout = SerializedNixlBlockLayout::deserialize(&serialized).unwrap();
         println!("Nixl layout: {:?}", remote_layout);
 
-        let remote_block = RemoteBlock::new(remote_layout.clone(), 0);
+        let remote_block = RemoteBlock::new(remote_layout.clone(), 0, 42);
         let remote_desc = remote_block.as_block_descriptor().unwrap();
         println!("Remote Descriptor: {:?}", remote_desc);
 

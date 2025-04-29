@@ -586,7 +586,7 @@ mod tests {
     #[tokio::test]
     async fn test_block_pool_state() {
         let layout = setup_layout(None).unwrap();
-        let blocks = Blocks::<_, BasicMetadata>::new(layout)
+        let blocks = Blocks::<_, BasicMetadata>::new(layout, 42)
             .unwrap()
             .into_blocks()
             .unwrap();
@@ -624,7 +624,7 @@ mod tests {
     #[tokio::test]
     async fn test_block_pool() {
         let layout = setup_layout(None).unwrap();
-        let blocks = Blocks::<_, BasicMetadata>::new(layout)
+        let blocks = Blocks::<_, BasicMetadata>::new(layout, 42)
             .unwrap()
             .into_blocks()
             .unwrap();
@@ -662,7 +662,7 @@ mod tests {
         let layout = setup_layout(None).unwrap();
 
         // Create the Blocks
-        let blocks = Blocks::<_, BasicMetadata>::new(layout)
+        let blocks = Blocks::<_, BasicMetadata>::new(layout, 42)
             .unwrap()
             .into_blocks()
             .unwrap();

@@ -36,7 +36,7 @@ pub struct InactiveBlockPool<S: Storage, M: BlockMetadata> {
     total_blocks: u64,
 }
 
-impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
+impl<S: Storage, M: BlockMetadata> InactiveBlockPool<S, M> {
     /// Creates a new, empty [`InactiveBlockPool`].
     ///
     /// # Returns
@@ -87,7 +87,7 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
     /// * `block` - The block to insert ([`BlockType<T, M>`]).
     /// * `sequence_hash` - The sequence hash associated with the block's content ([`SequenceHash`]).
     #[instrument(level = "trace", skip(self, block), fields(sequence_hash = ?sequence_hash))]
-    fn insert_with_sequence_hash(&mut self, block: BlockType<T, M>, sequence_hash: SequenceHash) {
+    fn insert_with_sequence_hash(&mut self, block: BlockType<S, M>, sequence_hash: SequenceHash) {
         let priority_key = PriorityKey::new(block.metadata().clone(), sequence_hash);
         if self.priority_set.contains(&priority_key) {
             tracing::trace!("multiple entries with the same priority key, resetting block and inserting into uninitialized set");
@@ -117,9 +117,9 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
     ///
     /// # Arguments
     ///
-    /// * `block` - The block to insert ([`BlockType<T, M>`]).
+    /// * `block` - The block to insert ([`BlockType<S, M>`]).
     #[instrument(level = "trace", skip(self, block), fields(block_state = ?block.state()))]
-    fn insert(&mut self, block: BlockType<T, M>) {
+    fn insert(&mut self, block: BlockType<S, M>) {
         tracing::trace!("Inserting block into available pool");
 
         // If we already have an entry for this sequence hash or the block is reset,
@@ -153,7 +153,7 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
     ///
     /// * `blocks` - A vector of blocks ([`BlockType<T, M>`]) to add.
     #[instrument(level = "debug", skip(self, blocks))]
-    pub fn add_blocks(&mut self, blocks: Vec<BlockType<T, M>>) {
+    pub fn add_blocks(&mut self, blocks: Vec<BlockType<S, M>>) {
         let count = blocks.len();
         tracing::debug!(count, "Adding blocks to pool");
 
@@ -174,7 +174,7 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
     ///
     /// * `blocks` - A vector of blocks ([`BlockType<T, M>`]) to add.
     #[instrument(level = "debug", skip(self, blocks))]
-    pub fn add_blocks_with_state(&mut self, blocks: Vec<BlockType<T, M>>) {
+    pub fn add_blocks_with_state(&mut self, blocks: Vec<BlockType<S, M>>) {
         let count = blocks.len();
         tracing::debug!(count, "Adding blocks to pool");
         self.total_blocks += count as u64;
@@ -189,9 +189,9 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
     ///
     /// # Arguments
     ///
-    /// * `block` - The block ([`BlockType<T, M>`]) to return.
+    /// * `block` - The block ([`BlockType<S, M>`]) to return.
     #[instrument(level = "debug", skip(self, block))]
-    pub fn return_block(&mut self, mut block: BlockType<T, M>) {
+    pub fn return_block(&mut self, mut block: BlockType<S, M>) {
         // increment the return tick
         self.return_tick += 1;
 
@@ -213,7 +213,7 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
     ///
     /// * `blocks` - A vector of blocks ([`BlockType<T, M>`]) to return.
     #[instrument(level = "debug", skip(self, blocks))]
-    pub fn return_blocks(&mut self, blocks: Vec<BlockType<T, M>>) {
+    pub fn return_blocks(&mut self, blocks: Vec<BlockType<S, M>>) {
         let count = blocks.len();
         tracing::debug!(count, "Returning blocks to pool");
         // return the block to the pool from tail to head
@@ -233,9 +233,9 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
     ///
     /// # Returns
     ///
-    /// An [`Option<BlockType<T, M>>`] containing the block if found, otherwise `None`.
+    /// An [`Option<BlockType<S, M>>`] containing the block if found, otherwise `None`.
     #[instrument(level = "trace", skip(self), fields(sequence_hash = ?sequence_hash))]
-    fn take_with_sequence_hash(&mut self, sequence_hash: SequenceHash) -> Option<BlockType<T, M>> {
+    fn take_with_sequence_hash(&mut self, sequence_hash: SequenceHash) -> Option<BlockType<S, M>> {
         match self.lookup_map.remove(&sequence_hash) {
             Some(block) => {
                 // Remove from priority set
@@ -257,9 +257,9 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
     ///
     /// # Returns
     ///
-    /// An [`Option<BlockType<T, M>>`] containing the block if found, otherwise `None`.
+    /// An [`Option<BlockType<S, M>>`] containing the block if found, otherwise `None`.
     #[instrument(level = "debug", skip(self), fields(sequence_hash = ?sequence_hash))]
-    pub fn match_sequence_hash(&mut self, sequence_hash: SequenceHash) -> Option<BlockType<T, M>> {
+    pub fn match_sequence_hash(&mut self, sequence_hash: SequenceHash) -> Option<BlockType<S, M>> {
         self.take_with_sequence_hash(sequence_hash)
     }
 
@@ -280,7 +280,7 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
     pub fn match_sequence_hashes(
         &mut self,
         sequence_hashes: Vec<SequenceHash>,
-    ) -> Vec<BlockType<T, M>> {
+    ) -> Vec<BlockType<S, M>> {
         let total_hashes = sequence_hashes.len();
         let mut matched_blocks = Vec::with_capacity(total_hashes);
 
@@ -313,7 +313,7 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
     /// A vector containing the blocks ([`BlockType<T, M>`]) that were successfully matched and taken.
     /// The vector may be shorter than `token_blocks` if not all corresponding hashes were found.
     #[instrument(level = "debug", skip(self, token_blocks), fields(num_token_blocks = token_blocks.len()))]
-    pub fn match_token_blocks(&mut self, token_blocks: &[TokenBlock]) -> Vec<BlockType<T, M>> {
+    pub fn match_token_blocks(&mut self, token_blocks: &[TokenBlock]) -> Vec<BlockType<S, M>> {
         let total_blocks = token_blocks.len();
         let mut matched_blocks = Vec::with_capacity(total_blocks);
 
@@ -356,7 +356,7 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
     /// and [`lookup_map`] (i.e., a key exists in the set but not the map). This indicates
     /// a bug in the pool's internal logic.
     #[instrument(level = "debug", skip(self))]
-    pub fn acquire_free_block(&mut self) -> Option<BlockType<T, M>> {
+    pub fn acquire_free_block(&mut self) -> Option<BlockType<S, M>> {
         // First try uninitialized blocks - these are often part of sequences
         // that have been arranged in the correct order
         if let Some(mut block) = self.uninitialized_set.pop_front() {
@@ -411,7 +411,7 @@ impl<T: BlockLayout, M: BlockMetadata> InactiveBlockPool<T, M> {
     pub fn acquire_free_blocks(
         &mut self,
         count: usize,
-    ) -> Result<Vec<BlockType<T, M>>, BlockPoolError> {
+    ) -> Result<Vec<BlockType<S, M>>, BlockPoolError> {
         if count == 0 {
             return Ok(Vec::new());
         }
@@ -576,7 +576,9 @@ pub(crate) mod tests {
     }
 
     /// Creates a block collection with the given number of blocks.
-    pub fn create_block_collection(num_blocks: usize) -> Blocks<NullDeviceStorage, TestMetadata> {
+    pub fn create_block_collection(
+        num_blocks: usize,
+    ) -> Blocks<impl BlockLayout<StorageType = NullDeviceStorage>, TestMetadata> {
         let config = LayoutConfigBuilder::default()
             .num_blocks(num_blocks)
             .num_layers(61)
@@ -588,7 +590,7 @@ pub(crate) mod tests {
         let layout = FullyContiguous::allocate(config, &NullDeviceAllocator)
             .expect("Failed to allocate layout/storage");
 
-        Blocks::<NullDeviceStorage, TestMetadata>::new(layout).unwrap()
+        Blocks::<_, TestMetadata>::new(layout, 42).unwrap()
     }
 
     /// Creates a vector of Blocks from a token sequence and block size.
