@@ -21,10 +21,10 @@ The planner is a component that monitors the state of the system and makes adjus
 
 ## Usage
 
-After you've deployed a dynamo graph, you can start the planner with the following command:
+After you've deployed a dynamo graph, you can start the planner with the following command (served_graph_id is a UUID that can be found in the logs of the `dynamo serve` command):
 
 ```bash
-python components/planner.py --namespace <namespace>
+python components/planner.py --namespace <namespace> --served-graph-id <served_graph_id>
 ```
 
 ## Backends

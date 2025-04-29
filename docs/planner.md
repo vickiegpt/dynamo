@@ -49,9 +49,9 @@ There are two additional rules set by planner to prevent over-compensation:
 1. We do not scale up prefill worker if the prefill queue size is estimated to reduce below the `--prefill-queue-scale-up-threshold` within the next `NEW_PREFILL_WORKER_QUEUE_BUFFER_PERIOD=3` adjustment intervals following the trend observed in the current adjustment interval.
 
 ## Usage
-After you've deployed a dynamo graph - you can start the planner with the following command:
+After you've deployed a dynamo graph - you can start the planner with the following command (served_graph_id is a UUID that can be found in the logs of the `dynamo serve` command):
 ```bash
-python components/planner.py <arguments>
+python components/planner.py <arguments> --served-graph-id <served_graph_id>
 ```
 
 Planner takes the following arguments:
