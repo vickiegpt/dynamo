@@ -84,7 +84,7 @@ def create_dynamo_watcher(
     num_workers, resource_envs = scheduler.get_resource_envs(svc)
     uri, socket = _get_server_socket(svc, uds_path)
     args = _get_dynamo_worker_script(bento_identifier, svc.name)
-    if served_graph_id: 
+    if served_graph_id:
         args.extend(["--served-graph-id", served_graph_id])
     if resource_envs:
         args.extend(["--worker-env", json.dumps(resource_envs)])

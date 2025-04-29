@@ -37,7 +37,9 @@ class PyDisaggregatedRouter:
     async def async_init(self):
         runtime = dynamo_context["runtime"]
         served_graph_id = dynamo_context["served_graph_id"]
-        logger.info(f"Disagg Router EtcdKvCache path: /dynamo/{served_graph_id}/disagg_router/")
+        logger.info(
+            f"Disagg Router EtcdKvCache path: /dynamo/{served_graph_id}/disagg_router/"
+        )
         self.etcd_kv_cache = await EtcdKvCache.create(
             runtime.etcd_client(),
             f"/dynamo/{served_graph_id}/disagg_router/",

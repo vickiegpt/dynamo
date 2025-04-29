@@ -23,10 +23,9 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from dynamo import sdk
-from dynamo.sdk import async_on_shutdown, depends, service, dynamo_context
+from dynamo.sdk import async_on_shutdown, depends, service
 from dynamo.sdk.lib.config import ServiceConfig
 from dynamo.sdk.lib.image import DYNAMO_IMAGE
-
 
 logger = logging.getLogger(__name__)
 

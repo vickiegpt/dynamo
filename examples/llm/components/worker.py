@@ -64,7 +64,9 @@ class VllmWorker:
         self._prefill_queue_nats_server = os.getenv(
             "NATS_SERVER", "nats://localhost:4222"
         )
-        self._prefill_queue_stream_name = f"prefill_queue_{dynamo_context['served_graph_id']}"
+        self._prefill_queue_stream_name = (
+            f"prefill_queue_{dynamo_context['served_graph_id']}"
+        )
         logger.info(
             f"Prefill queue: {self._prefill_queue_nats_server}:{self._prefill_queue_stream_name}"
         )
@@ -129,8 +131,12 @@ class VllmWorker:
         if self.engine_args.remote_prefill:
             metadata = self.engine_client.nixl_metadata
             served_graph_id = dynamo_context["served_graph_id"]
-            logger.info(f"PrefillWorker NixlMetadataStore path: /dynamo/{served_graph_id}/nixl")
-            metadata_store = NixlMetadataStore(f"dynamo/{served_graph_id}/nixl", runtime)
+            logger.info(
+                f"PrefillWorker NixlMetadataStore path: /dynamo/{served_graph_id}/nixl"
+            )
+            metadata_store = NixlMetadataStore(
+                f"dynamo/{served_graph_id}/nixl", runtime
+            )
             await metadata_store.put(metadata.engine_id, metadata)
 
         if self.engine_args.conditional_disagg:
