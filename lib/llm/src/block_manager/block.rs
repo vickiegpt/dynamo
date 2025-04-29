@@ -21,10 +21,11 @@ pub use crate::tokens::TokenBlockError;
 pub use anyhow::Result;
 pub use state::{BlockState, BlockStateInvalid};
 
+use crate::block_manager::storage::Storage;
 use crate::tokens::{SaltHash, SequenceHash, Token, TokenBlock, Tokens};
 
 use super::events::PublishHandle;
-use super::layout::{BlockLayout, LayoutError};
+use super::layout::{BlockLayout, LayoutError, LayoutType};
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -57,15 +58,15 @@ pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync +
 
 /// A block with storage and associated metadata/state
 #[derive(Debug)]
-pub struct Block<L: BlockLayout, M: BlockMetadata> {
-    data: BlockData<L>,
+pub struct Block<S: Storage, M: BlockMetadata> {
+    data: BlockData<S>,
     metadata: M,
     state: BlockState,
 }
 
-impl<L: BlockLayout, M: BlockMetadata> Block<L, M> {
+impl<S: Storage, M: BlockMetadata> Block<S, M> {
     /// Create a new block with default metadata/state
-    pub fn new(data: BlockData<L>, metadata: M) -> BlockResult<Self> {
+    pub fn new(data: BlockData<S>, metadata: M) -> BlockResult<Self> {
         Ok(Self {
             data,
             metadata,
@@ -109,16 +110,6 @@ impl<L: BlockLayout, M: BlockMetadata> Block<L, M> {
         &self.state
     }
 
-    /// Get a read-only view of a layer
-    pub fn layer_view(&self, layer_idx: usize) -> BlockResult<view::BlockView<L>> {
-        self.data.layer_view(layer_idx)
-    }
-
-    /// Get a mutable view of a layer
-    pub fn layer_view_mut(&mut self, layer_idx: usize) -> BlockResult<view::BlockViewMut<L>> {
-        self.data.layer_view_mut(layer_idx)
-    }
-
     /// Get the number of blocks in the block
     pub fn num_blocks(&self) -> usize {
         self.data.layout.num_blocks()
@@ -155,7 +146,7 @@ pub(crate) trait PrivateBlockExt {
     ) -> Result<PublishHandle, registry::BlockRegistationError>;
 }
 
-impl<L: BlockLayout, M: BlockMetadata> PrivateBlockExt for Block<L, M> {
+impl<S: Storage, M: BlockMetadata> PrivateBlockExt for Block<S, M> {
     fn register(
         &mut self,
         registry: &mut registry::BlockRegistry,
@@ -223,7 +214,7 @@ pub trait BlockExt {
     fn tokens(&self) -> Option<&Tokens>;
 }
 
-impl<L: BlockLayout, M: BlockMetadata> BlockExt for Block<L, M> {
+impl<S: Storage, M: BlockMetadata> BlockExt for Block<S, M> {
     fn reset(&mut self) {
         Block::reset(self);
     }
@@ -290,37 +281,77 @@ impl<L: BlockLayout, M: BlockMetadata> BlockExt for Block<L, M> {
     }
 }
 
+pub trait BlockDataExt<S: Storage> {
+    /// Returns true if the block data is fully contiguous
+    fn is_fully_contiguous(&self) -> bool;
+
+    /// Get a read-only view of this block's storage for a layer
+    fn layer_view(&self, layer_idx: usize) -> BlockResult<view::LayerView<S>>;
+
+    /// Get a mutable view of this block's storage for a layer
+    fn layer_view_mut(&mut self, layer_idx: usize) -> BlockResult<view::LayerViewMut<S>>;
+
+    /// Get a read-only view of this block's storage
+    fn block_view(&self) -> BlockResult<view::BlockView<S>>;
+
+    /// Get a mutable view of this block's storage
+    fn block_view_mut(&mut self) -> BlockResult<view::BlockViewMut<S>>;
+}
+
 /// Individual block storage - cannot be cloned to ensure uniqueness
 #[derive(Debug)]
-pub struct BlockData<L: BlockLayout> {
-    layout: Arc<L>,
+pub struct BlockData<S: Storage> {
+    layout: Arc<dyn BlockLayout<StorageType = S>>,
     block_idx: usize,
 }
 
-impl<L: BlockLayout> BlockData<L> {
+impl<S> BlockData<S>
+where
+    S: Storage,
+{
     /// Create a new block storage
-    fn new(layout: Arc<L>, block_idx: usize) -> Self {
+    fn new(layout: Arc<dyn BlockLayout<StorageType = S>>, block_idx: usize) -> Self {
         Self { layout, block_idx }
     }
+}
 
-    /// Get a read-only view of this block's storage for a layer
-    pub fn layer_view(&self, layer_idx: usize) -> BlockResult<view::BlockView<L>> {
-        let offset = self.layout.memory_region_addr(self.block_idx, layer_idx)?;
-
-        unsafe { view::BlockView::new(self, offset as usize, self.layout.memory_region_size()) }
+impl<S: Storage> BlockDataExt<S> for BlockData<S> {
+    fn is_fully_contiguous(&self) -> bool {
+        self.layout.layout_type() == LayoutType::FullyContiguous
     }
 
-    /// Get a mutable view of this block's storage for a layer
-    ///
-    /// # Safety
-    /// The caller must ensure:
-    /// - No other views of this block are concurrently accessed
-    /// - This is enforced in Rust by BlockView requiring unique access
-    /// - Cannot be enforced when using with Python bindings or CUDA kernels
-    pub fn layer_view_mut(&mut self, layer_idx: usize) -> BlockResult<view::BlockViewMut<L>> {
+    fn layer_view(&self, layer_idx: usize) -> BlockResult<view::LayerView<S>> {
         let offset = self.layout.memory_region_addr(self.block_idx, layer_idx)?;
+        unsafe { view::LayerView::new(self, offset as usize, self.layout.memory_region_size()) }
+    }
 
-        unsafe { view::BlockViewMut::new(self, offset as usize, self.layout.memory_region_size()) }
+    fn layer_view_mut(&mut self, layer_idx: usize) -> BlockResult<view::LayerViewMut<S>> {
+        let offset = self.layout.memory_region_addr(self.block_idx, layer_idx)?;
+        unsafe { view::LayerViewMut::new(self, offset as usize, self.layout.memory_region_size()) }
+    }
+
+    fn block_view(&self) -> BlockResult<view::BlockView<S>> {
+        if self.is_fully_contiguous() {
+            let offset = self.layout.memory_region_addr(self.block_idx, 0)?;
+            let size = self.layout.memory_region_size() * self.layout.num_layers();
+            unsafe { view::BlockView::new(self, offset as usize, size) }
+        } else {
+            Err(BlockError::InvalidState(
+                "Block is not fully contiguous".to_string(),
+            ))
+        }
+    }
+
+    fn block_view_mut(&mut self) -> BlockResult<view::BlockViewMut<S>> {
+        if self.is_fully_contiguous() {
+            let offset = self.layout.memory_region_addr(self.block_idx, 0)?;
+            let size = self.layout.memory_region_size() * self.layout.num_layers();
+            unsafe { view::BlockViewMut::new(self, offset as usize, size) }
+        } else {
+            Err(BlockError::InvalidState(
+                "Block is not fully contiguous".to_string(),
+            ))
+        }
     }
 }
 
@@ -351,7 +382,7 @@ pub struct Blocks<L: BlockLayout, M: BlockMetadata> {
     metadata: std::marker::PhantomData<M>,
 }
 
-impl<L: BlockLayout, M: BlockMetadata> Blocks<L, M> {
+impl<L: BlockLayout + 'static, M: BlockMetadata> Blocks<L, M> {
     /// Create a new block storage collection
     pub fn new(layout: L) -> BlockResult<Self> {
         let layout = Box::new(layout);
@@ -363,9 +394,9 @@ impl<L: BlockLayout, M: BlockMetadata> Blocks<L, M> {
     }
 
     /// Convert collection into Vec<Block> with default metadata/state
-    pub fn into_blocks(self) -> BlockResult<Vec<Block<L, M>>> {
+    pub fn into_blocks(self) -> BlockResult<Vec<Block<L::StorageType, M>>> {
         // convert box to arc
-        let layout = Arc::new(*self.layout);
+        let layout: Arc<dyn BlockLayout<StorageType = L::StorageType>> = Arc::new(*self.layout);
 
         (0..layout.num_blocks())
             .map(|idx| {
@@ -379,11 +410,44 @@ impl<L: BlockLayout, M: BlockMetadata> Blocks<L, M> {
 mod nixl {
     use super::*;
 
+    use super::view::{BlockKind, Kind, LayerKind};
+
     use super::super::{
-        layout::nixl::{NixlLayout, ToSerializedNixlBlockLayout},
-        storage::nixl::{NixlEnabledStorage, NixlStorage},
+        layout::nixl::NixlLayout,
+        storage::nixl::{MemType, NixlEnabledStorage, NixlStorage},
     };
-    use nixl_sys::{Agent as NixlAgent, OptArgs};
+    use nixl_sys::{Agent as NixlAgent, MemoryRegion, NixlDescriptor, OptArgs};
+
+    // --- Mutability Marker ---
+    pub trait MutabilityKind: Debug + Clone + Copy + Send + Sync + 'static {}
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct IsMutable;
+    impl MutabilityKind for IsMutable {}
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct IsImmutable;
+    impl MutabilityKind for IsImmutable {}
+
+    pub struct NixlBlockData<S: Storage + NixlEnabledStorage> {
+        layout: Arc<dyn NixlLayout<StorageType = S>>,
+        block_idx: usize,
+        mem_type: MemType,
+        device_id: u64,
+    }
+
+    impl<S: Storage + NixlEnabledStorage> NixlBlockData<S> {
+        pub fn new(layout: Arc<dyn NixlLayout<StorageType = S>>, block_idx: usize) -> Self {
+            let mem_type = layout.mem_type();
+            let device_id = layout.device_id();
+            Self {
+                layout,
+                block_idx,
+                mem_type,
+                device_id,
+            }
+        }
+    }
 
     impl<L: NixlLayout, M: BlockMetadata> Blocks<L, M>
     where
@@ -398,6 +462,128 @@ mod nixl {
             self.layout.nixl_register(agent, opt_args)
         }
     }
+
+    /// A unified, lifetime-bound descriptor containing information needed for NIXL operations.
+    /// Typed by Kind (Block/Layer) and Mutability (IsMutable/IsImmutable).
+    #[derive(Copy, Clone)] // Can be Copy/Clone as it holds basic data + markers
+    pub struct NixlMemoryDescriptor<'a, K: Kind, M: MutabilityKind> {
+        addr: u64,
+        size: usize,
+        mem_type: MemType,
+        device_id: u64,
+        _lifetime: std::marker::PhantomData<&'a ()>, // Binds the descriptor's lifetime to 'a
+        _kind: std::marker::PhantomData<K>,          // Stores the Kind marker type
+        _mutability: std::marker::PhantomData<M>,    // Stores the Mutability marker type
+    }
+
+    // Helper function to get the short type name
+    fn short_type_name<T>() -> &'static str {
+        let name = core::any::type_name::<T>();
+        name.split("::").last().unwrap_or(name)
+    }
+
+    // Implement Debug manually to avoid bounds on K/M
+    impl<'a, K: Kind, M: MutabilityKind> Debug for NixlMemoryDescriptor<'a, K, M> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("NixlMemoryDescriptor")
+                .field("addr", &self.addr)
+                .field("size", &self.size)
+                .field("mem_type", &self.mem_type)
+                .field("device_id", &self.device_id)
+                .field("kind", &short_type_name::<K>()) // Show marker types
+                .field("mutability", &short_type_name::<M>())
+                .finish()
+        }
+    }
+
+    impl<'a, K: Kind, M: MutabilityKind> NixlMemoryDescriptor<'a, K, M> {
+        /// Creates a new NixlMemoryDescriptor. Typically called via conversion methods.
+        #[inline]
+        pub(crate) fn new(addr: u64, size: usize, mem_type: MemType, device_id: u64) -> Self {
+            Self {
+                addr,
+                size,
+                mem_type,
+                device_id,
+                _lifetime: std::marker::PhantomData,
+                _kind: std::marker::PhantomData,
+                _mutability: std::marker::PhantomData,
+            }
+        }
+    }
+
+    impl<'a, K: Kind, M: MutabilityKind> MemoryRegion for NixlMemoryDescriptor<'a, K, M> {
+        unsafe fn as_ptr(&self) -> *const u8 {
+            self.addr as *const u8
+        }
+
+        fn size(&self) -> usize {
+            self.size
+        }
+    }
+
+    impl<'a, K: Kind, M: MutabilityKind> NixlDescriptor for NixlMemoryDescriptor<'a, K, M> {
+        fn mem_type(&self) -> MemType {
+            self.mem_type
+        }
+
+        fn device_id(&self) -> u64 {
+            self.device_id
+        }
+    }
+
+    pub trait NixlBlockDataExt<S: Storage + NixlEnabledStorage>: BlockDataExt<S> {
+        /// Get the NIXL memory descriptor for the entire block
+        fn as_block_descriptor(
+            &self,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsImmutable>>;
+
+        /// Get the NIXL memory descriptor for the entire block
+        fn as_block_descriptor_mut(
+            &mut self,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsMutable>>;
+
+        /// Get the NIXL memory descriptor for a specific layer
+        fn as_layer_descriptor(
+            &self,
+            layer_idx: usize,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsImmutable>>;
+
+        /// Get the NIXL memory descriptor for a specific layer
+        fn as_layer_descriptor_mut(
+            &mut self,
+            layer_idx: usize,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsMutable>>;
+    }
+
+    impl<S: Storage + NixlEnabledStorage> NixlBlockDataExt<S> for BlockData<S> {
+        fn as_block_descriptor(
+            &self,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsImmutable>> {
+            Ok(self.block_view()?.as_nixl_descriptor())
+        }
+
+        fn as_block_descriptor_mut(
+            &mut self,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsMutable>> {
+            Ok(self.block_view_mut()?.as_nixl_descriptor_mut())
+        }
+
+        fn as_layer_descriptor(
+            &self,
+            layer_idx: usize,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsImmutable>> {
+            Ok(self.layer_view(layer_idx)?.as_nixl_descriptor())
+        }
+
+        fn as_layer_descriptor_mut(
+            &mut self,
+            layer_idx: usize,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsMutable>> {
+            Ok(self.layer_view_mut(layer_idx)?.as_nixl_descriptor_mut())
+        }
+    }
+
     pub struct RemoteBlocks {
         layout: Arc<dyn BlockLayout<StorageType = NixlStorage>>,
     }
@@ -407,33 +593,98 @@ mod nixl {
             Self { layout }
         }
     }
+
+    pub struct RemoteBlock {
+        data: BlockData<NixlStorage>,
+        block_idx: usize,
+    }
+
+    impl RemoteBlock {
+        pub fn new(
+            layout: Arc<dyn BlockLayout<StorageType = NixlStorage>>,
+            block_idx: usize,
+        ) -> Self {
+            let data = BlockData::new(layout, block_idx);
+            Self { data, block_idx }
+        }
+    }
+
+    impl BlockDataExt<NixlStorage> for RemoteBlock {
+        fn is_fully_contiguous(&self) -> bool {
+            self.data.is_fully_contiguous()
+        }
+
+        fn layer_view(&self, layer_idx: usize) -> BlockResult<view::LayerView<NixlStorage>> {
+            self.data.layer_view(layer_idx)
+        }
+
+        fn layer_view_mut(
+            &mut self,
+            layer_idx: usize,
+        ) -> BlockResult<view::LayerViewMut<NixlStorage>> {
+            self.data.layer_view_mut(layer_idx)
+        }
+
+        fn block_view(&self) -> BlockResult<view::BlockView<NixlStorage>> {
+            self.data.block_view()
+        }
+
+        fn block_view_mut(&mut self) -> BlockResult<view::BlockViewMut<NixlStorage>> {
+            self.data.block_view_mut()
+        }
+    }
+
+    // impl NixlBlockDataExt<NixlStorage> for RemoteBlock {
+    //     fn as_block_descriptor(
+    //         &self,
+    //     ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsImmutable>> {
+    //         self.data.as_block_descriptor()
+    //     }
+
+    //     fn as_block_descriptor_mut(
+    //         &mut self,
+    //     ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsMutable>> {
+    //         self.data.as_block_descriptor_mut()
+    //     }
+
+    //     fn as_layer_descriptor(
+    //         &self,
+    //         layer_idx: usize,
+    //     ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsImmutable>> {
+    //         self.data.as_layer_descriptor(layer_idx)
+    //     }
+
+    //     fn as_layer_descriptor_mut(
+    //         &mut self,
+    //         layer_idx: usize,
+    //     ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsMutable>> {
+    //         self.data.as_layer_descriptor_mut(layer_idx)
+    //     }
+    // }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    use super::nixl::*;
+
+    use super::super::layout::{
+        nixl::{NixlLayout, SerializedNixlBlockLayout, ToSerializedNixlBlockLayout},
+        tests::setup_layout,
+        FullyContiguous, LayoutConfig,
+    };
+    use crate::block_manager::storage::SystemAllocator;
     use crate::tokens::TokenBlockSequence;
 
-    use super::super::layout::tests::setup_layout;
-    use super::*;
+    use dynamo_runtime::logging::init as init_logging;
+    use nixl_sys::Agent as NixlAgent;
 
     const BLOCK_SIZE: usize = 4;
     const SALT_HASH: SaltHash = 12345;
 
-    // Helper to create a block with a specific state for testing
-    fn _create_test_block<L: BlockLayout, M: BlockMetadata>(
-        layout: Arc<L>,
-        block_idx: usize,
-        state: BlockState,
-        metadata: M,
-    ) -> Block<L, M> {
-        let data = BlockData::new(layout, block_idx);
-        let mut block = Block::new(data, metadata).expect("Failed to create block");
-        block.update_state(state); // Set the desired initial state
-        block
-    }
-
     // Helper to create a default reset block
-    fn create_reset_block() -> Block<impl BlockLayout, BasicMetadata> {
+    fn create_reset_block() -> Block<impl Storage, BasicMetadata> {
         let layout = setup_layout(None).unwrap();
         let data = BlockData::new(Arc::new(layout), 0);
         Block::new(data, BasicMetadata::default()).unwrap()
@@ -634,5 +885,44 @@ mod tests {
                 .unwrap(),
             TokenBlockError::Incomplete
         );
+    }
+
+    #[test]
+    fn test_nixl_block_data_ext() {
+        init_logging();
+
+        let config = LayoutConfig::builder()
+            .num_blocks(10)
+            .num_layers(2)
+            .page_size(4)
+            .inner_dim(13)
+            .build()
+            .unwrap();
+
+        let mut layout = FullyContiguous::allocate(config, &SystemAllocator::default()).unwrap();
+        let agent = NixlAgent::new("test").unwrap();
+
+        tracing::info!("Registering layout");
+        layout.nixl_register(&agent, None).unwrap();
+        tracing::info!("Layout registered");
+
+        let serialized = layout.serialize().unwrap();
+        let layout = Arc::new(layout);
+
+        let data = BlockData::new(layout.clone(), 0);
+        let block_desc = data.as_block_descriptor().unwrap();
+        println!("Block descriptor: {:?}", block_desc);
+
+        let data = BlockData::new(layout.clone(), 1);
+        let block_desc = data.as_block_descriptor().unwrap();
+        println!("Block descriptor: {:?}", block_desc);
+
+        let remote_layout = SerializedNixlBlockLayout::deserialize(&serialized).unwrap();
+        println!("Nixl layout: {:?}", remote_layout);
+
+        let remote_block = RemoteBlock::new(remote_layout.clone(), 0);
+
+        // drop(layout);
+        tracing::info!("Layout dropped");
     }
 }

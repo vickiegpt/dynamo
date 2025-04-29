@@ -5,7 +5,7 @@ use crate::block_manager::{
 
 use super::*;
 
-impl<S: BlockLayout, M: BlockMetadata> State<S, M> {
+impl<S: Storage, M: BlockMetadata> State<S, M> {
     fn new(
         event_manager: Arc<dyn EventManager>,
         return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
@@ -224,7 +224,7 @@ impl<S: BlockLayout, M: BlockMetadata> State<S, M> {
     }
 }
 
-impl<S: BlockLayout, M: BlockMetadata> ProgressEngine<S, M> {
+impl<S: Storage, M: BlockMetadata> ProgressEngine<S, M> {
     pub fn new(
         event_manager: Arc<dyn EventManager>,
         priority_rx: tokio::sync::mpsc::UnboundedReceiver<PriorityRequest<S, M>>,
@@ -267,7 +267,7 @@ impl<S: BlockLayout, M: BlockMetadata> ProgressEngine<S, M> {
         true
     }
 }
-// pub(crate) async fn progress_engine<S: BlockLayout, M: BlockMetadata>(
+// pub(crate) async fn progress_engine<S: Storage, M: BlockMetadata>(
 //     event_manager: Arc<dyn EventManager>,
 //     mut priority_rx: tokio::sync::mpsc::UnboundedReceiver<PriorityRequest<S, M>>,
 //     mut ctrl_rx: tokio::sync::mpsc::UnboundedReceiver<ControlRequest<S, M>>,
@@ -299,7 +299,7 @@ impl<S: BlockLayout, M: BlockMetadata> ProgressEngine<S, M> {
 //     }
 // }
 
-// pub(crate) async fn progress_engine_v2<S: BlockLayout, M: BlockMetadata>(
+// pub(crate) async fn progress_engine_v2<S: Storage, M: BlockMetadata>(
 //     event_manager: Arc<dyn EventManager>,
 //     priority_rx: tokio::sync::mpsc::UnboundedReceiver<PriorityRequest<S, M>>,
 //     ctrl_rx: tokio::sync::mpsc::UnboundedReceiver<ControlRequest<S, M>>,

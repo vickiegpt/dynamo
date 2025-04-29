@@ -16,11 +16,11 @@
 use super::*;
 
 /// Manages active blocks being used by sequences
-pub struct ActiveBlockPool<S: BlockLayout, M: BlockMetadata> {
+pub struct ActiveBlockPool<S: Storage, M: BlockMetadata> {
     pub(super) map: HashMap<SequenceHash, Weak<MutableBlock<S, M>>>,
 }
 
-impl<S: BlockLayout, M: BlockMetadata> ActiveBlockPool<S, M> {
+impl<S: Storage, M: BlockMetadata> ActiveBlockPool<S, M> {
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),

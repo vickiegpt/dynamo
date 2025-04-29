@@ -1,12 +1,12 @@
-use super::{BlockLayout, BlockLayoutConfig, LayoutError};
+use super::{BlockLayout, BlockLayoutConfig, LayoutError, Storage};
 
-use super::super::storage::nixl::{NixlAgent, NixlEnabledStorage, NixlStorage, OptArgs};
+use super::super::storage::nixl::{MemType, NixlAgent, NixlEnabledStorage, NixlStorage, OptArgs};
 use super::{FullyContiguous, FullyContiguousConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Extends [BlockLayout] with NIXL-specific methods for registering with an NIXL agent.
-pub trait NixlLayout: BlockLayout {
+pub trait NixlLayout: BlockLayout + BlockLayoutNixlStorage {
     fn nixl_register(
         &mut self,
         agent: &NixlAgent,
@@ -14,10 +14,15 @@ pub trait NixlLayout: BlockLayout {
     ) -> anyhow::Result<()>;
 }
 
+pub trait BlockLayoutNixlStorage {
+    fn mem_type(&self) -> MemType;
+    fn device_id(&self) -> u64;
+}
+
 // Umbrella impl for all BlockLayout types that are NixlEnabledStorage
 impl<T> NixlLayout for T
 where
-    T: BlockLayout + ?Sized, // Implement for any T that is BlockLayout (potentially unsized)
+    T: BlockLayout + BlockLayoutNixlStorage + ?Sized, // Implement for any T that is BlockLayout (potentially unsized)
     T::StorageType: NixlEnabledStorage, // T's associated StorageType must be NixlStorage
 {
     fn nixl_register(
@@ -140,6 +145,19 @@ impl SerializedNixlBlockLayout {
     }
 }
 
+impl<S> BlockLayoutNixlStorage for FullyContiguous<S>
+where
+    S: Storage + NixlEnabledStorage,
+{
+    fn mem_type(&self) -> MemType {
+        self.storage.mem_type()
+    }
+
+    fn device_id(&self) -> u64 {
+        self.storage.device_id()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::*;
@@ -169,8 +187,9 @@ mod tests {
         tracing::info!("Layout registered");
 
         let serialized = layout.serialize().unwrap();
-        let nixl_layout = SerializedNixlBlockLayout::deserialize(&serialized).unwrap();
-        println!("Nixl layout: {:?}", nixl_layout);
+
+        let remote_layout = SerializedNixlBlockLayout::deserialize(&serialized).unwrap();
+        println!("Nixl layout: {:?}", remote_layout);
 
         drop(layout);
         tracing::info!("Layout dropped");

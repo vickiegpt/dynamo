@@ -114,7 +114,7 @@ pub trait Storage: Debug + Send + Sync + 'static {
     unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8>;
 }
 
-pub trait RegistationHandle: Send + Sync + 'static {
+pub trait RegistationHandle: std::any::Any + Send + Sync + 'static {
     /// Release the [RegistationHandle].
     /// This should be called when the external registration of this storage
     /// is no longer needed.
@@ -135,6 +135,8 @@ pub trait RegisterableStorage: Storage + Send + Sync + 'static {
 
     /// Check if a handle is registered with a key
     fn is_registered(&self, key: &str) -> bool;
+
+    fn registration_handle(&self, key: &str) -> Option<&dyn RegistationHandle>;
 }
 
 #[derive(Default)]
@@ -171,6 +173,10 @@ impl RegistrationHandles {
 
     fn is_registered(&self, key: &str) -> bool {
         self.handles.contains_key(key)
+    }
+
+    fn registration_handle(&self, key: &str) -> Option<&dyn RegistationHandle> {
+        self.handles.get(key).map(|h| h.as_ref())
     }
 }
 
@@ -282,6 +288,10 @@ impl RegisterableStorage for SystemStorage {
     fn is_registered(&self, key: &str) -> bool {
         self.handles.is_registered(key)
     }
+
+    fn registration_handle(&self, key: &str) -> Option<&dyn RegistationHandle> {
+        self.handles.registration_handle(key)
+    }
 }
 
 /// Allocator for SystemStorage
@@ -370,6 +380,10 @@ impl RegisterableStorage for PinnedStorage {
 
     fn is_registered(&self, key: &str) -> bool {
         self.handles.is_registered(key)
+    }
+
+    fn registration_handle(&self, key: &str) -> Option<&dyn RegistationHandle> {
+        self.handles.registration_handle(key)
     }
 }
 
@@ -474,6 +488,10 @@ impl RegisterableStorage for DeviceStorage {
 
     fn is_registered(&self, key: &str) -> bool {
         self.handles.is_registered(key)
+    }
+
+    fn registration_handle(&self, key: &str) -> Option<&dyn RegistationHandle> {
+        self.handles.registration_handle(key)
     }
 }
 

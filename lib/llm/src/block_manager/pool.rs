@@ -71,6 +71,7 @@ use super::block::BlockError;
 use super::block::{registry::BlockRegistry, Block, BlockMetadata};
 use super::events::{EventManager, NullEventManager};
 use super::layout::BlockLayout;
+use super::storage::Storage;
 
 use crate::tokens::{SequenceHash, TokenBlock};
 
@@ -113,7 +114,7 @@ pub enum BlockPoolError {
 
 #[derive(Builder, Dissolve)]
 #[builder(pattern = "owned", build_fn(private, name = "build_internal"))]
-pub struct BlockPoolArgs<S: BlockLayout, M: BlockMetadata> {
+pub struct BlockPoolArgs<S: Storage, M: BlockMetadata> {
     #[builder(default = "Runtime::default()")]
     runtime: Runtime,
 
@@ -127,7 +128,7 @@ pub struct BlockPoolArgs<S: BlockLayout, M: BlockMetadata> {
     blocks: Vec<Block<S, M>>,
 }
 
-impl<S: BlockLayout, M: BlockMetadata> BlockPoolArgsBuilder<S, M> {
+impl<S: Storage, M: BlockMetadata> BlockPoolArgsBuilder<S, M> {
     pub fn build(self) -> anyhow::Result<BlockPool<S, M>> {
         let args = self.build_internal()?;
         let (runtime, event_manager, cancel_token, blocks) = args.dissolve();
@@ -138,13 +139,13 @@ impl<S: BlockLayout, M: BlockMetadata> BlockPoolArgsBuilder<S, M> {
     }
 }
 /// Manages the blocks in a specific storage backenda
-pub struct BlockPool<S: BlockLayout, M: BlockMetadata> {
+pub struct BlockPool<S: Storage, M: BlockMetadata> {
     runtime: Runtime,
     priority_tx: tokio::sync::mpsc::UnboundedSender<PriorityRequest<S, M>>,
     ctrl_tx: tokio::sync::mpsc::UnboundedSender<ControlRequest<S, M>>,
 }
 
-impl<S: BlockLayout, M: BlockMetadata> Clone for BlockPool<S, M> {
+impl<S: Storage, M: BlockMetadata> Clone for BlockPool<S, M> {
     fn clone(&self) -> Self {
         Self {
             runtime: self.runtime.clone(),
@@ -176,13 +177,13 @@ impl<Req, Resp> Unary<Req, Resp> {
 pub type MutableBlocks<S, M> = Vec<MutableBlock<S, M>>;
 pub type ImmutableBlocks<S, M> = Vec<ImmutableBlock<S, M>>;
 
-enum PriorityRequest<S: BlockLayout, M: BlockMetadata> {
+enum PriorityRequest<S: Storage, M: BlockMetadata> {
     AllocateBlocks(Unary<usize, Result<Vec<MutableBlock<S, M>>, BlockPoolError>>),
     RegisterBlocks(Unary<MutableBlocks<S, M>, Result<ImmutableBlocks<S, M>, BlockPoolError>>),
     MatchSequenceHashes(Unary<Vec<SequenceHash>, Vec<ImmutableBlock<S, M>>>),
 }
 
-enum ControlRequest<S: BlockLayout, M: BlockMetadata> {
+enum ControlRequest<S: Storage, M: BlockMetadata> {
     AddBlocks(Unary<Vec<Block<S, M>>, ()>),
 }
 
@@ -227,12 +228,12 @@ impl Runtime {
     }
 }
 
-pub struct MutableBlock<S: BlockLayout, M: BlockMetadata> {
+pub struct MutableBlock<S: Storage, M: BlockMetadata> {
     block: Option<Block<S, M>>,
     return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
 }
 
-impl<S: BlockLayout, M: BlockMetadata> MutableBlock<S, M> {
+impl<S: Storage, M: BlockMetadata> MutableBlock<S, M> {
     fn new(block: Block<S, M>, return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>) -> Self {
         Self {
             block: Some(block),
@@ -241,13 +242,13 @@ impl<S: BlockLayout, M: BlockMetadata> MutableBlock<S, M> {
     }
 }
 
-impl<S: BlockLayout, M: BlockMetadata> std::fmt::Debug for MutableBlock<S, M> {
+impl<S: Storage, M: BlockMetadata> std::fmt::Debug for MutableBlock<S, M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "MutableBlock {{ block: {:?} }}", self.block)
     }
 }
 
-impl<S: BlockLayout, M: BlockMetadata> Drop for MutableBlock<S, M> {
+impl<S: Storage, M: BlockMetadata> Drop for MutableBlock<S, M> {
     fn drop(&mut self) {
         if let Some(block) = self.block.take() {
             if self.return_tx.send(block).is_err() {
@@ -258,11 +259,11 @@ impl<S: BlockLayout, M: BlockMetadata> Drop for MutableBlock<S, M> {
 }
 
 #[derive(Debug)]
-pub struct ImmutableBlock<S: BlockLayout, M: BlockMetadata> {
+pub struct ImmutableBlock<S: Storage, M: BlockMetadata> {
     block: Arc<MutableBlock<S, M>>,
 }
 
-impl<S: BlockLayout, M: BlockMetadata> BlockPool<S, M> {
+impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     pub fn builder() -> BlockPoolArgsBuilder<S, M> {
         BlockPoolArgsBuilder::default()
     }
@@ -505,7 +506,7 @@ impl<S: BlockLayout, M: BlockMetadata> BlockPool<S, M> {
     }
 }
 
-impl<S: BlockLayout, M: BlockMetadata> Deref for MutableBlock<S, M> {
+impl<S: Storage, M: BlockMetadata> Deref for MutableBlock<S, M> {
     type Target = Block<S, M>;
 
     fn deref(&self) -> &Self::Target {
@@ -513,13 +514,13 @@ impl<S: BlockLayout, M: BlockMetadata> Deref for MutableBlock<S, M> {
     }
 }
 
-impl<S: BlockLayout, M: BlockMetadata> DerefMut for MutableBlock<S, M> {
+impl<S: Storage, M: BlockMetadata> DerefMut for MutableBlock<S, M> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.block.as_mut().expect("block was dropped")
     }
 }
 
-impl<S: BlockLayout, M: BlockMetadata> Deref for ImmutableBlock<S, M> {
+impl<S: Storage, M: BlockMetadata> Deref for ImmutableBlock<S, M> {
     type Target = Block<S, M>;
     fn deref(&self) -> &Self::Target {
         self.block
@@ -530,7 +531,7 @@ impl<S: BlockLayout, M: BlockMetadata> Deref for ImmutableBlock<S, M> {
     }
 }
 
-struct State<S: BlockLayout, M: BlockMetadata> {
+struct State<S: Storage, M: BlockMetadata> {
     active: ActiveBlockPool<S, M>,
     inactive: InactiveBlockPool<S, M>,
     registry: BlockRegistry,
@@ -538,7 +539,7 @@ struct State<S: BlockLayout, M: BlockMetadata> {
     event_manager: Arc<dyn EventManager>,
 }
 
-struct ProgressEngine<S: BlockLayout, M: BlockMetadata> {
+struct ProgressEngine<S: Storage, M: BlockMetadata> {
     priority_rx: tokio::sync::mpsc::UnboundedReceiver<PriorityRequest<S, M>>,
     ctrl_rx: tokio::sync::mpsc::UnboundedReceiver<ControlRequest<S, M>>,
     cancel_token: CancellationToken,
@@ -555,7 +556,7 @@ mod tests {
     use super::*;
 
     /// Helper method to build a [`BlockPool`] with a [`ProgressEngine`] for unit testing
-    impl<S: BlockLayout, M: BlockMetadata> BlockPoolArgsBuilder<S, M> {
+    impl<S: Storage, M: BlockMetadata> BlockPoolArgsBuilder<S, M> {
         fn build_with_progress_engine(
             self,
         ) -> anyhow::Result<(BlockPool<S, M>, ProgressEngine<S, M>)> {

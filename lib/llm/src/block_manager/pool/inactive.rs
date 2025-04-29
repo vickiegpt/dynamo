@@ -19,7 +19,7 @@ use super::*;
 use tracing::instrument;
 
 #[derive(Default)]
-pub struct InactiveBlockPool<S: BlockLayout, M: BlockMetadata> {
+pub struct InactiveBlockPool<S: Storage, M: BlockMetadata> {
     // Direct lookup by sequence_hash
     lookup_map: HashMap<SequenceHash, BlockType<S, M>>,
 
@@ -576,9 +576,7 @@ pub(crate) mod tests {
     }
 
     /// Creates a block collection with the given number of blocks.
-    pub fn create_block_collection(
-        num_blocks: usize,
-    ) -> Blocks<FullyContiguous<NullDeviceStorage>, TestMetadata> {
+    pub fn create_block_collection(num_blocks: usize) -> Blocks<NullDeviceStorage, TestMetadata> {
         let config = LayoutConfigBuilder::default()
             .num_blocks(num_blocks)
             .num_layers(61)
@@ -590,7 +588,7 @@ pub(crate) mod tests {
         let layout = FullyContiguous::allocate(config, &NullDeviceAllocator)
             .expect("Failed to allocate layout/storage");
 
-        Blocks::<FullyContiguous<NullDeviceStorage>, TestMetadata>::new(layout).unwrap()
+        Blocks::<NullDeviceStorage, TestMetadata>::new(layout).unwrap()
     }
 
     /// Creates a vector of Blocks from a token sequence and block size.
@@ -598,7 +596,7 @@ pub(crate) mod tests {
     pub fn create_blocks(
         tokens: Tokens,
         block_size: usize,
-    ) -> Vec<Block<FullyContiguous<NullDeviceStorage>, TestMetadata>> {
+    ) -> Vec<Block<NullDeviceStorage, TestMetadata>> {
         let (token_blocks, _partial_token_block) =
             tokens.into_sequence(block_size, None).into_parts();
         let num_blocks = token_blocks.len();
@@ -628,7 +626,7 @@ pub(crate) mod tests {
 
     pub fn create_block_pool(
         num_blocks: usize,
-    ) -> InactiveBlockPool<FullyContiguous<NullDeviceStorage>, TestMetadata> {
+    ) -> InactiveBlockPool<NullDeviceStorage, TestMetadata> {
         let mut pool = InactiveBlockPool::new();
         let blocks = create_block_collection(num_blocks).into_blocks().unwrap();
         pool.add_blocks(blocks);
@@ -639,11 +637,8 @@ pub(crate) mod tests {
     pub fn acquire_blocks(
         tokens: Tokens,
         block_size: usize,
-        pool: &mut InactiveBlockPool<FullyContiguous<NullDeviceStorage>, TestMetadata>,
-    ) -> (
-        Vec<Block<FullyContiguous<NullDeviceStorage>, TestMetadata>>,
-        usize,
-    ) {
+        pool: &mut InactiveBlockPool<NullDeviceStorage, TestMetadata>,
+    ) -> (Vec<Block<NullDeviceStorage, TestMetadata>>, usize) {
         let (mut token_blocks, _partial_token_block) =
             tokens.into_sequence(block_size, None).into_parts();
 

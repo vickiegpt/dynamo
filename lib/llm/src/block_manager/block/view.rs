@@ -19,20 +19,37 @@
 //! and their storage. It handles the relationship between storage, layout,
 //! and individual blocks.
 
-use super::{BlockData, BlockError};
-use crate::block_manager::layout::BlockLayout;
+use super::{BlockData, BlockError, Storage};
+
+pub trait Kind: std::marker::Sized + std::fmt::Debug + Clone + Copy + Send + Sync {}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BlockKind;
+impl Kind for BlockKind {}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LayerKind;
+impl Kind for LayerKind {}
+
+pub type BlockView<'a, S> = MemoryView<'a, S, BlockKind>;
+pub type BlockViewMut<'a, S> = MemoryViewMut<'a, S, BlockKind>;
+
+pub type LayerView<'a, S> = MemoryView<'a, S, LayerKind>;
+pub type LayerViewMut<'a, S> = MemoryViewMut<'a, S, LayerKind>;
 
 /// Storage view that provides safe access to a region of storage
 #[derive(Debug)]
-pub struct BlockView<'a, L: BlockLayout> {
-    _block_data: &'a BlockData<L>,
+pub struct MemoryView<'a, S: Storage, K: Kind> {
+    _block_data: &'a BlockData<S>,
     addr: usize,
     size: usize,
+    kind: std::marker::PhantomData<K>,
 }
 
-impl<'a, L> BlockView<'a, L>
+impl<'a, S, K> MemoryView<'a, S, K>
 where
-    L: BlockLayout,
+    S: Storage,
+    K: Kind,
 {
     /// Create a new storage view
     ///
@@ -41,7 +58,7 @@ where
     /// - addr + size <= storage.size()
     /// - The view does not outlive the storage
     pub(crate) unsafe fn new(
-        _block_data: &'a BlockData<L>,
+        _block_data: &'a BlockData<S>,
         addr: usize,
         size: usize,
     ) -> Result<Self, BlockError> {
@@ -49,6 +66,7 @@ where
             _block_data,
             addr,
             size,
+            kind: std::marker::PhantomData,
         })
     }
 
@@ -70,13 +88,14 @@ where
 
 /// Mutable storage view that provides exclusive access to a region of storage
 #[derive(Debug)]
-pub struct BlockViewMut<'a, L: BlockLayout> {
-    _block_data: &'a mut BlockData<L>,
+pub struct MemoryViewMut<'a, S: Storage, K: Kind> {
+    _block_data: &'a mut BlockData<S>,
     addr: usize,
     size: usize,
+    kind: std::marker::PhantomData<K>,
 }
 
-impl<'a, L: BlockLayout> BlockViewMut<'a, L> {
+impl<'a, S: Storage, K: Kind> MemoryViewMut<'a, S, K> {
     /// Create a new mutable storage view
     ///
     /// # Safety
@@ -85,7 +104,7 @@ impl<'a, L: BlockLayout> BlockViewMut<'a, L> {
     /// - The view does not outlive the storage
     /// - No other views exist for this region
     pub(crate) unsafe fn new(
-        _block_data: &'a mut BlockData<L>,
+        _block_data: &'a mut BlockData<S>,
         addr: usize,
         size: usize,
     ) -> Result<Self, BlockError> {
@@ -93,6 +112,7 @@ impl<'a, L: BlockLayout> BlockViewMut<'a, L> {
             _block_data,
             addr,
             size,
+            kind: std::marker::PhantomData,
         })
     }
 
@@ -116,9 +136,11 @@ impl<'a, L: BlockLayout> BlockViewMut<'a, L> {
 mod nixl {
     use super::*;
 
+    use super::super::nixl::*;
+
     pub use nixl_sys::{MemType, MemoryRegion, NixlDescriptor};
 
-    impl<L: BlockLayout> MemoryRegion for BlockView<'_, L> {
+    impl<S: Storage, K: Kind> MemoryRegion for MemoryView<'_, S, K> {
         unsafe fn as_ptr(&self) -> *const u8 {
             self.addr as *const u8
         }
@@ -128,10 +150,10 @@ mod nixl {
         }
     }
 
-    impl<L> NixlDescriptor for BlockView<'_, L>
+    impl<S, K> NixlDescriptor for MemoryView<'_, S, K>
     where
-        L: BlockLayout,
-        L::StorageType: NixlDescriptor,
+        S: Storage + NixlDescriptor,
+        K: Kind,
     {
         fn mem_type(&self) -> MemType {
             self._block_data
@@ -152,7 +174,7 @@ mod nixl {
         }
     }
 
-    impl<L: BlockLayout> MemoryRegion for BlockViewMut<'_, L> {
+    impl<S: Storage, K: Kind> MemoryRegion for MemoryViewMut<'_, S, K> {
         unsafe fn as_ptr(&self) -> *const u8 {
             self.addr as *const u8
         }
@@ -162,10 +184,10 @@ mod nixl {
         }
     }
 
-    impl<L> NixlDescriptor for BlockViewMut<'_, L>
+    impl<S: Storage, K: Kind> NixlDescriptor for MemoryViewMut<'_, S, K>
     where
-        L: BlockLayout,
-        L::StorageType: NixlDescriptor,
+        S: Storage + NixlDescriptor,
+        K: Kind,
     {
         fn mem_type(&self) -> MemType {
             self._block_data
@@ -183,6 +205,40 @@ mod nixl {
                 .first()
                 .expect("no storage")
                 .device_id()
+        }
+    }
+
+    impl<'a, S, K> MemoryView<'a, S, K>
+    where
+        S: Storage + NixlDescriptor, // Ensure the underlying storage is a NixlDescriptor
+        K: Kind,
+    {
+        /// Creates an immutable NIXL memory descriptor from this view.
+        pub fn as_nixl_descriptor(&self) -> NixlMemoryDescriptor<'a, K, IsImmutable> {
+            NixlMemoryDescriptor::new(
+                self.addr as u64,                // Address from the view
+                self.size(),                     // Size from the view
+                NixlDescriptor::mem_type(self),  // Delegate to self's NixlDescriptor impl
+                NixlDescriptor::device_id(self), // Delegate to self's NixlDescriptor impl
+            )
+        }
+    }
+
+    impl<'a, S, K> MemoryViewMut<'a, S, K>
+    where
+        S: Storage + NixlDescriptor,
+        K: Kind,
+    {
+        /// Creates a mutable NIXL memory descriptor from this view.
+        // Note: We return a mutable descriptor even from an immutable borrow (&self)
+        // because the underlying memory region *can* be mutated.
+        pub fn as_nixl_descriptor_mut(&mut self) -> NixlMemoryDescriptor<'a, K, IsMutable> {
+            NixlMemoryDescriptor::new(
+                self.addr as u64,
+                self.size(),
+                NixlDescriptor::mem_type(self), // Delegate to self's NixlDescriptor impl
+                NixlDescriptor::device_id(self), // Delegate to self's NixlDescriptor impl
+            )
         }
     }
 }

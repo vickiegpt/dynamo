@@ -74,7 +74,7 @@ pub enum LayoutType {
 
 /// Core trait for block layouts
 pub trait BlockLayout:
-    BlockLayoutConfig + BlockLayoutLookup + Send + Sync + std::fmt::Debug + 'static
+    BlockLayoutConfig + BlockLayoutLookup + Send + Sync + std::fmt::Debug
 {
     /// The type of storage this layout uses
     type StorageType: Storage;

@@ -6,8 +6,8 @@ pub use nixl_sys::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeviceStorage, PinnedStorage, RegistationHandle, RegisterableStorage, Storage,
-    StorageType, SystemStorage,
+    DeviceStorage, PinnedStorage, RegistationHandle, RegisterableStorage, Storage, StorageType,
+    SystemStorage,
 };
 
 use anyhow::Result;
@@ -31,6 +31,21 @@ pub trait NixlEnabledStorage: RegisterableStorage + NixlDescriptor + Sized {
     /// Check if the storage is registered with the NIXL agent.
     fn is_nixl_registered(&self) -> bool {
         self.is_registered("nixl")
+    }
+
+    fn nixl_agent_name(&self) -> Option<String> {
+        // Get the registration handle associated with "nixl".
+        self.registration_handle("nixl")
+            // If a handle exists, attempt to downcast it.
+            .and_then(|handle_box| {
+                // Cast the trait object &dyn RegistationHandle to &dyn Any
+                // then attempt to downcast to the concrete NixlRegistrationHandle type.
+                // Note: This requires RegistationHandle: Any + 'static
+                (&*handle_box as &dyn std::any::Any)
+                    .downcast_ref::<NixlRegistrationHandle>()
+                    // If downcast succeeds, get the agent name.
+                    .map(|nixl_handle| nixl_handle.agent_name())
+            })?
     }
 
     /// If the underlying storage is NIXL-compatible, return descriptions of the NIXL memory regions.
