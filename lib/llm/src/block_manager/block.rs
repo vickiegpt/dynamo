@@ -429,25 +429,25 @@ mod nixl {
     pub struct IsImmutable;
     impl MutabilityKind for IsImmutable {}
 
-    pub struct NixlBlockData<S: Storage + NixlEnabledStorage> {
-        layout: Arc<dyn NixlLayout<StorageType = S>>,
-        block_idx: usize,
-        mem_type: MemType,
-        device_id: u64,
-    }
+    // pub struct NixlBlockData<S: Storage + NixlEnabledStorage> {
+    //     layout: Arc<dyn NixlLayout<StorageType = S>>,
+    //     block_idx: usize,
+    //     mem_type: MemType,
+    //     device_id: u64,
+    // }
 
-    impl<S: Storage + NixlEnabledStorage> NixlBlockData<S> {
-        pub fn new(layout: Arc<dyn NixlLayout<StorageType = S>>, block_idx: usize) -> Self {
-            let mem_type = layout.mem_type();
-            let device_id = layout.device_id();
-            Self {
-                layout,
-                block_idx,
-                mem_type,
-                device_id,
-            }
-        }
-    }
+    // impl<S: Storage + NixlEnabledStorage> NixlBlockData<S> {
+    //     pub fn new(layout: Arc<dyn NixlLayout<StorageType = S>>, block_idx: usize) -> Self {
+    //         let mem_type = layout.mem_type();
+    //         let device_id = layout.device_id();
+    //         Self {
+    //             layout,
+    //             block_idx,
+    //             mem_type,
+    //             device_id,
+    //         }
+    //     }
+    // }
 
     impl<L: NixlLayout, M: BlockMetadata> Blocks<L, M>
     where
@@ -532,7 +532,7 @@ mod nixl {
         }
     }
 
-    pub trait NixlBlockDataExt<S: Storage + NixlEnabledStorage>: BlockDataExt<S> {
+    pub trait NixlBlockDataExt<S: Storage>: BlockDataExt<S> {
         /// Get the NIXL memory descriptor for the entire block
         fn as_block_descriptor(
             &self,
@@ -556,7 +556,7 @@ mod nixl {
         ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsMutable>>;
     }
 
-    impl<S: Storage + NixlEnabledStorage> NixlBlockDataExt<S> for BlockData<S> {
+    impl<S: Storage + NixlDescriptor> NixlBlockDataExt<S> for BlockData<S> {
         fn as_block_descriptor(
             &self,
         ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsImmutable>> {
@@ -634,33 +634,33 @@ mod nixl {
         }
     }
 
-    // impl NixlBlockDataExt<NixlStorage> for RemoteBlock {
-    //     fn as_block_descriptor(
-    //         &self,
-    //     ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsImmutable>> {
-    //         self.data.as_block_descriptor()
-    //     }
+    impl NixlBlockDataExt<NixlStorage> for RemoteBlock {
+        fn as_block_descriptor(
+            &self,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsImmutable>> {
+            self.data.as_block_descriptor()
+        }
 
-    //     fn as_block_descriptor_mut(
-    //         &mut self,
-    //     ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsMutable>> {
-    //         self.data.as_block_descriptor_mut()
-    //     }
+        fn as_block_descriptor_mut(
+            &mut self,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsMutable>> {
+            self.data.as_block_descriptor_mut()
+        }
 
-    //     fn as_layer_descriptor(
-    //         &self,
-    //         layer_idx: usize,
-    //     ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsImmutable>> {
-    //         self.data.as_layer_descriptor(layer_idx)
-    //     }
+        fn as_layer_descriptor(
+            &self,
+            layer_idx: usize,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsImmutable>> {
+            self.data.as_layer_descriptor(layer_idx)
+        }
 
-    //     fn as_layer_descriptor_mut(
-    //         &mut self,
-    //         layer_idx: usize,
-    //     ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsMutable>> {
-    //         self.data.as_layer_descriptor_mut(layer_idx)
-    //     }
-    // }
+        fn as_layer_descriptor_mut(
+            &mut self,
+            layer_idx: usize,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsMutable>> {
+            self.data.as_layer_descriptor_mut(layer_idx)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -921,6 +921,8 @@ mod tests {
         println!("Nixl layout: {:?}", remote_layout);
 
         let remote_block = RemoteBlock::new(remote_layout.clone(), 0);
+        let remote_desc = remote_block.as_block_descriptor().unwrap();
+        println!("Remote Descriptor: {:?}", remote_desc);
 
         // drop(layout);
         tracing::info!("Layout dropped");
