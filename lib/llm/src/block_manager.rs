@@ -469,15 +469,18 @@ mod tests {
     #[tokio::test]
     async fn test_reference_block_managers() {
         dynamo_runtime::logging::init();
+
+        // create two block managers - mimics two unique dynamo workers
         let mut kvbm_0 = create_reference_block_manager();
         let mut kvbm_1 = create_reference_block_manager();
 
         assert_ne!(kvbm_0.worker_id, kvbm_1.worker_id);
 
-        // In Dynamo, we would exchange the blocksets via the discovery plane
+        // in dynamo, we would exchange the blocksets via the discovery plane
         let blockset_0 = kvbm_0.export_local_blockset().unwrap();
         let blockset_1 = kvbm_1.export_local_blockset().unwrap();
 
+        // in dynamo, we would be watching the discovery plane for remote blocksets
         kvbm_0.import_remote_blockset(blockset_1).unwrap();
         kvbm_1.import_remote_blockset(blockset_0).unwrap();
     }
