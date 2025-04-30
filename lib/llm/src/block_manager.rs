@@ -186,8 +186,11 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
         let worker_id = config.runtime.worker_id;
         let cancellation_token = config.runtime.cancellation_token;
 
+        // Create a map of NIXL backends
         let mut nixl_backends: HashMap<String, nixl_sys::Backend> = HashMap::new();
 
+        // Create a NIXL agent if NIXL is enabled and instantiate requested backends
+        // TODO: Build a map of NIXL backends to block pools/sets
         let nixl_agent = if config.runtime.enable_nixl {
             let agent = NixlAgent::new(&worker_id.to_string())?;
 
@@ -203,6 +206,9 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
             None
         };
 
+        // Initialize model-specific layout config. The layout_builder is incomplete at this point.
+        // We will clone this builder and apply the storage-specific configs to each clone in the
+        // following steps.
         let model = &config.model;
         let mut layout_builder = LayoutConfig::builder();
 
@@ -215,10 +221,11 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
         let mut next_block_set_idx = 0;
         let mut local_block_set = block::nixl::NixlBlockSet::new(worker_id);
 
-        let host_pool = if let Some(layout) = config.host_layout {
+        // Create the host block pool if a host layout is provided
+        let host_pool = if let Some(config) = config.host_layout {
             next_block_set_idx += 1;
             tracing::debug!("Constructing host pool.");
-            let layout = create_layout(layout_builder.clone(), layout, nixl_agent.as_ref())?;
+            let layout = create_layout(layout_builder.clone(), config, nixl_agent.as_ref())?;
             local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
             let block_pool = create_block_pool::<_, HostMetadata>(
                 layout,
@@ -231,10 +238,11 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
             None
         };
 
-        let device_pool = if let Some(layout) = config.device_layout {
+        // Create the device block pool if a device layout is provided
+        let device_pool = if let Some(config) = config.device_layout {
             next_block_set_idx += 1;
             tracing::debug!("Constructing device pool.");
-            let layout = create_layout(layout_builder.clone(), layout, nixl_agent.as_ref())?;
+            let layout = create_layout(layout_builder.clone(), config, nixl_agent.as_ref())?;
             local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
             let block_pool = create_block_pool::<_, DeviceMetadata>(
                 layout,
@@ -247,7 +255,7 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
             None
         };
 
-        // Finalize the block set
+        // Finalize the local block set by adding NIXL metadata
         if let Some(nixl_agent) = &nixl_agent {
             tracing::debug!("Finalize NixlBlockSet: adding NIXL metadata.");
             local_block_set.set_nixl_metadata(nixl_agent.get_local_md()?);
