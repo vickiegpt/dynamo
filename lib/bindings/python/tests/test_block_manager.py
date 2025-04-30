@@ -15,7 +15,9 @@
 
 
 import asyncio
+import gc
 
+import cupy
 import torch
 
 from dynamo.llm import BlockManager
@@ -87,6 +89,10 @@ async def test_cpu_tensor():
     assert tensor.dtype == tensor_.dtype
     assert torch.allclose(tensor, tensor_)
 
+    del tensor_
+    del tensor
+    gc.collect()
+
 
 async def test_cuda_tensor():
     block_manager = BlockManager(
@@ -106,11 +112,30 @@ async def test_cuda_tensor():
     assert tensor.dtype == tensor_.dtype
     assert torch.allclose(tensor, tensor_)
 
+    del tensor_
+    del tensor
+    gc.collect()
+
+
+async def test_further_dlpack_exchange():
+    block_manager = BlockManager(
+        NUM_BLOCKS, NUM_LAYERS, PAGE_SIZE, INNER_DIM, ALIGNMENT, DTYPE, device="CUDA"
+    )
+    cupy_tensor = cupy.from_dlpack(
+        block_manager.py_capsule(NUM_BLOCKS - 1, NUM_LAYERS - 1)
+    )
+    torch_tensor = torch.from_dlpack(cupy_tensor)
+
+    del torch_tensor
+    del cupy_tensor
+    gc.collect()
+
 
 async def main():
     await test_initialization()
     await test_cpu_tensor()
     await test_cuda_tensor()
+    await test_further_dlpack_exchange()
 
 
 if __name__ == "__main__":

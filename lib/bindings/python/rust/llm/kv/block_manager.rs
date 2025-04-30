@@ -20,13 +20,18 @@ use super::*;
 
 use pyo3::{exceptions::PyRuntimeError, Python, PyObject, PyResult};
 use crate::dlpack::{ffi, ManagerCtx, ShapeAndStrides, ToTensor};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
+use std::collections::HashMap;
+
+// Create a shared memory tracker type
+type RegionRefTracker = Arc<Mutex<HashMap<u64, usize>>>;
 
 struct DlPackTensor {
     memory_region: u64,
     region_shape: Vec<usize>,
     dtype: dynamo_kv_manager::dtype::DType,
     storage_type: dynamo_kv_manager::storage::StorageType,
+    region_ref_tracker: Weak<Mutex<HashMap<u64, usize>>>,
 }
 
 impl ToTensor for DlPackTensor {
@@ -80,9 +85,33 @@ impl ToTensor for DlPackTensor {
     }
 }
 
+impl Drop for DlPackTensor {
+    fn drop(&mut self) {
+        // Decrement the reference count for this memory region
+        if let Some(tracker) = self.region_ref_tracker.upgrade() {
+            let mut tracker_map = tracker.lock().unwrap();
+            if let Some(count) = tracker_map.get_mut(&self.memory_region) {
+                *count -= 1;
+                if *count == 0 {
+                    // Remove the entry if the count reaches zero
+                    tracker_map.remove(&self.memory_region);
+                    println!("Removed memory_region {:?} from tracking map", self.memory_region);
+                } else {
+                    println!("Decremented memory_region {:?} count to {}", self.memory_region, *count);
+                }
+            } else {
+                panic!("Failed to get count for memory_region {:?}", self.memory_region);
+            }
+        } else {
+            panic!("Failed to upgrade weak reference to RegionRefTracker");
+        }
+    }
+}
+
 #[pyclass]
 pub struct BlockManager {
     inner: Arc<dyn dynamo_kv_manager::layout::BlockLayout + Send + Sync>,
+    region_ref_tracker: RegionRefTracker,
 }
 
 #[pymethods]
@@ -141,7 +170,10 @@ impl BlockManager {
         let block_layout = dynamo_kv_manager::layout::contiguous::FullyContiguous::allocate(layout_config, &*allocator)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to allocate storage layout: {}", e)))?;
 
-        Ok(BlockManager { inner: Arc::from(block_layout) })
+        Ok(BlockManager {
+            inner: Arc::from(block_layout),
+            region_ref_tracker: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     fn py_capsule(&self, block_idx: usize, layer_idx: usize) -> PyResult<PyObject> {
@@ -152,19 +184,36 @@ impl BlockManager {
         let dtype = self.inner.dtype();
         let storage_type = self.inner.storage_type();
 
-        // Create a DlPackTensor instance
-        let dlpack_tensor = DlPackTensor {
+        // Update the memory region reference tracker
+        {
+            let mut tracker = self.region_ref_tracker.lock().unwrap();
+            let count = tracker.entry(memory_region).or_insert(0);
+            *count += 1;
+            println!("Tracking memory_region {:?}: count = {}", memory_region, *count);
+        }
+
+        // Create DLPack PyCapsule
+        let manager_ctx = ManagerCtx::new(DlPackTensor {
             memory_region,
             region_shape,
             dtype,
             storage_type,
-        };
-
-        // Convert to Python object using into_py
-        let manager_ctx = ManagerCtx::new(dlpack_tensor);
+            region_ref_tracker: Arc::downgrade(&self.region_ref_tracker),
+        });
         let py_capsule = Python::with_gil(|py| {
             manager_ctx.into_py(py)
         });
         Ok(py_capsule)
+    }
+}
+
+impl Drop for BlockManager {
+    fn drop(&mut self) {
+        // Check if there are any memory regions still being tracked
+        let tracker = self.region_ref_tracker.lock().unwrap();
+        if !tracker.is_empty() {
+            let regions: Vec<_> = tracker.iter().collect();
+            panic!("BlockManager dropped while still tracking memory regions: {:?}", regions);
+        }
     }
 }
