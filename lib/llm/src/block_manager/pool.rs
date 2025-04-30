@@ -566,7 +566,7 @@ mod tests {
         ) -> anyhow::Result<(BlockPool<S, M>, ProgressEngine<S, M>)> {
             let args = self.build_internal()?;
             let (runtime, event_manager, cancel_token, blocks) = args.dissolve();
-            let (pool, mut progress_engine) =
+            let (pool, progress_engine) =
                 BlockPool::with_progress_engine(event_manager, runtime, cancel_token, blocks);
 
             Ok((pool, progress_engine))

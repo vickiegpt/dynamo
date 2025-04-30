@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Extends [BlockLayout] with NIXL-specific methods for registering with an NIXL agent.
-pub trait NixlLayout: BlockLayout + BlockLayoutNixlStorage {
+pub trait NixlLayout: BlockLayout + BlockLayoutNixlStorage + ToSerializedNixlBlockLayout {
     fn nixl_register(
         &mut self,
         agent: &NixlAgent,
@@ -25,7 +25,7 @@ pub trait BlockLayoutNixlStorage {
 // Umbrella impl for all BlockLayout types that are NixlEnabledStorage
 impl<T> NixlLayout for T
 where
-    T: BlockLayout + BlockLayoutNixlStorage + ?Sized, // Implement for any T that is BlockLayout (potentially unsized)
+    T: BlockLayout + BlockLayoutNixlStorage + ToSerializedNixlBlockLayout + ?Sized, // Implement for any T that is BlockLayout (potentially unsized)
     T::StorageType: NixlEnabledStorage, // T's associated StorageType must be NixlStorage
 {
     fn nixl_register(
@@ -72,6 +72,7 @@ pub trait ToSerializedNixlBlockLayout: BlockLayout<StorageType: NixlEnabledStora
 }
 
 /// Serializable representation of a BlockLayout backed by NIXL storage.
+#[derive(Serialize, Deserialize, Clone)]
 pub struct SerializedNixlBlockLayout(Vec<u8>);
 
 /// Enum representing the serializable state of different BlockLayout types

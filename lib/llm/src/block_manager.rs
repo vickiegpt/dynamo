@@ -37,7 +37,7 @@ pub use tokio_util::sync::CancellationToken;
 use anyhow::{Context, Result};
 use derive_builder::Builder;
 use nixl_sys::Agent as NixlAgent;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use validator::Validate;
 
 #[derive(Debug, Clone, Builder, Validate)]
@@ -162,6 +162,9 @@ pub struct KvBlockManager<HostMetadata: BlockMetadata, DeviceMetadata: BlockMeta
 
     host_pool: Option<BlockPool<PinnedStorage, HostMetadata>>,
     device_pool: Option<BlockPool<DeviceStorage, DeviceMetadata>>,
+
+    block_set: block::nixl::NixlBlockSet,
+    backends: HashMap<String, nixl_sys::Backend>,
 }
 
 impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
@@ -178,8 +181,19 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
         let worker_id = config.runtime.worker_id;
         let cancellation_token = config.runtime.cancellation_token;
 
+        let mut backends: HashMap<String, nixl_sys::Backend> = HashMap::new();
+
         let nixl_agent = if config.runtime.enable_nixl {
-            Some(NixlAgent::new(&worker_id.to_string())?)
+            let agent = NixlAgent::new(&worker_id.to_string())?;
+
+            // Create NIXL backends
+            // TODO: Expose this to API for configuration
+            tracing::debug!("Creating NIXL UCX backend");
+            let (_ucx_mem_list1, ucx_params) = agent.get_plugin_params("UCX")?;
+            let backend = agent.create_backend("UCX", &ucx_params)?;
+            backends.insert("UCX".to_string(), backend);
+
+            Some(agent)
         } else {
             None
         };
@@ -194,16 +208,18 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
             .dtype(model.dtype);
 
         let mut next_block_set_idx = 0;
+        let mut block_set = block::nixl::NixlBlockSet::default();
 
         let host_pool = if let Some(layout) = config.host_layout {
+            next_block_set_idx += 1;
             tracing::debug!("Constructing host pool.");
             let layout = create_layout(layout_builder.clone(), layout, nixl_agent.as_ref())?;
+            block_set.add_block_set(next_block_set_idx, layout.serialize()?);
             let block_pool = create_block_pool::<_, HostMetadata>(
                 layout,
                 next_block_set_idx,
                 cancellation_token.clone(),
             )?;
-            next_block_set_idx += 1;
             Some(block_pool)
         } else {
             tracing::debug!("No host layout provided; will not allocate host blocks.");
@@ -211,19 +227,26 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
         };
 
         let device_pool = if let Some(layout) = config.device_layout {
+            next_block_set_idx += 1;
             tracing::debug!("Constructing device pool.");
             let layout = create_layout(layout_builder.clone(), layout, nixl_agent.as_ref())?;
+            block_set.add_block_set(next_block_set_idx, layout.serialize()?);
             let block_pool = create_block_pool::<_, DeviceMetadata>(
                 layout,
                 next_block_set_idx,
                 cancellation_token.clone(),
             )?;
-            next_block_set_idx += 1;
             Some(block_pool)
         } else {
             tracing::debug!("No device layout provided; will not allocate device blocks.");
             None
         };
+
+        // Finalize the block set
+        if let Some(nixl_agent) = &nixl_agent {
+            tracing::debug!("Finalize NixlBlockSet: adding NIXL metadata.");
+            block_set.set_nixl_metadata(nixl_agent.get_local_md()?);
+        }
 
         Ok(Self {
             worker_id,
@@ -231,6 +254,8 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
             nixl_agent,
             host_pool,
             device_pool,
+            block_set,
+            backends,
         })
     }
 }
@@ -338,35 +363,6 @@ mod tests {
         ReferenceBlockManager::new(config).unwrap()
     }
 
-    // fn create_reference_block_manager_host_only() -> ReferenceBlockManager {
-    //     let config = KvBlockManagerConfig::builder()
-    //         .runtime(
-    //             KvManagerRuntimeConfig::builder()
-    //                 .worker_id(1337)
-    //                 .build()
-    //                 .unwrap(),
-    //         )
-    //         .model(
-    //             KvManagerModelConfig::builder()
-    //                 .num_layers(3)
-    //                 .page_size(4)
-    //                 .inner_dim(16)
-    //                 .build()
-    //                 .unwrap(),
-    //         )
-    //         .host_layout(
-    //             KvManagerLayoutConfig::builder()
-    //                 .num_blocks(16)
-    //                 .allocator(storage::PinnedAllocator::default())
-    //                 .build()
-    //                 .unwrap(),
-    //         )
-    //         .build()
-    //         .unwrap();
-
-    //     ReferenceBlockManager::new(config).unwrap()
-    // }
-
     #[tokio::test]
     async fn test_reference_block_manager_inherited_async_runtime() {
         dynamo_runtime::logging::init();
@@ -386,8 +382,5 @@ mod tests {
         let kvbm_1 = create_reference_block_manager();
 
         assert_ne!(kvbm_0.worker_id, kvbm_1.worker_id);
-
-        drop(kvbm_0);
-        drop(kvbm_1);
     }
 }

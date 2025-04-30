@@ -438,16 +438,18 @@ pub(crate) fn layout_to_blocks<S: Storage, M: BlockMetadata>(
         .collect()
 }
 
-mod nixl {
+pub mod nixl {
     use super::*;
 
     use super::view::{BlockKind, Kind, LayerKind};
 
     use super::super::{
-        layout::nixl::NixlLayout,
+        layout::nixl::{NixlLayout, SerializedNixlBlockLayout},
         storage::nixl::{MemType, NixlEnabledStorage, NixlStorage},
     };
     use nixl_sys::{Agent as NixlAgent, MemoryRegion, NixlDescriptor, OptArgs};
+
+    use std::collections::HashMap;
 
     // --- Mutability Marker ---
     pub trait MutabilityKind: Debug + Clone + Copy + Send + Sync + 'static {}
@@ -459,26 +461,6 @@ mod nixl {
     #[derive(Debug, Clone, Copy)]
     pub struct IsImmutable;
     impl MutabilityKind for IsImmutable {}
-
-    // pub struct NixlBlockData<S: Storage + NixlEnabledStorage> {
-    //     layout: Arc<dyn NixlLayout<StorageType = S>>,
-    //     block_idx: usize,
-    //     mem_type: MemType,
-    //     device_id: u64,
-    // }
-
-    // impl<S: Storage + NixlEnabledStorage> NixlBlockData<S> {
-    //     pub fn new(layout: Arc<dyn NixlLayout<StorageType = S>>, block_idx: usize) -> Self {
-    //         let mem_type = layout.mem_type();
-    //         let device_id = layout.device_id();
-    //         Self {
-    //             layout,
-    //             block_idx,
-    //             mem_type,
-    //             device_id,
-    //         }
-    //     }
-    // }
 
     impl<L: NixlLayout, M: BlockMetadata> Blocks<L, M>
     where
@@ -612,6 +594,41 @@ mod nixl {
             layer_idx: usize,
         ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsMutable>> {
             Ok(self.layer_view_mut(layer_idx)?.as_nixl_descriptor_mut())
+        }
+    }
+
+    #[derive(Clone, serde::Serialize, serde::Deserialize, Default)]
+    pub struct NixlBlockSet {
+        /// The block set index
+        block_sets: HashMap<usize, SerializedNixlBlockLayout>,
+
+        /// Captures the NIXL metadata from [nixl_sys::Agent::get_local_md]
+        nixl_metadata: Vec<u8>,
+    }
+
+    impl NixlBlockSet {
+        /// Get the block set for a given block set index
+        pub fn get_block_set(&self, block_set_idx: usize) -> Option<&SerializedNixlBlockLayout> {
+            self.block_sets.get(&block_set_idx)
+        }
+
+        /// Add a block set to the block set
+        pub fn add_block_set(
+            &mut self,
+            block_set_idx: usize,
+            serialized_layout: SerializedNixlBlockLayout,
+        ) {
+            self.block_sets.insert(block_set_idx, serialized_layout);
+        }
+
+        /// Get the NIXL metadata
+        pub fn get_nixl_metadata(&self) -> &Vec<u8> {
+            &self.nixl_metadata
+        }
+
+        /// Set the NIXL metadata
+        pub fn set_nixl_metadata(&mut self, nixl_metadata: Vec<u8>) {
+            self.nixl_metadata = nixl_metadata;
         }
     }
 
