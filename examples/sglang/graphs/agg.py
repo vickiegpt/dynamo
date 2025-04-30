@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from components.frontend import Frontend
-from components.worker import SglangWorker
+from components.load_balancer import SimpleLoadBalancer
+from components.worker import SglangPrefillDecodeWorker
 
-Frontend.link(SglangWorker)
+Frontend.link(SimpleLoadBalancer).link(SglangPrefillDecodeWorker)

@@ -15,12 +15,13 @@
 
 Frontend:
   served_model_name: model
-  endpoint: dynamo.SglangWorker.chat/completions
+  endpoint: dynamo.SimpleLoadBalancer.chat/completions
   port: 8000
 
+SimpleLoadBalancer:
+  disaggregation_enabled: false
 
-SglangWorker:
-  router: round-robin
+SglangPrefillDecodeWorker:
   ServiceArgs:
     workers: 1
     resources:

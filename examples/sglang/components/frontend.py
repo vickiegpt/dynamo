@@ -17,7 +17,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from components.worker import SglangWorker
+from components.load_balancer import SimpleLoadBalancer
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -59,7 +59,7 @@ class FrontendConfig(BaseModel):
     app=FastAPI(title="LLM Example"),
 )
 class Frontend:
-    worker = depends(SglangWorker)
+    load_balancer = depends(SimpleLoadBalancer)
 
     def __init__(self):
         """Initialize Frontend service with HTTP server and model configuration."""

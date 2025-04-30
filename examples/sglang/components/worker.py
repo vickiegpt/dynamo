@@ -19,7 +19,6 @@ import logging
 import signal
 
 import requests
-from sglang.srt.openai_api.protocol import ChatCompletionRequest
 from sglang.utils import launch_server_cmd, terminate_process, wait_for_server
 
 from dynamo.sdk import dynamo_endpoint, service
@@ -27,21 +26,13 @@ from dynamo.sdk import dynamo_endpoint, service
 logger = logging.getLogger(__name__)
 
 
-@service(
-    dynamo={
-        "enabled": True,
-        "namespace": "dynamo",
-    },
-    resources={"gpu": 1, "cpu": "10", "memory": "20Gi"},
-    workers=1,
-)
-class SglangWorker:
-    def __init__(self):
+class SglangBaseWorker:
+    def __init__(self, additional_args: str = ""):
         print("Initializing...")
         self.server_process, self.port = launch_server_cmd(
-            """
+            f"""
             python3 -m sglang.launch_server --model-path qwen/qwen2.5-0.5b-instruct \
-            --host 0.0.0.0
+            --host 0.0.0.0 {additional_args}
             """
         )
         wait_for_server(f"http://localhost:{self.port}")
@@ -54,6 +45,7 @@ class SglangWorker:
     def shutdown_server(self, signum, frame):
         terminate_process(self.server_process)
 
+    @dynamo_endpoint(name="generate")
     async def generate(self, request: dict):
         print("Generating...")
         print(request)
@@ -71,9 +63,44 @@ class SglangWorker:
                 data = json.loads(chunk[5:].strip("\n"))
                 yield data
 
-    @dynamo_endpoint(name="chat/completions")
-    async def chat_completions(self, raw_request: ChatCompletionRequest):
-        print("Chat completions...")
-        print(raw_request)
-        async for response in self.generate(raw_request.model_dump()):
-            yield response
+
+@service(
+    dynamo={
+        "enabled": True,
+        "namespace": "dynamo",
+    },
+    resources={"gpu": 1, "cpu": "10", "memory": "20Gi"},
+    workers=1,
+)
+class SglangPrefillWorker(SglangBaseWorker):
+    def __init__(self):
+        super().__init__(
+            "--disaggregation-mode prefill --disaggregation-transfer-backend nixl"
+        )
+
+
+@service(
+    dynamo={
+        "enabled": True,
+        "namespace": "dynamo",
+    },
+    resources={"gpu": 1, "cpu": "10", "memory": "20Gi"},
+    workers=1,
+)
+class SglangDecodeWorker(SglangBaseWorker):
+    def __init__(self):
+        super().__init__(
+            "--disaggregation-mode decode --disaggregation-transfer-backend nixl"
+        )
+
+
+@service(
+    dynamo={
+        "enabled": True,
+        "namespace": "dynamo",
+    },
+    resources={"gpu": 1, "cpu": "10", "memory": "20Gi"},
+    workers=1,
+)
+class SglangPrefillDecodeWorker(SglangBaseWorker):
+    pass
