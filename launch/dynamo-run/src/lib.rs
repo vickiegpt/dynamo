@@ -103,8 +103,7 @@ pub async fn run(
                 Some(p)
             }
         });
-
-    // Serve the model under the name provided, or the name of the GGUF file or HF repo.
+    // Serve the model under the name provided, or the name of the GGUF file
     let mut model_name = flags
         .model_name
         .clone()
@@ -124,12 +123,18 @@ pub async fn run(
 
     // If it's an HF repo download it
     if let Some(inner_model_path) = model_path.as_ref() {
-        if !inner_model_path.exists() {
-            model_name = Some(inner_model_path.display().to_string());
-            model_path = Some(hub::from_hf(inner_model_path).await?);
+        let path_str = inner_model_path.to_string_lossy();
+        if path_str.starts_with("hf://") {
+            model_name = Some(path_str[5..].to_string()); // Set the model name to the repo name
+            model_path = Some(hub::from_hf(&path_str[5..]).await?);
+        }
+        else if inner_model_path.exists() {
+            // Local path exists, do nothing (it's already canonicalized)
+        }
+        else{
+            anyhow::bail!("Invalid model path specified, please use hf://<repo-name> or a local path: {}", inner_model_path.display());
         }
     }
-
     // Load the model deployment card, if any
     // Only used by some engines, so without those feature flags it's unused.
     #[allow(unused_variables)]

@@ -14,16 +14,15 @@
 // limitations under the License.
 
 use hf_hub::api::tokio::ApiBuilder;
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 
 const IGNORED: [&str; 3] = [".gitattributes", "LICENSE", "README.md"];
 
 /// Attempt to download a model from Hugging Face
 /// Returns the directory it is in
-pub async fn from_hf(name: &Path) -> anyhow::Result<PathBuf> {
+pub async fn from_hf(name: &str) -> anyhow::Result<PathBuf> {
     let api = ApiBuilder::new().with_progress(true).build()?;
-    let model_name = name.display().to_string();
-
+    let model_name = name.to_string();
     let repo = api.model(model_name.clone());
 
     let info = match repo.info().await {
