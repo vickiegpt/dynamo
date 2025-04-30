@@ -235,6 +235,18 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
     }
 }
 
+impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
+    KvBlockManager<HostMetadata, DeviceMetadata>
+{
+    pub fn host(&self) -> Option<&BlockPool<PinnedStorage, HostMetadata>> {
+        self.host_pool.as_ref()
+    }
+
+    pub fn device(&self) -> Option<&BlockPool<DeviceStorage, DeviceMetadata>> {
+        self.device_pool.as_ref()
+    }
+}
+
 impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata> Drop
     for KvBlockManager<HostMetadata, DeviceMetadata>
 {
@@ -284,11 +296,17 @@ fn create_block_pool<S: Storage + NixlEnabledStorage, M: BlockMetadata>(
 mod tests {
     use super::*;
 
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // Atomic Counter for Worker ID
+    static WORKER_ID: AtomicU64 = AtomicU64::new(1337);
+
     fn create_reference_block_manager() -> ReferenceBlockManager {
+        let worker_id = WORKER_ID.fetch_add(1, Ordering::SeqCst);
         let config = KvBlockManagerConfig::builder()
             .runtime(
                 KvManagerRuntimeConfig::builder()
-                    .worker_id(1337)
+                    .worker_id(worker_id)
                     .build()
                     .unwrap(),
             )
@@ -302,15 +320,15 @@ mod tests {
             )
             .host_layout(
                 KvManagerLayoutConfig::builder()
-                    .num_blocks(128)
+                    .num_blocks(16)
                     .allocator(storage::PinnedAllocator::default())
                     .build()
                     .unwrap(),
             )
             .device_layout(
                 KvManagerLayoutConfig::builder()
-                    .num_blocks(16)
-                    .allocator(storage::DeviceAllocator::try_new(0).unwrap())
+                    .num_blocks(8)
+                    .allocator(storage::DeviceAllocator::new(0).unwrap())
                     .build()
                     .unwrap(),
             )
@@ -320,9 +338,56 @@ mod tests {
         ReferenceBlockManager::new(config).unwrap()
     }
 
+    // fn create_reference_block_manager_host_only() -> ReferenceBlockManager {
+    //     let config = KvBlockManagerConfig::builder()
+    //         .runtime(
+    //             KvManagerRuntimeConfig::builder()
+    //                 .worker_id(1337)
+    //                 .build()
+    //                 .unwrap(),
+    //         )
+    //         .model(
+    //             KvManagerModelConfig::builder()
+    //                 .num_layers(3)
+    //                 .page_size(4)
+    //                 .inner_dim(16)
+    //                 .build()
+    //                 .unwrap(),
+    //         )
+    //         .host_layout(
+    //             KvManagerLayoutConfig::builder()
+    //                 .num_blocks(16)
+    //                 .allocator(storage::PinnedAllocator::default())
+    //                 .build()
+    //                 .unwrap(),
+    //         )
+    //         .build()
+    //         .unwrap();
+
+    //     ReferenceBlockManager::new(config).unwrap()
+    // }
+
     #[tokio::test]
-    async fn test_reference_block_manager() {
+    async fn test_reference_block_manager_inherited_async_runtime() {
         dynamo_runtime::logging::init();
-        let block_manager = create_reference_block_manager();
+        let _block_manager = create_reference_block_manager();
+    }
+
+    #[test]
+    fn test_reference_block_manager_blocking() {
+        dynamo_runtime::logging::init();
+        let _block_manager = create_reference_block_manager();
+    }
+
+    #[tokio::test]
+    async fn test_reference_block_managers() {
+        dynamo_runtime::logging::init();
+        let kvbm_0 = create_reference_block_manager();
+        let kvbm_1 = create_reference_block_manager();
+
+        assert_ne!(kvbm_0.worker_id, kvbm_1.worker_id);
+
+        drop(kvbm_0);
+        drop(kvbm_1);
     }
 }

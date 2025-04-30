@@ -310,6 +310,7 @@ pub struct PinnedStorage {
     ptr: u64,
     size: usize,
     handles: RegistrationHandles,
+    ctx: Arc<CudaContext>,
 }
 
 impl PinnedStorage {
@@ -331,6 +332,7 @@ impl PinnedStorage {
                 ptr,
                 size,
                 handles: RegistrationHandles::new(),
+                ctx: ctx.clone(),
             })
         }
     }
