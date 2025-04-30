@@ -35,10 +35,14 @@ pub use storage::{
 pub use tokio_util::sync::CancellationToken;
 
 use anyhow::{Context, Result};
+use block::nixl::{NixlBlockSet, RemoteBlocks, SerializedNixlBlockSet};
 use derive_builder::Builder;
 use nixl_sys::Agent as NixlAgent;
 use std::{collections::HashMap, sync::Arc};
+use storage::nixl::MemType;
 use validator::Validate;
+
+pub type WorkerID = u64;
 
 #[derive(Debug, Clone, Builder, Validate)]
 #[builder(pattern = "owned")]
@@ -155,16 +159,17 @@ pub type ReferenceBlockManager = KvBlockManager<BasicMetadata, BasicMetadata>;
 //    for each layout type.
 // 5. initialize the pools for each set of blocks
 pub struct KvBlockManager<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata> {
-    worker_id: u64,
+    worker_id: WorkerID,
     cancellation_token: CancellationToken,
 
     nixl_agent: Option<NixlAgent>,
+    nixl_backends: HashMap<String, nixl_sys::Backend>,
 
     host_pool: Option<BlockPool<PinnedStorage, HostMetadata>>,
     device_pool: Option<BlockPool<DeviceStorage, DeviceMetadata>>,
 
-    block_set: block::nixl::NixlBlockSet,
-    backends: HashMap<String, nixl_sys::Backend>,
+    local_block_set: NixlBlockSet,
+    remote_block_sets: HashMap<WorkerID, HashMap<usize, RemoteBlocks>>,
 }
 
 impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
@@ -181,17 +186,17 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
         let worker_id = config.runtime.worker_id;
         let cancellation_token = config.runtime.cancellation_token;
 
-        let mut backends: HashMap<String, nixl_sys::Backend> = HashMap::new();
+        let mut nixl_backends: HashMap<String, nixl_sys::Backend> = HashMap::new();
 
         let nixl_agent = if config.runtime.enable_nixl {
             let agent = NixlAgent::new(&worker_id.to_string())?;
 
-            // Create NIXL backends
+            // Create NIXL nixl_backends
             // TODO: Expose this to API for configuration
             tracing::debug!("Creating NIXL UCX backend");
             let (_ucx_mem_list1, ucx_params) = agent.get_plugin_params("UCX")?;
             let backend = agent.create_backend("UCX", &ucx_params)?;
-            backends.insert("UCX".to_string(), backend);
+            nixl_backends.insert("UCX".to_string(), backend);
 
             Some(agent)
         } else {
@@ -208,13 +213,13 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
             .dtype(model.dtype);
 
         let mut next_block_set_idx = 0;
-        let mut block_set = block::nixl::NixlBlockSet::default();
+        let mut local_block_set = block::nixl::NixlBlockSet::new(worker_id);
 
         let host_pool = if let Some(layout) = config.host_layout {
             next_block_set_idx += 1;
             tracing::debug!("Constructing host pool.");
             let layout = create_layout(layout_builder.clone(), layout, nixl_agent.as_ref())?;
-            block_set.add_block_set(next_block_set_idx, layout.serialize()?);
+            local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
             let block_pool = create_block_pool::<_, HostMetadata>(
                 layout,
                 next_block_set_idx,
@@ -230,7 +235,7 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
             next_block_set_idx += 1;
             tracing::debug!("Constructing device pool.");
             let layout = create_layout(layout_builder.clone(), layout, nixl_agent.as_ref())?;
-            block_set.add_block_set(next_block_set_idx, layout.serialize()?);
+            local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
             let block_pool = create_block_pool::<_, DeviceMetadata>(
                 layout,
                 next_block_set_idx,
@@ -245,18 +250,104 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
         // Finalize the block set
         if let Some(nixl_agent) = &nixl_agent {
             tracing::debug!("Finalize NixlBlockSet: adding NIXL metadata.");
-            block_set.set_nixl_metadata(nixl_agent.get_local_md()?);
+            local_block_set.set_nixl_metadata(nixl_agent.get_local_md()?);
         }
 
         Ok(Self {
             worker_id,
             cancellation_token,
             nixl_agent,
+            nixl_backends,
             host_pool,
             device_pool,
-            block_set,
-            backends,
+            local_block_set,
+            remote_block_sets: HashMap::new(),
         })
+    }
+
+    /// Exports the local blockset configuration as a serialized object.
+    pub fn export_local_blockset(&self) -> Result<SerializedNixlBlockSet> {
+        SerializedNixlBlockSet::try_from(&self.local_block_set)
+            .context("Failed to serialize local blockset")
+    }
+
+    /// Imports a remote blockset configuration from a serialized object.
+    pub fn import_remote_blockset(
+        &mut self,
+        serialized_blockset: SerializedNixlBlockSet,
+    ) -> Result<()> {
+        let remote = NixlBlockSet::try_from(serialized_blockset)
+            .context("Failed to deserialize remote blockset")?;
+
+        let (block_sets, metadata, worker_id) = remote.dissolve();
+        tracing::debug!("Importing remote blockset from worker {}", worker_id);
+
+        assert_ne!(
+            worker_id, self.worker_id,
+            "Cannot import blockset from self"
+        );
+
+        let agent = self
+            .nixl_agent
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("NIXL agent not initialized"))?;
+
+        if self.remote_block_sets.contains_key(&worker_id) {
+            anyhow::bail!(
+                "Worker ID {} already exists; cannot update remote blockset",
+                worker_id
+            );
+        }
+
+        let mut inner_map = HashMap::new();
+
+        for (block_set_idx, block_set_layout) in block_sets {
+            // Deserialize the individual layout and create RemoteBlocks
+            let remote_blocks =
+                RemoteBlocks::from_serialized(block_set_layout.clone(), block_set_idx)?;
+
+            // check the storage type of the remote blocks
+            let layout = remote_blocks.layout();
+            let storage = layout.storage();
+
+            let storage = storage
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("No storage found in remote blockset"))?;
+
+            match storage.mem_type() {
+                MemType::Dram => {
+                    tracing::trace!(block_set_idx, "Detected Host/DRAM remote descriptor");
+                }
+                MemType::Vram => {
+                    tracing::trace!(block_set_idx, "Detected GPU/Device/VRAM remote descriptor");
+                }
+                _ => {
+                    tracing::warn!(
+                        block_set_idx,
+                        "Detected unknown remote descriptor; skipping blockset..."
+                    );
+                    continue;
+                }
+            }
+
+            inner_map.insert(block_set_idx, remote_blocks);
+        }
+
+        let agent_id = agent
+            .load_remote_md(&metadata)
+            .context("Loading remote metadata")?;
+
+        // try to convert the agent_id (String) to a WorkerID (u64)
+        let agent_id: WorkerID =
+            agent_id // Assuming agent_id is String here
+                .parse() // Parse the String into u64 (WorkerID)
+                .context("Failed to parse agent ID string into WorkerID (u64)")?;
+
+        assert_eq!(agent_id, worker_id, "Mismatch with remote worker ID");
+
+        self.remote_block_sets.insert(worker_id, inner_map);
+
+        Ok(())
     }
 }
 
@@ -378,9 +469,16 @@ mod tests {
     #[tokio::test]
     async fn test_reference_block_managers() {
         dynamo_runtime::logging::init();
-        let kvbm_0 = create_reference_block_manager();
-        let kvbm_1 = create_reference_block_manager();
+        let mut kvbm_0 = create_reference_block_manager();
+        let mut kvbm_1 = create_reference_block_manager();
 
         assert_ne!(kvbm_0.worker_id, kvbm_1.worker_id);
+
+        // In Dynamo, we would exchange the blocksets via the discovery plane
+        let blockset_0 = kvbm_0.export_local_blockset().unwrap();
+        let blockset_1 = kvbm_1.export_local_blockset().unwrap();
+
+        kvbm_0.import_remote_blockset(blockset_1).unwrap();
+        kvbm_1.import_remote_blockset(blockset_0).unwrap();
     }
 }

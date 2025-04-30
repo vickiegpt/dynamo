@@ -446,9 +446,12 @@ pub mod nixl {
     use super::super::{
         layout::nixl::{NixlLayout, SerializedNixlBlockLayout},
         storage::nixl::{MemType, NixlEnabledStorage, NixlStorage},
+        WorkerID,
     };
-    use nixl_sys::{Agent as NixlAgent, MemoryRegion, NixlDescriptor, OptArgs};
 
+    use derive_getters::Dissolve;
+    use nixl_sys::{Agent as NixlAgent, MemoryRegion, NixlDescriptor, OptArgs};
+    use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
 
     // --- Mutability Marker ---
@@ -597,19 +600,85 @@ pub mod nixl {
         }
     }
 
-    #[derive(Clone, serde::Serialize, serde::Deserialize, Default)]
+    /// Error type for NixlBlockSet serialization/deserialization failures.
+    #[derive(Debug, Error)]
+    pub enum NixlSerializationError {
+        #[error("Serialization failed: {0}")]
+        Serialize(#[from] serde_json::Error),
+    }
+
+    /// A strongly-typed wrapper for serialized NixlBlockSet data.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct SerializedNixlBlockSet(Vec<u8>);
+
+    impl TryFrom<&NixlBlockSet> for SerializedNixlBlockSet {
+        type Error = NixlSerializationError;
+
+        /// Serializes a NixlBlockSet into SerializedNixlBlockSet.
+        fn try_from(value: &NixlBlockSet) -> Result<Self, Self::Error> {
+            let bytes = serde_json::to_vec(value)?;
+            Ok(SerializedNixlBlockSet(bytes))
+        }
+    }
+
+    impl TryFrom<NixlBlockSet> for SerializedNixlBlockSet {
+        type Error = NixlSerializationError;
+
+        /// Serializes a NixlBlockSet into SerializedNixlBlockSet, consuming the original.
+        fn try_from(value: NixlBlockSet) -> Result<Self, Self::Error> {
+            let bytes = serde_json::to_vec(&value)?;
+            Ok(SerializedNixlBlockSet(bytes))
+        }
+    }
+
+    impl TryFrom<&SerializedNixlBlockSet> for NixlBlockSet {
+        type Error = NixlSerializationError;
+
+        /// Deserializes SerializedNixlBlockSet into a NixlBlockSet.
+        fn try_from(value: &SerializedNixlBlockSet) -> Result<Self, Self::Error> {
+            let block_set = serde_json::from_slice(&value.0)?;
+            Ok(block_set)
+        }
+    }
+
+    impl TryFrom<SerializedNixlBlockSet> for NixlBlockSet {
+        type Error = NixlSerializationError;
+
+        /// Deserializes SerializedNixlBlockSet into a NixlBlockSet, consuming the original.
+        fn try_from(value: SerializedNixlBlockSet) -> Result<Self, Self::Error> {
+            let block_set = serde_json::from_slice(&value.0)?;
+            Ok(block_set)
+        }
+    }
+
+    #[derive(Clone, serde::Serialize, serde::Deserialize, Dissolve)]
     pub struct NixlBlockSet {
         /// The block set index
         block_sets: HashMap<usize, SerializedNixlBlockLayout>,
 
         /// Captures the NIXL metadata from [nixl_sys::Agent::get_local_md]
         nixl_metadata: Vec<u8>,
+
+        /// Worker ID
+        worker_id: u64,
     }
 
     impl NixlBlockSet {
+        pub fn new(worker_id: u64) -> Self {
+            Self {
+                block_sets: HashMap::new(),
+                nixl_metadata: Vec::new(),
+                worker_id,
+            }
+        }
+
+        pub fn worker_id(&self) -> u64 {
+            self.worker_id
+        }
+
         /// Get the block set for a given block set index
-        pub fn get_block_set(&self, block_set_idx: usize) -> Option<&SerializedNixlBlockLayout> {
-            self.block_sets.get(&block_set_idx)
+        pub fn block_sets(&self) -> &HashMap<usize, SerializedNixlBlockLayout> {
+            &self.block_sets
         }
 
         /// Add a block set to the block set
@@ -648,6 +717,14 @@ pub mod nixl {
             }
         }
 
+        pub fn from_serialized(
+            serialized: SerializedNixlBlockLayout,
+            block_set_idx: usize,
+        ) -> BlockResult<Self> {
+            let layout = serialized.deserialize()?;
+            Ok(Self::new(layout, block_set_idx))
+        }
+
         pub fn block(&self, block_idx: usize) -> BlockResult<RemoteBlock> {
             if block_idx >= self.layout.num_blocks() {
                 return Err(BlockError::InvalidState(format!(
@@ -661,6 +738,11 @@ pub mod nixl {
                 block_idx,
                 self.block_set_idx,
             ))
+        }
+
+        /// Get the layout of the remote blocks
+        pub fn layout(&self) -> &dyn BlockLayout<StorageType = NixlStorage> {
+            self.layout.as_ref()
         }
     }
 

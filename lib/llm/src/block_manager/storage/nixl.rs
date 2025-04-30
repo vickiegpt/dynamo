@@ -3,6 +3,7 @@ pub use nixl_sys::{
     RegistrationHandle as NixlRegistrationHandle,
 };
 
+use derive_getters::Getters;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -64,7 +65,7 @@ pub trait NixlEnabledStorage: RegisterableStorage + NixlDescriptor + Sized {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Getters)]
 pub struct NixlStorage {
     addr: u64,
     size: usize,
