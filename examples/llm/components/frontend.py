@@ -13,12 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import logging
 import subprocess
 from pathlib import Path
 
-from components.processor import Processor
-from components.worker import VllmWorker
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -46,6 +45,8 @@ class FrontendConfig(BaseModel):
     served_model_name: str
     endpoint: str
     port: int = 8080
+    worker: str
+    processor: str
 
 
 # todo this should be called ApiServer
@@ -60,14 +61,22 @@ class FrontendConfig(BaseModel):
     app=FastAPI(title="LLM Example"),
 )
 class Frontend:
-    worker = depends(VllmWorker)
-    processor = depends(Processor)
+    config = ServiceConfig.get_instance()
+    frontend_config = FrontendConfig(**config.get("Frontend", {}))
+    worker_module_path = "components.worker"
+    worker_class_name = frontend_config.worker
+    processor_module_path = "components.processor"
+    processor_class_name = frontend_config.processor
+
+    worker_module = importlib.import_module(worker_module_path)
+    worker_class = getattr(worker_module, worker_class_name)
+    processor_module = importlib.import_module(processor_module_path)
+    processor_class = getattr(processor_module, processor_class_name)
+    worker = depends(worker_class)
+    processor = depends(processor_class)
 
     def __init__(self):
         """Initialize Frontend service with HTTP server and model configuration."""
-        config = ServiceConfig.get_instance()
-        frontend_config = FrontendConfig(**config.get("Frontend", {}))
-        self.frontend_config = frontend_config
         self.process = None
 
         self.setup_model()

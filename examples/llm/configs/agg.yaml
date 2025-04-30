@@ -21,6 +21,8 @@ Frontend:
   served_model_name: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
   endpoint: dynamo.Processor.chat/completions
   port: 8000
+  worker: VllmWorker
+  processor: Processor
 
 Processor:
   router: round-robin

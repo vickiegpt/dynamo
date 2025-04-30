@@ -125,6 +125,7 @@ class VllmWorker:
         )
 
         runtime = dynamo_context["runtime"]
+        print(f"[============================Worker] runtime: {dynamo_context}")
 
         if self.engine_args.remote_prefill:
             metadata = self.engine_client.nixl_metadata
