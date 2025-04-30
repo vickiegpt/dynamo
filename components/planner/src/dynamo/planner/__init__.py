@@ -13,9 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__all__ = ["CircusController", "LocalConnector", "PlannerConnector"]
+__all__ = ["CircusController", "LocalConnector", "PlannerConnector", "KubernetesConnector"]
 
 # Import the classes
 from dynamo.planner.circusd import CircusController
 from dynamo.planner.local_connector import LocalConnector
 from dynamo.planner.planner_connector import PlannerConnector
+from dynamo.planner.kubernetes_connector import KubernetesConnector

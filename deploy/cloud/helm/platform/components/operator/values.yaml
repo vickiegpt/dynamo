@@ -76,6 +76,12 @@ dynamo:
   apiStore:
     endpoint: http://dynamo-server.dynamo-system.svc.cluster.local
     clusterName: default
+  
+  # configuration for local planner
+  # this will be removed (to be replaced by a global planner helm chart)
+  planner:
+    enabled: false
+    image: nvcr.io/ai-dynamo/dynamo-planner:latest
 
   internalImages:
     dynamoComponentsDownloader: rapidfort/curl:latest

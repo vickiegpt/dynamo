@@ -37,6 +37,11 @@ dynamo-operator:
         - --health-probe-bind-address=:8081
         - --metrics-bind-address=127.0.0.1:8080
   dynamo:
+    # configuration for local planner
+    # this will be removed (to be replaced by a global planner helm chart)
+    planner:
+      enabled: false
+      image: nvcr.io/ai-dynamo/dynamo-planner:latest
     apiStore:
       endpoint: http://dynamo-store
       clusterName: default

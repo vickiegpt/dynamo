@@ -1,0 +1,75 @@
+# Start with a base image that includes Python 3.12
+FROM python:3.12-bullseye AS builder
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install maturin for building Rust Python extensions
+RUN pip install maturin
+
+# Install Python protobuf packages
+RUN pip install protobuf grpcio-tools
+
+# Set up the working directory
+WORKDIR /workspace
+
+# Copy your Rust project files
+COPY . .
+
+# Build the Rust bindings using maturin
+WORKDIR /workspace/lib/bindings/python
+# Build for Python 3.12 specifically
+RUN maturin build --release --interpreter python3.12
+
+# Second stage using the same Python version as the builder
+FROM python:3.12-slim
+
+WORKDIR /workspace
+
+# Copy the built wheel from the builder stage
+COPY --from=builder /workspace/lib/bindings/python/target/wheels/*.whl ./
+
+# Copy requirements file
+COPY ./container/deps/requirements.planner.txt ./requirements.txt
+
+# Install the wheel file and dependencies
+# We skip package dependencies for the wheel installation to avoid conflicts
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-deps *.whl && \
+    pip install *.whl
+
+# Copy planner components directly to the correct location
+COPY ./components/planner/src/dynamo/planner /workspace/src/dynamo/planner
+COPY ./examples/llm/components/planner.py /workspace/src/dynamo/planner/planner.py
+# COPY ./lib/bindings/python/src/dynamo/runtime /workspace/src/dynamo/runtime
+
+
+# Create an __init__.py file to make it a proper Python package
+RUN touch /workspace/src/dynamo/__init__.py && \
+    touch /workspace/src/dynamo/planner/__init__.py
+
+# Set PYTHONPATH to include the necessary directories
+ENV PYTHONPATH=/workspace/src:/usr/local/lib/python3.12/site-packages
+
+# # Debug: Show installed packages and Python path - move this after PYTHONPATH is set
+# RUN pip list > /tmp/debug.txt && \
+#     python -c "import sys; print('Python path:', sys.path)" >> /tmp/debug.txt && \
+#     find /usr/local/lib/python3.12/site-packages -name "dynamo*" -type d >> /tmp/debug.txt && \
+#     python -c "from importlib.metadata import files; print('Runtime files:', [f for f in files('ai-dynamo-runtime') if 'runtime' in str(f)])" >> /tmp/debug.txt
+
+
+EXPOSE 8000
+
+# Make sure the entry point exists
+# RUN ls -la /workspace/src/dynamo/planner/ || echo "Warning: The directory doesn't exist"
+
+# Using absolute path to ensure script is found
+CMD ["python", "-m", "dynamo.planner.planner"]

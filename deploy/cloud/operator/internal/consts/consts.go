@@ -35,6 +35,7 @@ const (
 	EnvInternalImagesKaniko                     = "INTERNAL_IMAGES_KANIKO"
 	EnvInternalImagesBuildkit                   = "INTERNAL_IMAGES_BUILDKIT"
 	EnvInternalImagesBuildkitRootless           = "INTERNAL_IMAGES_BUILDKIT_ROOTLESS"
+	EnvInternalImagesPlanner                    = "INTERNAL_IMAGES_PLANNER"
 
 	EnvDynamoSystemNamespace       = "DYNAMO_SYSTEM_NAMESPACE"
 	EnvDynamoImageBuilderNamespace = "DYNAMO_IMAGE_BUILDER_NAMESPACE"

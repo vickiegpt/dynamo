@@ -1,0 +1,30 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: planner-serviceaccount
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: planner-role
+  namespace: {{ .Values.namespace }}
+rules:
+- apiGroups: ["nvidia.com"]
+  resources: ["dynamocomponentdeployments", "dynamographdeployments"]
+  verbs: ["get", "list", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: planner-binding
+  namespace: {{ .Values.namespace }}
+subjects:
+- kind: ServiceAccount
+  name: planner-serviceaccount
+  namespace: {{ .Values.namespace }}
+roleRef:
+  kind: Role
+  name: planner-role
+  apiGroup: rbac.authorization.k8s.io

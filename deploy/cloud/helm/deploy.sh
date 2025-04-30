@@ -36,6 +36,8 @@ export INGRESS_ENABLED="${INGRESS_ENABLED:=false}"
 export ISTIO_ENABLED="${ISTIO_ENABLED:=false}"
 export ISTIO_GATEWAY="${ISTIO_GATEWAY:=istio-system/istio-ingressgateway}"
 export INGRESS_CLASS="${INGRESS_CLASS:=nginx}"
+export PLANNER_ENABLED="${PLANNER_ENABLED:=false}"
+export PLANNER_IMAGE="${PLANNER_IMAGE:=""}"
 
 # Add command line options
 INTERACTIVE=false

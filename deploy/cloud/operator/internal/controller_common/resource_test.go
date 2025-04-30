@@ -20,66 +20,55 @@ package controller_common
 import (
 	"testing"
 
+	"github.com/cisco-open/k8s-objectmatcher/patch"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
-
-type MyResource struct {
-	unstructured.Unstructured
-}
-
-func (r *MyResource) GetSpec() any {
-	return r.Object["spec"]
-}
-
-func (r *MyResource) SetSpec(spec any) {
-	r.Object["spec"] = spec
-}
 
 func TestIsSpecChanged(t *testing.T) {
 	tests := []struct {
-		name     string
-		current  Resource
-		desired  Resource
-		expected bool
+		name          string
+		current       client.Object
+		desired       client.Object
+		expected      bool
+		expectedError bool
 	}{
 		{
 			name: "no change in hash with deployment spec and env variables",
-			current: &MyResource{
-				Unstructured: unstructured.Unstructured{
-					Object: map[string]interface{}{
-						"apiVersion": "apps/v1",
-						"kind":       "Deployment",
-						"metadata": map[string]interface{}{
-							"name":      "nim-deployment",
-							"namespace": "default",
+			current: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"metadata": map[string]interface{}{
+						"name":      "nim-deployment",
+						"namespace": "default",
+					},
+					"spec": map[string]interface{}{
+						"replicas": 2,
+						"selector": map[string]interface{}{
+							"matchLabels": map[string]interface{}{
+								"app": "nim",
+							},
 						},
-						"spec": map[string]interface{}{
-							"replicas": 2,
-							"selector": map[string]interface{}{
-								"matchLabels": map[string]interface{}{
+						"template": map[string]interface{}{
+							"metadata": map[string]interface{}{
+								"labels": map[string]interface{}{
 									"app": "nim",
 								},
 							},
-							"template": map[string]interface{}{
-								"metadata": map[string]interface{}{
-									"labels": map[string]interface{}{
-										"app": "nim",
-									},
-								},
-								"spec": map[string]interface{}{
-									"containers": []interface{}{
-										map[string]interface{}{
-											"name":  "nim",
-											"image": "nim:v0.1.0",
-											"ports": []interface{}{
-												map[string]interface{}{
-													"containerPort": 80,
-												},
+							"spec": map[string]interface{}{
+								"containers": []interface{}{
+									map[string]interface{}{
+										"name":  "nim",
+										"image": "nim:v0.1.0",
+										"ports": []interface{}{
+											map[string]interface{}{
+												"containerPort": 80,
 											},
-											"env": []interface{}{
-												map[string]interface{}{"name": "ENV_VAR1", "value": "value1"},
-												map[string]interface{}{"name": "ENV_VAR2", "value": "value2"},
-											},
+										},
+										"env": []interface{}{
+											map[string]interface{}{"name": "ENV_VAR1", "value": "value1"},
+											map[string]interface{}{"name": "ENV_VAR2", "value": "value2"},
 										},
 									},
 								},
@@ -88,42 +77,40 @@ func TestIsSpecChanged(t *testing.T) {
 					},
 				},
 			},
-			desired: &MyResource{
-				Unstructured: unstructured.Unstructured{
-					Object: map[string]interface{}{
-						"apiVersion": "apps/v1",
-						"kind":       "Deployment",
-						"metadata": map[string]interface{}{
-							"name":      "nim-deployment",
-							"namespace": "default",
+			desired: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"metadata": map[string]interface{}{
+						"name":      "nim-deployment",
+						"namespace": "default",
+					},
+					"spec": map[string]interface{}{
+						"replicas": 2,
+						"selector": map[string]interface{}{
+							"matchLabels": map[string]interface{}{
+								"app": "nim",
+							},
 						},
-						"spec": map[string]interface{}{
-							"replicas": 2,
-							"selector": map[string]interface{}{
-								"matchLabels": map[string]interface{}{
+						"template": map[string]interface{}{
+							"metadata": map[string]interface{}{
+								"labels": map[string]interface{}{
 									"app": "nim",
 								},
 							},
-							"template": map[string]interface{}{
-								"metadata": map[string]interface{}{
-									"labels": map[string]interface{}{
-										"app": "nim",
-									},
-								},
-								"spec": map[string]interface{}{
-									"containers": []interface{}{
-										map[string]interface{}{
-											"name":  "nim",
-											"image": "nim:v0.1.0",
-											"ports": []interface{}{
-												map[string]interface{}{
-													"containerPort": 80,
-												},
+							"spec": map[string]interface{}{
+								"containers": []interface{}{
+									map[string]interface{}{
+										"name":  "nim",
+										"image": "nim:v0.1.0",
+										"ports": []interface{}{
+											map[string]interface{}{
+												"containerPort": 80,
 											},
-											"env": []interface{}{
-												map[string]interface{}{"name": "ENV_VAR1", "value": "value1"},
-												map[string]interface{}{"name": "ENV_VAR2", "value": "value2"},
-											},
+										},
+										"env": []interface{}{
+											map[string]interface{}{"name": "ENV_VAR1", "value": "value1"},
+											map[string]interface{}{"name": "ENV_VAR2", "value": "value2"},
 										},
 									},
 								},
@@ -132,46 +119,45 @@ func TestIsSpecChanged(t *testing.T) {
 					},
 				},
 			},
-			expected: false,
+			expected:      false,
+			expectedError: false,
 		},
 		{
-			name: "no change in hash with change in order of elements",
-			current: &MyResource{
-				Unstructured: unstructured.Unstructured{
-					Object: map[string]interface{}{
-						"apiVersion": "apps/v1",
-						"kind":       "Deployment",
-						"metadata": map[string]interface{}{
-							"name":      "nim-deployment",
-							"namespace": "default",
+			name: "no change in hash with change in metadata and status",
+			current: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"metadata": map[string]interface{}{
+						"name":      "nim-deployment",
+						"namespace": "default",
+					},
+					"spec": map[string]interface{}{
+						"replicas": 2,
+						"selector": map[string]interface{}{
+							"matchLabels": map[string]interface{}{
+								"app": "nim",
+							},
 						},
-						"spec": map[string]interface{}{
-							"replicas": 2,
-							"selector": map[string]interface{}{
-								"matchLabels": map[string]interface{}{
+						"template": map[string]interface{}{
+							"metadata": map[string]interface{}{
+								"labels": map[string]interface{}{
 									"app": "nim",
 								},
 							},
-							"template": map[string]interface{}{
-								"metadata": map[string]interface{}{
-									"labels": map[string]interface{}{
-										"app": "nim",
-									},
-								},
-								"spec": map[string]interface{}{
-									"containers": []interface{}{
-										map[string]interface{}{
-											"name":  "nim",
-											"image": "nim:v0.1.0",
-											"ports": []interface{}{
-												map[string]interface{}{
-													"containerPort": 80,
-												},
-											}, // switch order of env
-											"env": []interface{}{
-												map[string]interface{}{"name": "ENV_VAR2", "value": "value2"},
-												map[string]interface{}{"name": "ENV_VAR1", "value": "value1"},
+							"spec": map[string]interface{}{
+								"containers": []interface{}{
+									map[string]interface{}{
+										"name":  "nim",
+										"image": "nim:v0.1.0",
+										"ports": []interface{}{
+											map[string]interface{}{
+												"containerPort": 80,
 											},
+										}, // switch order of env
+										"env": []interface{}{
+											map[string]interface{}{"name": "ENV_VAR1", "value": "value1"},
+											map[string]interface{}{"name": "ENV_VAR2", "value": "value2"},
 										},
 									},
 								},
@@ -180,90 +166,91 @@ func TestIsSpecChanged(t *testing.T) {
 					},
 				},
 			},
-			desired: &MyResource{
-				Unstructured: unstructured.Unstructured{
-					Object: map[string]interface{}{
-						"apiVersion": "apps/v1",
-						"kind":       "Deployment",
-						"metadata": map[string]interface{}{
-							"name":      "nim-deployment",
-							"namespace": "default",
+			desired: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"metadata": map[string]interface{}{
+						"name":      "nim-deployment",
+						"namespace": "default",
+						"blah":      "blah",
+					},
+					"spec": map[string]interface{}{
+						"replicas": 2,
+						"selector": map[string]interface{}{
+							"matchLabels": map[string]interface{}{
+								"app": "nim",
+							},
 						},
-						"spec": map[string]interface{}{
-							"replicas": 2,
-							"selector": map[string]interface{}{
-								"matchLabels": map[string]interface{}{
+						"template": map[string]interface{}{
+							"metadata": map[string]interface{}{
+								"labels": map[string]interface{}{
 									"app": "nim",
 								},
 							},
-							"template": map[string]interface{}{
-								"metadata": map[string]interface{}{
-									"labels": map[string]interface{}{
-										"app": "nim",
-									},
-								},
-								"spec": map[string]interface{}{
-									"containers": []interface{}{
-										map[string]interface{}{
-											"name":  "nim",
-											"image": "nim:v0.1.0",
-											"ports": []interface{}{
-												map[string]interface{}{
-													"containerPort": 80,
-												},
+							"spec": map[string]interface{}{
+								"containers": []interface{}{
+									map[string]interface{}{
+										"name":  "nim",
+										"image": "nim:v0.1.0",
+										"ports": []interface{}{
+											map[string]interface{}{
+												"containerPort": 80,
 											},
-											"env": []interface{}{
-												map[string]interface{}{"name": "ENV_VAR1", "value": "value1"},
-												map[string]interface{}{"name": "ENV_VAR2", "value": "value2"},
-											},
+										},
+										"env": []interface{}{
+											map[string]interface{}{"name": "ENV_VAR1", "value": "value1"},
+											map[string]interface{}{"name": "ENV_VAR2", "value": "value2"},
 										},
 									},
 								},
 							},
 						},
 					},
+					"status": map[string]interface{}{
+						"ready": true,
+					},
 				},
 			},
-			expected: false,
+			expected:      false,
+			expectedError: false,
 		},
 		{
 			name: "change in hash with change in value of elements",
-			current: &MyResource{
-				Unstructured: unstructured.Unstructured{
-					Object: map[string]interface{}{
-						"apiVersion": "apps/v1",
-						"kind":       "Deployment",
-						"metadata": map[string]interface{}{
-							"name":      "nim-deployment",
-							"namespace": "default",
+			current: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"metadata": map[string]interface{}{
+						"name":      "nim-deployment",
+						"namespace": "default",
+					},
+					"spec": map[string]interface{}{
+						"replicas": 2,
+						"selector": map[string]interface{}{
+							"matchLabels": map[string]interface{}{
+								"app": "nim",
+							},
 						},
-						"spec": map[string]interface{}{
-							"replicas": 2,
-							"selector": map[string]interface{}{
-								"matchLabels": map[string]interface{}{
+						"template": map[string]interface{}{
+							"metadata": map[string]interface{}{
+								"labels": map[string]interface{}{
 									"app": "nim",
 								},
 							},
-							"template": map[string]interface{}{
-								"metadata": map[string]interface{}{
-									"labels": map[string]interface{}{
-										"app": "nim",
-									},
-								},
-								"spec": map[string]interface{}{
-									"containers": []interface{}{
-										map[string]interface{}{
-											"name":  "nim",
-											"image": "nim:v0.1.0",
-											"ports": []interface{}{
-												map[string]interface{}{
-													"containerPort": 80,
-												},
+							"spec": map[string]interface{}{
+								"containers": []interface{}{
+									map[string]interface{}{
+										"name":  "nim",
+										"image": "nim:v0.1.0",
+										"ports": []interface{}{
+											map[string]interface{}{
+												"containerPort": 80,
 											},
-											"env": []interface{}{
-												map[string]interface{}{"name": "ENV_VAR1", "value": "value2"},
-												map[string]interface{}{"name": "ENV_VAR2", "value": "value1"},
-											},
+										},
+										"env": []interface{}{
+											map[string]interface{}{"name": "ENV_VAR1", "value": "value2"},
+											map[string]interface{}{"name": "ENV_VAR2", "value": "value1"},
 										},
 									},
 								},
@@ -272,42 +259,40 @@ func TestIsSpecChanged(t *testing.T) {
 					},
 				},
 			},
-			desired: &MyResource{
-				Unstructured: unstructured.Unstructured{
-					Object: map[string]interface{}{
-						"apiVersion": "apps/v1",
-						"kind":       "Deployment",
-						"metadata": map[string]interface{}{
-							"name":      "nim-deployment",
-							"namespace": "default",
+			desired: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"metadata": map[string]interface{}{
+						"name":      "nim-deployment",
+						"namespace": "default",
+					},
+					"spec": map[string]interface{}{
+						"replicas": 3,
+						"selector": map[string]interface{}{
+							"matchLabels": map[string]interface{}{
+								"app": "nim",
+							},
 						},
-						"spec": map[string]interface{}{
-							"replicas": 3,
-							"selector": map[string]interface{}{
-								"matchLabels": map[string]interface{}{
+						"template": map[string]interface{}{
+							"metadata": map[string]interface{}{
+								"labels": map[string]interface{}{
 									"app": "nim",
 								},
 							},
-							"template": map[string]interface{}{
-								"metadata": map[string]interface{}{
-									"labels": map[string]interface{}{
-										"app": "nim",
-									},
-								},
-								"spec": map[string]interface{}{
-									"containers": []interface{}{
-										map[string]interface{}{
-											"name":  "nim",
-											"image": "nim:v0.1.0",
-											"ports": []interface{}{
-												map[string]interface{}{
-													"containerPort": 80,
-												},
+							"spec": map[string]interface{}{
+								"containers": []interface{}{
+									map[string]interface{}{
+										"name":  "nim",
+										"image": "nim:v0.1.0",
+										"ports": []interface{}{
+											map[string]interface{}{
+												"containerPort": 80,
 											},
-											"env": []interface{}{
-												map[string]interface{}{"name": "ENV_VAR1", "value": "asdf"},
-												map[string]interface{}{"name": "ENV_VAR2", "value": "jljl"},
-											},
+										},
+										"env": []interface{}{
+											map[string]interface{}{"name": "ENV_VAR1", "value": "asdf"},
+											map[string]interface{}{"name": "ENV_VAR2", "value": "jljl"},
 										},
 									},
 								},
@@ -316,16 +301,22 @@ func TestIsSpecChanged(t *testing.T) {
 					},
 				},
 			},
-			expected: true,
+			expected:      true,
+			expectedError: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.current.SetAnnotations(map[string]string{
-				NvidiaAnnotationHashKey: GetResourceHash(tt.current.GetSpec()),
-			})
-			if got := IsSpecChanged(tt.current, tt.desired); got != tt.expected {
+			err := patch.DefaultAnnotator.SetLastAppliedAnnotation(tt.current)
+			if err != nil {
+				t.Errorf("failed to set last applied annotation in test for resource %s: %s", tt.current.GetName(), err)
+			}
+			got, err := IsSpecChanged(tt.current, tt.desired)
+			if err != nil {
+				t.Errorf("failed to check if spec has changed in test for resource %s: %s", tt.current.GetName(), err)
+			}
+			if got != tt.expected {
 				t.Errorf("IsSpecChanged() = %v, want %v", got, tt.expected)
 			}
 		})
