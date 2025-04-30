@@ -466,6 +466,12 @@ mod tests {
         let _block_manager = create_reference_block_manager();
     }
 
+    // This tests mimics the behavior of two unique dynamo workers exchanging blocksets
+    // Each KvBlockManager is a unique worker in this test, each has its resources including
+    // it's own worker_ids, nixl_agent, and block pools.
+    //
+    // This test is meant to mimic the behavior of the basic nixl integration test found here:
+    // https://github.com/ai-dynamo/nixl/blob/main/src/bindings/rust/src/tests.rs
     #[tokio::test]
     async fn test_reference_block_managers() {
         dynamo_runtime::logging::init();
