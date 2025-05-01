@@ -19,9 +19,8 @@
 use super::*;
 
 use pyo3::{exceptions::PyRuntimeError, Python, PyObject, PyResult};
-use crate::dlpack::{ffi, ManagerCtx, ShapeAndStrides, ToTensor};
-use std::sync::{Arc, Mutex, Weak};
-use std::collections::HashMap;
+use dlpark::{ffi::DeviceType, prelude::{Device, DataType, ManagerCtx, ShapeAndStrides, ToTensor}};
+use std::{collections::HashMap, sync::{Arc, Mutex, Weak}};
 
 // Create a shared memory tracker type
 type RegionRefTracker = Arc<Mutex<HashMap<u64, usize>>>;
@@ -43,39 +42,33 @@ impl ToTensor for DlPackTensor {
         0
     }
 
-    fn device(&self) -> ffi::Device {
+    fn device(&self) -> Device {
         match self.storage_type {
-            dynamo_kv_manager::storage::StorageType::Device(_) => ffi::Device {
-                device_type: ffi::DeviceType::Cuda,
+            dynamo_kv_manager::storage::StorageType::Device(_) => Device::cuda(0),
+            dynamo_kv_manager::storage::StorageType::Pinned => Device {
+                device_type: DeviceType::CudaHost,
                 device_id: 0,
             },
-            dynamo_kv_manager::storage::StorageType::Pinned => ffi::Device {
-                device_type: ffi::DeviceType::CudaHost,
-                device_id: 0,
-            },
-            dynamo_kv_manager::storage::StorageType::System => ffi::Device {
-                device_type: ffi::DeviceType::Cpu,
-                device_id: 0,
-            },
+            dynamo_kv_manager::storage::StorageType::System => Device::CPU,
             _ => panic!("Unsupported storage type"),
         }
     }
 
-    fn dtype(&self) -> ffi::DataType {
+    fn dtype(&self) -> DataType {
         match self.dtype {
-            dynamo_kv_manager::dtype::DType::FP8 => ffi::DataType::U8,
-            dynamo_kv_manager::dtype::DType::FP16 => ffi::DataType::F16,
-            dynamo_kv_manager::dtype::DType::BF16 => ffi::DataType::BF16,
-            dynamo_kv_manager::dtype::DType::FP32 => ffi::DataType::F32,
-            dynamo_kv_manager::dtype::DType::FP64 => ffi::DataType::F64,
-            dynamo_kv_manager::dtype::DType::U8 => ffi::DataType::U8,
-            dynamo_kv_manager::dtype::DType::U16 => ffi::DataType::U16,
-            dynamo_kv_manager::dtype::DType::U32 => ffi::DataType::U32,
-            dynamo_kv_manager::dtype::DType::U64 => ffi::DataType::U64,
-            dynamo_kv_manager::dtype::DType::I8 => ffi::DataType::I8,
-            dynamo_kv_manager::dtype::DType::I16 => ffi::DataType::I16,
-            dynamo_kv_manager::dtype::DType::I32 => ffi::DataType::I32,
-            dynamo_kv_manager::dtype::DType::I64 => ffi::DataType::I64,
+            dynamo_kv_manager::dtype::DType::FP8 => DataType::U8,
+            dynamo_kv_manager::dtype::DType::FP16 => DataType::F16,
+            dynamo_kv_manager::dtype::DType::BF16 => DataType::BF16,
+            dynamo_kv_manager::dtype::DType::FP32 => DataType::F32,
+            dynamo_kv_manager::dtype::DType::FP64 => DataType::F64,
+            dynamo_kv_manager::dtype::DType::U8 => DataType::U8,
+            dynamo_kv_manager::dtype::DType::U16 => DataType::U16,
+            dynamo_kv_manager::dtype::DType::U32 => DataType::U32,
+            dynamo_kv_manager::dtype::DType::U64 => DataType::U64,
+            dynamo_kv_manager::dtype::DType::I8 => DataType::I8,
+            dynamo_kv_manager::dtype::DType::I16 => DataType::I16,
+            dynamo_kv_manager::dtype::DType::I32 => DataType::I32,
+            dynamo_kv_manager::dtype::DType::I64 => DataType::I64,
         }
     }
 
