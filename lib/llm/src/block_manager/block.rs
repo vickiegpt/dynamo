@@ -15,6 +15,7 @@
 
 pub mod registry;
 pub mod state;
+pub mod transfer;
 pub mod view;
 
 pub use crate::tokens::TokenBlockError;
@@ -24,12 +25,25 @@ pub use state::{BlockState, BlockStateInvalid};
 use crate::block_manager::storage::Storage;
 use crate::tokens::{SaltHash, SequenceHash, Token, TokenBlock, Tokens};
 
-use super::events::PublishHandle;
-use super::layout::{BlockLayout, LayoutError, LayoutType};
+use transfer::{Immutable, Local, Mutable, Readable, Writable};
 
-use std::fmt::Debug;
-use std::sync::Arc;
+use super::{
+    events::PublishHandle,
+    layout::{BlockLayout, LayoutError, LayoutType},
+    WorkerID,
+};
+
+use std::{
+    fmt::Debug,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
+
 use thiserror::Error;
+
+mod private {
+    pub struct PrivateToken;
+}
 
 /// Result type for Block operations
 pub type BlockResult<T> = std::result::Result<T, BlockError>;
@@ -282,12 +296,6 @@ impl<S: Storage, M: BlockMetadata> BlockExt for Block<S, M> {
 }
 
 pub trait BlockDataExt<S: Storage> {
-    /// Returns the index of the block in the block set
-    fn block_idx(&self) -> usize;
-
-    /// Returns the index of the block set
-    fn block_set_idx(&self) -> usize;
-
     /// Returns true if the block data is fully contiguous
     fn is_fully_contiguous(&self) -> bool;
 
@@ -310,6 +318,7 @@ pub struct BlockData<S: Storage> {
     layout: Arc<dyn BlockLayout<StorageType = S>>,
     block_idx: usize,
     block_set_idx: usize,
+    worker_id: WorkerID,
 }
 
 impl<S> BlockData<S>
@@ -321,24 +330,18 @@ where
         layout: Arc<dyn BlockLayout<StorageType = S>>,
         block_idx: usize,
         block_set_idx: usize,
+        worker_id: WorkerID,
     ) -> Self {
         Self {
             layout,
             block_idx,
             block_set_idx,
+            worker_id,
         }
     }
 }
 
 impl<S: Storage> BlockDataExt<S> for BlockData<S> {
-    fn block_idx(&self) -> usize {
-        self.block_idx
-    }
-
-    fn block_set_idx(&self) -> usize {
-        self.block_set_idx
-    }
-
     fn is_fully_contiguous(&self) -> bool {
         self.layout.layout_type() == LayoutType::FullyContiguous
     }
@@ -378,6 +381,16 @@ impl<S: Storage> BlockDataExt<S> for BlockData<S> {
     }
 }
 
+pub trait BlockDataProvider {
+    type StorageType: Storage;
+
+    fn block_data(&self, _: private::PrivateToken) -> &BlockData<Self::StorageType>;
+}
+
+pub trait BlockDataProviderMut: BlockDataProvider {
+    fn block_data_mut(&mut self, _: private::PrivateToken) -> &mut BlockData<Self::StorageType>;
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 pub struct BasicMetadata {
     priority: u32,
@@ -404,17 +417,19 @@ pub struct Blocks<L: BlockLayout, M: BlockMetadata> {
     layout: Box<L>,
     metadata: std::marker::PhantomData<M>,
     block_set_idx: usize,
+    worker_id: WorkerID,
 }
 
 impl<L: BlockLayout + 'static, M: BlockMetadata> Blocks<L, M> {
     /// Create a new block storage collection
-    pub fn new(layout: L, block_set_idx: usize) -> BlockResult<Self> {
+    pub fn new(layout: L, block_set_idx: usize, worker_id: WorkerID) -> BlockResult<Self> {
         let layout = Box::new(layout);
 
         Ok(Self {
             layout,
             metadata: std::marker::PhantomData,
             block_set_idx,
+            worker_id,
         })
     }
 
@@ -422,20 +437,126 @@ impl<L: BlockLayout + 'static, M: BlockMetadata> Blocks<L, M> {
     pub fn into_blocks(self) -> BlockResult<Vec<Block<L::StorageType, M>>> {
         // convert box to arc
         let layout: Arc<dyn BlockLayout<StorageType = L::StorageType>> = Arc::new(*self.layout);
-        layout_to_blocks(layout, self.block_set_idx)
+        layout_to_blocks(layout, self.block_set_idx, self.worker_id)
     }
 }
 
 pub(crate) fn layout_to_blocks<S: Storage, M: BlockMetadata>(
     layout: Arc<dyn BlockLayout<StorageType = S>>,
     block_set_idx: usize,
+    worker_id: WorkerID,
 ) -> BlockResult<Vec<Block<S, M>>> {
     (0..layout.num_blocks())
         .map(|idx| {
-            let data = BlockData::new(layout.clone(), idx, block_set_idx);
+            let data = BlockData::new(layout.clone(), idx, block_set_idx, worker_id);
             Block::new(data, M::default())
         })
         .collect()
+}
+
+pub struct MutableBlock<S: Storage, M: BlockMetadata> {
+    block: Option<Block<S, M>>,
+    return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
+}
+
+impl<S: Storage, M: BlockMetadata> Writable for MutableBlock<S, M> {}
+impl<S: Storage, M: BlockMetadata> Readable for MutableBlock<S, M> {}
+impl<S: Storage, M: BlockMetadata> Mutable for MutableBlock<S, M> {}
+impl<S: Storage, M: BlockMetadata> Local for MutableBlock<S, M> {}
+
+impl<S: Storage, M: BlockMetadata> MutableBlock<S, M> {
+    pub(crate) fn new(
+        block: Block<S, M>,
+        return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
+    ) -> Self {
+        Self {
+            block: Some(block),
+            return_tx,
+        }
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> std::fmt::Debug for MutableBlock<S, M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MutableBlock {{ block: {:?} }}", self.block)
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> Drop for MutableBlock<S, M> {
+    fn drop(&mut self) {
+        if let Some(block) = self.block.take() {
+            if self.return_tx.send(block).is_err() {
+                tracing::warn!("block pool shutdown before block was returned");
+            }
+        }
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> Deref for MutableBlock<S, M> {
+    type Target = Block<S, M>;
+
+    fn deref(&self) -> &Self::Target {
+        self.block.as_ref().expect("block was dropped")
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> DerefMut for MutableBlock<S, M> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.block.as_mut().expect("block was dropped")
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> BlockDataProvider for MutableBlock<S, M> {
+    type StorageType = S;
+
+    fn block_data(&self, _: private::PrivateToken) -> &BlockData<S> {
+        &self.block.as_ref().expect("block was dropped").data
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> BlockDataProviderMut for MutableBlock<S, M> {
+    fn block_data_mut(&mut self, _: private::PrivateToken) -> &mut BlockData<S> {
+        &mut self.block.as_mut().expect("block was dropped").data
+    }
+}
+#[derive(Debug)]
+pub struct ImmutableBlock<S: Storage, M: BlockMetadata> {
+    block: Arc<MutableBlock<S, M>>,
+}
+
+impl<S: Storage, M: BlockMetadata> ImmutableBlock<S, M> {
+    pub(crate) fn new(block: Arc<MutableBlock<S, M>>) -> Self {
+        Self { block }
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> Readable for ImmutableBlock<S, M> {}
+impl<S: Storage, M: BlockMetadata> Immutable for ImmutableBlock<S, M> {}
+impl<S: Storage, M: BlockMetadata> Local for ImmutableBlock<S, M> {}
+
+impl<S: Storage, M: BlockMetadata> Deref for ImmutableBlock<S, M> {
+    type Target = Block<S, M>;
+    fn deref(&self) -> &Self::Target {
+        self.block
+            .as_ref()
+            .block
+            .as_ref()
+            .expect("block was dropped")
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> BlockDataProvider for ImmutableBlock<S, M> {
+    type StorageType = S;
+
+    fn block_data(&self, _: private::PrivateToken) -> &BlockData<S> {
+        &self
+            .block
+            .as_ref()
+            .block
+            .as_ref()
+            .expect("block was dropped")
+            .data
+    }
 }
 
 pub mod nixl {
@@ -449,7 +570,7 @@ pub mod nixl {
         WorkerID,
     };
 
-    use derive_getters::Dissolve;
+    use derive_getters::{Dissolve, Getters};
     use nixl_sys::{Agent as NixlAgent, MemoryRegion, NixlDescriptor, OptArgs};
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
@@ -548,22 +669,26 @@ pub mod nixl {
         }
     }
 
-    pub trait NixlBlockDataExt<S: Storage>: BlockDataExt<S> {
+    pub trait NixlBlockDataImmutable<S: Storage>: BlockDataExt<S> {
         /// Get the NIXL memory descriptor for the entire block
         fn as_block_descriptor(
             &self,
         ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsImmutable>>;
-
-        /// Get the NIXL memory descriptor for the entire block
-        fn as_block_descriptor_mut(
-            &mut self,
-        ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsMutable>>;
 
         /// Get the NIXL memory descriptor for a specific layer
         fn as_layer_descriptor(
             &self,
             layer_idx: usize,
         ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsImmutable>>;
+    }
+
+    pub trait NixlBlockDataMutable<S: Storage>:
+        BlockDataExt<S> + NixlBlockDataImmutable<S>
+    {
+        /// Get the NIXL memory descriptor for the entire block
+        fn as_block_descriptor_mut(
+            &mut self,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsMutable>>;
 
         /// Get the NIXL memory descriptor for a specific layer
         fn as_layer_descriptor_mut(
@@ -572,17 +697,11 @@ pub mod nixl {
         ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsMutable>>;
     }
 
-    impl<S: Storage + NixlDescriptor> NixlBlockDataExt<S> for BlockData<S> {
+    impl<S: Storage + NixlDescriptor> NixlBlockDataImmutable<S> for BlockData<S> {
         fn as_block_descriptor(
             &self,
         ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsImmutable>> {
             Ok(self.block_view()?.as_nixl_descriptor())
-        }
-
-        fn as_block_descriptor_mut(
-            &mut self,
-        ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsMutable>> {
-            Ok(self.block_view_mut()?.as_nixl_descriptor_mut())
         }
 
         fn as_layer_descriptor(
@@ -590,6 +709,14 @@ pub mod nixl {
             layer_idx: usize,
         ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsImmutable>> {
             Ok(self.layer_view(layer_idx)?.as_nixl_descriptor())
+        }
+    }
+
+    impl<S: Storage + NixlDescriptor> NixlBlockDataMutable<S> for BlockData<S> {
+        fn as_block_descriptor_mut(
+            &mut self,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsMutable>> {
+            Ok(self.block_view_mut()?.as_nixl_descriptor_mut())
         }
 
         fn as_layer_descriptor_mut(
@@ -704,28 +831,32 @@ pub mod nixl {
     pub struct RemoteBlocks {
         layout: Arc<dyn BlockLayout<StorageType = NixlStorage>>,
         block_set_idx: usize,
+        worker_id: WorkerID,
     }
 
     impl RemoteBlocks {
         pub fn new(
             layout: Arc<dyn BlockLayout<StorageType = NixlStorage>>,
             block_set_idx: usize,
+            worker_id: WorkerID,
         ) -> Self {
             Self {
                 layout,
                 block_set_idx,
+                worker_id,
             }
         }
 
         pub fn from_serialized(
             serialized: SerializedNixlBlockLayout,
             block_set_idx: usize,
+            worker_id: WorkerID,
         ) -> BlockResult<Self> {
             let layout = serialized.deserialize()?;
-            Ok(Self::new(layout, block_set_idx))
+            Ok(Self::new(layout, block_set_idx, worker_id))
         }
 
-        pub fn block(&self, block_idx: usize) -> BlockResult<RemoteBlock> {
+        pub fn block<M: MutabilityKind>(&self, block_idx: usize) -> BlockResult<RemoteBlock<M>> {
             if block_idx >= self.layout.num_blocks() {
                 return Err(BlockError::InvalidState(format!(
                     "block index out of bounds: {} >= {}",
@@ -737,6 +868,7 @@ pub mod nixl {
                 self.layout.clone(),
                 block_idx,
                 self.block_set_idx,
+                self.worker_id,
             ))
         }
 
@@ -746,36 +878,30 @@ pub mod nixl {
         }
     }
 
-    pub struct RemoteBlock {
+    pub type ImmutableRemoteBlock = RemoteBlock<IsImmutable>;
+    pub type MutableRemoteBlock = RemoteBlock<IsMutable>;
+
+    pub struct RemoteBlock<M: MutabilityKind> {
         data: BlockData<NixlStorage>,
-        block_idx: usize,
-        block_set_idx: usize,
+        _mutability: std::marker::PhantomData<M>,
     }
 
-    impl RemoteBlock {
+    impl<M: MutabilityKind> RemoteBlock<M> {
         pub fn new(
             layout: Arc<dyn BlockLayout<StorageType = NixlStorage>>,
             block_idx: usize,
             block_set_idx: usize,
+            worker_id: WorkerID,
         ) -> Self {
-            let data = BlockData::new(layout, block_idx, block_set_idx);
+            let data = BlockData::new(layout, block_idx, block_set_idx, worker_id);
             Self {
                 data,
-                block_idx,
-                block_set_idx,
+                _mutability: std::marker::PhantomData,
             }
         }
     }
 
-    impl BlockDataExt<NixlStorage> for RemoteBlock {
-        fn block_idx(&self) -> usize {
-            self.data.block_idx()
-        }
-
-        fn block_set_idx(&self) -> usize {
-            self.data.block_set_idx()
-        }
-
+    impl<M: MutabilityKind> BlockDataExt<NixlStorage> for RemoteBlock<M> {
         fn is_fully_contiguous(&self) -> bool {
             self.data.is_fully_contiguous()
         }
@@ -799,18 +925,18 @@ pub mod nixl {
             self.data.block_view_mut()
         }
     }
+    impl<M: MutabilityKind> BlockDataProvider for RemoteBlock<M> {
+        type StorageType = NixlStorage;
 
-    impl NixlBlockDataExt<NixlStorage> for RemoteBlock {
+        fn block_data(&self, _: private::PrivateToken) -> &BlockData<NixlStorage> {
+            &self.data
+        }
+    }
+    impl<M: MutabilityKind> NixlBlockDataImmutable<NixlStorage> for RemoteBlock<M> {
         fn as_block_descriptor(
             &self,
         ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsImmutable>> {
             self.data.as_block_descriptor()
-        }
-
-        fn as_block_descriptor_mut(
-            &mut self,
-        ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsMutable>> {
-            self.data.as_block_descriptor_mut()
         }
 
         fn as_layer_descriptor(
@@ -819,6 +945,19 @@ pub mod nixl {
         ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsImmutable>> {
             self.data.as_layer_descriptor(layer_idx)
         }
+    }
+
+    impl BlockDataProviderMut for RemoteBlock<IsMutable> {
+        fn block_data_mut(&mut self, _: private::PrivateToken) -> &mut BlockData<NixlStorage> {
+            &mut self.data
+        }
+    }
+    impl NixlBlockDataMutable<NixlStorage> for RemoteBlock<IsMutable> {
+        fn as_block_descriptor_mut(
+            &mut self,
+        ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsMutable>> {
+            self.data.as_block_descriptor_mut()
+        }
 
         fn as_layer_descriptor_mut(
             &mut self,
@@ -826,6 +965,171 @@ pub mod nixl {
         ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsMutable>> {
             self.data.as_layer_descriptor_mut(layer_idx)
         }
+    }
+
+    /// Defines the intended access pattern for a block represented by a descriptor.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum BlockMutability {
+        Immutable,
+        Mutable,
+    }
+
+    /// Describes a single block for identification and potential remote access setup.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct BlockDescriptor {
+        pub worker_id: WorkerID,
+        pub block_set_idx: usize,
+        pub block_idx: usize,
+        pub mutability: BlockMutability,
+    }
+
+    // Placeholder Trait: Real pool handles must provide this info.
+    // This trait allows BlockDescriptorSet constructors to be generic.
+    pub trait BlockHandleInfo {
+        fn worker_id(&self) -> WorkerID; // Needs access to the parent KvBlockManager's ID
+        fn block_set_idx(&self) -> usize;
+        fn block_idx(&self) -> usize;
+    }
+
+    impl<S: Storage> BlockHandleInfo for BlockData<S> {
+        fn worker_id(&self) -> WorkerID {
+            self.worker_id
+        }
+        fn block_set_idx(&self) -> usize {
+            self.block_set_idx
+        }
+        fn block_idx(&self) -> usize {
+            self.block_idx
+        }
+    }
+
+    impl<S: Storage, M: BlockMetadata> BlockHandleInfo for Block<S, M> {
+        fn worker_id(&self) -> WorkerID {
+            self.data.worker_id
+        }
+
+        fn block_set_idx(&self) -> usize {
+            self.data.block_set_idx
+        }
+
+        fn block_idx(&self) -> usize {
+            self.data.block_idx
+        }
+    }
+
+    /// A validated, homogeneous, and serializable collection of BlockDescriptors.
+    /// Primarily used to describe sets of remote blocks for transfer operations.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Getters)]
+    pub struct BlockDescriptorSet {
+        #[getter(copy)]
+        worker_id: WorkerID,
+
+        #[getter(copy)]
+        block_set_idx: usize,
+
+        #[getter(copy)]
+        mutability: BlockMutability,
+
+        block_indices: Vec<usize>,
+        // TODO: Consider storing MemType explicitly if it cannot be reliably
+        // derived from block_set_idx via the NixlBlockSet on the receiving side.
+    }
+
+    #[derive(Debug, Error)]
+    pub enum BlockDescriptorSetError {
+        #[error("Input block list cannot be empty")]
+        EmptyInput,
+
+        #[error(
+            "Blocks in the input list are not homogeneous (worker_id, block_set_idx mismatch)"
+        )]
+        NotHomogeneous,
+
+        #[error("Serialization failed: {0}")]
+        SerializationError(#[from] serde_json::Error),
+        #[error(
+            "An invalid block handle was encountered (block may have been dropped prematurely)"
+        )]
+        InvalidBlockHandle,
+    }
+
+    impl BlockDescriptorSet {
+        /// Creates a new validated BlockDescriptorSet from a slice of block handles.
+        /// Ensures all handles belong to the same worker and block set.
+        fn new<S: Storage>(
+            blocks: &[&BlockData<S>], // Use the generic trait bound
+            mutability: BlockMutability,
+        ) -> Result<Self, BlockDescriptorSetError> {
+            if blocks.is_empty() {
+                return Err(BlockDescriptorSetError::EmptyInput);
+            }
+
+            let first = blocks[0];
+            let worker_id = first.worker_id();
+            let block_set_idx = first.block_set_idx();
+
+            let mut block_indices = Vec::with_capacity(blocks.len());
+            block_indices.push(first.block_idx());
+
+            for block in blocks.iter().skip(1) {
+                // Validate homogeneity
+                if block.worker_id() != worker_id || block.block_set_idx() != block_set_idx {
+                    return Err(BlockDescriptorSetError::NotHomogeneous);
+                }
+                block_indices.push(block.block_idx());
+            }
+
+            // TODO: Potentially validate MemType derived from block_set_idx here if possible
+
+            Ok(Self {
+                worker_id,
+                block_set_idx,
+                mutability,
+                block_indices,
+            })
+        }
+
+        /// Creates a BlockDescriptorSet representing immutable blocks.
+        pub fn from_immutable_blocks<S: Storage, M: BlockMetadata>(
+            blocks: &[ImmutableBlock<S, M>],
+        ) -> Result<Self, BlockDescriptorSetError> {
+            // Map each block handle to Option<&BlockData>,
+            // then convert Option to Result (treating None as an error),
+            // finally collect into Result<Vec<&BlockData>, Error>.
+            let data: Vec<&BlockData<S>> = blocks
+                .iter()
+                .map(|b| b.block.block.as_ref().map(|inner_b| &inner_b.data))
+                .map(|opt| opt.ok_or(BlockDescriptorSetError::InvalidBlockHandle))
+                .collect::<Result<Vec<&BlockData<S>>, _>>()?;
+
+            Self::new(&data, BlockMutability::Immutable)
+        }
+
+        /// Creates a BlockDescriptorSet representing mutable blocks.
+        pub fn from_mutable_blocks<S: Storage, M: BlockMetadata>(
+            blocks: &[MutableBlock<S, M>],
+        ) -> Result<Self, BlockDescriptorSetError> {
+            // Map each block handle to Option<&BlockData>,
+            // then convert Option to Result (treating None as an error),
+            // finally collect into Result<Vec<&BlockData>, Error>.
+            let data: Vec<&BlockData<S>> = blocks
+                .iter()
+                .map(|b| b.block.as_ref().map(|inner_b| &inner_b.data))
+                .map(|opt| opt.ok_or(BlockDescriptorSetError::InvalidBlockHandle))
+                .collect::<Result<Vec<&BlockData<S>>, _>>()?;
+
+            Self::new(&data, BlockMutability::Mutable)
+        }
+
+        // /// Serializes the BlockDescriptorSet into a byte vector.
+        // pub fn serialize(&self) -> Result<Vec<u8>, BlockDescriptorSetError> {
+        //     Ok(serde_json::to_vec(self)?)
+        // }
+
+        // /// Deserializes a BlockDescriptorSet from a byte slice.
+        // pub fn deserialize(data: &[u8]) -> Result<Self, BlockDescriptorSetError> {
+        //     Ok(serde_json::from_slice(data)?)
+        // }
     }
 }
 
@@ -852,7 +1156,7 @@ mod tests {
     // Helper to create a default reset block
     fn create_reset_block() -> Block<impl Storage, BasicMetadata> {
         let layout = setup_layout(None).unwrap();
-        let data = BlockData::new(Arc::new(layout), 0, 42);
+        let data = BlockData::new(Arc::new(layout), 0, 42, 0);
         Block::new(data, BasicMetadata::default()).unwrap()
     }
 
@@ -1075,13 +1379,13 @@ mod tests {
         let serialized = layout.serialize().unwrap();
         let layout = Arc::new(layout);
 
-        let data = BlockData::new(layout.clone(), 0, 42);
+        let data = BlockData::new(layout.clone(), 0, 42, 0);
         assert_eq!(data.block_idx(), 0);
         assert_eq!(data.block_set_idx(), 42);
         let block_desc = data.as_block_descriptor().unwrap();
         println!("Block descriptor: {:?}", block_desc);
 
-        let data = BlockData::new(layout.clone(), 1, 42);
+        let data = BlockData::new(layout.clone(), 1, 42, 0);
         assert_eq!(data.block_idx(), 1);
         assert_eq!(data.block_set_idx(), 42);
         let block_desc = data.as_block_descriptor().unwrap();
@@ -1090,7 +1394,7 @@ mod tests {
         let remote_layout = SerializedNixlBlockLayout::deserialize(&serialized).unwrap();
         println!("Nixl layout: {:?}", remote_layout);
 
-        let remote_block = RemoteBlock::new(remote_layout.clone(), 0, 42);
+        let remote_block = RemoteBlock::<IsMutable>::new(remote_layout.clone(), 0, 42, 0);
         let remote_desc = remote_block.as_block_descriptor().unwrap();
         println!("Remote Descriptor: {:?}", remote_desc);
 

@@ -26,7 +26,11 @@ pub mod pool;
 pub mod storage;
 
 pub use crate::common::dtype::DType;
-pub use block::{BasicMetadata, BlockMetadata, Blocks};
+pub use block::{
+    nixl::{BlockDescriptorSet, IsImmutable, IsMutable, MutabilityKind, RemoteBlock},
+    transfer::TransferRequestPut,
+    BasicMetadata, BlockMetadata, Blocks,
+};
 pub use layout::{nixl::NixlLayout, LayoutConfig, LayoutConfigBuilder, LayoutError, LayoutType};
 pub use pool::BlockPool;
 pub use storage::{
@@ -35,7 +39,7 @@ pub use storage::{
 pub use tokio_util::sync::CancellationToken;
 
 use anyhow::{Context, Result};
-use block::nixl::{NixlBlockSet, RemoteBlocks, SerializedNixlBlockSet};
+use block::nixl::{BlockMutability, NixlBlockSet, RemoteBlocks, SerializedNixlBlockSet};
 use derive_builder::Builder;
 use nixl_sys::Agent as NixlAgent;
 use std::{collections::HashMap, sync::Arc};
@@ -231,6 +235,7 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
                 layout,
                 next_block_set_idx,
                 cancellation_token.clone(),
+                worker_id,
             )?;
             Some(block_pool)
         } else {
@@ -248,6 +253,7 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
                 layout,
                 next_block_set_idx,
                 cancellation_token.clone(),
+                worker_id,
             )?;
             Some(block_pool)
         } else {
@@ -312,7 +318,7 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
         for (block_set_idx, block_set_layout) in block_sets {
             // Deserialize the individual layout and create RemoteBlocks
             let remote_blocks =
-                RemoteBlocks::from_serialized(block_set_layout.clone(), block_set_idx)?;
+                RemoteBlocks::from_serialized(block_set_layout.clone(), block_set_idx, worker_id)?;
 
             // check the storage type of the remote blocks
             let layout = remote_blocks.layout();
@@ -356,6 +362,54 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
         self.remote_block_sets.insert(worker_id, inner_map);
 
         Ok(())
+    }
+
+    fn get_remote_blocks_immutable(
+        &self,
+        bds: &BlockDescriptorSet,
+    ) -> Result<Vec<RemoteBlock<IsImmutable>>> {
+        // no checks - we can always create an immutable remote block even if the bds is mutable
+        self.get_remote_blocks::<IsImmutable>(bds)
+    }
+
+    fn get_remote_blocks_mutable(
+        &self,
+        bds: &BlockDescriptorSet,
+    ) -> Result<Vec<RemoteBlock<IsMutable>>> {
+        if bds.mutability() == BlockMutability::Mutable {
+            self.get_remote_blocks::<IsMutable>(bds)
+        } else {
+            anyhow::bail!("Cannot get mutable remote blocks for immutable block descriptor set");
+        }
+    }
+
+    /// Generate a [`Vec<RemoteBlock>`] from a [`BlockDescriptorSet`]
+    fn get_remote_blocks<M: MutabilityKind>(
+        &self,
+        bds: &BlockDescriptorSet,
+    ) -> Result<Vec<RemoteBlock<M>>> {
+        // validate we have loaded a remote blockset for the worker and the specific block_set_idx
+        let remote_blocks = self
+            .remote_block_sets
+            .get(&bds.worker_id())
+            .and_then(|map| map.get(&bds.block_set_idx()))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No remote blockset found for worker {} and block_set_idx {}",
+                    bds.worker_id(),
+                    bds.block_set_idx()
+                )
+            })?;
+
+        // Iterate through indices, call .block() for each, and collect results.
+        // The collect::<Result<...>>() handles potential errors from .block()
+        let blocks: Vec<block::nixl::RemoteBlock<M>> = bds
+            .block_indices()
+            .iter()
+            .map(|block_idx| remote_blocks.block(*block_idx))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(blocks)
     }
 }
 
@@ -408,8 +462,9 @@ fn create_block_pool<S: Storage + NixlEnabledStorage, M: BlockMetadata>(
     layout: Arc<dyn NixlLayout<StorageType = S>>,
     block_set_idx: usize,
     cancellation_token: CancellationToken,
+    worker_id: WorkerID,
 ) -> Result<BlockPool<S, M>> {
-    let blocks = block::layout_to_blocks::<_, M>(layout, block_set_idx)?;
+    let blocks = block::layout_to_blocks::<_, M>(layout, block_set_idx, worker_id)?;
     Ok(BlockPool::builder()
         .blocks(blocks)
         .cancel_token(cancellation_token)
@@ -420,7 +475,11 @@ fn create_block_pool<S: Storage + NixlEnabledStorage, M: BlockMetadata>(
 mod tests {
     use super::*;
 
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    };
+    use tokio::sync::{mpsc, Barrier};
 
     // Atomic Counter for Worker ID
     static WORKER_ID: AtomicU64 = AtomicU64::new(1337);
@@ -474,7 +533,7 @@ mod tests {
         let _block_manager = create_reference_block_manager();
     }
 
-    // This tests mimics the behavior of two unique dynamo workers exchanging blocksets
+    // This tests mimics the behavior of two unique kvbm workers exchanging blocksets
     // Each KvBlockManager is a unique worker in this test, each has its resources including
     // it's own worker_ids, nixl_agent, and block pools.
     //
@@ -497,5 +556,34 @@ mod tests {
         // in dynamo, we would be watching the discovery plane for remote blocksets
         kvbm_0.import_remote_blockset(blockset_1).unwrap();
         kvbm_1.import_remote_blockset(blockset_0).unwrap();
+
+        // Worker 0
+        // Allocate 4 mutable blocks on the host
+        let blocks_0 = kvbm_0.host().unwrap().allocate_blocks(4).await.unwrap();
+
+        // Create a BlockDescriptorSet for the mutable blocks
+        let blockset_0 = BlockDescriptorSet::from_mutable_blocks(&blocks_0).unwrap();
+
+        // Worker 1
+        // Create a RemoteBlock list from blockset_0
+        let blocks_1 = kvbm_1.host().unwrap().allocate_blocks(4).await.unwrap();
+        let mut remote_blocks_0 = kvbm_1.get_remote_blocks_mutable(&blockset_0).unwrap();
+
+        // Create a TransferRequestPut for the mutable blocks
+        let transfer_request = TransferRequestPut::new(&blocks_0, &mut remote_blocks_0).unwrap();
+
+        // Validate blocks - this could be an expensive operation
+        // TODO: Create an ENV trigger debug flag which will call this on every transfer request
+        // In this case, we expect an error because we have overlapping blocks as we are sending to/from the same blocks
+        // because we are using the wrong target (artifact of the test setup allowing variable to cross what woudl be
+        // worker boundaries)
+        assert!(transfer_request.validate_blocks().is_err());
+
+        // This is proper request - PUT from worker 1 (local) to worker 0 (remote)
+        let transfer_request = TransferRequestPut::new(&blocks_1, &mut remote_blocks_0).unwrap();
+        assert!(transfer_request.validate_blocks().is_ok());
+
+        // Execute the transfer request
+        transfer_request.execute().unwrap();
     }
 }

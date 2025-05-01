@@ -64,16 +64,16 @@ impl<S: Storage, M: BlockMetadata> ActiveBlockPool<S, M> {
             std::collections::hash_map::Entry::Occupied(mut entry) => {
                 let weak = entry.get();
                 if let Some(arc) = weak.upgrade() {
-                    Ok(ImmutableBlock { block: arc })
+                    Ok(ImmutableBlock::new(arc))
                 } else {
                     // Weak reference is no longer alive, update it in the map
                     entry.insert(Arc::downgrade(&shared));
-                    Ok(ImmutableBlock { block: shared })
+                    Ok(ImmutableBlock::new(shared))
                 }
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(Arc::downgrade(&shared));
-                Ok(ImmutableBlock { block: shared })
+                Ok(ImmutableBlock::new(shared))
             }
         }
     }
@@ -96,7 +96,7 @@ impl<S: Storage, M: BlockMetadata> ActiveBlockPool<S, M> {
     ) -> Option<ImmutableBlock<S, M>> {
         if let Some(weak) = self.map.get(&sequence_hash) {
             if let Some(arc) = weak.upgrade() {
-                Some(ImmutableBlock { block: arc })
+                Some(ImmutableBlock::new(arc))
             } else {
                 // Weak reference is no longer alive, remove it from the map
                 self.map.remove(&sequence_hash);

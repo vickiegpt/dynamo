@@ -67,8 +67,11 @@ use inactive::InactiveBlockPool;
 use priority_key::PriorityKey;
 use tokio::sync::oneshot;
 
-use super::block::BlockError;
-use super::block::{registry::BlockRegistry, Block, BlockMetadata};
+pub use super::block::{ImmutableBlock, MutableBlock};
+
+use super::block::{
+    nixl::BlockHandleInfo, registry::BlockRegistry, Block, BlockError, BlockMetadata,
+};
 use super::events::{EventManager, NullEventManager};
 use super::layout::BlockLayout;
 use super::storage::Storage;
@@ -86,10 +89,6 @@ use dynamo_runtime::{
     utils::pool::{PoolItem, SharedPoolItem},
     Result,
 };
-
-pub type BlockType<S, M> = Block<S, M>;
-pub type UniqueBlock<S, M> = PoolItem<Block<S, M>>;
-pub type SharedBlock<S, M> = SharedPoolItem<Block<S, M>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BlockPoolError {
@@ -229,41 +228,6 @@ impl Runtime {
     }
 }
 
-pub struct MutableBlock<S: Storage, M: BlockMetadata> {
-    block: Option<Block<S, M>>,
-    return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
-}
-
-impl<S: Storage, M: BlockMetadata> MutableBlock<S, M> {
-    fn new(block: Block<S, M>, return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>) -> Self {
-        Self {
-            block: Some(block),
-            return_tx,
-        }
-    }
-}
-
-impl<S: Storage, M: BlockMetadata> std::fmt::Debug for MutableBlock<S, M> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MutableBlock {{ block: {:?} }}", self.block)
-    }
-}
-
-impl<S: Storage, M: BlockMetadata> Drop for MutableBlock<S, M> {
-    fn drop(&mut self) {
-        if let Some(block) = self.block.take() {
-            if self.return_tx.send(block).is_err() {
-                tracing::warn!("block pool shutdown before block was returned");
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct ImmutableBlock<S: Storage, M: BlockMetadata> {
-    block: Arc<MutableBlock<S, M>>,
-}
-
 impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     pub fn builder() -> BlockPoolArgsBuilder<S, M> {
         BlockPoolArgsBuilder::default()
@@ -322,37 +286,37 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         )
     }
 
-    /// Adds a vector of [`Block`]s to the [`InactiveBlockPool`].
-    ///
-    /// These blocks are typically created from a [`super::block::Blocks`]
-    /// and represent the initial set of available cache blocks.
-    /// Blocks added this way are initially reset.
-    ///
-    /// # Arguments
-    ///
-    /// * `blocks` - A [`Vec<Block<S, M>>`] to add to the inactive pool.
-    pub async fn add_blocks(&self, blocks: Vec<Block<S, M>>) -> Result<(), BlockPoolError> {
-        // Create the request
-        let (req, resp_rx) = Unary::<_, ()>::make_request(blocks);
+    // /// Adds a vector of [`Block`]s to the [`InactiveBlockPool`].
+    // ///
+    // /// These blocks are typically created from a [`super::block::Blocks`]
+    // /// and represent the initial set of available cache blocks.
+    // /// Blocks added this way are initially reset.
+    // ///
+    // /// # Arguments
+    // ///
+    // /// * `blocks` - A [`Vec<Block<S, M>>`] to add to the inactive pool.
+    // pub async fn add_blocks(&self, blocks: Vec<Block<S, M>>) -> Result<(), BlockPoolError> {
+    //     // Create the request
+    //     let (req, resp_rx) = Unary::<_, ()>::make_request(blocks);
 
-        // Issue the request
-        self.ctrl_tx
-            .send(ControlRequest::AddBlocks(req))
-            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
+    //     // Issue the request
+    //     self.ctrl_tx
+    //         .send(ControlRequest::AddBlocks(req))
+    //         .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
 
-        // Await a response
-        resp_rx
-            .await
-            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
-        Ok(())
-    }
+    //     // Await a response
+    //     resp_rx
+    //         .await
+    //         .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
+    //     Ok(())
+    // }
 
-    /// Blocking version of [`BlockPool::add_blocks`].
-    pub fn add_blocks_blocking(&self, blocks: Vec<Block<S, M>>) -> Result<(), BlockPoolError> {
-        self.runtime
-            .handle()
-            .block_on(async move { self.add_blocks(blocks).await })
-    }
+    // /// Blocking version of [`BlockPool::add_blocks`].
+    // pub fn add_blocks_blocking(&self, blocks: Vec<Block<S, M>>) -> Result<(), BlockPoolError> {
+    //     self.runtime
+    //         .handle()
+    //         .block_on(async move { self.add_blocks(blocks).await })
+    // }
 
     /// Attempts to allocate a specified number of free blocks from the [`InactiveBlockPool`].
     ///
@@ -510,31 +474,6 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> Deref for MutableBlock<S, M> {
-    type Target = Block<S, M>;
-
-    fn deref(&self) -> &Self::Target {
-        self.block.as_ref().expect("block was dropped")
-    }
-}
-
-impl<S: Storage, M: BlockMetadata> DerefMut for MutableBlock<S, M> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.block.as_mut().expect("block was dropped")
-    }
-}
-
-impl<S: Storage, M: BlockMetadata> Deref for ImmutableBlock<S, M> {
-    type Target = Block<S, M>;
-    fn deref(&self) -> &Self::Target {
-        self.block
-            .as_ref()
-            .block
-            .as_ref()
-            .expect("block was dropped")
-    }
-}
-
 struct State<S: Storage, M: BlockMetadata> {
     active: ActiveBlockPool<S, M>,
     inactive: InactiveBlockPool<S, M>,
@@ -588,7 +527,7 @@ mod tests {
     #[tokio::test]
     async fn test_block_pool_state() {
         let layout = setup_layout(None).unwrap();
-        let blocks = Blocks::<_, BasicMetadata>::new(layout, 42)
+        let blocks = Blocks::<_, BasicMetadata>::new(layout, 42, 0)
             .unwrap()
             .into_blocks()
             .unwrap();
@@ -626,7 +565,7 @@ mod tests {
     #[tokio::test]
     async fn test_block_pool() {
         let layout = setup_layout(None).unwrap();
-        let blocks = Blocks::<_, BasicMetadata>::new(layout, 42)
+        let blocks = Blocks::<_, BasicMetadata>::new(layout, 42, 0)
             .unwrap()
             .into_blocks()
             .unwrap();
@@ -664,7 +603,7 @@ mod tests {
         let layout = setup_layout(None).unwrap();
 
         // Create the Blocks
-        let blocks = Blocks::<_, BasicMetadata>::new(layout, 42)
+        let blocks = Blocks::<_, BasicMetadata>::new(layout, 42, 0)
             .unwrap()
             .into_blocks()
             .unwrap();
