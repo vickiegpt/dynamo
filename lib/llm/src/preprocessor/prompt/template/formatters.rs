@@ -42,9 +42,42 @@ impl HfTokenizerConfigJsonFormatter {
     pub fn new(config: ChatTemplate, mixins: ContextMixins) -> anyhow::Result<Self> {
         let mut env = JinjaEnvironment::default().env();
 
-        let chat_template = config.chat_template.as_ref().ok_or(anyhow::anyhow!(
-            "chat_template field is required in the tokenizer_config.json file"
-        ))?;
+        let chat_template = match config.chat_template.as_ref() {
+            Some(template) => template,
+            None => {
+                tracing::warn!("chat_template is not present in the tokenizer_config.json file.");
+                env.add_template(
+                    "default",
+                    r#"{% if messages[0]['role'] == 'system' %}
+        {% set loop_messages = messages[1:] %}
+        {% set system_message = messages[0]['content'] %}
+        {% else %}
+        {% set loop_messages = messages %}
+        {% set system_message = '' %}
+        {% endif %}
+        {% if system_message %}
+        <s>{% if add_generation_prompt %}{{ bos_token }}{% endif %}{{ system_message }}
+
+        {% endif %}
+        {% for message in loop_messages %}
+        {% if message['role'] == 'user' %}
+        {{ user_token }}{{ message['content'] }}
+        {% elif message['role'] == 'assistant' %}
+        {{ assistant_token }}{{ message['content'] }}{% if loop.last and add_generation_prompt %}{{ eos_token }}{% endif %}
+        {% endif %}
+        {% endfor %}
+        {% if add_generation_prompt and messages[-1]['role'] != 'assistant' %}
+        {{ assistant_token }}
+        {% endif %}"#
+                ).unwrap();
+                return Ok(HfTokenizerConfigJsonFormatter {
+                    env: env,
+                    config,
+                    mixins: Arc::new(mixins),
+                    supports_add_generation_prompt: false, // Default behavior
+                });
+            }
+        };
 
         // add pycompat
         // todo: should we use this: minijinja_contrib::add_to_environment(&mut env);

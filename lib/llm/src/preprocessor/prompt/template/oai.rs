@@ -14,6 +14,7 @@
 // limitations under the License.
 
 use super::*;
+use anyhow::Result;
 
 use minijinja::{context, value::Value};
 
@@ -111,7 +112,24 @@ impl OAIPromptFormatter for HfTokenizerConfigJsonFormatter {
         } else {
             self.env.get_template("default")?
         };
+        println!("tmpl: {:?}", tmpl.render(&ctx));
 
-        Ok(tmpl.render(&ctx)?)
+        let messages = ctx.get_item(&Value::from("messages"))
+            .map_err(|_| anyhow::Error::msg("No 'messages' found in context"))?;
+
+        let first_message = messages
+            .get_item_by_index(0)
+            .map_err(|_| anyhow::Error::msg("No message at index 0 or messages array is empty"))?;
+
+        let content = first_message
+            .get_attr("content")
+            .map_err(|_| anyhow::Error::msg("First message has no 'content' field"))?;
+
+        let content_str = content
+            .as_str()
+            .ok_or_else(|| anyhow::Error::msg("Message content is not a string"))?
+            .to_string();
+        println!("content_str: {:?}", content_str);
+        Ok(content_str)
     }
 }
