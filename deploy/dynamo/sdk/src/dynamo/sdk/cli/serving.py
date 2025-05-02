@@ -21,6 +21,7 @@ import contextlib
 import json
 import logging
 import os
+import sys
 import pathlib
 import shutil
 import tempfile
@@ -53,6 +54,29 @@ AnyService = TypeVar("AnyService", bound=ServiceProtocol)
 logger = logging.getLogger(__name__)
 
 _DYNAMO_WORKER_SCRIPT = "dynamo.sdk.cli.serve_dynamo"
+
+
+def maybe_get_slurm_mpirun_command(service_name, args):
+    # HACK: WAR issues with running MPI_Spawn in TRTLLM internals
+    #       while in a Slurm environment.
+    # FIXME: Find a better solution for running TRTLLM workers with `dynamo serve`
+    is_slurm = os.environ.get("SLURM_NODELIST") is not None
+    if is_slurm and "TensorRTLLM" in service_name:
+        logger.info(
+            "Slurm environment detected: Pre-pending `mpirun` to TRTLLM workers."
+        )
+        args = [
+            "-np",
+            "1",
+            "--allow-run-as-root",
+            "--oversubscribe",
+            f"{sys.executable}",
+        ] + args
+        cmd = "mpirun"
+    else:
+        cmd = sys.executable
+
+    return cmd, args
 
 
 def _get_dynamo_worker_script(bento_identifier: str, svc_name: str) -> list[str]:
@@ -106,12 +130,16 @@ def create_dynamo_watcher(
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse DYNAMO_SERVICE_ENVS: {e}")
 
+    # FIXME: Find a better solution for running TRTLLM workers with `dynamo serve`
+    cmd, args = maybe_get_slurm_mpirun_command(svc.name, args)
+
     # use namespace from the service
     namespace, _ = svc.dynamo_address()
 
     # Create the watcher with updated environment
     watcher = create_circus_watcher(
         name=f"{namespace}_{svc.name}",
+        cmd=cmd,
         args=args,
         numprocesses=num_workers,
         working_dir=working_dir,
@@ -235,9 +263,13 @@ def serve_dynamo_graph(
                             worker_env.update(service_args["envs"])
                 except json.JSONDecodeError as e:
                     logger.warning(f"Failed to parse DYNAMO_SERVICE_ENVS: {e}")
+            
+            # FIXME: Find a better solution for running TRTLLM workers with `dynamo serve`
+            cmd, dynamo_args = maybe_get_slurm_mpirun_command(svc.name, dynamo_args)
 
             watcher = create_circus_watcher(
                 name=f"{namespace}_{svc.name}",
+                cmd=cmd,
                 args=dynamo_args,
                 numprocesses=num_workers,
                 working_dir=str(bento_path.absolute()),
