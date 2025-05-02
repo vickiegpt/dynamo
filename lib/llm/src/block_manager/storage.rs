@@ -55,8 +55,8 @@ pub trait Remote {}
 
 pub trait Host {}
 
-pub trait SystemCopyable {}
-pub trait CudaCopyable {}
+pub trait SystemCopyable: Storage {}
+pub trait CudaCopyable: Storage {}
 
 /// Errors that can occur during storage operations
 #[derive(Debug, Error)]
