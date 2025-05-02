@@ -47,14 +47,16 @@ pub enum StorageType {
     Nixl,
 }
 
-pub enum StorageLocality {
-    Local,
+/// A block that is local to the current worker
+pub trait Local {}
 
-    // todo: add a nixl agent/bytes identifier
-    // perhaps this is an enum. other options could be a etcd path to a
-    // keyval object with nixl metadata
-    Remote,
-}
+/// A block that is remote to the current worker
+pub trait Remote {}
+
+pub trait Host {}
+
+pub trait SystemCopyable {}
+pub trait CudaCopyable {}
 
 /// Errors that can occur during storage operations
 #[derive(Debug, Error)]
@@ -114,16 +116,16 @@ pub trait Storage: Debug + Send + Sync + 'static {
     unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8>;
 }
 
-pub trait RegistationHandle: std::any::Any + Send + Sync + 'static {
-    /// Release the [RegistationHandle].
-    /// This should be called when the external registration of this storage
-    /// is no longer needed.
-    ///
-    /// Note: All [RegistrationHandle]s should be explicitly released before
-    /// the [Storage] is dropped.
-    fn release(&mut self);
-}
-
+/// Registerable storage is a [Storage] that can be associated with one or more
+/// [RegistationHandle]s.
+///
+/// The core concept here is that the storage might be registered with a library
+/// like NIXL or some other custom library which might make some system calls on
+/// viritual addresses of the storage.
+///
+/// Before the [Storage] is dropped, the [RegistationHandle]s should be released.
+///
+/// The behavior is enforced via the [Drop] implementation for [RegistrationHandles].
 pub trait RegisterableStorage: Storage + Send + Sync + 'static {
     /// Register a handle with a key
     /// If a handle with the same key already exists, an error is returned
@@ -139,6 +141,24 @@ pub trait RegisterableStorage: Storage + Send + Sync + 'static {
     fn registration_handle(&self, key: &str) -> Option<&dyn RegistationHandle>;
 }
 
+/// Designed to be implemented by any type that can be used as a handle to a
+/// [RegisterableStorage].
+///
+/// See [RegisterableStorage] for more details.
+pub trait RegistationHandle: std::any::Any + Send + Sync + 'static {
+    /// Release the [RegistationHandle].
+    /// This should be called when the external registration of this storage
+    /// is no longer needed.
+    ///
+    /// Note: All [RegistrationHandle]s should be explicitly released before
+    /// the [Storage] is dropped.
+    fn release(&mut self);
+}
+
+/// A collection of [RegistrationHandle]s for a [RegisterableStorage].
+///
+/// This is used to ensure that all [RegistrationHandle]s are explicitly released
+/// before the [RegisterableStorage] is dropped.
 #[derive(Default)]
 pub struct RegistrationHandles {
     handles: HashMap<String, Box<dyn RegistationHandle>>,
@@ -215,6 +235,10 @@ pub struct SystemStorage {
 
 unsafe impl Send for SystemStorage {}
 unsafe impl Sync for SystemStorage {}
+
+impl Local for SystemStorage {}
+impl Host for SystemStorage {}
+impl SystemCopyable for SystemStorage {}
 
 impl SystemStorage {
     /// Create a new system storage with the given size
@@ -312,6 +336,11 @@ pub struct PinnedStorage {
     handles: RegistrationHandles,
     ctx: Arc<CudaContext>,
 }
+
+impl Local for PinnedStorage {}
+impl Host for PinnedStorage {}
+impl SystemCopyable for PinnedStorage {}
+impl CudaCopyable for PinnedStorage {}
 
 impl PinnedStorage {
     /// Create a new pinned storage with the given size
@@ -424,6 +453,9 @@ pub struct DeviceStorage {
     ctx: Arc<CudaContext>,
     handles: RegistrationHandles,
 }
+
+impl Local for DeviceStorage {}
+impl CudaCopyable for DeviceStorage {}
 
 impl DeviceStorage {
     /// Create a new device storage with the given size

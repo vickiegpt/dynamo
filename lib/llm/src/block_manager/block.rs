@@ -299,6 +299,9 @@ pub trait BlockDataExt<S: Storage> {
     /// Returns true if the block data is fully contiguous
     fn is_fully_contiguous(&self) -> bool;
 
+    /// Returns the number of layers in the block
+    fn num_layers(&self) -> usize;
+
     /// Get a read-only view of this block's storage for a layer
     fn layer_view(&self, layer_idx: usize) -> BlockResult<view::LayerView<S>>;
 
@@ -344,6 +347,10 @@ where
 impl<S: Storage> BlockDataExt<S> for BlockData<S> {
     fn is_fully_contiguous(&self) -> bool {
         self.layout.layout_type() == LayoutType::FullyContiguous
+    }
+
+    fn num_layers(&self) -> usize {
+        self.layout.num_layers()
     }
 
     fn layer_view(&self, layer_idx: usize) -> BlockResult<view::LayerView<S>> {
@@ -614,7 +621,7 @@ pub mod nixl {
     }
 
     // Helper function to get the short type name
-    fn short_type_name<T>() -> &'static str {
+    pub(crate) fn short_type_name<T>() -> &'static str {
         let name = core::any::type_name::<T>();
         name.split("::").last().unwrap_or(name)
     }
@@ -904,6 +911,10 @@ pub mod nixl {
     impl<M: MutabilityKind> BlockDataExt<NixlStorage> for RemoteBlock<M> {
         fn is_fully_contiguous(&self) -> bool {
             self.data.is_fully_contiguous()
+        }
+
+        fn num_layers(&self) -> usize {
+            self.data.num_layers()
         }
 
         fn layer_view(&self, layer_idx: usize) -> BlockResult<view::LayerView<NixlStorage>> {

@@ -7,8 +7,8 @@ use derive_getters::Getters;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeviceStorage, PinnedStorage, RegistationHandle, RegisterableStorage, Storage, StorageType,
-    SystemStorage,
+    DeviceStorage, PinnedStorage, RegistationHandle, RegisterableStorage, Remote, Storage,
+    StorageType, SystemStorage,
 };
 
 use anyhow::Result;
@@ -72,6 +72,8 @@ pub struct NixlStorage {
     mem_type: MemType,
     device_id: u64,
 }
+
+impl Remote for NixlStorage {}
 
 impl Storage for NixlStorage {
     fn storage_type(&self) -> StorageType {

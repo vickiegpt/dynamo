@@ -28,7 +28,7 @@ pub mod storage;
 pub use crate::common::dtype::DType;
 pub use block::{
     nixl::{BlockDescriptorSet, IsImmutable, IsMutable, MutabilityKind, RemoteBlock},
-    transfer::TransferRequestPut,
+    transfer::{BlockTransferEngine, TransferRequestPut},
     BasicMetadata, BlockMetadata, Blocks,
 };
 pub use layout::{nixl::NixlLayout, LayoutConfig, LayoutConfigBuilder, LayoutError, LayoutType};
@@ -585,5 +585,18 @@ mod tests {
 
         // Execute the transfer request
         transfer_request.execute().unwrap();
+
+        // Create a Put request direct between two local blocks
+        // split the blocks into two vecs each with 2 blocks
+        let mut blocks_1 = blocks_1;
+
+        let slice_0 = blocks_1.split_off(2);
+        let mut slice_1 = blocks_1;
+
+        let transfer_request = TransferRequestPut::new(&slice_0, &mut slice_1).unwrap();
+        assert!(transfer_request.validate_blocks().is_ok());
+
+        // // Execute the transfer request
+        // transfer_request.execute().unwrap();
     }
 }

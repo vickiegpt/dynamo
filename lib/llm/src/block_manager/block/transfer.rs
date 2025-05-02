@@ -13,12 +13,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::nixl::{IsMutable, NixlBlockDataImmutable, NixlBlockDataMutable, RemoteBlock};
+mod cuda;
+mod memcpy;
+
+use super::nixl::{
+    short_type_name, IsMutable, NixlBlockDataImmutable, NixlBlockDataMutable, RemoteBlock,
+};
 use super::*;
 use crate::block_manager::storage::{
     nixl::{NixlEnabledStorage, NixlStorage},
-    DeviceStorage, PinnedStorage,
+    CudaCopyable, DeviceStorage, Host, PinnedStorage, SystemCopyable, SystemStorage,
 };
+
+use std::ops::Range;
+
+pub use crate::block_manager::storage::{Local, Remote};
 
 /// A block that can be the target of a write
 pub trait Writable {}
@@ -29,12 +38,6 @@ pub trait Readable {}
 pub trait Mutable: Readable + Writable {}
 
 pub trait Immutable: Readable {}
-
-/// A block that is local to the current worker
-pub trait Local {}
-
-/// A block that is remote to the current worker
-pub trait Remote {}
 
 #[derive(Debug)]
 enum BlockTarget {
@@ -65,6 +68,27 @@ pub enum TransferError {
     MismatchedWorkerID(BlockTarget, usize, usize),
 }
 
+pub trait BlockTransferEngine<Source: BlockDataProvider, Target: BlockDataProviderMut> {
+    fn prepare(&mut self) -> Result<(), TransferError> {
+        Ok(())
+    }
+    fn execute(self) -> Result<(), TransferError>;
+}
+
+// memcpy transfer engine
+// - System -> System
+// - Pinned -> Pinned
+
+// cuda memcpy transfer engine
+// - Pinned -> Device
+// - Device -> Pinned
+// - Device -> Device
+
+// nixl memcpy transfer engine
+// - NixlEnabledStorage -> Nixl
+// - Nixl -> NixlEnabledStorage
+// where System, Pinned, Device are NixlEnabledStorage
+
 // Placeholder for the actual transfer plan
 #[derive(Debug)]
 pub struct TransferRequestPut<
@@ -74,6 +98,35 @@ pub struct TransferRequestPut<
 > {
     sources: &'a [Source],
     destinations: &'a mut [Destination],
+}
+
+// --- NIXL PUT Transfer Implementation ---
+
+impl<'a, Source> BlockTransferEngine<Source, RemoteBlock<IsMutable>>
+    for TransferRequestPut<'a, Source, RemoteBlock<IsMutable>>
+where
+    Source: BlockDataProvider + Local, // + NixlBlockDataMutable<Source::StorageType>,
+    Source::StorageType: NixlEnabledStorage,
+{
+    fn execute(self) -> Result<(), TransferError> {
+        self.validate_counts()?;
+        tracing::info!("Executing NIXL PUT transfer request");
+
+        // TODO: Get NixlAgent handle
+
+        for (src_block, dst_block) in self.sources.iter().zip(self.destinations.iter_mut()) {
+            let src_data = src_block.block_data(private::PrivateToken);
+            let src_nixl_desc = src_data.as_block_descriptor()?;
+
+            let dst_data = dst_block.block_data_mut(private::PrivateToken);
+            let dst_nixl_desc = dst_data.as_block_descriptor_mut()?;
+
+            // TODO: Perform NIXL PUT operation
+            // tracing::trace!(src = ?(src_data.worker_id, src_data.block_set_idx, src_data.block_idx), dst = ?(dst_data.worker_id, dst_data.block_set_idx, dst_data.block_idx), "NIXL PUT block");
+            tracing::trace!(src_desc = ?src_nixl_desc, dst_desc = ?dst_nixl_desc, "NIXL PUT block");
+        }
+        Ok(())
+    }
 }
 
 impl<'a, Source, Destination> TransferRequestPut<'a, Source, Destination>
@@ -93,6 +146,10 @@ where
         Ok(transfer_request)
     }
 
+    /// Validate blocks
+    ///
+    /// For a put, we can have duplicate blocks on the source side, but all destinations must be unique
+    /// For all transfers, the source and destination block sets must be disjoint.
     pub fn validate_blocks(&self) -> Result<(), TransferError> {
         let mut src_set = std::collections::HashSet::new();
         let mut dst_set = std::collections::HashSet::new();
@@ -151,175 +208,88 @@ where
     }
 }
 
-// --- Local Transfer Implementations ---
+// // --- Local Transfer Implementations ---
 
-// Local Pinned -> Pinned
-impl<'a, MSource: BlockMetadata, MDest: BlockMetadata>
-    TransferRequestPut<
-        'a,
-        ImmutableBlock<PinnedStorage, MSource>,
-        MutableBlock<PinnedStorage, MDest>,
-    >
-{
-    pub fn execute(mut self) -> Result<(), TransferError> {
-        self.validate_counts()?;
-        tracing::info!("Executing local transfer: Pinned -> Pinned");
-        for (src_block, dst_block) in self.sources.iter().zip(self.destinations.iter_mut()) {
-            let src_data = src_block.block_data(private::PrivateToken);
-            let dst_data = dst_block.block_data_mut(private::PrivateToken);
-            // TODO: Implement layer-wise or block-wise CUDA memcpy H2H or std::ptr::copy
-            tracing::trace!(src = ?(src_data.worker_id, src_data.block_set_idx, src_data.block_idx), dst = ?(dst_data.worker_id, dst_data.block_set_idx, dst_data.block_idx), "Copying block");
-        }
-        Ok(())
-    }
-}
-
-// Local Pinned -> Device
-impl<'a, MSource: BlockMetadata, MDest: BlockMetadata>
-    TransferRequestPut<
-        'a,
-        ImmutableBlock<PinnedStorage, MSource>,
-        MutableBlock<DeviceStorage, MDest>,
-    >
-{
-    pub fn execute(mut self) -> Result<(), TransferError> {
-        self.validate_counts()?;
-        tracing::info!("Executing local transfer: Pinned -> Device");
-        for (src_block, dst_block) in self.sources.iter().zip(self.destinations.iter_mut()) {
-            let src_data = src_block.block_data(private::PrivateToken);
-            let dst_data = dst_block.block_data_mut(private::PrivateToken);
-            // TODO: Implement layer-wise or block-wise CUDA memcpy H2D
-            tracing::trace!(src = ?(src_data.worker_id, src_data.block_set_idx, src_data.block_idx), dst = ?(dst_data.worker_id, dst_data.block_set_idx, dst_data.block_idx), "Copying block");
-        }
-        Ok(())
-    }
-}
-
-// Local Device -> Pinned
-impl<'a, MSource: BlockMetadata, MDest: BlockMetadata>
-    TransferRequestPut<
-        'a,
-        ImmutableBlock<DeviceStorage, MSource>,
-        MutableBlock<PinnedStorage, MDest>,
-    >
-{
-    pub fn execute(mut self) -> Result<(), TransferError> {
-        self.validate_counts()?;
-        tracing::info!("Executing local transfer: Device -> Pinned");
-        for (src_block, dst_block) in self.sources.iter().zip(self.destinations.iter_mut()) {
-            let src_data = src_block.block_data(private::PrivateToken);
-            let dst_data = dst_block.block_data_mut(private::PrivateToken);
-            // TODO: Implement layer-wise or block-wise CUDA memcpy D2H
-            tracing::trace!(src = ?(src_data.worker_id, src_data.block_set_idx, src_data.block_idx), dst = ?(dst_data.worker_id, dst_data.block_set_idx, dst_data.block_idx), "Copying block");
-        }
-        Ok(())
-    }
-}
-
-// Local Device -> Device
-impl<'a, MSource: BlockMetadata, MDest: BlockMetadata>
-    TransferRequestPut<
-        'a,
-        ImmutableBlock<DeviceStorage, MSource>,
-        MutableBlock<DeviceStorage, MDest>,
-    >
-{
-    pub fn execute(mut self) -> Result<(), TransferError> {
-        self.validate_counts()?;
-        tracing::info!("Executing local transfer: Device -> Device");
-        for (src_block, dst_block) in self.sources.iter().zip(self.destinations.iter_mut()) {
-            let src_data = src_block.block_data(private::PrivateToken);
-            let dst_data = dst_block.block_data_mut(private::PrivateToken);
-            // TODO: Implement layer-wise or block-wise CUDA memcpy D2D
-            tracing::trace!(src = ?(src_data.worker_id, src_data.block_set_idx, src_data.block_idx), dst = ?(dst_data.worker_id, dst_data.block_set_idx, dst_data.block_idx), "Copying block");
-        }
-        Ok(())
-    }
-}
-
-// --- NIXL PUT Transfer Implementation ---
-
-impl<'a, Source> TransferRequestPut<'a, Source, RemoteBlock<IsMutable>>
-where
-    Source: BlockDataProvider + Local, // + NixlBlockDataMutable<Source::StorageType>,
-    Source::StorageType: NixlEnabledStorage,
-{
-    pub fn execute(mut self) -> Result<(), TransferError> {
-        self.validate_counts()?;
-        tracing::info!("Executing NIXL PUT transfer request");
-
-        // TODO: Get NixlAgent handle
-
-        for (src_block, dst_block) in self.sources.iter().zip(self.destinations.iter_mut()) {
-            let src_data = src_block.block_data(private::PrivateToken);
-            let src_nixl_desc = src_data.as_block_descriptor()?;
-
-            let dst_data = dst_block.block_data_mut(private::PrivateToken);
-            let dst_nixl_desc = dst_data.as_block_descriptor_mut()?;
-
-            // TODO: Perform NIXL PUT operation
-            // tracing::trace!(src = ?(src_data.worker_id, src_data.block_set_idx, src_data.block_idx), dst = ?(dst_data.worker_id, dst_data.block_set_idx, dst_data.block_idx), "NIXL PUT block");
-            tracing::trace!(src_desc = ?src_nixl_desc, dst_desc = ?dst_nixl_desc, "NIXL PUT block");
-        }
-        Ok(())
-    }
-}
-
-// #[derive(Debug)]
-// pub struct GetTransfer<'a> {
-//     sources: Vec<&'a dyn NixlBlockDataImmutable<NixlStorage>>,
-//     destinations: Vec<&'a mut dyn NixlBlockDataMutable<NixlStorage>>, // Assuming local destinations also use NIXL compatible storage for simplicity, might need adjustment
-// }
-
-// #[derive(Debug, Default)] // Added Default
-// pub struct TransferEngine {}
-
-// impl TransferEngine {
-//     pub fn put<'a, Source, Destination>(
-//         &self,
-//         sources: &'a [Source],
-//         destinations: &'a mut [Destination],
-//     ) -> TransferRequestPut<'a, Source, Destination>
-//     where
-//         Source: BlockDataProvider + Local,
-//         Destination: BlockDataProviderMut,
-//     {
-//         // TODO: Add basic validation here? (e.g., non-empty slices?)
-//         TransferRequestPut {
-//             sources,
-//             destinations,
-//         }
-//     }
-
-// // Placeholder for the actual transfer plan
-// #[derive(Debug)]
-// pub struct TransferRequestPut<
-//     'a,
-//     Source: BlockDataProvider + Local,
-//     Destination: BlockDataProviderMut,
-// > {
-//     sources: &'a [Source],
-//     destinations: &'a mut [Destination],
-// }
-
-// impl<'a, Source, Destination> TransferRequestPut<'a, Source, Destination>
-// where
-//     Source: BlockDataProvider + Local,
-//     Destination: BlockDataProviderMut + Remote,
+// // Local Pinned -> Pinned
+// impl<'a, MSource: BlockMetadata, MDest: BlockMetadata>
+//     TransferRequestPut<
+//         'a,
+//         ImmutableBlock<PinnedStorage, MSource>,
+//         MutableBlock<PinnedStorage, MDest>,
+//     >
 // {
-//     pub fn execute(self) -> Result<(), TransferError> {
-//         tracing::info!("Executing NIXL transfer request");
+//     pub fn execute(mut self) -> Result<(), TransferError> {
+//         self.validate_counts()?;
+//         tracing::info!("Executing local transfer: Pinned -> Pinned");
+//         for (src_block, dst_block) in self.sources.iter().zip(self.destinations.iter_mut()) {
+//             let src_data = src_block.block_data(private::PrivateToken);
+//             let dst_data = dst_block.block_data_mut(private::PrivateToken);
+//             // TODO: Implement layer-wise or block-wise CUDA memcpy H2H or std::ptr::copy
+//             tracing::trace!(src = ?(src_data.worker_id, src_data.block_set_idx, src_data.block_idx), dst = ?(dst_data.worker_id, dst_data.block_set_idx, dst_data.block_idx), "Copying block");
+//         }
 //         Ok(())
 //     }
 // }
 
-// impl<'a, Source, Destination> TransferRequestPut<'a, Source, Destination>
-// where
-//     Source: BlockDataProvider + Local,
-//     Destination: BlockDataProviderMut + Local,
+// // Local Pinned -> Device
+// impl<'a, MSource: BlockMetadata, MDest: BlockMetadata>
+//     TransferRequestPut<
+//         'a,
+//         ImmutableBlock<PinnedStorage, MSource>,
+//         MutableBlock<DeviceStorage, MDest>,
+//     >
 // {
-//     pub fn execute(self) -> Result<(), TransferError> {
-//         tracing::info!("Executing local transfer request");
+//     pub fn execute(mut self) -> Result<(), TransferError> {
+//         self.validate_counts()?;
+//         tracing::info!("Executing local transfer: Pinned -> Device");
+//         for (src_block, dst_block) in self.sources.iter().zip(self.destinations.iter_mut()) {
+//             let src_data = src_block.block_data(private::PrivateToken);
+//             let dst_data = dst_block.block_data_mut(private::PrivateToken);
+//             // TODO: Implement layer-wise or block-wise CUDA memcpy H2D
+//             tracing::trace!(src = ?(src_data.worker_id, src_data.block_set_idx, src_data.block_idx), dst = ?(dst_data.worker_id, dst_data.block_set_idx, dst_data.block_idx), "Copying block");
+//         }
+//         Ok(())
+//     }
+// }
+
+// // Local Device -> Pinned
+// impl<'a, MSource: BlockMetadata, MDest: BlockMetadata>
+//     TransferRequestPut<
+//         'a,
+//         ImmutableBlock<DeviceStorage, MSource>,
+//         MutableBlock<PinnedStorage, MDest>,
+//     >
+// {
+//     pub fn execute(mut self) -> Result<(), TransferError> {
+//         self.validate_counts()?;
+//         tracing::info!("Executing local transfer: Device -> Pinned");
+//         for (src_block, dst_block) in self.sources.iter().zip(self.destinations.iter_mut()) {
+//             let src_data = src_block.block_data(private::PrivateToken);
+//             let dst_data = dst_block.block_data_mut(private::PrivateToken);
+//             // TODO: Implement layer-wise or block-wise CUDA memcpy D2H
+//             tracing::trace!(src = ?(src_data.worker_id, src_data.block_set_idx, src_data.block_idx), dst = ?(dst_data.worker_id, dst_data.block_set_idx, dst_data.block_idx), "Copying block");
+//         }
+//         Ok(())
+//     }
+// }
+
+// // Local Device -> Device
+// impl<'a, MSource: BlockMetadata, MDest: BlockMetadata>
+//     TransferRequestPut<
+//         'a,
+//         ImmutableBlock<DeviceStorage, MSource>,
+//         MutableBlock<DeviceStorage, MDest>,
+//     >
+// {
+//     pub fn execute(mut self) -> Result<(), TransferError> {
+//         self.validate_counts()?;
+//         tracing::info!("Executing local transfer: Device -> Device");
+//         for (src_block, dst_block) in self.sources.iter().zip(self.destinations.iter_mut()) {
+//             let src_data = src_block.block_data(private::PrivateToken);
+//             let dst_data = dst_block.block_data_mut(private::PrivateToken);
+//             // TODO: Implement layer-wise or block-wise CUDA memcpy D2D
+//             tracing::trace!(src = ?(src_data.worker_id, src_data.block_set_idx, src_data.block_idx), dst = ?(dst_data.worker_id, dst_data.block_set_idx, dst_data.block_idx), "Copying block");
+//         }
 //         Ok(())
 //     }
 // }
