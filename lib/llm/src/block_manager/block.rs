@@ -45,6 +45,12 @@ mod private {
     pub struct PrivateToken;
 }
 
+/// A unique identifier for a block
+pub type BlockId = usize;
+
+/// A unique identifier for a block set
+pub type BlockSetId = usize;
+
 /// Result type for Block operations
 pub type BlockResult<T> = std::result::Result<T, BlockError>;
 
@@ -627,7 +633,7 @@ pub mod nixl {
     }
 
     // Implement Debug manually to avoid bounds on K/M
-    impl<'a, K: Kind, M: MutabilityKind> Debug for NixlMemoryDescriptor<'a, K, M> {
+    impl<K: Kind, M: MutabilityKind> Debug for NixlMemoryDescriptor<'_, K, M> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("NixlMemoryDescriptor")
                 .field("addr", &self.addr)
@@ -640,7 +646,7 @@ pub mod nixl {
         }
     }
 
-    impl<'a, K: Kind, M: MutabilityKind> NixlMemoryDescriptor<'a, K, M> {
+    impl<K: Kind, M: MutabilityKind> NixlMemoryDescriptor<'_, K, M> {
         /// Creates a new NixlMemoryDescriptor. Typically called via conversion methods.
         #[inline]
         pub(crate) fn new(addr: u64, size: usize, mem_type: MemType, device_id: u64) -> Self {
@@ -656,7 +662,7 @@ pub mod nixl {
         }
     }
 
-    impl<'a, K: Kind, M: MutabilityKind> MemoryRegion for NixlMemoryDescriptor<'a, K, M> {
+    impl<K: Kind, M: MutabilityKind> MemoryRegion for NixlMemoryDescriptor<'_, K, M> {
         unsafe fn as_ptr(&self) -> *const u8 {
             self.addr as *const u8
         }
@@ -666,7 +672,7 @@ pub mod nixl {
         }
     }
 
-    impl<'a, K: Kind, M: MutabilityKind> NixlDescriptor for NixlMemoryDescriptor<'a, K, M> {
+    impl<K: Kind, M: MutabilityKind> NixlDescriptor for NixlMemoryDescriptor<'_, K, M> {
         fn mem_type(&self) -> MemType {
             self.mem_type
         }
@@ -1141,6 +1147,53 @@ pub mod nixl {
         // pub fn deserialize(data: &[u8]) -> Result<Self, BlockDescriptorSetError> {
         //     Ok(serde_json::from_slice(data)?)
         // }
+    }
+
+    pub trait AsBlockDescriptorSet {
+        type Block;
+        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorSet, BlockDescriptorSetError>;
+    }
+
+    impl<S, M> AsBlockDescriptorSet for [ImmutableBlock<S, M>]
+    where
+        S: Storage,
+        M: BlockMetadata,
+    {
+        type Block = ImmutableBlock<S, M>;
+        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorSet, BlockDescriptorSetError> {
+            BlockDescriptorSet::from_immutable_blocks(self)
+        }
+    }
+
+    impl<S, M> AsBlockDescriptorSet for [MutableBlock<S, M>]
+    where
+        S: Storage,
+        M: BlockMetadata,
+    {
+        type Block = MutableBlock<S, M>;
+        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorSet, BlockDescriptorSetError> {
+            BlockDescriptorSet::from_mutable_blocks(self)
+        }
+    }
+
+    impl<T> AsBlockDescriptorSet for Vec<T>
+    where
+        [T]: AsBlockDescriptorSet<Block = T>,
+    {
+        type Block = T;
+        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorSet, BlockDescriptorSetError> {
+            self.as_slice().as_block_descriptor_set()
+        }
+    }
+
+    impl<T, const N: usize> AsBlockDescriptorSet for [T; N]
+    where
+        [T]: AsBlockDescriptorSet<Block = T>,
+    {
+        type Block = T;
+        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorSet, BlockDescriptorSetError> {
+            self.as_slice().as_block_descriptor_set()
+        }
     }
 }
 

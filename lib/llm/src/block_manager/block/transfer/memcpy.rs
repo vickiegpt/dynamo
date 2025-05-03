@@ -12,7 +12,7 @@ where
     Destination::StorageType: SystemCopyable,
 {
     let src_data = sources.block_data(private::PrivateToken);
-    let mut dst_data = destinations.block_data_mut(private::PrivateToken);
+    let dst_data = destinations.block_data_mut(private::PrivateToken);
 
     if src_data.is_fully_contiguous() && dst_data.is_fully_contiguous() {
         let src_view = src_data.block_view()?;
@@ -41,7 +41,7 @@ where
     Destination::StorageType: SystemCopyable,
 {
     let src_data = sources.block_data(private::PrivateToken);
-    let mut dst_data = destinations.block_data_mut(private::PrivateToken);
+    let dst_data = destinations.block_data_mut(private::PrivateToken);
 
     for layer_idx in layer_range {
         let src_view = src_data.layer_view(layer_idx)?;

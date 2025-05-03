@@ -42,7 +42,7 @@ pub trait NixlEnabledStorage: RegisterableStorage + NixlDescriptor + Sized {
                 // Cast the trait object &dyn RegistationHandle to &dyn Any
                 // then attempt to downcast to the concrete NixlRegistrationHandle type.
                 // Note: This requires RegistationHandle: Any + 'static
-                (&*handle_box as &dyn std::any::Any)
+                (handle_box as &dyn std::any::Any)
                     .downcast_ref::<NixlRegistrationHandle>()
                     // If downcast succeeds, get the agent name.
                     .map(|nixl_handle| nixl_handle.agent_name())

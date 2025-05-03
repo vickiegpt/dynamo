@@ -17,17 +17,17 @@ mod cuda;
 mod memcpy;
 
 use super::nixl::{
-    short_type_name, IsMutable, NixlBlockDataImmutable, NixlBlockDataMutable, RemoteBlock,
+    IsMutable, NixlBlockDataImmutable, NixlBlockDataMutable, RemoteBlock,
 };
 use super::*;
-use crate::block_manager::storage::{
-    nixl::{NixlEnabledStorage, NixlStorage},
-    CudaCopyable, DeviceStorage, Host, PinnedStorage, SystemCopyable, SystemStorage,
-};
+
+
+use crate::block_manager::storage::{nixl::NixlEnabledStorage, SystemCopyable};
 
 use std::ops::Range;
 
 pub use crate::block_manager::storage::{Local, Remote};
+pub use async_trait::async_trait;
 
 /// A block that can be the target of a write
 pub trait Writable {}
@@ -68,7 +68,135 @@ pub enum TransferError {
     MismatchedWorkerID(BlockTarget, usize, usize),
 }
 
-pub trait BlockTransferEngine<Source: BlockDataProvider, Target: BlockDataProviderMut> {
+/// Specialized handle for performing transfers between blocks
+/// This object holds the necessary resources for performing transfers.
+pub struct BlockTransferEngine {
+    state: Arc<BlockTransferEngineState>,
+}
+
+impl Default for BlockTransferEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BlockTransferEngine {
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new(BlockTransferEngineState::default()),
+        }
+    }
+}
+
+#[derive(Default)]
+struct BlockTransferEngineState {
+    // nixl_agent: Option<NixlAgent>,
+    // cuda_ctx: Option<Arc<CudaContext>>,
+    // h2d_stream: Option<Arc<CudaStream>>,
+    // d2h_stream: Option<Arc<CudaStream>>,
+    // d2d_stream: Option<Arc<CudaStream>>,
+}
+
+// impl BlockTransferEngine {
+//     pub fn get<'xfer, Source, Target>(&self) -> GetXferRequestBuilder<'xfer, Source, Target> {
+//         GetXferRequestBuilder::new(self.state.clone())
+//     }
+// }
+
+#[derive(Default)]
+pub struct GetXferRequestBuilder<
+    'xfer,
+    Source: BlockDataProvider,
+    Target: BlockDataProviderMut + Local,
+> {
+    src: Option<&'xfer [Source]>,
+    dst: Option<&'xfer [Target]>,
+}
+
+impl<'xfer, Source: BlockDataProvider, Target: BlockDataProviderMut + Local>
+    GetXferRequestBuilder<'xfer, Source, Target>
+{
+    fn new(state: Arc<BlockTransferEngineState>) -> Self {
+        Self {
+            src: None,
+            dst: None,
+        }
+    }
+
+    pub fn from(&mut self, local_or_remote_blocks: &'xfer [Target]) -> &mut Self {
+        self.dst = Some(local_or_remote_blocks);
+        self
+    }
+
+    pub fn to(&mut self, local_mutable_blocks: &'xfer [Source]) -> &mut Self {
+        self.src = Some(local_mutable_blocks);
+        self
+    }
+}
+
+pub struct PutXferRequestBuilder<
+    'xfer,
+    Source: BlockDataProvider + Local,
+    Target: BlockDataProviderMut,
+> {
+    src: Option<&'xfer [Source]>,
+    dst: Option<&'xfer [Target]>,
+}
+
+impl<'xfer, Source: BlockDataProvider + Local, Target: BlockDataProviderMut>
+    PutXferRequestBuilder<'xfer, Source, Target>
+{
+    fn new(state: Arc<BlockTransferEngineState>) -> Self {
+        Self {
+            src: None,
+            dst: None,
+        }
+    }
+    pub fn from(&mut self, local_blocks: &'xfer [Source]) -> &mut Self {
+        self.src = Some(local_blocks);
+        self
+    }
+
+    pub fn to(&mut self, local_or_remote: &'xfer [Target]) -> &mut Self {
+        self.dst = Some(local_or_remote);
+        self
+    }
+}
+
+// #[async_trait]
+// impl<'xfer, Target: BlockDataProviderMut + Local>
+//     AsyncBlockTransferEngine<RemoteBlock<IsImmutable>, Target>
+//     for GetXferRequestBuilder<'xfer, RemoteBlock<IsImmutable>, Target>
+// where
+//     Target: BlockDataProviderMut + Local + Send + Sync,
+// {
+//     async fn execute(self) -> Result<()> {
+//         unimplemented!()
+//     }
+// }
+
+// #[async_trait]
+// impl<'xfer, Source, Target> AsyncBlockTransferEngine<Source, Target>
+//     for GetXferRequestBuilder<'xfer, Source, Target>
+// where
+//     Source: BlockDataProvider + Local + Send + Sync,
+//     Target: BlockDataProviderMut + Local + Send + Sync,
+// {
+//     async fn execute(self) -> Result<()> {
+//         unimplemented!()
+//     }
+// }
+
+// pub trait BlockCopyTo<Target:BlockDataProviderMut + Local>: BlockDataProvider + Local {
+//     fn copy_blocks
+
+#[async_trait]
+pub trait AsyncBlockTransferEngine<Source: BlockDataProvider, Target: BlockDataProviderMut + Local>
+{
+    async fn execute(self) -> anyhow::Result<()>;
+}
+
+pub trait BlockTransferEngineV1<Source: BlockDataProvider, Target: BlockDataProviderMut> {
     fn prepare(&mut self) -> Result<(), TransferError> {
         Ok(())
     }
@@ -102,8 +230,8 @@ pub struct TransferRequestPut<
 
 // --- NIXL PUT Transfer Implementation ---
 
-impl<'a, Source> BlockTransferEngine<Source, RemoteBlock<IsMutable>>
-    for TransferRequestPut<'a, Source, RemoteBlock<IsMutable>>
+impl<Source> BlockTransferEngineV1<Source, RemoteBlock<IsMutable>>
+    for TransferRequestPut<'_, Source, RemoteBlock<IsMutable>>
 where
     Source: BlockDataProvider + Local, // + NixlBlockDataMutable<Source::StorageType>,
     Source::StorageType: NixlEnabledStorage,

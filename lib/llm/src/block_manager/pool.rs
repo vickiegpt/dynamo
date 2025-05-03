@@ -85,10 +85,7 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-use dynamo_runtime::{
-    utils::pool::{PoolItem, SharedPoolItem},
-    Result,
-};
+use dynamo_runtime::Result;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BlockPoolError {

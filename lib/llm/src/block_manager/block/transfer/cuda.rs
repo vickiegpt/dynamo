@@ -5,43 +5,7 @@ use crate::block_manager::storage::{CudaCopyable, DeviceStorage, PinnedStorage};
 use anyhow::Result;
 use cudarc::driver::result as cuda_result;
 pub use cudarc::driver::sys::CUstream;
-use cudarc::driver::{CudaSlice, CudaStream};
 use std::ops::Range;
-
-/// Helper function to perform the appropriate CUDA memcpy based on storage types
-unsafe fn dispatch_cuda_memcpy<Source: CudaCopyable, Dest: CudaCopyable>(
-    src_ptr: *const u8,
-    dst_ptr: *mut u8,
-    size: usize,
-    stream: CUstream,
-) -> Result<(), TransferError> {
-    match (
-        std::any::TypeId::of::<Source>(),
-        std::any::TypeId::of::<Dest>(),
-    ) {
-        (src, dst)
-            if src == std::any::TypeId::of::<PinnedStorage>()
-                && dst == std::any::TypeId::of::<DeviceStorage>() =>
-        {
-            cuda_memcpy_h2d(src_ptr, dst_ptr, size, stream)
-        }
-        (src, dst)
-            if src == std::any::TypeId::of::<DeviceStorage>()
-                && dst == std::any::TypeId::of::<PinnedStorage>() =>
-        {
-            cuda_memcpy_d2h(src_ptr, dst_ptr, size, stream)
-        }
-        (src, dst)
-            if src == std::any::TypeId::of::<DeviceStorage>()
-                && dst == std::any::TypeId::of::<DeviceStorage>() =>
-        {
-            cuda_memcpy_d2d(src_ptr, dst_ptr, size, stream)
-        }
-        _ => Err(TransferError::ExecutionError(
-            "Unsupported storage type combination for CUDA memcpy".into(),
-        )),
-    }
-}
 
 /// Copy a block from a source to a destination using CUDA memcpy
 pub fn cuda_memcpy_block<'a, Source, Destination>(
@@ -56,7 +20,7 @@ where
     Destination::StorageType: CudaCopyable,
 {
     let src_data = sources.block_data(private::PrivateToken);
-    let mut dst_data = destinations.block_data_mut(private::PrivateToken);
+    let dst_data = destinations.block_data_mut(private::PrivateToken);
 
     if src_data.is_fully_contiguous() && dst_data.is_fully_contiguous() {
         let src_view = src_data.block_view()?;
@@ -91,7 +55,7 @@ where
     Destination::StorageType: CudaCopyable,
 {
     let src_data = sources.block_data(private::PrivateToken);
-    let mut dst_data = destinations.block_data_mut(private::PrivateToken);
+    let dst_data = destinations.block_data_mut(private::PrivateToken);
 
     for layer_idx in layer_range {
         let src_view = src_data.layer_view(layer_idx)?;
@@ -108,6 +72,47 @@ where
         }
     }
     Ok(())
+}
+
+/// Helper function to perform the appropriate CUDA memcpy based on storage types
+unsafe fn dispatch_cuda_memcpy<Source: CudaCopyable, Dest: CudaCopyable>(
+    src_ptr: *const u8,
+    dst_ptr: *mut u8,
+    size: usize,
+    stream: CUstream,
+) -> Result<(), TransferError> {
+    debug_assert!(
+        (src_ptr as usize + size <= dst_ptr as usize)
+            || (dst_ptr as usize + size <= src_ptr as usize),
+        "Source and destination memory regions must not overlap for copy_nonoverlapping"
+    );
+
+    match (
+        std::any::TypeId::of::<Source>(),
+        std::any::TypeId::of::<Dest>(),
+    ) {
+        (src, dst)
+            if src == std::any::TypeId::of::<PinnedStorage>()
+                && dst == std::any::TypeId::of::<DeviceStorage>() =>
+        {
+            cuda_memcpy_h2d(src_ptr, dst_ptr, size, stream)
+        }
+        (src, dst)
+            if src == std::any::TypeId::of::<DeviceStorage>()
+                && dst == std::any::TypeId::of::<PinnedStorage>() =>
+        {
+            cuda_memcpy_d2h(src_ptr, dst_ptr, size, stream)
+        }
+        (src, dst)
+            if src == std::any::TypeId::of::<DeviceStorage>()
+                && dst == std::any::TypeId::of::<DeviceStorage>() =>
+        {
+            cuda_memcpy_d2d(src_ptr, dst_ptr, size, stream)
+        }
+        _ => Err(TransferError::ExecutionError(
+            "Unsupported storage type combination for CUDA memcpy".into(),
+        )),
+    }
 }
 
 /// H2D Implementation
@@ -166,11 +171,83 @@ unsafe fn cuda_memcpy_d2d(
 #[cfg(test)]
 mod tests {
     use super::*;
-    // TODO: Add test cases for:
-    // 1. H2D copy (Pinned -> Device)
-    // 2. D2H copy (Device -> Pinned)
-    // 3. D2D copy (Device -> Device)
-    // 4. Error cases (null pointers, invalid sizes)
-    // 5. Layer-by-layer copy
-    // 6. Contiguous block copy
+    use crate::block_manager::storage::{
+        DeviceAllocator, PinnedAllocator, StorageAllocator, StorageMemset,
+    };
+
+    #[test]
+    fn test_memset_and_transfer() {
+        // Create allocators
+        let device_allocator = DeviceAllocator::default();
+        let pinned_allocator = PinnedAllocator::default();
+
+        let ctx = device_allocator.ctx().clone();
+
+        // Create CUDA stream
+        let stream = ctx.new_stream().unwrap();
+        let stream_handle = stream.cu_stream();
+
+        // Allocate host and device memory
+        let mut host = pinned_allocator.allocate(1024).unwrap();
+        let mut device = device_allocator.allocate(1024).unwrap();
+
+        // Set a pattern in host memory
+        unsafe {
+            StorageMemset::memset(&mut host, 42, 0, 1024).unwrap();
+        }
+
+        // Verify host memory was set correctly
+        unsafe {
+            let ptr = host.as_ptr().unwrap();
+            let slice = std::slice::from_raw_parts(ptr, 1024);
+            assert!(slice.iter().all(|&x| x == 42));
+        }
+
+        // Copy host to device
+        unsafe {
+            dispatch_cuda_memcpy::<PinnedStorage, DeviceStorage>(
+                host.as_ptr().unwrap(),
+                device.as_mut_ptr().unwrap(),
+                1024,
+                stream_handle,
+            )
+            .unwrap();
+        }
+
+        // Synchronize to ensure H2D copy is complete
+        stream.synchronize().unwrap();
+
+        // Clear host memory
+        unsafe {
+            StorageMemset::memset(&mut host, 0, 0, 1024).unwrap();
+        }
+
+        // Verify host memory was cleared
+        unsafe {
+            let ptr = host.as_ptr().unwrap();
+            let slice = std::slice::from_raw_parts(ptr, 1024);
+            assert!(slice.iter().all(|&x| x == 0));
+        }
+
+        // Copy back from device to host
+        unsafe {
+            dispatch_cuda_memcpy::<DeviceStorage, PinnedStorage>(
+                device.as_ptr().unwrap(),
+                host.as_mut_ptr().unwrap(),
+                1024,
+                stream_handle,
+            )
+            .unwrap();
+        }
+
+        // Synchronize to ensure D2H copy is complete before verifying
+        stream.synchronize().unwrap();
+
+        // Verify the original pattern was restored
+        unsafe {
+            let ptr = host.as_ptr().unwrap();
+            let slice = std::slice::from_raw_parts(ptr, 1024);
+            assert!(slice.iter().all(|&x| x == 42));
+        }
+    }
 }

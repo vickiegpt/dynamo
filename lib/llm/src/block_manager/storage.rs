@@ -116,6 +116,22 @@ pub trait Storage: Debug + Send + Sync + 'static {
     unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8>;
 }
 
+/// Extension trait for storage types that support memory setting operations
+pub trait StorageMemset: Storage {
+    /// Sets a region of memory to a specific value
+    ///
+    /// # Arguments
+    /// * `value` - The value to set (will be truncated to u8)
+    /// * `offset` - Offset in bytes from the start of the storage
+    /// * `size` - Number of bytes to set
+    ///
+    /// # Safety
+    /// The caller must ensure:
+    /// - offset + size <= self.size()
+    /// - No other references exist to the memory region being set
+    fn memset(&mut self, value: u8, offset: usize, size: usize) -> Result<(), StorageError>;
+}
+
 /// Registerable storage is a [Storage] that can be associated with one or more
 /// [RegistationHandle]s.
 ///
@@ -300,6 +316,21 @@ impl Storage for SystemStorage {
     }
 }
 
+impl StorageMemset for SystemStorage {
+    fn memset(&mut self, value: u8, offset: usize, size: usize) -> Result<(), StorageError> {
+        if offset + size > self.len {
+            return Err(StorageError::OperationFailed(
+                "memset: offset + size > storage size".into(),
+            ));
+        }
+        unsafe {
+            let ptr = self.ptr.as_ptr().add(offset);
+            std::ptr::write_bytes(ptr, value, size);
+        }
+        Ok(())
+    }
+}
+
 impl RegisterableStorage for SystemStorage {
     fn register(
         &mut self,
@@ -334,7 +365,7 @@ pub struct PinnedStorage {
     ptr: u64,
     size: usize,
     handles: RegistrationHandles,
-    ctx: Arc<CudaContext>,
+    _ctx: Arc<CudaContext>,
 }
 
 impl Local for PinnedStorage {}
@@ -361,7 +392,7 @@ impl PinnedStorage {
                 ptr,
                 size,
                 handles: RegistrationHandles::new(),
-                ctx: ctx.clone(),
+                _ctx: ctx.clone(),
             })
         }
     }
@@ -415,6 +446,21 @@ impl RegisterableStorage for PinnedStorage {
 
     fn registration_handle(&self, key: &str) -> Option<&dyn RegistationHandle> {
         self.handles.registration_handle(key)
+    }
+}
+
+impl StorageMemset for PinnedStorage {
+    fn memset(&mut self, value: u8, offset: usize, size: usize) -> Result<(), StorageError> {
+        if offset + size > self.size {
+            return Err(StorageError::OperationFailed(
+                "memset: offset + size > storage size".into(),
+            ));
+        }
+        unsafe {
+            let ptr = (self.ptr as *mut u8).add(offset);
+            std::ptr::write_bytes(ptr, value, size);
+        }
+        Ok(())
     }
 }
 
@@ -491,7 +537,6 @@ impl Storage for DeviceStorage {
     }
 
     fn is_host_accessible(&self) -> bool {
-        // Device memory is not directly accessible from host
         false
     }
 
@@ -552,6 +597,10 @@ impl DeviceAllocator {
         Ok(Self {
             ctx: CudaContext::new(device_id).map_err(StorageError::Cuda)?,
         })
+    }
+
+    pub fn ctx(&self) -> &Arc<CudaContext> {
+        &self.ctx
     }
 }
 
