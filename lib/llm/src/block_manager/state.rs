@@ -15,7 +15,7 @@
 
 use super::*;
 
-use super::config::NixlOptions;
+use super::{block::Block, config::NixlOptions};
 
 use derive_getters::Getters;
 
@@ -36,7 +36,7 @@ pub struct KvBlockManagerState<HostMetadata: BlockMetadata, DeviceMetadata: Bloc
 impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
     KvBlockManagerState<HostMetadata, DeviceMetadata>
 {
-    pub fn new(config: KvBlockManagerConfig) -> Result<Self> {
+    pub fn new(config: KvBlockManagerConfig) -> Result<Arc<Self>> {
         config
             .runtime
             .validate()
@@ -84,39 +84,39 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
         let mut local_block_set = block::nixl::NixlBlockSet::new(worker_id);
 
         // Create the host block pool if a host layout is provided
-        let host_pool = if let Some(config) = config.host_layout {
+        let (host_pool, host_blocks) = if let Some(config) = config.host_layout {
             next_block_set_idx += 1;
             tracing::debug!("Constructing host pool.");
             let layout = create_layout(layout_builder.clone(), config, nixl_agent.as_ref())?;
             local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
-            let block_pool = create_block_pool::<_, HostMetadata>(
+            let (pool, blocks) = create_block_pool::<_, HostMetadata>(
                 layout,
                 next_block_set_idx,
                 cancellation_token.clone(),
                 worker_id,
             )?;
-            Some(block_pool)
+            (Some(pool), Some(blocks))
         } else {
             tracing::debug!("No host layout provided; will not allocate host blocks.");
-            None
+            (None, None)
         };
 
         // Create the device block pool if a device layout is provided
-        let device_pool = if let Some(config) = config.device_layout {
+        let (device_pool, device_blocks) = if let Some(config) = config.device_layout {
             next_block_set_idx += 1;
             tracing::debug!("Constructing device pool.");
             let layout = create_layout(layout_builder.clone(), config, nixl_agent.as_ref())?;
             local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
-            let block_pool = create_block_pool::<_, DeviceMetadata>(
+            let (pool, blocks) = create_block_pool::<_, DeviceMetadata>(
                 layout,
                 next_block_set_idx,
                 cancellation_token.clone(),
                 worker_id,
             )?;
-            Some(block_pool)
+            (Some(pool), Some(blocks))
         } else {
             tracing::debug!("No device layout provided; will not allocate device blocks.");
-            None
+            (None, None)
         };
 
         // Finalize the local block set by adding NIXL metadata
@@ -125,7 +125,7 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
             local_block_set.set_nixl_metadata(nixl_agent.get_local_md()?);
         }
 
-        Ok(Self {
+        let state = Arc::new(Self {
             worker_id,
             cancellation_token,
             nixl_agent,
@@ -134,7 +134,25 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
             device_pool,
             local_block_set,
             remote_block_sets: RwLock::new(HashMap::new()),
-        })
+        });
+
+        if let Some(blocks) = host_blocks {
+            state
+                .host_pool
+                .as_ref()
+                .unwrap()
+                .add_blocks_blocking(blocks)?;
+        }
+
+        if let Some(blocks) = device_blocks {
+            state
+                .device_pool
+                .as_ref()
+                .unwrap()
+                .add_blocks_blocking(blocks)?;
+        }
+
+        Ok(state)
     }
 
     /// Exports the local blockset configuration as a serialized object.
@@ -319,10 +337,10 @@ fn create_block_pool<S: Storage + NixlEnabledStorage, M: BlockMetadata>(
     block_set_idx: usize,
     cancellation_token: CancellationToken,
     worker_id: WorkerID,
-) -> Result<BlockPool<S, M>> {
+) -> Result<(BlockPool<S, M>, Vec<Block<S, M>>)> {
     let blocks = block::layout_to_blocks::<_, M>(layout, block_set_idx, worker_id)?;
-    BlockPool::builder()
-        .blocks(blocks)
+    let pool = BlockPool::<S, M>::builder()
         .cancel_token(cancellation_token)
-        .build()
+        .build()?;
+    Ok((pool, blocks))
 }

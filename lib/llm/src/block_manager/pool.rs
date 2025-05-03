@@ -65,12 +65,13 @@ use derive_builder::Builder;
 use derive_getters::Dissolve;
 use inactive::InactiveBlockPool;
 use priority_key::PriorityKey;
-use tokio::sync::oneshot;
 
 pub use super::block::{ImmutableBlock, MutableBlock};
 
 use super::block::{
-    nixl::BlockHandleInfo, registry::BlockRegistry, Block, BlockError, BlockMetadata,
+    nixl::{short_type_name, BlockHandleInfo},
+    registry::BlockRegistry,
+    Block, BlockError, BlockMetadata,
 };
 use super::events::{EventManager, NullEventManager};
 use super::layout::BlockLayout;
@@ -111,9 +112,6 @@ pub enum BlockPoolError {
 #[derive(Builder, Dissolve)]
 #[builder(pattern = "owned", build_fn(private, name = "build_internal"))]
 pub struct BlockPoolArgs<S: Storage, M: BlockMetadata> {
-    #[builder(default = "Runtime::default()")]
-    runtime: Runtime,
-
     #[builder(default = "NullEventManager::new()")]
     event_manager: Arc<dyn EventManager>,
 
@@ -127,17 +125,16 @@ pub struct BlockPoolArgs<S: Storage, M: BlockMetadata> {
 impl<S: Storage, M: BlockMetadata> BlockPoolArgsBuilder<S, M> {
     pub fn build(self) -> anyhow::Result<BlockPool<S, M>> {
         let args = self.build_internal()?;
-        let (runtime, event_manager, cancel_token, blocks) = args.dissolve();
+        let (event_manager, cancel_token, blocks) = args.dissolve();
 
         tracing::info!("building block pool");
-        let pool = BlockPool::new(event_manager, runtime, cancel_token, blocks);
+        let pool = BlockPool::new(event_manager, cancel_token, blocks);
 
         Ok(pool)
     }
 }
 /// Manages the blocks in a specific storage backenda
 pub struct BlockPool<S: Storage, M: BlockMetadata> {
-    runtime: Runtime,
     priority_tx: tokio::sync::mpsc::UnboundedSender<PriorityRequest<S, M>>,
     ctrl_tx: tokio::sync::mpsc::UnboundedSender<ControlRequest<S, M>>,
 }
@@ -145,7 +142,6 @@ pub struct BlockPool<S: Storage, M: BlockMetadata> {
 impl<S: Storage, M: BlockMetadata> Clone for BlockPool<S, M> {
     fn clone(&self) -> Self {
         Self {
-            runtime: self.runtime.clone(),
             priority_tx: self.priority_tx.clone(),
             ctrl_tx: self.ctrl_tx.clone(),
         }
@@ -184,47 +180,6 @@ enum ControlRequest<S: Storage, M: BlockMetadata> {
     AddBlocks(Unary<Vec<Block<S, M>>, ()>),
 }
 
-#[derive(Debug, Clone)]
-pub enum Runtime {
-    Handle(tokio::runtime::Handle),
-    Runtime(Arc<tokio::runtime::Runtime>),
-}
-
-impl Default for Runtime {
-    fn default() -> Self {
-        // detect if we are running in a tokio runtime
-        if tokio::runtime::Handle::try_current().is_ok() {
-            Self::current_thread()
-        } else {
-            Self::single_threaded()
-        }
-    }
-}
-
-impl Runtime {
-    pub fn current_thread() -> Self {
-        Self::Handle(tokio::runtime::Handle::current())
-    }
-
-    pub fn single_threaded() -> Self {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .max_blocking_threads(1)
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .expect("failed to create runtime");
-
-        Self::Runtime(Arc::new(runtime))
-    }
-
-    fn handle(&self) -> tokio::runtime::Handle {
-        match self {
-            Runtime::Handle(handle) => handle.clone(),
-            Runtime::Runtime(runtime) => runtime.handle().clone(),
-        }
-    }
-}
-
 impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     pub fn builder() -> BlockPoolArgsBuilder<S, M> {
         BlockPoolArgsBuilder::default()
@@ -243,27 +198,45 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     /// A new [`BlockPool`] instance.
     fn new(
         event_manager: Arc<dyn EventManager>,
-        runtime: Runtime,
         cancel_token: CancellationToken,
         blocks: Vec<Block<S, M>>,
     ) -> Self {
         let (pool, progress_engine) =
-            Self::with_progress_engine(event_manager, runtime, cancel_token, blocks);
+            Self::with_progress_engine(event_manager, cancel_token, blocks);
 
-        pool.runtime.handle().spawn(async move {
-            let mut progress_engine = progress_engine;
-            tracing::debug!("starting progress engine");
-            while progress_engine.step().await {
-                tracing::trace!("progress engine step");
-            }
-        });
+        // pool.runtime.handle().spawn(async move {
+        //     let mut progress_engine = progress_engine;
+        //     tracing::debug!("starting progress engine");
+        //     while progress_engine.step().await {
+        //         tracing::trace!("progress engine step");
+        //     }
+        // });
+
+        let thread_name = format!("block-pool-{}", short_type_name::<S>());
+
+        std::thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to build Tokio runtime for block pool progress engine");
+
+                runtime.block_on(async move {
+                    let mut progress_engine = progress_engine;
+                    tracing::debug!("starting progress engine");
+                    while progress_engine.step().await {
+                        tracing::trace!("progress engine step");
+                    }
+                });
+            })
+            .expect("Failed to spawn block pool progress engine thread");
 
         pool
     }
 
     fn with_progress_engine(
         event_manager: Arc<dyn EventManager>,
-        runtime: Runtime,
         cancel_token: CancellationToken,
         blocks: Vec<Block<S, M>>,
     ) -> (Self, ProgressEngine<S, M>) {
@@ -275,7 +248,6 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
 
         (
             Self {
-                runtime,
                 priority_tx,
                 ctrl_tx,
             },
@@ -283,37 +255,43 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         )
     }
 
-    // /// Adds a vector of [`Block`]s to the [`InactiveBlockPool`].
-    // ///
-    // /// These blocks are typically created from a [`super::block::Blocks`]
-    // /// and represent the initial set of available cache blocks.
-    // /// Blocks added this way are initially reset.
-    // ///
-    // /// # Arguments
-    // ///
-    // /// * `blocks` - A [`Vec<Block<S, M>>`] to add to the inactive pool.
-    // pub async fn add_blocks(&self, blocks: Vec<Block<S, M>>) -> Result<(), BlockPoolError> {
-    //     // Create the request
-    //     let (req, resp_rx) = Unary::<_, ()>::make_request(blocks);
+    /// Adds a vector of [`Block`]s to the [`InactiveBlockPool`].
+    ///
+    /// These blocks are typically created from a [`super::block::Blocks`]
+    /// and represent the initial set of available cache blocks.
+    /// Blocks added this way are initially reset.
+    ///
+    /// # Arguments
+    ///
+    /// * `blocks` - A [`Vec<Block<S, M>>`] to add to the inactive pool.
+    pub(crate) async fn add_blocks(&self, blocks: Vec<Block<S, M>>) -> Result<(), BlockPoolError> {
+        self._add_blocks(blocks)?
+            .await
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)
+    }
 
-    //     // Issue the request
-    //     self.ctrl_tx
-    //         .send(ControlRequest::AddBlocks(req))
-    //         .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
+    /// Blocking version of [`BlockPool::add_blocks`].
+    pub(crate) fn add_blocks_blocking(
+        &self,
+        blocks: Vec<Block<S, M>>,
+    ) -> Result<(), BlockPoolError> {
+        self._add_blocks(blocks)?
+            .recv()
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)
+    }
 
-    //     // Await a response
-    //     resp_rx
-    //         .await
-    //         .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
-    //     Ok(())
-    // }
+    fn _add_blocks(
+        &self,
+        blocks: Vec<Block<S, M>>,
+    ) -> Result<oneshot::Receiver<()>, BlockPoolError> {
+        let (req, resp_rx) = Unary::<_, ()>::make_request(blocks);
 
-    // /// Blocking version of [`BlockPool::add_blocks`].
-    // pub fn add_blocks_blocking(&self, blocks: Vec<Block<S, M>>) -> Result<(), BlockPoolError> {
-    //     self.runtime
-    //         .handle()
-    //         .block_on(async move { self.add_blocks(blocks).await })
-    // }
+        self.ctrl_tx
+            .send(ControlRequest::AddBlocks(req))
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
+
+        Ok(resp_rx)
+    }
 
     /// Attempts to allocate a specified number of free blocks from the [`InactiveBlockPool`].
     ///
@@ -334,6 +312,26 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         &self,
         count: usize,
     ) -> Result<Vec<MutableBlock<S, M>>, BlockPoolError> {
+        self._allocate_blocks(count)?
+            .await
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
+    }
+
+    /// Blocking version of [`BlockPool::allocate_blocks`].
+    pub fn allocate_blocks_blocking(
+        &self,
+        count: usize,
+    ) -> Result<Vec<MutableBlock<S, M>>, BlockPoolError> {
+        self._allocate_blocks(count)?
+            .recv()
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
+    }
+
+    fn _allocate_blocks(
+        &self,
+        count: usize,
+    ) -> Result<oneshot::Receiver<Result<Vec<MutableBlock<S, M>>, BlockPoolError>>, BlockPoolError>
+    {
         // Create the request
         let (req, resp_rx) =
             Unary::<_, Result<Vec<MutableBlock<S, M>>, BlockPoolError>>::make_request(count);
@@ -344,49 +342,8 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
 
         // Await a response
-        resp_rx
-            .await
-            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
+        Ok(resp_rx)
     }
-
-    /// Blocking version of [`BlockPool::allocate_blocks`].
-    pub fn allocate_blocks_blocking(
-        &self,
-        count: usize,
-    ) -> Result<Vec<MutableBlock<S, M>>, BlockPoolError> {
-        self.runtime
-            .handle()
-            .block_on(async move { self.allocate_blocks(count).await })
-    }
-
-    // /// Registers a [`MutableBlock`] (presumably after filling it) with the pool,
-    // /// making it potentially available for sharing via the [`ActiveBlockPool`].
-    // ///
-    // /// This function checks if a block with the same sequence hash already exists
-    // /// in the active pool. If so, it returns an [`ImmutableBlock`] pointing to the
-    // /// existing block, and the provided `block` is implicitly dropped (returned to
-    // /// the inactive pool). If no matching block exists, the provided `block` is
-    // /// added to the active pool (via a weak reference) and an [`ImmutableBlock`]
-    // /// pointing to it is returned.
-    // ///
-    // /// # Arguments
-    // ///
-    // /// * `block` - The [`MutableBlock<S, M>`] to register.
-    // ///
-    // /// # Returns
-    // ///
-    // /// A [`Result`] containing:
-    // /// - `Ok(ImmutableBlock<S, M>)`: An immutable, shareable reference to the registered block.
-    // /// - `Err(BlockPoolError)`: If the provided block is in an invalid state (e.g., has no sequence hash).
-    // pub async fn register_block(
-    //     &mut self,
-    //     block: MutableBlock<S, M>,
-    // ) -> Result<ImmutableBlock<S, M>, BlockPoolError> {
-    //     self.register_blocks(vec![block])
-    //         .await?
-    //         .first()
-    //         .ok_or(BlockPoolError::FailedToRegisterBlock("".to_string()))
-    // }
 
     /// Registers a vector of [`MutableBlock`]s (presumably after filling them) with the pool,
     /// making them available for sharing via the [`ActiveBlockPool`].
@@ -398,6 +355,26 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         &self,
         blocks: Vec<MutableBlock<S, M>>,
     ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
+        self._register_blocks(blocks)?
+            .await
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
+    }
+
+    /// Blocking version of [`BlockPool::register_blocks`].
+    pub fn register_blocks_blocking(
+        &self,
+        blocks: Vec<MutableBlock<S, M>>,
+    ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
+        self._register_blocks(blocks)?
+            .recv()
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
+    }
+
+    fn _register_blocks(
+        &self,
+        blocks: Vec<MutableBlock<S, M>>,
+    ) -> Result<oneshot::Receiver<Result<Vec<ImmutableBlock<S, M>>, BlockPoolError>>, BlockPoolError>
+    {
         // Make the request
         let (req, resp_rx) =
             Unary::<_, Result<Vec<ImmutableBlock<S, M>>, BlockPoolError>>::make_request(blocks);
@@ -408,19 +385,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
 
         // Await a response
-        resp_rx
-            .await
-            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
-    }
-
-    /// Blocking version of [`BlockPool::register_blocks`].
-    pub fn register_blocks_blocking(
-        &self,
-        blocks: Vec<MutableBlock<S, M>>,
-    ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
-        self.runtime
-            .handle()
-            .block_on(async move { self.register_blocks(blocks).await })
+        Ok(resp_rx)
     }
 
     /// Attempts to match the given [`SequenceHash`] to an existing block, checking
@@ -445,6 +410,25 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         &self,
         sequence_hashes: &[SequenceHash],
     ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
+        self._match_sequence_hashes(sequence_hashes)?
+            .await
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)
+    }
+
+    /// Blocking version of [`BlockPool::match_sequence_hashes`].
+    pub fn match_sequence_hashes_blocking(
+        &self,
+        sequence_hashes: &[SequenceHash],
+    ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
+        self._match_sequence_hashes(sequence_hashes)?
+            .recv()
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)
+    }
+
+    fn _match_sequence_hashes(
+        &self,
+        sequence_hashes: &[SequenceHash],
+    ) -> Result<oneshot::Receiver<Vec<ImmutableBlock<S, M>>>, BlockPoolError> {
         // Create the request
         let (req, resp_rx) =
             Unary::<_, Vec<ImmutableBlock<S, M>>>::make_request(sequence_hashes.into());
@@ -455,19 +439,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
 
         // Await a response
-        resp_rx
-            .await
-            .map_err(|_| BlockPoolError::ProgressEngineShutdown)
-    }
-
-    /// Blocking version of [`BlockPool::match_sequence_hashes`].
-    pub fn match_sequence_hashes_blocking(
-        &self,
-        sequence_hashes: &[SequenceHash],
-    ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
-        self.runtime
-            .handle()
-            .block_on(async move { self.match_sequence_hashes(sequence_hashes).await })
+        Ok(resp_rx)
     }
 }
 
@@ -501,24 +473,12 @@ mod tests {
             self,
         ) -> anyhow::Result<(BlockPool<S, M>, ProgressEngine<S, M>)> {
             let args = self.build_internal()?;
-            let (runtime, event_manager, cancel_token, blocks) = args.dissolve();
+            let (event_manager, cancel_token, blocks) = args.dissolve();
             let (pool, progress_engine) =
-                BlockPool::with_progress_engine(event_manager, runtime, cancel_token, blocks);
+                BlockPool::with_progress_engine(event_manager, cancel_token, blocks);
 
             Ok((pool, progress_engine))
         }
-    }
-
-    #[tokio::test]
-    async fn test_default_runtime_async() {
-        let runtime = Runtime::default();
-        assert!(matches!(runtime, Runtime::Handle(_)));
-    }
-
-    #[test]
-    fn test_default_runtime_blocking() {
-        let runtime = Runtime::default();
-        assert!(matches!(runtime, Runtime::Runtime(_)));
     }
 
     #[tokio::test]

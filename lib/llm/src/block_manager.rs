@@ -94,7 +94,7 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
         let state = state::KvBlockManagerState::new(config)?;
 
         Ok(Self {
-            state: Arc::new(state),
+            state,
             cancellation_token,
         })
     }

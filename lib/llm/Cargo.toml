@@ -75,6 +75,8 @@ rayon = "1"
 # kv_cuda
 cudarc = { version = "0.16.0", features = ["cuda-12020"], optional = true }
 ndarray = { version = "0.16", optional = true }
+oneshot = { version = "0.1.11", features = ["std", "async"] }
+
 # candle-core = { version = "0.8.3", features = ["cuda"], optional = true }
 # half = "2.4.1"
 
