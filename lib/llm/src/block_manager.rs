@@ -19,6 +19,9 @@
 //! mechanisms. It handles storage allocation, block management, and safe access
 //! patterns for both system memory and remote (NIXL) storage.
 
+mod config;
+mod state;
+
 pub mod block;
 pub mod events;
 pub mod layout;
@@ -34,6 +37,7 @@ pub use block::{
     transfer::{BlockTransferEngine, BlockTransferEngineV1, TransferRequestPut},
     BasicMetadata, BlockMetadata, Blocks,
 };
+pub use config::*;
 pub use layout::{nixl::NixlLayout, LayoutConfig, LayoutConfigBuilder, LayoutError, LayoutType};
 pub use pool::BlockPool;
 pub use storage::{
@@ -47,117 +51,12 @@ use derive_builder::Builder;
 use nixl_sys::Agent as NixlAgent;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 use storage::nixl::MemType;
 use validator::Validate;
 
 pub type WorkerID = u64;
-
-#[derive(Debug, Clone, Builder, Validate)]
-#[builder(pattern = "owned")]
-pub struct KvManagerRuntimeConfig {
-    worker_id: u64,
-
-    #[builder(default)]
-    cancellation_token: CancellationToken,
-
-    #[builder(default = "true")]
-    enable_nixl: bool,
-}
-
-impl KvManagerRuntimeConfig {
-    pub fn builder() -> KvManagerRuntimeConfigBuilder {
-        KvManagerRuntimeConfigBuilder::default()
-    }
-}
-
-#[derive(Debug, Clone, Builder, Validate)]
-#[builder(pattern = "owned")]
-pub struct KvManagerModelConfig {
-    #[validate(range(min = 1))]
-    pub num_layers: usize,
-
-    #[validate(range(min = 1))]
-    pub page_size: usize,
-
-    #[validate(range(min = 1))]
-    pub inner_dim: usize,
-
-    #[builder(default = "DType::FP16")]
-    pub dtype: DType,
-}
-
-impl KvManagerModelConfig {
-    pub fn builder() -> KvManagerModelConfigBuilder {
-        KvManagerModelConfigBuilder::default()
-    }
-}
-
-#[derive(Builder, Validate)]
-#[builder(pattern = "owned", build_fn(validate = "Self::validate"))]
-pub struct KvManagerLayoutConfig<S: Storage + NixlEnabledStorage> {
-    #[validate(range(min = 1))]
-    pub num_blocks: usize,
-
-    #[builder(default = "LayoutType::FullyContiguous")]
-    pub layout_type: LayoutType,
-
-    /// Storage for the blocks
-    /// If provided, the blocks will be allocated from the provided storage
-    /// Otherwise, the blocks will be allocated from
-    #[builder(default)]
-    pub storage: Option<Vec<S>>,
-
-    /// If provided, the blocks will be allocated from the provided allocator
-    /// This option is mutually exclusive with the `storage` option
-    #[builder(default, setter(custom))]
-    pub allocator: Option<Arc<dyn StorageAllocator<S>>>,
-}
-
-impl<S: Storage + NixlEnabledStorage> KvManagerLayoutConfig<S> {
-    pub fn builder() -> KvManagerLayoutConfigBuilder<S> {
-        KvManagerLayoutConfigBuilder::default()
-    }
-}
-
-// Implement the validation and build functions on the generated builder type
-// Note: derive_builder generates KvManagerBlockConfigBuilder<S>
-impl<S: Storage + NixlEnabledStorage> KvManagerLayoutConfigBuilder<S> {
-    /// Custom setter for the `allocator` field
-    fn allocator(mut self, allocator: impl StorageAllocator<S> + 'static) -> Self {
-        self.allocator = Some(Some(Arc::new(allocator)));
-        self
-    }
-
-    // Validation function
-    fn validate(&self) -> Result<(), String> {
-        match (self.storage.is_some(), self.allocator.is_some()) {
-            (true, false) | (false, true) => Ok(()), // XOR condition met
-            (true, true) => Err("Cannot provide both `storage` and `allocator`.".to_string()),
-            (false, false) => Err("Must provide either `storage` or `allocator`.".to_string()),
-        }
-    }
-}
-
-#[derive(Builder, Validate)]
-#[builder(pattern = "owned")]
-pub struct KvBlockManagerConfig {
-    runtime: KvManagerRuntimeConfig,
-    model: KvManagerModelConfig,
-
-    #[builder(default, setter(strip_option))]
-    device_layout: Option<KvManagerLayoutConfig<DeviceStorage>>,
-
-    #[builder(default, setter(strip_option))]
-    host_layout: Option<KvManagerLayoutConfig<PinnedStorage>>,
-}
-
-impl KvBlockManagerConfig {
-    pub fn builder() -> KvBlockManagerConfigBuilder {
-        KvBlockManagerConfigBuilder::default()
-    }
-}
 
 pub type ReferenceBlockManager = KvBlockManager<BasicMetadata, BasicMetadata>;
 
@@ -169,279 +68,79 @@ pub type ReferenceBlockManager = KvBlockManager<BasicMetadata, BasicMetadata>;
 //    for each layout type.
 // 5. initialize the pools for each set of blocks
 pub struct KvBlockManager<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata> {
-    worker_id: WorkerID,
+    state: Arc<state::KvBlockManagerState<HostMetadata, DeviceMetadata>>,
     cancellation_token: CancellationToken,
-
-    nixl_agent: Option<NixlAgent>,
-    nixl_backends: HashMap<String, nixl_sys::Backend>,
-
-    host_pool: Option<BlockPool<PinnedStorage, HostMetadata>>,
-    device_pool: Option<BlockPool<DeviceStorage, DeviceMetadata>>,
-
-    local_block_set: NixlBlockSet,
-    remote_block_sets: HashMap<WorkerID, HashMap<usize, RemoteBlocks>>,
-}
-
-struct KvBlockManagerState<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata> {
-    worker_id: WorkerID,
-    cancellation_token: CancellationToken,
-
-    nixl_agent: Option<NixlAgent>,
-    nixl_backends: HashMap<String, nixl_sys::Backend>,
-
-    host_pool: Option<BlockPool<PinnedStorage, HostMetadata>>,
-    device_pool: Option<BlockPool<DeviceStorage, DeviceMetadata>>,
-
-    local_block_set: NixlBlockSet,
-    remote_block_sets: Mutex<HashMap<WorkerID, HashMap<usize, RemoteBlocks>>>,
 }
 
 impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
     KvBlockManager<HostMetadata, DeviceMetadata>
 {
+    /// Create a new [KvBlockManager]
+    ///
+    /// The returned object is a frontend to the [KvBlockManager] which owns the cancellation
+    /// tokens. When this object gets drop, the cancellation token will be cancelled and begin
+    /// the gracefully shutdown of the block managers internal state.
     pub fn new(config: KvBlockManagerConfig) -> Result<Self> {
-        config
-            .runtime
-            .validate()
-            .context("Validating runtime config")?;
+        let mut config = config;
 
-        config.model.validate().context("Validating model config")?;
+        // The frontend of the KvBlockManager will take ownership of the cancellation token
+        // and will be responsible for cancelling the task when the KvBlockManager is dropped
+        let cancellation_token = config.runtime.cancellation_token.clone();
 
-        let worker_id = config.runtime.worker_id;
-        let cancellation_token = config.runtime.cancellation_token;
+        // The internal state will use a child token of the original token
+        config.runtime.cancellation_token = cancellation_token.child_token();
 
-        // Create a map of NIXL backends
-        let mut nixl_backends: HashMap<String, nixl_sys::Backend> = HashMap::new();
-
-        // Create a NIXL agent if NIXL is enabled and instantiate requested backends
-        // TODO: Build a map of NIXL backends to block pools/sets
-        let nixl_agent = if config.runtime.enable_nixl {
-            let agent = NixlAgent::new(&worker_id.to_string())?;
-
-            // Create NIXL nixl_backends
-            // TODO: Expose this to API for configuration
-            tracing::debug!("Creating NIXL UCX backend");
-            let (_ucx_mem_list1, ucx_params) = agent.get_plugin_params("UCX")?;
-            let backend = agent.create_backend("UCX", &ucx_params)?;
-            nixl_backends.insert("UCX".to_string(), backend);
-
-            Some(agent)
-        } else {
-            None
-        };
-
-        // Initialize model-specific layout config. The layout_builder is incomplete at this point.
-        // We will clone this builder and apply the storage-specific configs to each clone in the
-        // following steps.
-        let model = &config.model;
-        let mut layout_builder = LayoutConfig::builder();
-
-        layout_builder
-            .num_layers(model.num_layers)
-            .page_size(model.page_size)
-            .inner_dim(model.inner_dim)
-            .dtype(model.dtype);
-
-        let mut next_block_set_idx = 0;
-        let mut local_block_set = block::nixl::NixlBlockSet::new(worker_id);
-
-        // Create the host block pool if a host layout is provided
-        let host_pool = if let Some(config) = config.host_layout {
-            next_block_set_idx += 1;
-            tracing::debug!("Constructing host pool.");
-            let layout = create_layout(layout_builder.clone(), config, nixl_agent.as_ref())?;
-            local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
-            let block_pool = create_block_pool::<_, HostMetadata>(
-                layout,
-                next_block_set_idx,
-                cancellation_token.clone(),
-                worker_id,
-            )?;
-            Some(block_pool)
-        } else {
-            tracing::debug!("No host layout provided; will not allocate host blocks.");
-            None
-        };
-
-        // Create the device block pool if a device layout is provided
-        let device_pool = if let Some(config) = config.device_layout {
-            next_block_set_idx += 1;
-            tracing::debug!("Constructing device pool.");
-            let layout = create_layout(layout_builder.clone(), config, nixl_agent.as_ref())?;
-            local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
-            let block_pool = create_block_pool::<_, DeviceMetadata>(
-                layout,
-                next_block_set_idx,
-                cancellation_token.clone(),
-                worker_id,
-            )?;
-            Some(block_pool)
-        } else {
-            tracing::debug!("No device layout provided; will not allocate device blocks.");
-            None
-        };
-
-        // Finalize the local block set by adding NIXL metadata
-        if let Some(nixl_agent) = &nixl_agent {
-            tracing::debug!("Finalize NixlBlockSet: adding NIXL metadata.");
-            local_block_set.set_nixl_metadata(nixl_agent.get_local_md()?);
-        }
+        // Create the internal state
+        let state = state::KvBlockManagerState::new(config)?;
 
         Ok(Self {
-            worker_id,
+            state: Arc::new(state),
             cancellation_token,
-            nixl_agent,
-            nixl_backends,
-            host_pool,
-            device_pool,
-            local_block_set,
-            remote_block_sets: HashMap::new(),
         })
     }
 
     /// Exports the local blockset configuration as a serialized object.
     pub fn export_local_blockset(&self) -> Result<SerializedNixlBlockSet> {
-        SerializedNixlBlockSet::try_from(&self.local_block_set)
-            .context("Failed to serialize local blockset")
+        self.state.export_local_blockset()
     }
 
     /// Imports a remote blockset configuration from a serialized object.
     pub fn import_remote_blockset(
-        &mut self,
+        &self,
         serialized_blockset: SerializedNixlBlockSet,
     ) -> Result<()> {
-        let remote = NixlBlockSet::try_from(serialized_blockset)
-            .context("Failed to deserialize remote blockset")?;
-
-        let (block_sets, metadata, worker_id) = remote.dissolve();
-        tracing::debug!("Importing remote blockset from worker {}", worker_id);
-
-        assert_ne!(
-            worker_id, self.worker_id,
-            "Cannot import blockset from self"
-        );
-
-        let agent = self
-            .nixl_agent
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("NIXL agent not initialized"))?;
-
-        if self.remote_block_sets.contains_key(&worker_id) {
-            anyhow::bail!(
-                "Worker ID {} already exists; cannot update remote blockset",
-                worker_id
-            );
-        }
-
-        let mut inner_map = HashMap::new();
-
-        for (block_set_idx, block_set_layout) in block_sets {
-            // Deserialize the individual layout and create RemoteBlocks
-            let remote_blocks =
-                RemoteBlocks::from_serialized(block_set_layout.clone(), block_set_idx, worker_id)?;
-
-            // check the storage type of the remote blocks
-            let layout = remote_blocks.layout();
-            let storage = layout.storage();
-
-            let storage = storage
-                .first()
-                .ok_or_else(|| anyhow::anyhow!("No storage found in remote blockset"))?;
-
-            match storage.mem_type() {
-                MemType::Dram => {
-                    tracing::trace!(block_set_idx, "Detected Host/DRAM remote descriptor");
-                }
-                MemType::Vram => {
-                    tracing::trace!(block_set_idx, "Detected GPU/Device/VRAM remote descriptor");
-                }
-                _ => {
-                    tracing::warn!(
-                        block_set_idx,
-                        "Detected unknown remote descriptor; skipping blockset..."
-                    );
-                    continue;
-                }
-            }
-
-            inner_map.insert(block_set_idx, remote_blocks);
-        }
-
-        let agent_id = agent
-            .load_remote_md(&metadata)
-            .context("Loading remote metadata")?;
-
-        // try to convert the agent_id (String) to a WorkerID (u64)
-        let agent_id: WorkerID =
-            agent_id // Assuming agent_id is String here
-                .parse() // Parse the String into u64 (WorkerID)
-                .context("Failed to parse agent ID string into WorkerID (u64)")?;
-
-        assert_eq!(agent_id, worker_id, "Mismatch with remote worker ID");
-
-        self.remote_block_sets.insert(worker_id, inner_map);
-
-        Ok(())
+        self.state.import_remote_blockset(serialized_blockset)
     }
 
-    fn get_remote_blocks_immutable(
+    /// Get a [`Vec<RemoteBlock<IsImmutable>>`] from a [`BlockDescriptorSet`]
+    pub fn get_remote_blocks_immutable(
         &self,
         bds: &BlockDescriptorSet,
     ) -> Result<Vec<RemoteBlock<IsImmutable>>> {
-        // no checks - we can always create an immutable remote block even if the bds is mutable
-        self.get_remote_blocks::<IsImmutable>(bds)
+        self.state.get_remote_blocks_immutable(bds)
     }
 
-    fn get_remote_blocks_mutable(
+    /// Get a [`Vec<RemoteBlock<IsMutable>>`] from a [`BlockDescriptorSet`]
+    pub fn get_remote_blocks_mutable(
         &self,
         bds: &BlockDescriptorSet,
     ) -> Result<Vec<RemoteBlock<IsMutable>>> {
-        if bds.mutability() == BlockMutability::Mutable {
-            self.get_remote_blocks::<IsMutable>(bds)
-        } else {
-            anyhow::bail!("Cannot get mutable remote blocks for immutable block descriptor set");
-        }
+        self.state.get_remote_blocks_mutable(bds)
     }
 
-    /// Generate a [`Vec<RemoteBlock>`] from a [`BlockDescriptorSet`]
-    fn get_remote_blocks<M: MutabilityKind>(
-        &self,
-        bds: &BlockDescriptorSet,
-    ) -> Result<Vec<RemoteBlock<M>>> {
-        // validate we have loaded a remote blockset for the worker and the specific block_set_idx
-        let remote_blocks = self
-            .remote_block_sets
-            .get(&bds.worker_id())
-            .and_then(|map| map.get(&bds.block_set_idx()))
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "No remote blockset found for worker {} and block_set_idx {}",
-                    bds.worker_id(),
-                    bds.block_set_idx()
-                )
-            })?;
-
-        // Iterate through indices, call .block() for each, and collect results.
-        // The collect::<Result<...>>() handles potential errors from .block()
-        let blocks: Vec<block::nixl::RemoteBlock<M>> = bds
-            .block_indices()
-            .iter()
-            .map(|block_idx| remote_blocks.block(*block_idx))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(blocks)
-    }
-}
-
-impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
-    KvBlockManager<HostMetadata, DeviceMetadata>
-{
+    /// Get a reference to the host block pool
     pub fn host(&self) -> Option<&BlockPool<PinnedStorage, HostMetadata>> {
-        self.host_pool.as_ref()
+        self.state.host()
     }
 
+    /// Get a reference to the device block pool
     pub fn device(&self) -> Option<&BlockPool<DeviceStorage, DeviceMetadata>> {
-        self.device_pool.as_ref()
+        self.state.device()
+    }
+
+    /// Get the worker ID
+    pub fn worker_id(&self) -> WorkerID {
+        self.state.worker_id()
     }
 }
 
@@ -451,44 +150,6 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata> Drop
     fn drop(&mut self) {
         self.cancellation_token.cancel();
     }
-}
-
-fn create_layout<S: Storage + NixlEnabledStorage>(
-    mut builder: LayoutConfigBuilder,
-    config: KvManagerLayoutConfig<S>,
-    nixl_agent: Option<&NixlAgent>,
-) -> Result<Arc<dyn NixlLayout<StorageType = S>>> {
-    let layout = builder.num_blocks(config.num_blocks).build()?;
-    if let Some(storage) = config.storage {
-        let mut layout = layout.create_layout(config.layout_type, storage)?;
-        if let Some(nixl_agent) = nixl_agent {
-            layout.nixl_register(nixl_agent, None)?;
-        }
-        return Ok(Arc::new(layout));
-    }
-
-    if let Some(allocator) = config.allocator {
-        let mut layout = layout.allocate_layout(config.layout_type, allocator)?;
-        if let Some(nixl_agent) = nixl_agent {
-            layout.nixl_register(nixl_agent, None)?;
-        }
-        return Ok(Arc::new(layout));
-    }
-
-    anyhow::bail!("failed to create layout");
-}
-
-fn create_block_pool<S: Storage + NixlEnabledStorage, M: BlockMetadata>(
-    layout: Arc<dyn NixlLayout<StorageType = S>>,
-    block_set_idx: usize,
-    cancellation_token: CancellationToken,
-    worker_id: WorkerID,
-) -> Result<BlockPool<S, M>> {
-    let blocks = block::layout_to_blocks::<_, M>(layout, block_set_idx, worker_id)?;
-    BlockPool::builder()
-        .blocks(blocks)
-        .cancel_token(cancellation_token)
-        .build()
 }
 
 #[cfg(test)]
@@ -567,7 +228,7 @@ mod tests {
         let mut kvbm_0 = create_reference_block_manager();
         let mut kvbm_1 = create_reference_block_manager();
 
-        assert_ne!(kvbm_0.worker_id, kvbm_1.worker_id);
+        assert_ne!(kvbm_0.worker_id(), kvbm_1.worker_id());
 
         // in dynamo, we would exchange the blocksets via the discovery plane
         let blockset_0 = kvbm_0.export_local_blockset().unwrap();
