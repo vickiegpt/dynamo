@@ -548,7 +548,7 @@ dependencies = [
  "bitflags 2.9.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.11.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -568,7 +568,7 @@ dependencies = [
  "bitflags 2.9.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.11.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -1210,9 +1210,9 @@ dependencies = [
 
 [[package]]
 name = "cudarc"
-version = "0.16.2"
+version = "0.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4ed411343abcb4dd6fd1fbc32db3533d76c2af0fd40735a9e5e39e778a81254"
+checksum = "fc824dfce2bb28c9dccb37a77352791643ed971f0dc60afbd7934b0a689c88a2"
 dependencies = [
  "libloading",
 ]
@@ -1532,7 +1532,7 @@ dependencies = [
  "bytes",
  "chrono",
  "cmake",
- "cudarc 0.16.2",
+ "cudarc 0.16.3",
  "derive-getters",
  "derive_builder",
  "dynamo-runtime",
@@ -3232,9 +3232,9 @@ checksum = "23fb14cb19457329c82206317a5663005a4d404783dc74f4252769b0d5f42856"
 
 [[package]]
 name = "llama-cpp-2"
-version = "0.1.102"
+version = "0.1.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a419bb48efa0f8389a82301f1f64e2874568a3fbf6f62f8ddab5324382b82768"
+checksum = "401c708926326b1ee410735dc348882c73deeab78f1f89ff2c9caf148356feb4"
 dependencies = [
  "enumflags2",
  "llama-cpp-sys-2",
@@ -3245,9 +3245,9 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-sys-2"
-version = "0.1.102"
+version = "0.1.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0522f9894e22dd988dd2e34222bda7acba53a0dcce744ca6d8ddce905ba33a4e"
+checksum = "8b4ae3037b7d9b9fab9fd7905aeb04e214acb300599fa1ee698d6f759ee530f9"
 dependencies = [
  "bindgen 0.69.5",
  "cc",
@@ -3292,9 +3292,9 @@ dependencies = [
 
 [[package]]
 name = "local-ip-address"
-version = "0.6.4"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c986b1747bbd3666abe4d57c64e60e6a82c2216140d8b12d5ceb33feb9de44b3"
+checksum = "656b3b27f8893f7bbf9485148ff9a65f019e3f33bd5cdc87c83cab16b3fd9ec8"
 dependencies = [
  "libc",
  "neli",
@@ -3911,7 +3911,7 @@ dependencies = [
 [[package]]
 name = "nixl-sys"
 version = "0.1.1"
-source = "git+https://github.com/ai-dynamo/nixl.git?branch=ryan%2Fkvbm#9d0d1d59caad77adfa5d1cb9c40e924108d38dd3"
+source = "git+https://github.com/ai-dynamo/nixl.git?branch=ryan%2Fkvbm#6d4e8aa487683201e7076f3194f97539bfd638d2"
 dependencies = [
  "bindgen 0.71.1",
  "cc",
@@ -7626,9 +7626,9 @@ checksum = "271414315aff87387382ec3d271b52d7ae78726f5d44ac98b4f4030c91880486"
 
 [[package]]
 name = "winnow"
-version = "0.7.8"
+version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e27d6ad3dac991091e4d35de9ba2d2d00647c5d0fc26c5496dee55984ae111b"
+checksum = "d9fb597c990f03753e08d3c29efbfcf2019a003b4bf4ba19225c158e1549f0f3"
 dependencies = [
  "memchr",
 ]

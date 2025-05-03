@@ -17,25 +17,21 @@ use super::*;
 
 use super::{block::Block, config::NixlOptions};
 
-use derive_getters::Getters;
-
-pub struct KvBlockManagerState<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata> {
+pub struct KvBlockManagerState<Metadata: BlockMetadata> {
     worker_id: WorkerID,
     cancellation_token: CancellationToken,
 
     nixl_agent: Option<NixlAgent>,
-    nixl_backends: HashMap<String, nixl_sys::Backend>,
+    nixl_backends: HashMap<String, Arc<nixl_sys::Backend>>,
 
-    host_pool: Option<BlockPool<PinnedStorage, HostMetadata>>,
-    device_pool: Option<BlockPool<DeviceStorage, DeviceMetadata>>,
+    host_pool: Option<BlockPool<PinnedStorage, Metadata>>,
+    device_pool: Option<BlockPool<DeviceStorage, Metadata>>,
 
     local_block_set: NixlBlockSet,
     remote_block_sets: RwLock<HashMap<WorkerID, HashMap<usize, RemoteBlocks>>>,
 }
 
-impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
-    KvBlockManagerState<HostMetadata, DeviceMetadata>
-{
+impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
     pub fn new(config: KvBlockManagerConfig) -> Result<Arc<Self>> {
         config
             .runtime
@@ -48,7 +44,7 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
         let cancellation_token = config.runtime.cancellation_token;
 
         // Create a map of NIXL backends
-        let mut nixl_backends: HashMap<String, nixl_sys::Backend> = HashMap::new();
+        let mut nixl_backends: HashMap<String, Arc<nixl_sys::Backend>> = HashMap::new();
 
         // Create a NIXL agent if NIXL is enabled and instantiate requested backends
         // TODO: Build a map of NIXL backends to block pools/sets
@@ -60,7 +56,7 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
                 tracing::debug!("Creating NIXL backends");
                 let (_ucx_mem_list1, ucx_params) = agent.get_plugin_params("UCX")?;
                 let backend = agent.create_backend("UCX", &ucx_params)?;
-                nixl_backends.insert("UCX".to_string(), backend);
+                nixl_backends.insert("UCX".to_string(), Arc::new(backend));
 
                 Some(agent)
             }
@@ -89,7 +85,7 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
             tracing::debug!("Constructing host pool.");
             let layout = create_layout(layout_builder.clone(), config, nixl_agent.as_ref())?;
             local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
-            let (pool, blocks) = create_block_pool::<_, HostMetadata>(
+            let (pool, blocks) = create_block_pool::<_, Metadata>(
                 layout,
                 next_block_set_idx,
                 cancellation_token.clone(),
@@ -107,7 +103,7 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
             tracing::debug!("Constructing device pool.");
             let layout = create_layout(layout_builder.clone(), config, nixl_agent.as_ref())?;
             local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
-            let (pool, blocks) = create_block_pool::<_, DeviceMetadata>(
+            let (pool, blocks) = create_block_pool::<_, Metadata>(
                 layout,
                 next_block_set_idx,
                 cancellation_token.clone(),
@@ -136,7 +132,11 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
             remote_block_sets: RwLock::new(HashMap::new()),
         });
 
-        if let Some(blocks) = host_blocks {
+        if let Some(mut blocks) = host_blocks {
+            blocks.iter_mut().for_each(|block| {
+                block.set_manager(state.clone());
+            });
+
             state
                 .host_pool
                 .as_ref()
@@ -144,7 +144,11 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
                 .add_blocks_blocking(blocks)?;
         }
 
-        if let Some(blocks) = device_blocks {
+        if let Some(mut blocks) = device_blocks {
+            blocks.iter_mut().for_each(|block| {
+                block.set_manager(state.clone());
+            });
+
             state
                 .device_pool
                 .as_ref()
@@ -294,16 +298,22 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
         Ok(blocks)
     }
 
-    pub fn host(&self) -> Option<&BlockPool<PinnedStorage, HostMetadata>> {
+    pub fn host(&self) -> Option<&BlockPool<PinnedStorage, Metadata>> {
         self.host_pool.as_ref()
     }
 
-    pub fn device(&self) -> Option<&BlockPool<DeviceStorage, DeviceMetadata>> {
+    pub fn device(&self) -> Option<&BlockPool<DeviceStorage, Metadata>> {
         self.device_pool.as_ref()
     }
 
     pub fn worker_id(&self) -> WorkerID {
         self.worker_id
+    }
+}
+
+impl<Metadata: BlockMetadata> std::fmt::Debug for KvBlockManagerState<Metadata> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "KvBlockManagerState")
     }
 }
 

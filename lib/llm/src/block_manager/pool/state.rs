@@ -1,5 +1,5 @@
 use crate::block_manager::{
-    block::{nixl::short_type_name, registry::BlockRegistationError, BlockState, PrivateBlockExt},
+    block::{registry::BlockRegistationError, BlockState, PrivateBlockExt},
     events::Publisher,
 };
 

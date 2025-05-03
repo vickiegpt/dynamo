@@ -22,7 +22,7 @@ pub use crate::tokens::TokenBlockError;
 pub use anyhow::Result;
 pub use state::{BlockState, BlockStateInvalid};
 
-use crate::block_manager::storage::Storage;
+use crate::block_manager::{state::KvBlockManagerState, storage::Storage};
 use crate::tokens::{SaltHash, SequenceHash, Token, TokenBlock, Tokens};
 
 use transfer::{Immutable, Local, Mutable, Readable, Writable};
@@ -82,6 +82,7 @@ pub struct Block<S: Storage, M: BlockMetadata> {
     data: BlockData<S>,
     metadata: M,
     state: BlockState,
+    manager: Option<Arc<KvBlockManagerState<M>>>,
 }
 
 impl<S: Storage, M: BlockMetadata> Block<S, M> {
@@ -91,6 +92,7 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
             data,
             metadata,
             state: BlockState::Reset,
+            manager: None,
         })
     }
 
@@ -107,6 +109,10 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
     pub(crate) fn reset(&mut self) {
         self.state = BlockState::Reset;
         self.metadata.reset_metadata();
+    }
+
+    pub(crate) fn set_manager(&mut self, manager: Arc<KvBlockManagerState<M>>) {
+        self.manager = Some(manager);
     }
 
     /// Get the metadata of the block

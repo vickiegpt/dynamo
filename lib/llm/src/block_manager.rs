@@ -51,14 +51,14 @@ use derive_builder::Builder;
 use nixl_sys::Agent as NixlAgent;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
 };
 use storage::nixl::MemType;
 use validator::Validate;
 
 pub type WorkerID = u64;
 
-pub type ReferenceBlockManager = KvBlockManager<BasicMetadata, BasicMetadata>;
+pub type ReferenceBlockManager = KvBlockManager<BasicMetadata>;
 
 // When we construct the pool:
 // 1. instantiate the runtime,
@@ -67,14 +67,12 @@ pub type ReferenceBlockManager = KvBlockManager<BasicMetadata, BasicMetadata>;
 // 4. construct a Blocks object for each layout providing a unique block_set_idx
 //    for each layout type.
 // 5. initialize the pools for each set of blocks
-pub struct KvBlockManager<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata> {
-    state: Arc<state::KvBlockManagerState<HostMetadata, DeviceMetadata>>,
+pub struct KvBlockManager<Metadata: BlockMetadata> {
+    state: Arc<state::KvBlockManagerState<Metadata>>,
     cancellation_token: CancellationToken,
 }
 
-impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
-    KvBlockManager<HostMetadata, DeviceMetadata>
-{
+impl<Metadata: BlockMetadata> KvBlockManager<Metadata> {
     /// Create a new [KvBlockManager]
     ///
     /// The returned object is a frontend to the [KvBlockManager] which owns the cancellation
@@ -129,12 +127,12 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
     }
 
     /// Get a reference to the host block pool
-    pub fn host(&self) -> Option<&BlockPool<PinnedStorage, HostMetadata>> {
+    pub fn host(&self) -> Option<&BlockPool<PinnedStorage, Metadata>> {
         self.state.host()
     }
 
     /// Get a reference to the device block pool
-    pub fn device(&self) -> Option<&BlockPool<DeviceStorage, DeviceMetadata>> {
+    pub fn device(&self) -> Option<&BlockPool<DeviceStorage, Metadata>> {
         self.state.device()
     }
 
@@ -144,9 +142,7 @@ impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata>
     }
 }
 
-impl<HostMetadata: BlockMetadata, DeviceMetadata: BlockMetadata> Drop
-    for KvBlockManager<HostMetadata, DeviceMetadata>
-{
+impl<Metadata: BlockMetadata> Drop for KvBlockManager<Metadata> {
     fn drop(&mut self) {
         self.cancellation_token.cancel();
     }
