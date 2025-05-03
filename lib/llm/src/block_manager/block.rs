@@ -841,6 +841,7 @@ pub mod nixl {
         }
     }
 
+    #[derive(Debug, Clone)]
     pub struct RemoteBlocks {
         layout: Arc<dyn BlockLayout<StorageType = NixlStorage>>,
         block_set_idx: usize,
