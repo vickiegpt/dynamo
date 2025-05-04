@@ -108,14 +108,28 @@ pub trait AsBlockMutSlice<'a, B: 'a> {
 }
 
 /// Blanket trait for anything that can be converted into a mutable block
-pub trait IntoWritableBlocks<S: Storage, M: BlockMetadata> {
+pub trait IntoWritableBlocks<M: BlockMetadata> {
     type Output: WritableBlocks;
     fn into_writable_blocks(self, manager: &BlockManager<M>) -> BlockResult<Self::Output>;
 }
 
-pub trait IntoReadableBlocks<S: Storage, M: BlockMetadata> {
+impl<T: WritableBlocks, M: BlockMetadata> IntoWritableBlocks<M> for T {
+    type Output = T;
+    fn into_writable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
+        Ok(self)
+    }
+}
+
+pub trait IntoReadableBlocks<M: BlockMetadata> {
     type Output: ReadableBlocks;
     fn into_readable_blocks(self, manager: &BlockManager<M>) -> BlockResult<Self::Output>;
+}
+
+impl<T: ReadableBlocks, M: BlockMetadata> IntoReadableBlocks<M> for T {
+    type Output = T;
+    fn into_readable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
+        Ok(self)
+    }
 }
 
 /// A block with storage and associated metadata/state
@@ -616,14 +630,14 @@ impl<'a, S: Storage, M: BlockMetadata> AsBlockMutSlice<'a, MutableBlock<S, M>>
     }
 }
 
-impl<S: Storage, M: BlockMetadata> IntoWritableBlocks<S, M> for MutableBlock<S, M> {
+impl<S: Storage, M: BlockMetadata> IntoWritableBlocks<M> for MutableBlock<S, M> {
     type Output = Vec<MutableBlock<S, M>>;
     fn into_writable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
         Ok(vec![self])
     }
 }
 
-impl<S: Storage, M: BlockMetadata> IntoReadableBlocks<S, M> for MutableBlock<S, M> {
+impl<S: Storage, M: BlockMetadata> IntoReadableBlocks<M> for MutableBlock<S, M> {
     type Output = Vec<MutableBlock<S, M>>;
     fn into_readable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
         Ok(vec![self])
@@ -671,7 +685,7 @@ impl<S: Storage, M: BlockMetadata> BlockDataProvider for ImmutableBlock<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> IntoReadableBlocks<S, M> for ImmutableBlock<S, M> {
+impl<S: Storage, M: BlockMetadata> IntoReadableBlocks<M> for ImmutableBlock<S, M> {
     type Output = Vec<ImmutableBlock<S, M>>;
     fn into_readable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
         Ok(vec![self])
@@ -1201,7 +1215,7 @@ pub mod nixl {
         // derived from block_set_idx via the NixlBlockSet on the receiving side.
     }
 
-    impl<S: Storage, M: BlockMetadata> IntoWritableBlocks<S, M> for BlockDescriptorList {
+    impl<M: BlockMetadata> IntoWritableBlocks<M> for BlockDescriptorList {
         type Output = Vec<RemoteBlock<IsMutable>>;
         fn into_writable_blocks(self, manager: &BlockManager<M>) -> BlockResult<Self::Output> {
             Ok(manager.get_remote_blocks_mutable(&self)?)
