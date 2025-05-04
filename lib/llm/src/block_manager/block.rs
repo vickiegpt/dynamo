@@ -115,6 +115,10 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
         self.manager = Some(manager);
     }
 
+    pub(crate) fn manager(&self) -> Option<&Arc<KvBlockManagerState<M>>> {
+        self.manager.as_ref()
+    }
+
     /// Get the metadata of the block
     pub fn metadata(&self) -> &M {
         &self.metadata
@@ -1008,7 +1012,7 @@ pub mod nixl {
     }
 
     // Placeholder Trait: Real pool handles must provide this info.
-    // This trait allows BlockDescriptorSet constructors to be generic.
+    // This trait allows BlockDescriptorList constructors to be generic.
     pub trait BlockHandleInfo {
         fn worker_id(&self) -> WorkerID; // Needs access to the parent KvBlockManager's ID
         fn block_set_idx(&self) -> usize;
@@ -1044,7 +1048,7 @@ pub mod nixl {
     /// A validated, homogeneous, and serializable collection of BlockDescriptors.
     /// Primarily used to describe sets of remote blocks for transfer operations.
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Getters)]
-    pub struct BlockDescriptorSet {
+    pub struct BlockDescriptorList {
         #[getter(copy)]
         worker_id: WorkerID,
 
@@ -1077,8 +1081,8 @@ pub mod nixl {
         InvalidBlockHandle,
     }
 
-    impl BlockDescriptorSet {
-        /// Creates a new validated BlockDescriptorSet from a slice of block handles.
+    impl BlockDescriptorList {
+        /// Creates a new validated BlockDescriptorList from a slice of block handles.
         /// Ensures all handles belong to the same worker and block set.
         fn new<S: Storage>(
             blocks: &[&BlockData<S>], // Use the generic trait bound
@@ -1113,7 +1117,7 @@ pub mod nixl {
             })
         }
 
-        /// Creates a BlockDescriptorSet representing immutable blocks.
+        /// Creates a BlockDescriptorList representing immutable blocks.
         pub fn from_immutable_blocks<S: Storage, M: BlockMetadata>(
             blocks: &[ImmutableBlock<S, M>],
         ) -> Result<Self, BlockDescriptorSetError> {
@@ -1129,7 +1133,7 @@ pub mod nixl {
             Self::new(&data, BlockMutability::Immutable)
         }
 
-        /// Creates a BlockDescriptorSet representing mutable blocks.
+        /// Creates a BlockDescriptorList representing mutable blocks.
         pub fn from_mutable_blocks<S: Storage, M: BlockMetadata>(
             blocks: &[MutableBlock<S, M>],
         ) -> Result<Self, BlockDescriptorSetError> {
@@ -1145,12 +1149,12 @@ pub mod nixl {
             Self::new(&data, BlockMutability::Mutable)
         }
 
-        // /// Serializes the BlockDescriptorSet into a byte vector.
+        // /// Serializes the BlockDescriptorList into a byte vector.
         // pub fn serialize(&self) -> Result<Vec<u8>, BlockDescriptorSetError> {
         //     Ok(serde_json::to_vec(self)?)
         // }
 
-        // /// Deserializes a BlockDescriptorSet from a byte slice.
+        // /// Deserializes a BlockDescriptorList from a byte slice.
         // pub fn deserialize(data: &[u8]) -> Result<Self, BlockDescriptorSetError> {
         //     Ok(serde_json::from_slice(data)?)
         // }
@@ -1158,7 +1162,7 @@ pub mod nixl {
 
     pub trait AsBlockDescriptorSet {
         type Block;
-        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorSet, BlockDescriptorSetError>;
+        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorList, BlockDescriptorSetError>;
     }
 
     impl<S, M> AsBlockDescriptorSet for [ImmutableBlock<S, M>]
@@ -1167,8 +1171,8 @@ pub mod nixl {
         M: BlockMetadata,
     {
         type Block = ImmutableBlock<S, M>;
-        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorSet, BlockDescriptorSetError> {
-            BlockDescriptorSet::from_immutable_blocks(self)
+        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorList, BlockDescriptorSetError> {
+            BlockDescriptorList::from_immutable_blocks(self)
         }
     }
 
@@ -1178,8 +1182,8 @@ pub mod nixl {
         M: BlockMetadata,
     {
         type Block = MutableBlock<S, M>;
-        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorSet, BlockDescriptorSetError> {
-            BlockDescriptorSet::from_mutable_blocks(self)
+        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorList, BlockDescriptorSetError> {
+            BlockDescriptorList::from_mutable_blocks(self)
         }
     }
 
@@ -1188,7 +1192,7 @@ pub mod nixl {
         [T]: AsBlockDescriptorSet<Block = T>,
     {
         type Block = T;
-        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorSet, BlockDescriptorSetError> {
+        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorList, BlockDescriptorSetError> {
             self.as_slice().as_block_descriptor_set()
         }
     }
@@ -1198,7 +1202,7 @@ pub mod nixl {
         [T]: AsBlockDescriptorSet<Block = T>,
     {
         type Block = T;
-        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorSet, BlockDescriptorSetError> {
+        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorList, BlockDescriptorSetError> {
             self.as_slice().as_block_descriptor_set()
         }
     }

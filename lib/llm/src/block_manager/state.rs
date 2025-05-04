@@ -246,19 +246,19 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
         Ok(())
     }
 
-    /// Get a [`Vec<RemoteBlock<IsImmutable>>`] from a [`BlockDescriptorSet`]
+    /// Get a [`Vec<RemoteBlock<IsImmutable>>`] from a [`BlockDescriptorList`]
     pub fn get_remote_blocks_immutable(
         &self,
-        bds: &BlockDescriptorSet,
+        bds: &BlockDescriptorList,
     ) -> Result<Vec<RemoteBlock<IsImmutable>>> {
         // no checks - we can always create an immutable remote block even if the bds is mutable
         self.get_remote_blocks::<IsImmutable>(bds)
     }
 
-    /// Get a [`Vec<RemoteBlock<IsMutable>>`] from a [`BlockDescriptorSet`]
+    /// Get a [`Vec<RemoteBlock<IsMutable>>`] from a [`BlockDescriptorList`]
     pub fn get_remote_blocks_mutable(
         &self,
-        bds: &BlockDescriptorSet,
+        bds: &BlockDescriptorList,
     ) -> Result<Vec<RemoteBlock<IsMutable>>> {
         if bds.mutability() == BlockMutability::Mutable {
             self.get_remote_blocks::<IsMutable>(bds)
@@ -267,10 +267,10 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
         }
     }
 
-    /// Generate a [`Vec<RemoteBlock>`] from a [`BlockDescriptorSet`]
+    /// Generate a [`Vec<RemoteBlock>`] from a [`BlockDescriptorList`]
     fn get_remote_blocks<M: MutabilityKind>(
         &self,
-        bds: &BlockDescriptorSet,
+        bds: &BlockDescriptorList,
     ) -> Result<Vec<RemoteBlock<M>>> {
         // Get a read lock on the remote block sets
         let remote_block_sets = self.remote_block_sets.read().unwrap();

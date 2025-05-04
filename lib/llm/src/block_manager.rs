@@ -31,10 +31,10 @@ pub mod storage;
 pub use crate::common::dtype::DType;
 pub use block::{
     nixl::{
-        AsBlockDescriptorSet, BlockDescriptorSet, IsImmutable, IsMutable, MutabilityKind,
+        AsBlockDescriptorSet, BlockDescriptorList, IsImmutable, IsMutable, MutabilityKind,
         RemoteBlock,
     },
-    transfer::{BlockTransferEngine, BlockTransferEngineV1, TransferRequestPut},
+    transfer::{BlockTransferEngineV1, TransferRequestPut},
     BasicMetadata, BlockMetadata, Blocks,
 };
 pub use config::*;
@@ -59,6 +59,21 @@ use validator::Validate;
 pub type WorkerID = u64;
 
 pub type ReferenceBlockManager = KvBlockManager<BasicMetadata>;
+
+/// Represents the different cache levels for KV blocks
+pub enum CacheLevel {
+    /// Represents KV blocks in GPU memory
+    G1,
+
+    /// Represents KV blocks in CPU memory
+    G2,
+
+    /// Represents KV blocks in Local NVMe storage
+    G3,
+
+    /// Represents KV blocks in Remote NVMe storage
+    G4,
+}
 
 // When we construct the pool:
 // 1. instantiate the runtime,
@@ -110,18 +125,18 @@ impl<Metadata: BlockMetadata> KvBlockManager<Metadata> {
         self.state.import_remote_blockset(serialized_blockset)
     }
 
-    /// Get a [`Vec<RemoteBlock<IsImmutable>>`] from a [`BlockDescriptorSet`]
+    /// Get a [`Vec<RemoteBlock<IsImmutable>>`] from a [`BlockDescriptorList`]
     pub fn get_remote_blocks_immutable(
         &self,
-        bds: &BlockDescriptorSet,
+        bds: &BlockDescriptorList,
     ) -> Result<Vec<RemoteBlock<IsImmutable>>> {
         self.state.get_remote_blocks_immutable(bds)
     }
 
-    /// Get a [`Vec<RemoteBlock<IsMutable>>`] from a [`BlockDescriptorSet`]
+    /// Get a [`Vec<RemoteBlock<IsMutable>>`] from a [`BlockDescriptorList`]
     pub fn get_remote_blocks_mutable(
         &self,
-        bds: &BlockDescriptorSet,
+        bds: &BlockDescriptorList,
     ) -> Result<Vec<RemoteBlock<IsMutable>>> {
         self.state.get_remote_blocks_mutable(bds)
     }
@@ -238,8 +253,8 @@ mod tests {
         // Allocate 4 mutable blocks on the host
         let blocks_0 = kvbm_0.host().unwrap().allocate_blocks(4).await.unwrap();
 
-        // Create a BlockDescriptorSet for the mutable blocks
-        // let blockset_0 = BlockDescriptorSet::from_mutable_blocks(&blocks_0).unwrap();
+        // Create a BlockDescriptorList for the mutable blocks
+        // let blockset_0 = BlockDescriptorList::from_mutable_blocks(&blocks_0).unwrap();
         let blockset_0 = blocks_0.as_block_descriptor_set().unwrap();
 
         // Worker 1

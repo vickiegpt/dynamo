@@ -16,13 +16,13 @@
 mod cuda;
 mod memcpy;
 
-use super::nixl::{
-    IsMutable, NixlBlockDataImmutable, NixlBlockDataMutable, RemoteBlock,
-};
+use super::nixl::{IsMutable, NixlBlockDataImmutable, NixlBlockDataMutable, RemoteBlock};
 use super::*;
 
-
-use crate::block_manager::storage::{nixl::NixlEnabledStorage, SystemCopyable};
+use crate::block_manager::{
+    storage::{nixl::NixlEnabledStorage, SystemCopyable},
+    CacheLevel,
+};
 
 use std::ops::Range;
 
@@ -68,40 +68,25 @@ pub enum TransferError {
     MismatchedWorkerID(BlockTarget, usize, usize),
 }
 
-/// Specialized handle for performing transfers between blocks
-/// This object holds the necessary resources for performing transfers.
-pub struct BlockTransferEngine {
-    state: Arc<BlockTransferEngineState>,
-}
+impl<S: Storage, M: BlockMetadata> MutableBlock<S, M> {
+    pub fn copy_to(&self, dst: &mut MutableBlock<S, M>) -> Result<(), TransferError> {
+        unimplemented!()
+    }
 
-impl Default for BlockTransferEngine {
-    fn default() -> Self {
-        Self::new()
+    pub fn copy_from(&mut self, src: &mut MutableBlock<S, M>) -> Result<(), TransferError> {
+        unimplemented!()
     }
 }
 
-impl BlockTransferEngine {
-    pub fn new() -> Self {
-        Self {
-            state: Arc::new(BlockTransferEngineState::default()),
-        }
+impl<S: Storage, M: BlockMetadata> ImmutableBlock<S, M> {
+    pub fn copy_to(&self, dst: &mut MutableBlock<S, M>) -> Result<(), TransferError> {
+        unimplemented!()
+    }
+
+    pub fn offload_to(&self, cache_level: CacheLevel, priority: u8) -> Result<(), TransferError> {
+        unimplemented!()
     }
 }
-
-#[derive(Default)]
-struct BlockTransferEngineState {
-    // nixl_agent: Option<NixlAgent>,
-    // cuda_ctx: Option<Arc<CudaContext>>,
-    // h2d_stream: Option<Arc<CudaStream>>,
-    // d2h_stream: Option<Arc<CudaStream>>,
-    // d2d_stream: Option<Arc<CudaStream>>,
-}
-
-// impl BlockTransferEngine {
-//     pub fn get<'xfer, Source, Target>(&self) -> GetXferRequestBuilder<'xfer, Source, Target> {
-//         GetXferRequestBuilder::new(self.state.clone())
-//     }
-// }
 
 #[derive(Default)]
 pub struct GetXferRequestBuilder<
@@ -113,26 +98,26 @@ pub struct GetXferRequestBuilder<
     dst: Option<&'xfer [Target]>,
 }
 
-impl<'xfer, Source: BlockDataProvider, Target: BlockDataProviderMut + Local>
-    GetXferRequestBuilder<'xfer, Source, Target>
-{
-    fn new(state: Arc<BlockTransferEngineState>) -> Self {
-        Self {
-            src: None,
-            dst: None,
-        }
-    }
+// impl<'xfer, Source: BlockDataProvider, Target: BlockDataProviderMut + Local>
+//     GetXferRequestBuilder<'xfer, Source, Target>
+// {
+//     fn new(state: Arc<BlockTransferEngineState>) -> Self {
+//         Self {
+//             src: None,
+//             dst: None,
+//         }
+//     }
 
-    pub fn from(&mut self, local_or_remote_blocks: &'xfer [Target]) -> &mut Self {
-        self.dst = Some(local_or_remote_blocks);
-        self
-    }
+//     pub fn from(&mut self, local_or_remote_blocks: &'xfer [Target]) -> &mut Self {
+//         self.dst = Some(local_or_remote_blocks);
+//         self
+//     }
 
-    pub fn to(&mut self, local_mutable_blocks: &'xfer [Source]) -> &mut Self {
-        self.src = Some(local_mutable_blocks);
-        self
-    }
-}
+//     pub fn to(&mut self, local_mutable_blocks: &'xfer [Source]) -> &mut Self {
+//         self.src = Some(local_mutable_blocks);
+//         self
+//     }
+// }
 
 pub struct PutXferRequestBuilder<
     'xfer,
@@ -143,25 +128,25 @@ pub struct PutXferRequestBuilder<
     dst: Option<&'xfer [Target]>,
 }
 
-impl<'xfer, Source: BlockDataProvider + Local, Target: BlockDataProviderMut>
-    PutXferRequestBuilder<'xfer, Source, Target>
-{
-    fn new(state: Arc<BlockTransferEngineState>) -> Self {
-        Self {
-            src: None,
-            dst: None,
-        }
-    }
-    pub fn from(&mut self, local_blocks: &'xfer [Source]) -> &mut Self {
-        self.src = Some(local_blocks);
-        self
-    }
+// impl<'xfer, Source: BlockDataProvider + Local, Target: BlockDataProviderMut>
+//     PutXferRequestBuilder<'xfer, Source, Target>
+// {
+//     fn new(state: Arc<BlockTransferEngineState>) -> Self {
+//         Self {
+//             src: None,
+//             dst: None,
+//         }
+//     }
+//     pub fn from(&mut self, local_blocks: &'xfer [Source]) -> &mut Self {
+//         self.src = Some(local_blocks);
+//         self
+//     }
 
-    pub fn to(&mut self, local_or_remote: &'xfer [Target]) -> &mut Self {
-        self.dst = Some(local_or_remote);
-        self
-    }
-}
+//     pub fn to(&mut self, local_or_remote: &'xfer [Target]) -> &mut Self {
+//         self.dst = Some(local_or_remote);
+//         self
+//     }
+// }
 
 // #[async_trait]
 // impl<'xfer, Target: BlockDataProviderMut + Local>

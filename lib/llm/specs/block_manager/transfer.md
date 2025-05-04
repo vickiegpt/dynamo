@@ -19,24 +19,24 @@ The Transfer Engine is a core component within the Block Manager responsible for
 
 3.  **Block Descriptors and Sets**: Used primarily for identifying and validating collections of *remote* blocks.
     *   **`BlockDescriptor` (BD)**: Contains the necessary metadata to uniquely identify a block: `worker_id`, `block_set_idx`, `block_idx`, and a mutability flag (`Mutable` or `Immutable`). A BD is considered *local* if its `worker_id` matches the local worker's ID.
-    *   **`BlockDescriptorSet`**: A *validated*, *homogeneous*, and *serializable* collection of `BlockDescriptor`s. Validation ensures all descriptors in the set share the same `worker_id`, `block_set_idx`, mutability, and implicitly the same `MemType` (derived from the layout associated with the `block_set_idx` in the corresponding `NixlBlockSet`). This is the primary mechanism for exchanging information about groups of remote blocks.
-    *   **`RemoteBlock`**: A local proxy object implementing `BlockDataExt<NixlStorage>`, constructed using information from a *remote* `BlockDescriptorSet` and the corresponding imported `NixlBlockSet` data. These are used as sources/destinations in the Transfer Engine builders.
+    *   **`BlockDescriptorList`**: A *validated*, *homogeneous*, and *serializable* collection of `BlockDescriptor`s. Validation ensures all descriptors in the set share the same `worker_id`, `block_set_idx`, mutability, and implicitly the same `MemType` (derived from the layout associated with the `block_set_idx` in the corresponding `NixlBlockSet`). This is the primary mechanism for exchanging information about groups of remote blocks.
+    *   **`RemoteBlock`**: A local proxy object implementing `BlockDataExt<NixlStorage>`, constructed using information from a *remote* `BlockDescriptorList` and the corresponding imported `NixlBlockSet` data. These are used as sources/destinations in the Transfer Engine builders.
 
 ## Block Interactions and Descriptors
 
 -   **Local Blocks (`BlockDataExt<LocalStorage>`)**: Represented by handles like `MutableBlock`, `ImmutableBlock` obtained from the local `BlockPool`. These can be directly used as sources/destinations in the Transfer Engine builders.
     *   They can also *generate* a `BlockDescriptor` (e.g., via `as_bd()` / `as_bd_mut()`) if needed for describing local blocks to a remote peer, but these BDs are *not* typically used directly in the local transfer engine API.
--   **Remote Blocks (`RemoteBlock`, implements `BlockDataExt<NixlStorage>`)**: These are *constructed* locally based on received *remote* `BlockDescriptorSet`s. The process involves:
-    1.  Receiving a serialized `BlockDescriptorSet` from a remote worker.
+-   **Remote Blocks (`RemoteBlock`, implements `BlockDataExt<NixlStorage>`)**: These are *constructed* locally based on received *remote* `BlockDescriptorList`s. The process involves:
+    1.  Receiving a serialized `BlockDescriptorList` from a remote worker.
     2.  Validating the set and ensuring the corresponding `NixlBlockSet` from that `worker_id` has been imported (via `import_remote_blockset`).
-    3.  Using the `worker_id`, `block_set_idx`, and `block_idx` list from the `BlockDescriptorSet` to look up the appropriate `RemoteBlocks` instance.
+    3.  Using the `worker_id`, `block_set_idx`, and `block_idx` list from the `BlockDescriptorList` to look up the appropriate `RemoteBlocks` instance.
     4.  Creating `RemoteBlock` instances which implement `BlockDataExt<NixlStorage>`.
     5.  These `RemoteBlock` instances are then passed to the Transfer Engine builders.
 -   **Transfer Operations**: The core transfer logic operates on objects implementing `BlockDataExt`, using methods like `layer_view()` or `block_view()` to get the necessary memory region information for NIXL (via `as_nixl_descriptor` etc.).
 
 ## Transfer Operations and API Sketch
 
-This sketch illustrates a round-trip data transfer scenario involving two workers (Worker 0 and Worker 1), highlighting the use of `BlockDescriptorSet` and `RemoteBlock`.
+This sketch illustrates a round-trip data transfer scenario involving two workers (Worker 0 and Worker 1), highlighting the use of `BlockDescriptorList` and `RemoteBlock`.
 
 ```rust
 // --- Worker 0 ---
@@ -52,10 +52,10 @@ let local_immutable_blocks: Vec<ImmutableBlock<PinnedStorage>> = kvbm0
     .await?; // Assuming async pool operations
 assert_eq!(local_immutable_blocks.len(), 4);
 
-// 2. Create an immutable BlockDescriptorSet from these local blocks
-// The BlockDescriptorSet constructor internally calls block.as_bd()
+// 2. Create an immutable BlockDescriptorList from these local blocks
+// The BlockDescriptorList constructor internally calls block.as_bd()
 // and validates homogeneity (worker_id, block_set_idx, MemType, mutability).
-let immutable_bd_set = BlockDescriptorSet::from_immutable_blocks(&local_immutable_blocks)?;
+let immutable_bd_set = BlockDescriptorList::from_immutable_blocks(&local_immutable_blocks)?;
 
 // 3. Allocate 4 mutable local blocks
 let mut local_mutable_blocks: Vec<MutableBlock<PinnedStorage>> = kvbm0
@@ -64,9 +64,9 @@ let mut local_mutable_blocks: Vec<MutableBlock<PinnedStorage>> = kvbm0
     .await?;
 assert_eq!(local_mutable_blocks.len(), 4);
 
-// 4. Create a mutable BlockDescriptorSet from these local blocks
+// 4. Create a mutable BlockDescriptorList from these local blocks
 // Internally calls block.as_bd_mut() and validates.
-let mutable_bd_set = BlockDescriptorSet::from_mutable_blocks(&local_mutable_blocks)?;
+let mutable_bd_set = BlockDescriptorList::from_mutable_blocks(&local_mutable_blocks)?;
 
 // 5. Define a unique event ID for this transfer coordination
 let transfer_event_id = Uuid::new_v4();
@@ -102,8 +102,8 @@ let transfer_engine1 = get_local_transfer_engine();
 println!("Worker 1: Receiving BD sets and event ID from Worker 0");
 // let (serialized_immutable_bd_set, serialized_mutable_bd_set, transfer_event_id) =
 //     receive_from_worker_0().await?;
-let immutable_bd_set = BlockDescriptorSet::deserialize(serialized_immutable_bd_set)?;
-let mutable_bd_set = BlockDescriptorSet::deserialize(serialized_mutable_bd_set)?;
+let immutable_bd_set = BlockDescriptorList::deserialize(serialized_immutable_bd_set)?;
+let mutable_bd_set = BlockDescriptorList::deserialize(serialized_mutable_bd_set)?;
 
 // Validate received sets belong to expected remote worker (Worker 0)
 assert_eq!(immutable_bd_set.worker_id(), kvbm0.worker_id());
@@ -157,16 +157,16 @@ println!("Worker 1: Signaling completion event {}", transfer_event_id);
 
 ```
 
-## `BlockDescriptorSet` Homogeneity Constraints
+## `BlockDescriptorList` Homogeneity Constraints
 
-The `BlockDescriptorSet` type is responsible for ensuring homogeneity *before* serialization and transmission:
+The `BlockDescriptorList` type is responsible for ensuring homogeneity *before* serialization and transmission:
 
 1.  **Single `worker_id`**: All BDs must belong to the same worker.
 2.  **Single `block_set_idx`**: All BDs must reference the same block set (implying the same layout and `MemType`).
 3.  **Consistent Mutability**: All BDs must have the same mutability flag.
 4.  **Block Indices**: Contains a list of valid `block_idx` values within the specified `block_set_idx`.
 
-These constraints are checked during the creation or deserialization of a `BlockDescriptorSet`.
+These constraints are checked during the creation or deserialization of a `BlockDescriptorList`.
 
 ## Transfer Constraints
 
@@ -191,9 +191,9 @@ The validity of a transfer operation depends on the type of operation (PUT/GET) 
 
 -   Implement `PutXfer` and `GetXfer` builders taking `Vec<impl BlockDataExt>`.
 -   Define `BlockDescriptor` structure.
--   Define `BlockDescriptorSet` structure, including validation logic and serialization/deserialization.
+-   Define `BlockDescriptorList` structure, including validation logic and serialization/deserialization.
 -   Implement `as_bd()` / `as_bd_mut()` methods for local block representations (e.g., `MutableBlock`, `ImmutableBlock`).
--   Implement logic to construct `RemoteBlock` instances from remote `BlockDescriptorSet`s and imported `NixlBlockSet` data.
+-   Implement logic to construct `RemoteBlock` instances from remote `BlockDescriptorList`s and imported `NixlBlockSet` data.
 -   Integrate with NIXL for the actual data transfer execution, using information derived from the `BlockDataExt` sources/destinations.
 -   Ensure type safety distinguishes between mutable and immutable access patterns during transfer configuration.
 -   Provide mechanisms for tracking transfer completion and handling errors.
@@ -201,7 +201,7 @@ The validity of a transfer operation depends on the type of operation (PUT/GET) 
 ## NIXL Integration Notes
 
 -   The successful execution of transfers relies heavily on the prior exchange and processing of `NixlBlockSet` data between participating `KvBlockManager` instances via `import_remote_blockset`. This provides the necessary layout and NIXL metadata mapping.
--   The construction of `RemoteBlock` instances from *remote* `BlockDescriptorSet`s is the key step that links the abstract description of remote blocks to concrete NIXL-aware local proxies (`RemoteBlock` implementing `BlockDataExt<NixlStorage>`).
+-   The construction of `RemoteBlock` instances from *remote* `BlockDescriptorList`s is the key step that links the abstract description of remote blocks to concrete NIXL-aware local proxies (`RemoteBlock` implementing `BlockDataExt<NixlStorage>`).
 -   The Transfer Engine uses the `BlockDataExt` trait on both local and remote blocks to obtain the necessary NIXL memory descriptors (`NixlMemoryDescriptor`) for the NIXL agent to perform the transfer.
 
 
