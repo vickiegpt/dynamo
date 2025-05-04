@@ -80,10 +80,22 @@ pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync +
 }
 
 /// Marker trait for types that are mutable blocks
-pub trait IsMutableBlock {}
+pub trait IsWritableBlock {}
 
 /// Marker trait for types that are immutable blocks
-pub trait IsImmutableBlock {}
+pub trait IsReadableBlock {}
+
+pub trait ReadableBlocks {}
+
+impl<T: IsReadableBlock> ReadableBlocks for Vec<T> {}
+impl<T: IsReadableBlock> ReadableBlocks for [T] {}
+impl<T: IsReadableBlock> ReadableBlocks for &[T] {}
+
+pub trait WritableBlocks {}
+
+impl<T: IsWritableBlock> WritableBlocks for Vec<T> {}
+impl<T: IsWritableBlock> WritableBlocks for [T] {}
+impl<T: IsWritableBlock> WritableBlocks for &[T] {}
 
 /// Blanket trait for anything that can be viewed as a slice of blocks
 pub trait AsBlockSlice<'a, B: 'a> {
@@ -96,14 +108,14 @@ pub trait AsBlockMutSlice<'a, B: 'a> {
 }
 
 /// Blanket trait for anything that can be converted into a mutable block
-pub trait IntoMutableBlocks<S: Storage, M: BlockMetadata> {
-    type Output;
-    fn into_mutable_blocks(self, manager: &BlockManager<M>) -> BlockResult<Self::Output>;
+pub trait IntoWritableBlocks<S: Storage, M: BlockMetadata> {
+    type Output: WritableBlocks;
+    fn into_writable_blocks(self, manager: &BlockManager<M>) -> BlockResult<Self::Output>;
 }
 
-pub trait IntoImmutableBlock<S: Storage, M: BlockMetadata> {
-    type Output;
-    fn into_immutable_block(self, manager: &BlockManager<M>) -> BlockResult<Self::Output>;
+pub trait IntoReadableBlocks<S: Storage, M: BlockMetadata> {
+    type Output: ReadableBlocks;
+    fn into_readable_blocks(self, manager: &BlockManager<M>) -> BlockResult<Self::Output>;
 }
 
 /// A block with storage and associated metadata/state
@@ -512,7 +524,8 @@ pub struct MutableBlock<S: Storage, M: BlockMetadata> {
     return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
 }
 
-impl<S: Storage, M: BlockMetadata> IsMutableBlock for MutableBlock<S, M> {}
+impl<S: Storage, M: BlockMetadata> IsWritableBlock for MutableBlock<S, M> {}
+impl<S: Storage, M: BlockMetadata> IsReadableBlock for MutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Writable for MutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Readable for MutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Mutable for MutableBlock<S, M> {}
@@ -603,9 +616,16 @@ impl<'a, S: Storage, M: BlockMetadata> AsBlockMutSlice<'a, MutableBlock<S, M>>
     }
 }
 
-impl<S: Storage, M: BlockMetadata> IntoMutableBlocks<S, M> for MutableBlock<S, M> {
+impl<S: Storage, M: BlockMetadata> IntoWritableBlocks<S, M> for MutableBlock<S, M> {
     type Output = Vec<MutableBlock<S, M>>;
-    fn into_mutable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
+    fn into_writable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
+        Ok(vec![self])
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> IntoReadableBlocks<S, M> for MutableBlock<S, M> {
+    type Output = Vec<MutableBlock<S, M>>;
+    fn into_readable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
         Ok(vec![self])
     }
 }
@@ -621,7 +641,7 @@ impl<S: Storage, M: BlockMetadata> ImmutableBlock<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> IsImmutableBlock for ImmutableBlock<S, M> {}
+impl<S: Storage, M: BlockMetadata> IsReadableBlock for ImmutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Readable for ImmutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Immutable for ImmutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Local for ImmutableBlock<S, M> {}
@@ -648,6 +668,13 @@ impl<S: Storage, M: BlockMetadata> BlockDataProvider for ImmutableBlock<S, M> {
             .as_ref()
             .expect("block was dropped")
             .data
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> IntoReadableBlocks<S, M> for ImmutableBlock<S, M> {
+    type Output = Vec<ImmutableBlock<S, M>>;
+    fn into_readable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
+        Ok(vec![self])
     }
 }
 
@@ -994,6 +1021,9 @@ pub mod nixl {
         _mutability: std::marker::PhantomData<M>,
     }
 
+    impl<M: MutabilityKind> IsReadableBlock for RemoteBlock<M> {}
+    impl IsWritableBlock for RemoteBlock<IsMutable> {}
+
     impl<M: MutabilityKind> RemoteBlock<M> {
         pub fn new(
             layout: Arc<dyn BlockLayout<StorageType = NixlStorage>>,
@@ -1079,6 +1109,30 @@ pub mod nixl {
         }
     }
 
+    impl<'a, M: MutabilityKind> AsBlockSlice<'a, RemoteBlock<M>> for [RemoteBlock<M>] {
+        fn as_block_slice(&'a self) -> &'a [RemoteBlock<M>] {
+            self
+        }
+    }
+
+    impl<'a, M: MutabilityKind> AsBlockSlice<'a, RemoteBlock<M>> for Vec<RemoteBlock<M>> {
+        fn as_block_slice(&'a self) -> &'a [RemoteBlock<M>] {
+            self.as_slice()
+        }
+    }
+
+    impl<'a> AsBlockMutSlice<'a, RemoteBlock<IsMutable>> for [RemoteBlock<IsMutable>] {
+        fn as_block_mut_slice(&'a mut self) -> &'a mut [RemoteBlock<IsMutable>] {
+            self
+        }
+    }
+
+    impl<'a> AsBlockMutSlice<'a, RemoteBlock<IsMutable>> for Vec<RemoteBlock<IsMutable>> {
+        fn as_block_mut_slice(&'a mut self) -> &'a mut [RemoteBlock<IsMutable>] {
+            self.as_mut_slice()
+        }
+    }
+
     /// Defines the intended access pattern for a block represented by a descriptor.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     pub enum BlockMutability {
@@ -1147,9 +1201,9 @@ pub mod nixl {
         // derived from block_set_idx via the NixlBlockSet on the receiving side.
     }
 
-    impl<S: Storage, M: BlockMetadata> IntoMutableBlocks<S, M> for BlockDescriptorList {
+    impl<S: Storage, M: BlockMetadata> IntoWritableBlocks<S, M> for BlockDescriptorList {
         type Output = Vec<RemoteBlock<IsMutable>>;
-        fn into_mutable_blocks(self, manager: &BlockManager<M>) -> BlockResult<Self::Output> {
+        fn into_writable_blocks(self, manager: &BlockManager<M>) -> BlockResult<Self::Output> {
             Ok(manager.get_remote_blocks_mutable(&self)?)
         }
     }
