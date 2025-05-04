@@ -22,7 +22,7 @@ pub use crate::tokens::TokenBlockError;
 pub use anyhow::Result;
 pub use state::{BlockState, BlockStateInvalid};
 
-use crate::block_manager::{state::KvBlockManagerState, storage::Storage};
+use crate::block_manager::{state::KvBlockManagerState as BlockManager, storage::Storage};
 use crate::tokens::{SaltHash, SequenceHash, Token, TokenBlock, Tokens};
 
 use transfer::{Immutable, Local, Mutable, Readable, Writable};
@@ -62,6 +62,9 @@ pub enum BlockError {
 
     #[error("Invalid state: {0}")]
     InvalidState(String),
+
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync + 'static {
@@ -76,13 +79,40 @@ pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync +
     fn reset_metadata(&mut self);
 }
 
+/// Marker trait for types that are mutable blocks
+pub trait IsMutableBlock {}
+
+/// Marker trait for types that are immutable blocks
+pub trait IsImmutableBlock {}
+
+/// Blanket trait for anything that can be viewed as a slice of blocks
+pub trait AsBlockSlice<'a, B: 'a> {
+    fn as_block_slice(&'a self) -> &'a [B];
+}
+
+/// Blanket trait for anything that can be viewed as a mutable slice of blocks
+pub trait AsBlockMutSlice<'a, B: 'a> {
+    fn as_block_mut_slice(&'a mut self) -> &'a mut [B];
+}
+
+/// Blanket trait for anything that can be converted into a mutable block
+pub trait IntoMutableBlocks<S: Storage, M: BlockMetadata> {
+    type Output;
+    fn into_mutable_blocks(self, manager: &BlockManager<M>) -> BlockResult<Self::Output>;
+}
+
+pub trait IntoImmutableBlock<S: Storage, M: BlockMetadata> {
+    type Output;
+    fn into_immutable_block(self, manager: &BlockManager<M>) -> BlockResult<Self::Output>;
+}
+
 /// A block with storage and associated metadata/state
 #[derive(Debug)]
 pub struct Block<S: Storage, M: BlockMetadata> {
     data: BlockData<S>,
     metadata: M,
     state: BlockState,
-    manager: Option<Arc<KvBlockManagerState<M>>>,
+    manager: Option<Arc<BlockManager<M>>>,
 }
 
 impl<S: Storage, M: BlockMetadata> Block<S, M> {
@@ -111,11 +141,11 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
         self.metadata.reset_metadata();
     }
 
-    pub(crate) fn set_manager(&mut self, manager: Arc<KvBlockManagerState<M>>) {
+    pub(crate) fn set_manager(&mut self, manager: Arc<BlockManager<M>>) {
         self.manager = Some(manager);
     }
 
-    pub(crate) fn manager(&self) -> Option<&Arc<KvBlockManagerState<M>>> {
+    pub(crate) fn manager(&self) -> Option<&Arc<BlockManager<M>>> {
         self.manager.as_ref()
     }
 
@@ -482,6 +512,7 @@ pub struct MutableBlock<S: Storage, M: BlockMetadata> {
     return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
 }
 
+impl<S: Storage, M: BlockMetadata> IsMutableBlock for MutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Writable for MutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Readable for MutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Mutable for MutableBlock<S, M> {}
@@ -542,6 +573,43 @@ impl<S: Storage, M: BlockMetadata> BlockDataProviderMut for MutableBlock<S, M> {
         &mut self.block.as_mut().expect("block was dropped").data
     }
 }
+
+impl<'a, S: Storage, M: BlockMetadata> AsBlockSlice<'a, MutableBlock<S, M>>
+    for [MutableBlock<S, M>]
+{
+    fn as_block_slice(&'a self) -> &'a [MutableBlock<S, M>] {
+        self
+    }
+}
+impl<'a, S: Storage, M: BlockMetadata> AsBlockSlice<'a, MutableBlock<S, M>>
+    for Vec<MutableBlock<S, M>>
+{
+    fn as_block_slice(&'a self) -> &'a [MutableBlock<S, M>] {
+        self.as_slice()
+    }
+}
+impl<'a, S: Storage, M: BlockMetadata> AsBlockMutSlice<'a, MutableBlock<S, M>>
+    for [MutableBlock<S, M>]
+{
+    fn as_block_mut_slice(&'a mut self) -> &'a mut [MutableBlock<S, M>] {
+        self
+    }
+}
+impl<'a, S: Storage, M: BlockMetadata> AsBlockMutSlice<'a, MutableBlock<S, M>>
+    for Vec<MutableBlock<S, M>>
+{
+    fn as_block_mut_slice(&'a mut self) -> &'a mut [MutableBlock<S, M>] {
+        self.as_mut_slice()
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> IntoMutableBlocks<S, M> for MutableBlock<S, M> {
+    type Output = Vec<MutableBlock<S, M>>;
+    fn into_mutable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
+        Ok(vec![self])
+    }
+}
+
 #[derive(Debug)]
 pub struct ImmutableBlock<S: Storage, M: BlockMetadata> {
     block: Arc<MutableBlock<S, M>>,
@@ -553,6 +621,7 @@ impl<S: Storage, M: BlockMetadata> ImmutableBlock<S, M> {
     }
 }
 
+impl<S: Storage, M: BlockMetadata> IsImmutableBlock for ImmutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Readable for ImmutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Immutable for ImmutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Local for ImmutableBlock<S, M> {}
@@ -579,6 +648,21 @@ impl<S: Storage, M: BlockMetadata> BlockDataProvider for ImmutableBlock<S, M> {
             .as_ref()
             .expect("block was dropped")
             .data
+    }
+}
+
+impl<'a, S: Storage, M: BlockMetadata> AsBlockSlice<'a, ImmutableBlock<S, M>>
+    for [ImmutableBlock<S, M>]
+{
+    fn as_block_slice(&'a self) -> &'a [ImmutableBlock<S, M>] {
+        self
+    }
+}
+impl<'a, S: Storage, M: BlockMetadata> AsBlockSlice<'a, ImmutableBlock<S, M>>
+    for Vec<ImmutableBlock<S, M>>
+{
+    fn as_block_slice(&'a self) -> &'a [ImmutableBlock<S, M>] {
+        self.as_slice()
     }
 }
 
@@ -1061,6 +1145,13 @@ pub mod nixl {
         block_indices: Vec<usize>,
         // TODO: Consider storing MemType explicitly if it cannot be reliably
         // derived from block_set_idx via the NixlBlockSet on the receiving side.
+    }
+
+    impl<S: Storage, M: BlockMetadata> IntoMutableBlocks<S, M> for BlockDescriptorList {
+        type Output = Vec<RemoteBlock<IsMutable>>;
+        fn into_mutable_blocks(self, manager: &BlockManager<M>) -> BlockResult<Self::Output> {
+            Ok(manager.get_remote_blocks_mutable(&self)?)
+        }
     }
 
     #[derive(Debug, Error)]

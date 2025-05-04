@@ -69,21 +69,21 @@ pub enum TransferError {
 }
 
 impl<S: Storage, M: BlockMetadata> MutableBlock<S, M> {
-    pub fn copy_to(&self, dst: &mut MutableBlock<S, M>) -> Result<(), TransferError> {
+    pub async fn copy_to(&self, dst: &mut MutableBlock<S, M>) -> Result<(), TransferError> {
         unimplemented!()
     }
 
-    pub fn copy_from(&mut self, src: &mut MutableBlock<S, M>) -> Result<(), TransferError> {
+    pub async fn copy_from(&mut self, src: &mut MutableBlock<S, M>) -> Result<(), TransferError> {
         unimplemented!()
     }
 }
 
 impl<S: Storage, M: BlockMetadata> ImmutableBlock<S, M> {
-    pub fn copy_to(&self, dst: &mut MutableBlock<S, M>) -> Result<(), TransferError> {
+    pub async fn copy_to(&self, dst: &mut MutableBlock<S, M>) -> Result<(), TransferError> {
         unimplemented!()
     }
 
-    pub fn offload_to(&self, cache_level: CacheLevel, priority: u8) -> Result<(), TransferError> {
+    pub async fn offload_to(&self, cache_level: CacheLevel, priority: u8) -> Result<(), TransferError> {
         unimplemented!()
     }
 }
