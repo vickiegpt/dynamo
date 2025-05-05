@@ -2890,7 +2890,7 @@ index 975afe5ad..2208abea0 100644
              use_v1 = True
  
 diff --git a/vllm/engine/llm_engine.py b/vllm/engine/llm_engine.py
-index 54f7b8fb6..0559f9db2 100644
+index 54f7b8fb6..9c1c2635f 100644
 --- a/vllm/engine/llm_engine.py
 +++ b/vllm/engine/llm_engine.py
 @@ -1,11 +1,28 @@
@@ -3133,7 +3133,7 @@ index 54f7b8fb6..0559f9db2 100644
  
          # Skip the scheduler if there are any remaining steps in the seq groups.
          # This ensures that the scheduler is only called again when the current
-@@ -1372,7 +1452,41 @@ class LLMEngine:
+@@ -1372,7 +1452,43 @@ class LLMEngine:
              # Schedule iteration
              (seq_group_metadata_list, scheduler_outputs,
               allow_async_output_proc
@@ -3163,6 +3163,7 @@ index 54f7b8fb6..0559f9db2 100644
 +                    logger.debug("No blocks to prefill")
 +                    self._finished_prefills.add(seq_group_metadata.request_id)
 +                    continue
++                
 +                remote_prefill_request = RemotePrefillRequest(
 +                    request_id=seq_group_metadata.request_id,
 +                    # prompt_token_ids=scheduled_seq_group.seq_group.seqs[0].inputs.prompt_token_ids[:-1], # last one will be decoded on decode for sampling anyway
@@ -3171,12 +3172,13 @@ index 54f7b8fb6..0559f9db2 100644
 +                    block_ids=block_table,
 +                    engine_id=self.engine_id,
 +                    computed_block_ids=seq_group_metadata.computed_block_nums,
++                    multimodal_data_source=scheduled_seq_group.seq_group.remote_prefill_params.multimodal_data_source
 +                )
 +                scheduled_seq_group.seq_group.remote_prefill_params.remote_prefill_request_callback(remote_prefill_request)
  
              ctx.seq_group_metadata_list = seq_group_metadata_list
              ctx.scheduler_outputs = scheduler_outputs
-@@ -1427,8 +1541,46 @@ class LLMEngine:
+@@ -1427,8 +1543,46 @@ class LLMEngine:
                  execute_model_req.async_callback = self.async_callbacks[
                      virtual_engine]
  
@@ -3224,7 +3226,7 @@ index 54f7b8fb6..0559f9db2 100644
                      execute_model_req=execute_model_req)
                  self._skip_scheduling_next_step = False
              except InputProcessingError as e:
-@@ -1444,7 +1596,6 @@ class LLMEngine:
+@@ -1444,7 +1598,6 @@ class LLMEngine:
                      allow_async_output_proc=allow_async_output_proc)
                  # Raise so the caller is notified that this request failed
                  raise
@@ -3232,7 +3234,7 @@ index 54f7b8fb6..0559f9db2 100644
              # We need to do this here so that last step's sampled_token_ids can
              # be passed to the next iteration for PP.
              if self.scheduler_config.is_multi_step:
-@@ -1455,7 +1606,26 @@ class LLMEngine:
+@@ -1455,7 +1608,26 @@ class LLMEngine:
              if len(ctx.output_queue) > 0:
                  self._process_model_outputs(ctx=ctx)
              # No outputs in this case
@@ -3260,7 +3262,7 @@ index 54f7b8fb6..0559f9db2 100644
  
          # Finish the current step for all the sequence groups.
          if self.scheduler_config.is_multi_step:
-@@ -1515,7 +1685,7 @@ class LLMEngine:
+@@ -1515,7 +1687,7 @@ class LLMEngine:
              # queued control plane messages, such as add/remove lora adapters.
              logger.debug("Stopping remote worker execution loop.")
              self.model_executor.stop_remote_worker_execution_loop()
@@ -4088,10 +4090,10 @@ index 0ed221043..08dbc0e78 100644
              "The vLLM package was not found, so its version could not be "
 diff --git a/vllm/remote_prefill.py b/vllm/remote_prefill.py
 new file mode 100644
-index 000000000..83f6cd575
+index 000000000..0a063f1ca
 --- /dev/null
 +++ b/vllm/remote_prefill.py
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,84 @@
 +# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 +# SPDX-License-Identifier: Apache-2.0
 +#
@@ -4137,6 +4139,7 @@ index 000000000..83f6cd575
 +    sampling_params: SamplingParams
 +    block_ids: List[int]
 +    computed_block_ids: List[int]
++    multimodal_data_source: Optional[dict[str, str]] = None
 +
 +
 +class MemoryOpType(str, Enum):
@@ -4174,7 +4177,7 @@ index 000000000..83f6cd575
 +    decode_computed_block_ids: Optional[List[int]] = None
 +    decode_engine_id: Optional[str] = None
 +    remote_prefill_request_callback: Optional[RemotePrefillRequestCallback] = None
-\ No newline at end of file
++    multimodal_data_source: Optional[dict[str, str]] = None
 diff --git a/vllm/sampling_params.py b/vllm/sampling_params.py
 index 68ed99664..5b0b7e6dc 100644
 --- a/vllm/sampling_params.py
