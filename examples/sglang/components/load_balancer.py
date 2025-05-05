@@ -15,6 +15,7 @@
 
 import logging
 import random
+import urllib.parse
 
 from components.worker import (
     SglangDecodeWorker,
@@ -50,10 +51,11 @@ class SimpleLoadBalancer:
             "disaggregation_enabled", False
         )
 
-        print(f"Disaggregation enabled: {self.disaggregation_enabled}")
-        print(f"Prefill decode worker: {self.prefill_decode_worker}")
-        print(f"Decode worker: {self.decode_worker}")
-        print(f"Prefill worker: {self.prefill_worker}")
+        self.prefill_decode_client = None
+        self.decode_client = None
+        self.prefill_client = None
+        self.prefill_get_url_client = None
+        self._cached_prefill_urls = {}
 
     @async_on_start
     async def async_init(self):
@@ -62,7 +64,7 @@ class SimpleLoadBalancer:
         if not self.disaggregation_enabled:
             self.prefill_decode_client = (
                 await runtime.namespace("dynamo")
-                .component("router")
+                .component("SglangPrefillDecodeWorker")
                 .endpoint("generate")
                 .client()
             )
@@ -70,19 +72,19 @@ class SimpleLoadBalancer:
         if self.disaggregation_enabled:
             self.decode_client = (
                 await runtime.namespace("dynamo")
-                .component("router")
+                .component("SglangDecodeWorker")
                 .endpoint("generate")
                 .client()
             )
             self.prefill_client = (
                 await runtime.namespace("dynamo")
-                .component("router")
+                .component("SglangPrefillWorker")
                 .endpoint("generate")
                 .client()
             )
             self.prefill_get_url_client = (
                 await runtime.namespace("dynamo")
-                .component("router")
+                .component("SglangPrefillWorker")
                 .endpoint("get_url")
                 .client()
             )
@@ -108,20 +110,41 @@ class SimpleLoadBalancer:
             yield response
 
     async def _run_disaggregated(self, raw_request: ChatCompletionRequest):
-        raise NotImplementedError("Disaggregated mode not implemented")
-        # request_data = raw_request.model_dump()
-        # modified_request = request_data.copy()
-        # modified_request.update(
-        #     {
-        #         "bootstrap_host": hostname,
-        #         "bootstrap_port": bootstrap_port,
-        #         "bootstrap_room": self._generate_bootstrap_room(),
-        #     }
-        # )
+        worker_ids = self.prefill_client.endpoint_ids()
+        worker_id = random.choice(worker_ids)
+        print(f"Using worker {worker_id}")
 
-        # self.prefill_worker.generate(modified_request)
-        # async for response in self.decode_worker.generate(modified_request):
-        #     yield response
+        if worker_id not in self._cached_prefill_urls:
+            print("Getting prefill URL")
+            async for response in await self.prefill_get_url_client.direct(
+                {}, worker_id
+            ):
+                print(f"Prefill URL response: {response}")
+                self._cached_prefill_urls[worker_id] = response.data()
+
+        prefill_url = self._cached_prefill_urls[worker_id]
+        print(f"Prefill URL: {prefill_url}")
+
+        parsed_url = urllib.parse.urlparse(prefill_url)
+        hostname = parsed_url.hostname
+        print(f"Hostname: {hostname}")
+
+        request_data = raw_request.model_dump()
+        modified_request = request_data.copy()
+        modified_request.update(
+            {
+                "bootstrap_host": hostname,
+                "bootstrap_port": 8998,  # TODO: Get from config
+                "bootstrap_room": self._generate_bootstrap_room(),
+            }
+        )
+
+        print("Sending prefill request")
+        self.prefill_client.direct(modified_request, worker_id)
+
+        print("Sending decode request")
+        async for response in self.decode_worker.generate(modified_request):
+            yield response
 
     def _generate_bootstrap_room(self):
         return random.randint(0, 2**63 - 1)

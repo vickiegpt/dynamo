@@ -17,4 +17,6 @@ from components.frontend import Frontend
 from components.load_balancer import SimpleLoadBalancer
 from components.worker import SglangDecodeWorker, SglangPrefillWorker
 
-Frontend.link(SimpleLoadBalancer).link(SglangPrefillWorker).link(SglangDecodeWorker)
+load_balancer = Frontend.link(SimpleLoadBalancer)
+load_balancer.link(SglangPrefillWorker)
+load_balancer.link(SglangDecodeWorker)

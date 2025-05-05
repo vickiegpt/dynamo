@@ -67,7 +67,7 @@ class SglangBaseWorker:
 
     @dynamo_endpoint(name="get_url")
     async def get_url(self, request: dict):
-        return f"http://{self.hostname}:{self.port}"
+        yield f"http://{self.hostname}:{self.port}"
 
 
 @service(
