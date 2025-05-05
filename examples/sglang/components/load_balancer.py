@@ -123,11 +123,13 @@ class SimpleLoadBalancer:
         )
 
         print("Sending prefill request")
-        self.prefill_client.direct(modified_request, worker_id)
+        prefill_response = self.prefill_client.direct(modified_request, worker_id)
 
         print("Sending decode request")
         async for response in self.decode_worker.generate(modified_request):
             yield response
+
+        await prefill_response  # to avoid error log from dynamo runtime
 
     def _generate_bootstrap_room(self):
         return random.randint(0, 2**63 - 1)
