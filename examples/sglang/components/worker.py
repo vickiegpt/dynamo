@@ -17,6 +17,7 @@
 import json
 import logging
 import signal
+import socket
 
 import requests
 from sglang.utils import launch_server_cmd, terminate_process, wait_for_server
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 class SglangBaseWorker:
     def __init__(self, additional_args: str = ""):
         print("Initializing...")
+        self.hostname = socket.gethostname()
         self.server_process, self.port = launch_server_cmd(
             f"""
             python3 -m sglang.launch_server --model-path qwen/qwen2.5-0.5b-instruct \
@@ -62,6 +64,10 @@ class SglangBaseWorker:
                     break
                 data = json.loads(chunk[5:].strip("\n"))
                 yield data
+
+    @dynamo_endpoint(name="get_url")
+    async def get_url(self, request: dict):
+        return f"http://{self.hostname}:{self.port}"
 
 
 @service(

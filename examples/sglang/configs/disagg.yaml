@@ -18,7 +18,16 @@ Frontend:
   endpoint: dynamo.SimpleLoadBalancer.chat/completions
   port: 8000
 
-SglangPrefillDecodeWorker:
+SimpleLoadBalancer:
+  disaggregation_enabled: true
+
+SglangPrefillWorker:
+  ServiceArgs:
+    workers: 1
+    resources:
+      gpu: 1
+
+SglangDecodeWorker:
   ServiceArgs:
     workers: 1
     resources:

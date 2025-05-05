@@ -13,13 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-Frontend:
-  served_model_name: model
-  endpoint: dynamo.SimpleLoadBalancer.chat/completions
-  port: 8000
+from components.frontend import Frontend
+from components.load_balancer import SimpleLoadBalancer
+from components.worker import SglangDecodeWorker, SglangPrefillWorker
 
-SglangPrefillDecodeWorker:
-  ServiceArgs:
-    workers: 1
-    resources:
-      gpu: 1
+Frontend.link(SimpleLoadBalancer).link(SglangPrefillWorker).link(SglangDecodeWorker)
