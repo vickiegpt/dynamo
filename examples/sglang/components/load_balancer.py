@@ -51,31 +51,14 @@ class SimpleLoadBalancer:
             "disaggregation_enabled", False
         )
 
-        self.prefill_decode_client = None
-        self.decode_client = None
         self.prefill_client = None
         self.prefill_get_url_client = None
         self._cached_prefill_urls = {}
 
     @async_on_start
     async def async_init(self):
-        runtime = dynamo_context["runtime"]
-
-        if not self.disaggregation_enabled:
-            self.prefill_decode_client = (
-                await runtime.namespace("dynamo")
-                .component("SglangPrefillDecodeWorker")
-                .endpoint("generate")
-                .client()
-            )
-
         if self.disaggregation_enabled:
-            self.decode_client = (
-                await runtime.namespace("dynamo")
-                .component("SglangDecodeWorker")
-                .endpoint("generate")
-                .client()
-            )
+            runtime = dynamo_context["runtime"]
             self.prefill_client = (
                 await runtime.namespace("dynamo")
                 .component("SglangPrefillWorker")
