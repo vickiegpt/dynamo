@@ -87,31 +87,9 @@ impl Tokenizer {
         Ok(Tokenizer(create_tokenizer_from_file(file_path)?))
     }
 
-    pub async fn from_hf(repo_id: &str, revision: Option<&str>) -> Result<Tokenizer> {
-        use hf_hub::{api::tokio::ApiBuilder, Repo, RepoType};
-
-        // Build the API client
-        let api = ApiBuilder::new().with_progress(false).build()?;
-
-        // Create the repository reference
-        let repo = match revision {
-            Some(rev) => Repo::with_revision(repo_id.to_string(), RepoType::Model, rev.to_string()),
-            None => Repo::with_revision(repo_id.to_string(), RepoType::Model, "main".to_string()),
-        };
-
-        // Download the tokenizer.json file
-        let repo_builder = api.repo(repo);
-        let file_path = repo_builder
-            .get("tokenizer.json")
-            .await
-            .map_err(|err| Error::msg(format!("Failed to download tokenizer.json: {}", err)))?;
-
-        // Load the tokenizer from the downloaded file
-        Self::from_file(
-            file_path
-                .to_str()
-                .ok_or_else(|| Error::msg("Invalid path".to_string()))?,
-        )
+    pub async fn from_hf_repo_id(repo_id: &str, revision: Option<&str>) -> Result<Tokenizer> {
+        let hf_tokenizer = HuggingFaceTokenizer::from_repo_id(repo_id, revision).await?;
+        Ok(Tokenizer(Arc::new(hf_tokenizer)))
     }
 
     /// Create a stateful sequence object for decoding token_ids into text
@@ -606,7 +584,7 @@ mod tests {
         let repo_id = "gpt2";
 
         // Download and load the tokenizer
-        let tokenizer = Tokenizer::from_hf(repo_id, None).await.unwrap();
+        let tokenizer = Tokenizer::from_hf_repo_id(repo_id, None).await.unwrap();
 
         // Test encoding and decoding
         let test_text = "Hello, world!";
