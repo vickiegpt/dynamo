@@ -27,9 +27,6 @@ dynamo-operator:
     - name: ${DOCKER_SECRET_NAME}
 
   dynamo:
-    planner:
-      enabled: ${PLANNER_ENABLED}
-      image: ${PLANNER_IMAGE}
     ingress:
       enabled: ${INGRESS_ENABLED}
       className: ${INGRESS_CLASS}

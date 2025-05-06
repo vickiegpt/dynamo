@@ -70,7 +70,6 @@ type InternalImages struct {
 	Kaniko                     string
 	Buildkit                   string
 	BuildkitRootless           string
-	Planner                    string
 }
 
 func GetInternalImages() (conf *InternalImages) {
@@ -79,6 +78,5 @@ func GetInternalImages() (conf *InternalImages) {
 	conf.Kaniko = getEnv(consts.EnvInternalImagesKaniko, consts.InternalImagesKanikoDefault)
 	conf.Buildkit = getEnv(consts.EnvInternalImagesBuildkit, consts.InternalImagesBuildkitDefault)
 	conf.BuildkitRootless = getEnv(consts.EnvInternalImagesBuildkitRootless, consts.InternalImagesBuildkitRootlessDefault)
-	conf.Planner = getEnv(consts.EnvInternalImagesPlanner, "")
 	return
 }
