@@ -377,6 +377,7 @@ fn create_layout<S: Storage + NixlEnabledStorage>(
     anyhow::bail!("failed to create layout");
 }
 
+#[expect(clippy::type_complexity)]
 fn create_block_pool<S: Storage + NixlEnabledStorage, M: BlockMetadata>(
     layout: Arc<dyn NixlLayout<StorageType = S>>,
     block_set_idx: usize,

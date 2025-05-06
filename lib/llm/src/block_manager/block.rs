@@ -190,6 +190,8 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
         self.manager = Some(manager);
     }
 
+    // TODO(#967) - Enable with TransferEngine
+    #[allow(dead_code)]
     pub(crate) fn manager(&self) -> Option<&Arc<BlockManager<M>>> {
         self.manager.as_ref()
     }

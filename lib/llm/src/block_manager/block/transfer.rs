@@ -20,9 +20,9 @@ use super::nixl::{IsMutable, NixlBlockDataImmutable, NixlBlockDataMutable, Remot
 use super::*;
 
 use crate::block_manager::storage::{
-        nixl::{NixlEnabledStorage, NixlStorage},
-        DeviceStorage, PinnedStorage, SystemStorage,
-    };
+    nixl::{NixlEnabledStorage, NixlStorage},
+    DeviceStorage, PinnedStorage, SystemStorage,
+};
 
 use cudarc::driver::CudaStream;
 
@@ -42,7 +42,7 @@ pub trait Mutable: Readable + Writable {}
 pub trait Immutable: Readable {}
 
 #[derive(Debug)]
-enum BlockTarget {
+pub enum BlockTarget {
     Source,
     Destination,
 }
@@ -216,8 +216,8 @@ pub struct GetXferRequestBuilder<
     Source: BlockDataProvider,
     Target: BlockDataProviderMut + Local,
 > {
-    src: Option<&'xfer [Source]>,
-    dst: Option<&'xfer [Target]>,
+    _src: Option<&'xfer [Source]>,
+    _dst: Option<&'xfer [Target]>,
 }
 
 // impl<'xfer, Source: BlockDataProvider, Target: BlockDataProviderMut + Local>
@@ -246,8 +246,8 @@ pub struct PutXferRequestBuilder<
     Source: BlockDataProvider + Local,
     Target: BlockDataProviderMut,
 > {
-    src: Option<&'xfer [Source]>,
-    dst: Option<&'xfer [Target]>,
+    _src: Option<&'xfer [Source]>,
+    _dst: Option<&'xfer [Target]>,
 }
 
 // impl<'xfer, Source: BlockDataProvider + Local, Target: BlockDataProviderMut>
@@ -607,11 +607,8 @@ where
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::block_manager::storage::{
-        DeviceAllocator, PinnedAllocator, StorageAllocator, SystemAllocator,
-    };
+
     #[test]
     fn copy_to_strategy() {
         // System to ...

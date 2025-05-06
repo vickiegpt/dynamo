@@ -167,11 +167,7 @@ impl<Metadata: BlockMetadata> Drop for KvBlockManager<Metadata> {
 mod tests {
     use super::*;
 
-    use std::sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    };
-    use tokio::sync::{mpsc, Barrier};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     // Atomic Counter for Worker ID
     static WORKER_ID: AtomicU64 = AtomicU64::new(1337);
@@ -236,8 +232,8 @@ mod tests {
         dynamo_runtime::logging::init();
 
         // create two block managers - mimics two unique dynamo workers
-        let mut kvbm_0 = create_reference_block_manager();
-        let mut kvbm_1 = create_reference_block_manager();
+        let kvbm_0 = create_reference_block_manager();
+        let kvbm_1 = create_reference_block_manager();
 
         assert_ne!(kvbm_0.worker_id(), kvbm_1.worker_id());
 
@@ -259,9 +255,10 @@ mod tests {
 
         // Worker 1
         // Create a RemoteBlock list from blockset_0
-        let blocks_1 = kvbm_1.host().unwrap().allocate_blocks(4).await.unwrap();
-        let mut remote_blocks_0 = kvbm_1.get_remote_blocks_mutable(&blockset_0).unwrap();
+        let _blocks_1 = kvbm_1.host().unwrap().allocate_blocks(4).await.unwrap();
+        let mut _remote_blocks_0 = kvbm_1.get_remote_blocks_mutable(&blockset_0).unwrap();
 
+        // TODO(#967) - Enable with TransferEngine
 
         // // Create a TransferRequestPut for the mutable blocks
         // let transfer_request = TransferRequestPut::new(&blocks_0, &mut remote_blocks_0).unwrap();

@@ -163,6 +163,10 @@ impl<Req, Resp> Unary<Req, Resp> {
     }
 }
 
+type UnaryResponse<T> = Result<oneshot::Receiver<T>, BlockPoolError>;
+
+type ImmutableBlocksResult<S, M> = Result<Vec<ImmutableBlock<S, M>>, BlockPoolError>;
+
 pub type MutableBlocks<S, M> = Vec<MutableBlock<S, M>>;
 pub type ImmutableBlocks<S, M> = Vec<ImmutableBlock<S, M>>;
 
@@ -260,6 +264,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     /// # Arguments
     ///
     /// * `blocks` - A [`Vec<Block<S, M>>`] to add to the inactive pool.
+    #[expect(dead_code)]
     pub(crate) async fn add_blocks(&self, blocks: Vec<Block<S, M>>) -> Result<(), BlockPoolError> {
         self._add_blocks(blocks)?
             .await
@@ -276,10 +281,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)
     }
 
-    fn _add_blocks(
-        &self,
-        blocks: Vec<Block<S, M>>,
-    ) -> Result<oneshot::Receiver<()>, BlockPoolError> {
+    fn _add_blocks(&self, blocks: Vec<Block<S, M>>) -> UnaryResponse<()> {
         let (req, resp_rx) = Unary::<_, ()>::make_request(blocks);
 
         self.ctrl_tx
@@ -326,8 +328,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     fn _allocate_blocks(
         &self,
         count: usize,
-    ) -> Result<oneshot::Receiver<Result<Vec<MutableBlock<S, M>>, BlockPoolError>>, BlockPoolError>
-    {
+    ) -> UnaryResponse<Result<Vec<MutableBlock<S, M>>, BlockPoolError>> {
         // Create the request
         let (req, resp_rx) =
             Unary::<_, Result<Vec<MutableBlock<S, M>>, BlockPoolError>>::make_request(count);
@@ -350,7 +351,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     pub async fn register_blocks(
         &self,
         blocks: Vec<MutableBlock<S, M>>,
-    ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
+    ) -> ImmutableBlocksResult<S, M> {
         self._register_blocks(blocks)?
             .await
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
@@ -360,7 +361,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     pub fn register_blocks_blocking(
         &self,
         blocks: Vec<MutableBlock<S, M>>,
-    ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
+    ) -> ImmutableBlocksResult<S, M> {
         self._register_blocks(blocks)?
             .recv()
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
@@ -369,11 +370,9 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     fn _register_blocks(
         &self,
         blocks: Vec<MutableBlock<S, M>>,
-    ) -> Result<oneshot::Receiver<Result<Vec<ImmutableBlock<S, M>>, BlockPoolError>>, BlockPoolError>
-    {
+    ) -> UnaryResponse<ImmutableBlocksResult<S, M>> {
         // Make the request
-        let (req, resp_rx) =
-            Unary::<_, Result<Vec<ImmutableBlock<S, M>>, BlockPoolError>>::make_request(blocks);
+        let (req, resp_rx) = Unary::<_, ImmutableBlocksResult<S, M>>::make_request(blocks);
 
         // Issue the request
         self.priority_tx
@@ -405,7 +404,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     pub async fn match_sequence_hashes(
         &self,
         sequence_hashes: &[SequenceHash],
-    ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
+    ) -> ImmutableBlocksResult<S, M> {
         self._match_sequence_hashes(sequence_hashes)?
             .await
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)
@@ -415,7 +414,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     pub fn match_sequence_hashes_blocking(
         &self,
         sequence_hashes: &[SequenceHash],
-    ) -> Result<Vec<ImmutableBlock<S, M>>, BlockPoolError> {
+    ) -> ImmutableBlocksResult<S, M> {
         self._match_sequence_hashes(sequence_hashes)?
             .recv()
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)
@@ -424,7 +423,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     fn _match_sequence_hashes(
         &self,
         sequence_hashes: &[SequenceHash],
-    ) -> Result<oneshot::Receiver<Vec<ImmutableBlock<S, M>>>, BlockPoolError> {
+    ) -> UnaryResponse<Vec<ImmutableBlock<S, M>>> {
         // Create the request
         let (req, resp_rx) =
             Unary::<_, Vec<ImmutableBlock<S, M>>>::make_request(sequence_hashes.into());
