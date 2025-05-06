@@ -18,6 +18,7 @@ Common:
   max-model-len: 4096
 
 Processor:
+  engine_args: "configs/llm_api_config.yaml"
   router: round-robin
   common-configs: [model, block-size, max-model-len]
 
@@ -41,3 +42,16 @@ EncodeWorker:
     resources:
       gpu: 1
   common-configs: [model]
+
+Frontend:
+  served_model_name: llava-hf-trtllm/llava-1.5-7b-hf
+  endpoint: dynamo.Processor.chat/completions
+  port: 8000
+
+TensorRTLLMWorker:
+  engine_args: "configs/llm_api_config.yaml"
+  router: round-robin
+  ServiceArgs:
+    workers: 1
+    resources:
+      gpu: 1
