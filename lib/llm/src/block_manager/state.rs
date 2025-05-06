@@ -17,6 +17,28 @@ use super::*;
 
 use super::{block::Block, config::NixlOptions};
 
+use cudarc::driver::CudaStream;
+use std::sync::Arc;
+
+pub struct TransferContext {
+    nixl_agent: Option<NixlAgent>,
+    stream: Arc<CudaStream>,
+}
+
+impl TransferContext {
+    pub fn new(nixl_agent: Option<NixlAgent>, stream: Arc<CudaStream>) -> Self {
+        Self { nixl_agent, stream }
+    }
+
+    pub fn nixl_agent(&self) -> Option<&NixlAgent> {
+        self.nixl_agent.as_ref()
+    }
+
+    pub fn stream(&self) -> &Arc<CudaStream> {
+        &self.stream
+    }
+}
+
 pub struct KvBlockManagerState<Metadata: BlockMetadata> {
     worker_id: WorkerID,
     cancellation_token: CancellationToken,
@@ -166,6 +188,18 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
     }
 
     /// Imports a remote blockset configuration from a serialized object.
+    // TODO: NIXL will validate the every descriptor list against the memory registration list for
+    // a given agent; this is can be an expensive operation. To avoid this, NIXL offers the ability
+    // to generate "partial pre-validated (PPV)" descriptor lists. However, to support per-block and per-layer
+    // PPV lists we will need as many as `num_layers + 1` PPV lists per block:
+    // - one for representing the entire block
+    // - one for representing each layer individually
+    //
+    // A deeper dive into the performance impact of PPV lists is required to determine if this is
+    // the best approach.
+    //
+    // If PPV are valuable, it might be beneficial to lazily instantiate PPV lists when they are
+    // needed; alternatively, we could generate the entire PPV list for each block at import time.
     pub fn import_remote_blockset(
         &self,
         serialized_blockset: SerializedNixlBlockSet,

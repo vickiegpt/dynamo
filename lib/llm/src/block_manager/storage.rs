@@ -55,8 +55,8 @@ pub trait Remote {}
 
 pub trait Host {}
 
-pub trait SystemCopyable: Storage {}
-pub trait CudaCopyable: Storage {}
+pub trait SystemAccessible {}
+pub trait CudaAccessible {}
 
 /// Errors that can occur during storage operations
 #[derive(Debug, Error)]
@@ -254,7 +254,7 @@ unsafe impl Sync for SystemStorage {}
 
 impl Local for SystemStorage {}
 impl Host for SystemStorage {}
-impl SystemCopyable for SystemStorage {}
+impl SystemAccessible for SystemStorage {}
 
 impl SystemStorage {
     /// Create a new system storage with the given size
@@ -370,8 +370,8 @@ pub struct PinnedStorage {
 
 impl Local for PinnedStorage {}
 impl Host for PinnedStorage {}
-impl SystemCopyable for PinnedStorage {}
-impl CudaCopyable for PinnedStorage {}
+impl SystemAccessible for PinnedStorage {}
+impl CudaAccessible for PinnedStorage {}
 
 impl PinnedStorage {
     /// Create a new pinned storage with the given size
@@ -501,7 +501,7 @@ pub struct DeviceStorage {
 }
 
 impl Local for DeviceStorage {}
-impl CudaCopyable for DeviceStorage {}
+impl CudaAccessible for DeviceStorage {}
 
 impl DeviceStorage {
     /// Create a new device storage with the given size

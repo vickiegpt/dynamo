@@ -13,6 +13,8 @@ use super::{
 
 use anyhow::Result;
 
+pub trait NixlAccessible {}
+
 impl RegistationHandle for NixlRegistrationHandle {
     fn release(&mut self) {
         if let Err(e) = self.deregister() {
@@ -74,6 +76,7 @@ pub struct NixlStorage {
 }
 
 impl Remote for NixlStorage {}
+impl NixlAccessible for NixlStorage {}
 
 impl Storage for NixlStorage {
     fn storage_type(&self) -> StorageType {
@@ -143,6 +146,7 @@ impl NixlDescriptor for SystemStorage {
     }
 }
 
+impl NixlAccessible for PinnedStorage {}
 impl NixlEnabledStorage for PinnedStorage {}
 
 impl MemoryRegion for PinnedStorage {
@@ -165,6 +169,7 @@ impl NixlDescriptor for PinnedStorage {
     }
 }
 
+impl NixlAccessible for DeviceStorage {}
 impl NixlEnabledStorage for DeviceStorage {}
 
 impl MemoryRegion for DeviceStorage {

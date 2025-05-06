@@ -6,10 +6,8 @@ pub fn memcpy_block<'a, Source, Destination>(
     destinations: &'a mut Destination,
 ) -> Result<(), TransferError>
 where
-    Source: BlockDataProvider + Local,
-    Source::StorageType: SystemCopyable,
-    Destination: BlockDataProviderMut + Local,
-    Destination::StorageType: SystemCopyable,
+    Source: ReadableBlock,
+    Destination: WritableBlock,
 {
     let src_data = sources.block_data(private::PrivateToken);
     let dst_data = destinations.block_data_mut(private::PrivateToken);
@@ -35,10 +33,10 @@ pub fn memcpy_layers<'a, Source, Destination>(
     destinations: &'a mut Destination,
 ) -> Result<(), TransferError>
 where
-    Source: BlockDataProvider + Local,
-    Source::StorageType: SystemCopyable,
-    Destination: BlockDataProviderMut + Local,
-    Destination::StorageType: SystemCopyable,
+    Source: ReadableBlock,
+    // <Source as ReadableBlock>::StorageType: SystemAccessible + Local,
+    Destination: WritableBlock,
+    // <Destination as WritableBlock>::StorageType: SystemAccessible + Local,
 {
     let src_data = sources.block_data(private::PrivateToken);
     let dst_data = destinations.block_data_mut(private::PrivateToken);
@@ -55,6 +53,7 @@ where
     Ok(())
 }
 
+#[inline(always)]
 unsafe fn memcpy(src_ptr: *const u8, dst_ptr: *mut u8, size: usize) {
     debug_assert!(
         (src_ptr as usize + size <= dst_ptr as usize)

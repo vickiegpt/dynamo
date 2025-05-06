@@ -22,10 +22,13 @@ pub use crate::tokens::TokenBlockError;
 pub use anyhow::Result;
 pub use state::{BlockState, BlockStateInvalid};
 
-use crate::block_manager::{state::KvBlockManagerState as BlockManager, storage::Storage};
+use crate::block_manager::{
+    state::{KvBlockManagerState as BlockManager, TransferContext},
+    storage::{CudaAccessible, Local, Remote, Storage, SystemAccessible},
+};
 use crate::tokens::{SaltHash, SequenceHash, Token, TokenBlock, Tokens};
 
-use transfer::{Immutable, Local, Mutable, Readable, Writable};
+use transfer::{Immutable, Mutable, Readable, Writable};
 
 use super::{
     events::PublishHandle,
@@ -34,6 +37,7 @@ use super::{
 };
 
 use std::{
+    any::TypeId,
     fmt::Debug,
     ops::{Deref, DerefMut},
     sync::Arc,
@@ -80,22 +84,38 @@ pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync +
 }
 
 /// Marker trait for types that are mutable blocks
-pub trait IsWritableBlock {}
+pub trait WritableBlock: BlockDataProviderMut {
+    type StorageType: Storage;
+
+    fn storage_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<<Self as WritableBlock>::StorageType>()
+    }
+}
 
 /// Marker trait for types that are immutable blocks
-pub trait IsReadableBlock {}
+pub trait ReadableBlock: BlockDataProvider {
+    type StorageType: Storage;
+
+    fn storage_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<<Self as ReadableBlock>::StorageType>()
+    }
+
+    fn transfer_context(&self) -> &TransferContext {
+        unimplemented!()
+    }
+}
 
 pub trait ReadableBlocks {}
 
-impl<T: IsReadableBlock> ReadableBlocks for Vec<T> {}
-impl<T: IsReadableBlock> ReadableBlocks for [T] {}
-impl<T: IsReadableBlock> ReadableBlocks for &[T] {}
+impl<T: ReadableBlock> ReadableBlocks for Vec<T> {}
+impl<T: ReadableBlock> ReadableBlocks for [T] {}
+impl<T: ReadableBlock> ReadableBlocks for &[T] {}
 
 pub trait WritableBlocks {}
 
-impl<T: IsWritableBlock> WritableBlocks for Vec<T> {}
-impl<T: IsWritableBlock> WritableBlocks for [T] {}
-impl<T: IsWritableBlock> WritableBlocks for &[T] {}
+impl<T: WritableBlock> WritableBlocks for Vec<T> {}
+impl<T: WritableBlock> WritableBlocks for [T] {}
+impl<T: WritableBlock> WritableBlocks for &[T] {}
 
 /// Blanket trait for anything that can be viewed as a slice of blocks
 pub trait AsBlockSlice<'a, B: 'a> {
@@ -538,8 +558,12 @@ pub struct MutableBlock<S: Storage, M: BlockMetadata> {
     return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
 }
 
-impl<S: Storage, M: BlockMetadata> IsWritableBlock for MutableBlock<S, M> {}
-impl<S: Storage, M: BlockMetadata> IsReadableBlock for MutableBlock<S, M> {}
+impl<S: Storage, M: BlockMetadata> WritableBlock for MutableBlock<S, M> {
+    type StorageType = S;
+}
+impl<S: Storage, M: BlockMetadata> ReadableBlock for MutableBlock<S, M> {
+    type StorageType = S;
+}
 impl<S: Storage, M: BlockMetadata> Writable for MutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Readable for MutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Mutable for MutableBlock<S, M> {}
@@ -655,7 +679,9 @@ impl<S: Storage, M: BlockMetadata> ImmutableBlock<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> IsReadableBlock for ImmutableBlock<S, M> {}
+impl<S: Storage, M: BlockMetadata> ReadableBlock for ImmutableBlock<S, M> {
+    type StorageType = S;
+}
 impl<S: Storage, M: BlockMetadata> Readable for ImmutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Immutable for ImmutableBlock<S, M> {}
 impl<S: Storage, M: BlockMetadata> Local for ImmutableBlock<S, M> {}
@@ -1035,8 +1061,15 @@ pub mod nixl {
         _mutability: std::marker::PhantomData<M>,
     }
 
-    impl<M: MutabilityKind> IsReadableBlock for RemoteBlock<M> {}
-    impl IsWritableBlock for RemoteBlock<IsMutable> {}
+    impl<M: MutabilityKind> Remote for RemoteBlock<M> {}
+
+    impl<M: MutabilityKind> ReadableBlock for RemoteBlock<M> {
+        type StorageType = NixlStorage;
+    }
+
+    impl WritableBlock for RemoteBlock<IsMutable> {
+        type StorageType = NixlStorage;
+    }
 
     impl<M: MutabilityKind> RemoteBlock<M> {
         pub fn new(
