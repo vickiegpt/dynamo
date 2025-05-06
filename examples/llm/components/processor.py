@@ -217,6 +217,11 @@ class Processor(ProcessMixIn):
             if request_id in self.request_futures:
                 del self.request_futures[request_id]
 
+    def _parse_raw_request_sync(self, raw_request: Union[CompletionRequest, ChatCompletionRequest]):
+        loop = asyncio.new_event_loop()
+        return loop.run_until_complete(self._parse_raw_request(raw_request))
+        
+
     async def _process_request(self, request_data: Dict[str, Any]):
         """Process a single request from the queue"""
         request_id = request_data["request_id"]
@@ -224,14 +229,19 @@ class Processor(ProcessMixIn):
         request_type = request_data["request_type"]
 
         try:
-            # Parse the raw request here instead of in _generate
+            # Parse the raw request in a separate thread
+            loop = asyncio.get_event_loop()
             (
                 request,
                 conversation,
                 prompt,
                 engine_prompt,
                 sampling_params,
-            ) = await self._parse_raw_request(raw_request)
+            ) = await loop.run_in_executor(
+                None,
+                self._parse_raw_request_sync,
+                raw_request
+            )
 
             # Create an async generator function to process this request
             async def process_and_stream():
