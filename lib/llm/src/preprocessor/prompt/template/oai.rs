@@ -112,10 +112,19 @@ impl OAIPromptFormatter for HfTokenizerConfigJsonFormatter {
         } else {
             self.env.get_template("default")?
         };
-        println!("tmpl: {:?}", tmpl.render(&ctx));
 
-        let messages = ctx.get_item(&Value::from("messages"))
-            .map_err(|_| anyhow::Error::msg("No 'messages' found in context"))?;
+        Ok(tmpl.render(&ctx)?)
+    }
+}
+
+impl OAIPromptFormatter for NoOpFormatter {
+    fn supports_add_generation_prompt(&self) -> bool {
+        false
+    }
+
+    fn render(&self, req: &dyn OAIChatLikeRequest) -> Result<String> {
+
+        let messages = req.messages();
 
         let first_message = messages
             .get_item_by_index(0)

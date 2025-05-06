@@ -38,11 +38,17 @@ impl PromptFormatter {
                 let content = std::fs::read_to_string(&file)
                     .with_context(|| format!("fs:read_to_string '{file}'"))?;
                 let config: ChatTemplate = serde_json::from_str(&content)?;
-                Self::from_parts(
-                    config,
-                    mdc.prompt_context
-                        .map_or(ContextMixins::default(), |x| ContextMixins::new(&x)),
-                )
+                if config.chat_template.is_none() {
+                    tracing::info!("No chat template found in tokenizer_config.json, using NoOpFormatter");
+                    let noop = NoOpFormatter {};
+                    Ok(Self::OAI(Arc::new(noop)))
+                } else {
+                    Self::from_parts(
+                        config,
+                        mdc.prompt_context
+                            .map_or(ContextMixins::default(), |x| ContextMixins::new(&x)),
+                    )
+                }
             }
             PromptFormatterArtifact::GGUF(gguf_path) => {
                 let config = ChatTemplate::from_gguf(&gguf_path)?;
@@ -87,6 +93,13 @@ struct HfTokenizerConfigJsonFormatter {
     mixins: Arc<ContextMixins>,
     supports_add_generation_prompt: bool,
 }
+
+/// No-op formatter that passes through input without any template processing
+///
+/// Simple formatter that doesn't apply any template transformations.
+/// Used as a fallback when template processing is not needed.
+#[derive(Debug)]
+struct NoOpFormatter {}
 
 // /// OpenAI Standard Prompt Formatter
 // pub trait StandardPromptFormatter {
