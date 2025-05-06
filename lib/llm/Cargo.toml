@@ -25,9 +25,9 @@ readme.workspace = true
 description = "Dynamo LLM Library"
 
 [features]
-default = []
+default = ["block_manager"]
 
-cuda_kv = ["dep:cudarc", "dep:ndarray"]
+block_manager = ["dep:nixl-sys", "dep:cudarc", "dep:ndarray"]
 sentencepiece = ["dep:sentencepiece"]
 
 [dependencies]
@@ -48,6 +48,7 @@ etcd-client = { workspace = true }
 futures =  { workspace = true }
 hf-hub = { workspace = true }
 rand = { workspace = true }
+oneshot = { workspace = true }
 prometheus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -72,8 +73,9 @@ derive-getters = "0.5"
 regex = "1"
 rayon = "1"
 
-# kv_cuda
-cudarc = { version = "0.16.2", features = ["cuda-12040"], optional = true }
+# block_manager
+nixl-sys = { git = "https://github.com/ai-dynamo/nixl.git",  branch = "ryan/kvbm", optional = true }
+cudarc = { version = "0.16.2", features = ["cuda-12020"], optional = true }
 ndarray = { version = "0.16", optional = true }
 
 # protocols
