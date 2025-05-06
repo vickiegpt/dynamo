@@ -59,6 +59,7 @@ RUN apt-get update -y && \
     ninja-build \
     pybind11-dev \
     # Rust build dependencies
+	clang \
     libclang-dev \
     # Install utilities
     nvtop \
