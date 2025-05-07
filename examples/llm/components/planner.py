@@ -30,7 +30,7 @@ from tensorboardX import SummaryWriter
 from utils.prefill_queue import PrefillQueue
 
 from dynamo.llm import KvMetricsAggregator
-from dynamo.planner import KubernetesConnector, LocalConnector 
+from dynamo.planner import KubernetesConnector, LocalConnector
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 from dynamo.runtime.logging import configure_dynamo_logging
 

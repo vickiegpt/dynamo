@@ -38,7 +38,7 @@ class KubernetesAPI:
             return "default"
 
     async def get_graph_deployment(
-            self, component_name: str, dynamo_namespace: str
+        self, component_name: str, dynamo_namespace: str
     ) -> Optional[dict]:
         """Get DynamoGraphDeployment custom resource"""
         try:
@@ -52,7 +52,7 @@ class KubernetesAPI:
                 label_selector=label_selector,
             )
 
-            items = response.get('items', [])
+            items = response.get("items", [])
             if not items:
                 return None
             if len(items) > 1:
@@ -68,10 +68,10 @@ class KubernetesAPI:
             raise
 
     async def update_component_replicas(
-            self, graph_deployment_name: str, component_name: str, replicas: int
+        self, graph_deployment_name: str, component_name: str, replicas: int
     ) -> None:
         """Update the replicas count for a component in a DynamoGraphDeployment"""
-        patch = {"spec": {"services": {component_name: {"replicas": replicas}}}}    
+        patch = {"spec": {"services": {component_name: {"replicas": replicas}}}}
         self.custom_api.patch_namespaced_custom_object(
             group="nvidia.com",
             version="v1alpha1",
