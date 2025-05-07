@@ -183,7 +183,7 @@ func (r *DynamoGraphDeploymentReconciler) Reconcile(ctx context.Context, req ctr
 	// reconcile the dynamoComponentsDeployments
 	for serviceName, dynamoComponentDeployment := range dynamoComponentsDeployments {
 		logger.Info("Reconciling the DynamoComponentDeployment", "serviceName", serviceName, "dynamoComponentDeployment", dynamoComponentDeployment)
-		_, dynamoComponentDeployment, err = commonController.SyncResource(ctx, r, dynamoComponent, func(ctx context.Context) (*nvidiacomv1alpha1.DynamoComponentDeployment, bool, error) {
+		_, dynamoComponentDeployment, err = commonController.SyncResource(ctx, r, dynamoDeployment, func(ctx context.Context) (*nvidiacomv1alpha1.DynamoComponentDeployment, bool, error) {
 			return dynamoComponentDeployment, false, nil
 		})
 		if err != nil {

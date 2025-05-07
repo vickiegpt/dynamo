@@ -124,7 +124,7 @@ func SyncResource[T client.Object](ctx context.Context, r Reconciler, parentReso
 		}
 		logs.Info("Resource not found. Creating a new one.")
 
-		err = patch.DefaultAnnotator.SetLastAppliedAnnotation(resource)
+		err = annotator.SetLastAppliedAnnotation(resource)
 		if err != nil {
 			logs.Error(err, "Failed to set last applied annotation.")
 			r.GetRecorder().Eventf(parentResource, corev1.EventTypeWarning, "SetLastAppliedAnnotation", "Failed to set last applied annotation for %s %s: %s", resourceType, resourceNamespace, err)
