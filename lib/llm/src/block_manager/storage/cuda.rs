@@ -37,8 +37,6 @@
 //! - Lazy initialization of device contexts
 //! - Automatic cleanup of resources
 //!
-//!
-//!
 //! ## Usage
 //!
 //! ### Using Allocators
