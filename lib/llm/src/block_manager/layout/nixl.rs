@@ -149,11 +149,12 @@ impl<S: NixlRegisterableStorage> ToSerializedNixlBlockLayout for FullyContiguous
             LayoutError::OperationFailed("FullyContiguous requires one storage element".to_string())
         })?;
 
-        let storage_descriptors = storage_instance.get_nixl_descriptors().ok_or_else(|| {
-            LayoutError::OperationFailed(
-                "Storage does not provide NIXL descriptors for serialization".to_string(),
-            )
-        })?;
+        let storage_descriptors =
+            unsafe { storage_instance.as_nixl_descriptor() }.ok_or_else(|| {
+                LayoutError::OperationFailed(
+                    "Storage does not provide NIXL descriptors for serialization".to_string(),
+                )
+            })?;
 
         let serializable_data = SerializableNixlLayout::new(
             config,

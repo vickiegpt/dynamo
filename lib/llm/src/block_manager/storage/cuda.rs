@@ -155,12 +155,12 @@ impl Cuda {
     }
 
     // Get a context if it exists, but don't create one
-    pub fn get_existing_context(&self, device_id: usize) -> Option<Arc<CudaContext>> {
+    fn get_existing_context(&self, device_id: usize) -> Option<Arc<CudaContext>> {
         self.contexts.get(&device_id).cloned()
     }
 
     // Check if a context exists for a device
-    pub fn has_context(&self, device_id: usize) -> bool {
+    fn has_context(&self, device_id: usize) -> bool {
         self.contexts.contains_key(&device_id)
     }
 }
@@ -285,6 +285,7 @@ impl Default for PinnedAllocator {
 }
 
 impl PinnedAllocator {
+    /// Create a new pinned allocator
     pub fn new() -> Result<Self, StorageError> {
         Ok(Self {
             ctx: Cuda::get_or_init_device(0)?,
@@ -384,6 +385,7 @@ impl RegisterableStorage for DeviceStorage {
     }
 }
 
+/// Allocator for DeviceStorage
 pub struct DeviceAllocator {
     ctx: Arc<CudaContext>,
 }
@@ -397,12 +399,14 @@ impl Default for DeviceAllocator {
 }
 
 impl DeviceAllocator {
+    /// Create a new device allocator
     pub fn new(device_id: usize) -> Result<Self, StorageError> {
         Ok(Self {
             ctx: Cuda::get_or_init_device(device_id)?,
         })
     }
 
+    /// Get the CUDA context
     pub fn ctx(&self) -> &Arc<CudaContext> {
         &self.ctx
     }

@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![deny(missing_docs)]
+
 //! # Storage Management
 //!
 //! This module provides a unified interface for managing different types of memory storage used in the block manager.
@@ -84,10 +86,19 @@ pub type StorageResult<T> = std::result::Result<T, StorageError>;
 /// Represents the type of storage used for a block
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StorageType {
-    Device(u32),
-    Pinned,
+    /// System memory
     System,
+
+    /// CUDA device memory
+    Device(u32),
+
+    /// CUDA page-locked host memory
+    Pinned,
+
+    /// Remote memory accessible through NIXL
     Nixl,
+
+    /// Null storage
     Null,
 }
 
@@ -103,6 +114,7 @@ pub trait SystemAccessible: Storage {}
 
 /// Errors that can occur during storage operations
 #[derive(Debug, Error)]
+#[allow(missing_docs)]
 pub enum StorageError {
     #[error("Storage allocation failed: {0}")]
     AllocationFailed(String),
@@ -196,6 +208,7 @@ pub trait RegisterableStorage: Storage + Send + Sync + 'static {
     /// Check if a handle is registered with a key
     fn is_registered(&self, key: &str) -> bool;
 
+    /// Get a reference to the registration handle for a key
     fn registration_handle(&self, key: &str) -> Option<&dyn RegistationHandle>;
 }
 
@@ -223,12 +236,15 @@ pub struct RegistrationHandles {
 }
 
 impl RegistrationHandles {
+    /// Create a new [RegistrationHandles] instance
     pub fn new() -> Self {
         Self {
             handles: HashMap::new(),
         }
     }
 
+    /// Register a handle with a key
+    /// If a handle with the same key already exists, an error is returned
     pub fn register(
         &mut self,
         key: &str,
@@ -242,6 +258,7 @@ impl RegistrationHandles {
         Ok(())
     }
 
+    /// Release all handles
     fn release(&mut self) {
         for handle in self.handles.values_mut() {
             handle.release();
@@ -249,10 +266,12 @@ impl RegistrationHandles {
         self.handles.clear();
     }
 
+    /// Check if a handle is registered with a key
     fn is_registered(&self, key: &str) -> bool {
         self.handles.contains_key(key)
     }
 
+    /// Get a reference to the registration handle for a key
     fn registration_handle(&self, key: &str) -> Option<&dyn RegistationHandle> {
         self.handles.get(key).map(|h| h.as_ref())
     }
@@ -396,6 +415,7 @@ impl StorageAllocator<SystemStorage> for SystemAllocator {
     }
 }
 
+#[allow(missing_docs)]
 pub mod tests {
     use super::*;
 
