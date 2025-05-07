@@ -15,12 +15,14 @@
 
 mod cuda;
 mod memcpy;
+mod nixl;
+mod strategy;
 
 use super::nixl::{IsMutable, NixlBlockDataImmutable, NixlBlockDataMutable, RemoteBlock};
 use super::*;
 
 use crate::block_manager::storage::{
-    nixl::{NixlEnabledStorage, NixlStorage},
+    nixl::{NixlRegisterableStorage, NixlStorage},
     DeviceStorage, PinnedStorage, SystemStorage,
 };
 
@@ -68,142 +70,85 @@ pub enum TransferError {
 
     #[error("Mismatched {0:?} worker ID: {1} != {2}")]
     MismatchedWorkerID(BlockTarget, usize, usize),
+
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CopyStrategy {
+pub enum TransferStrategy {
     Memcpy,
     CudaAsyncH2D,
     CudaAsyncD2H,
     CudaAsyncD2D,
     CudaBlockingH2D,
     CudaBlockingD2H,
-    Nixl,
+    NixlWrite, // aka PUT
+    NixlRead,  // aka GET
     Invalid,
 }
 
-pub trait CopyToStrategy<Target> {
-    fn strategy() -> CopyStrategy {
-        CopyStrategy::Invalid
+/// Trait for determining the transfer strategy for writing from a local
+/// source to a target destination which could be local or remote
+pub trait WriteToStrategy<Target> {
+    fn write_to_strategy() -> TransferStrategy {
+        TransferStrategy::Invalid
     }
 }
 
-pub trait CopyFromStrategy<Source> {
-    fn copy_from_strategy() -> CopyStrategy {
-        CopyStrategy::Invalid
+/// Trait for determining the transfer strategy for reading from a
+/// `Source` which could be local or remote into `Self` which must
+/// be both local and writable.
+pub trait ReadFromStrategy<Source> {
+    fn read_from_strategy() -> TransferStrategy {
+        TransferStrategy::Invalid
     }
 }
 
-impl CopyToStrategy<SystemStorage> for SystemStorage {
-    #[inline(always)]
-    fn strategy() -> CopyStrategy {
-        CopyStrategy::Memcpy
-    }
-}
-
-impl CopyToStrategy<PinnedStorage> for SystemStorage {
-    #[inline(always)]
-    fn strategy() -> CopyStrategy {
-        CopyStrategy::Memcpy
-    }
-}
-
-impl CopyToStrategy<DeviceStorage> for SystemStorage {
-    #[inline(always)]
-    fn strategy() -> CopyStrategy {
-        CopyStrategy::CudaBlockingH2D
-    }
-}
-
-impl CopyToStrategy<SystemStorage> for PinnedStorage {
-    #[inline(always)]
-    fn strategy() -> CopyStrategy {
-        CopyStrategy::Memcpy
-    }
-}
-
-impl CopyToStrategy<PinnedStorage> for PinnedStorage {
-    #[inline(always)]
-    fn strategy() -> CopyStrategy {
-        CopyStrategy::Memcpy
-    }
-}
-
-impl CopyToStrategy<DeviceStorage> for PinnedStorage {
-    #[inline(always)]
-    fn strategy() -> CopyStrategy {
-        CopyStrategy::CudaAsyncH2D
-    }
-}
-
-impl CopyToStrategy<SystemStorage> for DeviceStorage {
-    #[inline(always)]
-    fn strategy() -> CopyStrategy {
-        CopyStrategy::CudaBlockingD2H
-    }
-}
-
-impl CopyToStrategy<PinnedStorage> for DeviceStorage {
-    #[inline(always)]
-    fn strategy() -> CopyStrategy {
-        CopyStrategy::CudaAsyncD2H
-    }
-}
-
-impl CopyToStrategy<DeviceStorage> for DeviceStorage {
-    #[inline(always)]
-    fn strategy() -> CopyStrategy {
-        CopyStrategy::CudaAsyncD2D
-    }
-}
-
-impl<S: Storage + Local> CopyToStrategy<NixlStorage> for S {
-    #[inline(always)]
-    fn strategy() -> CopyStrategy {
-        CopyStrategy::Nixl
-    }
-}
-
-impl<S: Storage + Local, T: Storage + Local> CopyFromStrategy<S> for T
+impl<RB: ReadableBlock, WB: WritableBlock> WriteToStrategy<WB> for RB
 where
-    T: CopyToStrategy<S>,
+    <RB as ReadableBlock>::StorageType: Local + WriteToStrategy<<WB as WritableBlock>::StorageType>,
 {
     #[inline(always)]
-    fn copy_from_strategy() -> CopyStrategy {
-        T::strategy()
+    fn write_to_strategy() -> TransferStrategy {
+        <<RB as ReadableBlock>::StorageType as WriteToStrategy<
+            <WB as WritableBlock>::StorageType,
+        >>::write_to_strategy()
     }
 }
 
-impl<RB: ReadableBlock, WB: WritableBlock> CopyToStrategy<WB> for RB
+impl<WB: WritableBlock, RB: ReadableBlock> ReadFromStrategy<RB> for WB
 where
-    <RB as ReadableBlock>::StorageType: Local + CopyToStrategy<<WB as WritableBlock>::StorageType>,
+    <RB as ReadableBlock>::StorageType: Remote,
+    <WB as WritableBlock>::StorageType: NixlRegisterableStorage,
 {
     #[inline(always)]
-    fn strategy() -> CopyStrategy {
-        <<RB as ReadableBlock>::StorageType as CopyToStrategy::<<WB as WritableBlock>::StorageType>>::strategy()
+    fn read_from_strategy() -> TransferStrategy {
+        TransferStrategy::NixlRead
     }
 }
 
-pub trait CopyTo<Target> {
-    fn copy_to(&self, dst: &mut Target) -> Result<(), TransferError>;
+pub trait WriteTo<Target> {
+    fn write_to(&self, dst: &mut Target, notify: Option<String>) -> Result<(), TransferError>;
 }
 
-impl<RB: ReadableBlock, WB: WritableBlock> CopyTo<WB> for RB
+impl<RB: ReadableBlock, WB: WritableBlock> WriteTo<WB> for RB
 where
-    RB: CopyToStrategy<WB> + Local,
+    RB: WriteToStrategy<WB> + Local,
 {
-    fn copy_to(&self, dst: &mut WB) -> Result<(), TransferError> {
+    fn write_to(&self, dst: &mut WB, notify: Option<String>) -> Result<(), TransferError> {
         let ctx = self.transfer_context();
-        match Self::strategy() {
-            CopyStrategy::Memcpy => memcpy::memcpy_block(self, dst),
-            CopyStrategy::CudaAsyncH2D
-            | CopyStrategy::CudaAsyncD2H
-            | CopyStrategy::CudaAsyncD2D => {
-                cuda::cuda_memcpy_block(self, dst, ctx.stream().as_ref(), RB::strategy())
+        match Self::write_to_strategy() {
+            TransferStrategy::Memcpy => memcpy::copy_block(self, dst),
+            TransferStrategy::CudaAsyncH2D
+            | TransferStrategy::CudaAsyncD2H
+            | TransferStrategy::CudaAsyncD2D => {
+                cuda::copy_block(self, dst, ctx.stream().as_ref(), RB::write_to_strategy())
             }
+            TransferStrategy::NixlWrite => Ok(nixl::write_block_to(self, dst, ctx, notify)?),
             _ => Err(TransferError::IncompatibleTypes(format!(
                 "Unsupported copy strategy: {:?}",
-                RB::strategy()
+                RB::write_to_strategy()
             ))),
         }
         // dispatch_copy_to(self, dst, self.transfer_context())
@@ -320,9 +265,9 @@ pub trait BlockTransferEngineV1<Source: BlockDataProvider, Target: BlockDataProv
 // - Device -> Device
 
 // nixl memcpy transfer engine
-// - NixlEnabledStorage -> Nixl
-// - Nixl -> NixlEnabledStorage
-// where System, Pinned, Device are NixlEnabledStorage
+// - NixlRegisterableStorage -> Nixl
+// - Nixl -> NixlRegisterableStorage
+// where System, Pinned, Device are NixlRegisterableStorage
 
 // Placeholder for the actual transfer plan
 #[derive(Debug)]
@@ -341,7 +286,7 @@ impl<Source> BlockTransferEngineV1<Source, RemoteBlock<IsMutable>>
     for TransferRequestPut<'_, Source, RemoteBlock<IsMutable>>
 where
     Source: BlockDataProvider + Local, // + NixlBlockDataMutable<Source::StorageType>,
-    Source::StorageType: NixlEnabledStorage,
+    Source::StorageType: NixlRegisterableStorage,
 {
     fn execute(self) -> Result<(), TransferError> {
         self.validate_counts()?;
@@ -610,80 +555,80 @@ mod tests {
     use super::*;
 
     #[test]
-    fn copy_to_strategy() {
+    fn write_to_strategy() {
         // System to ...
         assert_eq!(
-            <SystemStorage as CopyToStrategy<SystemStorage>>::strategy(),
-            CopyStrategy::Memcpy
+            <SystemStorage as WriteToStrategy<SystemStorage>>::write_to_strategy(),
+            TransferStrategy::Memcpy
         );
 
         assert_eq!(
-            <SystemStorage as CopyToStrategy<PinnedStorage>>::strategy(),
-            CopyStrategy::Memcpy
+            <SystemStorage as WriteToStrategy<PinnedStorage>>::write_to_strategy(),
+            TransferStrategy::Memcpy
         );
 
         assert_eq!(
-            <SystemStorage as CopyToStrategy<DeviceStorage>>::strategy(),
-            CopyStrategy::CudaBlockingH2D
+            <SystemStorage as WriteToStrategy<DeviceStorage>>::write_to_strategy(),
+            TransferStrategy::CudaBlockingH2D
         );
 
         assert_eq!(
-            <SystemStorage as CopyToStrategy<NixlStorage>>::strategy(),
-            CopyStrategy::Nixl
+            <SystemStorage as WriteToStrategy<NixlStorage>>::write_to_strategy(),
+            TransferStrategy::NixlWrite
         );
 
         // Pinned to ...
         assert_eq!(
-            <PinnedStorage as CopyToStrategy<SystemStorage>>::strategy(),
-            CopyStrategy::Memcpy
+            <PinnedStorage as WriteToStrategy<SystemStorage>>::write_to_strategy(),
+            TransferStrategy::Memcpy
         );
         assert_eq!(
-            <PinnedStorage as CopyToStrategy<PinnedStorage>>::strategy(),
-            CopyStrategy::Memcpy
+            <PinnedStorage as WriteToStrategy<PinnedStorage>>::write_to_strategy(),
+            TransferStrategy::Memcpy
         );
         assert_eq!(
-            <PinnedStorage as CopyToStrategy<DeviceStorage>>::strategy(),
-            CopyStrategy::CudaAsyncH2D
+            <PinnedStorage as WriteToStrategy<DeviceStorage>>::write_to_strategy(),
+            TransferStrategy::CudaAsyncH2D
         );
         assert_eq!(
-            <PinnedStorage as CopyToStrategy<NixlStorage>>::strategy(),
-            CopyStrategy::Nixl
+            <PinnedStorage as WriteToStrategy<NixlStorage>>::write_to_strategy(),
+            TransferStrategy::NixlWrite
         );
 
         // Device to ...
         assert_eq!(
-            <DeviceStorage as CopyToStrategy<SystemStorage>>::strategy(),
-            CopyStrategy::CudaBlockingD2H
+            <DeviceStorage as WriteToStrategy<SystemStorage>>::write_to_strategy(),
+            TransferStrategy::CudaBlockingD2H
         );
         assert_eq!(
-            <DeviceStorage as CopyToStrategy<PinnedStorage>>::strategy(),
-            CopyStrategy::CudaAsyncD2H
+            <DeviceStorage as WriteToStrategy<PinnedStorage>>::write_to_strategy(),
+            TransferStrategy::CudaAsyncD2H
         );
         assert_eq!(
-            <DeviceStorage as CopyToStrategy<DeviceStorage>>::strategy(),
-            CopyStrategy::CudaAsyncD2D
+            <DeviceStorage as WriteToStrategy<DeviceStorage>>::write_to_strategy(),
+            TransferStrategy::CudaAsyncD2D
         );
         assert_eq!(
-            <DeviceStorage as CopyToStrategy<NixlStorage>>::strategy(),
-            CopyStrategy::Nixl
+            <DeviceStorage as WriteToStrategy<NixlStorage>>::write_to_strategy(),
+            TransferStrategy::NixlWrite
         );
 
         // Nixl to ... should fail to compile
         // assert_eq!(
-        //     <NixlStorage as CopyToStrategy<SystemStorage>>::strategy(),
-        //     CopyStrategy::Invalid
+        //     <NixlStorage as WriteToStrategy<SystemStorage>>::write_to_strategy(),
+        //     TransferStrategy::Invalid
         // );
         // assert_eq!(
-        //     <NixlStorage as CopyToStrategy<PinnedStorage>>::strategy(),
-        //     CopyStrategy::Invalid
+        //     <NixlStorage as WriteToStrategy<PinnedStorage>>::write_to_strategy(),
+        //     TransferStrategy::Invalid
         // );
         // assert_eq!(
-        //     <NixlStorage as CopyToStrategy<DeviceStorage>>::strategy(),
-        //     CopyStrategy::Invalid
+        //     <NixlStorage as WriteToStrategy<DeviceStorage>>::write_to_strategy(),
+        //     TransferStrategy::Invalid
         // );
         // assert_eq!(
-        //     <NixlStorage as CopyToStrategy<NixlStorage>>::strategy(),
-        //     CopyStrategy::Invalid
+        //     <NixlStorage as WriteToStrategy<NixlStorage>>::write_to_strategy(),
+        //     TransferStrategy::Invalid
         // );
     }
 }

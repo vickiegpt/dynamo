@@ -20,6 +20,7 @@ pub mod view;
 
 pub use crate::tokens::TokenBlockError;
 pub use anyhow::Result;
+use nixl_sys::NixlDescriptor;
 pub use state::{BlockState, BlockStateInvalid};
 
 use crate::block_manager::{
@@ -33,6 +34,7 @@ use transfer::{Immutable, Mutable, Readable, Writable};
 use super::{
     events::PublishHandle,
     layout::{BlockLayout, LayoutError, LayoutType},
+    storage::StorageType,
     WorkerID,
 };
 
@@ -84,7 +86,7 @@ pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync +
 
 /// Marker trait for types that are mutable blocks
 pub trait WritableBlock: BlockDataProviderMut {
-    type StorageType: Storage;
+    type StorageType: Storage + NixlDescriptor;
 
     fn storage_type_id(&self) -> std::any::TypeId {
         std::any::TypeId::of::<<Self as WritableBlock>::StorageType>()
@@ -93,7 +95,7 @@ pub trait WritableBlock: BlockDataProviderMut {
 
 /// Marker trait for types that are immutable blocks
 pub trait ReadableBlock: BlockDataProvider {
-    type StorageType: Storage;
+    type StorageType: Storage + NixlDescriptor;
 
     fn storage_type_id(&self) -> std::any::TypeId {
         std::any::TypeId::of::<<Self as ReadableBlock>::StorageType>()
@@ -388,7 +390,7 @@ impl<S: Storage, M: BlockMetadata> BlockExt for Block<S, M> {
     }
 }
 
-pub trait BlockDataExt<S: Storage> {
+pub trait BlockDataExt<S: Storage + NixlDescriptor> {
     /// Returns true if the block data is fully contiguous
     fn is_fully_contiguous(&self) -> bool;
 
@@ -435,9 +437,16 @@ where
             worker_id,
         }
     }
+
+    pub fn storage_type(&self) -> StorageType {
+        self.layout.storage_type()
+    }
 }
 
-impl<S: Storage> BlockDataExt<S> for BlockData<S> {
+impl<S: Storage + NixlDescriptor> BlockDataExt<S> for BlockData<S>
+where
+    S: Storage + NixlDescriptor,
+{
     fn is_fully_contiguous(&self) -> bool {
         self.layout.layout_type() == LayoutType::FullyContiguous
     }
@@ -482,7 +491,7 @@ impl<S: Storage> BlockDataExt<S> for BlockData<S> {
 }
 
 pub trait BlockDataProvider {
-    type StorageType: Storage;
+    type StorageType: Storage + NixlDescriptor;
 
     fn block_data(&self, _: private::PrivateToken) -> &BlockData<Self::StorageType>;
 }
@@ -559,16 +568,16 @@ pub struct MutableBlock<S: Storage, M: BlockMetadata> {
     return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
 }
 
-impl<S: Storage, M: BlockMetadata> WritableBlock for MutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> WritableBlock for MutableBlock<S, M> {
     type StorageType = S;
 }
-impl<S: Storage, M: BlockMetadata> ReadableBlock for MutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> ReadableBlock for MutableBlock<S, M> {
     type StorageType = S;
 }
-impl<S: Storage, M: BlockMetadata> Writable for MutableBlock<S, M> {}
-impl<S: Storage, M: BlockMetadata> Readable for MutableBlock<S, M> {}
-impl<S: Storage, M: BlockMetadata> Mutable for MutableBlock<S, M> {}
-impl<S: Storage, M: BlockMetadata> Local for MutableBlock<S, M> {}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> Writable for MutableBlock<S, M> {}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> Readable for MutableBlock<S, M> {}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> Mutable for MutableBlock<S, M> {}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> Local for MutableBlock<S, M> {}
 
 impl<S: Storage, M: BlockMetadata> MutableBlock<S, M> {
     pub(crate) fn new(
@@ -612,7 +621,7 @@ impl<S: Storage, M: BlockMetadata> DerefMut for MutableBlock<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> BlockDataProvider for MutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProvider for MutableBlock<S, M> {
     type StorageType = S;
 
     fn block_data(&self, _: private::PrivateToken) -> &BlockData<S> {
@@ -620,34 +629,34 @@ impl<S: Storage, M: BlockMetadata> BlockDataProvider for MutableBlock<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> BlockDataProviderMut for MutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProviderMut for MutableBlock<S, M> {
     fn block_data_mut(&mut self, _: private::PrivateToken) -> &mut BlockData<S> {
         &mut self.block.as_mut().expect("block was dropped").data
     }
 }
 
-impl<'a, S: Storage, M: BlockMetadata> AsBlockSlice<'a, MutableBlock<S, M>>
+impl<'a, S: Storage + NixlDescriptor, M: BlockMetadata> AsBlockSlice<'a, MutableBlock<S, M>>
     for [MutableBlock<S, M>]
 {
     fn as_block_slice(&'a self) -> &'a [MutableBlock<S, M>] {
         self
     }
 }
-impl<'a, S: Storage, M: BlockMetadata> AsBlockSlice<'a, MutableBlock<S, M>>
+impl<'a, S: Storage + NixlDescriptor, M: BlockMetadata> AsBlockSlice<'a, MutableBlock<S, M>>
     for Vec<MutableBlock<S, M>>
 {
     fn as_block_slice(&'a self) -> &'a [MutableBlock<S, M>] {
         self.as_slice()
     }
 }
-impl<'a, S: Storage, M: BlockMetadata> AsBlockMutSlice<'a, MutableBlock<S, M>>
+impl<'a, S: Storage + NixlDescriptor, M: BlockMetadata> AsBlockMutSlice<'a, MutableBlock<S, M>>
     for [MutableBlock<S, M>]
 {
     fn as_block_mut_slice(&'a mut self) -> &'a mut [MutableBlock<S, M>] {
         self
     }
 }
-impl<'a, S: Storage, M: BlockMetadata> AsBlockMutSlice<'a, MutableBlock<S, M>>
+impl<'a, S: Storage + NixlDescriptor, M: BlockMetadata> AsBlockMutSlice<'a, MutableBlock<S, M>>
     for Vec<MutableBlock<S, M>>
 {
     fn as_block_mut_slice(&'a mut self) -> &'a mut [MutableBlock<S, M>] {
@@ -655,14 +664,14 @@ impl<'a, S: Storage, M: BlockMetadata> AsBlockMutSlice<'a, MutableBlock<S, M>>
     }
 }
 
-impl<S: Storage, M: BlockMetadata> IntoWritableBlocks<M> for MutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> IntoWritableBlocks<M> for MutableBlock<S, M> {
     type Output = Vec<MutableBlock<S, M>>;
     fn into_writable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
         Ok(vec![self])
     }
 }
 
-impl<S: Storage, M: BlockMetadata> IntoReadableBlocks<M> for MutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> IntoReadableBlocks<M> for MutableBlock<S, M> {
     type Output = Vec<MutableBlock<S, M>>;
     fn into_readable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
         Ok(vec![self])
@@ -680,12 +689,12 @@ impl<S: Storage, M: BlockMetadata> ImmutableBlock<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> ReadableBlock for ImmutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> ReadableBlock for ImmutableBlock<S, M> {
     type StorageType = S;
 }
-impl<S: Storage, M: BlockMetadata> Readable for ImmutableBlock<S, M> {}
-impl<S: Storage, M: BlockMetadata> Immutable for ImmutableBlock<S, M> {}
-impl<S: Storage, M: BlockMetadata> Local for ImmutableBlock<S, M> {}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> Readable for ImmutableBlock<S, M> {}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> Immutable for ImmutableBlock<S, M> {}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> Local for ImmutableBlock<S, M> {}
 
 impl<S: Storage, M: BlockMetadata> Deref for ImmutableBlock<S, M> {
     type Target = Block<S, M>;
@@ -698,7 +707,7 @@ impl<S: Storage, M: BlockMetadata> Deref for ImmutableBlock<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> BlockDataProvider for ImmutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProvider for ImmutableBlock<S, M> {
     type StorageType = S;
 
     fn block_data(&self, _: private::PrivateToken) -> &BlockData<S> {
@@ -712,14 +721,14 @@ impl<S: Storage, M: BlockMetadata> BlockDataProvider for ImmutableBlock<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> IntoReadableBlocks<M> for ImmutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> IntoReadableBlocks<M> for ImmutableBlock<S, M> {
     type Output = Vec<ImmutableBlock<S, M>>;
     fn into_readable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
         Ok(vec![self])
     }
 }
 
-impl<'a, S: Storage, M: BlockMetadata> AsBlockSlice<'a, ImmutableBlock<S, M>>
+impl<'a, S: Storage + NixlDescriptor, M: BlockMetadata> AsBlockSlice<'a, ImmutableBlock<S, M>>
     for [ImmutableBlock<S, M>]
 {
     fn as_block_slice(&'a self) -> &'a [ImmutableBlock<S, M>] {
@@ -735,13 +744,14 @@ impl<'a, S: Storage, M: BlockMetadata> AsBlockSlice<'a, ImmutableBlock<S, M>>
 }
 
 pub mod nixl {
+
     use super::*;
 
     use super::view::{BlockKind, Kind, LayerKind};
 
     use super::super::{
         layout::nixl::{NixlLayout, SerializedNixlBlockLayout},
-        storage::nixl::{MemType, NixlEnabledStorage, NixlStorage},
+        storage::nixl::{MemType, NixlRegisterableStorage, NixlStorage},
         WorkerID,
     };
 
@@ -763,7 +773,7 @@ pub mod nixl {
 
     impl<L: NixlLayout, M: BlockMetadata> Blocks<L, M>
     where
-        L::StorageType: NixlEnabledStorage,
+        L::StorageType: NixlRegisterableStorage,
     {
         /// Register the blocks with an NIXL agent
         pub fn nixl_register(
@@ -844,7 +854,7 @@ pub mod nixl {
         }
     }
 
-    pub trait NixlBlockDataImmutable<S: Storage>: BlockDataExt<S> {
+    pub trait NixlBlockDataImmutable<S: Storage + NixlDescriptor>: BlockDataExt<S> {
         /// Get the NIXL memory descriptor for the entire block
         fn as_block_descriptor(
             &self,
@@ -857,7 +867,7 @@ pub mod nixl {
         ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsImmutable>>;
     }
 
-    pub trait NixlBlockDataMutable<S: Storage>:
+    pub trait NixlBlockDataMutable<S: Storage + NixlDescriptor>:
         BlockDataExt<S> + NixlBlockDataImmutable<S>
     {
         /// Get the NIXL memory descriptor for the entire block

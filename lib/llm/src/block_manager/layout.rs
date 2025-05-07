@@ -29,6 +29,8 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use validator::Validate;
 
+use super::storage::StorageType;
+
 /// Errors that can occur during layout operations
 #[derive(Debug, Error)]
 pub enum LayoutError {
@@ -83,6 +85,9 @@ pub trait BlockLayout:
 
     /// Get the mutable memory regions for all blocks and layers
     fn storage_mut(&mut self) -> Vec<&mut Self::StorageType>;
+
+    /// Storage type for the layout
+    fn storage_type(&self) -> StorageType;
 }
 
 pub trait BlockLayoutConfig: std::fmt::Debug {
@@ -236,8 +241,14 @@ impl BlockLayoutConfig for FullyContiguousConfig {
 /// Contiguous memory layout where all blocks and layers are sequential
 #[derive(Debug)]
 pub struct FullyContiguous<S: Storage> {
+    /// Configuration for the layout
     config: FullyContiguousConfig,
+
+    /// Storage for the layoutk
     storage: S,
+
+    /// Storage type for the layout
+    storage_type: StorageType,
 
     // Offset from storage.addr() to the aligned start of block 0
     base_offset: usize,
@@ -258,6 +269,7 @@ impl<S: Storage> FullyContiguous<S> {
         }
         let mut storage = storage;
         let storage = storage.remove(0);
+        let storage_type = storage.storage_type();
 
         let provided_size = storage.size();
         let storage_addr = storage.addr();
@@ -308,6 +320,7 @@ impl<S: Storage> FullyContiguous<S> {
         Ok(Self {
             config,
             storage,
+            storage_type,
             base_offset,
         })
     }
@@ -319,12 +332,14 @@ impl<S: Storage> FullyContiguous<S> {
         config: FullyContiguousConfig,
         storage: S,
         base_offset: usize,
+        storage_type: StorageType,
     ) -> Result<Self, LayoutError> {
         // Basic check: Ensure the storage address matches expectations based on offset if possible?
         // Maybe not strictly necessary if we trust the serialized data.
         Ok(Self {
             config,
             storage,
+            storage_type,
             base_offset,
         })
     }
@@ -386,6 +401,10 @@ impl<S: Storage> BlockLayout for FullyContiguous<S> {
 
     fn storage_mut(&mut self) -> Vec<&mut Self::StorageType> {
         vec![&mut self.storage]
+    }
+
+    fn storage_type(&self) -> StorageType {
+        self.storage_type.clone()
     }
 }
 

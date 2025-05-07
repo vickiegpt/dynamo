@@ -13,10 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::block_manager::storage::StorageType;
+
 use super::{BlockLayout, BlockLayoutConfig, LayoutConfig, LayoutError, LayoutType};
 
 use super::super::storage::{
-    nixl::{MemType, NixlAgent, NixlEnabledStorage, NixlStorage, OptArgs},
+    nixl::{MemType, NixlAgent, NixlRegisterableStorage, NixlStorage, OptArgs},
     Storage, StorageAllocator,
 };
 use super::{FullyContiguous, FullyContiguousConfig};
@@ -37,11 +39,11 @@ pub trait BlockLayoutNixlStorage {
     fn device_id(&self) -> u64;
 }
 
-// Umbrella impl for all BlockLayout types that are NixlEnabledStorage
+// Umbrella impl for all BlockLayout types that are NixlRegisterableStorage
 impl<T> NixlLayout for T
 where
     T: BlockLayout + BlockLayoutNixlStorage + ToSerializedNixlBlockLayout + ?Sized, // Implement for any T that is BlockLayout (potentially unsized)
-    T::StorageType: NixlEnabledStorage, // T's associated StorageType must be NixlStorage
+    T::StorageType: NixlRegisterableStorage, // T's associated StorageType must be NixlStorage
 {
     fn nixl_register(
         &mut self,
@@ -56,7 +58,7 @@ where
 }
 
 impl LayoutConfig {
-    pub fn create_layout<S: Storage + NixlEnabledStorage>(
+    pub fn create_layout<S: Storage + NixlRegisterableStorage>(
         &self,
         layout_type: LayoutType,
         storage: Vec<S>,
@@ -66,7 +68,7 @@ impl LayoutConfig {
         }
     }
 
-    pub fn allocate_layout<S: Storage + NixlEnabledStorage>(
+    pub fn allocate_layout<S: Storage + NixlRegisterableStorage>(
         &self,
         layout_type: LayoutType,
         allocator: Arc<dyn StorageAllocator<S>>,
@@ -80,7 +82,7 @@ impl LayoutConfig {
 }
 
 /// Trait to convert a BlockLayout instance into its NIXL-specific serializable representation.
-pub trait ToSerializedNixlBlockLayout: BlockLayout<StorageType: NixlEnabledStorage> {
+pub trait ToSerializedNixlBlockLayout: BlockLayout<StorageType: NixlRegisterableStorage> {
     /// Converts the layout into a serializable format, ensuring it's backed by NIXL storage.
     /// Returns an error if the layout is not backed by storage providing NIXL descriptors.
     fn serialize(&self) -> Result<SerializedNixlBlockLayout, LayoutError>;
@@ -104,6 +106,7 @@ struct SerializableNixlLayout<C: BlockLayoutConfig> {
     config: C,
     base_offset: usize,
     storage_descriptors: Vec<NixlStorage>,
+    storage_type: StorageType,
 }
 
 impl<C> SerializableNixlLayout<C>
@@ -111,16 +114,22 @@ where
     C: BlockLayoutConfig + Serialize + for<'de> Deserialize<'de> + Clone + std::fmt::Debug,
 {
     /// Create a new SerializableNixlLayout
-    fn new(config: C, base_offset: usize, storage_descriptors: Vec<NixlStorage>) -> Self {
+    fn new(
+        config: C,
+        base_offset: usize,
+        storage_descriptors: Vec<NixlStorage>,
+        storage_type: StorageType,
+    ) -> Self {
         Self {
             config,
             base_offset,
             storage_descriptors,
+            storage_type,
         }
     }
 }
 
-impl<S: NixlEnabledStorage> ToSerializedNixlBlockLayout for FullyContiguous<S> {
+impl<S: NixlRegisterableStorage> ToSerializedNixlBlockLayout for FullyContiguous<S> {
     fn serialize(&self) -> Result<SerializedNixlBlockLayout, LayoutError> {
         // Use accessors added previously
         let config = self.config.clone();
@@ -140,14 +149,19 @@ impl<S: NixlEnabledStorage> ToSerializedNixlBlockLayout for FullyContiguous<S> {
             LayoutError::OperationFailed("FullyContiguous requires one storage element".to_string())
         })?;
 
-        let storage_descriptors = storage_instance.get_nixl_descriptors().ok_or_else(|| {
-            LayoutError::OperationFailed(
-                "Storage does not provide NIXL descriptors for serialization".to_string(),
-            )
-        })?;
+        let storage_descriptors =
+            unsafe { storage_instance.as_nixl_descriptor() }.ok_or_else(|| {
+                LayoutError::OperationFailed(
+                    "Storage does not provide NIXL descriptors for serialization".to_string(),
+                )
+            })?;
 
-        let serializable_data =
-            SerializableNixlLayout::new(config, base_offset, vec![storage_descriptors]);
+        let serializable_data = SerializableNixlLayout::new(
+            config,
+            base_offset,
+            vec![storage_descriptors],
+            self.storage_type(),
+        );
 
         let nixl_block_layout = NixlBlockLayoutKinds::FullyContiguous(serializable_data);
 
@@ -181,6 +195,7 @@ impl SerializedNixlBlockLayout {
                     config.config.clone(),
                     storage, // Pass the NixlStorage instance
                     config.base_offset,
+                    config.storage_type,
                 )?;
                 Ok(Arc::new(layout))
             } // Handle other variants when added...
@@ -190,7 +205,7 @@ impl SerializedNixlBlockLayout {
 
 impl<S> BlockLayoutNixlStorage for FullyContiguous<S>
 where
-    S: Storage + NixlEnabledStorage,
+    S: Storage + NixlRegisterableStorage,
 {
     fn mem_type(&self) -> MemType {
         self.storage.mem_type()
@@ -228,11 +243,15 @@ mod tests {
         tracing::info!("Registering layout");
         layout.nixl_register(&agent, None).unwrap();
         tracing::info!("Layout registered");
+        let local_storage_type = layout.storage_type();
 
         let serialized = layout.serialize().unwrap();
 
         let remote_layout = SerializedNixlBlockLayout::deserialize(&serialized).unwrap();
         println!("Nixl layout: {:?}", remote_layout);
+        let remote_storage_type = remote_layout.storage_type();
+
+        assert_eq!(local_storage_type, remote_storage_type);
 
         drop(layout);
         tracing::info!("Layout dropped");

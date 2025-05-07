@@ -13,6 +13,55 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! # NIXL Storage Support
+//!
+//! This module provides NIXL-specific storage implementations and integration for the block manager.
+//! It is conditionally compiled based on the `nixl` feature flag.
+//!
+//! ## Features
+//!
+//! The following functionality is available when the `nixl` feature is enabled:
+//! - [`NixlStorage`] - Remote memory representation
+//! - [`NixlRegisterableStorage`] - Trait for NIXL-compatible storage types
+//! - Integration with the NIXL agent system for remote memory access
+//!
+//! ## Memory Registration
+//!
+//! The module extends the core storage types with NIXL registration capabilities:
+//! - Automatic registration handle management
+//! - Memory type mapping between storage and NIXL types
+//! - Device ID tracking for GPU memory
+//!
+//! ## Usage
+//!
+//! ```rust
+//! // Create storage using an allocator
+//! let pinned_allocator = PinnedAllocator::default();
+//! let mut storage = pinned_allocator.allocate(1024)?;
+//!
+//! // Initially no NIXL descriptors are available
+//! assert!(storage.as_nixl_descriptor().is_none());
+//!
+//! // Register with NIXL
+//! storage.nixl_register(&agent, None)?;
+//!
+//! // Now we can get NIXL descriptors
+//! if let Some(nixl_desc) = storage.as_nixl_descriptor() {
+//!     // Use NIXL memory region
+//!     println!("NIXL memory at addr: {}", nixl_desc.addr());
+//!     println!("Memory type: {:?}", nixl_desc.mem_type());
+//!     println!("Device ID: {}", nixl_desc.device_id());
+//! }
+//! ```
+//!
+//! ## Safety
+//!
+//! The module ensures safe interaction with NIXL by:
+//! - Managing registration lifetimes
+//! - Validating memory types and device IDs
+//! - Providing type-safe interfaces for remote memory access
+//! - Automatic cleanup of NIXL resources
+
 pub use nixl_sys::{
     Agent as NixlAgent, MemType, MemoryRegion, NixlDescriptor, OptArgs,
     RegistrationHandle as NixlRegistrationHandle,
@@ -22,13 +71,42 @@ use derive_getters::Getters;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeviceStorage, PinnedStorage, RegistationHandle, RegisterableStorage, Remote, Storage,
-    StorageType, SystemStorage,
+    CudaContextProivder, DeviceStorage, PinnedStorage, RegistationHandle, RegisterableStorage,
+    Remote, Storage, StorageError, StorageType, SystemStorage,
 };
 
-use anyhow::Result;
-
+/// Marker trait for storage types that can be accessed by NIXL.
+///
+/// This trait is different from [`NixlRegisterableStorage`] which has further restrictions
+/// that the [`Storage`] must be [`RegisterableStorage`].
+///
+/// Remote memory described by [`NixlStorage`] is [`NixlAccessible`] but is not [`NixlRegisterableStorage`]
+/// due to the fact it represents memory that is registered to another NIXL agent.
 pub trait NixlAccessible {}
+
+impl StorageType {
+    /// Get the NIXL memory type for a given storage type.
+    pub fn nixl_mem_type(&self) -> MemType {
+        match self {
+            StorageType::System => MemType::Dram,
+            StorageType::Pinned => MemType::Dram,
+            StorageType::Device(_) => MemType::Vram,
+            StorageType::Nixl => MemType::Unknown,
+            StorageType::Null => MemType::Unknown,
+        }
+    }
+
+    /// Get the NIXL device ID for a given storage type.
+    pub fn nixl_device_id(&self) -> u64 {
+        match self {
+            StorageType::System => 0,
+            StorageType::Pinned => 0,
+            StorageType::Device(id) => *id as u64,
+            StorageType::Nixl => 0,
+            StorageType::Null => 0,
+        }
+    }
+}
 
 impl RegistationHandle for NixlRegistrationHandle {
     fn release(&mut self) {
@@ -38,12 +116,17 @@ impl RegistationHandle for NixlRegistrationHandle {
     }
 }
 
-pub trait NixlEnabledStorage: RegisterableStorage + NixlDescriptor + Sized {
+/// Extension to the [`RegisterableStorage`] trait for NIXL-compatible storage.
+pub trait NixlRegisterableStorage: RegisterableStorage + NixlDescriptor + Sized {
     /// Register the storage with the NIXL agent.
-    fn nixl_register(&mut self, agent: &NixlAgent, opt_args: Option<&OptArgs>) -> Result<()> {
+    fn nixl_register(
+        &mut self,
+        agent: &NixlAgent,
+        opt_args: Option<&OptArgs>,
+    ) -> Result<(), StorageError> {
         let handle = Box::new(agent.register_memory(self, opt_args)?);
         // Assuming PinnedStorage has `handles: RegistrationHandles`
-        Ok(self.register("nixl", handle)?)
+        self.register("nixl", handle)
     }
 
     /// Check if the storage is registered with the NIXL agent.
@@ -51,6 +134,7 @@ pub trait NixlEnabledStorage: RegisterableStorage + NixlDescriptor + Sized {
         self.is_registered("nixl")
     }
 
+    /// Get the NIXL agent name for the storage.
     fn nixl_agent_name(&self) -> Option<String> {
         // Get the registration handle associated with "nixl".
         self.registration_handle("nixl")
@@ -68,7 +152,11 @@ pub trait NixlEnabledStorage: RegisterableStorage + NixlDescriptor + Sized {
 
     /// If the underlying storage is NIXL-compatible, return descriptions of the NIXL memory regions.
     /// This is used for serialization/deserialization of NIXL-specific layouts.
-    fn get_nixl_descriptors(&self) -> Option<NixlStorage> {
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because because ownership of the storage is not transferred.
+    unsafe fn as_nixl_descriptor(&self) -> Option<NixlStorage> {
         if self.is_nixl_registered() {
             Some(NixlStorage {
                 addr: self.addr(),
@@ -82,6 +170,10 @@ pub trait NixlEnabledStorage: RegisterableStorage + NixlDescriptor + Sized {
     }
 }
 
+/// NIXL-compatible storage
+///
+/// This object does not own any memory, it is meant to hold descriptions
+/// of non-local/remote memory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Getters)]
 pub struct NixlStorage {
     addr: u64,
@@ -106,16 +198,12 @@ impl Storage for NixlStorage {
         self.size
     }
 
-    fn is_host_accessible(&self) -> bool {
-        false
+    unsafe fn as_ptr(&self) -> *const u8 {
+        self.addr as *const u8
     }
 
-    unsafe fn as_ptr(&self) -> Option<*const u8> {
-        Some(self.addr as *const u8)
-    }
-
-    unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
-        Some(self.addr as *mut u8)
+    unsafe fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.addr as *mut u8
     }
 }
 
@@ -139,7 +227,9 @@ impl NixlDescriptor for NixlStorage {
     }
 }
 
-impl NixlEnabledStorage for SystemStorage {}
+// SystemStorage
+
+impl NixlRegisterableStorage for SystemStorage {}
 
 impl MemoryRegion for SystemStorage {
     unsafe fn as_ptr(&self) -> *const u8 {
@@ -161,16 +251,18 @@ impl NixlDescriptor for SystemStorage {
     }
 }
 
+// PinnedStorage
+
 impl NixlAccessible for PinnedStorage {}
-impl NixlEnabledStorage for PinnedStorage {}
+impl NixlRegisterableStorage for PinnedStorage {}
 
 impl MemoryRegion for PinnedStorage {
     unsafe fn as_ptr(&self) -> *const u8 {
-        self.ptr as *const u8
+        Storage::as_ptr(self)
     }
 
     fn size(&self) -> usize {
-        self.size
+        Storage::size(self)
     }
 }
 
@@ -184,16 +276,18 @@ impl NixlDescriptor for PinnedStorage {
     }
 }
 
+// DeviceStorage
+
 impl NixlAccessible for DeviceStorage {}
-impl NixlEnabledStorage for DeviceStorage {}
+impl NixlRegisterableStorage for DeviceStorage {}
 
 impl MemoryRegion for DeviceStorage {
     unsafe fn as_ptr(&self) -> *const u8 {
-        self.ptr as *const u8
+        Storage::as_ptr(self)
     }
 
     fn size(&self) -> usize {
-        self.size
+        Storage::size(self)
     }
 }
 
@@ -203,6 +297,6 @@ impl NixlDescriptor for DeviceStorage {
     }
 
     fn device_id(&self) -> u64 {
-        self.ctx.cu_device() as u64
+        CudaContextProivder::cuda_context(self).cu_device() as u64
     }
 }
