@@ -242,11 +242,15 @@ mod tests {
         tracing::info!("Registering layout");
         layout.nixl_register(&agent, None).unwrap();
         tracing::info!("Layout registered");
+        let local_storage_type = layout.storage_type();
 
         let serialized = layout.serialize().unwrap();
 
         let remote_layout = SerializedNixlBlockLayout::deserialize(&serialized).unwrap();
         println!("Nixl layout: {:?}", remote_layout);
+        let remote_storage_type = remote_layout.storage_type();
+
+        assert_eq!(local_storage_type, remote_storage_type);
 
         drop(layout);
         tracing::info!("Layout dropped");

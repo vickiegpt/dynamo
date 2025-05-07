@@ -32,7 +32,10 @@ use crate::tokens::{SaltHash, SequenceHash, Token, TokenBlock, Tokens};
 use transfer::{Immutable, Mutable, Readable, Writable};
 
 use super::{
-    events::PublishHandle, layout::{BlockLayout, LayoutError, LayoutType}, storage::StorageType, WorkerID
+    events::PublishHandle,
+    layout::{BlockLayout, LayoutError, LayoutType},
+    storage::StorageType,
+    WorkerID,
 };
 
 use std::{
@@ -741,8 +744,6 @@ impl<'a, S: Storage, M: BlockMetadata> AsBlockSlice<'a, ImmutableBlock<S, M>>
 }
 
 pub mod nixl {
-    use crate::block_manager::storage::SystemStorage;
-    use crate::block_manager::{DeviceStorage, PinnedStorage};
 
     use super::*;
 
