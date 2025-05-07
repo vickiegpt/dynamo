@@ -41,22 +41,28 @@
 //!
 //! ### Using Allocators
 //! ```rust
+//! use dynamo_llm::block_manager::storage::{DeviceAllocator, PinnedAllocator, StorageAllocator};
+//!
 //! // Create a pinned memory allocator
 //! let pinned_allocator = PinnedAllocator::default();
-//! let pinned_storage = pinned_allocator.allocate(1024)?;
+//! let pinned_storage = pinned_allocator.allocate(1024).unwrap();
 //!
 //! // Create a device memory allocator for a specific device
-//! let device_allocator = DeviceAllocator::new(1)?;  // Use device 1
-//! let device_storage = device_allocator.allocate(1024)?;
+//! let device_allocator = DeviceAllocator::new(1).unwrap();  // Use device 1
+//! let device_storage = device_allocator.allocate(1024).unwrap();
 //! ```
 //!
 //! ### Memory Operations
 //! ```rust
-//! // Initialize memory
-//! let mut storage = PinnedStorage::new(&ctx, 1024)?;
+//! use dynamo_llm::block_manager::storage::{
+//!     PinnedAllocator, StorageAllocator, Storage, StorageMemset
+//! };
 //!
 //! // Initialize memory
-//! storage.memset(0, 0, 1024)?;
+//! let mut storage = PinnedAllocator::default().allocate(1024).unwrap();
+//!
+//! // Initialize memory
+//! storage.memset(0, 0, 1024).unwrap();
 //!
 //! // Access memory through raw pointers (requires unsafe)
 //! unsafe {

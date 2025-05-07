@@ -13,10 +13,101 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Block layout management.
+#![deny(missing_docs)]
+
+//! # Block Layout Management 🧱
 //!
-//! This module provides traits and implementations for managing how blocks
-//! are arranged in storage, including both contiguous and non-contiguous layouts.
+//! This module is responsible for defining and managing the memory layout of data blocks.
+//! It provides the foundational traits and concrete implementations for how blocks,
+//! composed of multiple layers and pages, are arranged within a given [`Storage`].
+//! The primary goal is to abstract the complexities of memory organization, including
+//! contiguity, strides, and alignment, to ensure efficient data access and manipulation.
+//!
+//! ## Core Concepts
+//!
+//! ### 1. Layout Traits
+//! The module defines a set of traits to ensure a consistent interface across different layout strategies:
+//! - [`BlockLayout`]: The central trait that combines configuration and lookup capabilities. It specifies the
+//!   associated [`StorageType`].
+//! - [`BlockLayoutConfig`]: Provides metadata about the layout, such as the number of blocks, layers, page size,
+//!   and data type.
+//! - [`BlockLayoutLookup`]: Offers methods to retrieve the memory address and size of a specific memory region
+//!   (page) within the layout.
+//!
+//! ### 2. Layout Configuration
+//! The [`LayoutConfig`] struct is used to define the parameters of a block layout, including:
+//! - `num_blocks`: Total number of blocks.
+//! - `num_layers`: Number of layers per block.
+//! - `page_size`: Size of each page (often corresponds to a dimension like sequence length or number of tokens).
+//! - `inner_dim`: The inner dimension of the data (e.g., hidden size).
+//! - `alignment`: Required memory alignment for certain operations or hardware. Must be a power of 2.
+//! - `dtype`: The data type ([`DType`]) of the elements stored.
+//!
+//! This configuration is validated to ensure consistency and correctness (e.g., alignment must be a power of 2).
+//!
+//! ### 3. Concrete Layouts
+//! Currently, the primary implemented layout is:
+//! - [`FullyContiguous<S>`]: Represents a layout where all blocks and their constituent layers are stored sequentially
+//!   in a single contiguous memory region provided by the generic storage `S`. It handles potential alignment
+//!   requirements by calculating a `base_offset` within the provided storage and adjusting strides between blocks if
+//!   necessary.
+//!
+//! ### 4. Strides and Alignment
+//! The layout calculations meticulously handle strides between layers and blocks. For instance, in [`FullyContiguousConfig`]:
+//! - `layer_stride_in_bytes`: The size of one memory region (page).
+//! - `natural_block_stride`: The size of one block if there were no additional alignment padding between blocks.
+//! - `block_stride_in_bytes`: The actual stride between the start of consecutive blocks, potentially larger than
+//!    `natural_block_stride` to meet `alignment` requirements.
+//! - `base_offset`: An offset applied from the start of the allocated [`Storage`] to ensure the first block's
+//!    data begins at an aligned address.
+//!
+//! The function `align_up` is a utility to ensure values are aligned to the nearest multiple of a power-of-2 alignment.
+//!
+//! ### 5. Storage Interaction
+//! Layouts are tightly coupled with the [`Storage`] trait from the `super::storage` module.
+//! The [`BlockLayout::allocate`] method uses a [`StorageAllocator`] to obtain the necessary memory,
+//! calculating the required size including any padding for alignment.
+//!
+//! ### 6. Error Handling
+//! Operations within this module can result in [`LayoutError`], which covers issues like invalid configuration, validation errors, or out-of-bounds indexing.
+//!
+//! ## Usage Example
+//!
+//! ```rust
+//! use dynamo_llm::block_manager::layout::{
+//!     LayoutConfig, FullyContiguous, BlockLayout, BlockLayoutLookup, BlockLayoutConfig,
+//! };
+//! use dynamo_llm::block_manager::storage::{SystemAllocator, StorageType};
+//! use dynamo_llm::common::dtype::DType;
+//!
+//! // Define the layout configuration
+//! let config = LayoutConfig::builder()
+//!     .num_blocks(10)
+//!     .num_layers(4)
+//!     .page_size(16)
+//!     .inner_dim(128)
+//!     .dtype(DType::FP16)
+//!     .build()
+//!     .unwrap();
+//!
+//!
+//! // Allocate a FullyContiguous layout using a SystemAllocator
+//! let allocator = SystemAllocator;
+//! let layout = FullyContiguous::allocate(config, &allocator).unwrap();
+//!
+//! // Access layout properties
+//! assert_eq!(layout.num_blocks(), 10);
+//! assert_eq!(layout.storage_type(), StorageType::System);
+//!
+//! // Get the address of a specific page
+//! let addr = layout.memory_region_addr(0, 0).unwrap();
+//! println!("Address of block 0, layer 0: {}", addr);
+//! ```
+//!
+//! ## NIXL Integration
+//! This module also includes a submodule `nixl` ([`crate::block_manager::layout::nixl`])
+//! which extends these layout concepts for NIXL (NVIDIA Interface eXchange Layer), enabling
+//! layouts to be registered and serialized for use in distributed environments.
 
 pub mod nixl;
 
@@ -33,6 +124,7 @@ use super::storage::StorageType;
 
 /// Errors that can occur during layout operations
 #[derive(Debug, Error)]
+#[allow(missing_docs)]
 pub enum LayoutError {
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
@@ -90,7 +182,9 @@ pub trait BlockLayout:
     fn storage_type(&self) -> StorageType;
 }
 
+/// Configuration for block layouts
 pub trait BlockLayoutConfig: std::fmt::Debug {
+    /// Returns the layout type
     fn layout_type(&self) -> LayoutType;
 
     /// Returns the total number of blocks this layout manages
@@ -106,6 +200,7 @@ pub trait BlockLayoutConfig: std::fmt::Debug {
     fn inner_dim(&self) -> usize;
 }
 
+/// Trait for looking up memory regions in a block layout
 pub trait BlockLayoutLookup {
     /// Get the memory region for a specific page [page_size, inner_dim]
     fn memory_region_addr(&self, block_idx: usize, layer_idx: usize) -> Result<u64, LayoutError>;
@@ -117,27 +212,34 @@ pub trait BlockLayoutLookup {
 /// Configuration for block layouts
 #[derive(Debug, Clone, Builder, Validate, Serialize, Deserialize)]
 pub struct LayoutConfig {
+    /// Number of blocks
     #[validate(range(min = 1))]
     pub num_blocks: usize,
 
+    /// Number of layers
     #[validate(range(min = 1))]
     pub num_layers: usize,
 
+    /// Page size
     #[validate(range(min = 1))]
     pub page_size: usize,
 
+    /// Inner dimension
     #[validate(range(min = 1))]
     pub inner_dim: usize,
 
+    /// Alignment
     #[validate(custom(function = "validate_power_of_2"))]
     #[builder(default = "1")]
     pub alignment: usize,
 
+    /// Data type
     #[builder(default = "DType::FP16")]
     pub dtype: DType,
 }
 
 impl LayoutConfig {
+    /// Builder for LayoutConfig
     pub fn builder() -> LayoutConfigBuilder {
         LayoutConfigBuilder::default()
     }
@@ -457,6 +559,7 @@ impl<S: Storage> BlockLayoutLookup for FullyContiguous<S> {
     }
 }
 
+#[allow(missing_docs)]
 #[cfg(test)]
 pub mod tests {
     use super::*;
