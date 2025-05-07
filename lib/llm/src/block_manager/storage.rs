@@ -23,11 +23,11 @@
 //! ## Core Concepts
 //!
 //! ### Storage Types
-//! The module defines several storage implementations:
-//! - [`SystemStorage`] - Regular system memory allocation
-//! - [`PinnedStorage`] - CUDA page-locked host memory
-//! - [`DeviceStorage`] - CUDA device memory
-//! - [`NixlStorage`] - Remote memory accessible through NIXL
+//! The module defines [`Storage`] trait which is implemented for all storage types. The primary module provide a
+//! [`Storage`] implementation for system memory via [`SystemStorage`].
+//!
+//! CUDA support is provided via the [`cuda`] module.
+//! NIXL support is provided via the [`nixl`] module.
 //!
 //! ### Memory Registration
 //! Storage objects can be registered with external libraries (like NIXL) through the [`RegisterableStorage`] trait.
