@@ -19,6 +19,7 @@ from pathlib import Path
 
 from components.processor import Processor
 from components.worker import VllmWorker
+from components.planner_service import Planner
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -60,6 +61,7 @@ class FrontendConfig(BaseModel):
     app=FastAPI(title="LLM Example"),
 )
 class Frontend:
+    planner = depends(Planner)
     worker = depends(VllmWorker)
     processor = depends(Processor)
 

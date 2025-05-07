@@ -16,5 +16,7 @@
 from components.frontend import Frontend
 from components.processor import Processor
 from components.worker import VllmWorker
+from components.planner import Planner
 
 Frontend.link(Processor).link(VllmWorker)
+Frontend.link(Planner)
