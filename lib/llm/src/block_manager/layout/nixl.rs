@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::block_manager::storage::StorageType;
+
 use super::{BlockLayout, BlockLayoutConfig, LayoutConfig, LayoutError, LayoutType};
 
 use super::super::storage::{
@@ -104,6 +106,7 @@ struct SerializableNixlLayout<C: BlockLayoutConfig> {
     config: C,
     base_offset: usize,
     storage_descriptors: Vec<NixlStorage>,
+    storage_type: StorageType,
 }
 
 impl<C> SerializableNixlLayout<C>
@@ -111,11 +114,17 @@ where
     C: BlockLayoutConfig + Serialize + for<'de> Deserialize<'de> + Clone + std::fmt::Debug,
 {
     /// Create a new SerializableNixlLayout
-    fn new(config: C, base_offset: usize, storage_descriptors: Vec<NixlStorage>) -> Self {
+    fn new(
+        config: C,
+        base_offset: usize,
+        storage_descriptors: Vec<NixlStorage>,
+        storage_type: StorageType,
+    ) -> Self {
         Self {
             config,
             base_offset,
             storage_descriptors,
+            storage_type,
         }
     }
 }
@@ -146,8 +155,12 @@ impl<S: NixlEnabledStorage> ToSerializedNixlBlockLayout for FullyContiguous<S> {
             )
         })?;
 
-        let serializable_data =
-            SerializableNixlLayout::new(config, base_offset, vec![storage_descriptors]);
+        let serializable_data = SerializableNixlLayout::new(
+            config,
+            base_offset,
+            vec![storage_descriptors],
+            self.storage_type(),
+        );
 
         let nixl_block_layout = NixlBlockLayoutKinds::FullyContiguous(serializable_data);
 
@@ -181,6 +194,7 @@ impl SerializedNixlBlockLayout {
                     config.config.clone(),
                     storage, // Pass the NixlStorage instance
                     config.base_offset,
+                    config.storage_type,
                 )?;
                 Ok(Arc::new(layout))
             } // Handle other variants when added...

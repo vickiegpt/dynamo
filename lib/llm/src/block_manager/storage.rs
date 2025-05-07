@@ -19,32 +19,32 @@
 //! It handles system memory, pinned memory, device memory, and remote (NIXL) storage,
 //! with a focus on safety and performance.
 
+pub mod cuda;
 pub mod nixl;
+
+pub use cuda::*;
 
 use std::{
     alloc::{alloc_zeroed, dealloc, Layout},
     collections::HashMap,
     fmt::Debug,
     ptr::NonNull,
-    sync::Arc,
 };
-use thiserror::Error;
 
-// Re-export cudarc types we use
-use cudarc::driver::{sys, CudaContext, DriverError};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 /// Result type for storage operations
 pub type StorageResult<T> = std::result::Result<T, StorageError>;
 
 /// Represents the type of storage used for a block
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StorageType {
-    Device(Arc<CudaContext>),
+    Device(u32),
     Pinned,
     System,
-    Null,
-
     Nixl,
+    Null,
 }
 
 /// A block that is local to the current worker
@@ -52,8 +52,6 @@ pub trait Local {}
 
 /// A block that is remote to the current worker
 pub trait Remote {}
-
-pub trait Host {}
 
 pub trait SystemAccessible {}
 pub trait CudaAccessible {}
@@ -74,7 +72,7 @@ pub enum StorageError {
     OperationFailed(String),
 
     #[error("CUDA error: {0}")]
-    Cuda(#[from] DriverError),
+    Cuda(#[from] cudarc::driver::DriverError),
 
     #[error("Registration key already exists: {0}")]
     RegistrationKeyExists(String),
@@ -94,17 +92,13 @@ pub trait Storage: Debug + Send + Sync + 'static {
     /// Returns the total size of the storage in bytes
     fn size(&self) -> usize;
 
-    /// Returns true if the storage is accessible by the host/cpu portion
-    /// of the application.
-    fn is_host_accessible(&self) -> bool;
-
     /// Get a raw pointer to the storage
     ///
     /// # Safety
     /// The caller must ensure:
     /// - The pointer is not used after the storage is dropped
     /// - Access patterns respect the storage's thread safety model
-    unsafe fn as_ptr(&self) -> Option<*const u8>;
+    unsafe fn as_ptr(&self) -> *const u8;
 
     /// Get a raw mutable pointer to the storage
     ///
@@ -113,7 +107,7 @@ pub trait Storage: Debug + Send + Sync + 'static {
     /// - The pointer is not used after the storage is dropped
     /// - No other references exist while the pointer is in use
     /// - Access patterns respect the storage's thread safety model
-    unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8>;
+    unsafe fn as_mut_ptr(&mut self) -> *mut u8;
 }
 
 /// Extension trait for storage types that support memory setting operations
@@ -253,7 +247,6 @@ unsafe impl Send for SystemStorage {}
 unsafe impl Sync for SystemStorage {}
 
 impl Local for SystemStorage {}
-impl Host for SystemStorage {}
 impl SystemAccessible for SystemStorage {}
 
 impl SystemStorage {
@@ -303,16 +296,12 @@ impl Storage for SystemStorage {
         self.len
     }
 
-    fn is_host_accessible(&self) -> bool {
-        true
+    unsafe fn as_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
     }
 
-    unsafe fn as_ptr(&self) -> Option<*const u8> {
-        Some(self.ptr.as_ptr())
-    }
-
-    unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
-        Some(self.ptr.as_ptr())
+    unsafe fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr.as_ptr()
     }
 }
 
@@ -359,257 +348,6 @@ impl StorageAllocator<SystemStorage> for SystemAllocator {
     }
 }
 
-/// Pinned host memory storage using CUDA page-locked memory
-#[derive(Debug)]
-pub struct PinnedStorage {
-    ptr: u64,
-    size: usize,
-    handles: RegistrationHandles,
-    _ctx: Arc<CudaContext>,
-}
-
-impl Local for PinnedStorage {}
-impl Host for PinnedStorage {}
-impl SystemAccessible for PinnedStorage {}
-impl CudaAccessible for PinnedStorage {}
-
-impl PinnedStorage {
-    /// Create a new pinned storage with the given size
-    pub fn new(ctx: &Arc<CudaContext>, size: usize) -> Result<Self, StorageError> {
-        unsafe {
-            ctx.bind_to_thread().map_err(StorageError::Cuda)?;
-
-            let ptr = cudarc::driver::result::malloc_host(size, sys::CU_MEMHOSTALLOC_WRITECOMBINED)
-                .map_err(StorageError::Cuda)?;
-
-            let ptr = ptr as *mut u8;
-            assert!(!ptr.is_null(), "Failed to allocate pinned memory");
-            assert!(ptr.is_aligned(), "Pinned memory is not aligned");
-            assert!(size < isize::MAX as usize);
-
-            let ptr = ptr as u64;
-            Ok(Self {
-                ptr,
-                size,
-                handles: RegistrationHandles::new(),
-                _ctx: ctx.clone(),
-            })
-        }
-    }
-}
-
-impl Drop for PinnedStorage {
-    fn drop(&mut self) {
-        self.handles.release();
-        unsafe { cudarc::driver::result::free_host(self.ptr as _) }.unwrap();
-    }
-}
-
-impl Storage for PinnedStorage {
-    fn storage_type(&self) -> StorageType {
-        StorageType::Pinned
-    }
-
-    fn addr(&self) -> u64 {
-        self.ptr
-    }
-
-    fn size(&self) -> usize {
-        self.size
-    }
-
-    fn is_host_accessible(&self) -> bool {
-        true
-    }
-
-    unsafe fn as_ptr(&self) -> Option<*const u8> {
-        Some(self.ptr as *const u8)
-    }
-
-    unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
-        Some(self.ptr as *mut u8)
-    }
-}
-
-impl RegisterableStorage for PinnedStorage {
-    fn register(
-        &mut self,
-        key: &str,
-        handle: Box<dyn RegistationHandle>,
-    ) -> Result<(), StorageError> {
-        self.handles.register(key, handle)
-    }
-
-    fn is_registered(&self, key: &str) -> bool {
-        self.handles.is_registered(key)
-    }
-
-    fn registration_handle(&self, key: &str) -> Option<&dyn RegistationHandle> {
-        self.handles.registration_handle(key)
-    }
-}
-
-impl StorageMemset for PinnedStorage {
-    fn memset(&mut self, value: u8, offset: usize, size: usize) -> Result<(), StorageError> {
-        if offset + size > self.size {
-            return Err(StorageError::OperationFailed(
-                "memset: offset + size > storage size".into(),
-            ));
-        }
-        unsafe {
-            let ptr = (self.ptr as *mut u8).add(offset);
-            std::ptr::write_bytes(ptr, value, size);
-        }
-        Ok(())
-    }
-}
-
-/// Allocator for PinnedStorage
-pub struct PinnedAllocator {
-    ctx: Arc<CudaContext>,
-}
-
-impl Default for PinnedAllocator {
-    fn default() -> Self {
-        Self {
-            ctx: CudaContext::new(0).expect("Failed to create CUDA context"),
-        }
-    }
-}
-
-impl PinnedAllocator {
-    pub fn try_new(device_id: usize) -> Result<Self, StorageError> {
-        Ok(Self {
-            ctx: CudaContext::new(device_id).map_err(StorageError::Cuda)?,
-        })
-    }
-}
-
-impl StorageAllocator<PinnedStorage> for PinnedAllocator {
-    fn allocate(&self, size: usize) -> Result<PinnedStorage, StorageError> {
-        PinnedStorage::new(&self.ctx, size)
-    }
-}
-
-/// CUDA device memory storage
-#[derive(Debug)]
-pub struct DeviceStorage {
-    ptr: u64,
-    size: usize,
-    ctx: Arc<CudaContext>,
-    handles: RegistrationHandles,
-}
-
-impl Local for DeviceStorage {}
-impl CudaAccessible for DeviceStorage {}
-
-impl DeviceStorage {
-    /// Create a new device storage with the given size
-    pub fn new(ctx: &Arc<CudaContext>, size: usize) -> Result<Self, StorageError> {
-        ctx.bind_to_thread().map_err(StorageError::Cuda)?;
-        let ptr = unsafe { cudarc::driver::result::malloc_sync(size).map_err(StorageError::Cuda)? };
-
-        Ok(Self {
-            ptr,
-            size,
-            ctx: ctx.clone(),
-            handles: RegistrationHandles::new(),
-        })
-    }
-
-    /// Get the CUDA context
-    pub fn context(&self) -> &Arc<CudaContext> {
-        &self.ctx
-    }
-}
-
-impl Storage for DeviceStorage {
-    fn storage_type(&self) -> StorageType {
-        StorageType::Device(self.ctx.clone())
-    }
-
-    fn addr(&self) -> u64 {
-        self.ptr
-    }
-
-    fn size(&self) -> usize {
-        self.size
-    }
-
-    fn is_host_accessible(&self) -> bool {
-        false
-    }
-
-    unsafe fn as_ptr(&self) -> Option<*const u8> {
-        Some(self.ptr as *const u8)
-    }
-
-    unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
-        Some(self.ptr as *mut u8)
-    }
-}
-
-impl Drop for DeviceStorage {
-    fn drop(&mut self) {
-        self.handles.release();
-        unsafe { cudarc::driver::result::free_sync(self.ptr as _) }.unwrap();
-    }
-}
-
-impl RegisterableStorage for DeviceStorage {
-    fn register(
-        &mut self,
-        key: &str,
-        handle: Box<dyn RegistationHandle>,
-    ) -> Result<(), StorageError> {
-        self.handles.register(key, handle)
-    }
-
-    fn is_registered(&self, key: &str) -> bool {
-        self.handles.is_registered(key)
-    }
-
-    fn registration_handle(&self, key: &str) -> Option<&dyn RegistationHandle> {
-        self.handles.registration_handle(key)
-    }
-}
-
-pub struct DeviceAllocator {
-    ctx: Arc<CudaContext>,
-}
-
-impl Default for DeviceAllocator {
-    fn default() -> Self {
-        Self {
-            ctx: CudaContext::new(0).expect("Failed to create CUDA context"),
-        }
-    }
-}
-
-impl DeviceAllocator {
-    pub fn new(device_id: usize) -> Result<Self, StorageError> {
-        Ok(Self {
-            ctx: CudaContext::new(device_id).map_err(StorageError::Cuda)?,
-        })
-    }
-
-    pub fn try_new(device_id: usize) -> Result<Self, StorageError> {
-        Ok(Self {
-            ctx: CudaContext::new(device_id).map_err(StorageError::Cuda)?,
-        })
-    }
-
-    pub fn ctx(&self) -> &Arc<CudaContext> {
-        &self.ctx
-    }
-}
-
-impl StorageAllocator<DeviceStorage> for DeviceAllocator {
-    fn allocate(&self, size: usize) -> Result<DeviceStorage, StorageError> {
-        DeviceStorage::new(&self.ctx, size)
-    }
-}
-
 pub mod tests {
     use super::*;
 
@@ -637,16 +375,12 @@ pub mod tests {
             self.size as usize
         }
 
-        fn is_host_accessible(&self) -> bool {
-            false
+        unsafe fn as_ptr(&self) -> *const u8 {
+            std::ptr::null()
         }
 
-        unsafe fn as_ptr(&self) -> Option<*const u8> {
-            None
-        }
-
-        unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
-            None
+        unsafe fn as_mut_ptr(&mut self) -> *mut u8 {
+            std::ptr::null_mut()
         }
     }
 
@@ -682,16 +416,12 @@ pub mod tests {
             self.size as usize
         }
 
-        fn is_host_accessible(&self) -> bool {
-            false
+        unsafe fn as_ptr(&self) -> *const u8 {
+            std::ptr::null()
         }
 
-        unsafe fn as_ptr(&self) -> Option<*const u8> {
-            None
-        }
-
-        unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
-            None
+        unsafe fn as_mut_ptr(&mut self) -> *mut u8 {
+            std::ptr::null_mut()
         }
     }
 

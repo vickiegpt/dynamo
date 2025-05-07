@@ -22,13 +22,35 @@ use derive_getters::Getters;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeviceStorage, PinnedStorage, RegistationHandle, RegisterableStorage, Remote, Storage,
-    StorageType, SystemStorage,
+    CudaContextProivder, DeviceStorage, PinnedStorage, RegistationHandle, RegisterableStorage,
+    Remote, Storage, StorageType, SystemStorage,
 };
 
 use anyhow::Result;
 
 pub trait NixlAccessible {}
+
+impl StorageType {
+    pub fn nixl_mem_type(&self) -> MemType {
+        match self {
+            StorageType::System => MemType::Dram,
+            StorageType::Pinned => MemType::Dram,
+            StorageType::Device(_) => MemType::Vram,
+            StorageType::Nixl => MemType::Unknown,
+            StorageType::Null => MemType::Unknown,
+        }
+    }
+
+    pub fn nixl_device_id(&self) -> u64 {
+        match self {
+            StorageType::System => 0,
+            StorageType::Pinned => 0,
+            StorageType::Device(id) => *id as u64,
+            StorageType::Nixl => 0,
+            StorageType::Null => 0,
+        }
+    }
+}
 
 impl RegistationHandle for NixlRegistrationHandle {
     fn release(&mut self) {
@@ -106,16 +128,12 @@ impl Storage for NixlStorage {
         self.size
     }
 
-    fn is_host_accessible(&self) -> bool {
-        false
+    unsafe fn as_ptr(&self) -> *const u8 {
+        self.addr as *const u8
     }
 
-    unsafe fn as_ptr(&self) -> Option<*const u8> {
-        Some(self.addr as *const u8)
-    }
-
-    unsafe fn as_mut_ptr(&mut self) -> Option<*mut u8> {
-        Some(self.addr as *mut u8)
+    unsafe fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.addr as *mut u8
     }
 }
 
@@ -166,11 +184,11 @@ impl NixlEnabledStorage for PinnedStorage {}
 
 impl MemoryRegion for PinnedStorage {
     unsafe fn as_ptr(&self) -> *const u8 {
-        self.ptr as *const u8
+        Storage::as_ptr(self)
     }
 
     fn size(&self) -> usize {
-        self.size
+        Storage::size(self)
     }
 }
 
@@ -189,11 +207,11 @@ impl NixlEnabledStorage for DeviceStorage {}
 
 impl MemoryRegion for DeviceStorage {
     unsafe fn as_ptr(&self) -> *const u8 {
-        self.ptr as *const u8
+        Storage::as_ptr(self)
     }
 
     fn size(&self) -> usize {
-        self.size
+        Storage::size(self)
     }
 }
 
@@ -203,6 +221,6 @@ impl NixlDescriptor for DeviceStorage {
     }
 
     fn device_id(&self) -> u64 {
-        self.ctx.cu_device() as u64
+        CudaContextProivder::cuda_context(self).cu_device() as u64
     }
 }

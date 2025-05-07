@@ -16,7 +16,7 @@
 use super::*;
 
 /// Copy a block from a source to a destination using memcpy
-pub fn memcpy_block<'a, Source, Destination>(
+pub fn copy_block<'a, Source, Destination>(
     sources: &'a Source,
     destinations: &'a mut Destination,
 ) -> Result<(), TransferError>
@@ -36,13 +36,13 @@ where
         }
     } else {
         assert_eq!(src_data.num_layers(), dst_data.num_layers());
-        memcpy_layers(0..src_data.num_layers(), sources, destinations)?;
+        copy_layers(0..src_data.num_layers(), sources, destinations)?;
     }
     Ok(())
 }
 
 /// Copy a range of layers from a source to a destination using memcpy
-pub fn memcpy_layers<'a, Source, Destination>(
+pub fn copy_layers<'a, Source, Destination>(
     layer_range: Range<usize>,
     sources: &'a Source,
     destinations: &'a mut Destination,

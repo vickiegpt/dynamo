@@ -28,11 +28,11 @@ type CudaMemcpyFnPtr = unsafe fn(
     stream: &CudaStream,
 ) -> Result<(), TransferError>;
 
-fn cuda_memcpy_fn_ptr(strategy: &CopyStrategy) -> Result<CudaMemcpyFnPtr, TransferError> {
+fn cuda_memcpy_fn_ptr(strategy: &TransferStrategy) -> Result<CudaMemcpyFnPtr, TransferError> {
     match strategy {
-        CopyStrategy::CudaAsyncH2D => Ok(cuda_memcpy_h2d),
-        CopyStrategy::CudaAsyncD2H => Ok(cuda_memcpy_d2h),
-        CopyStrategy::CudaAsyncD2D => Ok(cuda_memcpy_d2d),
+        TransferStrategy::CudaAsyncH2D => Ok(cuda_memcpy_h2d),
+        TransferStrategy::CudaAsyncD2H => Ok(cuda_memcpy_d2h),
+        TransferStrategy::CudaAsyncD2D => Ok(cuda_memcpy_d2d),
         _ => Err(TransferError::ExecutionError(
             "Unsupported copy strategy for CUDA memcpy async".into(),
         )),
@@ -40,11 +40,11 @@ fn cuda_memcpy_fn_ptr(strategy: &CopyStrategy) -> Result<CudaMemcpyFnPtr, Transf
 }
 
 /// Copy a block from a source to a destination using CUDA memcpy
-pub fn cuda_memcpy_block<'a, Source, Destination>(
+pub fn copy_block<'a, Source, Destination>(
     sources: &'a Source,
     destinations: &'a mut Destination,
     stream: &CudaStream,
-    strategy: CopyStrategy,
+    strategy: TransferStrategy,
 ) -> Result<(), TransferError>
 where
     Source: BlockDataProvider,
@@ -77,7 +77,7 @@ where
         }
     } else {
         assert_eq!(src_data.num_layers(), dst_data.num_layers());
-        cuda_memcpy_layers(
+        copy_layers(
             0..src_data.num_layers(),
             sources,
             destinations,
@@ -89,12 +89,12 @@ where
 }
 
 /// Copy a range of layers from a source to a destination using CUDA memcpy
-pub fn cuda_memcpy_layers<'a, Source, Destination>(
+pub fn copy_layers<'a, Source, Destination>(
     layer_range: Range<usize>,
     sources: &'a Source,
     destinations: &'a mut Destination,
     stream: &CudaStream,
-    strategy: CopyStrategy,
+    strategy: TransferStrategy,
 ) -> Result<(), TransferError>
 where
     Source: BlockDataProvider,
@@ -130,7 +130,7 @@ where
 }
 
 /// Helper function to perform the appropriate CUDA memcpy based on storage types
-fn expected_strategy<Source: Storage, Dest: Storage>() -> CopyStrategy {
+fn expected_strategy<Source: Storage, Dest: Storage>() -> TransferStrategy {
     match (
         std::any::TypeId::of::<Source>(),
         std::any::TypeId::of::<Dest>(),
@@ -139,21 +139,21 @@ fn expected_strategy<Source: Storage, Dest: Storage>() -> CopyStrategy {
             if src == std::any::TypeId::of::<PinnedStorage>()
                 && dst == std::any::TypeId::of::<DeviceStorage>() =>
         {
-            CopyStrategy::CudaAsyncH2D
+            TransferStrategy::CudaAsyncH2D
         }
         (src, dst)
             if src == std::any::TypeId::of::<DeviceStorage>()
                 && dst == std::any::TypeId::of::<PinnedStorage>() =>
         {
-            CopyStrategy::CudaAsyncD2H
+            TransferStrategy::CudaAsyncD2H
         }
         (src, dst)
             if src == std::any::TypeId::of::<DeviceStorage>()
                 && dst == std::any::TypeId::of::<DeviceStorage>() =>
         {
-            CopyStrategy::CudaAsyncD2D
+            TransferStrategy::CudaAsyncD2D
         }
-        _ => CopyStrategy::Invalid,
+        _ => TransferStrategy::Invalid,
     }
 }
 
@@ -249,20 +249,14 @@ mod tests {
 
         // Verify host memory was set correctly
         unsafe {
-            let ptr = host.as_ptr().unwrap();
+            let ptr = host.as_ptr();
             let slice = std::slice::from_raw_parts(ptr, 1024);
             assert!(slice.iter().all(|&x| x == 42));
         }
 
         // Copy host to device
         unsafe {
-            cuda_memcpy_h2d(
-                host.as_ptr().unwrap(),
-                device.as_mut_ptr().unwrap(),
-                1024,
-                stream.as_ref(),
-            )
-            .unwrap();
+            cuda_memcpy_h2d(host.as_ptr(), device.as_mut_ptr(), 1024, stream.as_ref()).unwrap();
         }
 
         // Synchronize to ensure H2D copy is complete
@@ -273,20 +267,14 @@ mod tests {
 
         // Verify host memory was cleared
         unsafe {
-            let ptr = host.as_ptr().unwrap();
+            let ptr = host.as_ptr();
             let slice = std::slice::from_raw_parts(ptr, 1024);
             assert!(slice.iter().all(|&x| x == 0));
         }
 
         // Copy back from device to host
         unsafe {
-            cuda_memcpy_d2h(
-                device.as_ptr().unwrap(),
-                host.as_mut_ptr().unwrap(),
-                1024,
-                stream.as_ref(),
-            )
-            .unwrap();
+            cuda_memcpy_d2h(device.as_ptr(), host.as_mut_ptr(), 1024, stream.as_ref()).unwrap();
         }
 
         // Synchronize to ensure D2H copy is complete before verifying
@@ -294,7 +282,7 @@ mod tests {
 
         // Verify the original pattern was restored
         unsafe {
-            let ptr = host.as_ptr().unwrap();
+            let ptr = host.as_ptr();
             let slice = std::slice::from_raw_parts(ptr, 1024);
             assert!(slice.iter().all(|&x| x == 42));
         }

@@ -156,21 +156,11 @@ mod nixl {
         K: Kind,
     {
         fn mem_type(&self) -> MemType {
-            self._block_data
-                .layout
-                .storage()
-                .first()
-                .expect("no storage")
-                .mem_type()
+            self._block_data.layout.storage_type().nixl_mem_type()
         }
 
         fn device_id(&self) -> u64 {
-            self._block_data
-                .layout
-                .storage()
-                .first()
-                .expect("no storage")
-                .device_id()
+            self._block_data.layout.storage_type().nixl_device_id()
         }
     }
 
@@ -190,21 +180,11 @@ mod nixl {
         K: Kind,
     {
         fn mem_type(&self) -> MemType {
-            self._block_data
-                .layout
-                .storage()
-                .first()
-                .expect("no storage")
-                .mem_type()
+            self._block_data.layout.storage_type().nixl_mem_type()
         }
 
         fn device_id(&self) -> u64 {
-            self._block_data
-                .layout
-                .storage()
-                .first()
-                .expect("no storage")
-                .device_id()
+            self._block_data.layout.storage_type().nixl_device_id()
         }
     }
 
