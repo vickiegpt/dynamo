@@ -22,7 +22,7 @@ class KubernetesAPI:
     def __init__(self):
         # Load kubernetes configuration
         config.load_incluster_config()  # for in-cluster deployment
-        
+
         self.custom_api = client.CustomObjectsApi()
         self.current_namespace = self._get_current_namespace()
 
