@@ -39,6 +39,14 @@ class RequestType(BaseModel):
     text: str
 
 
+async def wrap_generator(generator):
+    while True:
+        try:
+            await generator.__anext__()
+        except StopAsyncIteration:
+            break
+
+
 @service(
     dynamo={
         "enabled": True,
@@ -133,16 +141,25 @@ class PrefillWorker:
             stream_name=prefill_queue_stream_name,
         ) as prefill_queue:
             logger.info("prefill queue handler started")
+            inflight_futures = set()
             while True:
                 # TODO: this might add a small overhead to pull prefill from nats
                 # need to test and check how much overhead it is
                 prefill_request = await prefill_queue.dequeue_prefill_request()
+
+                completed_futures = {f for f in inflight_futures if f.done()}
+                inflight_futures -= completed_futures
+
                 if prefill_request is not None:
                     logger.info(
                         f"Dequeued prefill request: {prefill_request.request_id}"
                     )
-                    async for _ in self.generate(prefill_request):
-                        pass
+                    inflight_futures.add(
+                        asyncio.create_task(
+                            wrap_generator(self.generate(prefill_request))
+                        )
+                    )
+
                 is_valid = await self.lease.is_valid()
                 if not is_valid:
                     logger.info(
