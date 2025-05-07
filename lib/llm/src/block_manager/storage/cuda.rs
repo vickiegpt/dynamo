@@ -1,3 +1,80 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! # CUDA Storage Support
+//!
+//! This module provides CUDA-specific storage implementations for the block manager.
+//! It is conditionally compiled based on the `cuda` feature flag.
+//!
+//! ## Features
+//!
+//! The following types are available when the `cuda` feature is enabled:
+//! - [`PinnedStorage`] - Page-locked host memory for efficient GPU transfers
+//! - [`DeviceStorage`] - Direct GPU memory allocation
+//!
+//! ## Storage Allocators
+//!
+//! The module provides allocators for each storage type:
+//! - [`PinnedAllocator`] - Creates pinned host memory allocations
+//! - [`DeviceAllocator`] - Creates device memory allocations
+//!
+//! ## CUDA Context Management
+//!
+//! The module provides a singleton [`Cuda`] type for managing CUDA contexts:
+//! - Thread-safe context management
+//! - Lazy initialization of device contexts
+//! - Automatic cleanup of resources
+//!
+//!
+//!
+//! ## Usage
+//!
+//! ### Using Allocators
+//! ```rust
+//! // Create a pinned memory allocator
+//! let pinned_allocator = PinnedAllocator::default();
+//! let pinned_storage = pinned_allocator.allocate(1024)?;
+//!
+//! // Create a device memory allocator for a specific device
+//! let device_allocator = DeviceAllocator::new(1)?;  // Use device 1
+//! let device_storage = device_allocator.allocate(1024)?;
+//! ```
+//!
+//! ### Memory Operations
+//! ```rust
+//! // Initialize memory
+//! let mut storage = PinnedStorage::new(&ctx, 1024)?;
+//!
+//! // Initialize memory
+//! storage.memset(0, 0, 1024)?;
+//!
+//! // Access memory through raw pointers (requires unsafe)
+//! unsafe {
+//!     let ptr = storage.as_mut_ptr();
+//!     // Use the pointer...
+//! }
+//! ```
+//!
+//! ## Safety
+//!
+//! All CUDA operations are wrapped in safe Rust interfaces that ensure:
+//! - Proper resource cleanup
+//! - Thread safety
+//! - Memory alignment requirements
+//! - Error handling for CUDA operations
+
 use super::*;
 
 use std::{
@@ -7,10 +84,16 @@ use std::{
 
 use cudarc::driver::{sys, CudaContext};
 
+/// Trait for [Storage] types that can be accessed by CUDA
+pub trait CudaAccessible: Storage {}
+
+/// Trait for types that can provide a CUDA context.
 pub trait CudaContextProivder {
+    /// Get a referene to the [`CudaContext`].
     fn cuda_context(&self) -> &Arc<CudaContext>;
 }
 
+/// Singleton for managing CUDA contexts.
 pub struct Cuda {
     contexts: HashMap<usize, Arc<CudaContext>>,
 }
@@ -27,7 +110,7 @@ impl Cuda {
     /// If the context does not exist, it will return None.
     ///
     /// This will not lazily instantiate a context for a device. Use
-    /// [Cuda::device_or_create]
+    /// [Cuda::get_or_init_device]
     pub fn device(device_id: usize) -> Option<Arc<CudaContext>> {
         Cuda::instance()
             .lock()
@@ -40,7 +123,7 @@ impl Cuda {
     ///
     /// This will lazily instantiate a context for a device. Use
     /// [CudaContextManager::device] to get an existing context.
-    pub fn device_or_create(device_id: usize) -> Result<Arc<CudaContext>, StorageError> {
+    pub fn get_or_init_device(device_id: usize) -> Result<Arc<CudaContext>, StorageError> {
         Cuda::instance().lock().unwrap().get_context(device_id)
     }
 
@@ -99,10 +182,10 @@ impl PinnedStorage {
     /// Create a new pinned storage with the given size
     pub fn new(ctx: &Arc<CudaContext>, size: usize) -> Result<Self, StorageError> {
         unsafe {
-            ctx.bind_to_thread().map_err(StorageError::Cuda)?;
+            ctx.bind_to_thread().map_err(StorageError::CudaError)?;
 
             let ptr = cudarc::driver::result::malloc_host(size, sys::CU_MEMHOSTALLOC_WRITECOMBINED)
-                .map_err(StorageError::Cuda)?;
+                .map_err(StorageError::CudaError)?;
 
             let ptr = ptr as *mut u8;
             assert!(!ptr.is_null(), "Failed to allocate pinned memory");
@@ -196,7 +279,7 @@ pub struct PinnedAllocator {
 impl Default for PinnedAllocator {
     fn default() -> Self {
         Self {
-            ctx: Cuda::device_or_create(0).expect("Failed to create CUDA context"),
+            ctx: Cuda::get_or_init_device(0).expect("Failed to create CUDA context"),
         }
     }
 }
@@ -204,7 +287,7 @@ impl Default for PinnedAllocator {
 impl PinnedAllocator {
     pub fn new() -> Result<Self, StorageError> {
         Ok(Self {
-            ctx: Cuda::device_or_create(0)?,
+            ctx: Cuda::get_or_init_device(0)?,
         })
     }
 }
@@ -230,8 +313,9 @@ impl CudaAccessible for DeviceStorage {}
 impl DeviceStorage {
     /// Create a new device storage with the given size
     pub fn new(ctx: &Arc<CudaContext>, size: usize) -> Result<Self, StorageError> {
-        ctx.bind_to_thread().map_err(StorageError::Cuda)?;
-        let ptr = unsafe { cudarc::driver::result::malloc_sync(size).map_err(StorageError::Cuda)? };
+        ctx.bind_to_thread().map_err(StorageError::CudaError)?;
+        let ptr =
+            unsafe { cudarc::driver::result::malloc_sync(size).map_err(StorageError::CudaError)? };
 
         Ok(Self {
             ptr,
@@ -315,7 +399,7 @@ impl Default for DeviceAllocator {
 impl DeviceAllocator {
     pub fn new(device_id: usize) -> Result<Self, StorageError> {
         Ok(Self {
-            ctx: Cuda::device_or_create(device_id)?,
+            ctx: Cuda::get_or_init_device(device_id)?,
         })
     }
 

@@ -13,6 +13,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! # NIXL Storage Support
+//!
+//! This module provides NIXL-specific storage implementations and integration for the block manager.
+//! It is conditionally compiled based on the `nixl` feature flag.
+//!
+//! ## Features
+//!
+//! The following functionality is available when the `nixl` feature is enabled:
+//! - [`NixlStorage`] - Remote memory representation
+//! - [`NixlRegisterableStorage`] - Trait for NIXL-compatible storage types
+//! - Integration with the NIXL agent system for remote memory access
+//!
+//! ## Memory Registration
+//!
+//! The module extends the core storage types with NIXL registration capabilities:
+//! - Automatic registration handle management
+//! - Memory type mapping between storage and NIXL types
+//! - Device ID tracking for GPU memory
+//!
+//! ## Usage
+//!
+//! ```rust
+//! # #[cfg(feature = "nixl")]
+//! {
+//!     let mut storage = PinnedStorage::new(&ctx, 1024)?;
+//!     storage.nixl_register(&agent, None)?;
+//!
+//!     // Access remote memory
+//!     if let Some(nixl_desc) = storage.get_nixl_descriptors() {
+//!         // Use NIXL memory region
+//!     }
+//! }
+//! ```
+//!
+//! ## Safety
+//!
+//! The module ensures safe interaction with NIXL by:
+//! - Managing registration lifetimes
+//! - Validating memory types and device IDs
+//! - Providing type-safe interfaces for remote memory access
+//! - Automatic cleanup of NIXL resources
+
 pub use nixl_sys::{
     Agent as NixlAgent, MemType, MemoryRegion, NixlDescriptor, OptArgs,
     RegistrationHandle as NixlRegistrationHandle,
@@ -23,11 +65,16 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     CudaContextProivder, DeviceStorage, PinnedStorage, RegistationHandle, RegisterableStorage,
-    Remote, Storage, StorageType, SystemStorage,
+    Remote, Storage, StorageError, StorageType, SystemStorage,
 };
 
-use anyhow::Result;
-
+/// Marker trait for storage types that can be accessed by NIXL.
+///
+/// This trait is different from [`NixlRegisterableStorage`] which has further restrictions
+/// that the [`Storage`] must be [`RegisterableStorage`].
+///
+/// Remote memory described by [`NixlStorage`] is [`NixlAccessible`] but is not [`NixlRegisterableStorage`]
+/// due to the fact it represents memory that is registered to another NIXL agent.
 pub trait NixlAccessible {}
 
 impl StorageType {
@@ -60,12 +107,16 @@ impl RegistationHandle for NixlRegistrationHandle {
     }
 }
 
-pub trait NixlEnabledStorage: RegisterableStorage + NixlDescriptor + Sized {
+pub trait NixlRegisterableStorage: RegisterableStorage + NixlDescriptor + Sized {
     /// Register the storage with the NIXL agent.
-    fn nixl_register(&mut self, agent: &NixlAgent, opt_args: Option<&OptArgs>) -> Result<()> {
+    fn nixl_register(
+        &mut self,
+        agent: &NixlAgent,
+        opt_args: Option<&OptArgs>,
+    ) -> Result<(), StorageError> {
         let handle = Box::new(agent.register_memory(self, opt_args)?);
         // Assuming PinnedStorage has `handles: RegistrationHandles`
-        Ok(self.register("nixl", handle)?)
+        self.register("nixl", handle)
     }
 
     /// Check if the storage is registered with the NIXL agent.
@@ -157,7 +208,9 @@ impl NixlDescriptor for NixlStorage {
     }
 }
 
-impl NixlEnabledStorage for SystemStorage {}
+// SystemStorage
+
+impl NixlRegisterableStorage for SystemStorage {}
 
 impl MemoryRegion for SystemStorage {
     unsafe fn as_ptr(&self) -> *const u8 {
@@ -179,8 +232,10 @@ impl NixlDescriptor for SystemStorage {
     }
 }
 
+// PinnedStorage
+
 impl NixlAccessible for PinnedStorage {}
-impl NixlEnabledStorage for PinnedStorage {}
+impl NixlRegisterableStorage for PinnedStorage {}
 
 impl MemoryRegion for PinnedStorage {
     unsafe fn as_ptr(&self) -> *const u8 {
@@ -202,8 +257,10 @@ impl NixlDescriptor for PinnedStorage {
     }
 }
 
+// DeviceStorage
+
 impl NixlAccessible for DeviceStorage {}
-impl NixlEnabledStorage for DeviceStorage {}
+impl NixlRegisterableStorage for DeviceStorage {}
 
 impl MemoryRegion for DeviceStorage {
     unsafe fn as_ptr(&self) -> *const u8 {

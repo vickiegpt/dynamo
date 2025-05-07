@@ -86,7 +86,7 @@ impl KvManagerModelConfig {
 
 #[derive(Builder, Validate)]
 #[builder(pattern = "owned", build_fn(validate = "Self::validate"))]
-pub struct KvManagerLayoutConfig<S: Storage + NixlEnabledStorage> {
+pub struct KvManagerLayoutConfig<S: Storage + NixlRegisterableStorage> {
     /// The number of blocks to allocate
     #[validate(range(min = 1))]
     pub num_blocks: usize,
@@ -107,7 +107,7 @@ pub struct KvManagerLayoutConfig<S: Storage + NixlEnabledStorage> {
     pub allocator: Option<Arc<dyn StorageAllocator<S>>>,
 }
 
-impl<S: Storage + NixlEnabledStorage> KvManagerLayoutConfig<S> {
+impl<S: Storage + NixlRegisterableStorage> KvManagerLayoutConfig<S> {
     /// Create a new builder for the KvManagerLayoutConfig
     pub fn builder() -> KvManagerLayoutConfigBuilder<S> {
         KvManagerLayoutConfigBuilder::default()
@@ -116,7 +116,7 @@ impl<S: Storage + NixlEnabledStorage> KvManagerLayoutConfig<S> {
 
 // Implement the validation and build functions on the generated builder type
 // Note: derive_builder generates KvManagerBlockConfigBuilder<S>
-impl<S: Storage + NixlEnabledStorage> KvManagerLayoutConfigBuilder<S> {
+impl<S: Storage + NixlRegisterableStorage> KvManagerLayoutConfigBuilder<S> {
     /// Custom setter for the `allocator` field
     pub fn allocator(mut self, allocator: impl StorageAllocator<S> + 'static) -> Self {
         self.allocator = Some(Some(Arc::new(allocator)));

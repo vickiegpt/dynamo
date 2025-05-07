@@ -751,7 +751,7 @@ pub mod nixl {
 
     use super::super::{
         layout::nixl::{NixlLayout, SerializedNixlBlockLayout},
-        storage::nixl::{MemType, NixlEnabledStorage, NixlStorage},
+        storage::nixl::{MemType, NixlRegisterableStorage, NixlStorage},
         WorkerID,
     };
 
@@ -773,7 +773,7 @@ pub mod nixl {
 
     impl<L: NixlLayout, M: BlockMetadata> Blocks<L, M>
     where
-        L::StorageType: NixlEnabledStorage,
+        L::StorageType: NixlRegisterableStorage,
     {
         /// Register the blocks with an NIXL agent
         pub fn nixl_register(

@@ -22,7 +22,7 @@ use super::nixl::{IsMutable, NixlBlockDataImmutable, NixlBlockDataMutable, Remot
 use super::*;
 
 use crate::block_manager::storage::{
-    nixl::{NixlEnabledStorage, NixlStorage},
+    nixl::{NixlRegisterableStorage, NixlStorage},
     DeviceStorage, PinnedStorage, SystemStorage,
 };
 
@@ -120,7 +120,7 @@ where
 impl<WB: WritableBlock, RB: ReadableBlock> ReadFromStrategy<RB> for WB
 where
     <RB as ReadableBlock>::StorageType: Remote,
-    <WB as WritableBlock>::StorageType: NixlEnabledStorage,
+    <WB as WritableBlock>::StorageType: NixlRegisterableStorage,
 {
     #[inline(always)]
     fn read_from_strategy() -> TransferStrategy {
@@ -265,9 +265,9 @@ pub trait BlockTransferEngineV1<Source: BlockDataProvider, Target: BlockDataProv
 // - Device -> Device
 
 // nixl memcpy transfer engine
-// - NixlEnabledStorage -> Nixl
-// - Nixl -> NixlEnabledStorage
-// where System, Pinned, Device are NixlEnabledStorage
+// - NixlRegisterableStorage -> Nixl
+// - Nixl -> NixlRegisterableStorage
+// where System, Pinned, Device are NixlRegisterableStorage
 
 // Placeholder for the actual transfer plan
 #[derive(Debug)]
@@ -286,7 +286,7 @@ impl<Source> BlockTransferEngineV1<Source, RemoteBlock<IsMutable>>
     for TransferRequestPut<'_, Source, RemoteBlock<IsMutable>>
 where
     Source: BlockDataProvider + Local, // + NixlBlockDataMutable<Source::StorageType>,
-    Source::StorageType: NixlEnabledStorage,
+    Source::StorageType: NixlRegisterableStorage,
 {
     fn execute(self) -> Result<(), TransferError> {
         self.validate_counts()?;

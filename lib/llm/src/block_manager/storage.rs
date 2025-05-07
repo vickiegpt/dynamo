@@ -13,11 +13,55 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Storage management for block manager.
+//! # Storage Management
 //!
-//! This module provides traits and implementations for managing storage of KV blocks.
-//! It handles system memory, pinned memory, device memory, and remote (NIXL) storage,
-//! with a focus on safety and performance.
+//! This module provides a unified interface for managing different types of memory storage used in the block manager.
+//! It handles various memory types including system memory, pinned memory, device memory, and remote storage through NIXL.
+//!
+//! ## Core Concepts
+//!
+//! ### Storage Types
+//! The module defines several storage implementations:
+//! - [`SystemStorage`] - Regular system memory allocation
+//! - [`PinnedStorage`] - CUDA page-locked host memory
+//! - [`DeviceStorage`] - CUDA device memory
+//! - [`NixlStorage`] - Remote memory accessible through NIXL
+//!
+//! ### Memory Registration
+//! Storage objects can be registered with external libraries (like NIXL) through the [`RegisterableStorage`] trait.
+//! This registration process:
+//! - Creates a registration handle that ties the external library's state to the storage's lifetime
+//! - Ensures proper cleanup through the [`Drop`] implementation of [`RegistrationHandles`]
+//! - Provides a safe way to manage external library resources
+//!
+//! ### Safety and Performance
+//! The module emphasizes:
+//! - Memory safety through proper lifetime management
+//! - Thread safety with appropriate trait bounds
+//! - Performance optimization for different memory types
+//! - Automatic resource cleanup
+//!
+//! ## Usage
+//!
+//! Storage objects are typically created through their respective allocators:
+//! ```rust
+//! let system_allocator = SystemAllocator::default();
+//! let storage = system_allocator.allocate(1024)?;
+//! ```
+//!
+//! For registering with external libraries:
+//! ```rust
+//! let mut storage = PinnedStorage::new(&ctx, 1024)?;
+//! storage.nixl_register(&agent, None)?;
+//! ```
+//!
+//! ## Implementation Details
+//!
+//! The module uses several key traits to provide a unified interface:
+//! - [`Storage`] - Core trait for memory access
+//! - [`RegisterableStorage`] - Support for external library registration
+//! - [`StorageMemset`] - Memory initialization operations
+//! - [`StorageAllocator`] - Factory for creating storage instances
 
 pub mod cuda;
 pub mod nixl;
@@ -53,8 +97,9 @@ pub trait Local {}
 /// A block that is remote to the current worker
 pub trait Remote {}
 
-pub trait SystemAccessible {}
-pub trait CudaAccessible {}
+/// Marker trait for [`Storage`] types that can be accessed by the standard
+/// mechanisms of the system, e.g. `memcpy`, `memset`, etc.
+pub trait SystemAccessible: Storage {}
 
 /// Errors that can occur during storage operations
 #[derive(Debug, Error)]
@@ -71,14 +116,17 @@ pub enum StorageError {
     #[error("Storage operation failed: {0}")]
     OperationFailed(String),
 
-    #[error("CUDA error: {0}")]
-    Cuda(#[from] cudarc::driver::DriverError),
-
     #[error("Registration key already exists: {0}")]
     RegistrationKeyExists(String),
 
     #[error("Handle not found for key: {0}")]
     HandleNotFound(String),
+
+    #[error("CUDA error: {0}")]
+    CudaError(#[from] cudarc::driver::DriverError),
+
+    #[error("NIXL error: {0}")]
+    NixlError(#[from] nixl_sys::NixlError),
 }
 
 /// Core storage trait that provides access to memory regions

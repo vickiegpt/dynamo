@@ -41,7 +41,7 @@ pub use config::*;
 pub use layout::{nixl::NixlLayout, LayoutConfig, LayoutConfigBuilder, LayoutError, LayoutType};
 pub use pool::BlockPool;
 pub use storage::{
-    nixl::NixlEnabledStorage, DeviceStorage, PinnedStorage, Storage, StorageAllocator,
+    nixl::NixlRegisterableStorage, DeviceStorage, PinnedStorage, Storage, StorageAllocator,
 };
 pub use tokio_util::sync::CancellationToken;
 
