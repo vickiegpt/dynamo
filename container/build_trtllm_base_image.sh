@@ -17,7 +17,7 @@
 # Build the TRT-LLM base image.
 
 # This script builds the TRT-LLM base image for Dynamo with TensorRT-LLM.
-TRTLLM_COMMIT=dfbcb543
+TRTLLM_COMMIT=83f37614ef735d251281136c3c05b1fecf8ef68b
 
 while getopts "c:" opt; do
   case ${opt} in
