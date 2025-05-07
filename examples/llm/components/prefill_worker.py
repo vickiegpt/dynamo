@@ -39,6 +39,14 @@ class RequestType(BaseModel):
     text: str
 
 
+async def wrap_generator(generator):
+    while True:
+        try:
+            await generator.__anext__()
+        except StopAsyncIteration:
+            break
+
+
 @service(
     dynamo={
         "enabled": True,
@@ -133,13 +141,40 @@ class PrefillWorker:
             while True:
                 # TODO: this might add a small overhead to pull prefill from nats
                 # need to test and check how much overhead it is
-                prefill_request = await prefill_queue.dequeue_prefill_request()
-                if prefill_request is not None:
-                    logger.info(
-                        f"Dequeued prefill request: {prefill_request.request_id}"
+                req = await prefill_queue.dequeue_prefill_request()
+
+                if req is not None:
+                    # Start forming the batch of prefills.
+                    reqs = [req]
+                    # Ensure that the total amount of prefill tokens in a bs>1 batch does not exceed a threshold.
+                    # If a single request is larger than the threshold, we will execute it as bs=1.
+                    remaining_prefill_tokens = (
+                        self.engine_args.max_batched_prefill_tokens
+                        - len(req.prompt_token_ids)
                     )
-                    async for _ in self.generate(prefill_request):
-                        pass
+
+                    # TODO: We might want to double-buffer this process
+                    # to avoid the overhead of dequeuing from nats
+                    if remaining_prefill_tokens > 0:
+                        prefill_queue_size = await prefill_queue.get_queue_size()
+                        for _ in range(prefill_queue_size):
+                            # This should be dequeued almost immediately, hence the very short timeout.
+                            req = await prefill_queue.dequeue_prefill_request(0.1)
+
+                            if (
+                                req is not None
+                                and len(req.prompt_token_ids)
+                                <= remaining_prefill_tokens
+                            ):
+                                reqs.append(req)
+                                remaining_prefill_tokens -= len(req.prompt_token_ids)
+                            else:
+                                break
+                    # Create futures which indicate the completion of each prefill.
+                    futures = [wrap_generator(self.generate(req)) for req in reqs]
+                    # Wait for all prefills to complete.
+                    await asyncio.gather(*futures)
+
                 is_valid = await self.lease.is_valid()
                 if not is_valid:
                     logger.info(

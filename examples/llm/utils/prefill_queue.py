@@ -45,8 +45,10 @@ class PrefillQueue(NATSQueue):
         encoded_request = msgspec.json.encode(prefill_request)
         await self.enqueue_task(encoded_request)
 
-    async def dequeue_prefill_request(self) -> Optional[RemotePrefillRequest]:
-        encoded_request = await self.dequeue_task()
+    async def dequeue_prefill_request(
+        self, timeout: Optional[float] = None
+    ) -> Optional[RemotePrefillRequest]:
+        encoded_request = await self.dequeue_task(timeout)
         if encoded_request is not None:
             prefill_request = msgspec.json.decode(
                 encoded_request, type=RemotePrefillRequest
