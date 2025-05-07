@@ -34,7 +34,7 @@ T = TypeVar("T", bound=object)
 logger = logging.getLogger(__name__)
 
 
-class RuntimeLinkedServices:
+class RuntimeLinkedServices2:
     """
     A class to track the linked services in the runtime.
     """
@@ -57,7 +57,7 @@ class RuntimeLinkedServices:
             u.remove_unused_edges(used_edges=vertices)
 
 
-LinkedServices = RuntimeLinkedServices()
+LinkedServices = RuntimeLinkedServices2()
 
 
 @dataclass
@@ -149,15 +149,12 @@ class DynamoService(Service[T]):
             return service_config.get("ServiceArgs")
         return None
 
-    def is_dynamo_component(self) -> bool:
-        """Check if this service is configured as a Dynamo component"""
-        return self._dynamo_config.enabled
+    # def is_dynamo_component(self) -> bool:
+    #     """Check if this service is configured as a Dynamo component"""
+    #     return self._dynamo_config.enabled
 
     def dynamo_address(self) -> Tuple[Optional[str], Optional[str]]:
         """Get the Dynamo address for this component in namespace/name format"""
-        if not self.is_dynamo_component():
-            raise ValueError("Service is not configured as a Dynamo component")
-
         # Check if we have a runner map with Dynamo address
         runner_map = os.environ.get("BENTOML_RUNNER_MAP")
         if runner_map:
