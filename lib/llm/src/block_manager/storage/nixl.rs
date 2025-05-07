@@ -35,18 +35,29 @@
 //! ## Usage
 //!
 //! ```rust
+//! use dynamo_llm::block_manager::storage::{
+//!     PinnedAllocator, StorageAllocator,
+//!     nixl::NixlRegisterableStorage
+//! };
+//! use nixl_sys::Agent as NixlAgent;
+//!
+//! // Create a NIXL agent
+//! let agent = NixlAgent::new("my_agent").unwrap();
+//!
 //! // Create storage using an allocator
 //! let pinned_allocator = PinnedAllocator::default();
-//! let mut storage = pinned_allocator.allocate(1024)?;
+//! let mut storage = pinned_allocator.allocate(1024).unwrap();
 //!
 //! // Initially no NIXL descriptors are available
-//! assert!(storage.as_nixl_descriptor().is_none());
+//! assert!(unsafe { storage.as_nixl_descriptor() }.is_none());
 //!
 //! // Register with NIXL
-//! storage.nixl_register(&agent, None)?;
+//! storage.nixl_register(&agent, None).unwrap();
 //!
 //! // Now we can get NIXL descriptors
-//! if let Some(nixl_desc) = storage.as_nixl_descriptor() {
+//! // NIXL descriptors are not owned by the storage, so we need to access them
+//! // through an unsafe method.
+//! if let Some(nixl_desc) = unsafe { storage.as_nixl_descriptor() } {
 //!     // Use NIXL memory region
 //!     println!("NIXL memory at addr: {}", nixl_desc.addr());
 //!     println!("Memory type: {:?}", nixl_desc.mem_type());

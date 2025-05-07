@@ -47,14 +47,25 @@
 //!
 //! Storage objects are typically created through their respective allocators:
 //! ```rust
+//! use dynamo_llm::block_manager::storage::{SystemAllocator, StorageAllocator};
+//!
 //! let system_allocator = SystemAllocator::default();
-//! let storage = system_allocator.allocate(1024)?;
+//! let storage = system_allocator.allocate(1024).unwrap();
 //! ```
 //!
 //! For registering with external libraries:
 //! ```rust
-//! let mut storage = PinnedStorage::new(&ctx, 1024)?;
-//! storage.nixl_register(&agent, None)?;
+//! use dynamo_llm::block_manager::storage::{
+//!     PinnedAllocator, StorageAllocator,
+//!     nixl::NixlRegisterableStorage
+//! };
+//! use nixl_sys::Agent as NixlAgent;
+//!
+//! // Create a NIXL agent
+//! let agent = NixlAgent::new("my_agent").unwrap();
+//!
+//! let mut storage = PinnedAllocator::default().allocate(1024).unwrap();
+//! storage.nixl_register(&agent, None).unwrap();
 //! ```
 //!
 //! ## Implementation Details

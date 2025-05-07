@@ -74,19 +74,22 @@
 //! ## Usage Example
 //!
 //! ```rust
-//! use crate::block_manager::layout::{LayoutConfig, FullyContiguous, BlockLayout};
-//! use crate::block_manager::storage::{SystemAllocator, StorageType};
-//! use crate::common::dtype::DType;
+//! use dynamo_llm::block_manager::layout::{
+//!     LayoutConfig, FullyContiguous, BlockLayout, BlockLayoutLookup, BlockLayoutConfig,
+//! };
+//! use dynamo_llm::block_manager::storage::{SystemAllocator, StorageType};
+//! use dynamo_llm::common::dtype::DType;
 //!
 //! // Define the layout configuration
-//! let config = LayoutConfig {
-//!     num_blocks: 10,
-//!     num_layers: 4,
-//!     page_size: 16,
-//!     inner_dim: 128,
-//!     alignment: 64, // Ensure 64-byte alignment
-//!     dtype: DType::FP16,
-//! };
+//! let config = LayoutConfig::builder()
+//!     .num_blocks(10)
+//!     .num_layers(4)
+//!     .page_size(16)
+//!     .inner_dim(128)
+//!     .dtype(DType::FP16)
+//!     .build()
+//!     .unwrap();
+//!
 //!
 //! // Allocate a FullyContiguous layout using a SystemAllocator
 //! let allocator = SystemAllocator;

@@ -72,15 +72,18 @@
 //!     refers to the remote NIXL memory regions.
 //!
 //! ```rust
-//! use crate::block_manager::layout::{LayoutConfig, LayoutType};
-//! use crate::block_manager::layout::nixl::{NixlLayout, ToSerializedNixlBlockLayout, SerializedNixlBlockLayout};
-//! use crate::block_manager::storage::nixl::NixlAgent;
-//! use crate::block_manager::storage::PinnedAllocator; // Assuming PinnedStorage is NixlRegisterable
+//! use dynamo_llm::block_manager::layout::{LayoutConfig, LayoutType};
+//! use dynamo_llm::block_manager::layout::nixl::{NixlLayout, ToSerializedNixlBlockLayout, SerializedNixlBlockLayout};
+//! use dynamo_llm::block_manager::storage::nixl::NixlAgent;
+//! use dynamo_llm::block_manager::storage::PinnedAllocator; // Assuming PinnedStorage is NixlRegisterable
 //! use std::sync::Arc;
 //!
 //! // Configuration
 //! let config = LayoutConfig::builder()
-//!     .num_blocks(10).num_layers(2).page_size(4).inner_dim(13)
+//!     .num_blocks(10)
+//!     .num_layers(2)
+//!     .page_size(4)
+//!     .inner_dim(13)
 //!     .build().unwrap();
 //!
 //! // 1. Allocate a NIXL-compatible layout
