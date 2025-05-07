@@ -846,7 +846,7 @@ type generateResourceOption struct {
 	isGenericService                        bool
 }
 
-func (r *DynamoComponentDeploymentReconciler) generateHPA(ctx context.Context, opt generateResourceOption) (*autoscalingv2.HorizontalPodAutoscaler, bool, error) {
+func (r *DynamoComponentDeploymentReconciler) generateHPA(_ context.Context, opt generateResourceOption) (*autoscalingv2.HorizontalPodAutoscaler, bool, error) {
 	labels := r.getKubeLabels(opt.dynamoComponentDeployment, opt.dynamoComponent)
 
 	annotations := r.getKubeAnnotations(opt.dynamoComponentDeployment, opt.dynamoComponent)
@@ -1387,7 +1387,7 @@ func getResourcesConfig(resources *dynamoCommon.Resources) (corev1.ResourceRequi
 }
 
 //nolint:nakedret
-func (r *DynamoComponentDeploymentReconciler) generateService(ctx context.Context, opt generateResourceOption) (kubeService *corev1.Service, toDelete bool, err error) {
+func (r *DynamoComponentDeploymentReconciler) generateService(_ context.Context, opt generateResourceOption) (kubeService *corev1.Service, toDelete bool, err error) {
 	var kubeName string
 	if opt.isGenericService {
 		kubeName = r.getGenericServiceName(opt.dynamoComponentDeployment, opt.dynamoComponent)

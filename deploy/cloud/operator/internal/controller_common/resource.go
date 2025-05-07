@@ -75,6 +75,7 @@ type Reconciler interface {
 	GetRecorder() record.EventRecorder
 }
 
+//nolint:nakedret
 func SyncResource[T client.Object](ctx context.Context, r Reconciler, parentResource client.Object, generateResource func(ctx context.Context) (T, bool, error)) (modified bool, res T, err error) {
 	logs := log.FromContext(ctx)
 
@@ -165,7 +166,7 @@ func SyncResource[T client.Object](ctx context.Context, r Reconciler, parentReso
 		}
 
 		// Check if the Spec has changed and update if necessary
-		var changed = false
+		var changed bool
 		changed, err = IsSpecChanged(oldResource, resource)
 		if err != nil {
 			r.GetRecorder().Eventf(parentResource, corev1.EventTypeWarning, fmt.Sprintf("CalculatePatch%s", resourceType), "Failed to calculate patch for %s %s: %s", resourceType, resourceNamespace, err)
