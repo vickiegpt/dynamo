@@ -13,6 +13,96 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! # NIXL Integration for Block Layouts 🤝
+//!
+//! This module extends the core block layout functionalities defined in the parent `layout` module
+//! with [NIXL](http://github.com/ai-dynamo/nixl) specific capabilities. It enables block layouts,
+//! whose underlying storage is NIXL-registerable, to be registered with a NIXL agent and
+//! serialized into a format suitable for sharing and reconstruction in distributed environments.
+//!
+//! ## Key Features & Components
+//!
+//! ### 1. NIXL-Specific Layout Traits
+//! - [`NixlLayout`]: An umbrella trait that augments a [`BlockLayout`]. It requires the layout's
+//!   associated `StorageType` to implement [`NixlRegisterableStorage`]. This trait provides the
+//!   `nixl_register` method to register all underlying storage regions of the layout with a NIXL agent.
+//! - [`BlockLayoutNixlStorage`]: A trait implemented by layouts to provide NIXL-specific memory
+//!   information like `mem_type` and `device_id` directly from the layout structure, typically
+//!   derived from its underlying storage.
+//! - [`ToSerializedNixlBlockLayout`]: Implemented by layouts that can be converted into a
+//!   [`SerializedNixlBlockLayout`]. This involves capturing the layout configuration and the NIXL
+//!   descriptors of its storage.
+//!
+//! ### 2. Serializable NIXL Layout
+//! - [`SerializedNixlBlockLayout`]: A struct that holds the serialized representation (as `Vec<u8>`)
+//!   of a NIXL-compatible block layout. It can be deserialized to reconstruct the layout, typically
+//!   on a remote node, assuming the described NIXL memory regions are accessible.
+//! - `NixlBlockLayoutKinds`: An internal enum used during serialization to differentiate between
+//!    different types of layouts (e.g., `FullyContiguous`).
+//! - `SerializableNixlLayout<C>`: An internal generic struct that captures the configuration (`C`),
+//!    base offset, NIXL storage descriptors, and storage type for a specific layout kind.
+//!
+//! ### 3. Integration with Core Layouts
+//! The module provides implementations of these NIXL traits for concrete layout types from the
+//! parent module, such as [`FullyContiguous`]. For example:
+//! - `FullyContiguous<S>` (where `S:` [`NixlRegisterableStorage`]) implements [`NixlLayout`], allowing
+//!   its storage to be registered.
+//! - It also implements [`ToSerializedNixlBlockLayout`], enabling its configuration and NIXL storage
+//!   descriptors to be serialized.
+//!
+//! ### 4. Layout Creation and Allocation Extensions
+//! The [`LayoutConfig`] from the parent module is extended with methods like:
+//! - `create_layout`: To create a NIXL-aware layout from existing NIXL-registerable storage.
+//! - `allocate_layout`: To allocate storage using a NIXL-registerable storage allocator and then
+//!   create the NIXL-aware layout.
+//!
+//! ## Usage Flow
+//!
+//! 1.  **Create/Allocate Layout**: A block layout (e.g., [`FullyContiguous`]) is created or allocated,
+//!     ensuring its underlying storage is NIXL-compatible (e.g., using [`SystemStorage`] that implements
+//!     [`NixlRegisterableStorage`]).
+//! 2.  **Register with NIXL**: The [`nixl_register`] method from the [`NixlLayout`] trait is called on the
+//!     layout instance with a [`NixlAgent`].
+//! 3.  **Serialize**: The [`serialize`] method from [`ToSerializedNixlBlockLayout`] is used to get a
+//!     [`SerializedNixlBlockLayout`].
+//! 4.  **Transmit**: The [`SerializedNixlBlockLayout`] (or its byte representation) is sent to another
+//!     process/node.
+//! 5.  **Deserialize**: On the receiving end, [`SerializedNixlBlockLayout::deserialize`] is called to
+//!     reconstruct an `Arc<dyn BlockLayout<StorageType = NixlStorage>>`. This reconstructed layout now
+//!     refers to the remote NIXL memory regions.
+//!
+//! ```rust
+//! use crate::block_manager::layout::{LayoutConfig, LayoutType};
+//! use crate::block_manager::layout::nixl::{NixlLayout, ToSerializedNixlBlockLayout, SerializedNixlBlockLayout};
+//! use crate::block_manager::storage::nixl::NixlAgent;
+//! use crate::block_manager::storage::PinnedAllocator; // Assuming PinnedStorage is NixlRegisterable
+//! use std::sync::Arc;
+//!
+//! // Configuration
+//! let config = LayoutConfig::builder()
+//!     .num_blocks(10).num_layers(2).page_size(4).inner_dim(13)
+//!     .build().unwrap();
+//!
+//! // 1. Allocate a NIXL-compatible layout
+//! let allocator = Arc::new(PinnedAllocator::new().unwrap()); // PinnedAllocator provides NixlRegisterable PinnedStorage
+//! let mut layout = config.allocate_layout(LayoutType::FullyContiguous, allocator).unwrap();
+//!
+//! // 2. Register with NIXL Agent
+//! let agent = NixlAgent::new("my_agent").unwrap();
+//! layout.nixl_register(&agent, None).unwrap();
+//!
+//! // 3. Serialize the layout
+//! let serialized_layout = layout.serialize().unwrap();
+//!
+//! // 4. (Transmit serialized_layout to another process)
+//!
+//! // 5. Deserialize on the other end
+//! let reconstructed_layout = SerializedNixlBlockLayout::deserialize(&serialized_layout).unwrap();
+//! println!("Reconstructed layout refers to storage type: {:?}", reconstructed_layout.storage_type());
+//! ```
+//!
+//! This module effectively bridges the local layout definitions with the requirements of distributed memory management via NIXL.
+
 use crate::block_manager::storage::StorageType;
 
 use super::{BlockLayout, BlockLayoutConfig, LayoutConfig, LayoutError, LayoutType};
@@ -27,6 +117,9 @@ use std::sync::Arc;
 
 /// Extends [BlockLayout] with NIXL-specific methods for registering with an NIXL agent.
 pub trait NixlLayout: BlockLayout + BlockLayoutNixlStorage + ToSerializedNixlBlockLayout {
+    /// Register the layout with an NIXL agent
+    ///
+    /// This will register all the individual memory regions associated with the [BlockLayout].
     fn nixl_register(
         &mut self,
         agent: &NixlAgent,
@@ -34,8 +127,12 @@ pub trait NixlLayout: BlockLayout + BlockLayoutNixlStorage + ToSerializedNixlBlo
     ) -> anyhow::Result<()>;
 }
 
+/// Trait for providing NIXL-specific memory information
 pub trait BlockLayoutNixlStorage {
+    /// Returns the memory type of the storage
     fn mem_type(&self) -> MemType;
+
+    /// Returns the device ID of the storage
     fn device_id(&self) -> u64;
 }
 
@@ -58,6 +155,7 @@ where
 }
 
 impl LayoutConfig {
+    /// Create a new NIXL-aware layout from existing NIXL-registerable storage.
     pub fn create_layout<S: Storage + NixlRegisterableStorage>(
         &self,
         layout_type: LayoutType,
@@ -68,6 +166,7 @@ impl LayoutConfig {
         }
     }
 
+    /// Allocate a new NIXL-aware layout using a NIXL-registerable storage allocator.
     pub fn allocate_layout<S: Storage + NixlRegisterableStorage>(
         &self,
         layout_type: LayoutType,
