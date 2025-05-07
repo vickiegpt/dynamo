@@ -13,8 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from kubernetes import client, config
 from typing import Optional
+
+from kubernetes import client, config
+
 
 class KubernetesAPI:
     def __init__(self):
@@ -27,13 +29,17 @@ class KubernetesAPI:
     def _get_current_namespace(self) -> str:
         """Get the current namespace if running inside a k8s cluster"""
         try:
-            with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace", "r") as f:
+            with open(
+                "/var/run/secrets/kubernetes.io/serviceaccount/namespace", "r"
+            ) as f:
                 return f.read().strip()
         except FileNotFoundError:
             # Fallback to 'default' if not running in k8s
             return "default"
 
-    async def get_graph_deployment(self, component_name: str, dynamo_namespace: str) -> Optional[dict]:
+    async def get_graph_deployment(
+            self, component_name: str, dynamo_namespace: str
+    ) -> Optional[dict]:
         """Get DynamoGraphDeployment custom resource"""
         try:
             # Use label selector to find the deployment
@@ -43,9 +49,9 @@ class KubernetesAPI:
                 version="v1alpha1",
                 namespace=self.current_namespace,
                 plural="dynamographdeployments",
-                label_selector=label_selector
+                label_selector=label_selector,
             )
-            
+
             items = response.get('items', [])
             if not items:
                 return None
@@ -55,28 +61,22 @@ class KubernetesAPI:
                     "Expected exactly one deployment."
                 )
             return items[0]
-            
+
         except client.ApiException as e:
             if e.status == 404:
                 return None
             raise
 
-    async def update_component_replicas(self, graph_deployment_name: str, component_name: str, replicas: int) -> None:
+    async def update_component_replicas(
+            self, graph_deployment_name: str, component_name: str, replicas: int
+    ) -> None:
         """Update the replicas count for a component in a DynamoGraphDeployment"""
-        patch = {
-            "spec": {
-                "services": {
-                    component_name: {
-                        "replicas": replicas
-                    }
-                }
-            }
-        }        
+        patch = {"spec": {"services": {component_name: {"replicas": replicas}}}}    
         self.custom_api.patch_namespaced_custom_object(
             group="nvidia.com",
             version="v1alpha1",
             namespace=self.current_namespace,
             plural="dynamographdeployments",
             name=graph_deployment_name,
-            body=patch
+            body=patch,
         )

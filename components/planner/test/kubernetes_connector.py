@@ -13,9 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
 from unittest.mock import Mock, AsyncMock
+
+import pytest
+
 from dynamo.planner.kubernetes_connector import KubernetesConnector
+
 
 @pytest.fixture
 def mock_kube_api():
@@ -24,20 +27,25 @@ def mock_kube_api():
     mock_api.update_graph_replicas = AsyncMock()
     return mock_api
 
+
 @pytest.fixture
 def mock_kube_api_class(mock_kube_api):
     mock_class = Mock()
     mock_class.return_value = mock_kube_api
     return mock_class
 
+
 @pytest.fixture
 def kubernetes_connector(mock_kube_api_class, monkeypatch):
     # Patch the KubernetesAPI class before instantiating the connector
-    monkeypatch.setattr('dynamo.planner.kubernetes_connector.KubernetesAPI', mock_kube_api_class)
+    monkeypatch.setattr(
+        "dynamo.planner.kubernetes_connector.KubernetesAPI", mock_kube_api_class
+    )
     connector = KubernetesConnector()
     # Set the namespace attribute that's being accessed in the error
     connector.namespace = "default"
     return connector
+
 
 @pytest.mark.asyncio
 async def test_add_component_increases_replicas(kubernetes_connector, mock_kube_api):
@@ -45,13 +53,7 @@ async def test_add_component_increases_replicas(kubernetes_connector, mock_kube_
     component_name = "test-component"
     mock_deployment = {
         "metadata": {"name": "test-graph"},
-        "spec": {
-            "services": {
-                "test-component": {
-                    "replicas": 1
-                }
-            }
-        }
+        "spec": {"services": {"test-component": {"replicas": 1}}},
     }
     mock_kube_api.get_graph_deployment.return_value = mock_deployment
 
@@ -64,17 +66,16 @@ async def test_add_component_increases_replicas(kubernetes_connector, mock_kube_
         "test-graph", component_name, 2
     )
 
+
 @pytest.mark.asyncio
-async def test_add_component_with_no_existing_replicas(kubernetes_connector, mock_kube_api):
+async def test_add_component_with_no_existing_replicas(
+    kubernetes_connector, mock_kube_api
+):
     # Arrange
     component_name = "test-component"
     mock_deployment = {
         "metadata": {"name": "test-graph"},
-        "spec": {
-            "services": {
-                "test-component": {}
-            }
-        }
+        "spec": {"services": {"test-component": {}}},
     }
     mock_kube_api.get_graph_deployment.return_value = mock_deployment
 
@@ -86,6 +87,7 @@ async def test_add_component_with_no_existing_replicas(kubernetes_connector, moc
         "test-graph", component_name, 2
     )
 
+
 @pytest.mark.asyncio
 async def test_add_component_deployment_not_found(kubernetes_connector, mock_kube_api):
     # Arrange
@@ -93,8 +95,11 @@ async def test_add_component_deployment_not_found(kubernetes_connector, mock_kub
     mock_kube_api.get_graph_deployment.return_value = None
 
     # Act & Assert
-    with pytest.raises(ValueError, match=f"Graph not found for component {component_name}"):
+    with pytest.raises(
+        ValueError, match=f"Graph not found for component {component_name}"
+    ):
         await kubernetes_connector.add_component(component_name)
+
 
 @pytest.mark.asyncio
 async def test_remove_component_decreases_replicas(kubernetes_connector, mock_kube_api):
@@ -102,13 +107,7 @@ async def test_remove_component_decreases_replicas(kubernetes_connector, mock_ku
     component_name = "test-component"
     mock_deployment = {
         "metadata": {"name": "test-graph"},
-        "spec": {
-            "services": {
-                "test-component": {
-                    "replicas": 2
-                }
-            }
-        }
+        "spec": {"services": {"test-component": {"replicas": 2}}},
     }
     mock_kube_api.get_graph_deployment.return_value = mock_deployment
 
@@ -120,19 +119,14 @@ async def test_remove_component_decreases_replicas(kubernetes_connector, mock_ku
         "test-graph", component_name, 1
     )
 
+
 @pytest.mark.asyncio
 async def test_remove_component_with_zero_replicas(kubernetes_connector, mock_kube_api):
     # Arrange
     component_name = "test-component"
     mock_deployment = {
         "metadata": {"name": "test-graph"},
-        "spec": {
-            "services": {
-                "test-component": {
-                    "replicas": 0
-                }
-            }
-        }
+        "spec": {"services": {"test-component": {"replicas": 0}}},
     }
     mock_kube_api.get_graph_deployment.return_value = mock_deployment
 
