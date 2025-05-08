@@ -174,10 +174,6 @@ class DynamoService(Service[T]):
             return service_config.get("ServiceArgs")
         return None
 
-    # def is_dynamo_component(self) -> bool:
-    #     """Check if this service is configured as a Dynamo component"""
-    #     return self._dynamo_config.enabled
-
     def dynamo_address(self) -> Tuple[Optional[str], Optional[str]]:
         """Get the Dynamo address for this component in namespace/name format"""
         # Check if we have a runner map with Dynamo address
