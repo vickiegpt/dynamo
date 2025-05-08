@@ -1613,6 +1613,7 @@ dependencies = [
  "derive-getters",
  "derive_builder",
  "dynamo-runtime",
+ "dynamo-tokens",
  "either",
  "erased-serde",
  "etcd-client",
@@ -1755,6 +1756,7 @@ dependencies = [
  "bytemuck",
  "derive-getters",
  "rayon",
+ "thiserror 2.0.12",
  "xxhash-rust",
 ]
 
