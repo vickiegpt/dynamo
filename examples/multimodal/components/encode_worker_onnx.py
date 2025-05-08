@@ -14,24 +14,28 @@
 # limitations under the License.
 
 import logging
-from typing import AsyncIterator
 import os
-
-from pydantic import BaseModel, Field
-import onnxruntime as ort
-from onnxruntime import OrtValue, IOBinding
-import numpy as np
-from PIL import Image
-import requests
 from io import BytesIO
-from transformers import LlavaProcessor # Needed only during init for preprocessing params
+from typing import AsyncIterator
 
-from dynamo.sdk import depends, dynamo_endpoint, service
+import numpy as np
+import onnxruntime as ort
+import requests
+from onnxruntime import OrtValue
+from PIL import Image
+from pydantic import BaseModel, Field
+from transformers import (
+    LlavaProcessor,  # Needed only during init for preprocessing params
+)
+
 # Assuming protocol definitions are in utils relative to components
 from utils.protocol import EncodeRequest, EncodeResponse
+
+from dynamo.sdk import dynamo_endpoint, service
 from dynamo.sdk.lib.config import ServiceConfig
 
 logger = logging.getLogger(__name__)
+
 
 def load_image(image_path_or_url: str) -> Image.Image:
     """Loads an image from a URL or local file path."""
@@ -43,8 +47,8 @@ def load_image(image_path_or_url: str) -> Image.Image:
             logger.debug(f"Loaded image from URL: {image_path_or_url}")
         else:
             if not os.path.exists(image_path_or_url):
-                 logger.error(f"Local image not found: {image_path_or_url}")
-                 raise FileNotFoundError(f"Image not found at {image_path_or_url}")
+                logger.error(f"Local image not found: {image_path_or_url}")
+                raise FileNotFoundError(f"Image not found at {image_path_or_url}")
             image = Image.open(image_path_or_url).convert("RGB")
             logger.debug(f"Loaded image from path: {image_path_or_url}")
         return image
@@ -52,26 +56,35 @@ def load_image(image_path_or_url: str) -> Image.Image:
         logger.error(f"Error loading image '{image_path_or_url}': {e}")
         raise
 
+
 def get_preprocessing_params(model_path: str, device_str: str):
     """Loads the processor ONCE during init to extract image preprocessing parameters."""
     try:
-        logger.info(f"Loading processor from {model_path} to get preprocessing parameters (init only)...")
+        logger.info(
+            f"Loading processor from {model_path} to get preprocessing parameters (init only)..."
+        )
         processor = LlavaProcessor.from_pretrained(model_path)
         img_processor_config = processor.image_processor
-        target_dtype = np.float16 if device_str == 'cuda' else np.float32
+        target_dtype = np.float16 if device_str == "cuda" else np.float32
         logger.info(f"Using target dtype for preprocessing arrays: {target_dtype}")
         params = {
             "size": img_processor_config.size["shortest_edge"],
-            "crop_size": (img_processor_config.crop_size["height"], img_processor_config.crop_size["width"]),
+            "crop_size": (
+                img_processor_config.crop_size["height"],
+                img_processor_config.crop_size["width"],
+            ),
             "rescale_factor": img_processor_config.rescale_factor,
             "image_mean": np.array(img_processor_config.image_mean, dtype=target_dtype),
-            "image_std": np.array(img_processor_config.image_std, dtype=target_dtype)
+            "image_std": np.array(img_processor_config.image_std, dtype=target_dtype),
         }
         logger.info(f"Extracted preprocessing parameters: {params}")
         return params
     except Exception as e:
-        logger.error(f"Failed to load processor or extract params from {model_path}: {e}")
+        logger.error(
+            f"Failed to load processor or extract params from {model_path}: {e}"
+        )
         raise RuntimeError(f"Could not initialize preprocessing parameters: {e}")
+
 
 def preprocess_image(image: Image.Image, params: dict) -> np.ndarray:
     """Replicates the image preprocessing using PIL and NumPy based on extracted params."""
@@ -81,7 +94,7 @@ def preprocess_image(image: Image.Image, params: dict) -> np.ndarray:
     rescale_factor = params["rescale_factor"]
     mean = params["image_mean"]
     std = params["image_std"]
-    target_dtype = mean.dtype # Get dtype from loaded params
+    target_dtype = mean.dtype  # Get dtype from loaded params
 
     # Resize
     img_w, img_h = image.size
@@ -101,8 +114,10 @@ def preprocess_image(image: Image.Image, params: dict) -> np.ndarray:
     image = image.crop((left, top, right, bottom))
 
     # Convert, rescale, normalize
-    img_array = (np.array(image).astype(np.float32) * rescale_factor)
-    img_array = (img_array - mean.astype(np.float32)) / std.astype(np.float32) # Use float32 for stability
+    img_array = np.array(image).astype(np.float32) * rescale_factor
+    img_array = (img_array - mean.astype(np.float32)) / std.astype(
+        np.float32
+    )  # Use float32 for stability
 
     # Transpose & Add batch dim
     img_array = img_array.transpose(2, 0, 1)
@@ -110,15 +125,24 @@ def preprocess_image(image: Image.Image, params: dict) -> np.ndarray:
 
     # Ensure final dtype
     img_array = img_array.astype(target_dtype)
-    logger.debug(f"Preprocessing complete. Output shape: {img_array.shape}, dtype: {img_array.dtype}")
+    logger.debug(
+        f"Preprocessing complete. Output shape: {img_array.shape}, dtype: {img_array.dtype}"
+    )
     return img_array
 
 
 class FrameworkArgsConfig(BaseModel):
     """Configuration for framework-specific arguments."""
-    encode_framework: str = Field(alias='encode-framework') # Required, must be 'onnx' or 'pytorch'
-    onnx_model_path: str | None = Field(default=None, alias='onnx-model-path') # Optional, only needed for ONNX workers
-    hf_model_path: str | None = Field(default=None, alias='hf-model-path') # Optional, only needed for ONNX workers
+
+    encode_framework: str = Field(
+        alias="encode-framework"
+    )  # Required, must be 'onnx' or 'pytorch'
+    onnx_model_path: str | None = Field(
+        default=None, alias="onnx-model-path"
+    )  # Optional, only needed for ONNX workers
+    hf_model_path: str | None = Field(
+        default=None, alias="hf-model-path"
+    )  # Optional, only needed for ONNX workers
 
 
 # --- Dynamo Service Definition ---
@@ -128,15 +152,13 @@ class FrameworkArgsConfig(BaseModel):
         "namespace": "dynamo",
     },
     # Adjust resources based on ONNX model needs & execution provider (consider TRT memory usage)
-    resources={"gpu": 1, "cpu": "10", "memory": "25Gi"}, # Increased memory slightly
+    resources={"gpu": 1, "cpu": "10", "memory": "25Gi"},  # Increased memory slightly
     workers=1,
 )
-
 class EncodeWorker:
-
     def __init__(self) -> None:
         config = ServiceConfig.get_instance()
-        
+
         # Get FrameworkArgs specific config
         raw_framework_args_config = config.get("FrameworkArgs", {})
         framework_args_config = FrameworkArgsConfig(**raw_framework_args_config)
@@ -156,16 +178,25 @@ class EncodeWorker:
 
         # --- Instance attributes from config ---
         self.onnx_model_dir = framework_args_config.onnx_model_path
-        self.vision_tower_onnx_path = os.path.join(self.onnx_model_dir, "llava_vision_tower.onnx")
-        self.projector_onnx_path = os.path.join(self.onnx_model_dir, "llava_projector.onnx")
+        self.vision_tower_onnx_path = os.path.join(
+            self.onnx_model_dir, "llava_vision_tower.onnx"
+        )
+        self.projector_onnx_path = os.path.join(
+            self.onnx_model_dir, "llava_projector.onnx"
+        )
         self.trt_cache_path = os.path.join(self.onnx_model_dir, "trt_cache")
         self.original_model_path = framework_args_config.hf_model_path
         self.device = "cuda"
         self.ort_device = "cuda"
-        self.onnx_type_map = {"tensor(float16)": np.float16, "tensor(float)": np.float32} # Corresponds to former ONNX_TYPE_MAP
+        self.onnx_type_map = {
+            "tensor(float16)": np.float16,
+            "tensor(float)": np.float32,
+        }  # Corresponds to former ONNX_TYPE_MAP
 
         # --- Get Preprocessing Params (once during init) ---
-        self.preprocessing_params = get_preprocessing_params(self.original_model_path, self.device)
+        self.preprocessing_params = get_preprocessing_params(
+            self.original_model_path, self.device
+        )
 
         # --- Configure Execution Providers (TensorRT, CUDA, CPU) ---
         providers = []
@@ -173,22 +204,34 @@ class EncodeWorker:
         if not os.path.exists(self.trt_cache_path):
             try:
                 os.makedirs(self.trt_cache_path)
-                logger.info(f"Created TensorRT engine cache directory: {self.trt_cache_path}")
+                logger.info(
+                    f"Created TensorRT engine cache directory: {self.trt_cache_path}"
+                )
             except OSError as e:
-                logger.error(f"Failed to create TensorRT cache directory {self.trt_cache_path}: {e}")
+                logger.error(
+                    f"Failed to create TensorRT cache directory {self.trt_cache_path}: {e}"
+                )
                 # Decide how to handle this - maybe fall back to CUDA? For now, log and continue.
 
-        providers.extend([
-            ('TensorrtExecutionProvider', {
-                'device_id': 0, # Or appropriate GPU ID
-                'trt_fp16_enable': True, # Enable FP16 precision (adjust if model requires FP32)
-                'trt_engine_cache_enable': True, # Enable engine caching
-                'trt_engine_cache_path': self.trt_cache_path,
-            }),
-            ('CUDAExecutionProvider', {
-                'device_id': 0, # Or appropriate GPU ID
-            })
-        ])
+        providers.extend(
+            [
+                (
+                    "TensorrtExecutionProvider",
+                    {
+                        "device_id": 0,  # Or appropriate GPU ID
+                        "trt_fp16_enable": True,  # Enable FP16 precision (adjust if model requires FP32)
+                        "trt_engine_cache_enable": True,  # Enable engine caching
+                        "trt_engine_cache_path": self.trt_cache_path,
+                    },
+                ),
+                (
+                    "CUDAExecutionProvider",
+                    {
+                        "device_id": 0,  # Or appropriate GPU ID
+                    },
+                ),
+            ]
+        )
 
         # --- Load ONNX Sessions ---
         logger.info("Loading ONNX inference sessions...")
@@ -196,14 +239,26 @@ class EncodeWorker:
             logger.info(f"Attempting to load ONNX models with providers: {providers}")
 
             if not os.path.exists(self.vision_tower_onnx_path):
-                raise FileNotFoundError(f"Vision tower ONNX model not found at {self.vision_tower_onnx_path}")
+                raise FileNotFoundError(
+                    f"Vision tower ONNX model not found at {self.vision_tower_onnx_path}"
+                )
             if not os.path.exists(self.projector_onnx_path):
-                raise FileNotFoundError(f"Projector ONNX model not found at {self.projector_onnx_path}")
+                raise FileNotFoundError(
+                    f"Projector ONNX model not found at {self.projector_onnx_path}"
+                )
 
-            self.vision_sess = ort.InferenceSession(self.vision_tower_onnx_path, providers=providers)
-            logger.info(f"Loaded Vision Tower. Effective providers: {self.vision_sess.get_providers()}")
-            self.proj_sess = ort.InferenceSession(self.projector_onnx_path, providers=providers)
-            logger.info(f"Loaded Projector. Effective providers: {self.proj_sess.get_providers()}")
+            self.vision_sess = ort.InferenceSession(
+                self.vision_tower_onnx_path, providers=providers
+            )
+            logger.info(
+                f"Loaded Vision Tower. Effective providers: {self.vision_sess.get_providers()}"
+            )
+            self.proj_sess = ort.InferenceSession(
+                self.projector_onnx_path, providers=providers
+            )
+            logger.info(
+                f"Loaded Projector. Effective providers: {self.proj_sess.get_providers()}"
+            )
 
             # Get input/output metadata
             self.vision_input_meta = self.vision_sess.get_inputs()[0]
@@ -216,15 +271,26 @@ class EncodeWorker:
             self.proj_input_name = self.proj_input_meta.name
             self.proj_output_name = self.proj_output_meta.name
 
-            self.vision_output_type = self.onnx_type_map.get(self.vision_output_meta.type, np.float32)
-            self.proj_output_type = self.onnx_type_map.get(self.proj_output_meta.type, np.float32)
+            self.vision_output_type = self.onnx_type_map.get(
+                self.vision_output_meta.type, np.float32
+            )
+            self.proj_output_type = self.onnx_type_map.get(
+                self.proj_output_meta.type, np.float32
+            )
 
-            logger.info(f"Vision Tower I/O: Input='{self.vision_input_name}' ({self.vision_input_meta.type}, {self.vision_input_meta.shape}), Output='{self.vision_output_name}' ({self.vision_output_meta.type}, {self.vision_output_meta.shape})")
-            logger.info(f"Projector I/O: Input='{self.proj_input_name}' ({self.proj_input_meta.type}, {self.proj_input_meta.shape}), Output='{self.proj_output_name}' ({self.proj_output_meta.type}, {self.proj_output_meta.shape})")
+            logger.info(
+                f"Vision Tower I/O: Input='{self.vision_input_name}' ({self.vision_input_meta.type}, {self.vision_input_meta.shape}), Output='{self.vision_output_name}' ({self.vision_output_meta.type}, {self.vision_output_meta.shape})"
+            )
+            logger.info(
+                f"Projector I/O: Input='{self.proj_input_name}' ({self.proj_input_meta.type}, {self.proj_input_meta.shape}), Output='{self.proj_output_name}' ({self.proj_output_meta.type}, {self.proj_output_meta.shape})"
+            )
             logger.info("ONNX sessions and I/O metadata initialized.")
 
         except Exception as e:
-            logger.error(f"Fatal error loading ONNX models or getting metadata during initialization: {e}", exc_info=True)
+            logger.error(
+                f"Fatal error loading ONNX models or getting metadata during initialization: {e}",
+                exc_info=True,
+            )
             raise RuntimeError(f"Failed to initialize ONNX sessions: {e}")
 
     def encode_image_onnx(self, image_path_or_url: str) -> np.ndarray:
@@ -237,23 +303,39 @@ class EncodeWorker:
             preprocessed_image_np = preprocess_image(image, self.preprocessing_params)
 
             # Wrap NumPy input with OrtValue, potentially transferring to GPU
-            preprocessed_image_ortvalue = OrtValue.ortvalue_from_numpy(preprocessed_image_np, self.ort_device)
-            logger.debug(f"Input image OrtValue created on device: {preprocessed_image_ortvalue.device_name()}")
+            preprocessed_image_ortvalue = OrtValue.ortvalue_from_numpy(
+                preprocessed_image_np, self.ort_device
+            )
+            logger.debug(
+                f"Input image OrtValue created on device: {preprocessed_image_ortvalue.device_name()}"
+            )
 
             # 3. Allocate Output Buffer & Run Vision Tower Inference with IOBinding
             logger.debug("Preparing IOBinding for ONNX Vision Tower inference...")
             # Determine concrete output shape (assume batch size 1, handle symbolic dims)
             # Example for Llava: (1, 577, 1024)
-            vision_output_shape = [1 if isinstance(d, str) else d for d in self.vision_output_meta.shape]
-            logger.debug(f"Allocating vision output buffer with shape: {vision_output_shape} and type: {self.vision_output_type} on device: {self.ort_device}")
+            vision_output_shape = [
+                1 if isinstance(d, str) else d for d in self.vision_output_meta.shape
+            ]
+            logger.debug(
+                f"Allocating vision output buffer with shape: {vision_output_shape} and type: {self.vision_output_type} on device: {self.ort_device}"
+            )
 
-            vision_output_ortvalue = OrtValue.ortvalue_from_shape_and_type(vision_output_shape, self.vision_output_type, self.ort_device)
-            logger.debug(f"Vision Tower output buffer allocated on device: {vision_output_ortvalue.device_name()}")
+            vision_output_ortvalue = OrtValue.ortvalue_from_shape_and_type(
+                vision_output_shape, self.vision_output_type, self.ort_device
+            )
+            logger.debug(
+                f"Vision Tower output buffer allocated on device: {vision_output_ortvalue.device_name()}"
+            )
 
             # Create IOBinding for vision tower
             io_binding_vision = self.vision_sess.io_binding()
-            io_binding_vision.bind_ortvalue_input(self.vision_input_name, preprocessed_image_ortvalue)
-            io_binding_vision.bind_ortvalue_output(self.vision_output_name, vision_output_ortvalue)
+            io_binding_vision.bind_ortvalue_input(
+                self.vision_input_name, preprocessed_image_ortvalue
+            )
+            io_binding_vision.bind_ortvalue_output(
+                self.vision_output_name, vision_output_ortvalue
+            )
 
             logger.debug("Running Vision Tower inference with IOBinding...")
             self.vision_sess.run_with_iobinding(io_binding_vision)
@@ -263,47 +345,68 @@ class EncodeWorker:
             # Clear the input OrtValue binding explicitly (good practice)
             io_binding_vision.clear_binding_inputs()
 
-
             # 4. Allocate Output Buffer & Run Projector Inference with IOBinding
             logger.debug("Preparing IOBinding for ONNX Projector inference...")
             # Determine projector output shape (e.g., [1, 577, 4096])
             # Use the actual sequence length from the vision tower output
-            proj_output_shape = [1 if isinstance(d, str) else d for d in self.proj_output_meta.shape]
-            actual_seq_len = vision_output_ortvalue.shape()[1] # Get dynamic sequence length
-            if len(proj_output_shape) > 1 and isinstance(self.proj_output_meta.shape[1], str):
-                 proj_output_shape[1] = actual_seq_len
-            logger.debug(f"Allocating projector output buffer with shape: {proj_output_shape} and type: {self.proj_output_type} on device: {self.ort_device}")
+            proj_output_shape = [
+                1 if isinstance(d, str) else d for d in self.proj_output_meta.shape
+            ]
+            actual_seq_len = vision_output_ortvalue.shape()[
+                1
+            ]  # Get dynamic sequence length
+            if len(proj_output_shape) > 1 and isinstance(
+                self.proj_output_meta.shape[1], str
+            ):
+                proj_output_shape[1] = actual_seq_len
+            logger.debug(
+                f"Allocating projector output buffer with shape: {proj_output_shape} and type: {self.proj_output_type} on device: {self.ort_device}"
+            )
 
-            final_embeddings_ortvalue = OrtValue.ortvalue_from_shape_and_type(proj_output_shape, self.proj_output_type, self.ort_device)
-            logger.debug(f"Projector output buffer allocated on device: {final_embeddings_ortvalue.device_name()}")
+            final_embeddings_ortvalue = OrtValue.ortvalue_from_shape_and_type(
+                proj_output_shape, self.proj_output_type, self.ort_device
+            )
+            logger.debug(
+                f"Projector output buffer allocated on device: {final_embeddings_ortvalue.device_name()}"
+            )
 
             # Create IOBinding for projector
             io_binding_proj = self.proj_sess.io_binding()
             # Bind input (the output OrtValue from the vision tower)
-            io_binding_proj.bind_ortvalue_input(self.proj_input_name, vision_output_ortvalue)
+            io_binding_proj.bind_ortvalue_input(
+                self.proj_input_name, vision_output_ortvalue
+            )
             # Bind output
-            io_binding_proj.bind_ortvalue_output(self.proj_output_name, final_embeddings_ortvalue)
+            io_binding_proj.bind_ortvalue_output(
+                self.proj_output_name, final_embeddings_ortvalue
+            )
 
             logger.debug("Running Projector inference with IOBinding...")
             self.proj_sess.run_with_iobinding(io_binding_proj)
-            logger.debug("Projector inference complete. Final embeddings are in OrtValue.")
+            logger.debug(
+                "Projector inference complete. Final embeddings are in OrtValue."
+            )
             # final_embeddings_ortvalue holds the final result on ORT_DEVICE
 
             # Clear bindings explicitly
             io_binding_proj.clear_binding_inputs()
             io_binding_proj.clear_binding_outputs()
-            io_binding_vision.clear_binding_outputs() # Clear vision output binding too
-
+            io_binding_vision.clear_binding_outputs()  # Clear vision output binding too
 
             # 5. Copy final result from OrtValue (potentially GPU) to NumPy array (CPU)
             # This is the only H2D/D2H copy needed for the result (input copy happened at OrtValue creation).
-            logger.debug(f"Copying final embeddings from OrtValue ({final_embeddings_ortvalue.device_name()}) to NumPy array (CPU)...")
+            logger.debug(
+                f"Copying final embeddings from OrtValue ({final_embeddings_ortvalue.device_name()}) to NumPy array (CPU)..."
+            )
             final_embeddings_np = final_embeddings_ortvalue.numpy()
 
             return final_embeddings_np
 
         except Exception as e:
-            logger.error(f"Error during ONNX IOBinding image encoding for '{image_path_or_url}': {e}", exc_info=True)
+            logger.error(
+                f"Error during ONNX IOBinding image encoding for '{image_path_or_url}': {e}",
+                exc_info=True,
+            )
             # Reraise to signal failure to the caller
             raise
 
@@ -313,12 +416,21 @@ class EncodeWorker:
         logger.info(f"Received IOBinding encode request for image: {request.image_url}")
         try:
             # Perform encoding using the ONNX IOBinding method
-            image_embeds_np = self.encode_image_onnx(request.image_url) # This now uses IOBinding
-            logger.info(f"ONNX IOBinding encoding successful, embedding shape: {image_embeds_np.shape}")
+            image_embeds_np = self.encode_image_onnx(
+                request.image_url
+            )  # This now uses IOBinding
+            logger.info(
+                f"ONNX IOBinding encoding successful, embedding shape: {image_embeds_np.shape}"
+            )
 
             # Convert NumPy array to list for JSON serialization
-            yield EncodeResponse(image_features=image_embeds_np.tolist()).model_dump_json()
+            yield EncodeResponse(
+                image_features=image_embeds_np.tolist()
+            ).model_dump_json()
 
         except Exception as e:
-            logger.error(f"Failed to process encode request for {request.image_url}: {e}", exc_info=True)
-            pass # Or re-raise e
+            logger.error(
+                f"Failed to process encode request for {request.image_url}: {e}",
+                exc_info=True,
+            )
+            pass  # Or re-raise e

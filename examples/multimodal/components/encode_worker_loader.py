@@ -13,13 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import logging
 
-from pydantic import BaseModel
+from dynamo.sdk.lib.config import ServiceConfig
 
 from .encode_worker_onnx import FrameworkArgsConfig
-from dynamo.sdk.lib.config import ServiceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -57,4 +55,4 @@ else:
     logger.error(error_msg)
     raise ImportError(error_msg)
 
-__all__ = ["EncodeWorker"] 
+__all__ = ["EncodeWorker"]
