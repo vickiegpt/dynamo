@@ -132,11 +132,8 @@ class ServiceInterface(Generic[T], ABC):
         """Find a dependent service by name"""
         pass
 
-    # def is_dynamo_component(self) -> bool:
-    #     return True
-
     def dynamo_address(self) -> tuple[str, str]:
-        ...
+        pass
 
 
 @dataclass
