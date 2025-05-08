@@ -25,7 +25,7 @@ use crate::{
     tokens::BlockHash,
 };
 use derive_getters::{Dissolve, Getters};
-use dynamo_runtime::traits::events::EventPublisher;
+use dynamo_runtime::traits::events::BlockRegisterPubliser;
 use dynamo_runtime::{
     component::{Component, Namespace},
     raise, Result,
@@ -55,7 +55,7 @@ struct EventChannel {
     tx: mpsc::UnboundedSender<Event>,
 }
 
-impl EventReleaseManager for EventChannel {
+impl BlockReleasePublisher for EventChannel {
     // Generalize sequence_hash
     fn block_release(&self, sequence_hash: SequenceHash) {
         if self.tx.send(Event::RemoveSingle(sequence_hash)).is_err() {

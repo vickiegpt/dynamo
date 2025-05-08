@@ -34,16 +34,16 @@ use super::block::registry::RegistrationHandle;
 ///
 /// The [RegistrationHandle] associated from [EventManager::block_register] call is an RAII object
 /// which will trigger a `Remove` event on being dropped.
-pub trait EventManager: EventPublisher + EventReleaseManager + Send + Sync {
+pub trait EventManager: BlockRegisterPubliser + BlockReleasePublisher + Send + Sync {
     // fn register_block(&self, token_block: &TokenBlock) -> PublishHandle;
     // fn publisher(&self) -> Publisher;
 }
 
-pub trait EventPublisher: Send + Sync {
+pub trait BlockRegisterPubliser: Send + Sync {
     fn publish(&self, handles: Vec<Arc<RegistrationHandle>>);
 }
 
-pub trait EventReleaseManager: Send + Sync {
+pub trait BlockReleasePublisher: Send + Sync {
     fn block_release(&self, registration_handle: &RegistrationHandle);
 }
 
@@ -58,11 +58,11 @@ pub trait EventReleaseManager: Send + Sync {
 /// registration events.
 pub struct PublishHandle {
     handle: Arc<RegistrationHandle>,
-    publisher: Option<Arc<dyn EventPublisher>>,
+    publisher: Option<Arc<dyn BlockRegisterPubliser>>,
 }
 
 impl PublishHandle {
-    pub fn new(handle: RegistrationHandle, publisher: Arc<dyn EventPublisher>) -> Self {
+    pub fn new(handle: RegistrationHandle, publisher: Arc<dyn BlockRegisterPubliser>) -> Self {
         let handle = Arc::new(handle);
         let publisher = Some(publisher);
         Self { handle, publisher }
@@ -87,19 +87,19 @@ impl Drop for PublishHandle {
 
 /// Responsible for publishing multiple registration events.
 ///
-/// Because [EventPublisher::publish] takes a list of shared [RegistrationHandles][RegistrationHandle]
-/// this allows the [EventPublisher] logic to optimize the number of events published
+/// Because [BlockRegisterPubliser::publish] takes a list of shared [RegistrationHandles][RegistrationHandle]
+/// this allows the [BlockRegisterPubliser] logic to optimize the number of events published
 /// by consoldiate multiple registration events with additional sequence logic.
 ///
-/// The behavior of the [EventPublisher] is left entirely up to the the implementor.
+/// The behavior of the [BlockRegisterPubliser] is left entirely up to the the implementor.
 #[derive(Clone)]
 pub struct Publisher {
     handles: Vec<Arc<RegistrationHandle>>,
-    publisher: Arc<dyn EventPublisher>,
+    publisher: Arc<dyn BlockRegisterPubliser>,
 }
 
 impl Publisher {
-    pub fn new(publisher: Arc<dyn EventPublisher>) -> Self {
+    pub fn new(publisher: Arc<dyn BlockRegisterPubliser>) -> Self {
         Self {
             handles: Vec::new(),
             publisher,
@@ -145,11 +145,11 @@ impl NullEventManager {
 
 impl EventManager for NullEventManager {}
 
-impl EventPublisher for NullEventManager {
+impl BlockRegisterPubliser for NullEventManager {
     fn publish(&self, _handles: Vec<Arc<RegistrationHandle>>) {}
 }
 
-impl EventReleaseManager for NullEventManager {
+impl BlockReleasePublisher for NullEventManager {
     fn block_release(&self, _registration_handle: &RegistrationHandle) {}
 }
 
@@ -185,7 +185,7 @@ pub mod tests {
 
     impl EventManager for MockEventManager {}
 
-    impl EventPublisher for MockEventManager {
+    impl BlockRegisterPubliser for MockEventManager {
         fn publish(&self, handles: Vec<Arc<RegistrationHandle>>) {
             let events = handles
                 .iter()
@@ -195,7 +195,7 @@ pub mod tests {
         }
     }
 
-    impl EventReleaseManager for MockEventManager {
+    impl BlockReleasePublisher for MockEventManager {
         fn block_release(&self, registration_handle: &RegistrationHandle) {
             let events = vec![EventType::Remove(registration_handle.sequence_hash())];
             self.tx.send(events).unwrap();

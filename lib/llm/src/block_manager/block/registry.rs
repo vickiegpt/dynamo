@@ -18,7 +18,7 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use super::super::events::{EventManager, EventReleaseManager, PublishHandle};
+use super::super::events::{BlockReleasePublisher, EventManager, PublishHandle};
 use super::state::BlockState;
 
 use crate::tokens::{BlockHash, SequenceHash, TokenBlock};
@@ -139,13 +139,13 @@ pub struct RegistrationHandle {
     parent_sequence_hash: Option<SequenceHash>,
 
     #[getter(skip)]
-    release_manager: Arc<dyn EventReleaseManager>,
+    release_manager: Arc<dyn BlockReleasePublisher>,
 }
 
 impl RegistrationHandle {
     fn from_token_block(
         token_block: &TokenBlock,
-        release_manager: Arc<dyn EventReleaseManager>,
+        release_manager: Arc<dyn BlockReleasePublisher>,
     ) -> Self {
         Self {
             block_hash: token_block.block_hash(),
