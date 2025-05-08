@@ -1657,6 +1657,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-logging"
+version = "0.2.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "figment",
+ "log",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "dynamo-run"
 version = "0.2.1"
 dependencies = [
@@ -1701,6 +1715,7 @@ dependencies = [
  "chrono",
  "derive-getters",
  "derive_builder",
+ "dynamo-logging",
  "educe",
  "either",
  "env_logger",
@@ -1727,7 +1742,6 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
- "tracing-subscriber",
  "url",
  "uuid 1.16.0",
  "validator",
