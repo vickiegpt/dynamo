@@ -27,8 +27,6 @@ from pydantic import BaseModel, Field
 from transformers import (
     LlavaProcessor,  # Needed only during init for preprocessing params
 )
-
-# Assuming protocol definitions are in utils relative to components
 from utils.protocol import EncodeRequest, EncodeResponse
 
 from dynamo.sdk import dynamo_endpoint, service
@@ -54,7 +52,7 @@ def load_image(image_path_or_url: str) -> Image.Image:
         return image
     except Exception as e:
         logger.error(f"Error loading image '{image_path_or_url}': {e}")
-        raise
+        raise e
 
 
 def get_preprocessing_params(model_path: str, device_str: str):
@@ -151,8 +149,7 @@ class FrameworkArgsConfig(BaseModel):
         "enabled": True,
         "namespace": "dynamo",
     },
-    # Adjust resources based on ONNX model needs & execution provider (consider TRT memory usage)
-    resources={"gpu": 1, "cpu": "10", "memory": "25Gi"},  # Increased memory slightly
+    resources={"gpu": 1, "cpu": "10", "memory": "25Gi"},
     workers=1,
 )
 class EncodeWorker:
@@ -188,17 +185,19 @@ class EncodeWorker:
         self.original_model_path = framework_args_config.hf_model_path
         self.device = "cuda"
         self.ort_device = "cuda"
+        # Maps ONNX tensor type strings (e.g., 'tensor(float16)') to NumPy dtypes (e.g., np.float16)
+        # for correct buffer allocation, especially with IOBinding.
         self.onnx_type_map = {
             "tensor(float16)": np.float16,
             "tensor(float)": np.float32,
-        }  # Corresponds to former ONNX_TYPE_MAP
+        }
 
         # --- Get Preprocessing Params (once during init) ---
         self.preprocessing_params = get_preprocessing_params(
             self.original_model_path, self.device
         )
 
-        # --- Configure Execution Providers (TensorRT, CUDA, CPU) ---
+        # --- Configure Execution Providers (TensorRT, CUDA) ---
         providers = []
         # Ensure the TensorRT cache directory exists
         if not os.path.exists(self.trt_cache_path):
@@ -218,8 +217,8 @@ class EncodeWorker:
                 (
                     "TensorrtExecutionProvider",
                     {
-                        "device_id": 0,  # Or appropriate GPU ID
-                        "trt_fp16_enable": True,  # Enable FP16 precision (adjust if model requires FP32)
+                        "device_id": 0,
+                        "trt_fp16_enable": True,
                         "trt_engine_cache_enable": True,  # Enable engine caching
                         "trt_engine_cache_path": self.trt_cache_path,
                     },
@@ -227,7 +226,7 @@ class EncodeWorker:
                 (
                     "CUDAExecutionProvider",
                     {
-                        "device_id": 0,  # Or appropriate GPU ID
+                        "device_id": 0,
                     },
                 ),
             ]
@@ -296,10 +295,10 @@ class EncodeWorker:
     def encode_image_onnx(self, image_path_or_url: str) -> np.ndarray:
         """Loads image, preprocesses, and runs ONNX inference using IOBinding."""
         try:
-            # 1. Load Image
+            # Load Image
             image = load_image(image_path_or_url)
 
-            # 2. Preprocess Image (results in NumPy array on CPU)
+            # Preprocess Image (results in NumPy array on CPU)
             preprocessed_image_np = preprocess_image(image, self.preprocessing_params)
 
             # Wrap NumPy input with OrtValue, potentially transferring to GPU
@@ -310,10 +309,8 @@ class EncodeWorker:
                 f"Input image OrtValue created on device: {preprocessed_image_ortvalue.device_name()}"
             )
 
-            # 3. Allocate Output Buffer & Run Vision Tower Inference with IOBinding
+            # Allocate Output Buffer & Run Vision Tower Inference with IOBinding
             logger.debug("Preparing IOBinding for ONNX Vision Tower inference...")
-            # Determine concrete output shape (assume batch size 1, handle symbolic dims)
-            # Example for Llava: (1, 577, 1024)
             vision_output_shape = [
                 1 if isinstance(d, str) else d for d in self.vision_output_meta.shape
             ]
@@ -345,10 +342,8 @@ class EncodeWorker:
             # Clear the input OrtValue binding explicitly (good practice)
             io_binding_vision.clear_binding_inputs()
 
-            # 4. Allocate Output Buffer & Run Projector Inference with IOBinding
+            # Allocate Output Buffer & Run Projector Inference with IOBinding
             logger.debug("Preparing IOBinding for ONNX Projector inference...")
-            # Determine projector output shape (e.g., [1, 577, 4096])
-            # Use the actual sequence length from the vision tower output
             proj_output_shape = [
                 1 if isinstance(d, str) else d for d in self.proj_output_meta.shape
             ]
@@ -391,10 +386,11 @@ class EncodeWorker:
             # Clear bindings explicitly
             io_binding_proj.clear_binding_inputs()
             io_binding_proj.clear_binding_outputs()
-            io_binding_vision.clear_binding_outputs()  # Clear vision output binding too
+            io_binding_vision.clear_binding_outputs()
 
-            # 5. Copy final result from OrtValue (potentially GPU) to NumPy array (CPU)
+            # Copy final result from OrtValue (potentially GPU) to NumPy array (CPU)
             # This is the only H2D/D2H copy needed for the result (input copy happened at OrtValue creation).
+            # TODO : Change after NIXL Supoort
             logger.debug(
                 f"Copying final embeddings from OrtValue ({final_embeddings_ortvalue.device_name()}) to NumPy array (CPU)..."
             )
@@ -407,8 +403,7 @@ class EncodeWorker:
                 f"Error during ONNX IOBinding image encoding for '{image_path_or_url}': {e}",
                 exc_info=True,
             )
-            # Reraise to signal failure to the caller
-            raise
+            raise e
 
     @dynamo_endpoint()
     async def encode(self, request: EncodeRequest) -> AsyncIterator[EncodeResponse]:
@@ -433,4 +428,4 @@ class EncodeWorker:
                 f"Failed to process encode request for {request.image_url}: {e}",
                 exc_info=True,
             )
-            pass  # Or re-raise e
+            raise e
