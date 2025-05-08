@@ -83,23 +83,23 @@ class PrefillQueue(NATSQueue):
 
         if remaining_prefill_tokens < 0:
             return reqs
-        else:
-            # TODO: We might want to double-buffer this process
-            # to avoid the overhead of dequeuing from nats
-            prefill_queue_size = await self.get_queue_size()
-            for _ in range(prefill_queue_size):
-                # This should be immediate, hence the zero timeout.
-                req = await self.dequeue_prefill_request(0)
 
-                if req is None:
-                    break
+        # TODO: We might want to double-buffer this process
+        # to avoid the overhead of dequeuing from nats
+        prefill_queue_size = await self.get_queue_size()
+        for _ in range(prefill_queue_size):
+            # This should be immediate, hence the zero timeout.
+            req = await self.dequeue_prefill_request(0)
 
-                if num_new_tokens(req) <= remaining_prefill_tokens:
-                    reqs.append(req)
-                    remaining_prefill_tokens -= num_new_tokens(req)
-                else:
-                    # We need to save this request for the next batch.
-                    self.pending = req
-                    break
+            if req is None:
+                break
 
-            return reqs
+            if num_new_tokens(req) <= remaining_prefill_tokens:
+                reqs.append(req)
+                remaining_prefill_tokens -= num_new_tokens(req)
+            else:
+                # We need to save this request for the next batch.
+                self.pending = req
+                break
+
+        return reqs
