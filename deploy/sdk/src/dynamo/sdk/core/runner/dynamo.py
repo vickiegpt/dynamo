@@ -43,12 +43,6 @@ class LocalEndpoint(DynamoEndpoint):
     def name(self) -> str:
         return self._name
 
-    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        # Implementation depends on the communication mechanism with the circus process
-        # This is a simplified version that would need to be expanded
-        # with proper IPC or network communication
-        return await self._service.call_endpoint(self._name, *args, **kwargs)
-
 
 class LocalService(ServiceInterface[T]):
     """Circus implementation of the ServiceInterface"""
@@ -123,17 +117,6 @@ class LocalService(ServiceInterface[T]):
         for dep_key, dep_value in current_deps.items():
             if dep_value.on.inner not in used_edges:
                 del self._dependencies[dep_key]
-
-    async def call_endpoint(self, endpoint_name: str, *args: Any, **kwargs: Any) -> Any:
-        """Call an endpoint on this service through the circus socket"""
-        # Actual implementation would use the socket for IPC or networking
-        # This is just a placeholder
-        if self._socket is None:
-            raise RuntimeError("Service has no socket configured")
-
-        # Here you would implement the actual communication protocol
-        # with the worker process running in circus
-        raise NotImplementedError("Endpoint calling not yet implemented")
 
     def dynamo_address(self) -> tuple[str, str]:
         return (self._dynamo_config.namespace, self._dynamo_config.name)
