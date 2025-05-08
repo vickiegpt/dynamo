@@ -18,21 +18,40 @@ import logging
 
 from pydantic import BaseModel
 
-from .encode_worker_onnx import EncoderConfig
+from .encode_worker_onnx import FrameworkArgsConfig
 from dynamo.sdk.lib.config import ServiceConfig
 
 logger = logging.getLogger(__name__)
 
 config = ServiceConfig.get_instance()
-encoder_config = EncoderConfig(**config.get("EncodeWorker", {}))
 
-if encoder_config.encode_framework == "onnx":
+# Get FrameworkArgs specific config directly
+raw_framework_args_config = config.get("FrameworkArgs", {})
+if not raw_framework_args_config:
+    error_msg = (
+        "'FrameworkArgs' section is missing in the configuration. "
+        "Cannot determine the encode_framework."
+    )
+    logger.error(error_msg)
+    raise ValueError(error_msg)
+
+framework_args_config = FrameworkArgsConfig(**raw_framework_args_config)
+
+# Check if encode_framework is present in FrameworkArgs
+if not framework_args_config.encode_framework:
+    error_msg = (
+        "'encode-framework' is missing in the 'FrameworkArgs' configuration section."
+    )
+    logger.error(error_msg)
+    raise ValueError(error_msg)
+
+if framework_args_config.encode_framework == "onnx":
     from .encode_worker_onnx import EncodeWorker
-elif encoder_config.encode_framework == "pytorch":
+elif framework_args_config.encode_framework == "pytorch":
     from .encode_worker import EncodeWorker
 else:
     error_msg = (
-        f"Unsupported encode_framework: '{encoder_config.encode_framework}'. "
+        f"Unsupported encode_framework: '{framework_args_config.encode_framework}'. "
         "Valid options are 'onnx' or 'pytorch'."
     )
     logger.error(error_msg)

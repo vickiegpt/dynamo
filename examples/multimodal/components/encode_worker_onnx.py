@@ -113,27 +113,12 @@ def preprocess_image(image: Image.Image, params: dict) -> np.ndarray:
     logger.debug(f"Preprocessing complete. Output shape: {img_array.shape}, dtype: {img_array.dtype}")
     return img_array
 
-class ResourcesConfig(BaseModel):
-    """Configuration for service resources."""
-    gpu: int | None = None # Making optional as it might not always be present
-    cpu: str | None = None
-    memory: str | None = None
 
-class ServiceArgsConfig(BaseModel):
-    """Configuration for Service arguments."""
-    workers: int | None = None # Making optional
-    resources: ResourcesConfig | None = None # Making optional
-
-class EncoderConfig(BaseModel):
-    """Configuration for the Encoder service including model and HTTP server settings."""
-
-    encode_framework: str = Field(alias='encode-framework')
-    onnx_model_path: str | None = Field(default=None, alias='onnx-model-path')
-    hf_model_path: str | None = Field(default=None, alias='hf-model-path')
-    tensor_parallel_size: int | None = Field(default=None, alias='tensor-parallel-size')
-    router: str | None = None
-    ServiceArgs: ServiceArgsConfig | None = None
-    common_configs: list[str] | None = Field(default=None, alias='common-configs')
+class FrameworkArgsConfig(BaseModel):
+    """Configuration for framework-specific arguments."""
+    encode_framework: str = Field(alias='encode-framework') # Required, must be 'onnx' or 'pytorch'
+    onnx_model_path: str | None = Field(default=None, alias='onnx-model-path') # Optional, only needed for ONNX workers
+    hf_model_path: str | None = Field(default=None, alias='hf-model-path') # Optional, only needed for ONNX workers
 
 
 # --- Dynamo Service Definition ---
@@ -151,28 +136,32 @@ class EncodeWorker:
 
     def __init__(self) -> None:
         config = ServiceConfig.get_instance()
-        encoder_config = EncoderConfig(**config.get("EncodeWorker", {}))
+        
+        # Get FrameworkArgs specific config
+        raw_framework_args_config = config.get("FrameworkArgs", {})
+        framework_args_config = FrameworkArgsConfig(**raw_framework_args_config)
 
-        if not encoder_config.onnx_model_path:
-            error_msg = "'onnx_model_path' must be provided in EncoderConfig for the ONNX worker."
+        if not framework_args_config.onnx_model_path:
+            error_msg = "'onnx-model-path' must be provided in top-level 'FrameworkArgs' for the ONNX worker."
             logger.error(error_msg)
             raise ValueError(error_msg)
-        if not encoder_config.hf_model_path:
-            error_msg = "'hf_model_path' must be provided in EncoderConfig for the ONNX worker (for preprocessing parameters)."
+        if not framework_args_config.hf_model_path:
+            error_msg = "'hf-model-path' must be provided in top-level 'FrameworkArgs' for the ONNX worker (for preprocessing parameters)."
             logger.error(error_msg)
             raise ValueError(error_msg)
 
         logger.info("Initializing EncodeWorkerONNX with TensorRT and IOBinding...")
         logger.info(f"ONNX Runtime version in use: {ort.__version__}")
+        logger.info(f"Encode Framework: {framework_args_config.encode_framework}")
 
-        # --- Moved global constants to instance attributes ---
-        self.onnx_model_dir = encoder_config.onnx_model_path
+        # --- Instance attributes from config ---
+        self.onnx_model_dir = framework_args_config.onnx_model_path
         self.vision_tower_onnx_path = os.path.join(self.onnx_model_dir, "llava_vision_tower.onnx")
         self.projector_onnx_path = os.path.join(self.onnx_model_dir, "llava_projector.onnx")
         self.trt_cache_path = os.path.join(self.onnx_model_dir, "trt_cache")
-        self.original_model_path = encoder_config.hf_model_path
-        self.device = "cuda"  # Corresponds to former DEVICE global
-        self.ort_device = "cuda" # Corresponds to former ORT_DEVICE global
+        self.original_model_path = framework_args_config.hf_model_path
+        self.device = "cuda"
+        self.ort_device = "cuda"
         self.onnx_type_map = {"tensor(float16)": np.float16, "tensor(float)": np.float32} # Corresponds to former ONNX_TYPE_MAP
 
         # --- Get Preprocessing Params (once during init) ---
