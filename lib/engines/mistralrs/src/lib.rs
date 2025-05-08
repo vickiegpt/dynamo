@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::any;
 use std::collections::HashMap;
 use std::{num::NonZero, sync::Arc};
 
@@ -237,6 +238,7 @@ impl MistralRsEngine {
             return_raw_logits: false,
             web_search_options: None,
         });
+        tracing::debug!(request_id, "Sending warmup request");
 
         // Send warmup request and consume response
         if let Ok(sender) = engine.mistralrs.get_sender() {
