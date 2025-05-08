@@ -49,3 +49,4 @@ EncodeWorker:
     resources:
       gpu: 1
   common-configs: [model]
+  encode-framework: pytorch
