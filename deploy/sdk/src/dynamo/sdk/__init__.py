@@ -21,7 +21,6 @@ from dynamo.sdk.core.decorators.endpoint import dynamo_endpoint
 from dynamo.sdk.core.lib import DYNAMO_IMAGE, depends, service
 from dynamo.sdk.lib.decorators import async_on_start
 
-# todo:bis: move to a pydantic class
 dynamo_context: dict[str, Any] = {}
 
 __all__ = [
