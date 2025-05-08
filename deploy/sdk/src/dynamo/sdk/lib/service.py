@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections import defaultdict
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple, TypeVar, Union
 
@@ -27,37 +26,12 @@ from _bentoml_sdk.images import Image
 from _bentoml_sdk.service.config import validate
 from fastapi import FastAPI
 
+from deploy.sdk.src.dynamo.sdk.core.protocol.interface import LinkedServices
 from dynamo.sdk.lib.decorators import DynamoEndpoint
 
 T = TypeVar("T", bound=object)
 
 logger = logging.getLogger(__name__)
-
-
-class RuntimeLinkedServices2:
-    """
-    A class to track the linked services in the runtime.
-    """
-
-    def __init__(self) -> None:
-        self.edges: Dict[DynamoService, Set[DynamoService]] = defaultdict(set)
-
-    def add(self, edge: Tuple[DynamoService, DynamoService]):
-        src, dest = edge
-        self.edges[src].add(dest.inner)
-        # track the dest node as well so we can cleanup later
-        self.edges[dest]
-
-    def remove_unused_edges(self):
-        # this method is idempotent
-        if not self.edges:
-            return
-        # remove edges that are not in the current service
-        for u, vertices in self.edges.items():
-            u.remove_unused_edges(used_edges=vertices)
-
-
-LinkedServices = RuntimeLinkedServices2()
 
 
 @dataclass

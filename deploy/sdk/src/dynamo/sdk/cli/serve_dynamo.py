@@ -133,8 +133,7 @@ def main(
     from bentoml._internal.context import server_context
 
     from dynamo.runtime.logging import configure_dynamo_logging
-
-    from .utils import set_deployment_target
+    from dynamo.sdk.cli.utils import set_deployment_target
 
     set_deployment_target(target)
 
@@ -244,7 +243,6 @@ def main(
             logger.info(
                 f"Starting {service.name} instance with all registered endpoints"
             )
-            # TODO:bis: convert to list
             if lease is None:
                 logger.info(f"Serving {service.name} with primary lease")
             else:
