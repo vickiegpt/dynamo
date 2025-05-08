@@ -39,7 +39,7 @@ jobs:
   pre-merge-rust:
     runs-on: ubuntu-latest
     strategy:
-      matrix: { dir: ['.', 'lib/bindings/python', 'lib/runtime/examples', 'lib/logging'] }
+      matrix: { dir: ['.', 'lib/bindings/python', 'lib/runtime/examples', 'lib/logging', 'lib/tokens'] }
     permissions:
       contents: read
     steps:

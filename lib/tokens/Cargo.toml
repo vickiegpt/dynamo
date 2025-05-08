@@ -15,18 +15,18 @@
 
 [package]
 name = "dynamo-tokens"
-version.workspace = true
-edition.workspace = true
-description.workspace = true
-authors.workspace = true
-license.workspace = true
-homepage.workspace = true
-repository.workspace = true
-keywords.workspace = true
+version = "0.2.1"
+edition = "2021"
+description = "Dynamo Tokens Library"
+authors = ["NVIDIA Inc. <sw-dl-dynamo@nvidia.com>"]
+license = "Apache-2.0"
+homepage = "https://github.com/ai-dynamo/dynamo"
+repository = "https://github.com/ai-dynamo/dynamo.git"
 
 [dependencies]
 derive-getters = { workspace = true }
 xxhash-rust = { workspace = true }
+thiserror = { workspace = true }
 
 bytemuck = "1.22"
 rayon = "1"
