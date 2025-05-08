@@ -30,25 +30,24 @@ use tokcfg::ChatTemplate;
 
 impl PromptFormatter {
     pub async fn from_mdc(mdc: ModelDeploymentCard) -> Result<PromptFormatter> {
-        match mdc
-            .prompt_formatter
-            .ok_or(anyhow::anyhow!("MDC does not contain a prompt formatter"))?
+        let prompt_formatter = match mdc.prompt_formatter {
+            Some(prompt_formatter) => prompt_formatter,
+            None => {
+                tracing::warn!("No prompt formatter found in MDC, using NoOp formatter");
+                return Ok(Self::OAI(Arc::new(NoOpFormatter::default())));
+            }
+        };
+        match prompt_formatter
         {
             PromptFormatterArtifact::HfTokenizerConfigJson(file) => {
                 let content = std::fs::read_to_string(&file)
                     .with_context(|| format!("fs:read_to_string '{file}'"))?;
                 let config: ChatTemplate = serde_json::from_str(&content)?;
-                if config.chat_template.is_none() {
-                    tracing::info!("No chat template found in tokenizer_config.json, using NoOpFormatter");
-                    let noop = NoOpFormatter {};
-                    Ok(Self::OAI(Arc::new(noop)))
-                } else {
-                    Self::from_parts(
-                        config,
-                        mdc.prompt_context
-                            .map_or(ContextMixins::default(), |x| ContextMixins::new(&x)),
-                    )
-                }
+                Self::from_parts(
+                    config,
+            mdc.prompt_context
+                        .map_or(ContextMixins::default(), |x| ContextMixins::new(&x)),
+                )
             }
             PromptFormatterArtifact::GGUF(gguf_path) => {
                 let config = ChatTemplate::from_gguf(&gguf_path)?;
@@ -98,7 +97,7 @@ struct HfTokenizerConfigJsonFormatter {
 ///
 /// Simple formatter that doesn't apply any template transformations.
 /// Used as a fallback when template processing is not needed.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct NoOpFormatter {}
 
 // /// OpenAI Standard Prompt Formatter

@@ -138,7 +138,6 @@ impl OAIPromptFormatter for NoOpFormatter {
             .as_str()
             .ok_or_else(|| anyhow::Error::msg("Message content is not a string"))?
             .to_string();
-        println!("content_str: {:?}", content_str);
         Ok(content_str)
     }
 }
