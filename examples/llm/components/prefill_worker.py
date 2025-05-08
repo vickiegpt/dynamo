@@ -140,7 +140,8 @@ class PrefillWorker:
             logger.info("prefill queue handler started")
             while True:
                 reqs = await prefill_queue.dequeue_prefill_request_batch(
-                    self.engine_args.max_batched_prefill_tokens
+                    self.engine_args.max_batched_prefill_tokens,
+                    self.engine_args.block_size,
                 )
 
                 if reqs is not None:

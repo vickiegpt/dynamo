@@ -60,8 +60,11 @@ class PrefillQueue(NATSQueue):
             return None
 
     async def dequeue_prefill_request_batch(
-        self, max_batched_prefill_tokens: int
+        self, max_batched_prefill_tokens: int, block_size: int
     ) -> Optional[List[RemotePrefillRequest]]:
+        def num_new_tokens(req: RemotePrefillRequest) -> int:
+            return len(req.prompt_token_ids) - len(req.computed_block_ids) * block_size
+
         req = (
             self.pending
             if self.pending is not None
@@ -76,9 +79,7 @@ class PrefillQueue(NATSQueue):
         # Reset the pending request (if any).
         self.pending = None
         # Determine how much margin we have for more requests in the same batch.
-        remaining_prefill_tokens = max_batched_prefill_tokens - len(
-            req.prompt_token_ids
-        )
+        remaining_prefill_tokens = max_batched_prefill_tokens - num_new_tokens(req)
 
         if remaining_prefill_tokens < 0:
             return reqs
@@ -93,9 +94,9 @@ class PrefillQueue(NATSQueue):
                 if req is None:
                     break
 
-                if len(req.prompt_token_ids) <= remaining_prefill_tokens:
+                if num_new_tokens(req) <= remaining_prefill_tokens:
                     reqs.append(req)
-                    remaining_prefill_tokens -= len(req.prompt_token_ids)
+                    remaining_prefill_tokens -= num_new_tokens(req)
                 else:
                     # We need to save this request for the next batch.
                     self.pending = req
