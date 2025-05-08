@@ -214,14 +214,6 @@ class Bento(BaseBento):
                     else:
                         f.write(build_config.description)
 
-            # Create 'apis/openapi.yaml' file
-            # bento_fs.makedir("apis")
-            # with bento_fs.open(fs.path.combine("apis", "openapi.yaml"), "w") as f:
-            #     yaml.dump(svc.openapi_spec, f)
-            # if not is_legacy:
-            #     with bento_fs.open(fs.path.combine("apis", "schema.json"), "w") as f:
-            #         json.dump(svc.schema(), f, indent=2)
-
         if image is None:
             bento_info = BentoInfo(
                 tag=tag,
@@ -269,7 +261,6 @@ class Bento(BaseBento):
                     else []
                 ),
                 envs=build_config.envs,
-                # schema=svc.schema() if not is_legacy else {},
                 image=image.freeze(bento_fs, build_config.envs, platform),
             )
 
