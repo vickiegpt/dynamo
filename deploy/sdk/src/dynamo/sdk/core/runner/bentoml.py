@@ -73,7 +73,7 @@ class BentoMLService(ServiceInterface[T]):
                     field, field.name, field.transports
                 )
             if isinstance(field, DependencyInterface):
-                self._dependencies[field.on.name] = field
+                self._dependencies[field_name] = field
 
     @property
     def dependencies(self) -> dict[str, "DependencyInterface"]:

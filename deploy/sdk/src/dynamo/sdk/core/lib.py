@@ -29,6 +29,7 @@ def set_target(target: DeploymentTarget) -> None:
 
 def get_target() -> DeploymentTarget:
     """Get the current service provider implementation"""
+    global _target
     return _target
 
 
