@@ -96,10 +96,9 @@ def serve(
     Starts a local server for the specified Dynamo pipeline.
     """
     from dynamo.runtime.logging import configure_dynamo_logging
+    from dynamo.sdk.cli.utils import set_deployment_target
     from dynamo.sdk.core.protocol.interface import LinkedServices
     from dynamo.sdk.lib.loader import find_and_load_service
-
-    from .utils import set_deployment_target
 
     set_deployment_target(target)
     # Extract extra arguments not captured by typer
@@ -160,7 +159,6 @@ def serve(
             border_style="green",
         )
     )
-
     serve_dynamo_graph(
         dynamo_pipeline,
         working_dir=working_dir_str,

@@ -18,6 +18,7 @@ from dynamo.sdk.core.protocol.interface import (
     DynamoConfig,
     DynamoEndpointInterface,
     DynamoTransport,
+    LinkedServices,
     ServiceConfig,
     ServiceInterface,
 )
@@ -74,7 +75,7 @@ class LocalService(ServiceInterface[T]):
                     field.name, self, field.transports
                 )
             if isinstance(field, DependencyInterface):
-                self._dependencies[field.on.name] = field
+                self._dependencies[field_name] = field
 
     def find_dependent_by_name(self, name: str) -> "ServiceInterface":
         return self.all_services()[name]
@@ -110,6 +111,7 @@ class LocalService(ServiceInterface[T]):
         return list(self._endpoints.keys())
 
     def link(self, next_service: "ServiceInterface") -> "ServiceInterface":
+        LinkedServices.add((self, next_service))
         return next_service
 
     def remove_unused_edges(self, used_edges: Set["ServiceInterface"]) -> None:

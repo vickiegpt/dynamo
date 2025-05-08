@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections import defaultdict
 from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple, TypeVar, Union
@@ -28,6 +27,7 @@ from _bentoml_sdk.images import Image
 from _bentoml_sdk.service.config import validate
 from fastapi import FastAPI
 
+from deploy.sdk.src.dynamo.sdk.core.protocol.interface import LinkedServices
 from dynamo.sdk.lib.decorators import DynamoEndpoint
 
 T = TypeVar("T", bound=object)
@@ -69,7 +69,6 @@ class RuntimeLinkedServices2:
 
 
 LinkedServices = RuntimeLinkedServices2()
-
 
 @dataclass
 class DynamoConfig:
