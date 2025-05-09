@@ -31,7 +31,7 @@ class DynamoEndpoint:
         self,
         func: t.Callable,
         name: str | None = None,
-        transports: t.List[DynamoTransport] = None,
+        transports: t.List[DynamoTransport] | None = None,
     ):
         self.func = func
         self.name = name or func.__name__
@@ -84,7 +84,8 @@ def dynamo_endpoint(
     """
 
     def decorator(func: t.Callable) -> DynamoEndpoint:
-        return DynamoEndpoint(func, name, is_api)
+        transports = [DynamoTransport.HTTP] if is_api else [DynamoTransport.DEFAULT]
+        return DynamoEndpoint(func, name, transports)
 
     return decorator
 

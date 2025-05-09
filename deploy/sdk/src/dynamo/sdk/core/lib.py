@@ -68,6 +68,8 @@ def service(
         else:
             dynamo_config = dynamo
 
+    assert isinstance(dynamo_config, DynamoConfig)
+
     def decorator(inner: Type[T]) -> ServiceInterface[T]:
         provider = get_target()
         if inner is not None:

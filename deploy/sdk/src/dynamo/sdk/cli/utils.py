@@ -358,9 +358,9 @@ def configure_target_environment(target: TargetEnum):
     from dynamo.sdk.core.lib import set_target
 
     if target == TargetEnum.BENTO:
-        from dynamo.sdk.core.runner.bentoml import K8sDeploymentTarget
+        from dynamo.sdk.core.runner.bentoml import BentoDeploymentTarget
 
-        target = K8sDeploymentTarget()
+        target = BentoDeploymentTarget()
     elif target == TargetEnum.DYNAMO:
         from dynamo.sdk.core.runner.dynamo import LocalDeploymentTarget
 

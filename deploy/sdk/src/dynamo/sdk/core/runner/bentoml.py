@@ -153,7 +153,7 @@ class BentoMLService(ServiceInterface[T]):
         return services
 
 
-class K8sDependency(DependencyInterface[T]):
+class BentoMLDependency(DependencyInterface[T]):
     """BentoML adapter implementing the DependencyInterface"""
 
     def __init__(
@@ -203,7 +203,7 @@ class K8sDependency(DependencyInterface[T]):
         return self._dynamo_client
 
 
-class K8sDeploymentTarget(DeploymentTarget):
+class BentoDeploymentTarget(DeploymentTarget):
     """Kubernetes implementation of the DeploymentTarget"""
 
     def create_service(
@@ -247,5 +247,4 @@ class K8sDeploymentTarget(DeploymentTarget):
         )
 
         # Wrap in our adapter
-        ret = K8sDependency(bentoml_dependency, on)
-        return ret
+        return BentoMLDependency(bentoml_dependency, on)
