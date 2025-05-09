@@ -146,10 +146,10 @@ class ServiceInterface(Generic[T], ABC):
 
     def find_dependent_by_name(self, service_name: str) -> "ServiceInterface":
         """Find a dependent service by name"""
-        pass
+        raise NotImplementedError()
 
     def dynamo_address(self) -> tuple[str, str]:
-        pass
+        raise NotImplementedError()
 
 
 @dataclass
@@ -224,7 +224,7 @@ class DependencyInterface(Generic[T], ABC):
     def __get__(
         self: "DependencyInterface[T]", instance: Any, owner: Any
     ) -> "DependencyInterface[T]" | T:
-        pass
+        raise NotImplementedError()
 
 
 class RuntimeLinkedServices:
@@ -237,7 +237,7 @@ class RuntimeLinkedServices:
 
     def add(self, edge: Tuple[ServiceInterface, ServiceInterface]):
         src, dest = edge
-        self.edges[src].add(dest.inner)
+        self.edges[src].add(dest)
         # track the dest node as well so we can cleanup later
         self.edges[dest]
 
