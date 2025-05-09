@@ -27,7 +27,7 @@ from _bentoml_sdk.images import Image
 from _bentoml_sdk.service.config import validate
 from fastapi import FastAPI
 
-from dynamo.sdk.core.protocol.interface import LinkedServices
+from dynamo.sdk.core.protocol.interface import DynamoTransport, LinkedServices
 from dynamo.sdk.lib.decorators import DynamoEndpoint
 
 T = TypeVar("T", bound=object)
@@ -126,7 +126,9 @@ class DynamoService(Service[T]):
             value = getattr(inner, field)
             if isinstance(value, DynamoEndpoint):
                 self._dynamo_endpoints[value.name] = value
-                if getattr(value, "is_api", False):
+                if DynamoTransport.HTTP in getattr(
+                    value, "_transports", [DynamoTransport.DEFAULT]
+                ):
                     # Ensure endpoint path starts with '/'
                     path = (
                         value.name if value.name.startswith("/") else f"/{value.name}"
