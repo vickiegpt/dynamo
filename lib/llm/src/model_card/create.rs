@@ -169,30 +169,21 @@ impl PromptFormatterArtifact {
 
         // If we found a formatter artifact, check if it's a tokenizer.json with a chat_template
         if let Some(PromptFormatterArtifact::HfTokenizerConfigJson(file)) = &formatter_artifact {
-            // Read and parse the tokenizer.json file
-            match std::fs::read_to_string(file) {
-                Ok(content) => {
-                    match serde_json::from_str::<serde_json::Value>(&content) {
-                        Ok(json) => {
-                            // Check if chat_template field exists
-                            if !json.get("chat_template").is_some() {
-                                tracing::info!("Found tokenizer.json but it doesn't contain a chat_template field");
-                                return Ok(None);
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("Found tokenizer.json but failed to parse it: {}", e);
-                            return Ok(None);
-                        }
-                    }
-                }
-                Err(e) => {
+            let content = std::fs::read_to_string(file)
+                .inspect_err(|e| {
                     tracing::warn!("Found tokenizer.json but failed to read it: {}", e);
-                    return Ok(None);
-                }
+                })?;
+
+            let json = serde_json::from_str::<serde_json::Value>(&content)
+                .inspect_err(|e| {
+                    tracing::warn!("Found tokenizer.json but failed to parse it: {}", e);
+                })?;
+
+            if json.get("chat_template").is_none() {
+                tracing::warn!("tokenizer.json doesn't contain a chat_template field");
+                return Ok(None);
             }
         }
-
         // Return the original formatter artifact
         Ok(formatter_artifact)
     }
