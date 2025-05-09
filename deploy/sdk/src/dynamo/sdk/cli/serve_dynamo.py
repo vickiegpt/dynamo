@@ -36,7 +36,6 @@ from dynamo.sdk import dynamo_context
 from dynamo.sdk.cli.utils import append_dynamo_state
 from dynamo.sdk.core.protocol.interface import DynamoTransport, LinkedServices
 from dynamo.sdk.lib.loader import find_and_load_service
-from dynamo.sdk.lib.service import LinkedServices
 from dynamo.sdk.lib.utils import get_host_port
 
 logger = logging.getLogger(__name__)
@@ -311,9 +310,7 @@ def main(
         if added_routes:
             # Configure uvicorn with graceful shutdown
             host, port = get_host_port()
-            config = uvicorn.Config(
-                service.app, host=host, port=port, log_level="info"
-            )
+            config = uvicorn.Config(service.app, host=host, port=port, log_level="info")
             server = uvicorn.Server(config)
 
             # Start the server with graceful shutdown handling
