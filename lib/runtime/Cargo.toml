@@ -70,6 +70,7 @@ nuid = { version = "0.5" }
 once_cell = { version = "1" }
 regex = { version = "1" }
 socket2 = { version = "0.5.8" }
+webpki-roots = { version = "=0.26.8" }
 
 [dev-dependencies]
 assert_matches = { version = "1.5.0" }

@@ -75,6 +75,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "local-time", 
 validator = { version = "0.20.0", features = ["derive"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 url = {version = "2.5", features = ["serde"]}
+webpki-roots = { version = "=0.26.8" }
 xxhash-rust = { version = "0.8", features = ["xxh3", "const_xxh3"] }
 
 [profile.dev.package]
