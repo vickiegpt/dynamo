@@ -1145,6 +1145,7 @@ dependencies = [
  "url",
  "uuid",
  "validator",
+ "webpki-roots",
  "xxhash-rust",
 ]
 
