@@ -53,3 +53,7 @@ PrefillWorker:
     resources:
       gpu: 1
   common-configs: [model, block-size, max-model-len, kv-transfer-config]
+
+Planner:
+  environment: local
+  no-operation: true
