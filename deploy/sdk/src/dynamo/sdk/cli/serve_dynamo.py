@@ -33,7 +33,6 @@ from fastapi.responses import StreamingResponse
 
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 from dynamo.sdk import dynamo_context
-from dynamo.sdk.cli.utils import append_dynamo_state
 from dynamo.sdk.core.protocol.interface import DynamoTransport, LinkedServices
 from dynamo.sdk.lib.loader import find_and_load_service
 from dynamo.sdk.lib.utils import get_host_port
@@ -249,23 +248,9 @@ def main(
             logger.info(
                 f"Starting {service.name} instance with all registered endpoints"
             )
-            if lease is None:
-                logger.info(f"Serving {service.name} with primary lease")
-            else:
-                logger.info(f"Serving {service.name} with lease: {lease.id()}")
-                # Map custom lease to component
-                watcher_name = None
-                if custom_component_name:
-                    watcher_name = custom_component_name
-                else:
-                    watcher_name = f"{namespace}_{component_name}"
-                append_dynamo_state(namespace, watcher_name, {"lease": lease.id()})
-                logger.info(
-                    f"Appended lease {lease.id()}/{lease.id():x} to {watcher_name}"
-                )
             # Launch serve_endpoint for all endpoints concurrently
             tasks = [
-                endpoint.serve_endpoint(handler, lease)
+                endpoint.serve_endpoint(handler)
                 for endpoint, handler in zip(endpoints, dynamo_handlers)
             ]
             if tasks:
