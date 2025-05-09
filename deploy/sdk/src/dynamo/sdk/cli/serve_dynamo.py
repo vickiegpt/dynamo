@@ -276,8 +276,6 @@ def main(
                     )
                 finally:
                     logger.info("Service shutting down")
-            if class_instance.__class__.__name__ == "PrefillWorker":
-                await asyncio.wait_for(class_instance.task, timeout=None)
         except Exception as e:
             logger.error(f"Error in Dynamo component setup: {str(e)}")
             raise
