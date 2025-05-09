@@ -171,12 +171,12 @@ impl PromptFormatterArtifact {
         if let Some(PromptFormatterArtifact::HfTokenizerConfigJson(file)) = &formatter_artifact {
             let content = std::fs::read_to_string(file)
                 .inspect_err(|e| {
-                    tracing::warn!("Found tokenizer.json but failed to read it: {}", e);
+                    tracing::error!("Found tokenizer.json but failed to read it: {}", e);
                 })?;
 
             let json = serde_json::from_str::<serde_json::Value>(&content)
                 .inspect_err(|e| {
-                    tracing::warn!("Found tokenizer.json but failed to parse it: {}", e);
+                    tracing::error!("Found tokenizer.json but failed to parse it: {}", e);
                 })?;
 
             if json.get("chat_template").is_none() {
