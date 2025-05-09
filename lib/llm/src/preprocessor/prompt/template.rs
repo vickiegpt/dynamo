@@ -37,15 +37,14 @@ impl PromptFormatter {
                 return Ok(Self::OAI(Arc::new(NoOpFormatter::default())));
             }
         };
-        match prompt_formatter
-        {
+        match prompt_formatter {
             PromptFormatterArtifact::HfTokenizerConfigJson(file) => {
                 let content = std::fs::read_to_string(&file)
                     .with_context(|| format!("fs:read_to_string '{file}'"))?;
                 let config: ChatTemplate = serde_json::from_str(&content)?;
                 Self::from_parts(
                     config,
-            mdc.prompt_context
+                    mdc.prompt_context
                         .map_or(ContextMixins::default(), |x| ContextMixins::new(&x)),
                 )
             }

@@ -171,19 +171,21 @@ impl PromptFormatterArtifact {
         if let Some(PromptFormatterArtifact::HfTokenizerConfigJson(file)) = &formatter_artifact {
             // Read and parse the tokenizer.json file
             match std::fs::read_to_string(file) {
-                Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
-                    Ok(json) => {
-                        // Check if chat_template field exists
-                        if !json.get("chat_template").is_some() {
-                            tracing::info!("Found tokenizer.json but it doesn't contain a chat_template field");
+                Ok(content) => {
+                    match serde_json::from_str::<serde_json::Value>(&content) {
+                        Ok(json) => {
+                            // Check if chat_template field exists
+                            if !json.get("chat_template").is_some() {
+                                tracing::info!("Found tokenizer.json but it doesn't contain a chat_template field");
+                                return Ok(None);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Found tokenizer.json but failed to parse it: {}", e);
                             return Ok(None);
                         }
-                    },
-                    Err(e) => {
-                        tracing::warn!("Found tokenizer.json but failed to parse it: {}", e);
-                        return Ok(None);
                     }
-                },
+                }
                 Err(e) => {
                     tracing::warn!("Found tokenizer.json but failed to read it: {}", e);
                     return Ok(None);

@@ -123,7 +123,6 @@ impl OAIPromptFormatter for NoOpFormatter {
     }
 
     fn render(&self, req: &dyn OAIChatLikeRequest) -> Result<String> {
-
         let messages = req.messages();
 
         let first_message = messages
