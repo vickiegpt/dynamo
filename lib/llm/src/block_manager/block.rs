@@ -32,7 +32,10 @@ use crate::tokens::{SaltHash, SequenceHash, Token, TokenBlock, Tokens};
 use transfer::{Immutable, Mutable, Readable, Writable};
 
 use super::{
-    events::PublishHandle, layout::{BlockLayout, LayoutError, LayoutType}, storage::StorageType, WorkerID
+    events::PublishHandle,
+    layout::{BlockLayout, LayoutError, LayoutType},
+    storage::StorageType,
+    WorkerID,
 };
 
 use std::{

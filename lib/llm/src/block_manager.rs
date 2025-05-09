@@ -25,6 +25,7 @@ mod state;
 pub mod block;
 pub mod events;
 pub mod layout;
+pub mod offload;
 pub mod pool;
 pub mod storage;
 
@@ -142,12 +143,12 @@ impl<Metadata: BlockMetadata> KvBlockManager<Metadata> {
     }
 
     /// Get a reference to the host block pool
-    pub fn host(&self) -> Option<&BlockPool<PinnedStorage, Metadata>> {
+    pub fn host(&self) -> Option<&BlockPool<PinnedStorage, Metadata, DeviceStorage>> {
         self.state.host()
     }
 
     /// Get a reference to the device block pool
-    pub fn device(&self) -> Option<&BlockPool<DeviceStorage, Metadata>> {
+    pub fn device(&self) -> Option<&BlockPool<DeviceStorage, Metadata, storage::NullStorage>> {
         self.state.device()
     }
 

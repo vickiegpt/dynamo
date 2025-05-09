@@ -15,8 +15,9 @@
 
 use super::*;
 
+use super::offload::{build_offload_manager, OffloadReceiver, OffloadSender};
+use super::storage::NullStorage;
 use super::{block::Block, config::NixlOptions};
-
 use cudarc::driver::CudaStream;
 use std::sync::Arc;
 
@@ -47,8 +48,8 @@ pub struct KvBlockManagerState<Metadata: BlockMetadata> {
     nixl_agent: Option<NixlAgent>,
     nixl_backends: HashMap<String, Arc<nixl_sys::Backend>>,
 
-    host_pool: Option<BlockPool<PinnedStorage, Metadata>>,
-    device_pool: Option<BlockPool<DeviceStorage, Metadata>>,
+    host_pool: Option<BlockPool<PinnedStorage, Metadata, DeviceStorage>>,
+    device_pool: Option<BlockPool<DeviceStorage, Metadata, NullStorage>>,
 
     local_block_set: NixlBlockSet,
     remote_block_sets: RwLock<HashMap<WorkerID, HashMap<usize, RemoteBlocks>>>,
@@ -101,6 +102,8 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
 
         let mut next_block_set_idx = 0;
         let mut local_block_set = block::nixl::NixlBlockSet::new(worker_id);
+        let should_offload = config.host_layout.is_some() && config.device_layout.is_some();
+        let (offload_sender, offload_receiver) = build_offload_manager::<DeviceStorage, Metadata>();
 
         // Create the host block pool if a host layout is provided
         let (host_pool, host_blocks) = if let Some(config) = config.host_layout {
@@ -108,11 +111,17 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
             tracing::debug!("Constructing host pool.");
             let layout = create_layout(layout_builder.clone(), config, nixl_agent.as_ref())?;
             local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
-            let (pool, blocks) = create_block_pool::<_, Metadata>(
+            let (pool, blocks) = create_block_pool::<_, Metadata, _>(
                 layout,
                 next_block_set_idx,
                 cancellation_token.clone(),
                 worker_id,
+                if should_offload {
+                    Some(offload_receiver)
+                } else {
+                    None
+                },
+                None,
             )?;
             (Some(pool), Some(blocks))
         } else {
@@ -126,11 +135,17 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
             tracing::debug!("Constructing device pool.");
             let layout = create_layout(layout_builder.clone(), config, nixl_agent.as_ref())?;
             local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
-            let (pool, blocks) = create_block_pool::<_, Metadata>(
+            let (pool, blocks) = create_block_pool::<_, Metadata, _>(
                 layout,
                 next_block_set_idx,
                 cancellation_token.clone(),
                 worker_id,
+                None,
+                if should_offload {
+                    Some(offload_sender)
+                } else {
+                    None
+                },
             )?;
             (Some(pool), Some(blocks))
         } else {
@@ -333,11 +348,11 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
         Ok(blocks)
     }
 
-    pub fn host(&self) -> Option<&BlockPool<PinnedStorage, Metadata>> {
+    pub fn host(&self) -> Option<&BlockPool<PinnedStorage, Metadata, DeviceStorage>> {
         self.host_pool.as_ref()
     }
 
-    pub fn device(&self) -> Option<&BlockPool<DeviceStorage, Metadata>> {
+    pub fn device(&self) -> Option<&BlockPool<DeviceStorage, Metadata, NullStorage>> {
         self.device_pool.as_ref()
     }
 
@@ -378,15 +393,23 @@ fn create_layout<S: Storage + NixlEnabledStorage>(
 }
 
 #[expect(clippy::type_complexity)]
-fn create_block_pool<S: Storage + NixlEnabledStorage, M: BlockMetadata>(
+fn create_block_pool<
+    S: Storage + NixlEnabledStorage,
+    M: BlockMetadata,
+    OffloadRecvType: Storage,
+>(
     layout: Arc<dyn NixlLayout<StorageType = S>>,
     block_set_idx: usize,
     cancellation_token: CancellationToken,
     worker_id: WorkerID,
-) -> Result<(BlockPool<S, M>, Vec<Block<S, M>>)> {
+    offload_recv: Option<OffloadReceiver<OffloadRecvType, M>>,
+    offload_send: Option<OffloadSender<S, M>>,
+) -> Result<(BlockPool<S, M, OffloadRecvType>, Vec<Block<S, M>>)> {
     let blocks = block::layout_to_blocks::<_, M>(layout, block_set_idx, worker_id)?;
-    let pool = BlockPool::<S, M>::builder()
+    let pool = BlockPool::<S, M, OffloadRecvType>::builder()
         .cancel_token(cancellation_token)
+        .offload_recv(offload_recv)
+        .offload_send(offload_send)
         .build()?;
     Ok((pool, blocks))
 }

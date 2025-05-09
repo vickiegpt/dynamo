@@ -64,6 +64,7 @@ use active::ActiveBlockPool;
 use derive_builder::Builder;
 use derive_getters::Dissolve;
 use inactive::InactiveBlockPool;
+
 use priority_key::PriorityKey;
 
 pub use super::block::{ImmutableBlock, MutableBlock};
@@ -72,12 +73,14 @@ use super::block::{
     nixl::short_type_name, registry::BlockRegistry, Block, BlockError, BlockMetadata,
 };
 use super::events::{EventManager, NullEventManager};
+use super::offload::{OffloadReceiver, OffloadSender};
 use super::storage::Storage;
 
 use crate::tokens::{SequenceHash, TokenBlock};
 
 use std::{
     collections::{BTreeSet, HashMap, VecDeque},
+    marker::PhantomData,
     sync::{Arc, Weak},
 };
 use tokio_util::sync::CancellationToken;
@@ -107,7 +110,7 @@ pub enum BlockPoolError {
 
 #[derive(Builder, Dissolve)]
 #[builder(pattern = "owned", build_fn(private, name = "build_internal"))]
-pub struct BlockPoolArgs<S: Storage, M: BlockMetadata> {
+pub struct BlockPoolArgs<S: Storage, M: BlockMetadata, OffloadRecvType: Storage> {
     #[builder(default = "NullEventManager::new()")]
     event_manager: Arc<dyn EventManager>,
 
@@ -116,30 +119,48 @@ pub struct BlockPoolArgs<S: Storage, M: BlockMetadata> {
 
     #[builder(default)]
     blocks: Vec<Block<S, M>>,
+
+    #[builder(default)]
+    offload_recv: Option<OffloadReceiver<OffloadRecvType, M>>,
+
+    #[builder(default)]
+    offload_send: Option<OffloadSender<S, M>>,
 }
 
-impl<S: Storage, M: BlockMetadata> BlockPoolArgsBuilder<S, M> {
-    pub fn build(self) -> anyhow::Result<BlockPool<S, M>> {
+impl<S: Storage, M: BlockMetadata, OffloadRecvType: Storage>
+    BlockPoolArgsBuilder<S, M, OffloadRecvType>
+{
+    pub fn build(self) -> anyhow::Result<BlockPool<S, M, OffloadRecvType>> {
         let args = self.build_internal()?;
-        let (event_manager, cancel_token, blocks) = args.dissolve();
+        let (event_manager, cancel_token, blocks, offload_recv, offload_send) = args.dissolve();
 
         tracing::info!("building block pool");
-        let pool = BlockPool::new(event_manager, cancel_token, blocks);
+        let pool = BlockPool::new(
+            event_manager,
+            cancel_token,
+            blocks,
+            offload_recv,
+            offload_send,
+        );
 
         Ok(pool)
     }
 }
 /// Manages the blocks in a specific storage backenda
-pub struct BlockPool<S: Storage, M: BlockMetadata> {
+pub struct BlockPool<S: Storage, M: BlockMetadata, OffloadRecvType: Storage> {
     priority_tx: tokio::sync::mpsc::UnboundedSender<PriorityRequest<S, M>>,
     ctrl_tx: tokio::sync::mpsc::UnboundedSender<ControlRequest<S, M>>,
+    marker: PhantomData<OffloadRecvType>,
 }
 
-impl<S: Storage, M: BlockMetadata> Clone for BlockPool<S, M> {
+impl<S: Storage, M: BlockMetadata, OffloadRecvType: Storage> Clone
+    for BlockPool<S, M, OffloadRecvType>
+{
     fn clone(&self) -> Self {
         Self {
             priority_tx: self.priority_tx.clone(),
             ctrl_tx: self.ctrl_tx.clone(),
+            marker: PhantomData,
         }
     }
 }
@@ -180,8 +201,8 @@ enum ControlRequest<S: Storage, M: BlockMetadata> {
     AddBlocks(Unary<Vec<Block<S, M>>, ()>),
 }
 
-impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
-    pub fn builder() -> BlockPoolArgsBuilder<S, M> {
+impl<S: Storage, M: BlockMetadata, OffloadRecvType: Storage> BlockPool<S, M, OffloadRecvType> {
+    pub fn builder() -> BlockPoolArgsBuilder<S, M, OffloadRecvType> {
         BlockPoolArgsBuilder::default()
     }
 
@@ -200,9 +221,16 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         event_manager: Arc<dyn EventManager>,
         cancel_token: CancellationToken,
         blocks: Vec<Block<S, M>>,
+        offload_recv: Option<OffloadReceiver<OffloadRecvType, M>>,
+        offload_send: Option<OffloadSender<S, M>>,
     ) -> Self {
-        let (pool, progress_engine) =
-            Self::with_progress_engine(event_manager, cancel_token, blocks);
+        let (pool, progress_engine) = Self::with_progress_engine(
+            event_manager,
+            cancel_token,
+            blocks,
+            offload_recv,
+            offload_send,
+        );
 
         // pool.runtime.handle().spawn(async move {
         //     let mut progress_engine = progress_engine;
@@ -239,6 +267,8 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         event_manager: Arc<dyn EventManager>,
         cancel_token: CancellationToken,
         blocks: Vec<Block<S, M>>,
+        offload_recv: Option<OffloadReceiver<OffloadRecvType, M>>,
+        offload_send: Option<OffloadSender<S, M>>,
     ) -> (Self, ProgressEngine<S, M>) {
         let (priority_tx, priority_rx) = tokio::sync::mpsc::unbounded_channel();
         let (ctrl_tx, ctrl_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -250,6 +280,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
             Self {
                 priority_tx,
                 ctrl_tx,
+                marker: PhantomData,
             },
             progress_engine,
         )

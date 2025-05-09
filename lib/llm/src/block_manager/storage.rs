@@ -338,6 +338,35 @@ impl RegisterableStorage for SystemStorage {
     }
 }
 
+/// A storage implementation that does nothing.
+///
+/// This is useful for cases where a storage is not needed, or when a storage is not
+/// available.
+#[derive(Debug)]
+pub struct NullStorage;
+
+impl Storage for NullStorage {
+    fn storage_type(&self) -> StorageType {
+        StorageType::Null
+    }
+
+    fn addr(&self) -> u64 {
+        0
+    }
+
+    fn size(&self) -> usize {
+        0
+    }
+
+    unsafe fn as_ptr(&self) -> *const u8 {
+        std::ptr::null()
+    }
+
+    unsafe fn as_mut_ptr(&mut self) -> *mut u8 {
+        std::ptr::null_mut()
+    }
+}
+
 /// Allocator for SystemStorage
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemAllocator;
