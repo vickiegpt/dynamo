@@ -49,12 +49,12 @@ If you are using a **GPU**, the following GPU models and architectures are suppo
 | **Build Dependency** | **Version** |
 |----------------------|-------------|
 | **Base Container**   |    [25.03](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/cuda-dl-base/tags)    |
-| **ai-dynamo-vllm**   |0.8.4* |
+| **ai-dynamo-vllm**   |0.8.4.post1* |
 | **TensorRT-LLM**     |    0.19.0** |
 | **NIXL**             |    0.2.1    |
 
 > **Note**:
-> - *ai-dynamo-vllm v0.8.4 is a customized patch of v0.8.4 from vLLM.
+> - *ai-dynamo-vllm v0.8.4.post1 is a customized patch of v0.8.4 from vLLM.
 > - **The specific version of TensorRT-LLM (planned v0.19.0) that will be supported by Dynamo is subject to change.
 
 
