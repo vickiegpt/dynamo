@@ -133,7 +133,7 @@ class LocalService(ServiceInterface[T]):
     def remove_unused_edges(self, used_edges: Set["ServiceInterface"]) -> None:
         current_deps = dict(self._dependencies)
         for dep_key, dep_value in current_deps.items():
-            if dep_value.on.inner not in used_edges:
+            if dep_value.on not in used_edges:
                 del self._dependencies[dep_key]
 
     def dynamo_address(self) -> tuple[str, str]:
