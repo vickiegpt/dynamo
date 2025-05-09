@@ -1,4 +1,20 @@
-# Import BentoML here to isolate the dependency
+#  SPDX-FileCopyrightText: Copyright (c) 2020 Atalaya Tech. Inc
+#  SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#  SPDX-License-Identifier: Apache-2.0
+#  #
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#  #
+#  http://www.apache.org/licenses/LICENSE-2.0
+#  #
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#  Modifications Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES
+
 from typing import Any, Dict, List, Optional, Set, Type, TypeVar
 
 from _bentoml_sdk import Service as BentoService
@@ -20,7 +36,7 @@ from dynamo.sdk.core.protocol.interface import (
 T = TypeVar("T", bound=object)
 
 
-class K8sEndpoint(DynamoEndpoint):
+class BentoEndpoint(DynamoEndpoint):
     """BentoML-specific endpoint implementation"""
 
     def __init__(
@@ -59,7 +75,7 @@ class BentoMLService(ServiceInterface[T]):
         self._dynamo_config = dynamo_config or DynamoConfig(
             name=name, namespace="default"
         )
-        self._endpoints: Dict[str, K8sEndpoint] = {}
+        self._endpoints: Dict[str, BentoEndpoint] = {}
         if not app:
             self.app = FastAPI(title=name)
         else:
@@ -69,7 +85,7 @@ class BentoMLService(ServiceInterface[T]):
         for field_name in dir(bentoml_service.inner):
             field = getattr(bentoml_service.inner, field_name)
             if isinstance(field, DynamoEndpoint):
-                self._endpoints[field.name] = K8sEndpoint(
+                self._endpoints[field.name] = BentoEndpoint(
                     field, field.name, field.transports
                 )
             if isinstance(field, DependencyInterface):
