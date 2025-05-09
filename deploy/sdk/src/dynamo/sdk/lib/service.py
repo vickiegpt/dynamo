@@ -45,31 +45,6 @@ class ComponentType(str, Enum):
     # etc.
 
 
-class RuntimeLinkedServices2:
-    """
-    A class to track the linked services in the runtime.
-    """
-
-    def __init__(self) -> None:
-        self.edges: Dict[DynamoService, Set[DynamoService]] = defaultdict(set)
-
-    def add(self, edge: Tuple[DynamoService, DynamoService]):
-        src, dest = edge
-        self.edges[src].add(dest.inner)
-        # track the dest node as well so we can cleanup later
-        self.edges[dest]
-
-    def remove_unused_edges(self):
-        # this method is idempotent
-        if not self.edges:
-            return
-        # remove edges that are not in the current service
-        for u, vertices in self.edges.items():
-            u.remove_unused_edges(used_edges=vertices)
-
-
-LinkedServices = RuntimeLinkedServices2()
-
 @dataclass
 class DynamoConfig:
     """Configuration for Dynamo components"""
