@@ -355,13 +355,15 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
         self.worker_id
     }
 
-    pub fn offload_block<S: Storage + 'static>(
+    pub async fn enqueue_offload_block<S: Storage + 'static>(
         &self,
         block: &ImmutableBlock<S, Metadata>,
         location: CacheLevel,
         priority: u64,
     ) -> Result<()> {
-        self.offload_manager.offload(block, location, priority)?;
+        self.offload_manager
+            .offload(block, location, priority)
+            .await?;
 
         Ok(())
     }

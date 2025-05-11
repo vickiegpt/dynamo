@@ -180,8 +180,12 @@ impl<S: Storage, M: BlockMetadata> State<S, M> {
 
             let immutable = self.active.register(mutable)?;
 
+            // TODO: Make a way to set meaningful priority values, and maybe don't offload every block.
             if offload {
-                immutable.enqueue_offload_to(CacheLevel::G2, 0).unwrap();
+                immutable
+                    .enqueue_offload_to(CacheLevel::G2, 0)
+                    .await
+                    .unwrap();
             }
 
             immutable_blocks.push(immutable);

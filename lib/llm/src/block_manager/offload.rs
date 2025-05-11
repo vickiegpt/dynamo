@@ -1,5 +1,5 @@
-use std::sync::{Arc, Weak};
-use tokio::sync::{Mutex, Notify};
+use std::sync::Arc;
+use tokio::sync::{mpsc, Mutex, Notify};
 
 use super::storage::Storage;
 use crate::block_manager::block::{
@@ -9,50 +9,22 @@ use crate::block_manager::state::TransferContext;
 use crate::block_manager::{BlockPool, CacheLevel, DeviceStorage, PinnedStorage};
 
 use anyhow::Result;
-use cudarc::driver::CudaContext;
+use cudarc::driver::{sys::CUevent_flags, CudaContext};
 use std::any::Any;
-use std::cmp::Ordering;
+
 use std::collections::BTreeSet;
 
-struct OffloadRequest<S: Storage, M: BlockMetadata> {
-    priority: u64,
-    block: Weak<MutableBlock<S, M>>,
-    sequence_hash: u64,
-    location: CacheLevel,
-}
+mod pending;
+mod request;
 
-impl<S: Storage, M: BlockMetadata> PartialOrd for OffloadRequest<S, M> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // Order high to low.
-        Some(self.cmp(other))
-    }
-}
+use pending::{PendingOffload, PendingOffloadManager};
+use request::{OffloadRequest, OffloadRequestKey};
 
-impl<S: Storage, M: BlockMetadata> Ord for OffloadRequest<S, M> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Order high to low.
-        other.priority.cmp(&self.priority)
-    }
-}
-
-// Manually implement PartialEq based on sequence_hash
-impl<S: Storage, M: BlockMetadata> PartialEq for OffloadRequest<S, M> {
-    fn eq(&self, other: &Self) -> bool {
-        self.sequence_hash == other.sequence_hash
-            && self.priority == other.priority
-            && self.location == other.location
-    }
-}
-
-// Manually implement Eq
-impl<S: Storage, M: BlockMetadata> Eq for OffloadRequest<S, M> {}
-
-/// For now, only support offloading from G1 to G2.
+/// The offload manager receives and enqueues offload requests from the device.
 pub struct OffloadManager<Metadata: BlockMetadata> {
-    device_offload_tx: tokio::sync::mpsc::UnboundedSender<OffloadRequest<DeviceStorage, Metadata>>,
+    device_offload_tx: mpsc::UnboundedSender<OffloadRequest<DeviceStorage, Metadata>>,
 
-    ingress_handle: Option<tokio::task::JoinHandle<Result<()>>>,
-    process_handle: Option<tokio::task::JoinHandle<Result<()>>>,
+    tick: Arc<Mutex<u64>>,
 }
 
 impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
@@ -60,14 +32,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         device: Arc<Option<BlockPool<DeviceStorage, Metadata>>>,
         host: Arc<Option<BlockPool<PinnedStorage, Metadata>>>,
     ) -> Arc<Self> {
-        let (device_offload_tx, mut device_offload_rx) = tokio::sync::mpsc::unbounded_channel();
-
-        // Create self, then create the offload handle that references self.
-        let mut this = Self {
-            device_offload_tx,
-            ingress_handle: None,
-            process_handle: None,
-        };
+        let (device_offload_tx, device_offload_rx) = mpsc::unbounded_channel();
 
         let device_offload_queue = Arc::new(Mutex::new(BTreeSet::new()));
         let device_offload_notify = Arc::new(Notify::new());
@@ -75,79 +40,41 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         let device_offload_queue_clone = device_offload_queue.clone();
         let device_offload_notify_clone = device_offload_notify.clone();
 
-        let ingress_handle = tokio::spawn(async move {
-            while let Some(request) = device_offload_rx.recv().await {
-                println!("Received offload request.");
-                device_offload_queue.lock().await.insert(request);
-                device_offload_notify.notify_one();
-            }
-
-            Ok(())
+        // The task responsible for receiving and enqueuing offload requests.
+        tokio::spawn(async move {
+            OffloadManager::ingress_worker(
+                device_offload_queue,
+                device_offload_notify,
+                device_offload_rx,
+            )
+            .await
         });
 
-        let cuda_ctx = CudaContext::new(0).unwrap();
-        let transfer_ctx = TransferContext::new(None, cuda_ctx.default_stream());
-
-        let process_handle = tokio::spawn(async move {
-            let device_offload_queue = device_offload_queue_clone;
-            let device_offload_notify = device_offload_notify_clone;
-            loop {
-                let request = device_offload_queue.lock().await.pop_first();
-
-                if let Some(request) = request {
-                    println!("Processing offload request.");
-                    let block = match request.block.upgrade() {
-                        Some(block) => Some(block),
-                        None => {
-                            println!("No block found, trying to match sequence hash.");
-                            if let Some(device) = device.as_ref() {
-                                device
-                                    .match_sequence_hashes(vec![request.sequence_hash].as_slice())
-                                    .await?
-                                    .pop()
-                                    .map(|block| block.mutable_block().clone())
-                            } else {
-                                None
-                            }
-                        }
-                    };
-
-                    // If we've found the block, offload it to the host.
-                    if let Some(block) = block {
-                        // Get a block from the host pool
-                        if let Some(host) = host.as_ref() {
-                            // Allocate a single block from the host pool
-
-                            let host_blocks = host.allocate_blocks(1).await?;
-
-                            if let Some(mut host_block) = host_blocks.into_iter().next() {
-                                block.write_to(&mut host_block, None, &transfer_ctx)?;
-
-                                OffloadManager::handle_offload(&block, host_block, host).await?;
-                            }
-                        }
-                    }
-                } else {
-                    device_offload_notify.notified().await;
-                }
-            }
+        // The task responsible for processing offload requests.
+        tokio::spawn(async move {
+            OffloadManager::process_worker(
+                device_offload_queue_clone,
+                device_offload_notify_clone,
+                device,
+                host,
+            )
+            .await
         });
 
-        this.ingress_handle = Some(ingress_handle);
-        this.process_handle = Some(process_handle);
-        Arc::new(this)
+        Arc::new(Self {
+            device_offload_tx,
+            tick: Arc::new(Mutex::new(0)),
+        })
     }
 
     fn build_request<S: Storage>(
         block: &ImmutableBlock<S, Metadata>,
-        location: CacheLevel,
-        priority: u64,
+        key: OffloadRequestKey,
     ) -> Result<OffloadRequest<S, Metadata>> {
         Ok(OffloadRequest {
             block: Arc::downgrade(block.mutable_block()),
             sequence_hash: block.sequence_hash()?,
-            location,
-            priority,
+            key,
         })
     }
 
@@ -171,7 +98,92 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         Ok(())
     }
 
-    pub fn offload<S: Storage>(
+    async fn ingress_worker(
+        device_offload_queue: Arc<Mutex<BTreeSet<OffloadRequest<DeviceStorage, Metadata>>>>,
+        device_offload_notify: Arc<Notify>,
+        mut device_offload_rx: mpsc::UnboundedReceiver<OffloadRequest<DeviceStorage, Metadata>>,
+    ) -> Result<()> {
+        while let Some(request) = device_offload_rx.recv().await {
+            device_offload_queue.lock().await.insert(request);
+            device_offload_notify.notify_one();
+        }
+        Ok(())
+    }
+
+    async fn process_worker(
+        device_offload_queue: Arc<Mutex<BTreeSet<OffloadRequest<DeviceStorage, Metadata>>>>,
+        device_offload_notify: Arc<Notify>,
+        device: Arc<Option<BlockPool<DeviceStorage, Metadata>>>,
+        host: Arc<Option<BlockPool<PinnedStorage, Metadata>>>,
+    ) -> Result<()> {
+        // Since cuda memcpys in streams are async, this gets a bit tricky.
+        // We can't just consume the queue normally, otherwise the stream would become very backlogged.
+        // We also need to ensure that we hold a strong reference to blocks currently being offloaded until the transfer corresponding to the block is complete.
+        // We can't just release our strong reference to the block until the transfer is complete, because the block may be deallocated before the transfer is complete.
+        // To do this, we use a queue to track blocks currently being offloaded. Once the offload is complete, the reference to the block is dropped.
+
+        if device.is_none() || host.is_none() {
+            return Ok(());
+        }
+
+        let device = device.as_ref().as_ref().unwrap();
+        let host = host.as_ref().as_ref().unwrap();
+
+        let cuda_ctx = CudaContext::new(0)?;
+        let stream = cuda_ctx.new_stream()?;
+
+        let transfer_ctx = TransferContext::new(None, stream.clone());
+
+        let pending_offload_manager = PendingOffloadManager::new();
+
+        loop {
+            // Try to check the offload queue.
+            let request = device_offload_queue.lock().await.pop_first();
+
+            // If there is a request, process it.
+            if let Some(request) = request {
+                // Try to upgrade the block to a strong reference.
+                let block = match request.block.upgrade() {
+                    Some(block) => Some(block),
+                    // If unable to, try to find the block in the pool.
+                    None => device
+                        .match_sequence_hashes(vec![request.sequence_hash].as_slice())
+                        .await?
+                        .pop()
+                        .map(|block| block.mutable_block().clone()),
+                };
+
+                // If we've found the block, offload it to the host.
+                if let Some(block) = block {
+                    // Allocate a block from the host pool.
+                    let host_blocks = host.allocate_blocks(1).await?;
+
+                    if let Some(mut host_block) = host_blocks.into_iter().next() {
+                        // Enqueue the offload into the stream.
+                        block.write_to(&mut host_block, None, &transfer_ctx)?;
+
+                        // Record an event after the transfer is complete.
+                        let event = transfer_ctx
+                            .stream()
+                            .record_event(Some(CUevent_flags::CU_EVENT_BLOCKING_SYNC))?;
+
+                        // Update block metadata and register with host pool.
+                        OffloadManager::handle_offload(&block, host_block, host).await?;
+
+                        // Record the pending offload. This may block if too many offloads are already pending.
+                        pending_offload_manager
+                            .handle_pending_offload(PendingOffload::new(block, event))
+                            .await?;
+                    } // TODO: How should we handle an allocation failure?
+                }
+            } else {
+                // If the queue is empty, wait to be notified.
+                device_offload_notify.notified().await;
+            }
+        }
+    }
+
+    pub async fn offload<S: Storage>(
         &self,
         block: &ImmutableBlock<S, Metadata>,
         location: CacheLevel,
@@ -194,13 +206,17 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                 return Err(anyhow::anyhow!("Only offloads to G2 are supported."));
             }
 
-            println!("Enqueuing offload.");
-
-            self.device_offload_tx.send(OffloadManager::build_request(
-                device_block,
-                location,
+            let mut tick = self.tick.lock().await;
+            let key = OffloadRequestKey {
                 priority,
-            )?)?;
+                timestamp: *tick,
+            };
+            // Increment a counter for each block. Within the same priority, blocks with lower counter values are processed first.
+            *tick += 1;
+            drop(tick);
+
+            self.device_offload_tx
+                .send(OffloadManager::build_request(device_block, key)?)?;
         }
 
         Ok(())
@@ -300,12 +316,14 @@ mod tests {
         let immutable_block = ImmutableBlock::new(Arc::new(reset_block(device_pool).await?));
         assert!(offload_manager
             .offload(&immutable_block, CacheLevel::G2, 0)
+            .await
             .is_err());
 
         // Check blocks in the 'PARTIAL' state.
         let immutable_block = ImmutableBlock::new(Arc::new(partial_block(device_pool, 0).await?));
         assert!(offload_manager
             .offload(&immutable_block, CacheLevel::G2, 0)
+            .await
             .is_err());
 
         // Check blocks in the 'COMPLETED' state.
@@ -314,6 +332,7 @@ mod tests {
         ));
         assert!(offload_manager
             .offload(&immutable_block, CacheLevel::G2, 0)
+            .await
             .is_err());
 
         Ok(())
@@ -338,16 +357,21 @@ mod tests {
 
         assert!(offload_manager
             .offload(&immutable_device_block, CacheLevel::G1, 0)
+            .await
             .is_err());
         assert!(offload_manager
             .offload(&immutable_device_block, CacheLevel::G3, 0)
+            .await
             .is_err());
         assert!(offload_manager
             .offload(&immutable_device_block, CacheLevel::G4, 0)
+            .await
             .is_err());
 
         // Offloads should only go to G2 (for now)
-        offload_manager.offload(&immutable_device_block, CacheLevel::G2, 0)?;
+        offload_manager
+            .offload(&immutable_device_block, CacheLevel::G2, 0)
+            .await?;
 
         // Wait for it to be processed
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -356,6 +380,7 @@ mod tests {
         let host_blocks = host_pool
             .match_sequence_hashes(vec![immutable_device_block.sequence_hash()?].as_slice())
             .await?;
+
         assert_eq!(host_blocks.len(), 1);
         assert_eq!(
             host_blocks[0].sequence_hash()?,
