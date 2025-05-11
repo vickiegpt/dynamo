@@ -1,3 +1,18 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, Notify};
 
@@ -162,7 +177,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                         // Enqueue the offload into the stream.
                         block.write_to(&mut host_block, None, &transfer_ctx)?;
 
-                        // Record an event after the transfer is complete.
+                        // Record an event after the transfer is complete. Use the BLOCKING_SYNC flag to ensure the event is recorded synchronously on the host.
                         let event = transfer_ctx
                             .stream()
                             .record_event(Some(CUevent_flags::CU_EVENT_BLOCKING_SYNC))?;
@@ -174,7 +189,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                         pending_offload_manager
                             .handle_pending_offload(PendingOffload::new(block, event))
                             .await?;
-                    } // TODO: How should we handle an allocation failure?
+                    } // TODO: How should we handle an allocation failure in the host pool?
                 }
             } else {
                 // If the queue is empty, wait to be notified.
