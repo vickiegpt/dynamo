@@ -136,7 +136,7 @@ pub fn compute_block_hash_for_seq(tokens: &[u32], kv_block_size: usize) -> Vec<L
 }
 
 pub fn compute_seq_hash_for_blocks(
-    local_hashes: Vec<LocalBlockHash>,
+    local_hashes: &[LocalBlockHash],
     parent_hash: Option<ExternalSequenceBlockHash>,
 ) -> Vec<KvCacheStoredBlockData> {
     if local_hashes.is_empty() {
@@ -146,7 +146,7 @@ pub fn compute_seq_hash_for_blocks(
     let mut result = Vec::with_capacity(local_hashes.len());
     let mut current_parent = parent_hash;
 
-    for tokens_hash in local_hashes {
+    for &tokens_hash in local_hashes {
         // Compute the sequence hash based on the parent and current block hash
         let sequence_hash = match current_parent {
             Some(parent) => {
@@ -1262,6 +1262,60 @@ mod tests {
             .collect::<Vec<u32>>();
         let hashes = compute_block_hash_for_seq(&sequence, kv_block_size);
         assert_eq!(hashes.len(), 2);
+    }
+
+    #[test]
+    fn test_compute_seq_hash_for_blocks() {
+        // Create two vectors of local hashes: [1, 2, 3, 4] and [1, 2, 3]
+        let long_vec = vec![
+            LocalBlockHash(1),
+            LocalBlockHash(2), 
+            LocalBlockHash(3),
+            LocalBlockHash(4),
+        ];
+        
+        let short_vec = vec![
+            LocalBlockHash(1),
+            LocalBlockHash(2),
+            LocalBlockHash(3),
+        ];
+        
+        // Compute sequence hashes for both vectors with no parent
+        let long_result = compute_seq_hash_for_blocks(&long_vec, None);
+        let short_result = compute_seq_hash_for_blocks(&short_vec, None);
+        
+        // Verify correct lengths
+        assert_eq!(long_result.len(), 4);
+        assert_eq!(short_result.len(), 3);
+        
+        // Verify that sequence hashes match up to the third position
+        for i in 0..3 {
+            assert_eq!(long_result[i].block_hash, short_result[i].block_hash);
+            assert_eq!(long_result[i].tokens_hash, short_result[i].tokens_hash);
+        }
+        
+        // Verify the tokens_hash is preserved in both results
+        assert_eq!(long_result[0].tokens_hash, LocalBlockHash(1));
+        assert_eq!(long_result[1].tokens_hash, LocalBlockHash(2));
+        assert_eq!(long_result[2].tokens_hash, LocalBlockHash(3));
+        assert_eq!(long_result[3].tokens_hash, LocalBlockHash(4));
+        
+        // For first blocks with no parent, the sequence hash equals the tokens hash
+        assert_eq!(long_result[0].block_hash, ExternalSequenceBlockHash(1));
+        
+        // Compute sequence hashes with a parent hash
+        let parent_hash = Some(ExternalSequenceBlockHash(1000));
+        let long_result_with_parent = compute_seq_hash_for_blocks(&long_vec, parent_hash);
+        let short_result_with_parent = compute_seq_hash_for_blocks(&short_vec, parent_hash);
+        
+        // Verify that sequence hashes still match up to the third position
+        for i in 0..3 {
+            assert_eq!(long_result_with_parent[i].block_hash, short_result_with_parent[i].block_hash);
+            assert_eq!(long_result_with_parent[i].tokens_hash, short_result_with_parent[i].tokens_hash);
+        }
+        
+        // First block with parent should have different hash than without parent
+        assert_ne!(long_result_with_parent[0].block_hash, long_result[0].block_hash);
     }
 
     fn make_indexer(
