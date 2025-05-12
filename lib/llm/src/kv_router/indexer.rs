@@ -44,6 +44,7 @@
 //! This module provides a scalable and efficient way to manage and retrieve data blocks for LLM inference, leveraging a global KV cache to optimize performance.
 
 use bytes::Bytes;
+use bytemuck::cast_slice;
 // use prometheus::{IntCounter, IntGauge};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -132,6 +133,45 @@ pub fn compute_block_hash_for_seq(tokens: &[u32], kv_block_size: usize) -> Vec<L
             compute_block_hash(&Bytes::from(bytes)) // Convert the byte Vec to Bytes
         })
         .collect()
+}
+
+pub fn compute_seq_hash_for_blocks(
+    local_hashes: Vec<LocalBlockHash>,
+    parent_hash: Option<ExternalSequenceBlockHash>,
+) -> Vec<KvCacheStoredBlockData> {
+    if local_hashes.is_empty() {
+        return Vec::new();
+    }
+
+    let mut result = Vec::with_capacity(local_hashes.len());
+    let mut current_parent = parent_hash;
+
+    for tokens_hash in local_hashes {
+        // Compute the sequence hash based on the parent and current block hash
+        let sequence_hash = match current_parent {
+            Some(parent) => {
+                // Rolling hash: combine parent sequence hash with current block hash
+                let hash_input = [parent.0, tokens_hash.0];
+                let seq_hash = xxh3::xxh3_64_with_seed(cast_slice(&hash_input), 0);
+                ExternalSequenceBlockHash(seq_hash)
+            }
+            None => {
+                // First block with no parent: sequence hash is the block hash itself
+                ExternalSequenceBlockHash(tokens_hash.0)
+            }
+        };
+
+        // Add to the result
+        result.push(KvCacheStoredBlockData {
+            block_hash: sequence_hash,
+            tokens_hash,
+        });
+
+        // Update parent for next iteration
+        current_parent = Some(sequence_hash);
+    }
+
+    result
 }
 
 /// A [`KvCacheEvent`] on a specific LLM worker denoted by [`WorkerId`].
