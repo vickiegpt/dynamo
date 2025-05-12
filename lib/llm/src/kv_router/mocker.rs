@@ -126,20 +126,32 @@ impl<T: Clone + Eq + Hash + Ord> LRUEvictor<T> {
 
 /// Mock implementation of workers for testing and simulation
 pub struct MockWorkers {
-    pub active_blocks: HashSet<SequenceHashWithDepth>,
+    pub num_workers: u64,
+    pub active_blocks: Vec<HashSet<SequenceHashWithDepth>>,
+    pub inactive_blocks: Vec<LRUEvictor<SequenceHashWithDepth>>,
+    pub waiting_blocks: Vec<VecDeque<DirectRequest>>,
     pub radix_tree: RadixTree,
-    pub inactive_blocks: LRUEvictor<SequenceHashWithDepth>,
-    pub waiting_blocks: VecDeque<DirectRequest>,
 }
 
 impl MockWorkers {
     /// Create a new MockWorkers instance
-    pub fn new() -> Self {
+    pub fn new(num_workers: u64) -> Self {
+        let mut active_blocks = Vec::with_capacity(num_workers as usize);
+        let mut inactive_blocks = Vec::with_capacity(num_workers as usize);
+        let mut waiting_blocks = Vec::with_capacity(num_workers as usize);
+        
+        for _ in 0..num_workers {
+            active_blocks.push(HashSet::new());
+            inactive_blocks.push(LRUEvictor::new());
+            waiting_blocks.push(VecDeque::new());
+        }
+        
         MockWorkers {
-            active_blocks: HashSet::new(),
+            num_workers,
+            active_blocks,
+            inactive_blocks,
+            waiting_blocks,
             radix_tree: RadixTree::new(),
-            inactive_blocks: LRUEvictor::new(),
-            waiting_blocks: VecDeque::new(),
         }
     }
 }
