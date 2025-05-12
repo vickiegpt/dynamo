@@ -202,7 +202,7 @@ class DynamoRunProcess:
                     response = requests.get(f"{self.url}/v1/models", timeout=1)
                     model_list = response.json()
                     print(model_list)
-                    if response.status_code == 200:
+                    if response.status_code == 200 and len(model_list["data"]) > 0:
                         return
                 except Exception:
                     pass
@@ -262,6 +262,7 @@ def dynamo_run(tmp_path_factory, backend, model, input_type, timeout):
     ids=["text", "http-streaming", "http"],
 )
 @pytest.mark.parametrize("prompt", [("Hello!", "Hello! How can I assist you today?")])
+@pytest.mark.gpu
 def test_run(dynamo_run, backend, model, input_type, prompt, stream, timeout):
     if input_type == "text":
         dynamo_run.send_input(f"{prompt[0]}")

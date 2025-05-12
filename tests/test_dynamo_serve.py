@@ -265,6 +265,7 @@ def deployment_graph_test(request):
     return graphs[request.param]
 
 
+@pytest.mark.gpu
 def test_deployment(deployment_graph_test):
     deployment_graph, payload = deployment_graph_test
     response = None
