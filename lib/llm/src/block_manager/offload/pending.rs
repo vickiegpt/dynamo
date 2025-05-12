@@ -41,7 +41,7 @@ impl<S: Storage, M: BlockMetadata> PendingOffload<S, M> {
 const MAX_OFFLOAD_STREAM_DEPTH: usize = 4;
 
 pub struct PendingOffloadManager<S: Storage, M: BlockMetadata> {
-    pub pending_offload_q: mpsc::Sender<PendingOffload<S, M>>,
+    pending_offload_q: mpsc::Sender<PendingOffload<S, M>>,
 }
 
 impl<S: Storage, M: BlockMetadata> PendingOffloadManager<S, M> {

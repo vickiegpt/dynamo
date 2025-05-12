@@ -355,7 +355,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
         self.worker_id
     }
 
-    pub async fn enqueue_offload_block<S: Storage + 'static>(
+    pub(crate) async fn enqueue_offload_block<S: Storage + 'static>(
         &self,
         block: &ImmutableBlock<S, Metadata>,
         location: CacheLevel,

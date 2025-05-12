@@ -37,7 +37,7 @@ use request::{OffloadRequest, OffloadRequestKey};
 
 /// The offload manager receives and enqueues offload requests from the device.
 pub struct OffloadManager<Metadata: BlockMetadata> {
-    device_offload_tx: mpsc::UnboundedSender<OffloadRequest<DeviceStorage, Metadata>>,
+    dtoh_offload_tx: mpsc::UnboundedSender<OffloadRequest<DeviceStorage, Metadata>>,
 
     tick: Arc<Mutex<u64>>,
 }
@@ -47,37 +47,31 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         device: Arc<Option<BlockPool<DeviceStorage, Metadata>>>,
         host: Arc<Option<BlockPool<PinnedStorage, Metadata>>>,
     ) -> Arc<Self> {
-        let (device_offload_tx, device_offload_rx) = mpsc::unbounded_channel();
+        let (dtoh_offload_tx, dtoh_offload_rx) = mpsc::unbounded_channel();
 
-        let device_offload_queue = Arc::new(Mutex::new(BTreeSet::new()));
-        let device_offload_notify = Arc::new(Notify::new());
-
-        let device_offload_queue_clone = device_offload_queue.clone();
-        let device_offload_notify_clone = device_offload_notify.clone();
+        let dtoh_offload_queue = Arc::new(Mutex::new(BTreeSet::new()));
+        let dtoh_offload_notify = Arc::new(Notify::new());
 
         // The task responsible for receiving and enqueuing offload requests.
+        let dtoh_offload_queue_clone = dtoh_offload_queue.clone();
+        let dtoh_offload_notify_clone = dtoh_offload_notify.clone();
         tokio::spawn(async move {
             OffloadManager::ingress_worker(
-                device_offload_queue,
-                device_offload_notify,
-                device_offload_rx,
+                dtoh_offload_queue_clone,
+                dtoh_offload_notify_clone,
+                dtoh_offload_rx,
             )
             .await
         });
 
         // The task responsible for processing offload requests.
         tokio::spawn(async move {
-            OffloadManager::process_worker(
-                device_offload_queue_clone,
-                device_offload_notify_clone,
-                device,
-                host,
-            )
-            .await
+            OffloadManager::process_worker(dtoh_offload_queue, dtoh_offload_notify, device, host)
+                .await
         });
 
         Arc::new(Self {
-            device_offload_tx,
+            dtoh_offload_tx,
             tick: Arc::new(Mutex::new(0)),
         })
     }
@@ -114,20 +108,20 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
     }
 
     async fn ingress_worker(
-        device_offload_queue: Arc<Mutex<BTreeSet<OffloadRequest<DeviceStorage, Metadata>>>>,
-        device_offload_notify: Arc<Notify>,
-        mut device_offload_rx: mpsc::UnboundedReceiver<OffloadRequest<DeviceStorage, Metadata>>,
+        dtoh_offload_queue: Arc<Mutex<BTreeSet<OffloadRequest<DeviceStorage, Metadata>>>>,
+        dtoh_offload_notify: Arc<Notify>,
+        mut dtoh_offload_rx: mpsc::UnboundedReceiver<OffloadRequest<DeviceStorage, Metadata>>,
     ) -> Result<()> {
-        while let Some(request) = device_offload_rx.recv().await {
-            device_offload_queue.lock().await.insert(request);
-            device_offload_notify.notify_one();
+        while let Some(request) = dtoh_offload_rx.recv().await {
+            dtoh_offload_queue.lock().await.insert(request);
+            dtoh_offload_notify.notify_one();
         }
         Ok(())
     }
 
     async fn process_worker(
-        device_offload_queue: Arc<Mutex<BTreeSet<OffloadRequest<DeviceStorage, Metadata>>>>,
-        device_offload_notify: Arc<Notify>,
+        dtoh_offload_queue: Arc<Mutex<BTreeSet<OffloadRequest<DeviceStorage, Metadata>>>>,
+        dtoh_offload_notify: Arc<Notify>,
         device: Arc<Option<BlockPool<DeviceStorage, Metadata>>>,
         host: Arc<Option<BlockPool<PinnedStorage, Metadata>>>,
     ) -> Result<()> {
@@ -149,11 +143,11 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
 
         let transfer_ctx = TransferContext::new(None, stream.clone());
 
-        let pending_offload_manager = PendingOffloadManager::new();
+        let dtoh_pending_offload_manager = PendingOffloadManager::new();
 
         loop {
             // Try to check the offload queue.
-            let request = device_offload_queue.lock().await.pop_first();
+            let request = dtoh_offload_queue.lock().await.pop_first();
 
             // If there is a request, process it.
             if let Some(request) = request {
@@ -193,14 +187,14 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                         OffloadManager::handle_offload(&block, host_block, host).await?;
 
                         // Record the pending offload. This may block if too many offloads are already pending.
-                        pending_offload_manager
+                        dtoh_pending_offload_manager
                             .handle_pending_offload(PendingOffload::new(block, event))
                             .await?;
                     } // TODO: How should we handle an allocation failure in the host pool?
                 }
             } else {
                 // If the queue is empty, wait to be notified.
-                device_offload_notify.notified().await;
+                dtoh_offload_notify.notified().await;
             }
         }
     }
@@ -237,7 +231,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
             *tick += 1;
             drop(tick);
 
-            self.device_offload_tx
+            self.dtoh_offload_tx
                 .send(OffloadManager::build_request(device_block, key)?)?;
         }
 
@@ -509,8 +503,9 @@ mod tests {
             .await?;
         assert_eq!(matched_host_blocks.len(), 0);
 
-        // Return the host blocks to the pool.
+        // Wait for blocks to be returned to the pool.
         drop(host_blocks);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Try the offload again.
         offload_manager
