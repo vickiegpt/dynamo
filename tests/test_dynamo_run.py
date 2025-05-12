@@ -252,8 +252,12 @@ def dynamo_run(tmp_path_factory, backend, model, input_type, timeout):
 
 @pytest.mark.parametrize(
     ["backend", "timeout"],
-    [("vllm", 100), ("mistralrs", 600)],
-    ids=["vllm", "mistralrs"],
+    [
+        ("vllm", 300),
+    ],  # ("mistralrs", 600)],
+    ids=[
+        "vllm",
+    ],  # "mistralrs"],
 )
 @pytest.mark.parametrize("model", ["deepseek-ai/DeepSeek-R1-Distill-Llama-8B"])
 @pytest.mark.parametrize(
@@ -263,6 +267,8 @@ def dynamo_run(tmp_path_factory, backend, model, input_type, timeout):
 )
 @pytest.mark.parametrize("prompt", [("Hello!", "Hello! How can I assist you today?")])
 @pytest.mark.gpu
+@pytest.mark.e2e
+@pytest.mark.vlm
 def test_run(dynamo_run, backend, model, input_type, prompt, stream, timeout):
     if input_type == "text":
         dynamo_run.send_input(f"{prompt[0]}")

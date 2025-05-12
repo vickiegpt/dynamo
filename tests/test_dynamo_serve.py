@@ -266,6 +266,8 @@ def deployment_graph_test(request):
 
 
 @pytest.mark.gpu
+@pytest.mark.e2e
+@pytest.mark.vllm
 def test_deployment(deployment_graph_test):
     deployment_graph, payload = deployment_graph_test
     response = None
