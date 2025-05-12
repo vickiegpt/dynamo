@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 import pytest
+import requests
 
 
 @contextmanager
@@ -114,42 +115,7 @@ def nats_server(port=4222):
 @pytest.fixture(scope="function", autouse=True)
 def runtime_processes(etcd_server, nats_server):
     yield
-    subprocess.run(["pkill", "-f", "nats-server|etcd"], check=False)
-
-
-@pytest.fixture(params=[])
-def prompt(request):
-    pass
-
-
-@pytest.fixture(
-    params=["agg", "agg_router", "disagg_skeleton"]
-)  #'disagg_router','disagg'])
-def deployment_config(request):
-    config_map = {
-        "agg": ("graphs.agg:Frontend", "configs/agg.yaml", "/workspace/examples/llm"),
-        "disagg": (
-            "graphs.disagg:Frontend",
-            "configs/disagg.yaml",
-            "/workspace/examples/llm",
-        ),
-        "agg_router": (
-            "graphs.agg_router:Frontend",
-            "configs/agg_router.yaml",
-            "/workspace/examples/llm",
-        ),
-        "disagg_router": (
-            "graphs.disagg_router:Frontend",
-            "configs/disagg_router.yaml",
-            "/workspae/examples/llm",
-        ),
-        "disagg_skeleton": (
-            "components.graph:Frontend",
-            "",
-            "/workspace/examples/hello_world/disagg_skeleton",
-        ),
-    }
-    return config_map[request.param]
+    subprocess.run(["pkill", "-f", "nats-server|etcd|.*http.*"], check=False)
 
 
 @dataclass
@@ -159,6 +125,13 @@ class DeploymentGraph:
     directory: str
     endpoint: str
     response_handler: Callable[[Any], str]
+
+
+@dataclass
+class Payload:
+    payload: dict
+    expected_response: list[str]
+    expected_log: list[str]
 
 
 @contextmanager
@@ -177,6 +150,14 @@ def dynamo_serve_process(graph: DeploymentGraph, port=8000, timeout=600):
         yield proc
 
 
+def multimodal_response_handler(response):
+    if response.status_code != 200:
+        return ""
+    result = response.json()
+    print(result)
+    return result
+
+
 def completions_response_handler(response):
     if response.status_code != 200:
         return ""
@@ -189,68 +170,122 @@ def completions_response_handler(response):
 
 
 @pytest.fixture(
-    params=["agg", "agg_router", "disagg_skeleton"]
+    params=["agg", "agg_router", "multimodal_agg", "sglang_agg"]
 )  #'disagg_router','disagg'])
-def deployment_graph(request):
+def deployment_graph_test(request):
+    multimodal_payload = Payload(
+        payload={
+            "model": "llava-hf/llava-1.5-7b-hf",
+            "image": "http://images.cocodataset.org/test2017/000000155781.jpg",
+            "prompt": "Describe the image",
+            "max_tokens": 300,
+        },
+        expected_log=[],
+        expected_response=["bus"],
+    )
+
+    eldoria_payload = Payload(
+        payload={
+            "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "In the heart of Eldoria, an ancient land of boundless magic and mysterious creatures, lies the long-forgotten city of Aeloria. Once a beacon of knowledge and power, Aeloria was buried beneath the shifting sands of time, lost to the world for centuries. You are an intrepid explorer, known for your unparalleled curiosity and courage, who has stumbled upon an ancient map hinting at ests that Aeloria holds a secret so profound that it has the potential to reshape the very fabric of reality. Your journey will take you through treacherous deserts, enchanted forests, and across perilous mountain ranges. Your Task: Character Background: Develop a detailed background for your character. Describe their motivations for seeking out Aeloria, their skills and weaknesses, and any personal connections to the ancient city or its legends. Are they driven by a quest for knowledge, a search for lost familt clue is hidden.",
+                }
+            ],
+            "max_tokens": 500,
+            "temperature": 0.1,
+            "seed": 0,
+        },
+        expected_log=[],
+        expected_response=["Eldoria"],
+    )
     graphs = {
-        "agg": DeploymentGraph(
-            "graphs.agg:Frontend",
-            "configs/agg.yaml",
-            "/workspace/examples/llm",
-            "v1/chat/completions",
-            completions_response_handler,
-        )
+        "agg": (
+            DeploymentGraph(
+                "graphs.agg:Frontend",
+                "configs/agg.yaml",
+                "/workspace/examples/llm",
+                "v1/chat/completions",
+                completions_response_handler,
+            ),
+            eldoria_payload,
+        ),
+        "sglang_agg": (
+            DeploymentGraph(
+                "graphs.agg:Frontend",
+                "configs/agg.yaml",
+                "/workspace/examples/sglang",
+                "v1/chat/completions",
+                completions_response_handler,
+            ),
+            eldoria_payload,
+        ),
+        "disagg": (
+            DeploymentGraph(
+                "graphs.disagg:Frontend",
+                "configs/disagg.yaml",
+                "/workspace/examples/llm",
+                "v1/chat/completions",
+                completions_response_handler,
+            ),
+            eldoria_payload,
+        ),
+        "agg_router": (
+            DeploymentGraph(
+                "graphs.agg_router:Frontend",
+                "configs/agg_router.yaml",
+                "/workspace/examples/llm",
+                "v1/chat/completions",
+                completions_response_handler,
+            ),
+            eldoria_payload,
+        ),
+        "disagg_router": (
+            DeploymentGraph(
+                "graphs.disagg_router:Frontend",
+                "configs/disagg_router.yaml",
+                "/workspae/examples/llm",
+                "v1/chat/completions",
+                completions_response_handler,
+            ),
+            eldoria_payload,
+        ),
+        "multimodal_agg": (
+            DeploymentGraph(
+                "graphs.agg:Frontend",
+                "configs/agg.yaml",
+                "/workspace/examples/multimodal",
+                "generate",
+                multimodal_response_handler,
+            ),
+            multimodal_payload,
+        ),
     }
     return graphs[request.param]
 
 
-def test_deployment(deployment_graph: deployment_graph):
+def test_deployment(deployment_graph_test):
+    deployment_graph, payload = deployment_graph_test
+    response = None
     with dynamo_serve_process(deployment_graph):
-        pass
+        url = f"http://localhost:8000/{deployment_graph.endpoint}"
 
+        # Retry to account for service startup time
+        for _ in range(60):
+            try:
+                response = requests.post(url, json=payload.payload, timeout=600)
+                if response.status_code == 200:
+                    break
+                    time.sleep(0.5)
+                    continue
+                time.sleep(5)
+            except Exception:
+                time.sleep(1)
+        else:
+            if not response or response.status_code != 200:
+                pytest.fail("Service failed to start within timeout")
+        content = deployment_graph.response_handler(response)
 
-# def test_deployment(etcd_server, nats_server, deployment_config):
-#     graph_module, config_path, cwd = deployment_config
-
-#     with dynamo_serve_process(graph_module, config_path, cwd):
-#         # Test OpenAI-compatible endpoint
-#         url = "http://localhost:8000/v1/chat/completions"
-#         payload = {
-#             "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-#             "messages": [
-#                 {
-#                     "role": "user",
-#                     "content": "In the heart of Eldoria, an ancient land of boundless magic and mysterious creatures, lies the long-forgotten city of Aeloria. Once a beacon of knowledge and power, Aeloria was buried beneath the shifting sands of time, lost to the world for centuries. You are an intrepid explorer, known for your unparalleled curiosity and courage, who has stumbled upon an ancient map hinting at ests that Aeloria holds a secret so profound that it has the potential to reshape the very fabric of reality. Your journey will take you through treacherous deserts, enchanted forests, and across perilous mountain ranges. Your Task: Character Background: Develop a detailed background for your character. Describe their motivations for seeking out Aeloria, their skills and weaknesses, and any personal connections to the ancient city or its legends. Are they driven by a quest for knowledge, a search for lost familt clue is hidden.",
-#                 }
-#             ],
-#             "max_tokens": 500,
-#             "temperature": 0.1,
-#         }
-
-#         # Retry to account for service startup time
-#         for _ in range(4):
-#             try:
-#                 response = requests.post(url, json=payload, timeout=600)
-#                 if response.status_code == 200:
-#                     time.sleep(0.5)
-#                     continue
-#                 time.sleep(5)
-#             except requests.ConnectionError:
-#                 time.sleep(1)
-#         else:
-#             if response.status_code != 200:
-#                 pytest.fail("Service failed to start within timeout")
-
-#         assert response.status_code == 200
-#         result = response.json()
-#         assert "choices" in result
-#         assert len(result["choices"]) > 0
-#         assert "message" in result["choices"][0]
-#         assert len(result["choices"][0]["message"]["content"]) > 10
-#         print(result["choices"][0]["message"]["content"])
-
-
-# @pytest.fixture(scope="function", autouse=True)
-# def cleanup_processes():
-#     yield
-#     subprocess.run(["pkill", "-f", "nats-server|etcd"], check=False)
+        for response in payload.expected_response:
+            assert response in content

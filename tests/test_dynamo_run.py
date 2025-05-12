@@ -17,15 +17,109 @@
 import json
 import os
 import pty
+import shutil
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from io import StringIO
 from typing import Optional
 
 # test_dynamo_run.py
 import pytest
 import requests
+
+
+@contextmanager
+def managed_process(
+    command, env=None, check_ports=[], timeout=600, cwd=None, output=False
+):
+    cmd_string = " ".join(command)
+    cmd_name = command[0]
+    print()
+    print("*" * 80)
+    print(f"* Starting: {cmd_name}")
+    print(f"* \t {cmd_string}")
+    print("*" * 80)
+    print()
+
+    _input: Optional[int] = subprocess.DEVNULL
+    _output: Optional[int] = subprocess.DEVNULL
+    if output:
+        _input = None
+        _output = None
+    proc = subprocess.Popen(
+        command,
+        env=env or os.environ.copy(),
+        cwd=cwd,
+        stdin=_input,
+        stdout=_output,
+        stderr=_output,
+    )
+    start_time = time.time()
+
+    # Wait for ports to become available
+    while time.time() - start_time < timeout:
+        if all(is_port_open(p) for p in check_ports):
+            break
+        time.sleep(0.1)
+    else:
+        proc.terminate()
+        raise TimeoutError(
+            f"{cmd_name} failed to start. Ports {check_ports} not ready in time"
+        )
+
+    try:
+        yield proc
+    finally:
+        print(f"Terminating {cmd_name}")
+        proc.terminate()
+        proc.wait()
+
+
+def is_port_open(port):
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("localhost", port)) == 0
+
+
+@pytest.fixture()
+def etcd_server(port=2379):
+    port_string = str(port)
+    etcd_env = os.environ.copy()
+    etcd_env["ALLOW_NONE_AUTHENTICATION"] = "yes"
+    shutil.rmtree("/tmp/etcd-test-data", ignore_errors=True)
+    with managed_process(
+        [
+            "etcd",
+            "--listen-client-urls",
+            f"http://0.0.0.0:{port_string}",
+            "--advertise-client-urls",
+            f"http://0.0.0.0:{port_string}",
+            "--data-dir",
+            "/tmp/etcd-test-data",
+        ],
+        env=etcd_env,
+        check_ports=[port],
+    ) as proc:
+        yield proc
+
+
+@pytest.fixture()
+def nats_server(port=4222):
+    shutil.rmtree("/tmp/nats/jetstream", ignore_errors=True)
+    with managed_process(
+        ["nats-server", "-js", "--trace", "--store_dir", "/tmp/nats/jetstream"],
+        check_ports=[port],
+    ) as proc:
+        yield proc
+
+
+@pytest.fixture(scope="function", autouse=True)
+def runtime_processes(etcd_server, nats_server):
+    yield
+    subprocess.run(["pkill", "-f", "nats-server|etcd|.*http.*"], check=False)
 
 
 class DynamoRunProcess:
