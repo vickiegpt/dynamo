@@ -126,13 +126,9 @@ impl<T: Clone + Eq + Hash + Ord> LRUEvictor<T> {
 
 /// Mock implementation of workers for testing and simulation
 pub struct MockWorkers {
-    /// Blocks that are currently active in the worker
     pub active_blocks: HashSet<SequenceHashWithDepth>,
-    /// The radix tree for efficient prefix matching
     pub radix_tree: RadixTree,
-    /// Blocks that are inactive but can be reactivated
     pub inactive_blocks: LRUEvictor<SequenceHashWithDepth>,
-    /// Queue of pending requests
     pub waiting_blocks: VecDeque<DirectRequest>,
 }
 
