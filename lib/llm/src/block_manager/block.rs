@@ -1429,6 +1429,15 @@ pub mod nixl {
 }
 
 #[cfg(test)]
+pub mod test_utils {
+    use super::private::PrivateToken;
+
+    pub fn get_private_token() -> PrivateToken {
+        PrivateToken
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

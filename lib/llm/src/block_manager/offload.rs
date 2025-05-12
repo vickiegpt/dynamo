@@ -238,28 +238,30 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "testing-cuda"))]
 mod tests {
     use super::*;
+    use crate::block_manager::block::test_utils::get_private_token;
 
     use crate::block_manager::{
-        block::{BasicMetadata, Blocks},
+        block::{BasicMetadata, BlockDataExt, BlockDataProvider, Blocks},
         layout::FullyContiguous,
         pool::BlockPool,
         storage::{DeviceAllocator, DeviceStorage, PinnedAllocator, PinnedStorage},
         DType, LayoutConfig,
     };
 
+    use cudarc::runtime::sys::{cudaMemcpy, cudaMemcpyKind, cudaMemset};
+
     const BLOCK_SIZE: usize = 4;
+
+    type DevicePool = Arc<Option<BlockPool<DeviceStorage, BasicMetadata>>>;
+    type HostPool = Arc<Option<BlockPool<PinnedStorage, BasicMetadata>>>;
 
     fn build_pools(
         device_blocks: usize,
         host_blocks: usize,
-    ) -> Result<(
-        Arc<OffloadManager<BasicMetadata>>,
-        Arc<Option<BlockPool<DeviceStorage, BasicMetadata>>>,
-        Arc<Option<BlockPool<PinnedStorage, BasicMetadata>>>,
-    )> {
+    ) -> Result<(Arc<OffloadManager<BasicMetadata>>, DevicePool, HostPool)> {
         let mut config = LayoutConfig {
             num_blocks: device_blocks,
             num_layers: 8,
@@ -290,12 +292,11 @@ mod tests {
     async fn reset_block<S: Storage, Metadata: BlockMetadata>(
         pool: &BlockPool<S, Metadata>,
     ) -> Result<MutableBlock<S, Metadata>> {
-        Ok(pool
-            .allocate_blocks(1)
+        pool.allocate_blocks(1)
             .await?
             .into_iter()
             .next()
-            .ok_or(anyhow::anyhow!("Failed to allocate block"))?)
+            .ok_or(anyhow::anyhow!("Failed to allocate block"))
     }
 
     async fn partial_block<S: Storage, Metadata: BlockMetadata>(
@@ -319,6 +320,66 @@ mod tests {
         }
         block.commit()?;
         Ok(block)
+    }
+
+    fn populate_block(
+        block: &impl BlockDataProvider<StorageType = DeviceStorage>,
+        value: i32,
+    ) -> Result<()> {
+        let block_data = block.block_data(get_private_token());
+
+        for layer in 0..block_data.num_layers() {
+            let layer_data = block_data.layer_view(layer)?;
+            let layer_size = layer_data.size();
+
+            unsafe {
+                cudaMemset(
+                    layer_data.as_ptr() as *mut std::ffi::c_void,
+                    value,
+                    layer_size,
+                )
+                .result()?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn compare_block_contents<Metadata: BlockMetadata>(
+        device_block: &ImmutableBlock<DeviceStorage, Metadata>,
+        host_block: &ImmutableBlock<PinnedStorage, Metadata>,
+    ) -> Result<()> {
+        let host_data = host_block.block_data(get_private_token());
+        let device_data = device_block.block_data(get_private_token());
+
+        for layer in 0..host_data.num_layers() {
+            let host_layer = host_data.layer_view(layer)?;
+            let device_layer = device_data.layer_view(layer)?;
+
+            let layer_size = host_layer.size();
+
+            assert_eq!(layer_size, device_layer.size());
+
+            let mut host_buffer = vec![0u8; layer_size];
+
+            let host_slice;
+
+            unsafe {
+                cudaMemcpy(
+                    host_buffer.as_mut_ptr() as *mut std::ffi::c_void,
+                    device_layer.as_ptr() as *const std::ffi::c_void,
+                    layer_size,
+                    cudaMemcpyKind::cudaMemcpyDeviceToHost,
+                )
+                .result()?;
+                host_slice =
+                    std::slice::from_raw_parts(host_buffer.as_ptr(), layer_size);
+            }
+
+            assert_eq!(host_buffer, host_slice);
+        }
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -383,6 +444,8 @@ mod tests {
             .await
             .is_err());
 
+        populate_block(&immutable_device_block, 42)?;
+
         // Offloads should only go to G2 (for now)
         offload_manager
             .offload(&immutable_device_block, CacheLevel::G2, 0)
@@ -401,6 +464,8 @@ mod tests {
             host_blocks[0].sequence_hash()?,
             immutable_device_block.sequence_hash()?
         );
+
+        compare_block_contents(&immutable_device_block, &host_blocks[0]).await?;
 
         Ok(())
     }
