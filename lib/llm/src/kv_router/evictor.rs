@@ -2,6 +2,9 @@ use std::collections::{BinaryHeap, HashMap};
 use std::cmp::{Eq, Ord, Ordering, PartialOrd};
 use std::hash::Hash;
 use std::cmp::Reverse;
+use std::collections::{HashSet, VecDeque};
+use crate::kv_router::protocols::{DirectRequest, SequenceHashWithDepth};
+use crate::kv_router::indexer::RadixTree;
 
 /// Wrapper for f64 that implements total ordering and panics when NaN is encountered
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -118,6 +121,30 @@ impl<T: Clone + Eq + Hash + Ord> LRUEvictor<T> {
         }
 
         self.priority_queue = new_priority_queue;
+    }
+}
+
+/// Mock implementation of workers for testing and simulation
+pub struct MockWorkers {
+    /// Blocks that are currently active in the worker
+    pub active_blocks: HashSet<SequenceHashWithDepth>,
+    /// The radix tree for efficient prefix matching
+    pub radix_tree: RadixTree,
+    /// Blocks that are inactive but can be reactivated
+    pub inactive_blocks: LRUEvictor<SequenceHashWithDepth>,
+    /// Queue of pending requests
+    pub waiting_blocks: VecDeque<DirectRequest>,
+}
+
+impl MockWorkers {
+    /// Create a new MockWorkers instance
+    pub fn new() -> Self {
+        MockWorkers {
+            active_blocks: HashSet::new(),
+            radix_tree: RadixTree::new(),
+            inactive_blocks: LRUEvictor::new(),
+            waiting_blocks: VecDeque::new(),
+        }
     }
 }
 

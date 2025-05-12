@@ -66,6 +66,13 @@ pub struct LocalBlockHash(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct ExternalSequenceBlockHash(pub u64);
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectRequest {
+    pub hashes: Vec<LocalBlockHash>,
+    pub worker_id: i64,
+    pub max_tokens: u64,
+}
+
 /// A sequence block hash with an associated depth in the sequence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SequenceHashWithDepth {
