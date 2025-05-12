@@ -65,6 +65,25 @@ pub struct LocalBlockHash(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct ExternalSequenceBlockHash(pub u64);
 
+/// A sequence block hash with an associated depth in the sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SequenceHashWithDepth {
+    pub hash: ExternalSequenceBlockHash,
+    pub depth: u64,
+}
+
+impl Ord for SequenceHashWithDepth {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.depth.cmp(&other.depth)
+    }
+}
+
+impl PartialOrd for SequenceHashWithDepth {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Represents a collection of cache events and a shutdown flag.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct KvCacheEvents {
