@@ -261,6 +261,7 @@ def dynamo_run(tmp_path_factory, backend, model, input_type, timeout):
     [("text", False), ("http", True), ("http", False)],
     ids=["text", "http-streaming", "http"],
 )
+@pytest.mark.gpu
 @pytest.mark.parametrize("prompt", [("Hello!", "Hello! How can I assist you today?")])
 def test_run(dynamo_run, backend, model, input_type, prompt, stream, timeout):
     if input_type == "text":
