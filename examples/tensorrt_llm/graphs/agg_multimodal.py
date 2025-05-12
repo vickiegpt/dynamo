@@ -13,22 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-Frontend:
-  served_model_name: llava-1.5-7b-hf
-  endpoint_completions: dynamo.Processor.completions
-  endpoint_chat: dynamo.Processor.chat/completions
-  port: 8000
+from components.encode_worker import EncodeWorker
+from components.frontend import Frontend
+from components.multimodal_worker import TensorRTLLMWorker
+from components.processor import Processor
 
-Processor:
-  engine_args: "configs/llm_api_config.yaml"
-  router: round-robin
-  ServiceArgs:
-    workers: 5 # to reduce the tokenization bottleneck at a high concurrency
-
-TensorRTLLMWorker:
-  engine_args: "configs/llm_api_config.yaml"
-  router: round-robin
-  ServiceArgs:
-    workers: 1
-    resources:
-      gpu: 1
+Frontend.link(Processor).link(TensorRTLLMWorker).link(EncodeWorker)
