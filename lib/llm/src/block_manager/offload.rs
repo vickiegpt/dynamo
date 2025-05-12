@@ -171,7 +171,14 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                 // If we've found the block, offload it to the host.
                 if let Some(block) = block {
                     // Allocate a block from the host pool.
-                    let host_blocks = host.allocate_blocks(1).await?;
+                    // TODO: The most likely error here is that the host pool is full.
+                    // It's probably not a good idea to keep consuming queue elements in the meantime.
+                    let host_blocks = match host.allocate_blocks(1).await {
+                        Ok(blocks) => blocks,
+                        Err(_) => {
+                            continue;
+                        }
+                    };
 
                     if let Some(mut host_block) = host_blocks.into_iter().next() {
                         // Enqueue the offload into the stream.
@@ -372,8 +379,7 @@ mod tests {
                     cudaMemcpyKind::cudaMemcpyDeviceToHost,
                 )
                 .result()?;
-                host_slice =
-                    std::slice::from_raw_parts(host_buffer.as_ptr(), layer_size);
+                host_slice = std::slice::from_raw_parts(host_buffer.as_ptr(), layer_size);
             }
 
             assert_eq!(host_buffer, host_slice);
@@ -451,7 +457,9 @@ mod tests {
             .offload(&immutable_device_block, CacheLevel::G2, 0)
             .await?;
 
-        // Wait for it to be processed
+        // Wait for it to be processed.
+        // TODO: This is a bit of a hack, and may lead to non-deterministic behavior.
+        // In theory, the offload + memcpy should take much less time than this.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Check that the block exists in the host pool
@@ -466,6 +474,57 @@ mod tests {
         );
 
         compare_block_contents(&immutable_device_block, &host_blocks[0]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_no_host_blocks_available() -> Result<()> {
+        let (offload_manager, device_pool, host_pool) = build_pools(4, 4)?;
+
+        let device_pool = device_pool.as_ref().as_ref().unwrap();
+        let host_pool = host_pool.as_ref().as_ref().unwrap();
+
+        let host_blocks = host_pool.allocate_blocks(4).await?;
+        assert_eq!(host_blocks.len(), 4);
+
+        let device_block = completed_block(device_pool, [0, 1, 2, 3]).await?;
+        let immutable_device_block = device_pool
+            .register_blocks(vec![device_block])
+            .await?
+            .into_iter()
+            .next()
+            .unwrap();
+
+        offload_manager
+            .offload(&immutable_device_block, CacheLevel::G2, 0)
+            .await?;
+
+        // Wait for offload to be processed.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // The offload should fail due to a lack of host blocks.
+        let matched_host_blocks = host_pool
+            .match_sequence_hashes(vec![immutable_device_block.sequence_hash()?].as_slice())
+            .await?;
+        assert_eq!(matched_host_blocks.len(), 0);
+
+        // Return the host blocks to the pool.
+        drop(host_blocks);
+
+        // Try the offload again.
+        offload_manager
+            .offload(&immutable_device_block, CacheLevel::G2, 0)
+            .await?;
+
+        // Wait for offload to be processed.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // This time, the offload should succeed.
+        let matched_host_blocks = host_pool
+            .match_sequence_hashes(vec![immutable_device_block.sequence_hash()?].as_slice())
+            .await?;
+        assert_eq!(matched_host_blocks.len(), 1);
 
         Ok(())
     }
