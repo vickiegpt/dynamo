@@ -48,7 +48,9 @@ async fn test_tokenizer_from_hf_like_local_repo() {
 
 #[tokio::test]
 async fn test_prompt_formatter_from_hf_like_local_repo() {
-    let mdc = ModelDeploymentCard::load("tests/data/sample-models/mock-llama-3.1-8b-instruct").await.unwrap();
+    let mdc = ModelDeploymentCard::load("tests/data/sample-models/mock-llama-3.1-8b-instruct")
+        .await
+        .unwrap();
     // Verify prompt formatter was found
     match mdc.prompt_formatter {
         Some(PromptFormatterArtifact::HfTokenizerConfigJson(_)) => (),
