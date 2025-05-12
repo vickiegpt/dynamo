@@ -201,8 +201,8 @@ class DynamoRunProcess:
                 try:
                     response = requests.get(f"{self.url}/v1/models", timeout=1)
                     model_list = response.json()
-                    print(model_list)
                     if response.status_code == 200 and len(model_list["data"]) > 0:
+                        print(model_list)
                         return
                 except Exception:
                     pass
