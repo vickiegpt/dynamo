@@ -57,7 +57,7 @@ async fn test_prompt_formatter_from_hf_like_local_repo() {
 }
 
 #[tokio::test]
-async fn test_prompt_formatter_from_hf_like_local_repo_no_formatter() {
+async fn test_noop_prompt_formatter_from_repo_with_no_chat_template() {
     let mdc = ModelDeploymentCard::load(HF_PATH).await.unwrap();
     // Verify prompt formatter was found
     match mdc.prompt_formatter {
