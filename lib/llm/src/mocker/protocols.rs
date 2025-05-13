@@ -40,6 +40,7 @@ impl Default for UniqueBlock {
 /// Represents different block movement operations in the cache
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MoveBlock {
+    Make(UniqueBlock),
     Reuse(UniqueBlock),
     Destroy(UniqueBlock),
     Evict(UniqueBlock),

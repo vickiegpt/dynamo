@@ -19,7 +19,7 @@ use crate::mocker::tokens::{compute_seq_hash_for_blocks, compute_block_hash_for_
 use tokio::sync::mpsc;
 
 /// A sequence that is actively being built, with the ability to add tokens and commit to hashes
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ActiveSequence {
     pub parent_cached: Option<GlobalHash>,
     pub new_input_blocks: Vec<LocalBlockHash>,
@@ -28,6 +28,7 @@ pub struct ActiveSequence {
     pub block_size: usize,
     pub worker_id: usize,
     pub event_tx: Option<mpsc::Sender<MoveBlock>>,
+    pub max_output_tokens: u64,
 }
 
 impl ActiveSequence {
@@ -39,6 +40,7 @@ impl ActiveSequence {
         block_size: usize,
         worker_id: usize,
         event_tx: Option<mpsc::Sender<MoveBlock>>,
+        max_output_tokens: u64,
     ) -> Self {
         Self {
             parent_cached,
@@ -48,6 +50,7 @@ impl ActiveSequence {
             block_size,
             worker_id,
             event_tx,
+            max_output_tokens,
         }
     }
 
@@ -59,6 +62,7 @@ impl ActiveSequence {
         block_size: usize,
         worker_id: usize,
         event_tx: Option<mpsc::Sender<MoveBlock>>,
+        max_output_tokens: u64,
     ) -> Self {
         // Initialize with no parent hash
         let mut parent_hash: Option<GlobalHash> = None;
@@ -125,6 +129,7 @@ impl ActiveSequence {
             block_size,
             worker_id,
             event_tx,
+            max_output_tokens,
         }
     }
 
@@ -185,6 +190,7 @@ mod tests {
             block_size,
             worker_id,
             None,
+            100,
         );
         
         for i in 0..12 {
@@ -224,6 +230,7 @@ mod tests {
             block_size,
             worker_id,
             None,
+            100,
         );
         
         // Push all tokens to sequence1
@@ -244,7 +251,7 @@ mod tests {
         }
         
         // Create a second sequence using new_from_tokens_with_cache
-        let sequence2 = ActiveSequence::new_from_tokens_with_cache(&cache, tokens, block_size, worker_id, None);
+        let sequence2 = ActiveSequence::new_from_tokens_with_cache(&cache, tokens, block_size, worker_id, None, 100);
         
         // Commit the second sequence
         let committed2 = sequence2.commit();

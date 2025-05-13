@@ -14,23 +14,8 @@
 // limitations under the License.
 
 use std::collections::{HashMap, VecDeque};
-use std::cmp::{Eq, Ord, Ordering, PartialOrd};
+use std::cmp::Eq;
 use std::hash::Hash;
-
-/// Wrapper for f64 that implements total ordering and panics when NaN is encountered
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct TimeStamp(f64);
-impl PartialOrd for TimeStamp {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.0.partial_cmp(&other.0)
-    }
-}
-impl Eq for TimeStamp {}
-impl Ord for TimeStamp {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.partial_cmp(&other.0).unwrap()
-    }
-}
 
 /// An LRU evictor that maintains objects and evicts them based on their
 /// last accessed time. Implements a "lazy" eviction mechanism where:
@@ -42,7 +27,7 @@ impl Ord for TimeStamp {
 #[derive(Debug)]
 pub struct LRUEvictor<T: Clone + Eq + Hash> {
     pub free_table: HashMap<T, f64>,
-    priority_queue: VecDeque<(T, TimeStamp)>,
+    priority_queue: VecDeque<(T, f64)>,
     cleanup_threshold: usize,
 }
 
@@ -76,7 +61,7 @@ impl<T: Clone + Eq + Hash> LRUEvictor<T> {
         while let Some((object, last_accessed)) = self.priority_queue.pop_front() {
             // Check if the entry is still valid (not outdated)
             if let Some(&current_last_accessed) = self.free_table.get(&object) {
-                if current_last_accessed == last_accessed.0 {
+                if current_last_accessed == last_accessed {
                     // The entry is valid, remove it from the free table
                     self.free_table.remove(&object);
                     return Some(object);
@@ -91,18 +76,15 @@ impl<T: Clone + Eq + Hash> LRUEvictor<T> {
     /// Insert or update an object in the evictor
     pub fn insert(&mut self, object: T, last_accessed: f64) {
         self.free_table.insert(object.clone(), last_accessed);
-        self.priority_queue.push_back((object, TimeStamp(last_accessed)));
+        self.priority_queue.push_back((object, last_accessed));
         self.cleanup_if_necessary();
     }
     
     /// Remove an object from the evictor
     /// We don't remove from the priority queue immediately, as that would be inefficient
     /// Outdated entries will be filtered out during eviction or cleanup
-    pub fn remove(&mut self, object: &T) -> Result<(), String> {
-        match self.free_table.remove(object) {
-            Some(_) => Ok(()),
-            None => Err("Attempting to remove object that's not in the evictor".to_string()),
-        }
+    pub fn remove(&mut self, object: &T) -> bool {
+        self.free_table.remove(object).is_some()
     }
     
     /// Get the number of objects in the evictor
@@ -118,10 +100,11 @@ impl<T: Clone + Eq + Hash> LRUEvictor<T> {
     }
     
     /// Clean up the priority queue by removing outdated entries
+    /// TODO: fix this
     fn cleanup(&mut self) {
         let mut new_priority_queue = VecDeque::new();
         for (object, &last_accessed) in &self.free_table {
-            new_priority_queue.push_back((object.clone(), TimeStamp(last_accessed)));
+            new_priority_queue.push_back((object.clone(), last_accessed));
         }
         self.priority_queue = new_priority_queue;
     }
