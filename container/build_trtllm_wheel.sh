@@ -18,12 +18,12 @@
 
 # This script builds the TRT-LLM base image for Dynamo with TensorRT-LLM.
 
-while getopts "c:v:o:a:" opt; do
+while getopts "c:o:a:" opt; do
   case ${opt} in
     c) TRTLLM_COMMIT=$OPTARG ;;
     o) OUTPUT_DIR=$OPTARG ;;
     a) ARCH=$OPTARG ;;
-    *) echo "Usage: $(basename $0) [-c commit] [-v version] [-o output_dir] [-a arch]"
+    *) echo "Usage: $(basename $0) [-c commit] [-o output_dir] [-a arch]"
        echo "  -c: TensorRT-LLM commit to build"
        echo "  -o: Output directory for wheel files"
        echo "  -a: Architecture (amd64 or arm64)"
