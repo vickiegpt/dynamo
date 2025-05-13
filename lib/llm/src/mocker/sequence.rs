@@ -29,8 +29,8 @@ pub struct ActiveSequence {
     pub new_output_tokens: Vec<u32>,
     pub block_size: usize,
     pub worker_id: usize,
-    pub event_tx: Option<mpsc::Sender<MoveBlock>>,
     pub max_output_tokens: u64,
+    move_block_tx: Option<mpsc::Sender<MoveBlock>>,
 }
 
 impl ActiveSequence {
@@ -41,8 +41,8 @@ impl ActiveSequence {
         new_input_tokens: Vec<u32>,
         block_size: usize,
         worker_id: usize,
-        event_tx: Option<mpsc::Sender<MoveBlock>>,
         max_output_tokens: u64,
+        move_block_tx: Option<mpsc::Sender<MoveBlock>>,
     ) -> Self {
         Self {
             parent_cached,
@@ -51,8 +51,8 @@ impl ActiveSequence {
             new_output_tokens: Vec::new(),
             block_size,
             worker_id,
-            event_tx,
             max_output_tokens,
+            move_block_tx,
         }
     }
 
@@ -63,8 +63,8 @@ impl ActiveSequence {
         tokens: Vec<u32>,
         block_size: usize,
         worker_id: usize,
-        event_tx: Option<mpsc::Sender<MoveBlock>>,
         max_output_tokens: u64,
+        move_block_tx: Option<mpsc::Sender<MoveBlock>>,
     ) -> Self {
         // Initialize with no parent hash
         let mut parent_hash: Option<GlobalHash> = None;
@@ -94,8 +94,8 @@ impl ActiveSequence {
                 parent_hash = Some(sequence_hash);
                 processed_blocks += 1;
 
-                // Send Reuse signal if event_tx is available
-                if let Some(tx) = &event_tx {
+                // Send Reuse signal if move_block_tx is available
+                if let Some(tx) = &move_block_tx {
                     let _ =
                         tx.try_send(MoveBlock::Reuse(UniqueBlock::HashIdentifier(sequence_hash)));
                 }
@@ -113,8 +113,8 @@ impl ActiveSequence {
         let (new_input_blocks, new_input_tokens) =
             process_token_blocks(remaining_tokens, block_size);
 
-        // Send Evict signal for each new input block if event_tx is available
-        if let Some(tx) = &event_tx {
+        // Send Evict signal for each new input block if move_block_tx is available
+        if let Some(tx) = &move_block_tx {
             for _ in 0..new_input_blocks.len() {
                 let _ = tx.try_send(MoveBlock::Evict(UniqueBlock::default()));
             }
@@ -132,7 +132,7 @@ impl ActiveSequence {
             new_output_tokens: Vec::new(),
             block_size,
             worker_id,
-            event_tx,
+            move_block_tx,
             max_output_tokens,
         }
     }
@@ -166,7 +166,7 @@ impl ActiveSequence {
         let global_hashes = compute_seq_hash_for_blocks(&combined_hashes, self.parent_cached);
 
         // Send Deref signals for each global hash in reverse order
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.move_block_tx {
             for &hash in global_hashes.iter().rev() {
                 let _ = tx.try_send(MoveBlock::Ref(UniqueBlock::HashIdentifier(hash)));
             }
@@ -195,8 +195,8 @@ mod tests {
             input_tokens,
             block_size,
             worker_id,
-            None,
             100,
+            None,
         );
 
         for i in 0..12 {
@@ -235,8 +235,8 @@ mod tests {
             Vec::new(), // No input tokens
             block_size,
             worker_id,
-            None,
             100,
+            None,
         );
 
         // Push all tokens to sequence1
@@ -258,7 +258,7 @@ mod tests {
 
         // Create a second sequence using new_from_tokens_with_cache
         let sequence2 = ActiveSequence::new_from_tokens_with_cache(
-            &cache, tokens, block_size, worker_id, None, 100,
+            &cache, tokens, block_size, worker_id, 100, None
         );
 
         // Commit the second sequence
