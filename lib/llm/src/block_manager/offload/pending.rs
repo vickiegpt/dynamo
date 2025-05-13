@@ -27,6 +27,7 @@ use cudarc::driver::CudaEvent;
 type OnboardResult<Target, Metadata> =
     Result<Vec<ImmutableBlock<Target, Metadata>>, BlockPoolError>;
 
+/// Manage a set of pending transfers.
 pub struct PendingTransfer<Source: Storage, Target: Storage, Metadata: BlockMetadata> {
     /// The block being copied from.
     _sources: Vec<Arc<MutableBlock<Source, Metadata>>>,
@@ -82,6 +83,9 @@ impl<Source: Storage, Target: Storage, Metadata: BlockMetadata>
                 } = pending_transfer;
 
                 if let Some(target_pool) = target_pool.as_ref() {
+                    // Register the blocks in the new pool only AFTER the transfers have been completed.
+                    // This way, we maintain the invariant that blocks that are registered in a pool
+                    // are always available in that pool.
                     let blocks = target_pool.register_blocks_blocking(targets)?;
 
                     if let Some(completion_indicator) = pending_transfer.completion_indicator {

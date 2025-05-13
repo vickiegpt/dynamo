@@ -331,9 +331,12 @@ mod tests {
         block::{BasicMetadata, BlockDataExt, BlockDataProvider, Blocks},
         layout::FullyContiguous,
         pool::BlockPool,
-        storage::{DeviceAllocator, DeviceStorage, PinnedAllocator, PinnedStorage},
+        storage::{
+            cuda::CudaAccessible, DeviceAllocator, DeviceStorage, PinnedAllocator, PinnedStorage,
+        },
         DType, LayoutConfig,
     };
+    use nixl_sys::NixlDescriptor;
 
     use cudarc::runtime::sys::{cudaMemcpy, cudaMemcpyKind, cudaMemset};
 
@@ -374,7 +377,7 @@ mod tests {
     }
 
     /// Create a block in the 'RESET' state.
-    async fn reset_block<S: Storage, Metadata: BlockMetadata>(
+    async fn get_block<S: Storage, Metadata: BlockMetadata>(
         pool: &BlockPool<S, Metadata>,
     ) -> Result<MutableBlock<S, Metadata>> {
         pool.allocate_blocks(1)
@@ -389,7 +392,7 @@ mod tests {
         pool: &BlockPool<S, Metadata>,
         token: u32,
     ) -> Result<MutableBlock<S, Metadata>> {
-        let mut block = reset_block(pool).await?;
+        let mut block = get_block(pool).await?;
         block.init_sequence(42)?;
         block.add_token(token)?;
         Ok(block)
@@ -400,7 +403,7 @@ mod tests {
         pool: &BlockPool<S, Metadata>,
         tokens: [u32; BLOCK_SIZE],
     ) -> Result<MutableBlock<S, Metadata>> {
-        let mut block = reset_block(pool).await?;
+        let mut block = get_block(pool).await?;
         block.init_sequence(42)?;
         for token in tokens {
             block.add_token(token)?;
@@ -409,49 +412,21 @@ mod tests {
         Ok(block)
     }
 
-    /// Fill a host block with a given value. Used to validate correctness of transfers.
-    fn populate_host_block(
-        block: &impl BlockDataProvider<StorageType = PinnedStorage>,
+    fn populate_cuda_block<S: Storage + CudaAccessible + NixlDescriptor>(
+        block: &impl BlockDataProvider<StorageType = S>,
         value: i32,
     ) -> Result<()> {
-        let block_data = block.block_data(get_private_token());
+        let block_data = block.block_data(get_private_token()).block_view()?;
+        let block_size = block_data.size();
 
-        for layer in 0..block_data.num_layers() {
-            let layer_data = block_data.layer_view(layer)?;
-            let layer_size = layer_data.size();
-
-            unsafe {
-                let ptr = layer_data.as_ptr() as *mut i32;
-                for i in 0..layer_size / std::mem::size_of::<i32>() {
-                    std::ptr::write(ptr.add(i), value);
-                }
-            }
+        unsafe {
+            cudaMemset(
+                block_data.as_ptr() as *mut std::ffi::c_void,
+                value,
+                block_size,
+            )
+            .result()?;
         }
-
-        Ok(())
-    }
-
-    /// Fill a device block with a given value. Same as populate_host_block, but for device blocks.
-    fn populate_device_block(
-        block: &impl BlockDataProvider<StorageType = DeviceStorage>,
-        value: i32,
-    ) -> Result<()> {
-        let block_data = block.block_data(get_private_token());
-
-        for layer in 0..block_data.num_layers() {
-            let layer_data = block_data.layer_view(layer)?;
-            let layer_size = layer_data.size();
-
-            unsafe {
-                cudaMemset(
-                    layer_data.as_ptr() as *mut std::ffi::c_void,
-                    value,
-                    layer_size,
-                )
-                .result()?;
-            }
-        }
-
         Ok(())
     }
 
@@ -460,34 +435,28 @@ mod tests {
         device_block: &impl BlockDataProvider<StorageType = DeviceStorage>,
         host_block: &impl BlockDataProvider<StorageType = PinnedStorage>,
     ) -> Result<()> {
-        let host_data = host_block.block_data(get_private_token());
-        let device_data = device_block.block_data(get_private_token());
+        let host_data = host_block.block_data(get_private_token()).block_view()?;
+        let device_data = device_block.block_data(get_private_token()).block_view()?;
 
-        for layer in 0..host_data.num_layers() {
-            let host_layer = host_data.layer_view(layer)?;
-            let device_layer = device_data.layer_view(layer)?;
+        let size = host_data.size();
 
-            let layer_size = host_layer.size();
+        assert_eq!(size, device_data.size());
 
-            assert_eq!(layer_size, device_layer.size());
+        let mut host_buffer = vec![0u8; size];
+        let host_slice;
 
-            let mut host_buffer = vec![0u8; layer_size];
-
-            let host_slice;
-
-            unsafe {
-                cudaMemcpy(
-                    host_buffer.as_mut_ptr() as *mut std::ffi::c_void,
-                    device_layer.as_ptr() as *const std::ffi::c_void,
-                    layer_size,
-                    cudaMemcpyKind::cudaMemcpyDeviceToHost,
-                )
-                .result()?;
-                host_slice = std::slice::from_raw_parts(host_buffer.as_ptr(), layer_size);
-            }
-
-            assert_eq!(host_buffer, host_slice);
+        unsafe {
+            cudaMemcpy(
+                host_buffer.as_mut_ptr() as *mut std::ffi::c_void,
+                device_data.as_ptr() as *const std::ffi::c_void,
+                size,
+                cudaMemcpyKind::cudaMemcpyDeviceToHost,
+            )
+            .result()?;
+            host_slice = std::slice::from_raw_parts(host_buffer.as_ptr(), size);
         }
+
+        assert_eq!(host_buffer, host_slice);
 
         Ok(())
     }
@@ -499,7 +468,7 @@ mod tests {
         let device_pool = device_pool.as_ref().as_ref().unwrap();
 
         // Check blocks in the 'RESET' state.
-        let immutable_block = ImmutableBlock::new(Arc::new(reset_block(device_pool).await?));
+        let immutable_block = ImmutableBlock::new(Arc::new(get_block(device_pool).await?));
 
         assert!(matches!(
             offload_manager
@@ -570,7 +539,7 @@ mod tests {
             Err(BlockPoolError::BlockError(BlockError::Other(_)))
         ));
 
-        populate_device_block(&immutable_device_block, 42)?;
+        populate_cuda_block(&immutable_device_block, 42)?;
 
         // Offloads should only go to G2 (for now)
         offload_manager
@@ -666,7 +635,7 @@ mod tests {
             .next()
             .unwrap();
 
-        populate_host_block(&immutable_host_block, 42)?;
+        populate_cuda_block(&immutable_host_block, 42)?;
 
         // Onboard the block.
         let onboarded_blocks = offload_manager
@@ -719,7 +688,7 @@ mod tests {
             .next()
             .unwrap();
 
-        populate_device_block(&immutable_device_block, 42)?;
+        populate_cuda_block(&immutable_device_block, 42)?;
         // Offload the block to the host.
         offload_manager
             .offload(&immutable_device_block, CacheLevel::G2, 0)
