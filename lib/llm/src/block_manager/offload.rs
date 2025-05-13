@@ -22,11 +22,11 @@ use super::block::{
 };
 use super::pool::BlockPoolError;
 use super::state::TransferContext;
-use super::storage::Storage;
+use super::storage::{Cuda, Storage};
 use super::{BlockPool, CacheLevel, DeviceStorage, PinnedStorage};
 
 use anyhow::Result;
-use cudarc::driver::{sys::CUevent_flags, CudaContext};
+use cudarc::driver::sys::CUevent_flags;
 use std::any::Any;
 
 use std::collections::BTreeSet;
@@ -74,26 +74,13 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
             htod_onboard_tx,
         });
 
-        // TODO: What about TP/PP?
-        let cuda_ctx = CudaContext::new(0)?;
-
         let this_clone = this.clone();
         // The offload and onboard workers must run in separate streams.
         // Otherwise, we'd only be doing either an offload or onboard at a time, cutting our effective transfer bandwidth in half.
-        let stream = cuda_ctx.new_stream()?;
-        tokio::spawn(async move {
-            this_clone
-                .offload_worker(TransferContext::new(None, stream))
-                .await
-        });
+        tokio::spawn(async move { this_clone.offload_worker().await });
 
         let this_clone = this.clone();
-        let stream = cuda_ctx.new_stream()?;
-        tokio::spawn(async move {
-            this_clone
-                .onboard_worker(htod_onboard_rx, TransferContext::new(None, stream))
-                .await
-        });
+        tokio::spawn(async move { this_clone.onboard_worker(htod_onboard_rx).await });
 
         Ok(this)
     }
@@ -119,7 +106,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         Ok(())
     }
 
-    async fn offload_worker(&self, transfer_ctx: TransferContext) -> Result<()> {
+    async fn offload_worker(&self) -> Result<()> {
         // Since cuda memcpys in streams are async, this gets a bit tricky.
         // We can't just consume the queue normally, otherwise the stream would become very backlogged.
         // From the point when the a transfer is put into the stream until the transfer corresponding to the block is complete, we need to hold a strong reference to the block.
@@ -129,6 +116,10 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         if self.device.is_none() || self.host.is_none() {
             return Ok(());
         }
+
+        let cuda_ctx = Cuda::device_or_create(0)?;
+
+        let transfer_ctx = TransferContext::new(None, cuda_ctx.new_stream()?);
 
         let device = self.device.as_ref().as_ref().unwrap();
         let host = self.host.as_ref().as_ref().unwrap();
@@ -202,8 +193,14 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         mut htod_onboard_rx: mpsc::UnboundedReceiver<
             OnboardRequest<PinnedStorage, DeviceStorage, Metadata>,
         >,
-        transfer_ctx: TransferContext,
     ) -> Result<()> {
+        if self.device.is_none() || self.host.is_none() {
+            return Ok(());
+        }
+
+        let cuda_ctx = Cuda::device_or_create(0)?;
+        let transfer_ctx = TransferContext::new(None, cuda_ctx.new_stream()?);
+
         // For the onboarding manager, we can get away with a much bigger queue, since any onboardings would get triggered by an upcoming prefill.
         let htod_pending_onboard_manager = PendingTransferManager::new(16384);
         let device = self.device.as_ref().as_ref().unwrap();
