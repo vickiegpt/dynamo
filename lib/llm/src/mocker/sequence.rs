@@ -14,13 +14,13 @@
 // limitations under the License.
 
 use std::collections::HashSet;
-use crate::kv_router::protocols::{KvCacheStoredBlockData, ExternalSequenceBlockHash, LocalBlockHash};
-use crate::kv_router::indexer::{compute_seq_hash_for_blocks, compute_block_hash_for_seq};
+use crate::mocker::protocols::{GlobalHash, LocalBlockHash};
+use crate::mocker::tokens::{compute_seq_hash_for_blocks, compute_block_hash_for_seq};
 
 /// A sequence that is actively being built, with the ability to add tokens and commit to hashes
 #[derive(PartialEq, Debug)]
 pub struct ActiveSequence {
-    pub parent_cached: Option<ExternalSequenceBlockHash>,
+    pub parent_cached: Option<GlobalHash>,
     pub new_input_blocks: Vec<LocalBlockHash>,
     pub new_input_tokens: Vec<u32>,
     pub new_output_tokens: Vec<u32>,
@@ -31,7 +31,7 @@ pub struct ActiveSequence {
 impl ActiveSequence {
     /// Create a new ActiveSequence instance with the provided parent, input blocks, input tokens, and block size
     pub fn new(
-        parent_cached: Option<ExternalSequenceBlockHash>,
+        parent_cached: Option<GlobalHash>,
         new_input_blocks: Vec<LocalBlockHash>,
         new_input_tokens: Vec<u32>,
         block_size: usize,
@@ -76,13 +76,13 @@ impl ActiveSequence {
     /// Create a new ActiveSequence from tokens, finding the longest prefix that exists in the cache
     /// by performing a rolling hash over the tokens. The parent is set to the last matching hash.
     pub fn new_from_tokens_with_cache(
-        cache: &HashSet<ExternalSequenceBlockHash>,
+        cache: &HashSet<GlobalHash>,
         tokens: Vec<u32>,
         block_size: usize,
         worker_id: usize
     ) -> Self {
         // Initialize with no parent hash
-        let mut parent_hash: Option<ExternalSequenceBlockHash> = None;
+        let mut parent_hash: Option<GlobalHash> = None;
         let mut processed_blocks = 0;
         
         // Process tokens in block-sized chunks
@@ -101,7 +101,7 @@ impl ActiveSequence {
             let seq_blocks = compute_seq_hash_for_blocks(&block_hash, parent_hash);
             assert_eq!(seq_blocks.len(), 1);
             
-            let sequence_hash = seq_blocks[0].block_hash;
+            let sequence_hash = seq_blocks[0];
             
             // Check if this hash exists in the cache
             if cache.contains(&sequence_hash) {
@@ -140,7 +140,7 @@ impl ActiveSequence {
     }
 
     /// Commit the sequence to block hashes
-    pub fn commit(&self) -> Vec<KvCacheStoredBlockData> {
+    pub fn commit(&self) -> Vec<GlobalHash> {
         // Concatenate input and output tokens
         let mut combined_tokens = Vec::with_capacity(self.new_input_tokens.len() + self.new_output_tokens.len());
         combined_tokens.extend_from_slice(&self.new_input_tokens);
@@ -166,8 +166,8 @@ mod tests {
     #[test]
     fn test_active_sequence_commit_with_different_token_counts() {
         // Create an ActiveSequence with specified values
-        let parent = Some(ExternalSequenceBlockHash(42));
-        let input_blocks = vec![LocalBlockHash(50), LocalBlockHash(51)];
+        let parent = Some(42);
+        let input_blocks = vec![50, 50];
         let input_tokens = vec![1, 2, 3];
         let block_size = 16;
         let worker_id = 0;
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_sequence_creation_methods_equivalence() {
-        // Let's derive PartialEq for ExternalSequenceBlockHash if needed
+        // Let's derive PartialEq for GlobalHash if needed
         // (not needed since it already has PartialEq derived)
 
         // Create tokens from 0 to 16
@@ -227,12 +227,12 @@ mod tests {
         let committed1 = sequence1.commit();
         
         // Extract the parent hash from the committed sequence
-        let parent_hash = committed1.last().map(|block| block.block_hash);
+        let parent_hash = committed1.last().map(|block| block);
         
         // Create a dummy cache with the hash from the first sequence
         let mut cache = HashSet::new();
         if let Some(hash) = parent_hash {
-            cache.insert(hash); // The value doesn't matter for this test
+            cache.insert(*hash); // Dereference the hash to store the value, not the reference
         }
         
         // Create a second sequence using new_from_tokens_with_cache

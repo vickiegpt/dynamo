@@ -1,0 +1,171 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::collections::{HashMap, VecDeque};
+use std::cmp::{Eq, Ord, Ordering, PartialOrd};
+use std::hash::Hash;
+
+/// Wrapper for f64 that implements total ordering and panics when NaN is encountered
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TimeStamp(f64);
+impl PartialOrd for TimeStamp {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+impl Eq for TimeStamp {}
+impl Ord for TimeStamp {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.partial_cmp(&other.0).unwrap()
+    }
+}
+
+/// An LRU evictor that maintains objects and evicts them based on their
+/// last accessed time. Implements a "lazy" eviction mechanism where:
+/// 1. The priority queue does not immediately reflect updates or removes
+/// 2. Objects are pushed to the queue in order of increasing priority (older objects first)
+/// 3. The user must ensure objects are added in correct temporal order
+/// 4. Remove and update operations are lazy - entries remain in the queue until
+///    they are either evicted or cleaned up during maintenance
+pub struct LRUEvictor<T: Clone + Eq + Hash + Ord> {
+    pub free_table: HashMap<T, f64>,
+    priority_queue: VecDeque<(T, TimeStamp)>,
+    cleanup_threshold: usize,
+}
+
+impl<T: Clone + Eq + Hash + Ord> LRUEvictor<T> {
+    /// Create a new LRUEvictor with the default cleanup threshold
+    pub fn new() -> Self {
+        Self::with_cleanup_threshold(50)
+    }
+    
+    /// Create a new LRUEvictor with a custom cleanup threshold
+    pub fn with_cleanup_threshold(cleanup_threshold: usize) -> Self {
+        LRUEvictor {
+            free_table: HashMap::new(),
+            priority_queue: VecDeque::new(),
+            cleanup_threshold,
+        }
+    }
+    
+    /// Check if the evictor contains the given object
+    pub fn contains(&self, object: &T) -> bool {
+        self.free_table.contains_key(object)
+    }
+    
+    /// Evict an object based on LRU policy
+    /// Returns the evicted object or an error if no objects are available
+    pub fn evict(&mut self) -> Result<T, String> {
+        if self.free_table.is_empty() {
+            return Err("No usable cache memory left".to_string());
+        }
+        
+        while let Some((object, last_accessed)) = self.priority_queue.pop_front() {
+            // Check if the entry is still valid (not outdated)
+            if let Some(&current_last_accessed) = self.free_table.get(&object) {
+                if current_last_accessed == last_accessed.0 {
+                    // The entry is valid, remove it from the free table
+                    self.free_table.remove(&object);
+                    return Ok(object);
+                }
+                // Otherwise, this is an outdated entry and we skip it
+            }
+        }
+        
+        Err("No usable cache memory left".to_string())
+    }
+    
+    /// Add a new object to the evictor
+    pub fn add(&mut self, object: T, last_accessed: f64) {
+        self.free_table.insert(object.clone(), last_accessed);
+        self.priority_queue.push_back((object.clone(), TimeStamp(last_accessed)));
+        self.cleanup_if_necessary();
+    }
+    
+    /// Update the last_accessed time for an object with a specific timestamp
+    pub fn update(&mut self, object: &T, last_accessed: f64) {
+        if let Some(entry) = self.free_table.get_mut(object) {
+            *entry = last_accessed;
+        }
+    }
+    
+    /// Remove an object from the evictor
+    /// We don't remove from the priority queue immediately, as that would be inefficient
+    /// Outdated entries will be filtered out during eviction or cleanup
+    pub fn remove(&mut self, object: &T) -> Result<(), String> {
+        match self.free_table.remove(object) {
+            Some(_) => Ok(()),
+            None => Err("Attempting to remove object that's not in the evictor".to_string()),
+        }
+    }
+    
+    /// Get the number of objects in the evictor
+    pub fn num_objects(&self) -> usize {
+        self.free_table.len()
+    }
+    
+    /// Check if cleanup is necessary and perform it if needed
+    fn cleanup_if_necessary(&mut self) {
+        if self.priority_queue.len() > self.cleanup_threshold * self.free_table.len() {
+            self.cleanup();
+        }
+    }
+    
+    /// Clean up the priority queue by removing outdated entries
+    fn cleanup(&mut self) {
+        let mut new_priority_queue = VecDeque::new();
+        for (object, &last_accessed) in &self.free_table {
+            new_priority_queue.push_back((object.clone(), TimeStamp(last_accessed)));
+        }
+        self.priority_queue = new_priority_queue;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_lru_evictor_eviction_order() {
+        // Create a new LRUEvictor with default cleanup threshold
+        let mut evictor = LRUEvictor::<i32>::new();
+        
+        // Add items in the specified order with incrementing timestamps
+        // to ensure predictable eviction order
+        evictor.add(4, 1.0);
+        evictor.add(3, 1.0);
+        evictor.add(2, 1.0);
+        evictor.add(1, 1.0);
+        evictor.add(5, 2.0);
+        evictor.add(1, 2.0); // Updates timestamp for 1
+        evictor.add(2, 3.0); // Updates timestamp for 2
+        evictor.add(1, 3.0); // Updates timestamp for 1 again
+        
+        // Verify the eviction order
+        // 4 should be evicted first as it has the oldest timestamp
+        let evicted = evictor.evict().unwrap();
+        assert_eq!(evicted, 4);
+        
+        // 3 should be evicted next
+        let evicted = evictor.evict().unwrap();
+        assert_eq!(evicted, 3);
+        
+        // Check remaining objects
+        assert_eq!(evictor.num_objects(), 3);
+        assert!(evictor.contains(&1));
+        assert!(evictor.contains(&2));
+        assert!(evictor.contains(&5));
+    }
+}

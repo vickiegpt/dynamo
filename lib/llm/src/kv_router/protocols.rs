@@ -15,7 +15,6 @@
 
 use crate::tokens::Token;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RouterRequest {
@@ -66,13 +65,6 @@ pub struct LocalBlockHash(pub u64);
 /// In this case, the hashing function is external and unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct ExternalSequenceBlockHash(pub u64);
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DirectRequest {
-    pub hashes: Vec<Token>,
-    pub worker_id: i64,
-    pub max_output_tokens: u64,
-}
 
 /// Represents a collection of cache events and a shutdown flag.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -165,33 +157,6 @@ impl<'de> Deserialize<'de> for ExternalSequenceBlockHash {
         let value = u64::deserialize(deserializer)?;
         Ok(ExternalSequenceBlockHash(value))
     }
-}
-
-/// Represents an active block in the cache with a reference count
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
-pub enum UniqueSequenceHash {
-    /// Block identified by UUID
-    UuidIdentifier(Uuid),
-    /// Block identified by hash
-    HashIdentifier(ExternalSequenceBlockHash),
-}
-
-impl Default for UniqueSequenceHash {
-    fn default() -> Self {
-        // Generate a random UUID when default is used
-        Self::UuidIdentifier(Uuid::new_v4())
-    }
-}
-
-/// Represents different block movement operations in the cache
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MoveBlock {
-    /// Move a block to active state
-    ToActive(UniqueSequenceHash, usize),
-    /// Move a block to inactive state
-    ToInactive(UniqueSequenceHash, usize),
-    /// Destroy a block
-    Destroy(UniqueSequenceHash, usize),
 }
 
 #[cfg(test)]
