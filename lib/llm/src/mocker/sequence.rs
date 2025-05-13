@@ -14,11 +14,12 @@
 // limitations under the License.
 
 use std::collections::HashSet;
-use crate::mocker::protocols::{GlobalHash, LocalBlockHash};
+use crate::mocker::protocols::{GlobalHash, LocalBlockHash, MoveBlock, UniqueBlock};
 use crate::mocker::tokens::{compute_seq_hash_for_blocks, compute_block_hash_for_seq, process_token_blocks};
+use tokio::sync::mpsc;
 
 /// A sequence that is actively being built, with the ability to add tokens and commit to hashes
-#[derive(PartialEq, Debug)]
+#[derive(Debug)]
 pub struct ActiveSequence {
     pub parent_cached: Option<GlobalHash>,
     pub new_input_blocks: Vec<LocalBlockHash>,
@@ -26,6 +27,7 @@ pub struct ActiveSequence {
     pub new_output_tokens: Vec<u32>,
     pub block_size: usize,
     pub worker_id: usize,
+    pub event_tx: Option<mpsc::Sender<MoveBlock>>,
 }
 
 impl ActiveSequence {
@@ -35,7 +37,8 @@ impl ActiveSequence {
         new_input_blocks: Vec<LocalBlockHash>,
         new_input_tokens: Vec<u32>,
         block_size: usize,
-        worker_id: usize
+        worker_id: usize,
+        event_tx: Option<mpsc::Sender<MoveBlock>>,
     ) -> Self {
         Self {
             parent_cached,
@@ -44,6 +47,7 @@ impl ActiveSequence {
             new_output_tokens: Vec::new(),
             block_size,
             worker_id,
+            event_tx,
         }
     }
 
@@ -53,7 +57,8 @@ impl ActiveSequence {
         cache: &HashSet<GlobalHash>,
         tokens: Vec<u32>,
         block_size: usize,
-        worker_id: usize
+        worker_id: usize,
+        event_tx: Option<mpsc::Sender<MoveBlock>>,
     ) -> Self {
         // Initialize with no parent hash
         let mut parent_hash: Option<GlobalHash> = None;
@@ -82,6 +87,11 @@ impl ActiveSequence {
                 // The hash exists, so update the parent and continue
                 parent_hash = Some(sequence_hash);
                 processed_blocks += 1;
+                
+                // Send Reuse signal if event_tx is available
+                if let Some(tx) = &event_tx {
+                    let _ = tx.try_send(MoveBlock::Reuse(UniqueBlock::HashIdentifier(sequence_hash)));
+                }
             } else {
                 // Hash not found, stop processing
                 break;
@@ -95,6 +105,18 @@ impl ActiveSequence {
         let remaining_tokens = &tokens[processed_tokens..];
         let (new_input_blocks, new_input_tokens) = process_token_blocks(remaining_tokens, block_size);
         
+        // Send Evict signal for each new input block if event_tx is available
+        if let Some(tx) = &event_tx {
+            for _ in 0..new_input_blocks.len() {
+                let _ = tx.try_send(MoveBlock::Evict(UniqueBlock::default()));
+            }
+            
+            // Send an additional Evict signal if new_input_tokens is not empty
+            if !new_input_tokens.is_empty() {
+                let _ = tx.try_send(MoveBlock::Evict(UniqueBlock::default()));
+            }
+        }
+        
         Self {
             parent_cached: parent_hash,
             new_input_blocks,
@@ -102,6 +124,7 @@ impl ActiveSequence {
             new_output_tokens: Vec::new(),
             block_size,
             worker_id,
+            event_tx,
         }
     }
 
@@ -129,7 +152,16 @@ impl ActiveSequence {
         combined_hashes.extend_from_slice(&local_hashes_from_tokens);
         
         // Convert to sequence block hashes with the parent
-        compute_seq_hash_for_blocks(&combined_hashes, self.parent_cached)
+        let global_hashes = compute_seq_hash_for_blocks(&combined_hashes, self.parent_cached);
+        
+        // Send Deref signals for each global hash in reverse order
+        if let Some(tx) = &self.event_tx {
+            for &hash in global_hashes.iter().rev() {
+                let _ = tx.try_send(MoveBlock::Ref(UniqueBlock::HashIdentifier(hash)));
+            }
+        }
+        
+        global_hashes
     }
 }
 
@@ -151,7 +183,8 @@ mod tests {
             input_blocks,
             input_tokens,
             block_size,
-            worker_id
+            worker_id,
+            None,
         );
         
         for i in 0..12 {
@@ -189,7 +222,8 @@ mod tests {
             Vec::new(), // No input blocks
             Vec::new(), // No input tokens
             block_size,
-            worker_id
+            worker_id,
+            None,
         );
         
         // Push all tokens to sequence1
@@ -210,7 +244,7 @@ mod tests {
         }
         
         // Create a second sequence using new_from_tokens_with_cache
-        let sequence2 = ActiveSequence::new_from_tokens_with_cache(&cache, tokens, block_size, worker_id);
+        let sequence2 = ActiveSequence::new_from_tokens_with_cache(&cache, tokens, block_size, worker_id, None);
         
         // Commit the second sequence
         let committed2 = sequence2.commit();

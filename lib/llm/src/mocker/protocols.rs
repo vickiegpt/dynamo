@@ -38,18 +38,13 @@ impl Default for UniqueBlock {
 }
 
 /// Represents different block movement operations in the cache
-pub enum MoveBlockType {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum MoveBlock {
     Reuse(UniqueBlock),
-    Free(UniqueBlock),
     Destroy(UniqueBlock),
     Evict(UniqueBlock),
     Ref(UniqueBlock),
     Unref(UniqueBlock),
-}
-
-pub struct MoveBlock {
-    pub block_type: MoveBlockType,
-    pub worker_id: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
