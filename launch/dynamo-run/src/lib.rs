@@ -16,10 +16,6 @@ pub use dynamo_llm::request_template::RequestTemplate;
 pub use opt::{Input, Output};
 mod subprocess;
 
-/// When `in=text` the user doesn't need to know the model name, and doesn't need to provide it on
-/// the command line. Hence it's optional, and defaults to this.
-const INVISIBLE_MODEL_NAME: &str = "dynamo-run";
-
 const CHILD_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How we identify a python string endpoint
@@ -64,15 +60,10 @@ pub async fn run(
         _ => {
             match &maybe_path {
                 Some(model_path) => {
-                    let maybe_model_name = if in_opt == Input::Text {
-                        Some(INVISIBLE_MODEL_NAME.to_string())
-                    } else {
-                        flags.model_name.clone()
-                    };
                     LocalModel::prepare(
                         model_path.to_str().context("Invalid UTF-8 in model path")?,
                         flags.model_config.as_deref(),
-                        maybe_model_name.as_deref(),
+                        flags.model_name.clone(),
                     )
                     .await?
                 }
@@ -121,7 +112,7 @@ pub async fn run(
         }
         #[cfg(feature = "mistralrs")]
         Output::MistralRs => EngineConfig::StaticFull {
-            engine: dynamo_engine_mistralrs::make_engine(local_model.path()).await?,
+            engine: dynamo_engine_mistralrs::make_engine(&local_model).await?,
             model: Box::new(local_model),
         },
         Output::SgLang => {
@@ -136,7 +127,7 @@ pub async fn run(
             };
             let (py_script, child) = match subprocess::start(
                 subprocess::sglang::PY,
-                local_model.path(),
+                &local_model,
                 flags.tensor_parallel_size,
                 if flags.base_gpu_id == 0 {
                     None
@@ -172,7 +163,7 @@ pub async fn run(
             }
             let (py_script, child) = match subprocess::start(
                 subprocess::vllm::PY,
-                local_model.path(),
+                &local_model,
                 flags.tensor_parallel_size,
                 None, // base_gpu_id. vllm uses CUDA_VISIBLE_DEVICES instead
                 None, // multi-node config. vllm uses `ray`, see guide

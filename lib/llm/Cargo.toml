@@ -25,10 +25,15 @@ readme.workspace = true
 description = "Dynamo LLM Library"
 
 [features]
-default = ["block_manager"]
+default = ["block-manager"]
 
-block_manager = ["dep:nixl-sys", "dep:cudarc", "dep:ndarray"]
+block-manager = ["dep:nixl-sys", "dep:cudarc", "dep:ndarray"]
 sentencepiece = ["dep:sentencepiece"]
+
+# testing features - enables deeper integration tests with cuda and nixl
+testing-full  = ["testing-cuda", "testing-nixl"]
+testing-cuda  = ["dep:cudarc"]
+testing-nixl  = ["dep:nixl-sys"]
 
 [dependencies]
 # repo
@@ -74,7 +79,7 @@ regex = "1"
 rayon = "1"
 
 # block_manager
-nixl-sys = { git = "https://github.com/ai-dynamo/nixl.git",  branch = "ryan/kvbm", optional = true }
+nixl-sys = { version = "0.2.1-rc.1", optional = true }
 cudarc = { version = "0.16.2", features = ["cuda-12020"], optional = true }
 ndarray = { version = "0.16", optional = true }
 
@@ -101,8 +106,8 @@ toktrie_hf_tokenizers =  { version = "0.6.28" }
 bs62 = { version = "0.1" }
 erased-serde = { version = "0.4" }
 itertools = { version = "0.14.0" }
-minijinja = { version = "2.3.1", features = ["loader"] }
-minijinja-contrib = { version = "2.3.1", features = ["pycompat"] }
+minijinja = { version = "2.10.2", features = ["loader"] }
+minijinja-contrib = { version = "2.10.2", features = ["pycompat"] }
 
 # GGUF
 ggus = "0.4.0"

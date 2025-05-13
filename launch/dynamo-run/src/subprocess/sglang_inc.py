@@ -17,7 +17,9 @@
 
 import argparse
 import asyncio
+import logging
 import sys
+from typing import Optional
 
 import sglang
 import uvloop
@@ -29,6 +31,8 @@ from dynamo.runtime import DistributedRuntime, dynamo_worker
 DEFAULT_ENDPOINT = "dyn://dynamo.backend.generate"
 DEFAULT_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 
+logging.basicConfig(level=logging.DEBUG)
+
 
 class Config:
     """Command line parameters or defaults"""
@@ -36,7 +40,8 @@ class Config:
     namespace: str
     component: str
     endpoint: str
-    model: str
+    model_path: str
+    model_name: Optional[str]
     base_gpu_id: int
     tensor_parallel_size: int
     nnodes: int
@@ -54,9 +59,10 @@ class RequestHandler:
         self.engine_client = engine
 
     async def generate(self, request):
-        # print(f"Received request: {request}")
+        sampling_params = {}
+        if request["sampling_options"]["temperature"] is not None:
+            sampling_params["temperature"] = request["sampling_options"]["temperature"]
         sampling_params = {
-            "temperature": request["sampling_options"]["temperature"],
             # sglang defaults this to 128
             "max_new_tokens": request["stop_conditions"]["max_tokens"],
         }
@@ -91,12 +97,12 @@ async def init(runtime: DistributedRuntime, config: Config):
     await component.create_service()
 
     endpoint = component.endpoint(config.endpoint)
-    print("Started server instance")
-
-    await register_llm(endpoint, config.model, ModelType.Backend)
+    await register_llm(
+        ModelType.Backend, endpoint, config.model_path, config.model_name
+    )
 
     arg_map = {
-        "model_path": config.model,
+        "model_path": config.model_path,
         "skip_tokenizer_init": True,
         "tp_size": config.tensor_parallel_size,
         "base_gpu_id": config.base_gpu_id,
@@ -121,12 +127,14 @@ async def init(runtime: DistributedRuntime, config: Config):
         logging.debug(f"Adding extra engine arguments: {json_map}")
         arg_map = {**arg_map, **json_map}  # json_map gets precedence
 
+    # TODO fetch default SamplingParams from generation_config.json
+
     engine_args = ServerArgs(**arg_map)
     engine_client = sglang.Engine(server_args=engine_args)
 
     # the server will gracefully shutdown (i.e., keep opened TCP streams finishes)
     # after the lease is revoked
-    await endpoint.serve_endpoint(RequestHandler(engine_client).generate, None)
+    await endpoint.serve_endpoint(RequestHandler(engine_client).generate)
 
 
 def cmd_line_args():
@@ -140,10 +148,16 @@ def cmd_line_args():
         help=f"Dynamo endpoint string in 'dyn://namespace.component.endpoint' format. Default: {DEFAULT_ENDPOINT}",
     )
     parser.add_argument(
-        "--model",
+        "--model-path",
         type=str,
         default=DEFAULT_MODEL,
         help=f"Path to disk model or HuggingFace model identifier to load. Default: {DEFAULT_MODEL}",
+    )
+    parser.add_argument(
+        "--model-name",
+        type=str,
+        default="",
+        help="Name to serve the model under. Defaults to deriving it from model path.",
     )
     parser.add_argument(
         "--base-gpu-id",
@@ -178,12 +192,17 @@ def cmd_line_args():
     args = parser.parse_args()
 
     config = Config()
-    config.model = args.model
+    config.model_path = args.model_path
+    if args.model_name:
+        config.model_name = args.model_name
+    else:
+        # This becomes an `Option` on the Rust side
+        config.model_name = None
 
     endpoint_str = args.endpoint.replace("dyn://", "", 1)
     endpoint_parts = endpoint_str.split(".")
     if len(endpoint_parts) != 3:
-        print(
+        logging.error(
             f"Invalid endpoint format: '{args.endpoint}'. Expected 'dyn://namespace.component.endpoint' or 'namespace.component.endpoint'."
         )
         sys.exit(1)
