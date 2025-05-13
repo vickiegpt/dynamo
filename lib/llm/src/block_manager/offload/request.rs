@@ -20,7 +20,7 @@ use crate::block_manager::block::{BlockMetadata, ImmutableBlock, MutableBlock};
 use crate::block_manager::pool::BlockPoolError;
 use crate::block_manager::storage::Storage;
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Ord, PartialOrd)]
 pub struct OffloadRequestKey {
     pub priority: u64,
     pub timestamp: u64,
@@ -44,11 +44,7 @@ impl<S: Storage, M: BlockMetadata> PartialOrd for OffloadRequest<S, M> {
 /// Order offload requests by priority, high to low.
 impl<S: Storage, M: BlockMetadata> Ord for OffloadRequest<S, M> {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Order high to low.
-        match other.key.priority.cmp(&self.key.priority) {
-            Ordering::Equal => self.key.timestamp.cmp(&other.key.timestamp),
-            ordering => ordering,
-        }
+        self.key.cmp(&other.key)
     }
 }
 

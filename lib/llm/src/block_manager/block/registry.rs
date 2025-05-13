@@ -141,7 +141,6 @@ pub struct RegistrationHandle {
     #[getter(skip)]
     release_manager: Arc<dyn EventReleaseManager>,
 
-    #[getter(skip)]
     token_block: TokenBlock,
 }
 
@@ -157,10 +156,6 @@ impl RegistrationHandle {
             release_manager,
             token_block: token_block.clone(),
         }
-    }
-
-    pub fn token_block(&self) -> &TokenBlock {
-        &self.token_block
     }
 }
 
