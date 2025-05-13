@@ -100,8 +100,9 @@ impl<T: Clone + Eq + Hash> LRUEvictor<T> {
     }
     
     /// Clean up the priority queue by removing outdated entries
-    /// TODO: fix this
     fn cleanup(&mut self) {
+        todo!("This is bugged!");
+
         let mut new_priority_queue = VecDeque::new();
         for (object, &last_accessed) in &self.free_table {
             new_priority_queue.push_back((object.clone(), last_accessed));
