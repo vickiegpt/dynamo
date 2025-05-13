@@ -108,37 +108,42 @@ impl<T: Clone + Eq + Hash> LRUEvictor<T> {
     /// Clean up the priority queue by removing outdated entries
     fn cleanup(&mut self) {
         let mut new_priority_queue = VecDeque::new();
-        for (object, &last_accessed) in &self.free_table {
-            new_priority_queue.push_back((object.clone(), last_accessed));
+        for (object, timestamp) in self.priority_queue.drain(..) {
+            if let Some(&current_timestamp) = self.free_table.get(&object) {
+                if current_timestamp == timestamp {
+                    new_priority_queue.push_back((object, timestamp));
+                }
+            }
         }
         self.priority_queue = new_priority_queue;
-
-        todo!("This is bugged!");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn test_lru_evictor_eviction_order() {
-        // Create a new LRUEvictor with default cleanup threshold
-        let mut evictor = LRUEvictor::<i32>::new();
+    #[rstest]
+    #[case(1)]
+    #[case(2)]
+    #[case(3)]
+    fn test_lru_evictor_eviction_order(#[case] threshold: usize) {
+        // Create a new LRUEvictor with the given cleanup threshold
+        let mut evictor = LRUEvictor::<i32>::with_cleanup_threshold(threshold);
 
         // Add items in the specified order with incrementing timestamps
-        // to ensure predictable eviction order
         evictor.insert(4, 1.0);
         evictor.insert(3, 1.0);
         evictor.insert(2, 1.0);
         evictor.insert(1, 1.0);
         evictor.insert(5, 2.0);
         evictor.insert(1, 2.0); // Updates timestamp for 1
-        evictor.insert(4, 3.0); // Updates timestamp for 2
-        evictor.insert(2, 3.0); // Updates timestamp for 1 again
+        evictor.insert(4, 3.0); // Updates timestamp for 4
+        evictor.insert(2, 3.0); // Updates timestamp for 2
 
         // Verify the eviction order
-        println!("{:?}", evictor);
+        println!("Testing with threshold {}", threshold);
         let evicted = evictor.evict().unwrap();
         assert_eq!(evicted, 3);
         let evicted = evictor.evict().unwrap();
