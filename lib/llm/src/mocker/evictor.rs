@@ -39,13 +39,13 @@ impl Ord for TimeStamp {
 /// 3. The user must ensure objects are added in correct temporal order
 /// 4. Remove and update operations are lazy - entries remain in the queue until
 ///    they are either evicted or cleaned up during maintenance
-pub struct LRUEvictor<T: Clone + Eq + Hash + Ord> {
+pub struct LRUEvictor<T: Clone + Eq + Hash> {
     pub free_table: HashMap<T, f64>,
     priority_queue: VecDeque<(T, TimeStamp)>,
     cleanup_threshold: usize,
 }
 
-impl<T: Clone + Eq + Hash + Ord> LRUEvictor<T> {
+impl<T: Clone + Eq + Hash> LRUEvictor<T> {
     /// Create a new LRUEvictor with the default cleanup threshold
     pub fn new() -> Self {
         Self::with_cleanup_threshold(50)
@@ -87,17 +87,14 @@ impl<T: Clone + Eq + Hash + Ord> LRUEvictor<T> {
         Err("No usable cache memory left".to_string())
     }
     
-    /// Add a new object to the evictor
-    pub fn add(&mut self, object: T, last_accessed: f64) {
+    /// Insert or update an object in the evictor
+    pub fn insert(&mut self, object: T, last_accessed: f64) {
+        let is_new = !self.free_table.contains_key(&object);
         self.free_table.insert(object.clone(), last_accessed);
-        self.priority_queue.push_back((object.clone(), TimeStamp(last_accessed)));
-        self.cleanup_if_necessary();
-    }
-    
-    /// Update the last_accessed time for an object with a specific timestamp
-    pub fn update(&mut self, object: &T, last_accessed: f64) {
-        if let Some(entry) = self.free_table.get_mut(object) {
-            *entry = last_accessed;
+        
+        if is_new {
+            self.priority_queue.push_back((object, TimeStamp(last_accessed)));
+            self.cleanup_if_necessary();
         }
     }
     
@@ -144,14 +141,14 @@ mod tests {
         
         // Add items in the specified order with incrementing timestamps
         // to ensure predictable eviction order
-        evictor.add(4, 1.0);
-        evictor.add(3, 1.0);
-        evictor.add(2, 1.0);
-        evictor.add(1, 1.0);
-        evictor.add(5, 2.0);
-        evictor.add(1, 2.0); // Updates timestamp for 1
-        evictor.add(2, 3.0); // Updates timestamp for 2
-        evictor.add(1, 3.0); // Updates timestamp for 1 again
+        evictor.insert(4, 1.0);
+        evictor.insert(3, 1.0);
+        evictor.insert(2, 1.0);
+        evictor.insert(1, 1.0);
+        evictor.insert(5, 2.0);
+        evictor.insert(1, 2.0); // Updates timestamp for 1
+        evictor.insert(2, 3.0); // Updates timestamp for 2
+        evictor.insert(1, 3.0); // Updates timestamp for 1 again
         
         // Verify the eviction order
         // 4 should be evicted first as it has the oldest timestamp
