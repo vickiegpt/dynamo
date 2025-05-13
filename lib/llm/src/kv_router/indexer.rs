@@ -44,7 +44,6 @@
 //! This module provides a scalable and efficient way to manage and retrieve data blocks for LLM inference, leveraging a global KV cache to optimize performance.
 
 use bytes::Bytes;
-use bytemuck::cast_slice;
 // use prometheus::{IntCounter, IntGauge};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

@@ -55,7 +55,6 @@ pub struct ForwardPassMetrics {
 
 /// A [`LocalBlockHash`] is a hash computed from the tokens_ids, extra_token_ids and the optional
 /// lora_id of a block.
-/// NOTE (rupei): would the derived Ord and PartialOrd traits make sense?
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct LocalBlockHash(pub u64);
 
