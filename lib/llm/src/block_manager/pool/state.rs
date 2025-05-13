@@ -16,7 +16,6 @@
 use crate::block_manager::{
     block::{registry::BlockRegistationError, BlockState, PrivateBlockExt},
     events::Publisher,
-    CacheLevel,
 };
 
 use super::*;
@@ -182,10 +181,7 @@ impl<S: Storage, M: BlockMetadata> State<S, M> {
 
             // TODO: Make a way to set meaningful priority values, and maybe don't enqueue offloads for every registered block.
             if offload {
-                immutable
-                    .enqueue_offload_to(CacheLevel::G2, 0)
-                    .await
-                    .unwrap();
+                immutable.enqueue_offload_to(0).await.unwrap();
             }
 
             immutable_blocks.push(immutable);

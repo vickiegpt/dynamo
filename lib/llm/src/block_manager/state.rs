@@ -359,12 +359,9 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
     pub(crate) async fn enqueue_offload_block<S: Storage + 'static>(
         &self,
         block: &ImmutableBlock<S, Metadata>,
-        location: CacheLevel,
         priority: u64,
     ) -> Result<()> {
-        self.offload_manager
-            .offload(block, location, priority)
-            .await?;
+        self.offload_manager.offload(block, priority).await?;
 
         Ok(())
     }

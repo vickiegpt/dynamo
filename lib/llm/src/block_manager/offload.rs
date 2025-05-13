@@ -23,7 +23,7 @@ use super::block::{
 use super::pool::BlockPoolError;
 use super::state::TransferContext;
 use super::storage::{Cuda, Storage};
-use super::{BlockPool, CacheLevel, DeviceStorage, PinnedStorage};
+use super::{BlockPool, DeviceStorage, PinnedStorage};
 
 use anyhow::Result;
 use cudarc::driver::sys::CUevent_flags;
@@ -247,7 +247,6 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
     pub async fn offload<S: Storage>(
         &self,
         block: &ImmutableBlock<S, Metadata>,
-        location: CacheLevel,
         priority: u64,
     ) -> core::result::Result<(), BlockPoolError> {
         match block.state() {
@@ -267,12 +266,6 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         if let Some(device_block) =
             any_block.downcast_ref::<ImmutableBlock<DeviceStorage, Metadata>>()
         {
-            if location != CacheLevel::G2 {
-                return Err(BlockPoolError::BlockError(BlockError::Other(
-                    anyhow::anyhow!("Only offloads to G2 are supported."),
-                )));
-            }
-
             let mut tick = self.tick.lock().await;
             let key = OffloadRequestKey {
                 priority,
@@ -471,18 +464,14 @@ mod tests {
         let immutable_block = ImmutableBlock::new(Arc::new(get_block(device_pool).await?));
 
         assert!(matches!(
-            offload_manager
-                .offload(&immutable_block, CacheLevel::G2, 0)
-                .await,
+            offload_manager.offload(&immutable_block, 0).await,
             Err(BlockPoolError::BlockError(BlockError::InvalidState(_)))
         ));
 
         // Check blocks in the 'PARTIAL' state.
         let immutable_block = ImmutableBlock::new(Arc::new(partial_block(device_pool, 0).await?));
         assert!(matches!(
-            offload_manager
-                .offload(&immutable_block, CacheLevel::G2, 0)
-                .await,
+            offload_manager.offload(&immutable_block, 0).await,
             Err(BlockPoolError::BlockError(BlockError::InvalidState(_)))
         ));
 
@@ -491,9 +480,7 @@ mod tests {
             completed_block(device_pool, [0; BLOCK_SIZE]).await?,
         ));
         assert!(matches!(
-            offload_manager
-                .offload(&immutable_block, CacheLevel::G2, 0)
-                .await,
+            offload_manager.offload(&immutable_block, 0).await,
             Err(BlockPoolError::BlockError(BlockError::InvalidState(_)))
         ));
 
@@ -517,34 +504,10 @@ mod tests {
             .next()
             .ok_or(anyhow::anyhow!("Failed to register block"))?;
 
-        // Check that offloads to G1, G3 and G4 fail.
-        assert!(matches!(
-            offload_manager
-                .offload(&immutable_device_block, CacheLevel::G1, 0)
-                .await,
-            Err(BlockPoolError::BlockError(BlockError::Other(_)))
-        ));
-
-        assert!(matches!(
-            offload_manager
-                .offload(&immutable_device_block, CacheLevel::G3, 0)
-                .await,
-            Err(BlockPoolError::BlockError(BlockError::Other(_)))
-        ));
-
-        assert!(matches!(
-            offload_manager
-                .offload(&immutable_device_block, CacheLevel::G4, 0)
-                .await,
-            Err(BlockPoolError::BlockError(BlockError::Other(_)))
-        ));
-
         populate_cuda_block(&immutable_device_block, 42)?;
 
         // Offloads should only go to G2 (for now)
-        offload_manager
-            .offload(&immutable_device_block, CacheLevel::G2, 0)
-            .await?;
+        offload_manager.offload(&immutable_device_block, 0).await?;
 
         // Wait for it to be processed.
         // TODO: This is a bit of a hack, and may lead to non-deterministic behavior.
@@ -585,9 +548,7 @@ mod tests {
             .next()
             .unwrap();
 
-        offload_manager
-            .offload(&immutable_device_block, CacheLevel::G2, 0)
-            .await?;
+        offload_manager.offload(&immutable_device_block, 0).await?;
 
         // Wait for offload to be processed.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -603,9 +564,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Try the offload again.
-        offload_manager
-            .offload(&immutable_device_block, CacheLevel::G2, 0)
-            .await?;
+        offload_manager.offload(&immutable_device_block, 0).await?;
 
         // Wait for offload to be processed.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -690,9 +649,7 @@ mod tests {
 
         populate_cuda_block(&immutable_device_block, 42)?;
         // Offload the block to the host.
-        offload_manager
-            .offload(&immutable_device_block, CacheLevel::G2, 0)
-            .await?;
+        offload_manager.offload(&immutable_device_block, 0).await?;
 
         // Wait for the offload to be processed.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
