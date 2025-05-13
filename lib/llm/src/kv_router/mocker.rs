@@ -1,200 +1,152 @@
-use std::collections::{BinaryHeap, HashMap};
-use std::cmp::{Eq, Ord, Ordering, PartialOrd};
-use std::hash::Hash;
-use std::cmp::Reverse;
 use std::collections::{HashSet, VecDeque};
-use crate::kv_router::protocols::{DirectRequest, SequenceHashWithDepth};
-use crate::kv_router::indexer::RadixTree;
+use indexmap::IndexSet;
+use crate::kv_router::protocols::{DirectRequest, KvCacheStoredBlockData, ExternalSequenceBlockHash, LocalBlockHash};
+use crate::kv_router::indexer::{compute_seq_hash_for_blocks, RadixTree, compute_block_hash_for_seq};
 
-/// Wrapper for f64 that implements total ordering and panics when NaN is encountered
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct TimeStamp(f64);
-
-impl PartialOrd for TimeStamp {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.0.partial_cmp(&other.0)
-    }
+/// A sequence that is actively being built, with the ability to add tokens and commit to hashes
+pub struct ActiveSequence {
+    pub parent_cached: ExternalSequenceBlockHash,
+    pub new_input_blocks: Vec<LocalBlockHash>,
+    pub new_input_tokens: Vec<u32>,
+    pub new_output_tokens: Vec<u32>,
+    pub block_size: u64,
 }
 
-impl Eq for TimeStamp {}
-
-impl Ord for TimeStamp {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.partial_cmp(&other.0).unwrap()
-    }
-} 
-/// An LRU evictor that maintains objects and evicts them based on their
-/// last accessed time.
-pub struct LRUEvictor<T: Clone + Eq + Hash + Ord> {
-    // Maps object keys to their metadata
-    pub free_table: HashMap<T, f64>,
-    // Min-heap of (last_accessed, object) for efficient eviction
-    priority_queue: BinaryHeap<(Reverse<TimeStamp>, T)>,
-    // Cleanup threshold as a ratio of priority_queue size to free_table size
-    cleanup_threshold: usize,
-}
-
-impl<T: Clone + Eq + Hash + Ord> LRUEvictor<T> {
-    /// Create a new LRUEvictor with the default cleanup threshold
-    pub fn new() -> Self {
-        Self::with_cleanup_threshold(50)
-    }
-
-    /// Create a new LRUEvictor with a custom cleanup threshold
-    pub fn with_cleanup_threshold(cleanup_threshold: usize) -> Self {
-        LRUEvictor {
-            free_table: HashMap::new(),
-            priority_queue: BinaryHeap::new(),
-            cleanup_threshold,
+impl ActiveSequence {
+    /// Create a new ActiveSequence instance with the provided parent, input blocks, input tokens, and block size
+    pub fn new(
+        parent_cached: ExternalSequenceBlockHash,
+        new_input_blocks: Vec<LocalBlockHash>,
+        new_input_tokens: Vec<u32>,
+        block_size: u64
+    ) -> Self {
+        Self {
+            parent_cached,
+            new_input_blocks,
+            new_input_tokens,
+            new_output_tokens: Vec::new(),
+            block_size,
         }
     }
 
-    /// Check if the evictor contains the given object
-    pub fn contains(&self, object: &T) -> bool {
-        self.free_table.contains_key(object)
+    /// Push a token to the output tokens sequence
+    pub fn push(&mut self, token: u32) {
+        self.new_output_tokens.push(token);
     }
 
-    /// Evict an object based on LRU policy
-    /// Returns the evicted object or an error if no objects are available
-    pub fn evict(&mut self) -> Result<T, String> {
-        if self.free_table.is_empty() {
-            return Err("No usable cache memory left".to_string());
-        }
-
-        while let Some((Reverse(last_accessed), object)) = self.priority_queue.pop() {
-            // Check if the entry is still valid (not outdated)
-            if let Some(&current_last_accessed) = self.free_table.get(&object) {
-                if current_last_accessed == last_accessed.0 {
-                    // The entry is valid, remove it from the free table
-                    self.free_table.remove(&object);
-                    return Ok(object);
-                }
-                // Otherwise, this is an outdated entry and we skip it
-            }
-        }
-
-        Err("No usable cache memory left".to_string())
-    }
-
-    /// Add a new object to the evictor
-    pub fn add(&mut self, object: T, last_accessed: f64) {        
-        self.free_table.insert(object.clone(), last_accessed);
-        self.priority_queue.push((Reverse(TimeStamp(last_accessed)), object.clone()));
-        self.cleanup_if_necessary();
-    }
-
-    /// Update the last_accessed time for an object with a specific timestamp
-    pub fn update(&mut self, object: &T, last_accessed: f64) {
-        if let Some(entry) = self.free_table.get_mut(object) {
-            *entry = last_accessed;
-        }
-    }
-
-    /// Remove an object from the evictor
-    /// We don't remove from the priority queue immediately, as that would be inefficient
-    /// Outdated entries will be filtered out during eviction or cleanup
-    pub fn remove(&mut self, object: &T) -> Result<(), String> {
-        match self.free_table.remove(object) {
-            Some(_) => Ok(()),
-            None => Err("Attempting to remove object that's not in the evictor".to_string()),
-        }
-    }
-
-    /// Get the number of objects in the evictor
-    pub fn num_objects(&self) -> usize {
-        self.free_table.len()
-    }
-
-    /// Check if cleanup is necessary and perform it if needed
-    fn cleanup_if_necessary(&mut self) {
-        if self.priority_queue.len() > self.cleanup_threshold * self.free_table.len() {
-            self.cleanup();
-        }
-    }
-
-    /// Clean up the priority queue by removing outdated entries
-    fn cleanup(&mut self) {
-        let mut new_priority_queue = BinaryHeap::new();
-
-        for (object, &last_accessed) in &self.free_table {
-            new_priority_queue.push((Reverse(TimeStamp(last_accessed)), object.clone()));
-        }
-
-        self.priority_queue = new_priority_queue;
+    /// Commit the sequence to block hashes
+    pub fn commit(&self) -> Vec<KvCacheStoredBlockData> {
+        // Concatenate input and output tokens
+        let mut combined_tokens = Vec::with_capacity(self.new_input_tokens.len() + self.new_output_tokens.len());
+        combined_tokens.extend_from_slice(&self.new_input_tokens);
+        combined_tokens.extend_from_slice(&self.new_output_tokens);
+        
+        // Calculate how many complete blocks we can make
+        let block_size = self.block_size as usize;
+        let complete_blocks_tokens = (combined_tokens.len() / block_size) * block_size;
+        
+        // Truncate tokens to include only complete blocks
+        let tokens_to_process = &combined_tokens[0..complete_blocks_tokens];
+        
+        // Compute the block hashes for the tokens
+        let local_hashes_from_tokens = compute_block_hash_for_seq(tokens_to_process, block_size);
+        
+        // Combine the new_input_blocks with the computed local hashes
+        let mut combined_hashes = Vec::with_capacity(self.new_input_blocks.len() + local_hashes_from_tokens.len());
+        combined_hashes.extend_from_slice(&self.new_input_blocks);
+        combined_hashes.extend_from_slice(&local_hashes_from_tokens);
+        
+        // Convert to sequence block hashes with the parent
+        compute_seq_hash_for_blocks(&combined_hashes, Some(self.parent_cached))
     }
 }
 
 /// Mock implementation of workers for testing and simulation
 pub struct MockWorkers {
     pub num_workers: u64,
-    pub active_blocks: Vec<HashSet<SequenceHashWithDepth>>,
-    pub inactive_blocks: Vec<LRUEvictor<SequenceHashWithDepth>>,
-    pub waiting_blocks: Vec<VecDeque<DirectRequest>>,
+    pub max_capacity: u64,
+    pub block_size: u64,
+    pub active_blocks: Vec<HashSet<KvCacheStoredBlockData>>,
+    pub inactive_blocks: Vec<IndexSet<KvCacheStoredBlockData>>,
+    pub waiting_blocks: Vec<VecDeque<KvCacheStoredBlockData>>,
     pub radix_tree: RadixTree,
 }
 
 impl MockWorkers {
     /// Create a new MockWorkers instance
-    pub fn new(num_workers: u64) -> Self {
+    pub fn new(num_workers: u64, max_capacity: u64, block_size: u64) -> Self {
         let mut active_blocks = Vec::with_capacity(num_workers as usize);
         let mut inactive_blocks = Vec::with_capacity(num_workers as usize);
         let mut waiting_blocks = Vec::with_capacity(num_workers as usize);
         
         for _ in 0..num_workers {
             active_blocks.push(HashSet::new());
-            inactive_blocks.push(LRUEvictor::new());
+            inactive_blocks.push(IndexSet::new());
             waiting_blocks.push(VecDeque::new());
         }
         
         MockWorkers {
             num_workers,
+            max_capacity,
+            block_size,
             active_blocks,
             inactive_blocks,
             waiting_blocks,
             radix_tree: RadixTree::new(),
         }
     }
+
+    /// Receive a DirectRequest and store it in the waiting queue for the specified worker
+    /// Also compute and store the sequence block hashes
+    pub fn receive_request(&mut self, request: DirectRequest) {
+        // Get worker index from worker_id, ensuring it's within bounds
+        let worker_idx = (request.worker_id as usize) % self.num_workers as usize;
+        
+        // Compute sequence block hashes
+        let stored_blocks = compute_seq_hash_for_blocks(&request.hashes, None);
+        
+        // Add the block hashes to the active set for this worker
+        for block in stored_blocks {
+            self.waiting_blocks[worker_idx].push_back(block);
+        }
+    }
 }
 
 #[cfg(test)]
-mod tests{
+mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn test_lru_evictor_eviction_order() {
-        // Create a new LRUEvictor with default cleanup threshold
-        let mut evictor = LRUEvictor::<i32>::new();
+    fn test_active_sequence_commit_with_different_token_counts() {
+        // Create an ActiveSequence with specified values
+        let parent = ExternalSequenceBlockHash(42);
+        let input_blocks = vec![LocalBlockHash(50), LocalBlockHash(51)];
+        let input_tokens = vec![1, 2, 3];
+        let block_size = 16;
         
-        // Get current timestamp
-        let timestamp1 = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
+        let mut sequence = ActiveSequence::new(
+            parent,
+            input_blocks,
+            input_tokens,
+            block_size
+        );
         
-        // Add two integers with the same timestamp
-        evictor.add(1, timestamp1);
-        evictor.add(2, timestamp1);
+        for i in 0..12 {
+            sequence.push(i);
+        }
         
-        // Get a new timestamp (slightly later)
-        let timestamp2 = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
+        let result1 = sequence.commit();
+        assert_eq!(result1.len(), 2);
         
-        // Add three more integers with the new timestamp
-        evictor.add(1, timestamp2); // This updates the timestamp for 1
-        evictor.add(3, timestamp2);
-        evictor.add(4, timestamp2);
+        sequence.push(12);
+        let result2 = sequence.commit();
+        assert_eq!(result2.len(), 3);
         
-        // Evict an object (should be 2 as it has the oldest timestamp)
-        let evicted = evictor.evict().unwrap();
-        assert_eq!(evicted, 2);
+        for i in 13..16 {
+            sequence.push(i);
+        }
         
-        // Check that free_table contains 1, 3, 4 and nothing else
-        assert_eq!(evictor.num_objects(), 3);
-        assert!(evictor.contains(&1));
-        assert!(evictor.contains(&3));
-        assert!(evictor.contains(&4));
+        let result3 = sequence.commit();
+        assert_eq!(result3.len(), 3);
     }
 }

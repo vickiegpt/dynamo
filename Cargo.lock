@@ -1620,6 +1620,7 @@ dependencies = [
  "galil-seiferas",
  "ggus",
  "hf-hub",
+ "indexmap 2.9.0",
  "insta",
  "itertools 0.14.0",
  "memmap2",

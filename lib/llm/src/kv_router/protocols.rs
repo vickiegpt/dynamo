@@ -70,26 +70,7 @@ pub struct ExternalSequenceBlockHash(pub u64);
 pub struct DirectRequest {
     pub hashes: Vec<LocalBlockHash>,
     pub worker_id: i64,
-    pub max_tokens: u64,
-}
-
-/// A sequence block hash with an associated depth in the sequence.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SequenceHashWithDepth {
-    pub hash: ExternalSequenceBlockHash,
-    pub depth: u64,
-}
-
-impl Ord for SequenceHashWithDepth {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.depth.cmp(&other.depth)
-    }
-}
-
-impl PartialOrd for SequenceHashWithDepth {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
+    pub max_output_tokens: u64,
 }
 
 /// Represents a collection of cache events and a shutdown flag.

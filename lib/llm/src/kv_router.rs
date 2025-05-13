@@ -26,6 +26,7 @@ use dynamo_runtime::{
 use futures::stream::{self, StreamExt};
 use std::sync::Arc;
 
+pub mod mocker;
 pub mod indexer;
 pub mod metrics_aggregator;
 pub mod protocols;
