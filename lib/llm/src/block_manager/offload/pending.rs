@@ -17,56 +17,91 @@ use std::sync::Arc;
 use std::thread::spawn;
 use tokio::sync::mpsc;
 
-use crate::block_manager::block::{BlockMetadata, MutableBlock};
+use crate::block_manager::block::{BlockMetadata, ImmutableBlock, MutableBlock};
+use crate::block_manager::pool::BlockPoolError;
 use crate::block_manager::storage::Storage;
-
+use crate::block_manager::BlockPool;
 use anyhow::Result;
 use cudarc::driver::CudaEvent;
 
-pub struct PendingOffload<S: Storage, M: BlockMetadata> {
-    _block: Arc<MutableBlock<S, M>>,
+type OnboardResult<Target, Metadata> =
+    Result<Vec<ImmutableBlock<Target, Metadata>>, BlockPoolError>;
+
+pub struct PendingTransfer<Source: Storage, Target: Storage, Metadata: BlockMetadata> {
+    /// The block being copied from.
+    _sources: Vec<Arc<MutableBlock<Source, Metadata>>>,
+    /// The block being copied to.
+    targets: Vec<MutableBlock<Target, Metadata>>,
+    /// The Cuda event that indicates the completion of the transfer.
     event: CudaEvent,
+    /// The oneshot sender that optionally returns the registered blocks once the transfer is complete.
+    completion_indicator: Option<oneshot::Sender<OnboardResult<Target, Metadata>>>,
+    /// The target pool that will receive the registered block.
+    target_pool: Arc<Option<BlockPool<Target, Metadata>>>,
 }
 
-impl<S: Storage, M: BlockMetadata> PendingOffload<S, M> {
-    pub fn new(block: Arc<MutableBlock<S, M>>, event: CudaEvent) -> Self {
+impl<Source: Storage, Target: Storage, Metadata: BlockMetadata>
+    PendingTransfer<Source, Target, Metadata>
+{
+    pub fn new(
+        sources: Vec<Arc<MutableBlock<Source, Metadata>>>,
+        targets: Vec<MutableBlock<Target, Metadata>>,
+        event: CudaEvent,
+        completion_indicator: Option<oneshot::Sender<OnboardResult<Target, Metadata>>>,
+        target_pool: Arc<Option<BlockPool<Target, Metadata>>>,
+    ) -> Self {
         Self {
-            _block: block,
+            _sources: sources,
+            targets,
             event,
+            completion_indicator,
+            target_pool,
         }
     }
 }
 
-// TODO: Parameterize this.
-const MAX_OFFLOAD_STREAM_DEPTH: usize = 4;
-
-pub struct PendingOffloadManager<S: Storage, M: BlockMetadata> {
-    pending_offload_q: mpsc::Sender<PendingOffload<S, M>>,
+pub struct PendingTransferManager<Source: Storage, Target: Storage, Metadata: BlockMetadata> {
+    pending_transfer_q: mpsc::Sender<PendingTransfer<Source, Target, Metadata>>,
 }
 
-impl<S: Storage, M: BlockMetadata> PendingOffloadManager<S, M> {
-    pub fn new() -> Self {
-        let (tx, mut rx) = mpsc::channel::<PendingOffload<S, M>>(MAX_OFFLOAD_STREAM_DEPTH);
+impl<Source: Storage, Target: Storage, Metadata: BlockMetadata>
+    PendingTransferManager<Source, Target, Metadata>
+{
+    pub fn new(max_depth: usize) -> Self {
+        let (tx, mut rx) = mpsc::channel::<PendingTransfer<Source, Target, Metadata>>(max_depth);
 
         spawn(move || {
-            while let Some(pending_offload) = rx.blocking_recv() {
-                // Wait for the event, then drop the struct (including the block).
-                pending_offload.event.synchronize()?;
-                drop(pending_offload);
+            while let Some(pending_transfer) = rx.blocking_recv() {
+                // Wait for the event.
+                pending_transfer.event.synchronize()?;
+
+                let PendingTransfer {
+                    targets,
+                    target_pool,
+                    ..
+                } = pending_transfer;
+
+                if let Some(target_pool) = target_pool.as_ref() {
+                    let blocks = target_pool.register_blocks_blocking(targets)?;
+
+                    if let Some(completion_indicator) = pending_transfer.completion_indicator {
+                        completion_indicator.send(Ok(blocks))?;
+                    }
+                }
             }
             Ok::<(), anyhow::Error>(())
         });
 
         Self {
-            pending_offload_q: tx,
+            pending_transfer_q: tx,
         }
     }
 
-    pub async fn handle_pending_offload(
+    pub async fn handle_pending_transfer(
         &self,
-        pending_offload: PendingOffload<S, M>,
+        pending_transfer: PendingTransfer<Source, Target, Metadata>,
     ) -> Result<()> {
-        self.pending_offload_q.send(pending_offload).await?;
+        self.pending_transfer_q.send(pending_transfer).await?;
 
         Ok(())
     }

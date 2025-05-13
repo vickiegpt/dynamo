@@ -680,6 +680,14 @@ pub struct ImmutableBlock<S: Storage, M: BlockMetadata> {
     block: Arc<MutableBlock<S, M>>,
 }
 
+impl<S: Storage, M: BlockMetadata> Clone for ImmutableBlock<S, M> {
+    fn clone(&self) -> Self {
+        Self {
+            block: self.block.clone(),
+        }
+    }
+}
+
 impl<S: Storage, M: BlockMetadata> ImmutableBlock<S, M> {
     pub(crate) fn new(block: Arc<MutableBlock<S, M>>) -> Self {
         Self { block }

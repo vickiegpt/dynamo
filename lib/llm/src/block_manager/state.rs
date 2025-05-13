@@ -19,6 +19,7 @@ use super::offload::OffloadManager;
 use super::{
     block::{Block, ImmutableBlock},
     config::NixlOptions,
+    pool::BlockPoolError,
 };
 use cudarc::driver::CudaStream;
 use std::sync::Arc;
@@ -149,7 +150,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
             local_block_set.set_nixl_metadata(nixl_agent.get_local_md()?);
         }
 
-        let offload_manager = OffloadManager::new(device_pool.clone(), host_pool.clone());
+        let offload_manager = OffloadManager::new(device_pool.clone(), host_pool.clone())?;
 
         let state = Arc::new(Self {
             worker_id,
@@ -366,6 +367,13 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
             .await?;
 
         Ok(())
+    }
+
+    pub async fn onboard_blocks(
+        &self,
+        blocks: Vec<ImmutableBlock<PinnedStorage, Metadata>>,
+    ) -> core::result::Result<Vec<ImmutableBlock<DeviceStorage, Metadata>>, BlockPoolError> {
+        self.offload_manager.onboard(blocks).await
     }
 }
 

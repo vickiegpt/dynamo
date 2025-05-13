@@ -16,7 +16,8 @@
 use std::cmp::Ordering;
 use std::sync::Weak;
 
-use crate::block_manager::block::{BlockMetadata, MutableBlock};
+use crate::block_manager::block::{BlockMetadata, ImmutableBlock, MutableBlock};
+use crate::block_manager::pool::BlockPoolError;
 use crate::block_manager::storage::Storage;
 
 #[derive(PartialEq, Eq)]
@@ -59,3 +60,21 @@ impl<S: Storage, M: BlockMetadata> PartialEq for OffloadRequest<S, M> {
 }
 
 impl<S: Storage, M: BlockMetadata> Eq for OffloadRequest<S, M> {}
+
+pub struct OnboardRequest<Source: Storage, Target: Storage, M: BlockMetadata> {
+    pub blocks: Vec<ImmutableBlock<Source, M>>,
+    pub response_tx:
+        oneshot::Sender<std::result::Result<Vec<ImmutableBlock<Target, M>>, BlockPoolError>>,
+}
+
+impl<Source: Storage, Target: Storage, M: BlockMetadata> OnboardRequest<Source, Target, M> {
+    pub fn new(
+        blocks: Vec<ImmutableBlock<Source, M>>,
+        response_tx: oneshot::Sender<Result<Vec<ImmutableBlock<Target, M>>, BlockPoolError>>,
+    ) -> Self {
+        Self {
+            blocks,
+            response_tx,
+        }
+    }
+}
