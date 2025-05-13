@@ -16,17 +16,13 @@
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, Notify};
 
-use super::block::{
-    transfer::WriteTo, BlockError, BlockExt, BlockMetadata, BlockState, ImmutableBlock,
-    MutableBlock,
-};
+use super::block::{BlockError, BlockMetadata, BlockState, ImmutableBlock};
 use super::pool::BlockPoolError;
 use super::state::TransferContext;
 use super::storage::{Cuda, Storage};
 use super::{BlockPool, DeviceStorage, PinnedStorage};
 
 use anyhow::Result;
-use cudarc::driver::sys::CUevent_flags;
 use std::any::Any;
 
 use std::collections::BTreeSet;
@@ -34,7 +30,7 @@ use std::collections::BTreeSet;
 mod pending;
 mod request;
 
-use pending::{PendingTransfer, PendingTransferManager};
+use pending::{PendingCudaTransferManager, PendingTransfer, PendingTransferManager};
 use request::{OffloadRequest, OffloadRequestKey, OnboardRequest};
 
 const MAX_OFFLOAD_STREAM_DEPTH: usize = 4;
@@ -85,27 +81,6 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         Ok(this)
     }
 
-    async fn update_target_metadata<Source: Storage, Target: Storage>(
-        source: &Arc<MutableBlock<Source, Metadata>>,
-        target: &mut MutableBlock<Target, Metadata>,
-    ) -> Result<()> {
-        // Only registered blocks can be transferred. There are upstream checks for this, so this shouldn't ever fail.
-        if let BlockState::Registered(reg_handle) = source.state() {
-            // Bring the block back to the 'Reset' state.
-            target.reset();
-            // Transfer metadata.
-            target.update_metadata(source.metadata().clone());
-            // Copy tokens
-            target.apply_token_block(reg_handle.token_block().clone())?;
-        } else {
-            Err(BlockPoolError::BlockError(BlockError::InvalidState(
-                "Block is not registered.".to_string(),
-            )))?;
-        }
-
-        Ok(())
-    }
-
     async fn offload_worker(&self) -> Result<()> {
         // Since cuda memcpys in streams are async, this gets a bit tricky.
         // We can't just consume the queue normally, otherwise the stream would become very backlogged.
@@ -119,14 +94,15 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
 
         let cuda_ctx = Cuda::device_or_create(0)?;
 
-        let transfer_ctx = TransferContext::new(None, cuda_ctx.new_stream()?);
-
         let device = self.device.as_ref().as_ref().unwrap();
         let host = self.host.as_ref().as_ref().unwrap();
 
         // We don't want to hold too many strong references to blocks in the device pool, since it would limit our effective KV Cache capacity.
         // In this case, we limit it to just enough to ensure that a transfer is always occurring.
-        let dtoh_pending_offload_manager = PendingTransferManager::new(MAX_OFFLOAD_STREAM_DEPTH);
+        let dtoh_pending_offload_manager = PendingCudaTransferManager::new(
+            MAX_OFFLOAD_STREAM_DEPTH,
+            TransferContext::new(None, cuda_ctx.new_stream()?),
+        );
 
         loop {
             // Try to check the offload queue.
@@ -157,24 +133,11 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                         }
                     };
 
-                    if let Some(mut host_block) = host_blocks.into_iter().next() {
-                        // Enqueue the offload into the stream.
-                        block.write_to(&mut host_block, None, &transfer_ctx)?;
-
-                        // Record an event after the transfer is complete. Use the BLOCKING_SYNC flag to ensure the event is recorded synchronously on the host.
-                        let event = transfer_ctx
-                            .stream()
-                            .record_event(Some(CUevent_flags::CU_EVENT_BLOCKING_SYNC))?;
-
-                        // Update block metadata and register with host pool.
-                        OffloadManager::update_target_metadata(&block, &mut host_block).await?;
-
-                        // Record the pending offload. This may block if too many offloads are already pending.
+                    if let Some(host_block) = host_blocks.into_iter().next() {
                         dtoh_pending_offload_manager
-                            .handle_pending_transfer(PendingTransfer::new(
+                            .begin_transfer(PendingTransfer::new(
                                 vec![block],
                                 vec![host_block],
-                                event,
                                 None,
                                 self.host.clone(),
                             ))
@@ -199,31 +162,22 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         }
 
         let cuda_ctx = Cuda::device_or_create(0)?;
-        let transfer_ctx = TransferContext::new(None, cuda_ctx.new_stream()?);
 
         // For the onboarding manager, we can get away with a much bigger queue, since any onboardings would get triggered by an upcoming prefill.
-        let htod_pending_onboard_manager = PendingTransferManager::new(16384);
+        let htod_pending_onboard_manager = PendingCudaTransferManager::new(
+            16384,
+            TransferContext::new(None, cuda_ctx.new_stream()?),
+        );
         let device = self.device.as_ref().as_ref().unwrap();
 
         while let Some(request) = htod_onboard_rx.recv().await {
-            let mut device_blocks = match device.allocate_blocks(request.blocks.len()).await {
+            let device_blocks = match device.allocate_blocks(request.blocks.len()).await {
                 Ok(blocks) => blocks,
                 Err(err) => {
                     request.response_tx.send(Err(err))?;
                     continue;
                 }
             };
-
-            for (host_block, device_block) in request.blocks.iter().zip(device_blocks.iter_mut()) {
-                host_block.write_to(device_block, None, &transfer_ctx)?;
-                OffloadManager::update_target_metadata(host_block.mutable_block(), device_block)
-                    .await?;
-            }
-
-            // Record an event after all transfers are complete. See use of CU_EVENT_BLOCKING_SYNC in offload_worker.
-            let event = transfer_ctx
-                .stream()
-                .record_event(Some(CUevent_flags::CU_EVENT_BLOCKING_SYNC))?;
 
             let sources = request
                 .blocks
@@ -232,10 +186,9 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                 .collect();
 
             htod_pending_onboard_manager
-                .handle_pending_transfer(PendingTransfer::new(
+                .begin_transfer(PendingTransfer::new(
                     sources,
                     device_blocks,
-                    event,
                     Some(request.response_tx),
                     self.device.clone(),
                 ))
@@ -321,7 +274,10 @@ mod tests {
     use crate::block_manager::block::test_utils::get_private_token;
 
     use crate::block_manager::{
-        block::{BasicMetadata, BlockDataExt, BlockDataProvider, Blocks},
+        block::{
+            BasicMetadata, BlockDataExt, BlockDataProvider, BlockExt, Blocks, ImmutableBlock,
+            MutableBlock,
+        },
         layout::FullyContiguous,
         pool::BlockPool,
         storage::{
