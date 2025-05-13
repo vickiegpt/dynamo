@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 use crate::kv_router::protocols::{KvCacheStoredBlockData, ExternalSequenceBlockHash, LocalBlockHash};
 use crate::kv_router::indexer::{compute_seq_hash_for_blocks, compute_block_hash_for_seq};
 
@@ -25,6 +25,7 @@ pub struct ActiveSequence {
     pub new_input_tokens: Vec<u32>,
     pub new_output_tokens: Vec<u32>,
     pub block_size: usize,
+    pub worker_id: usize,
 }
 
 impl ActiveSequence {
@@ -33,7 +34,8 @@ impl ActiveSequence {
         parent_cached: Option<ExternalSequenceBlockHash>,
         new_input_blocks: Vec<LocalBlockHash>,
         new_input_tokens: Vec<u32>,
-        block_size: usize
+        block_size: usize,
+        worker_id: usize
     ) -> Self {
         Self {
             parent_cached,
@@ -41,6 +43,7 @@ impl ActiveSequence {
             new_input_tokens,
             new_output_tokens: Vec::new(),
             block_size,
+            worker_id,
         }
     }
 
@@ -73,9 +76,10 @@ impl ActiveSequence {
     /// Create a new ActiveSequence from tokens, finding the longest prefix that exists in the cache
     /// by performing a rolling hash over the tokens. The parent is set to the last matching hash.
     pub fn new_from_tokens_with_cache(
-        cache: &HashMap<ExternalSequenceBlockHash, usize>,
+        cache: &HashSet<ExternalSequenceBlockHash>,
         tokens: Vec<u32>,
-        block_size: usize
+        block_size: usize,
+        worker_id: usize
     ) -> Self {
         // Initialize with no parent hash
         let mut parent_hash: Option<ExternalSequenceBlockHash> = None;
@@ -100,7 +104,7 @@ impl ActiveSequence {
             let sequence_hash = seq_blocks[0].block_hash;
             
             // Check if this hash exists in the cache
-            if cache.contains_key(&sequence_hash) {
+            if cache.contains(&sequence_hash) {
                 // The hash exists, so update the parent and continue
                 parent_hash = Some(sequence_hash);
                 processed_blocks += 1;
@@ -123,6 +127,7 @@ impl ActiveSequence {
             new_input_tokens,
             new_output_tokens: Vec::new(),
             block_size,
+            worker_id,
         }
     }
 
@@ -165,12 +170,14 @@ mod tests {
         let input_blocks = vec![LocalBlockHash(50), LocalBlockHash(51)];
         let input_tokens = vec![1, 2, 3];
         let block_size = 16;
+        let worker_id = 0;
         
         let mut sequence = ActiveSequence::new(
             parent,
             input_blocks,
             input_tokens,
-            block_size
+            block_size,
+            worker_id
         );
         
         for i in 0..12 {
@@ -200,13 +207,15 @@ mod tests {
         // Create tokens from 0 to 16
         let tokens: Vec<u32> = (0..17).collect();
         let block_size = 16;
+        let worker_id = 0;
         
         // Create first sequence using new method
         let mut sequence1 = ActiveSequence::new(
             None, // No parent cached
             Vec::new(), // No input blocks
             Vec::new(), // No input tokens
-            block_size
+            block_size,
+            worker_id
         );
         
         // Push all tokens to sequence1
@@ -221,13 +230,13 @@ mod tests {
         let parent_hash = committed1.last().map(|block| block.block_hash);
         
         // Create a dummy cache with the hash from the first sequence
-        let mut cache = HashMap::new();
+        let mut cache = HashSet::new();
         if let Some(hash) = parent_hash {
-            cache.insert(hash, 1); // The value doesn't matter for this test
+            cache.insert(hash); // The value doesn't matter for this test
         }
         
         // Create a second sequence using new_from_tokens_with_cache
-        let sequence2 = ActiveSequence::new_from_tokens_with_cache(&cache, tokens, block_size);
+        let sequence2 = ActiveSequence::new_from_tokens_with_cache(&cache, tokens, block_size, worker_id);
         
         // Commit the second sequence
         let committed2 = sequence2.commit();

@@ -15,6 +15,7 @@
 
 use crate::tokens::Token;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RouterRequest {
@@ -164,6 +165,33 @@ impl<'de> Deserialize<'de> for ExternalSequenceBlockHash {
         let value = u64::deserialize(deserializer)?;
         Ok(ExternalSequenceBlockHash(value))
     }
+}
+
+/// Represents an active block in the cache with a reference count
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
+pub enum UniqueSequenceHash {
+    /// Block identified by UUID
+    UuidIdentifier(Uuid),
+    /// Block identified by hash
+    HashIdentifier(ExternalSequenceBlockHash),
+}
+
+impl Default for UniqueSequenceHash {
+    fn default() -> Self {
+        // Generate a random UUID when default is used
+        Self::UuidIdentifier(Uuid::new_v4())
+    }
+}
+
+/// Represents different block movement operations in the cache
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MoveBlock {
+    /// Move a block to active state
+    ToActive(UniqueSequenceHash, usize),
+    /// Move a block to inactive state
+    ToInactive(UniqueSequenceHash, usize),
+    /// Destroy a block
+    Destroy(UniqueSequenceHash, usize),
 }
 
 #[cfg(test)]
