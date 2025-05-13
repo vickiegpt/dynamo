@@ -21,12 +21,10 @@
 while getopts "c:v:o:a:" opt; do
   case ${opt} in
     c) TRTLLM_COMMIT=$OPTARG ;;
-    v) COMMIT_VERSION=$OPTARG ;;
     o) OUTPUT_DIR=$OPTARG ;;
     a) ARCH=$OPTARG ;;
     *) echo "Usage: $(basename $0) [-c commit] [-v version] [-o output_dir] [-a arch]"
        echo "  -c: TensorRT-LLM commit to build"
-       echo "  -v: Version suffix for the wheel. Use this to uniquely identify the wheel for a given commit."
        echo "  -o: Output directory for wheel files"
        echo "  -a: Architecture (amd64 or arm64)"
        exit 1 ;;
@@ -75,6 +73,7 @@ if ! grep -q "^__version__" "$VERSION_FILE"; then
 fi
 
 # Append suffix to version
+COMMIT_VERSION=$(git rev-parse --short HEAD)
 sed -i "s/__version__ = \"\(.*\)\"/__version__ = \"\1.dev${COMMIT_VERSION}\"/" "$VERSION_FILE"
 
 echo "Updated version:"
