@@ -96,7 +96,7 @@ impl MockWorker {
                             *ref_count += 1;
                         }
                     },
-                    MoveBlock::Unref(hash) => {
+                    MoveBlock::Deref(hash) => {
                         let mut active = active_blocks_clone.lock().await;
                         
                         // Decrement reference count and check if we need to move to inactive
@@ -207,7 +207,7 @@ mod tests {
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
             
             // Step 3: Send Unref(1) - Should move block1 from active to inactive
-            event_tx.send(MoveBlock::Unref(block1.clone())).await.unwrap();
+            event_tx.send(MoveBlock::Deref(block1.clone())).await.unwrap();
             
             // Small delay to ensure events are processed
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;

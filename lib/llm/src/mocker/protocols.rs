@@ -44,7 +44,7 @@ pub enum MoveBlock {
     Destroy(UniqueBlock),
     Evict(UniqueBlock),
     Ref(UniqueBlock),
-    Unref(UniqueBlock),
+    Deref(UniqueBlock),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
