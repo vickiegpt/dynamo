@@ -68,7 +68,7 @@ pub struct ExternalSequenceBlockHash(pub u64);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DirectRequest {
-    pub hashes: Vec<LocalBlockHash>,
+    pub hashes: Vec<Token>,
     pub worker_id: i64,
     pub max_output_tokens: u64,
 }

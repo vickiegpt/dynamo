@@ -34,6 +34,7 @@ pub mod publisher;
 pub mod recorder;
 pub mod scheduler;
 pub mod scoring;
+pub mod sequence;
 
 use crate::{
     kv_router::{
