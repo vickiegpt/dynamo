@@ -65,6 +65,33 @@ pub fn compute_seq_hash_for_blocks(
     result
 }
 
+/// Process a list of tokens and split them into block hashes and remaining tokens
+/// Returns a tuple of (block_hashes, remaining_tokens)
+pub fn process_token_blocks(tokens: &[u32], block_size: usize) -> (Vec<LocalBlockHash>, Vec<u32>) {
+    if tokens.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    
+    // Calculate how many complete blocks we can make
+    let complete_blocks_tokens = (tokens.len() / block_size) * block_size;
+    
+    if complete_blocks_tokens == 0 {
+        // No complete blocks, just return all tokens
+        return (Vec::new(), tokens.to_vec());
+    }
+    
+    // Get the tokens for complete blocks
+    let tokens_to_process = &tokens[0..complete_blocks_tokens];
+    
+    // Compute block hashes from the complete blocks
+    let block_hashes = compute_block_hash_for_seq(tokens_to_process, block_size);
+    
+    // Store the remaining tokens
+    let remaining_tokens = tokens[complete_blocks_tokens..].to_vec();
+    
+    (block_hashes, remaining_tokens)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -15,7 +15,7 @@
 
 use std::collections::HashSet;
 use crate::mocker::protocols::{GlobalHash, LocalBlockHash};
-use crate::mocker::tokens::{compute_seq_hash_for_blocks, compute_block_hash_for_seq};
+use crate::mocker::tokens::{compute_seq_hash_for_blocks, compute_block_hash_for_seq, process_token_blocks};
 
 /// A sequence that is actively being built, with the ability to add tokens and commit to hashes
 #[derive(PartialEq, Debug)]
@@ -45,32 +45,6 @@ impl ActiveSequence {
             block_size,
             worker_id,
         }
-    }
-
-    // Helper function to process tokens and split into block hashes and remaining tokens
-    fn process_token_blocks(tokens: &[u32], block_size: usize) -> (Vec<LocalBlockHash>, Vec<u32>) {
-        if tokens.is_empty() {
-            return (Vec::new(), Vec::new());
-        }
-        
-        // Calculate how many complete blocks we can make
-        let complete_blocks_tokens = (tokens.len() / block_size) * block_size;
-        
-        if complete_blocks_tokens == 0 {
-            // No complete blocks, just return all tokens
-            return (Vec::new(), tokens.to_vec());
-        }
-        
-        // Get the tokens for complete blocks
-        let tokens_to_process = &tokens[0..complete_blocks_tokens];
-        
-        // Compute block hashes from the complete blocks
-        let block_hashes = compute_block_hash_for_seq(tokens_to_process, block_size);
-        
-        // Store the remaining tokens
-        let remaining_tokens = tokens[complete_blocks_tokens..].to_vec();
-        
-        (block_hashes, remaining_tokens)
     }
 
     /// Create a new ActiveSequence from tokens, finding the longest prefix that exists in the cache
@@ -119,7 +93,7 @@ impl ActiveSequence {
         
         // Process the remaining tokens
         let remaining_tokens = &tokens[processed_tokens..];
-        let (new_input_blocks, new_input_tokens) = Self::process_token_blocks(remaining_tokens, block_size);
+        let (new_input_blocks, new_input_tokens) = process_token_blocks(remaining_tokens, block_size);
         
         Self {
             parent_cached: parent_hash,
@@ -147,7 +121,7 @@ impl ActiveSequence {
         combined_tokens.extend_from_slice(&self.new_output_tokens);
         
         // Process the combined tokens to get block hashes
-        let (local_hashes_from_tokens, _) = Self::process_token_blocks(&combined_tokens, self.block_size);
+        let (local_hashes_from_tokens, _) = process_token_blocks(&combined_tokens, self.block_size);
         
         // Combine the new_input_blocks with the computed local hashes
         let mut combined_hashes = Vec::with_capacity(self.new_input_blocks.len() + local_hashes_from_tokens.len());
