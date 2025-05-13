@@ -74,7 +74,7 @@ fi
 
 # Append suffix to version
 COMMIT_VERSION=$(git rev-parse --short HEAD)
-sed -i "s/__version__ = \"\(.*\)\"/__version__ = \"\1.dev${COMMIT_VERSION}\"/" "$VERSION_FILE"
+sed -i "s/__version__ = \"\(.*\)\"/__version__ = \"\1+dev${COMMIT_VERSION}\"/" "$VERSION_FILE"
 
 echo "Updated version:"
 grep "__version__" "$VERSION_FILE"
