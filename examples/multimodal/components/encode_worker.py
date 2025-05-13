@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 import logging
 from io import BytesIO
 from queue import Queue
@@ -27,13 +26,13 @@ from transformers import AutoImageProcessor, LlavaForConditionalGeneration
 from utils.protocol import EncodeRequest, EncodeResponse
 from utils.vllm import parse_vllm_args
 
-import connect
 from dynamo.sdk import async_on_start, endpoint, service
 
 logger = logging.getLogger(__name__)
 
 try:
     import cupy as array_module
+
     if not array_module.cuda.is_available():
         raise ImportError("CUDA is not available.")
     DEVICE = "cuda"
@@ -149,7 +148,7 @@ class VllmEncodeWorker:
                 request_id=request.request_id,
             ).model_dump_json()
 
-    @async_on_start
+    @async_on_start()
     async def on_start(self):
         logger.info("Startup started.")
         # Create and initialize a dynamo connector for this worker.
