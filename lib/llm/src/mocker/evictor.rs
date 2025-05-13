@@ -39,6 +39,7 @@ impl Ord for TimeStamp {
 /// 3. The user must ensure objects are added in correct temporal order
 /// 4. Remove and update operations are lazy - entries remain in the queue until
 ///    they are either evicted or cleaned up during maintenance
+#[derive(Debug)]
 pub struct LRUEvictor<T: Clone + Eq + Hash> {
     pub free_table: HashMap<T, f64>,
     priority_queue: VecDeque<(T, TimeStamp)>,
@@ -66,10 +67,10 @@ impl<T: Clone + Eq + Hash> LRUEvictor<T> {
     }
     
     /// Evict an object based on LRU policy
-    /// Returns the evicted object or an error if no objects are available
-    pub fn evict(&mut self) -> Result<T, String> {
+    /// Returns the evicted object or None if no objects are available
+    pub fn evict(&mut self) -> Option<T> {
         if self.free_table.is_empty() {
-            return Err("No usable cache memory left".to_string());
+            return None;
         }
         
         while let Some((object, last_accessed)) = self.priority_queue.pop_front() {
@@ -78,24 +79,20 @@ impl<T: Clone + Eq + Hash> LRUEvictor<T> {
                 if current_last_accessed == last_accessed.0 {
                     // The entry is valid, remove it from the free table
                     self.free_table.remove(&object);
-                    return Ok(object);
+                    return Some(object);
                 }
                 // Otherwise, this is an outdated entry and we skip it
             }
         }
         
-        Err("No usable cache memory left".to_string())
+        None
     }
     
     /// Insert or update an object in the evictor
     pub fn insert(&mut self, object: T, last_accessed: f64) {
-        let is_new = !self.free_table.contains_key(&object);
         self.free_table.insert(object.clone(), last_accessed);
-        
-        if is_new {
-            self.priority_queue.push_back((object, TimeStamp(last_accessed)));
-            self.cleanup_if_necessary();
-        }
+        self.priority_queue.push_back((object, TimeStamp(last_accessed)));
+        self.cleanup_if_necessary();
     }
     
     /// Remove an object from the evictor
@@ -147,22 +144,23 @@ mod tests {
         evictor.insert(1, 1.0);
         evictor.insert(5, 2.0);
         evictor.insert(1, 2.0); // Updates timestamp for 1
-        evictor.insert(2, 3.0); // Updates timestamp for 2
-        evictor.insert(1, 3.0); // Updates timestamp for 1 again
+        evictor.insert(4, 3.0); // Updates timestamp for 2
+        evictor.insert(2, 3.0); // Updates timestamp for 1 again
         
         // Verify the eviction order
-        // 4 should be evicted first as it has the oldest timestamp
-        let evicted = evictor.evict().unwrap();
-        assert_eq!(evicted, 4);
-        
-        // 3 should be evicted next
+        println!("{:?}", evictor);
         let evicted = evictor.evict().unwrap();
         assert_eq!(evicted, 3);
-        
-        // Check remaining objects
-        assert_eq!(evictor.num_objects(), 3);
-        assert!(evictor.contains(&1));
-        assert!(evictor.contains(&2));
-        assert!(evictor.contains(&5));
+        let evicted = evictor.evict().unwrap();
+        assert_eq!(evicted, 5);
+        let evicted = evictor.evict().unwrap();
+        assert_eq!(evicted, 1);
+        let evicted = evictor.evict().unwrap();
+        assert_eq!(evicted, 4);
+        let evicted = evictor.evict().unwrap();
+        assert_eq!(evicted, 2);
+        let evicted = evictor.evict();
+        assert_eq!(evicted, None);
+        assert_eq!(evictor.num_objects(), 0);
     }
 }
