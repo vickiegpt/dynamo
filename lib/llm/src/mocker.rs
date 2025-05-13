@@ -20,6 +20,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use crate::mocker::protocols::{DirectRequest, UniqueBlock, MoveBlock};
 use crate::mocker::evictor::LRUEvictor;
+use crate::mocker::sequence::ActiveSequence;
 
 pub mod evictor;
 pub mod protocols;
@@ -43,14 +44,8 @@ impl MockWorker {
         let active_blocks = Arc::new(Mutex::new(HashMap::new()));
         
         // Initialize LRUEvictor
-        let mut evictor = LRUEvictor::new();
-        // Get a single timestamp for all initial blocks
-        let initial_timestamp = Instant::now().elapsed().as_secs_f64();
-        // Populate with default blocks
-        for _ in 0..max_capacity {
-            let block = UniqueBlock::default();
-            evictor.insert(block, initial_timestamp); // Use the same timestamp for all initial blocks
-        }
+        let evictor = LRUEvictor::new();
+        // No initial blocks, start with empty inactive_blocks
         let inactive_blocks = Arc::new(Mutex::new(evictor));
         
         let waiting = Arc::new(Mutex::new(VecDeque::new()));
@@ -58,9 +53,13 @@ impl MockWorker {
         // Create mpsc channel for MoveBlock events
         let (event_tx, event_rx) = mpsc::channel::<MoveBlock>(100);
         
+        // Initialize start_time
+        let start_time = Instant::now();
+        
         // Clone Arc references for the event loop
         let active_blocks_clone = active_blocks.clone();
         let inactive_blocks_clone = inactive_blocks.clone();
+        let start_time_clone = start_time.clone();
         
         // Spawn the event loop
         let event_loop_handle = tokio::spawn(async move {
@@ -69,23 +68,24 @@ impl MockWorker {
             while let Some(event) = event_rx.recv().await {
                 // Process event based on block_type
                 match event {
+                    MoveBlock::Make(hash) => {
+                        // Directly create the block in active blocks with reference count 1
+                        let mut active = active_blocks_clone.lock().await;
+                        active.insert(hash, 1);
+                    },
                     MoveBlock::Reuse(hash) => {
+                        // Always lock active first, then inactive to maintain consistent order
+                        let mut active = active_blocks_clone.lock().await;
                         let mut inactive = inactive_blocks_clone.lock().await;
                         
                         // Remove from inactive if it exists
-                        if inactive.contains(&hash) {
-                            if let Ok(_) = inactive.remove(&hash) {
-                                // Now lock active and add with reference count 1
-                                drop(inactive);
-                                let mut active = active_blocks_clone.lock().await;
-                                active.insert(hash, 1);
-                            }
+                        if inactive.remove(&hash) {
+                            // Insert into active with reference count 1
+                            active.insert(hash, 1);
                         }
                     },
                     MoveBlock::Destroy(hash) => {
                         let mut active = active_blocks_clone.lock().await;
-                        
-                        // Remove from active completely
                         active.remove(&hash);
                     },
                     MoveBlock::Ref(hash) => {
@@ -97,6 +97,7 @@ impl MockWorker {
                         }
                     },
                     MoveBlock::Deref(hash) => {
+                        // Always lock active first, then inactive if needed
                         let mut active = active_blocks_clone.lock().await;
                         
                         // Decrement reference count and check if we need to move to inactive
@@ -106,23 +107,22 @@ impl MockWorker {
                             // If reference count reaches zero, remove from active and move to inactive
                             if *ref_count == 0 {
                                 active.remove(&hash);
-                                drop(active);
                                 
-                                // Get the inactive blocks
+                                // Now lock inactive
                                 let mut inactive = inactive_blocks_clone.lock().await;
                                 // Use monotonic time instead of system time
-                                inactive.insert(hash.clone(), Instant::now().elapsed().as_secs_f64());
+                                inactive.insert(hash, start_time_clone.elapsed().as_secs_f64());
                             }
                         }
                     },
                     MoveBlock::Evict(hash) => {
+                        // Always lock active first, then inactive to maintain consistent order
+                        let mut active = active_blocks_clone.lock().await;
                         let mut inactive = inactive_blocks_clone.lock().await;
                         
                         // Evict the oldest entry using LRUEvictor
-                        if let Ok(_) = inactive.evict() {
-                            // Now add the specified hash to active blocks with reference count 1
-                            drop(inactive);
-                            let mut active = active_blocks_clone.lock().await;
+                        if let Some(_) = inactive.evict() {
+                            // Add the specified hash to active blocks with reference count 1
                             active.insert(hash, 1);
                         }
                     }
@@ -198,10 +198,10 @@ mod tests {
             let block1 = UniqueBlock::HashIdentifier(1);
             
             // Step 1: Send Evict(0) - Should move a default block out and put block0 in active
-            event_tx.send(MoveBlock::Evict(block0.clone())).await.unwrap();
+            event_tx.send(MoveBlock::Make(block0.clone())).await.unwrap();
             
             // Step 2: Send Evict(1) - Should move another default block out and put block1 in active
-            event_tx.send(MoveBlock::Evict(block1.clone())).await.unwrap();
+            event_tx.send(MoveBlock::Make(block1.clone())).await.unwrap();
             
             // Small delay to ensure events are processed
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
