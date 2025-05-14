@@ -19,6 +19,7 @@ import os
 import signal
 from typing import Optional
 
+import numpy as np
 import torch
 from components.disagg_router import PyDisaggregatedRouter
 from components.encode_worker import EncodeWorker
@@ -242,25 +243,45 @@ class VllmWorker:
                 encode_output = EncodeResponse.model_validate_json(
                     encode_response.data()
                 )
-                video_features = torch.tensor(
-                    encode_output.video_features, device=device, dtype=torch.float16
-                )
+                # video_data_for_vllm should now be a NumPy array of raw frames
+                video_data_for_vllm = None
+                if encode_output.raw_frames:
+                    # Convert List[List[List[List[int]]]] back to np.ndarray (num_frames, H, W, C) uint8
+                    # Assuming all frames have the same dimensions as the first frame
+                    try:
+                        # Stack the list of frames (each frame is HxWxC) into a single (num_frames, H, W, C) array
+                        video_data_for_vllm = np.array(encode_output.raw_frames, dtype=np.uint8)
+                        logger.info(f"Reconstructed raw_frames to NumPy array with shape: {video_data_for_vllm.shape} and dtype: {video_data_for_vllm.dtype}")
+                    except Exception as e:
+                        logger.error(f"Error converting raw_frames list to NumPy array: {e}")
+                        video_data_for_vllm = None # Ensure it's None if conversion fails
+                # else: # video_data_for_vllm remains None if encode_output.raw_frames is empty/None
+                #     video_data_for_vllm = None
 
             remote_prefill_params = None
             logger.info(
                 f"Prefilling locally for request {request.request_id} with length {len(request.engine_prompt['prompt_token_ids'])}"
             )
             prompt_ids = request.engine_prompt["prompt_token_ids"]
-            print(f"prompt_ids: {prompt_ids}")
+            # print(f"prompt_ids: {prompt_ids}") # Redundant with vLLM internal logs
 
         # rust HTTP requires Delta streaming
         request.sampling_params.output_kind = RequestOutputKind.DELTA
 
-        if video_features is not None:
-            multi_modal_data = {"video": video_features}
-            print(f"multi_modal_data: {multi_modal_data}")
-            print(f"type of multi_modal_data: {type(multi_modal_data['video'])}")
+        if video_data_for_vllm is not None and video_data_for_vllm.size > 0: # Check if array is not empty
+            # Pass the NumPy array of raw frames directly.
+            # vLLM's internal LlavaNextVideoProcessor is expected to handle this.
+            multi_modal_data = {"video": video_data_for_vllm}
+            
+            # Debug prints
+            print(f"multi_modal_data content present: {multi_modal_data is not None}")
+            if multi_modal_data.get("video") is not None:
+                 print(f"type of multi_modal_data['video']: {type(multi_modal_data['video'])}")
+                 print(f"shape of multi_modal_data['video']: {multi_modal_data['video'].shape}")
+                 print(f"dtype of multi_modal_data['video']: {multi_modal_data['video'].dtype}")
         else:
+            if video_data_for_vllm is not None: # It was not None but size was 0
+                 logger.warning("video_data_for_vllm was an empty NumPy array, not passing to multi_modal_data.")
             multi_modal_data = None
 
         async for response in self.engine_client.generate(

@@ -43,23 +43,17 @@ class EncodeWorker:
     def __init__(self) -> None:
         class_name = self.__class__.__name__
         self.engine_args = parse_vllm_args(class_name, "")
-        self.MODEL_ID = self.engine_args.model
+        # self.MODEL_ID = self.engine_args.model # Not strictly needed if only sampling frames
 
-        # Load the model in half-precision
-        self.model = LlavaNextVideoForConditionalGeneration.from_pretrained(
-            self.MODEL_ID, 
-            torch_dtype=torch.float16, 
-            device_map="auto"
-        )
-        self.processor = LlavaNextVideoProcessor.from_pretrained(self.MODEL_ID)
-
-        # self.image_processor = AutoImageProcessor.from_pretrained(
-        #     self.MODEL_ID, trust_remote_code=True
+        # The model and processor are not needed if EncodeWorker only samples frames
+        # and vLLM handles the actual processing.
+        # self.model = LlavaNextVideoForConditionalGeneration.from_pretrained(
+        #     self.MODEL_ID, 
+        #     torch_dtype=torch.float16, 
+        #     device_map="auto"
         # )
-
-        # self.vision_model = LlavaForConditionalGeneration.from_pretrained(
-        #     self.MODEL_ID, device_map="auto", torch_dtype=torch.float16
-        # ).eval()
+        # self.processor = LlavaNextVideoProcessor.from_pretrained(self.MODEL_ID)
+        logger.info(f"{class_name} initialized to sample frames.")
 
     def sample_frames(self, video_path: str, num_frames: int = 8) -> List[np.ndarray]:
         """Sample frames from a video file or URL.
@@ -114,101 +108,79 @@ class EncodeWorker:
             logger.error(f"Error sampling frames from video: {e}")
             raise
 
-    def encode_frames(self, frames: List[np.ndarray]) -> torch.Tensor:
-        """Encode video frames using the vision encoder.
+    # def encode_frames(self, frames: List[np.ndarray]) -> torch.Tensor: # This method is no longer used as we pass raw frames
+    #     """Encode video frames using the vision encoder.
         
-        Args:
-            frames: List of RGB frames as numpy arrays
+    #     Args:
+    #         frames: List of RGB frames as numpy arrays
             
-        Returns:
-            Tensor of frame embeddings
-        """
-        try:
-            # Convert frames to PIL Images
-            images = [Image.fromarray(f) for f in frames]
+    #     Returns:
+    #         Tensor of frame embeddings
+    #     """
+    #     try:
+    #         # Convert frames to PIL Images
+    #         images = [Image.fromarray(f) for f in frames]
             
-            # Process frames through the processor
-            inputs = self.processor(
-                text="",  # Empty text as we only need video embeddings
-                videos=[images],  # Pass frames as video input
-                return_tensors="pt"
-            )
+    #         # Process frames through the processor
+    #         inputs = self.processor(
+    #             text="",  # Empty text as we only need video embeddings
+    #             videos=[images],  # Pass frames as video input
+    #             return_tensors="pt"
+    #         )
             
-            # Move inputs to the same device as the model
-            inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+    #         # Move inputs to the same device as the model
+    #         inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
             
-            # Get frame embeddings using the vision tower
-            with torch.no_grad():
-                # Get the vision tower outputs
-                logger.info(f"Inputs['pixel_values_videos'].shape: {inputs['pixel_values_videos'].shape}")
-                
-                # Ensure correct input shape for vision tower
-                pixel_values = inputs["pixel_values_videos"]
-                if len(pixel_values.shape) == 5:  # (batch, frames, channels, height, width)
-                    pixel_values = pixel_values.squeeze(0)  # Remove batch dimension
-                
-                vision_outputs = self.model.vision_tower(pixel_values)
-                
-                # Extract the frame embeddings from the last hidden state
-                frame_embeddings = vision_outputs.last_hidden_state
-                logger.info(f"Frame embeddings shape: {frame_embeddings.shape}")
-                
-                # Project embeddings through multi-modal projector
-                frame_embeddings = self.model.multi_modal_projector(frame_embeddings)
-                logger.info(f"Frame embeddings shape after projector: {frame_embeddings.shape}")
-                
-            return frame_embeddings
+    #         return inputs["pixel_values_videos"] # Return the direct output of the processor
             
-        except Exception as e:
-            logger.error(f"Error encoding frames: {e}")
-            raise
+    #     except Exception as e:
+    #         logger.error(f"Error encoding frames: {e}")
+    #         raise
 
-    def aggregate_embeddings(self, frame_embeddings: torch.Tensor, method: str = 'mean') -> torch.Tensor:
-        """Aggregate frame embeddings into a single video embedding.
+    # def aggregate_embeddings(self, frame_embeddings: torch.Tensor, method: str = 'mean') -> torch.Tensor: # No longer used
+    #     """Aggregate frame embeddings into a single video embedding.
         
-        Args:
-            frame_embeddings: Tensor of frame embeddings
-            method: Aggregation method ('mean' or 'max')
+    #     Args:
+    #         frame_embeddings: Tensor of frame embeddings
+    #         method: Aggregation method ('mean' or 'max')
             
-        Returns:
-            Single video embedding tensor
-        """
-        if method == 'mean':
-            return frame_embeddings.mean(dim=0)
-        elif method == 'max':
-            return frame_embeddings.max(dim=0).values
-        else:
-            raise ValueError(f"Unknown aggregation method: {method}")
+    #     Returns:
+    #         Single video embedding tensor
+    #     """
+    #     if method == 'mean':
+    #         return frame_embeddings.mean(dim=0)
+    #     elif method == 'max':
+    #         return frame_embeddings.max(dim=0).values
+    #     else:
+    #         raise ValueError(f"Unknown aggregation method: {method}")
 
     @dynamo_endpoint()
     async def encode(self, request: EncodeRequest) -> AsyncIterator[EncodeResponse]:
-        """Encode a video into embeddings.
+        """Sample frames from a video.
         
         Args:
             request: EncodeRequest containing video URL or path
             
         Yields:
-            EncodeResponse containing video embeddings
+            EncodeResponse containing raw video frames
         """
         try:
             # Sample frames from video
-            frames = self.sample_frames(request.image_url)
+            # sample_frames returns a list of np.ndarray (H, W, C) uint8
+            sampled_frames_np_list = self.sample_frames(request.image_url, num_frames=request.num_frames or 8) # Use num_frames from request
             
-            # Encode frames
-            frame_embeddings = self.encode_frames(frames)
+            # Convert List[np.ndarray] to List[List[List[List[int]]]] for JSON serialization
+            # This creates a list of frames, where each frame is a list of rows,
+            # each row is a list of pixels, and each pixel is a list of [R,G,B] values.
+            raw_frames_for_json = [frame.tolist() for frame in sampled_frames_np_list]
             
-            # Aggregate frame embeddings into video embedding
-            # Mean pool across frames
-            video_embedding = frame_embeddings.mean(dim=0)  # Average across frames
-            video_embedding = video_embedding.unsqueeze(0)  # Add batch dimension
-            
-            logger.info(f"Final video embedding shape: {video_embedding.shape}")
+            logger.info(f"Sampled {len(raw_frames_for_json)} frames. Shape of first frame (if any): {sampled_frames_np_list[0].shape if sampled_frames_np_list else 'N/A'}")
             
             yield EncodeResponse(
-                video_features=video_embedding.tolist()
+                raw_frames=raw_frames_for_json
             ).model_dump_json()
             
         except Exception as e:
-            logger.error(f"Error in encode: {e}")
+            logger.error(f"Error in EncodeWorker encode (frame sampling): {e}")
             raise
 

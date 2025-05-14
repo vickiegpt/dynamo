@@ -111,13 +111,15 @@ class EncodeRequest(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
     image_url: str
+    num_frames: Optional[int] = None
 
 
 class EncodeResponse(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    image_features: Optional[List[List[List[float]]]] = None
-    video_features: Optional[List[List[List[float]]]] = None
+    # raw_frames will represent a List[np.ndarray] where each ndarray is HxWxC (uint8)
+    # For JSON serialization, this will be List[List[List[List[int]]]]
+    raw_frames: Optional[List[List[List[List[int]]]]] = None
 
 
 class MyRequestOutput(BaseModel):
