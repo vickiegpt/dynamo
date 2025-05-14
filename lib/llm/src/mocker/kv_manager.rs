@@ -16,11 +16,11 @@
 use crate::mocker::evictor::LRUEvictor;
 use crate::mocker::protocols::{MoveBlock, UniqueBlock};
 use std::collections::HashMap;
+use std::panic;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use std::panic;
 
 /// Mock implementation of worker for testing and simulation
 pub struct KvManager {
@@ -63,7 +63,7 @@ impl KvManager {
                         // Always lock active first, then inactive to maintain consistent order
                         let mut active = active_blocks_clone.lock().await;
                         let mut inactive = inactive_blocks_clone.lock().await;
-                        
+
                         for hash in hashes {
                             // First check if it already exists in active blocks
                             if let Some(ref_count) = active.get_mut(&hash) {
@@ -71,7 +71,7 @@ impl KvManager {
                                 *ref_count += 1;
                                 continue;
                             }
-                            
+
                             // Then check if it exists in inactive and move it to active if found
                             if inactive.remove(&hash) {
                                 // Insert into active with reference count 1
@@ -84,12 +84,12 @@ impl KvManager {
                             let inactive_count = inactive.num_objects();
 
                             // If at max capacity, evict the oldest entry from inactive blocks
-                            if active_count + inactive_count >= max_capacity {
-                                if inactive.evict().is_none() {
-                                    panic!("max capacity reached and no free blocks left");
-                                }
+                            if active_count + inactive_count >= max_capacity
+                                && inactive.evict().is_none()
+                            {
+                                panic!("max capacity reached and no free blocks left");
                             }
-                            
+
                             // Now insert the new block in active blocks with reference count 1
                             active.insert(hash, 1);
                         }
@@ -115,7 +115,7 @@ impl KvManager {
                                 // If reference count reaches zero, remove from active and move to inactive
                                 if *ref_count == 0 {
                                     active.remove(&hash);
-                                    
+
                                     // Use monotonic time instead of system time
                                     inactive.insert(hash, start_time.elapsed().as_secs_f64());
                                 }
@@ -124,10 +124,10 @@ impl KvManager {
                     }
                     MoveBlock::Promote(uuid, hash) => {
                         let mut active = active_blocks_clone.lock().await;
-                        
+
                         let uuid_block = UniqueBlock::PartialBlock(uuid);
                         let hash_block = UniqueBlock::FullBlock(hash);
-                        
+
                         // Check if the UUID block exists in active blocks
                         if let Some(ref_count) = active.remove(&uuid_block) {
                             // Replace with hash block, keeping the same reference count
@@ -219,7 +219,10 @@ mod tests {
             });
 
             // Verify that a panic occurred
-            assert!(result.is_err(), "Expected a panic when exceeding max capacity");
+            assert!(
+                result.is_err(),
+                "Expected a panic when exceeding max capacity"
+            );
         });
     }
 
@@ -253,31 +256,50 @@ mod tests {
             // Helper function to check if active blocks contain expected blocks with expected ref counts
             async fn assert_active_blocks(worker: &KvManager, expected_blocks: &[(u64, usize)]) {
                 let active_blocks_lock = worker.active_blocks.lock().await;
-                
-                assert_eq!(active_blocks_lock.len(), expected_blocks.len(), 
-                           "Active blocks count doesn't match expected");
-                
+
+                assert_eq!(
+                    active_blocks_lock.len(),
+                    expected_blocks.len(),
+                    "Active blocks count doesn't match expected"
+                );
+
                 for &(id, ref_count) in expected_blocks {
                     let block = UniqueBlock::FullBlock(id);
-                    assert!(active_blocks_lock.contains_key(&block), 
-                           "Block {} not found in active blocks", id);
-                    assert_eq!(active_blocks_lock.get(&block), Some(&ref_count), 
-                              "Block {} has wrong reference count", id);
+                    assert!(
+                        active_blocks_lock.contains_key(&block),
+                        "Block {} not found in active blocks",
+                        id
+                    );
+                    assert_eq!(
+                        active_blocks_lock.get(&block),
+                        Some(&ref_count),
+                        "Block {} has wrong reference count",
+                        id
+                    );
                 }
             }
 
             // Helper function to check if inactive blocks contain expected blocks
-            async fn assert_inactive_blocks(worker: &KvManager, expected_size: usize, expected_blocks: &[u64]) {
+            async fn assert_inactive_blocks(
+                worker: &KvManager,
+                expected_size: usize,
+                expected_blocks: &[u64],
+            ) {
                 let inactive_blocks = worker.get_inactive_blocks().await;
                 let inactive_blocks_count = worker.inactive_blocks.lock().await.num_objects();
-                
-                assert_eq!(inactive_blocks_count, expected_size, 
-                           "Inactive blocks count doesn't match expected");
-                
+
+                assert_eq!(
+                    inactive_blocks_count, expected_size,
+                    "Inactive blocks count doesn't match expected"
+                );
+
                 for &id in expected_blocks {
                     let block = UniqueBlock::FullBlock(id);
-                    assert!(inactive_blocks.contains(&block), 
-                           "Block {} not found in inactive blocks", id);
+                    assert!(
+                        inactive_blocks.contains(&block),
+                        "Block {} not found in inactive blocks",
+                        id
+                    );
                 }
             }
 
@@ -295,7 +317,11 @@ mod tests {
             process_events().await;
 
             // Check that the blocks 0 and 1 are in active blocks, both with reference counts of 2
-            assert_active_blocks(&worker, &[(0, 2), (1, 2), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1)]).await;
+            assert_active_blocks(
+                &worker,
+                &[(0, 2), (1, 2), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1)],
+            )
+            .await;
 
             // Now destroy block 4
             destroy_blocks(&event_tx, vec![4]).await;

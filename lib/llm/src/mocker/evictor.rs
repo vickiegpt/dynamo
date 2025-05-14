@@ -21,7 +21,7 @@ use std::hash::Hash;
 /// last accessed time. Implements a "lazy" eviction mechanism where:
 /// 1. The priority queue does not immediately reflect updates or removes
 /// 2. Objects are pushed to the queue in order of increasing priority (older objects first)
-/// 3. The user must ensure objects are added in correct temporal order
+/// 3. The user must ensure objects are added in correct priority (temporal order)
 /// 4. Remove and update operations are lazy - entries remain in the queue until
 ///    they are either evicted or cleaned up during maintenance
 #[derive(Debug)]

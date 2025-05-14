@@ -64,12 +64,12 @@ pub struct DirectRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_unique_block_default_uniqueness() {
         // Create 10 default UniqueBlock instances
         let blocks: Vec<UniqueBlock> = (0..10).map(|_| UniqueBlock::default()).collect();
-        
+
         // Extract UUIDs from each block
         let mut uuids = Vec::new();
         for block in blocks {
@@ -78,11 +78,15 @@ mod tests {
                 _ => panic!("Expected UuidIdentifier variant"),
             }
         }
-        
+
         // Check that all UUIDs are unique by comparing each with every other
         for i in 0..uuids.len() {
-            for j in i+1..uuids.len() {
-                assert_ne!(uuids[i], uuids[j], "UUID at index {} and {} are identical", i, j);
+            for j in i + 1..uuids.len() {
+                assert_ne!(
+                    uuids[i], uuids[j],
+                    "UUID at index {} and {} are identical",
+                    i, j
+                );
             }
         }
     }
