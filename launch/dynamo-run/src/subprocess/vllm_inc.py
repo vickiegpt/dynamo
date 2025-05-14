@@ -112,13 +112,10 @@ async def init(runtime: DistributedRuntime, config: Config):
     """
     Instantiate and serve
     """
+
     component = runtime.namespace(config.namespace).component(config.component)
     await component.create_service()
-
     endpoint = component.endpoint(config.endpoint)
-    await register_llm(
-        ModelType.Backend, endpoint, config.model_path, config.model_name
-    )
 
     arg_map = {
         "model": config.model_path,
@@ -150,6 +147,10 @@ async def init(runtime: DistributedRuntime, config: Config):
 
     engine_context = build_async_engine_client_from_engine_args(engine_args)
     engine_client = await engine_context.__aenter__()
+
+    await register_llm(
+        ModelType.Backend, endpoint, config.model_path, config.model_name
+    )
 
     # the server will gracefully shutdown (i.e., keep opened TCP streams finishes)
     # after the lease is revoked

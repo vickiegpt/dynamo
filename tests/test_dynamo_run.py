@@ -97,8 +97,9 @@ def etcd_server(port=2379):
             f"http://0.0.0.0:{port_string}",
             "--advertise-client-urls",
             f"http://0.0.0.0:{port_string}",
-            "--data-dir",
-            "/tmp/etcd-test-data",
+            "--listen-peer-urls",
+            "http://0.0.0.0:2380",
+            "--enable-v2=false",
         ],
         env=etcd_env,
         check_ports=[port],
@@ -119,7 +120,8 @@ def nats_server(port=4222):
 @pytest.fixture(scope="function", autouse=True)
 def runtime_processes(etcd_server, nats_server):
     yield
-    subprocess.run(["pkill", "-f", "nats-server|etcd|.*http.*"], check=False)
+    print("killing nats server")
+    subprocess.run(["pkill", "-f", "nats-server|etcd"], check=False)
 
 
 class DynamoRunProcess:
@@ -235,6 +237,7 @@ class DynamoRunProcess:
 @pytest.fixture(scope="function", autouse=True)
 def kill_dynamo_processes():
     yield
+    print("killing dynamo processes")
     subprocess.run(["pkill", "-f", ".*dynamo-run.*|.*multiprocessing.*"], check=False)
 
 
