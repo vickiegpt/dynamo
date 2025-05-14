@@ -40,9 +40,9 @@ impl Default for UniqueBlock {
 /// Represents different block movement operations in the cache
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MoveBlock {
-    Use(UniqueBlock, Option<f64>),
-    Destroy(UniqueBlock),
-    Deref(UniqueBlock),
+    Use(Vec<UniqueBlock>, Option<f64>),
+    Destroy(Vec<UniqueBlock>),
+    Deref(Vec<UniqueBlock>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
