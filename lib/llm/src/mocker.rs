@@ -141,8 +141,8 @@ impl MockWorker {
                     MoveBlock::Promote(uuid, hash) => {
                         let mut active = active_blocks_clone.lock().await;
                         
-                        let uuid_block = UniqueBlock::UuidIdentifier(uuid);
-                        let hash_block = UniqueBlock::HashIdentifier(hash);
+                        let uuid_block = UniqueBlock::PartialBlock(uuid);
+                        let hash_block = UniqueBlock::FullBlock(hash);
                         
                         // Check if the UUID block exists in active blocks
                         if let Some(ref_count) = active.remove(&uuid_block) {
@@ -219,7 +219,7 @@ mod tests {
 
             // Helper function to use multiple blocks
             async fn use_blocks(event_tx: &mpsc::Sender<MoveBlock>, ids: Vec<u64>) {
-                let blocks = ids.into_iter().map(UniqueBlock::HashIdentifier).collect();
+                let blocks = ids.into_iter().map(UniqueBlock::FullBlock).collect();
                 event_tx.send(MoveBlock::Use(blocks, None)).await.unwrap();
             }
 
@@ -257,19 +257,19 @@ mod tests {
 
             // Helper function to use multiple blocks
             async fn use_blocks(event_tx: &mpsc::Sender<MoveBlock>, ids: Vec<u64>) {
-                let blocks = ids.into_iter().map(UniqueBlock::HashIdentifier).collect();
+                let blocks = ids.into_iter().map(UniqueBlock::FullBlock).collect();
                 event_tx.send(MoveBlock::Use(blocks, None)).await.unwrap();
             }
 
             // Helper function to destroy multiple blocks
             async fn destroy_blocks(event_tx: &mpsc::Sender<MoveBlock>, ids: Vec<u64>) {
-                let blocks = ids.into_iter().map(UniqueBlock::HashIdentifier).collect();
+                let blocks = ids.into_iter().map(UniqueBlock::FullBlock).collect();
                 event_tx.send(MoveBlock::Destroy(blocks)).await.unwrap();
             }
 
             // Helper function to deref multiple blocks
             async fn deref_blocks(event_tx: &mpsc::Sender<MoveBlock>, ids: Vec<u64>) {
-                let blocks = ids.into_iter().map(UniqueBlock::HashIdentifier).collect();
+                let blocks = ids.into_iter().map(UniqueBlock::FullBlock).collect();
                 event_tx.send(MoveBlock::Deref(blocks)).await.unwrap();
             }
 
@@ -281,7 +281,7 @@ mod tests {
                            "Active blocks count doesn't match expected");
                 
                 for &(id, ref_count) in expected_blocks {
-                    let block = UniqueBlock::HashIdentifier(id);
+                    let block = UniqueBlock::FullBlock(id);
                     assert!(active_blocks_lock.contains_key(&block), 
                            "Block {} not found in active blocks", id);
                     assert_eq!(active_blocks_lock.get(&block), Some(&ref_count), 
@@ -298,7 +298,7 @@ mod tests {
                            "Inactive blocks count doesn't match expected");
                 
                 for &id in expected_blocks {
-                    let block = UniqueBlock::HashIdentifier(id);
+                    let block = UniqueBlock::FullBlock(id);
                     assert!(inactive_blocks.contains(&block), 
                            "Block {} not found in inactive blocks", id);
                 }

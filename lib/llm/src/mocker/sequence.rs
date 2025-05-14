@@ -23,9 +23,8 @@ use tokio::sync::mpsc::Sender;
 /// A sequence that is actively being built, with the ability to add tokens and commit to hashes
 #[derive(Debug, Clone)]
 pub struct ActiveSequence {
-    pub global_hashes: Option<Vec<GlobalHash>>,
-    pub input_tokens: Vec<u32>,
-    pub output_tokens: Vec<u32>,
+    pub unique_blocks: Vec<UniqueBlock>,
+    pub partial_tokens: Vec<u32>,
     pub block_size: usize,
     pub chunk_size: usize,
     pub max_output_tokens: u64,
@@ -34,13 +33,12 @@ pub struct ActiveSequence {
 
 impl PartialEq for ActiveSequence {
     fn eq(&self, other: &Self) -> bool {
-        self.global_hashes == other.global_hashes &&
-        self.input_tokens == other.input_tokens &&
-        self.output_tokens == other.output_tokens &&
+        self.unique_blocks == other.unique_blocks &&
+        self.partial_tokens == other.partial_tokens &&
         self.block_size == other.block_size &&
         self.chunk_size == other.chunk_size &&
         self.max_output_tokens == other.max_output_tokens
-        // event_tx is intentionally not compared
+        // move_block_tx is intentionally not compared
     }
 }
 
@@ -56,50 +54,49 @@ impl ActiveSequence {
         let block_size = block_size.unwrap_or(64);
         let chunk_size = chunk_size.unwrap_or(256);
         
-        let (global_hashes, remaining_tokens) = if tokens.len() >= block_size {
-            // We have at least one complete block, process it
-            let complete_blocks_len = (tokens.len() / block_size) * block_size;
+        let mut unique_blocks = Vec::new();
+        let mut partial_tokens = Vec::new();
+        
+        if !tokens.is_empty() {
+            if tokens.len() >= block_size {
+                // We have at least one complete block, process it
+                let complete_blocks_len = (tokens.len() / block_size) * block_size;
+                
+                // Process complete blocks to get local block hashes
+                let local_block_hashes = compute_block_hash_for_seq(&tokens[0..complete_blocks_len], block_size);
+                
+                // Compute global hashes using rolling hash
+                let global_hashes = compute_seq_hash_for_blocks(&local_block_hashes, None);
+                
+                // Convert global hashes to FullBlock variants
+                for &hash in &global_hashes {
+                    unique_blocks.push(UniqueBlock::FullBlock(hash));
+                }
+                
+                // Get remaining tokens that don't form a complete block
+                partial_tokens = tokens[complete_blocks_len..].to_vec();
+            } else {
+                // Not enough tokens for a full block, just store them as partial tokens
+                partial_tokens = tokens;
+            }
             
-            // Process complete blocks to get local block hashes
-            let local_block_hashes = compute_block_hash_for_seq(&tokens[0..complete_blocks_len], block_size);
-            
-            // Compute global hashes using rolling hash
-            let global_hashes = compute_seq_hash_for_blocks(&local_block_hashes, None);
-            
-            // Get remaining tokens that don't form a complete block
-            let remaining_tokens = tokens[complete_blocks_len..].to_vec();
-            
-            (Some(global_hashes), remaining_tokens)
-        } else {
-            // Not enough tokens for a full block, just store them as input tokens
-            (None, tokens)
-        };
+            // Add a PartialBlock if there are remaining tokens
+            if !partial_tokens.is_empty() {
+                unique_blocks.push(UniqueBlock::default()); // Creates a PartialBlock with a new UUID
+            }
+        }
         
         // Only process blocks and send event if event_tx is provided
         if let Some(tx) = &move_block_tx {
-            // Build Vec<UniqueBlock> from global_hashes
-            let mut unique_blocks = Vec::new();
-            if let Some(hashes) = &global_hashes {
-                for &hash in hashes {
-                    unique_blocks.push(UniqueBlock::HashIdentifier(hash));
-                }
-            }
-            
-            // Add a default block if there are remaining tokens
-            if !remaining_tokens.is_empty() {
-                unique_blocks.push(UniqueBlock::default());
-            }
-            
             // Send Use event if we have blocks
             if !unique_blocks.is_empty() {
-                let _ = tx.try_send(MoveBlock::Use(unique_blocks, None));
+                let _ = tx.try_send(MoveBlock::Use(unique_blocks.clone(), None));
             }
         }
         
         Self {
-            global_hashes,
-            input_tokens: remaining_tokens,
-            output_tokens: Vec::new(),
+            unique_blocks,
+            partial_tokens,
             block_size,
             chunk_size,
             max_output_tokens,
@@ -107,40 +104,54 @@ impl ActiveSequence {
         }
     }
     
-    /// Push a token to the output tokens sequence
+    /// Push a token to the sequence
     pub fn push(&mut self, token: u32) {
-        self.output_tokens.push(token);
+        self.partial_tokens.push(token);
         
-        // Check if we have a complete block
-        let total_tokens = self.input_tokens.len() + self.output_tokens.len();
-        if total_tokens >= self.block_size {
-            // Concatenate input and output tokens
-            let mut combined_tokens = Vec::with_capacity(total_tokens);
-            combined_tokens.extend_from_slice(&self.input_tokens);
-            combined_tokens.extend_from_slice(&self.output_tokens);
+        // Add a partial block if needed
+        let needs_partial_block = self.partial_tokens.len() == 1 && 
+            (self.unique_blocks.is_empty() || 
+             matches!(self.unique_blocks.last(), Some(UniqueBlock::FullBlock(_))));
             
-            // Compute local block hash for the combined tokens
-            let local_hash = compute_block_hash_for_seq(&combined_tokens[0..self.block_size], self.block_size);
-            
-            // Get the last global hash as parent or None if there are no global hashes yet
-            let parent_hash = match &self.global_hashes {
-                Some(hashes) if !hashes.is_empty() => Some(hashes[hashes.len() - 1]),
-                _ => None,
-            };
-            
-            // Compute new global hash by rolling the local hash with the parent
-            let new_global_hash = compute_seq_hash_for_blocks(&local_hash, parent_hash);
-            
-            // Append the new global hash
-            if let Some(global_hashes) = &mut self.global_hashes {
-                global_hashes.extend(new_global_hash);
-            } else {
-                self.global_hashes = Some(new_global_hash);
-            }
-            
-            // Clear both token buffers
-            self.input_tokens = Vec::new();
-            self.output_tokens = Vec::new();
+        if needs_partial_block {
+            self.unique_blocks.push(UniqueBlock::default());
+        }
+        
+        // Not enough tokens for a complete block
+        if self.partial_tokens.len() < self.block_size {
+            return;
+        }
+        
+        // Compute local block hash for the tokens
+        let local_hash = compute_block_hash_for_seq(&self.partial_tokens[0..self.block_size], self.block_size);
+        
+        // Get the parent hash (the last full block if exists, otherwise None)
+        let parent_hash = self.unique_blocks.iter()
+            .rev()
+            .find_map(|block| match block {
+                UniqueBlock::FullBlock(hash) => Some(*hash),
+                _ => None
+            });
+        
+        // Compute new global hash by rolling the local hash with the parent
+        let new_global_hash = compute_seq_hash_for_blocks(&local_hash, parent_hash);
+        
+        // Replace the last partial block with a full block
+        if matches!(self.unique_blocks.last(), Some(UniqueBlock::PartialBlock(_))) {
+            self.unique_blocks.pop();
+        }
+        
+        // Add the new full block
+        if let Some(hash) = new_global_hash.first() {
+            self.unique_blocks.push(UniqueBlock::FullBlock(*hash));
+        }
+        
+        // Store any remaining tokens that don't form a complete block
+        self.partial_tokens = self.partial_tokens[self.block_size..].to_vec();
+        
+        // Add a new partial block if we have remaining tokens
+        if !self.partial_tokens.is_empty() {
+            self.unique_blocks.push(UniqueBlock::default());
         }
     }
 }
@@ -166,22 +177,77 @@ mod tests {
         seq1.push(16);
 
         // Verify state after pushing tokens
-        assert_eq!(seq1.global_hashes.as_ref().unwrap().len(), 1);
-        assert_eq!(seq1.input_tokens.len(), 0);
-        assert_eq!(seq1.output_tokens.len(), 1);
-
+        assert_eq!(seq1.unique_blocks.len(), 2); // One full block and one partial block
+        assert_eq!(seq1.partial_tokens.len(), 1);
+        
         // Create another sequence with block size 16 initialized with tokens [0..17]
         let extended_tokens: Vec<u32> = (0..17).collect();
-        let seq2 = ActiveSequence::new(
+        let mut seq2 = ActiveSequence::new(
             extended_tokens,
             Some(16),
             Some(256),
             100,
             None,
         );
-
-        // Assert that the global hashes contain the same data
-        assert!(seq1.global_hashes.is_some() && seq2.global_hashes.is_some());
-        assert_eq!(seq1.global_hashes.as_ref().unwrap(), seq2.global_hashes.as_ref().unwrap());
+        
+        // Assert that the first block (full block) has the same hash in both sequences
+        match (&seq1.unique_blocks[0], &seq2.unique_blocks[0]) {
+            (UniqueBlock::FullBlock(hash1), UniqueBlock::FullBlock(hash2)) => {
+                assert_eq!(hash1, hash2, "First blocks should have the same hash");
+            },
+            _ => panic!("Expected FullBlock for the first blocks"),
+        }
+        
+        // Assert that the second blocks are different (both are partial blocks with different UUIDs)
+        assert_ne!(
+            seq1.unique_blocks[1], 
+            seq2.unique_blocks[1], 
+            "Second blocks should be different"
+        );
+        
+        // Verify types of second blocks
+        match (&seq1.unique_blocks[1], &seq2.unique_blocks[1]) {
+            (UniqueBlock::PartialBlock(_), UniqueBlock::PartialBlock(_)) => {
+                // Both are partial blocks but should have different UUIDs
+            },
+            _ => panic!("Expected PartialBlock for the second blocks"),
+        }
+        
+        // Now push tokens 17..32 to both sequences
+        for token in 17..32 {
+            seq1.push(token);
+            seq2.push(token);
+        }
+        
+        // Both sequences should now have 3 blocks:
+        // 1. FullBlock for tokens 0-15
+        // 2. FullBlock for tokens 16-31
+        // 3. No partial block since there are no remaining tokens
+        assert_eq!(seq1.unique_blocks.len(), 2, "seq1 should have exactly 2 blocks");
+        assert_eq!(seq2.unique_blocks.len(), 2, "seq2 should have exactly 2 blocks");
+        assert_eq!(seq1.partial_tokens.len(), 0, "seq1 should have no partial tokens");
+        assert_eq!(seq2.partial_tokens.len(), 0, "seq2 should have no partial tokens");
+        
+        // Verify that both sequences now have identical blocks
+        assert_eq!(
+            seq1.unique_blocks, 
+            seq2.unique_blocks, 
+            "After pushing tokens 17-31, both sequences should have identical blocks"
+        );
+        
+        // Verify both blocks in detail
+        match (&seq1.unique_blocks[0], &seq2.unique_blocks[0]) {
+            (UniqueBlock::FullBlock(hash1), UniqueBlock::FullBlock(hash2)) => {
+                assert_eq!(hash1, hash2, "First blocks should have the same hash");
+            },
+            _ => panic!("Expected FullBlock for the first blocks"),
+        }
+        
+        match (&seq1.unique_blocks[1], &seq2.unique_blocks[1]) {
+            (UniqueBlock::FullBlock(hash1), UniqueBlock::FullBlock(hash2)) => {
+                assert_eq!(hash1, hash2, "Second blocks should have the same hash");
+            },
+            _ => panic!("Expected FullBlock for the second blocks"),
+        }
     }
 }

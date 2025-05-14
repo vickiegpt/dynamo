@@ -26,15 +26,15 @@ pub type NumBlocks = usize;
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub enum UniqueBlock {
     /// Block identified by UUID
-    UuidIdentifier(Uuid),
+    PartialBlock(Uuid),
     /// Block identified by hash
-    HashIdentifier(GlobalHash),
+    FullBlock(GlobalHash),
 }
 
 impl Default for UniqueBlock {
     fn default() -> Self {
         // Generate a random UUID when default is used
-        Self::UuidIdentifier(Uuid::new_v4())
+        Self::PartialBlock(Uuid::new_v4())
     }
 }
 
@@ -74,7 +74,7 @@ mod tests {
         let mut uuids = Vec::new();
         for block in blocks {
             match block {
-                UniqueBlock::UuidIdentifier(uuid) => uuids.push(uuid),
+                UniqueBlock::PartialBlock(uuid) => uuids.push(uuid),
                 _ => panic!("Expected UuidIdentifier variant"),
             }
         }
