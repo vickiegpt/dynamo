@@ -13,13 +13,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::mocker::protocols::GlobalHash;
+use crate::mocker::protocols::{GlobalHash, MoveBlock, UniqueBlock};
 use crate::mocker::tokens::{
     compute_block_hash_for_seq, compute_seq_hash_for_blocks,
 };
+use std::cmp::PartialEq;
+use tokio::sync::mpsc::Sender;
 
 /// A sequence that is actively being built, with the ability to add tokens and commit to hashes
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ActiveSequence {
     pub global_hashes: Option<Vec<GlobalHash>>,
     pub input_tokens: Vec<u32>,
@@ -27,6 +29,19 @@ pub struct ActiveSequence {
     pub block_size: usize,
     pub chunk_size: usize,
     pub max_output_tokens: u64,
+    move_block_tx: Option<Sender<MoveBlock>>,
+}
+
+impl PartialEq for ActiveSequence {
+    fn eq(&self, other: &Self) -> bool {
+        self.global_hashes == other.global_hashes &&
+        self.input_tokens == other.input_tokens &&
+        self.output_tokens == other.output_tokens &&
+        self.block_size == other.block_size &&
+        self.chunk_size == other.chunk_size &&
+        self.max_output_tokens == other.max_output_tokens
+        // event_tx is intentionally not compared
+    }
 }
 
 impl ActiveSequence {
@@ -36,6 +51,7 @@ impl ActiveSequence {
         block_size: Option<usize>,
         chunk_size: Option<usize>,
         max_output_tokens: u64,
+        move_block_tx: Option<Sender<MoveBlock>>,
     ) -> Self {
         let block_size = block_size.unwrap_or(64);
         let chunk_size = chunk_size.unwrap_or(256);
@@ -59,6 +75,27 @@ impl ActiveSequence {
             (None, tokens)
         };
         
+        // Only process blocks and send event if event_tx is provided
+        if let Some(tx) = &move_block_tx {
+            // Build Vec<UniqueBlock> from global_hashes
+            let mut unique_blocks = Vec::new();
+            if let Some(hashes) = &global_hashes {
+                for &hash in hashes {
+                    unique_blocks.push(UniqueBlock::HashIdentifier(hash));
+                }
+            }
+            
+            // Add a default block if there are remaining tokens
+            if !remaining_tokens.is_empty() {
+                unique_blocks.push(UniqueBlock::default());
+            }
+            
+            // Send Use event if we have blocks
+            if !unique_blocks.is_empty() {
+                let _ = tx.try_send(MoveBlock::Use(unique_blocks, None));
+            }
+        }
+        
         Self {
             global_hashes,
             input_tokens: remaining_tokens,
@@ -66,6 +103,7 @@ impl ActiveSequence {
             block_size,
             chunk_size,
             max_output_tokens,
+            move_block_tx,
         }
     }
     
@@ -120,6 +158,7 @@ mod tests {
             Some(16),
             Some(256),
             100,
+            None,
         );
 
         // Push tokens 15 and 16
@@ -138,6 +177,7 @@ mod tests {
             Some(16),
             Some(256),
             100,
+            None,
         );
 
         // Assert that the global hashes contain the same data

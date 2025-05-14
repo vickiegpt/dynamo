@@ -20,6 +20,7 @@ pub type Token = u32;
 pub type LocalBlockHash = u64;
 /// A global hash identifier for blocks
 pub type GlobalHash = u64;
+pub type NumBlocks = usize;
 
 /// Represents an active block in the cache with a reference count
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
@@ -43,6 +44,15 @@ pub enum MoveBlock {
     Use(Vec<UniqueBlock>, Option<f64>),
     Destroy(Vec<UniqueBlock>),
     Deref(Vec<UniqueBlock>),
+    Promote(Uuid, GlobalHash),
+}
+
+/// Response to block movement operations in the cache
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum MoveBlockResponse {
+    Success,
+    Partial(NumBlocks),
+    Failure,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

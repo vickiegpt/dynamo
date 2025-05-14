@@ -138,6 +138,18 @@ impl MockWorker {
                             }
                         }
                     }
+                    MoveBlock::Promote(uuid, hash) => {
+                        let mut active = active_blocks_clone.lock().await;
+                        
+                        let uuid_block = UniqueBlock::UuidIdentifier(uuid);
+                        let hash_block = UniqueBlock::HashIdentifier(hash);
+                        
+                        // Check if the UUID block exists in active blocks
+                        if let Some(ref_count) = active.remove(&uuid_block) {
+                            // Replace with hash block, keeping the same reference count
+                            active.insert(hash_block, ref_count);
+                        }
+                    }
                 }
             }
         });
