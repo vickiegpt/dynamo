@@ -19,7 +19,7 @@ use crate::block_manager::block::{
 };
 use crate::block_manager::pool::BlockPoolError;
 use crate::block_manager::state::TransferContext;
-use crate::block_manager::storage::{Local, Storage};
+use crate::block_manager::storage::{DeviceStorage, DiskStorage, Local, PinnedStorage, Storage};
 use crate::block_manager::BlockPool;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -113,13 +113,13 @@ pub trait PendingTransferManager<Source: Storage, Target: Storage, Metadata: Blo
 
 pub struct PendingCudaTransferManager<Source: Storage, Target: Storage, Metadata: BlockMetadata> {
     pending_transfer_q: mpsc::Sender<(PendingTransfer<Source, Target, Metadata>, CudaEvent)>,
-    transfer_ctx: TransferContext,
+    transfer_ctx: Arc<TransferContext>,
 }
 
 impl<Source: Storage, Target: Storage, Metadata: BlockMetadata>
     PendingCudaTransferManager<Source, Target, Metadata>
 {
-    pub fn new(max_depth: usize, transfer_ctx: TransferContext) -> Self {
+    pub fn new(max_depth: usize, transfer_ctx: Arc<TransferContext>) -> Self {
         let (tx, mut rx) =
             mpsc::channel::<(PendingTransfer<Source, Target, Metadata>, CudaEvent)>(max_depth);
 
@@ -163,7 +163,7 @@ where
             .zip(pending_transfer.targets.iter_mut())
         {
             transfer_metadata(source, target)?;
-            source.write_to(target, None, &self.transfer_ctx)?;
+            source.write_to(target, None, self.transfer_ctx.as_ref())?;
         }
 
         let event = self
@@ -196,31 +196,34 @@ where
     // Check that the target block is writable.
     MutableBlock<Target, Metadata>: WritableBlock<StorageType = Target>,
 {
-    pub fn new(max_depth: usize, num_workers: usize, transfer_ctx: TransferContext) -> Self {
+    pub fn new(max_depth: usize, num_workers: usize, transfer_ctx: Arc<TransferContext>) -> Self {
         let (transfer_tx, transfer_rx) =
             mpsc::channel::<PendingTransfer<Source, Target, Metadata>>(max_depth);
 
         let transfer_rx = Arc::new(Mutex::new(transfer_rx));
-
-        let transfer_ctx = Arc::new(transfer_ctx);
         for _ in 0..num_workers {
             let transfer_rx = transfer_rx.clone();
             let transfer_ctx = transfer_ctx.clone();
             let _: JoinHandle<Result<()>> = spawn(move || loop {
                 let mut transfer_rx = transfer_rx.lock().unwrap();
-                let mut pending_transfer = transfer_rx.blocking_recv().unwrap();
-                drop(transfer_rx);
 
-                for (source, target) in pending_transfer
-                    .sources
-                    .iter()
-                    .zip(pending_transfer.targets.iter_mut())
-                {
-                    transfer_metadata(source, target)?;
-                    source.write_to(target, None, &transfer_ctx)?;
+                if let Some(mut pending_transfer) = transfer_rx.blocking_recv() {
+                    drop(transfer_rx);
+
+                    for (source, target) in pending_transfer
+                        .sources
+                        .iter()
+                        .zip(pending_transfer.targets.iter_mut())
+                    {
+                        transfer_metadata(source, target)?;
+                        source.write_to(target, None, transfer_ctx.as_ref())?;
+                    }
+    
+                    pending_transfer.handle_complete()?;
+                } else {
+                    return Ok(())
                 }
 
-                pending_transfer.handle_complete()?;
             });
         }
 
@@ -248,6 +251,92 @@ where
         pending_transfer: PendingTransfer<Source, Target, Metadata>,
     ) -> Result<()> {
         self.transfer_q.send(pending_transfer).await?;
+
+        Ok(())
+    }
+}
+
+pub struct PendingDiskOnboardManager<Metadata: BlockMetadata> {
+    disk_transfer_manager: Arc<PendingDiskTransferManager<DiskStorage, PinnedStorage, Metadata>>,
+    cuda_transfer_manager: Arc<PendingCudaTransferManager<PinnedStorage, DeviceStorage, Metadata>>,
+    host_pool: Arc<Option<BlockPool<PinnedStorage, Metadata>>>,
+}
+
+impl<Metadata: BlockMetadata> PendingDiskOnboardManager<Metadata> {
+    pub fn new(
+        num_workers: usize,
+        transfer_ctx: Arc<TransferContext>,
+        host_pool: Arc<Option<BlockPool<PinnedStorage, Metadata>>>,
+    ) -> Self {
+        let disk_transfer_manager = Arc::new(PendingDiskTransferManager::new(
+            16384,
+            num_workers,
+            transfer_ctx.clone(),
+        ));
+        let cuda_transfer_manager =
+            Arc::new(PendingCudaTransferManager::new(16384, transfer_ctx.clone()));
+
+        Self {
+            disk_transfer_manager,
+            cuda_transfer_manager,
+            host_pool,
+        }
+    }
+}
+
+#[async_trait]
+impl<Metadata: BlockMetadata> PendingTransferManager<DiskStorage, DeviceStorage, Metadata>
+    for PendingDiskOnboardManager<Metadata>
+{
+    async fn begin_transfer(
+        &self,
+        pending_transfer: PendingTransfer<DiskStorage, DeviceStorage, Metadata>,
+    ) -> Result<()> {
+        let disk_transfer_manager = self.disk_transfer_manager.clone();
+        let cuda_transfer_manager = self.cuda_transfer_manager.clone();
+        let host_pool = self.host_pool.clone();
+
+        tokio::spawn(async move {
+            let PendingTransfer {
+                sources: disk_sources,
+                targets: device_targets,
+                completion_indicator: device_completion_indicator,
+                target_registration_pool: device_target_registration_pool,
+            } = pending_transfer;
+
+            let host = host_pool.as_ref().as_ref().unwrap();
+
+            let host_blocks = host.allocate_blocks(disk_sources.len()).await?;
+
+            let (host_completion_indicator, host_completion_rx) = oneshot::channel();
+
+            disk_transfer_manager
+                .begin_transfer(PendingTransfer::new(
+                    disk_sources,
+                    host_blocks,
+                    Some(host_completion_indicator),
+                    host_pool.clone(),
+                ))
+                .await?;
+
+            let host_blocks = host_completion_rx
+                .await
+                .unwrap()?
+                .iter()
+                .map(|b| b.mutable_block().clone())
+                .collect();
+
+            cuda_transfer_manager
+                .begin_transfer(PendingTransfer::new(
+                    host_blocks,
+                    device_targets,
+                    device_completion_indicator,
+                    device_target_registration_pool,
+                ))
+                .await?;
+
+            Ok::<(), anyhow::Error>(())
+        });
 
         Ok(())
     }
