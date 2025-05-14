@@ -20,6 +20,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+use std::panic;
 
 pub mod evictor;
 pub mod protocols;
@@ -50,7 +51,7 @@ impl MockWorker {
         let waiting = Arc::new(Mutex::new(VecDeque::new()));
 
         // Create mpsc channel for MoveBlock events
-        let (event_tx, event_rx) = mpsc::channel::<MoveBlock>(100);
+        let (event_tx, event_rx) = mpsc::channel::<MoveBlock>(1024);
 
         // Initialize start_time
         let start_time = Instant::now();
@@ -66,7 +67,7 @@ impl MockWorker {
             while let Some(event) = event_rx.recv().await {
                 // Process event based on block_type
                 match event {
-                    MoveBlock::Use(hash) => {
+                    MoveBlock::Use(hash, watermark) => {
                         // Always lock active first, then inactive to maintain consistent order
                         let mut active = active_blocks_clone.lock().await;
                         
@@ -91,9 +92,19 @@ impl MockWorker {
                         let active_count = active.len();
                         let inactive_count = inactive.num_objects();
 
+                        // If watermark is specified, check if we're approaching the watermark threshold
+                        if let Some(watermark) = watermark {
+                            let watermark_threshold = ((1.0 - watermark) * max_capacity as f64) as usize;
+                            if active_count + inactive_count >= watermark_threshold {
+                                todo!("don't schedule");
+                            }
+                        }
+
                         // If at max capacity, evict the oldest entry from inactive blocks
                         if active_count + inactive_count >= max_capacity {
-                            inactive.evict();
+                            if inactive.evict().is_none() {
+                                panic!("max capacity reached and no free blocks left");
+                            }
                         }
                         
                         // Now insert the new block in active blocks with reference count 1
@@ -181,6 +192,46 @@ mod tests {
     use tokio::runtime::Runtime;
 
     #[test]
+    fn test_panic_on_max_capacity() {
+        // Create a runtime for async testing
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            // Create a MockWorker with 10 blocks capacity
+            let worker = MockWorker::new(10, 16);
+            let event_tx = worker.get_event_sender();
+
+            // Helper function to use a block
+            async fn use_block(event_tx: &mpsc::Sender<MoveBlock>, id: u64) {
+                let block = UniqueBlock::HashIdentifier(id);
+                event_tx.send(MoveBlock::Use(block, None)).await.unwrap();
+            }
+
+            // First use 10 blocks (0 to 9)
+            for i in 0..10 {
+                use_block(&event_tx, i).await;
+            }
+
+            // Process events to ensure they are processed
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+            // Verify we are at capacity
+            assert_eq!(worker.current_capacity().await, 10);
+
+            // The 11th block should cause a panic
+            let result = panic::catch_unwind(|| {
+                rt.block_on(async {
+                    use_block(&event_tx, 10).await;
+                    // Give time for the event to be processed
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                });
+            });
+
+            // Verify that a panic occurred
+            assert!(result.is_err(), "Expected a panic when exceeding max capacity");
+        });
+    }
+
+    #[test]
     fn test_block_lifecycle_stringent() {
         // Create a runtime for async testing
         let rt = Runtime::new().unwrap();
@@ -192,7 +243,7 @@ mod tests {
             // Helper function to use a block
             async fn use_block(event_tx: &mpsc::Sender<MoveBlock>, id: u64) {
                 let block = UniqueBlock::HashIdentifier(id);
-                event_tx.send(MoveBlock::Use(block)).await.unwrap();
+                event_tx.send(MoveBlock::Use(block, None)).await.unwrap();
             }
 
             // Helper function to destroy a block

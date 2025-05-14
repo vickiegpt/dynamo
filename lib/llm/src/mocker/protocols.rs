@@ -40,7 +40,7 @@ impl Default for UniqueBlock {
 /// Represents different block movement operations in the cache
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MoveBlock {
-    Use(UniqueBlock),
+    Use(UniqueBlock, Option<f64>),
     Destroy(UniqueBlock),
     Deref(UniqueBlock),
 }
@@ -49,4 +49,31 @@ pub enum MoveBlock {
 pub struct DirectRequest {
     pub hashes: Vec<Token>,
     pub max_output_tokens: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_unique_block_default_uniqueness() {
+        // Create 10 default UniqueBlock instances
+        let blocks: Vec<UniqueBlock> = (0..10).map(|_| UniqueBlock::default()).collect();
+        
+        // Extract UUIDs from each block
+        let mut uuids = Vec::new();
+        for block in blocks {
+            match block {
+                UniqueBlock::UuidIdentifier(uuid) => uuids.push(uuid),
+                _ => panic!("Expected UuidIdentifier variant"),
+            }
+        }
+        
+        // Check that all UUIDs are unique by comparing each with every other
+        for i in 0..uuids.len() {
+            for j in i+1..uuids.len() {
+                assert_ne!(uuids[i], uuids[j], "UUID at index {} and {} are identical", i, j);
+            }
+        }
+    }
 }
