@@ -93,7 +93,7 @@ impl ActiveSequence {
         if let Some(tx) = &move_block_tx {
             // Send Use event if we have blocks
             if !unique_blocks.is_empty() {
-                let _ = tx.try_send(MoveBlock::Use(unique_blocks.clone(), Some(0.01)));
+                let _ = tx.try_send(MoveBlock::Use(unique_blocks.clone(), None));
             }
         }
         

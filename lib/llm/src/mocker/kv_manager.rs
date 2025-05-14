@@ -59,7 +59,7 @@ impl KvManager {
             while let Some(event) = event_rx.recv().await {
                 // Process event based on block_type
                 match event {
-                    MoveBlock::Use(hashes, watermark) => {
+                    MoveBlock::Use(hashes, _) => {
                         // Always lock active first, then inactive to maintain consistent order
                         let mut active = active_blocks_clone.lock().await;
                         let mut inactive = inactive_blocks_clone.lock().await;
@@ -82,14 +82,6 @@ impl KvManager {
                             // Get counts for capacity check (we already have both locks)
                             let active_count = active.len();
                             let inactive_count = inactive.num_objects();
-
-                            // If watermark is specified, check if we're approaching the watermark threshold
-                            if let Some(watermark) = watermark {
-                                let watermark_threshold = ((1.0 - watermark) * max_capacity as f64) as usize;
-                                if active_count + inactive_count >= watermark_threshold {
-                                    continue;
-                                }
-                            }
 
                             // If at max capacity, evict the oldest entry from inactive blocks
                             if active_count + inactive_count >= max_capacity {
