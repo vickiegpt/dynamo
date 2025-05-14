@@ -21,6 +21,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, sleep, Duration};
+use tokio::sync::CancellationToken;
 
 // Change SchedulerState to not include KvManager
 struct SchedulerState {
@@ -37,7 +38,7 @@ pub struct Scheduler {
     chunk_size: usize,
     background_handle: Option<JoinHandle<()>>,
     request_tx: mpsc::Sender<DirectRequest>,
-    shutdown_tx: Option<mpsc::Sender<()>>,
+    cancellation_token: CancellationToken,
 }
 
 impl Scheduler {
@@ -52,9 +53,12 @@ impl Scheduler {
         let block_size = block_size.unwrap_or(64);
         let chunk_size = chunk_size.unwrap_or(256);
         
-        // Create channels for request handling and shutdown signaling
+        // Create channel for request handling
         let (request_tx, mut request_rx) = mpsc::channel::<DirectRequest>(1024);
-        let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+        
+        // Create cancellation token
+        let cancellation_token = CancellationToken::new();
+        let token_clone = cancellation_token.clone();
         
         // Create a clone for the background task
         let state_clone = state.clone();
@@ -63,20 +67,18 @@ impl Scheduler {
         let block_size_clone = block_size;
         let chunk_size_clone = chunk_size;
         
-        // Spawn the background task that handles both scheduling and processing
+        // Spawn background task with cancellation token
         let background_handle = tokio::spawn(async move {
-            let mut schedule_interval = interval(Duration::from_millis(10));  // Schedule every 10ms
-            let mut process_interval = interval(Duration::from_millis(100));  // Process every 100ms
+            let mut schedule_interval = interval(Duration::from_millis(10));
+            let mut process_interval = interval(Duration::from_millis(100));
             
             loop {
                 tokio::select! {
-                    // Handle incoming requests
                     Some(request) = request_rx.recv() => {
                         let mut state = state_clone.lock().await;
                         state.waiting_requests.push_back(request);
                     }
                     
-                    // Schedule tick
                     _ = schedule_interval.tick() => {
                         let mut state_guard = state_clone.lock().await;
                         
@@ -105,7 +107,6 @@ impl Scheduler {
                         }
                     }
                     
-                    // Process tick
                     _ = process_interval.tick() => {
                         let mut state_guard = state_clone.lock().await;
                         let mut completed_indices = Vec::new();
@@ -133,8 +134,8 @@ impl Scheduler {
                         }
                     }
                     
-                    // Check for shutdown signal
-                    Some(_) = shutdown_rx.recv() => {
+                    // Check for cancellation
+                    _ = token_clone.cancelled() => {
                         break;
                     }
                 }
@@ -149,7 +150,7 @@ impl Scheduler {
             chunk_size,
             background_handle: Some(background_handle),
             request_tx,
-            shutdown_tx: Some(shutdown_tx),
+            cancellation_token,
         }
     }
 
@@ -182,16 +183,16 @@ impl Clone for Scheduler {
             chunk_size: self.chunk_size,
             background_handle: None,
             request_tx: self.request_tx.clone(),
-            shutdown_tx: None,
+            cancellation_token: self.cancellation_token.clone(),
         }
     }
 }
 
 impl Drop for Scheduler {
     fn drop(&mut self) {
-        // Send shutdown signal if this is the original instance
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.try_send(());
+        // Only the original instance should cancel
+        if self.background_handle.is_some() {
+            self.cancellation_token.cancel();
         }
         
         // Abort the background task if this is the original instance
