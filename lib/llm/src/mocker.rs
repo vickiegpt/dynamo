@@ -66,33 +66,42 @@ impl MockWorker {
             while let Some(event) = event_rx.recv().await {
                 // Process event based on block_type
                 match event {
-                    MoveBlock::Make(hash) => {
-                        // Directly create the block in active blocks with reference count 1
-                        let mut active = active_blocks_clone.lock().await;
-                        active.insert(hash, 1);
-                    }
-                    MoveBlock::Reuse(hash) => {
+                    MoveBlock::Use(hash) => {
                         // Always lock active first, then inactive to maintain consistent order
                         let mut active = active_blocks_clone.lock().await;
+                        
+                        // First check if it already exists in active blocks
+                        if let Some(ref_count) = active.get_mut(&hash) {
+                            // Block already active, just increment reference count
+                            *ref_count += 1;
+                            continue;
+                        }
+                        
+                        // Now get inactive lock
                         let mut inactive = inactive_blocks_clone.lock().await;
 
-                        // Remove from inactive if it exists
+                        // Then check if it exists in inactive and move it to active if found
                         if inactive.remove(&hash) {
                             // Insert into active with reference count 1
                             active.insert(hash, 1);
+                            continue;
                         }
+
+                        // Get counts for capacity check (now we already have both locks)
+                        let active_count = active.len();
+                        let inactive_count = inactive.num_objects();
+
+                        // If at max capacity, evict the oldest entry from inactive blocks
+                        if active_count + inactive_count >= max_capacity {
+                            inactive.evict();
+                        }
+                        
+                        // Now insert the new block in active blocks with reference count 1
+                        active.insert(hash, 1);
                     }
                     MoveBlock::Destroy(hash) => {
                         let mut active = active_blocks_clone.lock().await;
                         active.remove(&hash);
-                    }
-                    MoveBlock::Ref(hash) => {
-                        let mut active = active_blocks_clone.lock().await;
-
-                        // Increment reference count if it exists in active
-                        if let Some(ref_count) = active.get_mut(&hash) {
-                            *ref_count += 1;
-                        }
                     }
                     MoveBlock::Deref(hash) => {
                         // Always lock active first, then inactive if needed
@@ -111,17 +120,6 @@ impl MockWorker {
                                 // Use monotonic time instead of system time
                                 inactive.insert(hash, start_time.elapsed().as_secs_f64());
                             }
-                        }
-                    }
-                    MoveBlock::Evict(hash) => {
-                        // Always lock active first, then inactive to maintain consistent order
-                        let mut active = active_blocks_clone.lock().await;
-                        let mut inactive = inactive_blocks_clone.lock().await;
-
-                        // Evict the oldest entry using LRUEvictor
-                        if inactive.evict().is_some() {
-                            // Add the specified hash to active blocks with reference count 1
-                            active.insert(hash, 1);
                         }
                     }
                 }
@@ -183,68 +181,131 @@ mod tests {
     use tokio::runtime::Runtime;
 
     #[test]
-    fn test_block_lifecycle() {
+    fn test_block_lifecycle_stringent() {
         // Create a runtime for async testing
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            // Create a MockWorker with 2 blocks capacity
-            let worker = MockWorker::new(2, 16);
+            // Create a MockWorker with 7 blocks capacity
+            let worker = MockWorker::new(10, 16);
             let event_tx = worker.get_event_sender();
 
-            // Create two blocks with HashIdentifier variant
-            let block0 = UniqueBlock::HashIdentifier(0);
-            let block1 = UniqueBlock::HashIdentifier(1);
+            // Helper function to use a block
+            async fn use_block(event_tx: &mpsc::Sender<MoveBlock>, id: u64) {
+                let block = UniqueBlock::HashIdentifier(id);
+                event_tx.send(MoveBlock::Use(block)).await.unwrap();
+            }
 
-            // Step 1: Send Evict(0) - Should move a default block out and put block0 in active
-            event_tx
-                .send(MoveBlock::Make(block0.clone()))
-                .await
-                .unwrap();
+            // Helper function to destroy a block
+            async fn destroy_block(event_tx: &mpsc::Sender<MoveBlock>, id: u64) {
+                let block = UniqueBlock::HashIdentifier(id);
+                event_tx.send(MoveBlock::Destroy(block)).await.unwrap();
+            }
 
-            // Step 2: Send Evict(1) - Should move another default block out and put block1 in active
-            event_tx
-                .send(MoveBlock::Make(block1.clone()))
-                .await
-                .unwrap();
+            // Helper function to deref a block
+            async fn deref_block(event_tx: &mpsc::Sender<MoveBlock>, id: u64) {
+                let block = UniqueBlock::HashIdentifier(id);
+                event_tx.send(MoveBlock::Deref(block)).await.unwrap();
+            }
 
-            // Small delay to ensure events are processed
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            // Helper function to check if active blocks contain expected blocks with expected ref counts
+            async fn assert_active_blocks(worker: &MockWorker, expected_blocks: &[(u64, usize)]) {
+                let active_blocks_lock = worker.active_blocks.lock().await;
+                
+                assert_eq!(active_blocks_lock.len(), expected_blocks.len(), 
+                           "Active blocks count doesn't match expected");
+                
+                for &(id, ref_count) in expected_blocks {
+                    let block = UniqueBlock::HashIdentifier(id);
+                    assert!(active_blocks_lock.contains_key(&block), 
+                           "Block {} not found in active blocks", id);
+                    assert_eq!(active_blocks_lock.get(&block), Some(&ref_count), 
+                              "Block {} has wrong reference count", id);
+                }
+            }
 
-            // Step 3: Send Unref(1) - Should move block1 from active to inactive
-            event_tx
-                .send(MoveBlock::Deref(block1.clone()))
-                .await
-                .unwrap();
+            // Helper function to check if inactive blocks contain expected blocks
+            async fn assert_inactive_blocks(worker: &MockWorker, expected_size: usize, expected_blocks: &[u64]) {
+                let inactive_blocks = worker.get_inactive_blocks().await;
+                let inactive_blocks_count = worker.inactive_blocks.lock().await.num_objects();
+                
+                assert_eq!(inactive_blocks_count, expected_size, 
+                           "Inactive blocks count doesn't match expected");
+                
+                for &id in expected_blocks {
+                    let block = UniqueBlock::HashIdentifier(id);
+                    assert!(inactive_blocks.contains(&block), 
+                           "Block {} not found in inactive blocks", id);
+                }
+            }
 
-            // Small delay to ensure events are processed
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            // Helper function to process events
+            async fn process_events() {
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            }
 
-            // Check state: active_blocks should contain only block0, inactive should contain block1
-            let active_blocks = worker.get_active_blocks().await;
-            let inactive_blocks = worker.get_inactive_blocks().await;
+            // First use blocks 0, 1, 2, 3, 4
+            for i in 0..5 {
+                use_block(&event_tx, i).await;
+            }
+            process_events().await;
 
-            assert_eq!(active_blocks.len(), 1);
-            assert!(active_blocks.contains(&block0));
+            // Then use blocks 0, 1, 5, 6
+            use_block(&event_tx, 0).await;
+            use_block(&event_tx, 1).await;
+            use_block(&event_tx, 5).await;
+            use_block(&event_tx, 6).await;
+            process_events().await;
 
-            assert_eq!(inactive_blocks.len(), 1);
-            assert!(inactive_blocks.contains(&block1));
+            // Check that the blocks 0 and 1 are in active blocks, both with reference counts of 2
+            assert_active_blocks(&worker, &[(0, 2), (1, 2), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1)]).await;
 
-            // Step 4: Send Destroy(0) - Should remove block0 from active
-            event_tx
-                .send(MoveBlock::Destroy(block0.clone()))
-                .await
-                .unwrap();
+            // Now destroy block 4
+            destroy_block(&event_tx, 4).await;
+            process_events().await;
 
-            // Small delay to ensure events are processed
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            // And deref blocks 3, 2, 1, 0 in this order
+            deref_block(&event_tx, 3).await;
+            deref_block(&event_tx, 2).await;
+            deref_block(&event_tx, 1).await;
+            deref_block(&event_tx, 0).await;
+            process_events().await;
 
-            // Check final state: active_blocks should be empty, inactive still contains block1
-            let active_blocks = worker.get_active_blocks().await;
-            let inactive_blocks = worker.get_inactive_blocks().await;
+            // Check that the inactive_blocks is size 2 (via num_objects) and contains 3 and 2
+            assert_inactive_blocks(&worker, 2, &[3, 2]).await;
+            assert_active_blocks(&worker, &[(0, 1), (1, 1), (5, 1), (6, 1)]).await;
 
-            assert_eq!(active_blocks.len(), 0);
-            assert_eq!(inactive_blocks.len(), 1);
-            assert!(inactive_blocks.contains(&block1));
+            // Now destroy block 6
+            destroy_block(&event_tx, 6).await;
+            process_events().await;
+
+            // And deref blocks 5, 1, 0 in this order
+            deref_block(&event_tx, 5).await;
+            deref_block(&event_tx, 1).await;
+            deref_block(&event_tx, 0).await;
+            process_events().await;
+
+            // Check that the inactive_blocks is size 5, and contains 0, 1, 2, 3, 5
+            assert_inactive_blocks(&worker, 5, &[0, 1, 2, 3, 5]).await;
+            assert_active_blocks(&worker, &[]).await;
+
+            // Now use 0, 1, 2, 7, 8, 9
+            for i in [0, 1, 2, 7, 8, 9] {
+                use_block(&event_tx, i).await;
+            }
+            process_events().await;
+
+            // Check that the inactive_blocks is size 2, and contains 3 and 5
+            assert_inactive_blocks(&worker, 2, &[3, 5]).await;
+            assert_active_blocks(&worker, &[(0, 1), (1, 1), (2, 1), (7, 1), (8, 1), (9, 1)]).await;
+
+            // Now use blocks 10, 11, 12
+            for i in [10, 11, 12] {
+                use_block(&event_tx, i).await;
+            }
+            process_events().await;
+
+            // Check that the inactive_blocks is size 1 and contains only 5
+            assert_inactive_blocks(&worker, 1, &[5]).await;
         });
     }
 }

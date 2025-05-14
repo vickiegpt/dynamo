@@ -19,6 +19,7 @@ use crate::mocker::tokens::{
 };
 use std::collections::HashSet;
 use tokio::sync::mpsc;
+use rand::Rng;
 
 /// A sequence that is actively being built, with the ability to add tokens and commit to hashes
 #[derive(Debug, Clone)]
@@ -97,7 +98,7 @@ impl ActiveSequence {
                 // Send Reuse signal if move_block_tx is available
                 if let Some(tx) = &move_block_tx {
                     let _ =
-                        tx.try_send(MoveBlock::Reuse(UniqueBlock::HashIdentifier(sequence_hash)));
+                        tx.try_send(MoveBlock::Use(UniqueBlock::HashIdentifier(sequence_hash)));
                 }
             } else {
                 // Hash not found, stop processing
@@ -116,12 +117,12 @@ impl ActiveSequence {
         // Send Evict signal for each new input block if move_block_tx is available
         if let Some(tx) = &move_block_tx {
             for _ in 0..new_input_blocks.len() {
-                let _ = tx.try_send(MoveBlock::Evict(UniqueBlock::default()));
+                let _ = tx.try_send(MoveBlock::Use(UniqueBlock::default()));
             }
 
             // Send an additional Evict signal if new_input_tokens is not empty
             if !new_input_tokens.is_empty() {
-                let _ = tx.try_send(MoveBlock::Evict(UniqueBlock::default()));
+                let _ = tx.try_send(MoveBlock::Use(UniqueBlock::default()));
             }
         }
 
@@ -139,10 +140,24 @@ impl ActiveSequence {
 
     /// Push a token to the output tokens sequence
     /// Returns true if this push would leave new_output_tokens.len() % block_size == 1
-    pub fn push(&mut self, token: u32) -> bool {
+    pub fn push(&mut self, token: u32) {
         self.new_output_tokens.push(token);
         let total_tokens = self.new_input_tokens.len() + self.new_output_tokens.len();
-        total_tokens % self.block_size == 1
+        let new_block = total_tokens % self.block_size == 1;
+        
+        // Send Make event if a new block is starting and we have a move_block_tx
+        if new_block {
+            if let Some(tx) = &self.move_block_tx {
+                let _ = tx.try_send(MoveBlock::Use(UniqueBlock::default()));
+            }
+        }
+    }
+
+    /// Generate a random u32 token and push it to the output tokens sequence
+    /// Returns true if this push would leave new_output_tokens.len() % block_size == 1
+    pub fn generate_random(&mut self) {
+        let random_token = rand::rng().random::<u32>();
+        self.push(random_token);
     }
 
     /// Commit the sequence to block hashes
@@ -168,7 +183,7 @@ impl ActiveSequence {
         // Send Deref signals for each global hash in reverse order
         if let Some(tx) = &self.move_block_tx {
             for &hash in global_hashes.iter().rev() {
-                let _ = tx.try_send(MoveBlock::Ref(UniqueBlock::HashIdentifier(hash)));
+                let _ = tx.try_send(MoveBlock::Use(UniqueBlock::HashIdentifier(hash)));
             }
         }
 
