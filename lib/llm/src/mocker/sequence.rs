@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::mocker::protocols::{GlobalHash, MoveBlock, UniqueBlock};
+use crate::mocker::protocols::{MoveBlock, UniqueBlock};
 use crate::mocker::tokens::{
     compute_block_hash_for_seq, compute_seq_hash_for_blocks,
 };
@@ -52,6 +52,7 @@ impl ActiveSequence {
         move_block_tx: Option<Sender<MoveBlock>>,
     ) -> Self {
         let block_size = block_size.unwrap_or(64);
+        assert!(block_size > 1, "block_size must be greater than 1");
         let chunk_size = chunk_size.unwrap_or(256);
         
         let mut unique_blocks = Vec::new();
@@ -108,13 +109,22 @@ impl ActiveSequence {
     pub fn push(&mut self, token: u32) {
         self.partial_tokens.push(token);
         
-        // Add a partial block if needed
-        let needs_partial_block = self.partial_tokens.len() == 1 && 
-            (self.unique_blocks.is_empty() || 
-             matches!(self.unique_blocks.last(), Some(UniqueBlock::FullBlock(_))));
+        // Add a partial block if this is the first token in a new partial sequence
+        if self.partial_tokens.len() == 1 {
+            // Assert that we need a new partial block (empty or last block is full)
+            assert!(
+                self.unique_blocks.is_empty() || 
+                matches!(self.unique_blocks.last(), Some(UniqueBlock::FullBlock(_))),
+                "Expected empty blocks or last block to be a FullBlock"
+            );
             
-        if needs_partial_block {
-            self.unique_blocks.push(UniqueBlock::default());
+            let partial_block = UniqueBlock::default();
+            self.unique_blocks.push(partial_block.clone());
+            
+            // Send Use event for the new partial block
+            if let Some(tx) = &self.move_block_tx {
+                let _ = tx.try_send(MoveBlock::Use(vec![partial_block], None));
+            }
         }
         
         // Not enough tokens for a complete block
@@ -122,8 +132,11 @@ impl ActiveSequence {
             return;
         }
         
+        // At this point we should have exactly one block's worth of tokens
+        assert_eq!(self.partial_tokens.len(), self.block_size);
+        
         // Compute local block hash for the tokens
-        let local_hash = compute_block_hash_for_seq(&self.partial_tokens[0..self.block_size], self.block_size);
+        let local_hash = compute_block_hash_for_seq(&self.partial_tokens, self.block_size);
         
         // Get the parent hash (the last full block if exists, otherwise None)
         let parent_hash = self.unique_blocks.iter()
@@ -136,23 +149,29 @@ impl ActiveSequence {
         // Compute new global hash by rolling the local hash with the parent
         let new_global_hash = compute_seq_hash_for_blocks(&local_hash, parent_hash);
         
-        // Replace the last partial block with a full block
-        if matches!(self.unique_blocks.last(), Some(UniqueBlock::PartialBlock(_))) {
-            self.unique_blocks.pop();
+        // Ensure the last block is a partial block
+        match self.unique_blocks.last() {
+            Some(UniqueBlock::PartialBlock(uuid)) => {
+                let uuid_copy = *uuid;
+                
+                // Replace the partial block with the full block
+                self.unique_blocks.pop();
+                
+                if let Some(hash) = new_global_hash.first() {
+                    // Add the new full block
+                    self.unique_blocks.push(UniqueBlock::FullBlock(*hash));
+                    
+                    // Send Promote event
+                    if let Some(tx) = &self.move_block_tx {
+                        let _ = tx.try_send(MoveBlock::Promote(uuid_copy, *hash));
+                    }
+                }
+            },
+            _ => panic!("Expected last block to be a PartialBlock")
         }
         
-        // Add the new full block
-        if let Some(hash) = new_global_hash.first() {
-            self.unique_blocks.push(UniqueBlock::FullBlock(*hash));
-        }
-        
-        // Store any remaining tokens that don't form a complete block
-        self.partial_tokens = self.partial_tokens[self.block_size..].to_vec();
-        
-        // Add a new partial block if we have remaining tokens
-        if !self.partial_tokens.is_empty() {
-            self.unique_blocks.push(UniqueBlock::default());
-        }
+        // Clear partial tokens since we've consumed them all
+        self.partial_tokens.clear();
     }
 }
 
