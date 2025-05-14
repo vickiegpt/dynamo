@@ -19,6 +19,7 @@ use crate::mocker::tokens::{
 };
 use std::cmp::PartialEq;
 use tokio::sync::mpsc::Sender;
+use rand::random;
 
 /// A sequence that is actively being built, with the ability to add tokens and commit to hashes
 #[derive(Debug, Clone)]
@@ -27,7 +28,8 @@ pub struct ActiveSequence {
     pub partial_tokens: Vec<u32>,
     pub block_size: usize,
     pub chunk_size: usize,
-    pub max_output_tokens: u64,
+    pub max_output_tokens: usize,
+    pub generated_tokens: usize,
     move_block_tx: Option<Sender<MoveBlock>>,
 }
 
@@ -48,7 +50,7 @@ impl ActiveSequence {
         tokens: Vec<u32>,
         block_size: Option<usize>,
         chunk_size: Option<usize>,
-        max_output_tokens: u64,
+        max_output_tokens: usize,
         move_block_tx: Option<Sender<MoveBlock>>,
     ) -> Self {
         let block_size = block_size.unwrap_or(64);
@@ -91,7 +93,7 @@ impl ActiveSequence {
         if let Some(tx) = &move_block_tx {
             // Send Use event if we have blocks
             if !unique_blocks.is_empty() {
-                let _ = tx.try_send(MoveBlock::Use(unique_blocks.clone(), None));
+                let _ = tx.try_send(MoveBlock::Use(unique_blocks.clone(), Some(0.01)));
             }
         }
         
@@ -101,6 +103,7 @@ impl ActiveSequence {
             block_size,
             chunk_size,
             max_output_tokens,
+            generated_tokens: 0,
             move_block_tx,
         }
     }
@@ -172,6 +175,50 @@ impl ActiveSequence {
         
         // Clear partial tokens since we've consumed them all
         self.partial_tokens.clear();
+    }
+
+    /// Generate a random token, push it to the sequence, and increment generation count
+    pub fn generate(&mut self) {
+        // Assert that we haven't reached the maximum output tokens
+        assert!(self.generated_tokens < self.max_output_tokens, 
+            "Cannot generate more tokens: reached max_output_tokens limit");
+        
+        // Generate a random token
+        let token = random::<u32>();
+        
+        // Push the token to the sequence
+        self.push(token);
+        
+        // Increment the generated tokens counter
+        self.generated_tokens += 1;
+        
+        // Check if we've reached the limit after pushing
+        if self.generated_tokens == self.max_output_tokens {
+            if let Some(tx) = &self.move_block_tx {
+                // Collect blocks to deref based on type
+                let (full_blocks, partial_blocks) = match self.unique_blocks.last() {
+                    Some(UniqueBlock::PartialBlock(uuid)) => {
+                        // All blocks except the last are full blocks, last is partial
+                        let full = self.unique_blocks[..self.unique_blocks.len()-1].to_vec();
+                        (full, vec![UniqueBlock::PartialBlock(*uuid)])
+                    },
+                    _ => {
+                        // All blocks are full blocks
+                        (self.unique_blocks.clone(), Vec::new())
+                    }
+                };
+                
+                // Send Destroy event for partial block first if it exists
+                if !partial_blocks.is_empty() {
+                    let _ = tx.try_send(MoveBlock::Destroy(partial_blocks));
+                }
+                
+                // Then send Deref event for full blocks
+                if !full_blocks.is_empty() {
+                    let _ = tx.try_send(MoveBlock::Deref(full_blocks));
+                }
+            }
+        }
     }
 }
 
@@ -267,6 +314,97 @@ mod tests {
                 assert_eq!(hash1, hash2, "Second blocks should have the same hash");
             },
             _ => panic!("Expected FullBlock for the second blocks"),
+        }
+    }
+
+    #[test]
+    fn test_active_sequence_generate_events() {
+        use tokio::sync::mpsc;
+        use std::collections::VecDeque;
+
+        // Create a channel to receive block events
+        let (tx, mut rx) = mpsc::channel(10);
+        
+        // Create a sequence with block size 16, max_output_tokens 4, initialized with tokens [0..15)
+        let initial_tokens: Vec<u32> = (0..14).collect();
+        let mut seq = ActiveSequence::new(
+            initial_tokens,
+            Some(16),
+            Some(256),
+            4, // max of 4 tokens total
+            Some(tx),
+        );
+        
+        // Helper to collect events from the channel
+        let collect_events = |rx: &mut mpsc::Receiver<MoveBlock>| {
+            let mut events = VecDeque::new();
+            while let Ok(event) = rx.try_recv() {
+                events.push_back(event);
+            }
+            events
+        };
+        
+        // Initial event - should have received a Use event for the partial block
+        let initial_events = collect_events(&mut rx);
+        assert_eq!(initial_events.len(), 1);
+        match &initial_events[0] {
+            MoveBlock::Use(blocks, _) => {
+                assert_eq!(blocks.len(), 1);
+                assert!(matches!(blocks[0], UniqueBlock::PartialBlock(_)));
+            },
+            _ => panic!("Expected Use event for the initial partial block"),
+        }
+        
+        // Generate first token - should not trigger new events
+        seq.generate();
+        assert!(rx.try_recv().is_err(), "No events should be triggered after first token");
+        
+        // Generate second token - this fills the block and should trigger a Promote event
+        seq.generate();
+        let events_after_second = collect_events(&mut rx);
+        assert_eq!(events_after_second.len(), 1);
+        match &events_after_second[0] {
+            MoveBlock::Promote(uuid, hash) => {
+                // The uuid and hash values are generated dynamically, so we just check the event type
+                let _ = uuid;
+                let _ = hash;
+            },
+            _ => panic!("Expected Promote event after second token"),
+        }
+        
+        // Generate third token - should trigger a Use event for the new partial block
+        seq.generate();
+        let events_after_third = collect_events(&mut rx);
+        assert_eq!(events_after_third.len(), 1);
+        match &events_after_third[0] {
+            MoveBlock::Use(blocks, _) => {
+                assert_eq!(blocks.len(), 1);
+                assert!(matches!(blocks[0], UniqueBlock::PartialBlock(_)));
+            },
+            _ => panic!("Expected Use event for new partial block after third token"),
+        }
+        
+        // Generate fourth token - we reach max_output_tokens, should trigger Destroy and Deref events
+        seq.generate();
+        let events_after_fourth = collect_events(&mut rx);
+        assert_eq!(events_after_fourth.len(), 2);
+        
+        // First event should be Destroy for the partial block
+        match &events_after_fourth[0] {
+            MoveBlock::Destroy(blocks) => {
+                assert_eq!(blocks.len(), 1);
+                assert!(matches!(blocks[0], UniqueBlock::PartialBlock(_)));
+            },
+            _ => panic!("Expected Destroy event for partial block after fourth token"),
+        }
+        
+        // Second event should be Deref for the full block
+        match &events_after_fourth[1] {
+            MoveBlock::Deref(blocks) => {
+                assert_eq!(blocks.len(), 1);
+                assert!(matches!(blocks[0], UniqueBlock::FullBlock(_)));
+            },
+            _ => panic!("Expected Deref event for full block after fourth token"),
         }
     }
 }
