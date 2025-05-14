@@ -23,7 +23,7 @@ use super::*;
 
 use crate::block_manager::storage::{
     nixl::{NixlRegisterableStorage, NixlStorage},
-    DeviceStorage, PinnedStorage, SystemStorage,
+    DeviceStorage, DiskStorage, PinnedStorage, SystemStorage,
 };
 
 use cudarc::driver::CudaStream;
@@ -153,7 +153,7 @@ where
             TransferStrategy::CudaAsyncH2D
             | TransferStrategy::CudaAsyncD2H
             | TransferStrategy::CudaAsyncD2D => {
-                cuda::copy_block(self, dst, ctx.stream().as_ref(), RB::write_to_strategy())
+                cuda::copy_block(self, dst, ctx.stream(), RB::write_to_strategy())
             }
             TransferStrategy::NixlWrite => Ok(nixl::write_block_to(self, dst, ctx, notify)?),
             _ => Err(TransferError::IncompatibleTypes(format!(

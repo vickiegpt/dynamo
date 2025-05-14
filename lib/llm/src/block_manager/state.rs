@@ -51,6 +51,7 @@ pub struct KvBlockManagerState<Metadata: BlockMetadata> {
     nixl_agent: Option<NixlAgent>,
     nixl_backends: HashMap<String, Arc<nixl_sys::Backend>>,
 
+    disk_pool: Arc<Option<BlockPool<DiskStorage, Metadata>>>,
     host_pool: Arc<Option<BlockPool<PinnedStorage, Metadata>>>,
     device_pool: Arc<Option<BlockPool<DeviceStorage, Metadata>>>,
 
@@ -108,6 +109,23 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
         let mut next_block_set_idx = 0;
         let mut local_block_set = block::nixl::NixlBlockSet::new(worker_id);
 
+        let (disk_pool, disk_blocks) = if let Some(config) = config.disk_layout {
+            next_block_set_idx += 1;
+            tracing::debug!("Constructing disk pool.");
+            let layout = create_layout(layout_builder.clone(), config, nixl_agent.as_ref())?;
+            local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
+            let (pool, blocks) = create_block_pool::<_, Metadata>(
+                layout,
+                next_block_set_idx,
+                cancellation_token.clone(),
+                worker_id,
+            )?;
+            (Arc::new(Some(pool)), Some(blocks))
+        } else {
+            tracing::debug!("No disk layout provided; will not allocate disk blocks.");
+            (Arc::new(None), None)
+        };
+
         // Create the host block pool if a host layout is provided
         let (host_pool, host_blocks) = if let Some(config) = config.host_layout {
             next_block_set_idx += 1;
@@ -150,19 +168,34 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
             local_block_set.set_nixl_metadata(nixl_agent.get_local_md()?);
         }
 
-        let offload_manager = OffloadManager::new(device_pool.clone(), host_pool.clone())?;
+        let offload_manager =
+            OffloadManager::new(device_pool.clone(), host_pool.clone(), disk_pool.clone())?;
 
         let state = Arc::new(Self {
             worker_id,
             cancellation_token,
             nixl_agent,
             nixl_backends,
+            disk_pool,
             host_pool,
             device_pool,
             local_block_set,
             remote_block_sets: RwLock::new(HashMap::new()),
             offload_manager,
         });
+
+        if let Some(mut blocks) = disk_blocks {
+            blocks.iter_mut().for_each(|block| {
+                block.set_manager(state.clone());
+            });
+
+            state
+                .disk_pool
+                .as_ref()
+                .as_ref()
+                .unwrap()
+                .add_blocks_blocking(blocks)?;
+        }
 
         if let Some(mut blocks) = host_blocks {
             blocks.iter_mut().for_each(|block| {
@@ -342,6 +375,10 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(blocks)
+    }
+
+    pub fn disk(&self) -> Option<&BlockPool<DiskStorage, Metadata>> {
+        self.disk_pool.as_ref().as_ref()
     }
 
     pub fn host(&self) -> Option<&BlockPool<PinnedStorage, Metadata>> {

@@ -24,9 +24,8 @@ use crate::block_manager::BlockPool;
 use anyhow::Result;
 use async_trait::async_trait;
 use cudarc::driver::{sys::CUevent_flags, CudaEvent};
-use nixl_sys::NixlDescriptor;
-use std::sync::Arc;
-use std::thread::spawn;
+use std::sync::{Arc, Mutex};
+use std::thread::{spawn, JoinHandle};
 use tokio::sync::mpsc;
 
 type BlockResult<Target, Metadata> = Result<Vec<ImmutableBlock<Target, Metadata>>, BlockPoolError>;
@@ -102,7 +101,10 @@ fn transfer_metadata<Source: Storage, Target: Storage, Metadata: BlockMetadata>(
 }
 
 #[async_trait]
-pub trait PendingTransferManager<Source: Storage, Target: Storage, Metadata: BlockMetadata> {
+pub trait PendingTransferManager<Source: Storage, Target: Storage, Metadata: BlockMetadata>:
+    Send + Sync
+{
+    /// Begin a transfer. Blocks if the pending queue is full.
     async fn begin_transfer(
         &self,
         pending_transfer: PendingTransfer<Source, Target, Metadata>,
@@ -141,8 +143,8 @@ impl<Source: Storage, Target: Storage, Metadata: BlockMetadata>
 impl<Source, Target, Metadata> PendingTransferManager<Source, Target, Metadata>
     for PendingCudaTransferManager<Source, Target, Metadata>
 where
-    Source: Storage + NixlDescriptor,
-    Target: Storage + NixlDescriptor,
+    Source: Storage,
+    Target: Storage,
     Metadata: BlockMetadata,
     // Check that the source block is readable, local, and writable to the target block.
     MutableBlock<Source, Metadata>: ReadableBlock<StorageType = Source>
@@ -172,6 +174,80 @@ where
         self.pending_transfer_q
             .send((pending_transfer, event))
             .await?;
+
+        Ok(())
+    }
+}
+
+pub struct PendingDiskTransferManager<Source: Storage, Target: Storage, Metadata: BlockMetadata> {
+    transfer_q: Arc<mpsc::Sender<PendingTransfer<Source, Target, Metadata>>>,
+}
+
+impl<Source: Storage, Target: Storage, Metadata: BlockMetadata>
+    PendingDiskTransferManager<Source, Target, Metadata>
+where
+    Source: Storage,
+    Target: Storage,
+    Metadata: BlockMetadata,
+    // Check that the source block is readable, local, and writable to the target block.
+    MutableBlock<Source, Metadata>: ReadableBlock<StorageType = Source>
+        + Local
+        + WriteToStrategy<MutableBlock<Target, Metadata>>,
+    // Check that the target block is writable.
+    MutableBlock<Target, Metadata>: WritableBlock<StorageType = Target>,
+{
+    pub fn new(max_depth: usize, num_workers: usize, transfer_ctx: TransferContext) -> Self {
+        let (transfer_tx, transfer_rx) =
+            mpsc::channel::<PendingTransfer<Source, Target, Metadata>>(max_depth);
+
+        let transfer_rx = Arc::new(Mutex::new(transfer_rx));
+
+        let transfer_ctx = Arc::new(transfer_ctx);
+        for _ in 0..num_workers {
+            let transfer_rx = transfer_rx.clone();
+            let transfer_ctx = transfer_ctx.clone();
+            let _: JoinHandle<Result<()>> = spawn(move || loop {
+                let mut transfer_rx = transfer_rx.lock().unwrap();
+                let mut pending_transfer = transfer_rx.blocking_recv().unwrap();
+                drop(transfer_rx);
+
+                for (source, target) in pending_transfer
+                    .sources
+                    .iter()
+                    .zip(pending_transfer.targets.iter_mut())
+                {
+                    transfer_metadata(source, target)?;
+                    source.write_to(target, None, &transfer_ctx)?;
+                }
+
+                pending_transfer.handle_complete()?;
+            });
+        }
+
+        let transfer_q = Arc::new(transfer_tx);
+        Self { transfer_q }
+    }
+}
+
+#[async_trait]
+impl<Source, Target, Metadata> PendingTransferManager<Source, Target, Metadata>
+    for PendingDiskTransferManager<Source, Target, Metadata>
+where
+    Source: Storage,
+    Target: Storage,
+    Metadata: BlockMetadata,
+    // Check that the source block is readable, local, and writable to the target block.
+    MutableBlock<Source, Metadata>: ReadableBlock<StorageType = Source>
+        + Local
+        + WriteToStrategy<MutableBlock<Target, Metadata>>,
+    // Check that the target block is writable.
+    MutableBlock<Target, Metadata>: WritableBlock<StorageType = Target>,
+{
+    async fn begin_transfer(
+        &self,
+        pending_transfer: PendingTransfer<Source, Target, Metadata>,
+    ) -> Result<()> {
+        self.transfer_q.send(pending_transfer).await?;
 
         Ok(())
     }

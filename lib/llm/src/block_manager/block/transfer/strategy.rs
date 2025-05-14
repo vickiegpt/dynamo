@@ -18,6 +18,34 @@
 
 use super::*;
 
+impl WriteToStrategy<DiskStorage> for DiskStorage {
+    #[inline(always)]
+    fn write_to_strategy() -> TransferStrategy {
+        TransferStrategy::Memcpy
+    }
+}
+
+impl WriteToStrategy<DiskStorage> for SystemStorage {
+    #[inline(always)]
+    fn write_to_strategy() -> TransferStrategy {
+        TransferStrategy::Memcpy
+    }
+}
+
+impl WriteToStrategy<DiskStorage> for PinnedStorage {
+    #[inline(always)]
+    fn write_to_strategy() -> TransferStrategy {
+        TransferStrategy::Memcpy
+    }
+}
+
+impl WriteToStrategy<DiskStorage> for DeviceStorage {
+    #[inline(always)]
+    fn write_to_strategy() -> TransferStrategy {
+        unimplemented!()
+    }
+}
+
 impl WriteToStrategy<SystemStorage> for SystemStorage {
     #[inline(always)]
     fn write_to_strategy() -> TransferStrategy {
