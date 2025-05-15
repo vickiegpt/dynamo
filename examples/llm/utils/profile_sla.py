@@ -13,87 +13,167 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import subprocess
-import yaml
 import argparse
+import json
 import logging
 import math
-import time
-import requests
-import json
-import signal
+import os
 import random
-import matplotlib.pyplot as plt
+import signal
+import subprocess
+import time
 from typing import Literal
 
-DECODE_NUM_REQUESTS_RANGE = [1, 5, 10, 25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500]
+import matplotlib.pyplot as plt
+import requests
+import yaml
+
+DECODE_NUM_REQUESTS_RANGE = [
+    1,
+    5,
+    10,
+    25,
+    50,
+    100,
+    150,
+    200,
+    250,
+    300,
+    350,
+    400,
+    450,
+    500,
+]
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s', '%Y-%m-%d %H:%M:%S')
+formatter = logging.Formatter(
+    "%(asctime)s - %(name)s - %(levelname)s - %(message)s", "%Y-%m-%d %H:%M:%S"
+)
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
+
 def get_dynamo_serve_cmd(config_file_path):
     return [
-        "dynamo", "serve", "graphs.agg:Frontend", 
-        "-f", config_file_path,
+        "dynamo",
+        "serve",
+        "graphs.agg:Frontend",
+        "-f",
+        config_file_path,
     ]
 
-def get_prefill_gap_cmd(isl, artifact_dir, seed=100, model="deepseek-ai/DeepSeek-R1-Distill-Llama-8B", osl=5, port=8000):
+
+def get_prefill_gap_cmd(
+    isl,
+    artifact_dir,
+    seed=100,
+    model="deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    osl=5,
+    port=8000,
+):
     return [
-        "genai-perf", "profile",
-        "--model", model,
-        "--tokenizer", model,
-        "--service-kind", "openai",
-        "--endpoint-type", "chat",
-        "--endpoint", "/v1/chat/completions",
+        "genai-perf",
+        "profile",
+        "--model",
+        model,
+        "--tokenizer",
+        model,
+        "--service-kind",
+        "openai",
+        "--endpoint-type",
+        "chat",
+        "--endpoint",
+        "/v1/chat/completions",
         "--streaming",
-        "--url", f"http://localhost:{port}",
-        "--synthetic-input-tokens-mean", str(isl), 
-        "--synthetic-input-tokens-stddev", "0",
-        "--output-tokens-mean", "5",
-        "--output-tokens-stddev", "0",
-        "--extra-inputs", "max_tokens:5",
-        "--extra-inputs", "min_tokens:5",
-        "--extra-inputs", "ignore_eos:true",
-        "--extra-inputs", "{\"nvext\":{\"ignore_eos\":true}}",
-        "--concurrency", "1",
-        "--request-count", "1",
-        "--warmup-request-count", "3",
-        "--artifact-dir", artifact_dir,
-        "--random-seed", str(seed),
-
+        "--url",
+        f"http://localhost:{port}",
+        "--synthetic-input-tokens-mean",
+        str(isl),
+        "--synthetic-input-tokens-stddev",
+        "0",
+        "--output-tokens-mean",
+        "5",
+        "--output-tokens-stddev",
+        "0",
+        "--extra-inputs",
+        "max_tokens:5",
+        "--extra-inputs",
+        "min_tokens:5",
+        "--extra-inputs",
+        "ignore_eos:true",
+        "--extra-inputs",
+        '{"nvext":{"ignore_eos":true}}',
+        "--concurrency",
+        "1",
+        "--request-count",
+        "1",
+        "--warmup-request-count",
+        "3",
+        "--artifact-dir",
+        artifact_dir,
+        "--random-seed",
+        str(seed),
     ]
 
-def get_decode_gap_cmd(isl, osl, artifact_dir, num_request, seed=100, model="deepseek-ai/DeepSeek-R1-Distill-Llama-8B", port=8000):
+
+def get_decode_gap_cmd(
+    isl,
+    osl,
+    artifact_dir,
+    num_request,
+    seed=100,
+    model="deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    port=8000,
+):
     return [
-        "genai-perf", "profile",
-        "--model", model,
-        "--tokenizer", model,
-        "--service-kind", "openai",
-        "--endpoint-type", "chat",
-        "--endpoint", "/v1/chat/completions",
+        "genai-perf",
+        "profile",
+        "--model",
+        model,
+        "--tokenizer",
+        model,
+        "--service-kind",
+        "openai",
+        "--endpoint-type",
+        "chat",
+        "--endpoint",
+        "/v1/chat/completions",
         "--streaming",
-        "--url", f"http://localhost:{port}",
-        "--synthetic-input-tokens-mean", str(isl),
-        "--synthetic-input-tokens-stddev", "0",
-        "--output-tokens-mean", str(osl),
-        "--output-tokens-stddev", "0",
-        "--extra-inputs", f"max_tokens:{osl}",
-        "--extra-inputs", f"min_tokens:{osl}",
-        "--extra-inputs", "ignore_eos:true",
-        "--extra-inputs", "{\"nvext\":{\"ignore_eos\":true}}",
-        "--concurrency", str(num_request),
-        "--num-dataset-entries", str(num_request),
-        "--request-count", str(num_request),
-        "--warmup-request-count", "3",
-        "--artifact-dir", artifact_dir,
-        "--random-seed", str(seed),
+        "--url",
+        f"http://localhost:{port}",
+        "--synthetic-input-tokens-mean",
+        str(isl),
+        "--synthetic-input-tokens-stddev",
+        "0",
+        "--output-tokens-mean",
+        str(osl),
+        "--output-tokens-stddev",
+        "0",
+        "--extra-inputs",
+        f"max_tokens:{osl}",
+        "--extra-inputs",
+        f"min_tokens:{osl}",
+        "--extra-inputs",
+        "ignore_eos:true",
+        "--extra-inputs",
+        '{"nvext":{"ignore_eos":true}}',
+        "--concurrency",
+        str(num_request),
+        "--num-dataset-entries",
+        str(num_request),
+        "--request-count",
+        str(num_request),
+        "--warmup-request-count",
+        "3",
+        "--artifact-dir",
+        artifact_dir,
+        "--random-seed",
+        str(seed),
     ]
+
 
 def convert_config(config: dict, target: Literal["prefill", "decode"]) -> dict:
     config = config.copy()
@@ -128,7 +208,10 @@ def convert_config(config: dict, target: Literal["prefill", "decode"]) -> dict:
     config["VllmWorker"]["ServiceArgs"]["workers"] = 1
 
     # set PP to 1
-    if "pipeline-parallel-size" in config["VllmWorker"] and config["VllmWorker"]["pipeline-parallel-size"] > 1:
+    if (
+        "pipeline-parallel-size" in config["VllmWorker"]
+        and config["VllmWorker"]["pipeline-parallel-size"] > 1
+    ):
         logger.warning("Currently we only support TP, setting PP to 1")
         config["VllmWorker"]["pipeline-parallel-size"] = 1
 
@@ -138,58 +221,69 @@ def convert_config(config: dict, target: Literal["prefill", "decode"]) -> dict:
 
     return config
 
+
 def set_config_tp_size(config: dict, tp_size: int):
     config["VllmWorker"]["tensor-parallel-size"] = tp_size
     config["VllmWorker"]["ServiceArgs"]["resources"]["gpu"] = tp_size
     return config
 
+
 def get_available_gpu_count():
     try:
         # Run nvidia-smi to get GPU information
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.total,memory.free", "--format=csv,noheader"],
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.total,memory.free",
+                "--format=csv,noheader",
+            ],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
-        
+
         # Parse the output
-        gpu_info = result.stdout.strip().split('\n')
+        gpu_info = result.stdout.strip().split("\n")
         gpu_count = len(gpu_info)
-        
+
         if gpu_count > 0:
             logger.info(f"Detected {gpu_count} GPUs in the system:")
             for i, info in enumerate(gpu_info):
                 logger.info(f"  GPU {i}: {info}")
         else:
             logger.warning("No GPUs detected with nvidia-smi.")
-            
+
         return gpu_count
     except subprocess.CalledProcessError:
-        logger.error("Failed to run nvidia-smi. Make sure NVIDIA drivers are installed properly.")
+        logger.error(
+            "Failed to run nvidia-smi. Make sure NVIDIA drivers are installed properly."
+        )
         return 0
     except Exception as e:
         logger.error(f"Error detecting GPUs: {e}")
         return 0
-    
+
+
 def get_model_name(config: dict) -> str:
     if "Common" in config and "served_model_name" in config["Common"]:
         return config["Common"]["served_model_name"]
     else:
         return config["Frontend"]["served_model_name"]
 
+
 def get_port(config: dict) -> int:
     if "Common" in config and "port" in config["Common"]:
         return config["Common"]["port"]
     else:
         return config["Frontend"]["port"]
-    
+
+
 def wait_for_server_ready(model_name: str, port: int, timeout: int = 300):
     logger.info("Waiting for the server to be ready...")
     endpoint_url = f"http://localhost:{port}/v1/chat/completions"
     start_time = time.time()
     server_ready = False
-    
+
     while time.time() - start_time < timeout:
         try:
             # Send a simple request to check if the server is up
@@ -198,22 +292,27 @@ def wait_for_server_ready(model_name: str, port: int, timeout: int = 300):
                 json={
                     "model": model_name,
                     "messages": [{"role": "user", "content": "Hello"}],
-                    "max_tokens": 1
+                    "max_tokens": 1,
                 },
-                timeout=5
+                timeout=5,
             )
             if response.status_code == 200:
-                logger.info(f"Server is ready after {time.time() - start_time:.2f} seconds")
+                logger.info(
+                    f"Server is ready after {time.time() - start_time:.2f} seconds"
+                )
                 server_ready = True
                 break
             else:
-                logger.info(f"Server returned status code {response.status_code}, waiting...")
+                logger.info(
+                    f"Server returned status code {response.status_code}, waiting..."
+                )
         except (requests.RequestException, ConnectionError) as e:
             logger.info(f"Server not ready yet: {e}")
-        
+
         time.sleep(5)
 
     return server_ready
+
 
 def get_kv_cache_size_from_dynamo_log(dynamo_log_fn: str) -> int:
     try:
@@ -223,25 +322,44 @@ def get_kv_cache_size_from_dynamo_log(dynamo_log_fn: str) -> int:
                     line = line.strip().split("Maximum concurrency for ")[1]
                     token_count = int(line.split(" tokens per request: ")[0])
                     concurrency = float(line.split(" tokens per request: ")[1][:-1])
-                    
-                    logger.info(f"Found KV cache info: {token_count} x {concurrency} = {int(token_count * concurrency)}")
+
+                    logger.info(
+                        f"Found KV cache info: {token_count} x {concurrency} = {int(token_count * concurrency)}"
+                    )
                     return int(token_count * concurrency)
     except Exception as e:
         logger.warning(f"Failed to parse KV cache size from line: {line}. Error: {e}")
     return 0
 
+
 def get_gap_result(artifact_dir: str) -> dict:
     with open(f"{artifact_dir}/profile_export_genai_perf.json", "r") as f:
         return json.load(f)
-    
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, required=True, help="Path to the dynamo config file")
-    parser.add_argument("--output-dir", type=str, default="profiling_results", help="Path to the output results directory")
-    parser.add_argument("--isl", type=int, default=3000, help="target input sequence length")
-    parser.add_argument("--osl", type=int, default=500, help="target output sequence length")
-    parser.add_argument("--ttft", type=int, default=50, help="target Time To First Token in ms")
-    parser.add_argument("--itl", type=int, default=5, help="target Inter Token Latency in ms")
+    parser.add_argument(
+        "--config", type=str, required=True, help="Path to the dynamo config file"
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="profiling_results",
+        help="Path to the output results directory",
+    )
+    parser.add_argument(
+        "--isl", type=int, default=3000, help="target input sequence length"
+    )
+    parser.add_argument(
+        "--osl", type=int, default=500, help="target output sequence length"
+    )
+    parser.add_argument(
+        "--ttft", type=int, default=50, help="target Time To First Token in ms"
+    )
+    parser.add_argument(
+        "--itl", type=int, default=5, help="target Inter Token Latency in ms"
+    )
     args = parser.parse_args()
 
     with open(args.config, "r") as f:
@@ -249,7 +367,7 @@ if __name__ == "__main__":
 
     # Get the number of available GPUs
     available_gpus = get_available_gpu_count()
-    
+
     profile_tp_size = [2**i for i in range(int(math.log2(available_gpus)) + 1)]
     logger.info(f"Profiling TP sizes: {profile_tp_size}")
 
@@ -286,9 +404,9 @@ if __name__ == "__main__":
                 stdout=dynamo_log_f,
                 stderr=subprocess.STDOUT,
                 text=True,
-                preexec_fn=os.setsid  # Use process group for clean termination
+                preexec_fn=os.setsid,  # Use process group for clean termination
             )
-        
+
         if not wait_for_server_ready(model_name, port):
             logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
             break
@@ -296,19 +414,18 @@ if __name__ == "__main__":
         # run genai-perf
         logger.info(f"Running genai-perf with isl {args.isl}")
         genai_perf_artifact_dir = f"{work_dir}/gap_isl{args.isl}"
-        genai_perf_cmd = get_prefill_gap_cmd(args.isl, genai_perf_artifact_dir, model=model_name, port=port)
+        genai_perf_cmd = get_prefill_gap_cmd(
+            args.isl, genai_perf_artifact_dir, model=model_name, port=port
+        )
         gap_process = subprocess.Popen(
-            genai_perf_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+            genai_perf_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
         stdout, stderr = gap_process.communicate()
         if gap_process.returncode == 0:
             logger.info("Genai-perf profiling completed successfully")
             logger.info(stdout)
             gap_result = get_gap_result(genai_perf_artifact_dir)
-            ttft = gap_result['time_to_first_token']['avg']
+            ttft = gap_result["time_to_first_token"]["avg"]
             prefill_tp_size.append(tp_size)
             prefill_ttft.append(ttft)
             prefill_thpt_per_gpu.append(args.isl / ttft / tp_size * 1000)
@@ -325,25 +442,29 @@ if __name__ == "__main__":
         plt.figure(figsize=(10, 6))
         plt.scatter(prefill_ttft, prefill_thpt_per_gpu, s=100)
         for i, tp in enumerate(prefill_tp_size):
-            plt.annotate(f"TP{tp}", 
-                        (prefill_ttft[i], prefill_thpt_per_gpu[i]),
-                        xytext=(10, 0), 
-                        textcoords='offset points',
-                        fontsize=10)
-        
-        plt.axvline(x=args.ttft, color='r', linestyle='--', label=f'Target TTFT: {args.ttft} ms')
+            plt.annotate(
+                f"TP{tp}",
+                (prefill_ttft[i], prefill_thpt_per_gpu[i]),
+                xytext=(10, 0),
+                textcoords="offset points",
+                fontsize=10,
+            )
+
+        plt.axvline(
+            x=args.ttft, color="r", linestyle="--", label=f"Target TTFT: {args.ttft} ms"
+        )
         plt.legend()
 
-        plt.title('Prefill Performance')
-        plt.xlabel('Time to First Token (ms)')
-        plt.ylabel('Prefill throughput per GPU (tokens/s/GPU)')
+        plt.title("Prefill Performance")
+        plt.xlabel("Time to First Token (ms)")
+        plt.ylabel("Prefill throughput per GPU (tokens/s/GPU)")
         plt.grid(True)
-        
+
         plot_path = f"{args.output_dir}/prefill_performance.png"
         plt.savefig(plot_path, dpi=300)
         logger.info(f"Performance plot saved to {plot_path}")
         plt.close()
-        
+
     # then profile prefill
     plt.figure(figsize=(10, 6))
     decode_tp_size = []
@@ -374,17 +495,21 @@ if __name__ == "__main__":
                 stdout=dynamo_log_f,
                 stderr=subprocess.STDOUT,
                 text=True,
-                preexec_fn=os.setsid  # Use process group for clean termination
+                preexec_fn=os.setsid,  # Use process group for clean termination
             )
-        
+
         if not wait_for_server_ready(model_name, port):
             logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
             break
 
         max_kv_tokens = get_kv_cache_size_from_dynamo_log(dynamo_log_fn)
         max_concurrency = max_kv_tokens // (args.isl + args.osl)
-        sweep_num_request = [num for num in DECODE_NUM_REQUESTS_RANGE if num < max_concurrency]
-        logger.info(f"Sweeping num_request range based on maximum number of kv tokens: {sweep_num_request}")
+        sweep_num_request = [
+            num for num in DECODE_NUM_REQUESTS_RANGE if num < max_concurrency
+        ]
+        logger.info(
+            f"Sweeping num_request range based on maximum number of kv tokens: {sweep_num_request}"
+        )
 
         engine_decode_itl = []
         engine_decode_thpt_per_gpu = []
@@ -395,30 +520,48 @@ if __name__ == "__main__":
             # we use the same random seed to make sure the prompt is the same
             seed = random.randint(0, 1000000)
             genai_perf_artifact_dir = f"{work_dir}/gap_request{num_request}_isl{args.isl}_osl{args.osl}_warmup"
-            genai_perf_cmd = get_decode_gap_cmd(args.isl, args.osl, genai_perf_artifact_dir, num_request, seed=seed, model=model_name, port=port)
+            genai_perf_cmd = get_decode_gap_cmd(
+                args.isl,
+                args.osl,
+                genai_perf_artifact_dir,
+                num_request,
+                seed=seed,
+                model=model_name,
+                port=port,
+            )
             gap_process = subprocess.Popen(
                 genai_perf_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
             )
             gap_process.communicate()
             # then send out the real requests, hopefully, this will skip all prefill computation
-            genai_perf_artifact_dir = f"{work_dir}/gap_request{num_request}_isl{args.isl}_osl{args.osl}"
-            genai_perf_cmd = get_decode_gap_cmd(args.isl, args.osl, genai_perf_artifact_dir, num_request, seed=seed, model=model_name, port=port)
+            genai_perf_artifact_dir = (
+                f"{work_dir}/gap_request{num_request}_isl{args.isl}_osl{args.osl}"
+            )
+            genai_perf_cmd = get_decode_gap_cmd(
+                args.isl,
+                args.osl,
+                genai_perf_artifact_dir,
+                num_request,
+                seed=seed,
+                model=model_name,
+                port=port,
+            )
             gap_process = subprocess.Popen(
                 genai_perf_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
             )
             stdout, stderr = gap_process.communicate()
             if gap_process.returncode == 0:
                 logger.info("Genai-perf profiling completed successfully")
                 logger.info(stdout)
                 gap_result = get_gap_result(genai_perf_artifact_dir)
-                itl = gap_result['inter_token_latency']['avg']
-                thpt_per_gpu = gap_result['output_token_throughput']['avg']
+                itl = gap_result["inter_token_latency"]["avg"]
+                thpt_per_gpu = gap_result["output_token_throughput"]["avg"]
                 engine_decode_itl.append(itl)
                 engine_decode_thpt_per_gpu.append(thpt_per_gpu)
                 decode_tp_size.append(tp_size)
@@ -426,7 +569,9 @@ if __name__ == "__main__":
                 decode_thpt_per_gpu.append(thpt_per_gpu)
                 decode_concurrency.append(num_request)
             else:
-                logger.error(f"Genai-perf failed with error code: {gap_process.returncode}")
+                logger.error(
+                    f"Genai-perf failed with error code: {gap_process.returncode}"
+                )
                 logger.error(f"stderr: {stderr}")
 
         # Send SIGINT to the dynamo process to terminate it gracefully
@@ -434,15 +579,17 @@ if __name__ == "__main__":
         dynamo_process.communicate()
 
         # Plot a line in the 2d plot
-        plt.plot(engine_decode_itl, engine_decode_thpt_per_gpu, label=f'TP{tp_size}')
+        plt.plot(engine_decode_itl, engine_decode_thpt_per_gpu, label=f"TP{tp_size}")
 
-    plt.axvline(x=args.itl, color='r', linestyle='--', label=f'Target ITL: {args.itl} ms')
+    plt.axvline(
+        x=args.itl, color="r", linestyle="--", label=f"Target ITL: {args.itl} ms"
+    )
     plt.legend()
-    plt.title('Decode Performance')
-    plt.xlabel('Inter Token Latency (ms)')
-    plt.ylabel('Decode throughput per GPU (tokens/s/GPU)')
+    plt.title("Decode Performance")
+    plt.xlabel("Inter Token Latency (ms)")
+    plt.ylabel("Decode throughput per GPU (tokens/s/GPU)")
     plt.grid(True)
-    
+
     plot_path = f"{args.output_dir}/decode_performance.png"
     plt.savefig(plot_path, dpi=300)
     logger.info(f"Performance plot saved to {plot_path}")

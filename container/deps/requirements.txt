@@ -19,6 +19,7 @@ ftfy
 grpcio-tools==1.66.0
 httpx
 kubernetes==32.0.1
+matplotlib==3.10.3
 msgspec
 mypy
 numpy
@@ -37,4 +38,3 @@ transformers
 tritonclient==2.53.0
 types-PyYAML
 uvicorn
-matplotlib==3.10.3
