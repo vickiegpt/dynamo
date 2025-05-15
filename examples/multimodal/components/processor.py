@@ -196,22 +196,29 @@ class Processor(ProcessMixIn):
 
     # The generate endpoint will be used by the frontend to handle incoming requests.
     @endpoint()
-    async def generate(self, request: MultiModalRequest):
-        # TODO: After having the multimodal support in OpenAI compatible frontend, we can use that directly and remove the custom endpoint.
+    async def generate(self, raw_request: MultiModalRequest):
         msg = {
             "role": "user",
-            "content": "USER: <image>\nQuestion:" + request.prompt + " Answer:",
+            "content": "USER: <image>\nQuestion:"
+            + raw_request.messages[0].content[0].text
+            + " Answer:",
         }
 
         chat_request = ChatCompletionRequest(
-            model=request.model,
+            model=raw_request.model,
             messages=[msg],
-            stream=True,
-            max_tokens=request.max_tokens,
+            stream=raw_request.stream,
+            max_tokens=raw_request.max_tokens,
             request_id=str(uuid.uuid4()),
         )
+        image_url = None
 
-        async for response in self._generate(
-            chat_request, request.image, RequestType.CHAT
-        ):
+        for message in raw_request.messages:
+            for item in message.content:
+                if item.type == "image_url":
+                    image_url = item.image_url.url
+        if image_url is None:
+            raise ValueError("Image URL is required")
+
+        async for response in self._generate(chat_request, image_url, RequestType.CHAT):
             yield json.dumps(response)
