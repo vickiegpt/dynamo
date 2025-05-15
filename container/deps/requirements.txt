@@ -37,3 +37,4 @@ transformers
 tritonclient==2.53.0
 types-PyYAML
 uvicorn
+matplotlib==3.10.3
