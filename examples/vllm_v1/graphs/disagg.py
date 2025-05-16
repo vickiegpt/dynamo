@@ -13,17 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__all__ = [
-    "CircusController",
-    "LocalConnector",
-    "PlannerConnector",
-    "KubernetesConnector",
-    "PlannerDefaults",
-]
+from components.frontend import Frontend
+from components.simple_load_balancer import SimpleLoadBalancer
+from components.worker import VllmDecodeWorker, VllmPrefillWorker
 
-# Import the classes
-from dynamo.planner.circusd import CircusController
-from dynamo.planner.defaults import PlannerDefaults
-from dynamo.planner.kubernetes_connector import KubernetesConnector
-from dynamo.planner.local_connector import LocalConnector
-from dynamo.planner.planner_connector import PlannerConnector
+load_balancer = Frontend.link(SimpleLoadBalancer)
+load_balancer.link(VllmPrefillWorker)
+load_balancer.link(VllmDecodeWorker)
