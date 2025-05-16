@@ -612,7 +612,7 @@ if __name__ == "__main__":
         max_thpt_idx = valid_indices[np.argmax(valid_thpts)]
         selected_prefill_idx = max_thpt_idx
     logger.info(
-        f"Suggested prefill TP:{prefill_tp_size[selected_prefill_idx]} (TTFT {prefill_ttft[selected_prefill_idx]} ms, throughput {prefill_thpt_per_gpu[selected_prefill_idx]} tokens/s/GPU)"
+        f"Suggested prefill TP:{prefill_tp_size[selected_prefill_idx]} (TTFT {prefill_ttft[selected_prefill_idx]:.2f} ms, throughput {prefill_thpt_per_gpu[selected_prefill_idx]:.2f} tokens/s/GPU)"
     )
 
     # scale up if estimated TTFT is 120% of target TTFT
@@ -640,7 +640,7 @@ if __name__ == "__main__":
         max_thpt_idx = valid_indices[np.argmax(valid_thpts)]
         selected_decode_idx = max_thpt_idx
     logger.info(
-        f"Suggested decode TP:{decode_tp_size[selected_decode_idx]} (ITL {decode_itl[selected_decode_idx]} ms, throughput {decode_thpt_per_gpu[selected_decode_idx]} tokens/s/GPU)"
+        f"Suggested decode TP:{decode_tp_size[selected_decode_idx]} (ITL {decode_itl[selected_decode_idx]:.2f} ms, throughput {decode_thpt_per_gpu[selected_decode_idx]:.2f} tokens/s/GPU)"
     )
 
     # calculate kv cache utlization for the selected TP and concurrency
