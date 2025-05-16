@@ -561,7 +561,7 @@ if __name__ == "__main__":
                 logger.info(stdout)
                 gap_result = get_gap_result(genai_perf_artifact_dir)
                 itl = gap_result["inter_token_latency"]["avg"]
-                thpt_per_gpu = gap_result["output_token_throughput"]["avg"]
+                thpt_per_gpu = gap_result["output_token_throughput"]["avg"] / tp_size
                 engine_decode_itl.append(itl)
                 engine_decode_thpt_per_gpu.append(thpt_per_gpu)
                 decode_tp_size.append(tp_size)
