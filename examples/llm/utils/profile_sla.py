@@ -25,6 +25,7 @@ import time
 from typing import Literal
 
 import matplotlib.pyplot as plt
+import numpy as np
 import requests
 import yaml
 
@@ -465,12 +466,13 @@ if __name__ == "__main__":
         logger.info(f"Performance plot saved to {plot_path}")
         plt.close()
 
-    # then profile prefill
+    # then profile decode
     plt.figure(figsize=(10, 6))
     decode_tp_size = []
     decode_itl = []
     decode_thpt_per_gpu = []
     decode_concurrency = []
+    decode_kv_cache_size = []
     logger.info("Profiling decode...")
     decode_config = convert_config(config, "decode")
     for tp_size in profile_tp_size:
@@ -568,6 +570,7 @@ if __name__ == "__main__":
                 decode_itl.append(itl)
                 decode_thpt_per_gpu.append(thpt_per_gpu)
                 decode_concurrency.append(num_request)
+                decode_kv_cache_size.append(max_kv_tokens)
             else:
                 logger.error(
                     f"Genai-perf failed with error code: {gap_process.returncode}"
@@ -594,3 +597,59 @@ if __name__ == "__main__":
     plt.savefig(plot_path, dpi=300)
     logger.info(f"Performance plot saved to {plot_path}")
     plt.close()
+
+    logger.info("Analyzing results and generate recommendations...")
+    # select best tp size for prefill
+    if min(prefill_ttft) > args.ttft:
+        logger.info(
+            "No TP size satisfies the TTFT requirement, please try a smaller model or a more powerful GPU SKU"
+        )
+        selected_prefill_idx = np.argmin(np.array(prefill_ttft))
+    else:
+        valid_indices = [i for i, ttft in enumerate(prefill_ttft) if ttft <= args.ttft]
+        # Among valid TP sizes, select the one with highest throughput per GPU
+        valid_thpts = [prefill_thpt_per_gpu[i] for i in valid_indices]
+        max_thpt_idx = valid_indices[np.argmax(valid_thpts)]
+        selected_prefill_idx = max_thpt_idx
+    logger.info(
+        f"Suggested prefill TP:{prefill_tp_size[selected_prefill_idx]} (TTFT {prefill_ttft[selected_prefill_idx]} ms, throughput {prefill_thpt_per_gpu[selected_prefill_idx]} tokens/s/GPU)"
+    )
+
+    # scale up if estimated TTFT is 120% of target TTFT
+    prefill_queue_size_upper_bound = max(
+        0.1, args.ttft * 1.2 / prefill_ttft[selected_prefill_idx] - 1
+    )
+    # scale down if estimated TTFT is 80% of target TTFT
+    prefill_queue_size_lower_bound = max(
+        0.1, args.ttft * 0.8 / prefill_ttft[selected_prefill_idx] - 1
+    )
+    logger.info(
+        f"Suggested planner upper/lower bound for prefill queue size: {prefill_queue_size_upper_bound:.2f}/{prefill_queue_size_lower_bound:.2f}"
+    )
+
+    # select best tp size for decode
+    if min(decode_itl) > args.itl:
+        logger.info(
+            "No TP size satisfies the ITL requirement, please try a smaller model or a more powerful GPU SKU"
+        )
+        selected_decode_idx = np.argmin(np.array(decode_itl))
+    else:
+        valid_indices = [i for i, itl in enumerate(decode_itl) if itl <= args.itl]
+        # Among valid TP sizes, select the one with highest throughput per GPU
+        valid_thpts = [decode_thpt_per_gpu[i] for i in valid_indices]
+        max_thpt_idx = valid_indices[np.argmax(valid_thpts)]
+        selected_decode_idx = max_thpt_idx
+    logger.info(
+        f"Suggested decode TP:{decode_tp_size[selected_decode_idx]} (ITL {decode_itl[selected_decode_idx]} ms, throughput {decode_thpt_per_gpu[selected_decode_idx]} tokens/s/GPU)"
+    )
+
+    # calculate kv cache utlization for the selected TP and concurrency
+    selected_decode_kv_cache_utilization = (
+        decode_concurrency[selected_decode_idx]
+        * (args.isl + args.osl / 2)
+        / decode_kv_cache_size[selected_decode_idx]
+    )
+    # set a +- 20% range for the kv cache utilization
+    logger.info(
+        f"Suggested planner upper/lower bound for decode kv cache utilization: {max(0.1, selected_decode_kv_cache_utilization - 0.2):.2f}/{min(1, selected_decode_kv_cache_utilization + 0.2):.2f}"
+    )
