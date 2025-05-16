@@ -13,24 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-Frontend:
-  message: "earth"
-  port: 8000
-  ServiceArgs:
-    workers: 1
-    resources:
-      cpu: "1"
-
 Middle:
-  message: "moon"
   ServiceArgs:
     workers: 2
     resources:
       cpu: "1"
 
 Backend:
-  message: "mars"
   ServiceArgs:
-    workers: 2
+    workers: 3
     resources:
       cpu: "1"
