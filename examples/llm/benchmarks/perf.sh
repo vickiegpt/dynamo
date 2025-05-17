@@ -23,7 +23,7 @@ isl=3000
 osl=150
 
 # Concurrency levels to test
-for concurrency in 1 2 4 8 16 32 64 128 256; do
+for concurrency in 1 2 4 8 16 32 64; do
 
   # NOTE: For Dynamo HTTP OpenAI frontend, use `nvext` for fields like
   # `ignore_eos` since they are not in the official OpenAI spec.
