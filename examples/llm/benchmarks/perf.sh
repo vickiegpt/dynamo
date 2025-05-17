@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-model=neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic
+model=deepseek-ai/DeepSeek-R1-Distill-Llama-8B
 
 # Input Sequence Length (isl) 3000 and Output Sequence Length (osl) 150 are
 # selected for chat use case. Note that for other use cases, the results and
@@ -25,10 +25,11 @@ osl=150
 # Concurrency levels to test
 for concurrency in 1 2 4 8 16 32 64 128 256; do
 
+  # NOTE: For Dynamo HTTP OpenAI frontend, use `nvext` for fields like
+  # `ignore_eos` since they are not in the official OpenAI spec.
   genai-perf profile \
     --model ${model} \
     --tokenizer ${model} \
-    --service-kind openai \
     --endpoint-type chat \
     --endpoint /v1/chat/completions \
     --streaming \
@@ -40,6 +41,7 @@ for concurrency in 1 2 4 8 16 32 64 128 256; do
     --extra-inputs max_tokens:${osl} \
     --extra-inputs min_tokens:${osl} \
     --extra-inputs ignore_eos:true \
+    --extra-inputs "{\"nvext\":{\"ignore_eos\":true}}" \
     --concurrency ${concurrency} \
     --request-count $(($concurrency*10)) \
     --warmup-request-count $(($concurrency*2)) \
