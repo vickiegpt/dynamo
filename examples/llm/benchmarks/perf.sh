@@ -32,6 +32,7 @@ for concurrency in 1 2 4 8 16 32 64; do
     --tokenizer ${model} \
     --endpoint-type chat \
     --endpoint /v1/chat/completions \
+    --goodput output_token_throughput_per_user:40 \
     --streaming \
     --url http://localhost:8000 \
     --synthetic-input-tokens-mean ${isl} \

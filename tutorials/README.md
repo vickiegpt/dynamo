@@ -1,3 +1,10 @@
+
+```
+git clone https://github.com/ai-dynamo/dynamo.git
+cd dynamo
+git checkout nnshah1/0.2.0-msbuild
+```
+
 ```
 docker compose -f deploy/docker-compose.yml up --detach
 ```
@@ -10,6 +17,11 @@ docker build -f tutorials/Dockerfile . -t dynamo:dev
 ```
 ./container/run.sh --mount-workspace -it --image dynamo:dev --name dynamo-dev
 ```
+
+```
+dynamo run out=vllm deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+```
+
 
 ```
 cd examples/llm
