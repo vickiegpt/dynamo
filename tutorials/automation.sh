@@ -2,12 +2,12 @@
 set -euo pipefail
 
 SERVER_CMD_AGG="dynamo serve graphs.agg:Frontend --working-dir /workspace/examples/llm -f" 
-SERVER_CMD_DISAGG="dynamo serve graphs.disagg:Frontend /workspace/examples/llm -f"
+SERVER_CMD_DISAGG="dynamo serve graphs.disagg:Frontend --working-dir /workspace/examples/llm -f"
 
 # Configuration
 #configs(agg_tp_1_dp_4.yaml, disagg_p_tp_1_dp_2_d_tp_1_dp_2.yaml, agg_tp_2_dp_2.yaml, disagg_p_tp_2_dp_1_d_tp_1_dp_2.yaml, agg_tp_4_dp_1.yaml, disagg_p_tp_1_dp_2_d_tp_2_dp_1.yaml, disagg_p_tp_2_dp_1_d_tp_2_dp_1.yaml)  # Replace with actual config files
 
-configs=("agg_tp_1_dp_4.yaml" "disagg_p_tp_1_dp_2_d_tp_1_dp_2.yaml")  # Replace with actual config files
+configs=("disagg_p_tp_1_dp_2_d_tp_1_dp_2.yaml")  # Replace with actual config files
 
 benchmark_command="./perf.sh"
 
@@ -122,10 +122,10 @@ for config in "${configs[@]}"; do
     echo "=== Benchmark complete - terminating server ==="
     if kill -0 "${server_pid}" 2>/dev/null; then
         echo "Killing server process tree (PID ${server_pid})"
-        pkill -P "${server_pid}" 2>/dev/null  # Kill children first
-        kill "${server_pid}" 2>/dev/null       # Then parent
-        wait "${server_pid}" 2>/dev/null
-	pkill -f .*circusd.*
+        pkill -P "${server_pid}" 2>/dev/null || true  # Kill children first
+        kill "${server_pid}" 2>/dev/null || true      # Then parent
+        wait "${server_pid}" 2>/dev/null || true
+	pkill -f .*circusd.* || true
     fi
 
     server_pid=""
