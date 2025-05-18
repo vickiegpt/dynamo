@@ -30,11 +30,11 @@ VllmWorker:
   enforce-eager: true
   max-num-batched-tokens: 16384
   enable-prefix-caching: true
-  tensor-parallel-size: 4
+  tensor-parallel-size: 2
   ServiceArgs:
-    workers: 4
+    workers: 2
     resources:
-      gpu: 1
+      gpu: 2
   common-configs: [model, block-size, max-model-len]
 
 Planner:

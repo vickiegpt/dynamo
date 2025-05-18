@@ -32,9 +32,9 @@ VllmWorker:
   enable-prefix-caching: true
   tensor-parallel-size: 4
   ServiceArgs:
-    workers: 4
+    workers: 1
     resources:
-      gpu: 1
+      gpu: 4
   common-configs: [model, block-size, max-model-len]
 
 Planner:
