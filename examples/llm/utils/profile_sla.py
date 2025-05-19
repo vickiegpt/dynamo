@@ -407,9 +407,11 @@ if __name__ == "__main__":
         max_kv_tokens = get_kv_cache_size_from_dynamo_log(dynamo_log_fn)
 
         osl = 500
-        for isl in range(500, 10500, 500):
+        for isl in range(1000, 11000, 1000):
+            logger.info(f"Profiling decode with isl {isl}...")
             max_concurrency = max_kv_tokens // (isl + osl)
             sweep_num_request = range(1, max_concurrency, 50)
+            logger.info(f"Num requestrange: {sweep_num_request}")
 
             for num_request in sweep_num_request:
                 logger.info(f"Profiling decode with num_request {num_request}...")
@@ -459,7 +461,7 @@ if __name__ == "__main__":
                     logger.info(stdout)
                     gap_result = get_gap_result(genai_perf_artifact_dir)
                     itl = gap_result["inter_token_latency"]["avg"]
-                    x_kv_usage.append(max_kv_tokens / (isl + osl / 2))
+                    x_kv_usage.append((isl + osl / 2) * num_request / max_kv_tokens)
                     y_context_length.append(isl + osl / 2)
                     z_itl.append(itl)
                 else:
@@ -468,47 +470,47 @@ if __name__ == "__main__":
                     )
                     logger.error(f"stderr: {stderr}")
 
-            print(f"x_kv_usage: {x_kv_usage}")
-            print(f"y_context_length: {y_context_length}")
-            print(f"z_itl: {z_itl}")
-            xi =np.linspace(min(x_kv_usage), max(x_kv_usage), 100)
-            yi = np.linspace(min(y_context_length), max(y_context_length), 100)
-            X, Y = np.meshgrid(xi, yi)
-            Z = griddata((x_kv_usage, y_context_length), z_itl, (X, Y), method='cubic')
+        print(f"x_kv_usage: {x_kv_usage}")
+        print(f"y_context_length: {y_context_length}")
+        print(f"z_itl: {z_itl}")
+        xi =np.linspace(min(x_kv_usage), max(x_kv_usage), 100)
+        yi = np.linspace(min(y_context_length), max(y_context_length), 100)
+        X, Y = np.meshgrid(xi, yi)
+        Z = griddata((x_kv_usage, y_context_length), z_itl, (X, Y), method='cubic')
 
-            fig = plt.figure(figsize=(12, 10))
-            ax = fig.add_subplot(111, projection='3d')
+        fig = plt.figure(figsize=(12, 10))
+        ax = fig.add_subplot(111, projection='3d')
 
-            # Create the surface plot with customizations
-            surf = ax.plot_surface(
-                X, Y, Z, 
-                cmap=cm.coolwarm,  # Change colormap
-                linewidth=0.2,     # Add grid lines
-                antialiased=True,
-                alpha=0.8
-            )
+        # Create the surface plot with customizations
+        surf = ax.plot_surface(
+            X, Y, Z, 
+            cmap=cm.coolwarm,  # Change colormap
+            linewidth=0.2,     # Add grid lines
+            antialiased=True,
+            alpha=0.8
+        )
 
-            # Add a color bar with custom settings
-            cbar = fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
-            cbar.set_label('Z Value', fontsize=12)
-            cbar.ax.tick_params(labelsize=10)
+        # Add a color bar with custom settings
+        cbar = fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
+        cbar.set_label('Z Value', fontsize=12)
+        cbar.ax.tick_params(labelsize=10)
 
-            # Add labels with custom font sizes
-            ax.set_xlabel('Active KV Percentage', fontsize=12)
-            ax.set_ylabel('Decode Context Length', fontsize=12)
-            ax.set_zlabel('ITL', fontsize=12)
+        # Add labels with custom font sizes
+        ax.set_xlabel('Active KV Percentage', fontsize=12)
+        ax.set_ylabel('Decode Context Length', fontsize=12)
+        ax.set_zlabel('ITL', fontsize=12)
 
-            # Set viewing angle
-            ax.view_init(elev=30, azim=45)  # elevation and azimuth angles
+        # Set viewing angle
+        ax.view_init(elev=30, azim=45)  # elevation and azimuth angles
 
-            # Add a grid
-            ax.grid(True)
+        # Add a grid
+        ax.grid(True)
 
-            # Adjust tick label font size
-            ax.tick_params(axis='both', which='major', labelsize=10)
+        # Adjust tick label font size
+        ax.tick_params(axis='both', which='major', labelsize=10)
 
-            # Save the figure if needed
-            plt.savefig(f'{work_dir}/decode_tp{tp_size}.png', dpi=300, bbox_inches='tight')
+        # Save the figure if needed
+        plt.savefig(f'{work_dir}/decode_tp{tp_size}.png', dpi=300, bbox_inches='tight')
 
 
         # Send SIGINT to the dynamo process to terminate it gracefully
