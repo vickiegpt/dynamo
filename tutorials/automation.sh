@@ -7,12 +7,12 @@ SERVER_CMD_DISAGG="dynamo serve graphs.disagg:Frontend --working-dir /workspace/
 # Configuration
 #configs(agg_tp_1_dp_4.yaml, disagg_p_tp_1_dp_2_d_tp_1_dp_2.yaml, agg_tp_2_dp_2.yaml, disagg_p_tp_2_dp_1_d_tp_1_dp_2.yaml, agg_tp_4_dp_1.yaml, disagg_p_tp_1_dp_2_d_tp_2_dp_1.yaml, disagg_p_tp_2_dp_1_d_tp_2_dp_1.yaml)  # Replace with actual config files
 
-configs=("disagg_p_tp_1_dp_2_d_tp_1_dp_2.yaml")  # Replace with actual config files
+configs=("disagg_p_tp_1_dp_2_d_tp_2_dp_1.yaml")  # Replace with actual config files
 
 benchmark_command="./perf.sh"
 
 HEALTH_CHECK_URL="http://localhost:8000/v1/chat/completions"
-MAX_WAIT_SECONDS=60                             # Maximum time to wait for server startup
+MAX_WAIT_SECONDS=300                             # Maximum time to wait for server startup
 CHECK_INTERVAL=2                                # Seconds between health checks
 
 HEALTH_CHECK_STRING="deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
@@ -50,7 +50,9 @@ cleanup() {
         kill "$server_pid" 2>/dev/null || true
         wait "$server_pid" 2>/dev/null || true
     fi
-    pkill -f .*circusd.*
+    pkill -f .*circusd.* || true
+    pkill -f .*dynamo.* || treu
+
     exit 1
 }
 
@@ -126,6 +128,8 @@ for config in "${configs[@]}"; do
         kill "${server_pid}" 2>/dev/null || true      # Then parent
         wait "${server_pid}" 2>/dev/null || true
 	pkill -f .*circusd.* || true
+	pkill -f .*dynamo.* || true
+
     fi
 
     server_pid=""
