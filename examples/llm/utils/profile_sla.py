@@ -67,7 +67,7 @@ def get_dynamo_serve_cmd(config_file_path):
     ]
 
 
-def get_prefill_gap_cmd(
+def get_prefill_genai_perf_cmd(
     isl,
     artifact_dir,
     seed=100,
@@ -120,7 +120,7 @@ def get_prefill_gap_cmd(
     ]
 
 
-def get_decode_gap_cmd(
+def get_decode_genai_perf_cmd(
     isl,
     osl,
     artifact_dir,
@@ -415,7 +415,7 @@ if __name__ == "__main__":
         # run genai-perf
         logger.info(f"Running genai-perf with isl {args.isl}")
         genai_perf_artifact_dir = f"{work_dir}/gap_isl{args.isl}"
-        genai_perf_cmd = get_prefill_gap_cmd(
+        genai_perf_cmd = get_prefill_genai_perf_cmd(
             args.isl, genai_perf_artifact_dir, model=model_name, port=port
         )
         gap_process = subprocess.Popen(
@@ -522,7 +522,7 @@ if __name__ == "__main__":
             # we use the same random seed to make sure the prompt is the same
             seed = random.randint(0, 1000000)
             genai_perf_artifact_dir = f"{work_dir}/gap_request{num_request}_isl{args.isl}_osl{args.osl}_warmup"
-            genai_perf_cmd = get_decode_gap_cmd(
+            genai_perf_cmd = get_decode_genai_perf_cmd(
                 args.isl,
                 args.osl,
                 genai_perf_artifact_dir,
@@ -542,7 +542,7 @@ if __name__ == "__main__":
             genai_perf_artifact_dir = (
                 f"{work_dir}/gap_request{num_request}_isl{args.isl}_osl{args.osl}"
             )
-            genai_perf_cmd = get_decode_gap_cmd(
+            genai_perf_cmd = get_decode_genai_perf_cmd(
                 args.isl,
                 args.osl,
                 genai_perf_artifact_dir,
