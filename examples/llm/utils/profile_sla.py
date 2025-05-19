@@ -604,12 +604,12 @@ if __name__ == "__main__":
         logger.info(
             "No TP size satisfies the TTFT requirement, please try a smaller model or a more powerful GPU SKU"
         )
-        selected_prefill_idx = np.argmin(np.array(prefill_ttft))
+        selected_prefill_idx = int(np.argmin(np.array(prefill_ttft)))
     else:
         valid_indices = [i for i, ttft in enumerate(prefill_ttft) if ttft <= args.ttft]
         # Among valid TP sizes, select the one with highest throughput per GPU
         valid_thpts = [prefill_thpt_per_gpu[i] for i in valid_indices]
-        max_thpt_idx = valid_indices[np.argmax(valid_thpts)]
+        max_thpt_idx = valid_indices[int(np.argmax(valid_thpts))]
         selected_prefill_idx = max_thpt_idx
     logger.info(
         f"Suggested prefill TP:{prefill_tp_size[selected_prefill_idx]} (TTFT {prefill_ttft[selected_prefill_idx]:.2f} ms, throughput {prefill_thpt_per_gpu[selected_prefill_idx]:.2f} tokens/s/GPU)"
@@ -632,12 +632,12 @@ if __name__ == "__main__":
         logger.info(
             "No TP size satisfies the ITL requirement, please try a smaller model or a more powerful GPU SKU"
         )
-        selected_decode_idx = np.argmin(np.array(decode_itl))
+        selected_decode_idx = int(np.argmin(np.array(decode_itl)))
     else:
         valid_indices = [i for i, itl in enumerate(decode_itl) if itl <= args.itl]
         # Among valid TP sizes, select the one with highest throughput per GPU
         valid_thpts = [decode_thpt_per_gpu[i] for i in valid_indices]
-        max_thpt_idx = valid_indices[np.argmax(valid_thpts)]
+        max_thpt_idx = valid_indices[int(np.argmax(valid_thpts))]
         selected_decode_idx = max_thpt_idx
     logger.info(
         f"Suggested decode TP:{decode_tp_size[selected_decode_idx]} (ITL {decode_itl[selected_decode_idx]:.2f} ms, throughput {decode_thpt_per_gpu[selected_decode_idx]:.2f} tokens/s/GPU)"
