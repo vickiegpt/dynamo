@@ -5,9 +5,10 @@ SERVER_CMD_AGG="dynamo serve graphs.agg:Frontend --working-dir /workspace/exampl
 SERVER_CMD_DISAGG="dynamo serve graphs.disagg:Frontend --working-dir /workspace/examples/llm -f"
 
 # Configuration
-#configs(agg_tp_1_dp_4.yaml, disagg_p_tp_1_dp_2_d_tp_1_dp_2.yaml, agg_tp_2_dp_2.yaml, disagg_p_tp_2_dp_1_d_tp_1_dp_2.yaml, agg_tp_4_dp_1.yaml, disagg_p_tp_1_dp_2_d_tp_2_dp_1.yaml, disagg_p_tp_2_dp_1_d_tp_2_dp_1.yaml)  # Replace with actual config files
 
-configs=(agg_tp_1_dp_4.yaml disagg_p_tp_1_dp_2_d_tp_1_dp_2.yaml agg_tp_2_dp_2.yaml disagg_p_tp_1_dp_2_d_tp_2_dp_1.yaml agg_tp_4_dp_1.yaml disagg_p_tp_2_dp_1_d_tp_2_dp_1.yaml)  # Replace with actual config files
+# configs=(agg_tp_1_dp_4.yaml disagg_p_tp_1_dp_2_d_tp_1_dp_2.yaml agg_tp_2_dp_2.yaml disagg_p_tp_1_dp_2_d_tp_2_dp_1.yaml agg_tp_4_dp_1.yaml disagg_p_tp_2_dp_1_d_tp_2_dp_1.yaml)  # Replace with actual config files
+
+configs=(agg_tp_2_dp_2.yaml disagg_p_tp_1_dp_2_d_tp_2_dp_1.yaml)
 
 benchmark_command="./perf.sh"
 
