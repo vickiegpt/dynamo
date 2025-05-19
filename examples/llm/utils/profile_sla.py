@@ -410,8 +410,8 @@ if __name__ == "__main__":
         for isl in range(1000, 11000, 1000):
             logger.info(f"Profiling decode with isl {isl}...")
             max_concurrency = max_kv_tokens // (isl + osl)
-            sweep_num_request = range(1, max_concurrency, 50)
-            logger.info(f"Num requestrange: {sweep_num_request}")
+            sweep_num_request = range(1, max_concurrency, max_concurrency // 5)
+            logger.info(f"Num request range: {list(sweep_num_request)}")
 
             for num_request in sweep_num_request:
                 logger.info(f"Profiling decode with num_request {num_request}...")
