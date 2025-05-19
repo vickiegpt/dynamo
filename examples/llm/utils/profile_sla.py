@@ -231,34 +231,29 @@ def set_config_tp_size(config: dict, tp_size: int):
 
 def get_available_gpu_count():
     try:
-        # Run nvidia-smi to get GPU information
-        result = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=name,memory.total,memory.free",
-                "--format=csv,noheader",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-
-        # Parse the output
-        gpu_info = result.stdout.strip().split("\n")
-        gpu_count = len(gpu_info)
+        import pynvml
+        pynvml.nvmlInit()
+        gpu_count = pynvml.nvmlDeviceGetCount()
 
         if gpu_count > 0:
             logger.info(f"Detected {gpu_count} GPUs in the system:")
-            for i, info in enumerate(gpu_info):
-                logger.info(f"  GPU {i}: {info}")
+            for i in range(gpu_count):
+                handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                name = pynvml.nvmlDeviceGetName(handle)
+                memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                total_memory_mb = memory.total / (1024 * 1024)
+                free_memory_mb = memory.free / (1024 * 1024)
+                logger.info(f"  GPU {i}: {name}, Total Memory: {total_memory_mb:.2f} MB, Free Memory: {free_memory_mb:.2f} MB")
         else:
-            logger.warning("No GPUs detected with nvidia-smi.")
+            logger.warning("No GPUs detected with pynvml.")
 
+        pynvml.nvmlShutdown()
         return gpu_count
-    except subprocess.CalledProcessError:
-        logger.error(
-            "Failed to run nvidia-smi. Make sure NVIDIA drivers are installed properly."
-        )
+    except ImportError:
+        logger.error("pynvml module not found. Please install it with 'pip install pynvml'")
+        return 0
+    except pynvml.NVMLError as e:
+        logger.error(f"NVML Error: {e}")
         return 0
     except Exception as e:
         logger.error(f"Error detecting GPUs: {e}")
