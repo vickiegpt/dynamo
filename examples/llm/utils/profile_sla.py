@@ -232,6 +232,7 @@ def set_config_tp_size(config: dict, tp_size: int):
 def get_available_gpu_count():
     try:
         import pynvml
+
         pynvml.nvmlInit()
         gpu_count = pynvml.nvmlDeviceGetCount()
 
@@ -243,14 +244,18 @@ def get_available_gpu_count():
                 memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
                 total_memory_mb = memory.total / (1024 * 1024)
                 free_memory_mb = memory.free / (1024 * 1024)
-                logger.info(f"  GPU {i}: {name}, Total Memory: {total_memory_mb:.2f} MB, Free Memory: {free_memory_mb:.2f} MB")
+                logger.info(
+                    f"  GPU {i}: {name}, Total Memory: {total_memory_mb:.2f} MB, Free Memory: {free_memory_mb:.2f} MB"
+                )
         else:
             logger.warning("No GPUs detected with pynvml.")
 
         pynvml.nvmlShutdown()
         return gpu_count
     except ImportError:
-        logger.error("pynvml module not found. Please install it with 'pip install pynvml'")
+        logger.error(
+            "pynvml module not found. Please install it with 'pip install pynvml'"
+        )
         return 0
     except pynvml.NVMLError as e:
         logger.error(f"NVML Error: {e}")
