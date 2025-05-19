@@ -7,7 +7,7 @@ SERVER_CMD_DISAGG="dynamo serve graphs.disagg:Frontend --working-dir /workspace/
 # Configuration
 #configs(agg_tp_1_dp_4.yaml, disagg_p_tp_1_dp_2_d_tp_1_dp_2.yaml, agg_tp_2_dp_2.yaml, disagg_p_tp_2_dp_1_d_tp_1_dp_2.yaml, agg_tp_4_dp_1.yaml, disagg_p_tp_1_dp_2_d_tp_2_dp_1.yaml, disagg_p_tp_2_dp_1_d_tp_2_dp_1.yaml)  # Replace with actual config files
 
-configs=("disagg_p_tp_1_dp_2_d_tp_2_dp_1.yaml")  # Replace with actual config files
+configs=(agg_tp_1_dp_4.yaml disagg_p_tp_1_dp_2_d_tp_1_dp_2.yaml agg_tp_2_dp_2.yaml disagg_p_tp_2_dp_1_d_tp_1_dp_2.yaml agg_tp_4_dp_1.yaml disagg_p_tp_1_dp_2_d_tp_2_dp_1.yaml disagg_p_tp_2_dp_1_d_tp_2_dp_1.yaml)  # Replace with actual config files
 
 benchmark_command="./perf.sh"
 
@@ -51,7 +51,7 @@ cleanup() {
         wait "$server_pid" 2>/dev/null || true
     fi
     pkill -f .*circusd.* || true
-    pkill -f .*dynamo.* || treu
+    pkill -f .*dynamo.* || true
 
     exit 1
 }
