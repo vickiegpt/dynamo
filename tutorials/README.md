@@ -19,6 +19,7 @@ docker build -f tutorials/Dockerfile . -t dynamo:dev
 ```
 
 ```
+huggingface-cli download deepseek-ai/DeepSeek-R1-Distill-Llama-8B
 dynamo run out=vllm deepseek-ai/DeepSeek-R1-Distill-Llama-8B
 ```
 
