@@ -10,11 +10,10 @@ RUN pip install "ai-dynamo[all]"
 RUN pip3 install mooncake-transfer-engine
 
 WORKDIR /sgl-workspace
-RUN git clone -b ishan/r1-port-fix https://github.com/ai-dynamo/dynamo.git
+RUN git clone https://github.com/ai-dynamo/dynamo.git
 
 # install dynamo in editable mode
 WORKDIR /sgl-workspace/dynamo
-
 # Rust build/dev dependencies
 RUN apt update -y && \
     apt install --no-install-recommends -y \
@@ -60,6 +59,18 @@ RUN cp target/release/dynamo-run deploy/sdk/src/dynamo/sdk/cli/bin
 RUN cd lib/bindings/python && pip install -e . && cd ../../..
 RUN pip install -e .
 
-ENV PYTHONPATH=components/planner/src
+ENV PYTHONPATH=/sgl-workspace/dynamo/components/planner/src
+
+ARG ARCH=amd64
+
+RUN wget --tries=3 --waitretry=5 https://github.com/nats-io/nats-server/releases/download/v2.10.24/nats-server-v2.10.24-${ARCH}.deb && \
+    dpkg -i nats-server-v2.10.24-${ARCH}.deb && rm nats-server-v2.10.24-${ARCH}.deb
+
+ENV ETCD_VERSION="v3.5.18"
+RUN wget --tries=3 --waitretry=5 https://github.com/etcd-io/etcd/releases/download/$ETCD_VERSION/etcd-$ETCD_VERSION-linux-${ARCH}.tar.gz -O /tmp/etcd.tar.gz && \
+    mkdir -p /usr/local/bin/etcd && \
+    tar -xvf /tmp/etcd.tar.gz -C /usr/local/bin/etcd --strip-components=1 && \
+    rm /tmp/etcd.tar.gz
+ENV PATH=/usr/local/bin/etcd/:$PATH
 
 WORKDIR /sgl-workspace
