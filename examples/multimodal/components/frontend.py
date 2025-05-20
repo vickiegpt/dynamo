@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import logging
 
 from components.processor import Processor
@@ -41,6 +42,7 @@ class Frontend:
     async def generate(self, request: MultiModalRequest):
         async def content_generator():
             async for response in self.processor.generate(request.model_dump_json()):
-                yield response
+                s = json.loads(response)
+                yield s
 
-        return StreamingResponse(content_generator())
+        return StreamingResponse(content_generator(), media_type="text/event-stream")

@@ -145,20 +145,10 @@ class Processor(ProcessMixIn):
 
         output = self._generate_responses(response_generator, request_type)
 
-        # TODO: This is a temporary solution to combine the content from the engine generator.
-        # After having the multimodal support in OpenAI compatible frontend, we can use that directly without the need to manually combine the content.
-        combined_content = ""
         async for response in await self._stream_response(
             request, output, request_id, conversation
         ):
-            if "choices" in response and len(response["choices"]) > 0:
-                delta = response["choices"][0].get("delta", {})
-                content = delta.get("content", "")
-                combined_content += content
-
-                # Yield complete content on final response
-                if response["choices"][0].get("finish_reason") is not None:
-                    yield combined_content
+            yield response
 
     # This method is used to process the responses from the engine generator.
     async def _generate_responses(
