@@ -123,4 +123,4 @@ federer-mid-back
 
 You can find in-depth documentation for the Dynamo SDK [here](./docs/sdk/README.md) and the Dynamo CLI [here](./docs/cli/README.md)
 
-Please refer to [hello_world](../../../examples/hello_world/README.md) and [llm](../../../examples/llm/README.md) for examples.
+Please refer to [hello_world](../../../examples/hello_world/README.md) and [llm](../../../examples/vllm_v0/README.md) for examples.

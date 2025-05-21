@@ -72,7 +72,7 @@ Note: The huggingface home source mount can be changed by setting `--hf-cache ~/
 
 2\. Start disaggregated services
 ```bash
-cd /workspace/examples/llm
+cd /workspace/examples/vllm_v0
 dynamo serve benchmarks.disagg:Frontend -f benchmarks/disagg.yaml 1> disagg.log 2>&1 &
 ```
 Note: Check the `disagg.log` to make sure the service is fully started before collecting performance numbers.
@@ -108,14 +108,14 @@ Note: Node 1 must be able to reach Node 0 over the network for the above service
 
 3\. Start workers (node 0)
 ```bash
-cd /workspace/examples/llm
+cd /workspace/examples/vllm_v0
 dynamo serve benchmarks.disagg_multinode:Frontend -f benchmarks/disagg_multinode.yaml 1> disagg_multinode.log 2>&1 &
 ```
 Note: Check the `disagg_multinode.log` to make sure the service is fully started before collecting performance numbers.
 
 4\. Start workers (node 1)
 ```bash
-cd /workspace/examples/llm
+cd /workspace/examples/vllm_v0
 dynamo serve components.prefill_worker:PrefillWorker -f benchmarks/disagg_multinode.yaml 1> prefill_multinode.log 2>&1 &
 ```
 Note: Check the `prefill_multinode.log` to make sure the service is fully started before collecting performance numbers.
@@ -160,7 +160,7 @@ Notes:
 3\. Use NGINX as load balancer
 ```bash
 apt update && apt install -y nginx
-cp /workspace/examples/llm/benchmarks/nginx.conf /etc/nginx/nginx.conf
+cp /workspace/examples/vllm_v0/benchmarks/nginx.conf /etc/nginx/nginx.conf
 service nginx restart
 ```
 Note: If benchmarking over 2 nodes, the `upstream` configuration will need to be updated to link to the `vllm serve` on the second node.
@@ -171,7 +171,7 @@ Collect the performance numbers as shown on the [Collecting Performance Numbers]
 
 Run the benchmarking script
 ```bash
-bash -x /workspace/examples/llm/benchmarks/perf.sh
+bash -x /workspace/examples/vllm_v0/benchmarks/perf.sh
 ```
 
 ## Future Roadmap

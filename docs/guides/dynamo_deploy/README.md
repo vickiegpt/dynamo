@@ -55,7 +55,7 @@ Users who need more control over their deployments can use the manual deployment
 1. **For Dynamo Cloud Platform**:
    - Follow the [Dynamo Cloud Platform Guide](dynamo_cloud.md)
    - Deploy a Hello World pipeline using the [Operator Deployment Guide](operator_deployment.md)
-   - Deploy a Dynamo LLM pipeline to Kubernetes [Deploy LLM Guide](../../examples/llm_deployment.md#deploy-to-kubernetes)
+   - Deploy a Dynamo LLM pipeline to Kubernetes [Deploy LLM Guide](../../examples/vllm_v0_deployment.md#deploy-to-kubernetes)
 
 2. **For Manual Deployment**:
    - Follow the [Manual Helm Deployment Guide](manual_helm_deployment.md)
@@ -64,4 +64,4 @@ Users who need more control over their deployments can use the manual deployment
 
 See the [Hello World example](../../examples/hello_world.md#deploying-to-and-running-the-example-in-kubernetes) for a complete walkthrough of deploying a simple inference graph.
 
-See the [LLM example](../../examples/llm_deployment.md#deploy-to-kubernetes) for a complete walkthrough of deploying a production-ready LLM inference pipeline to Kubernetes.
+See the [LLM example](../../examples/vllm_v0_deployment.md#deploy-to-kubernetes) for a complete walkthrough of deploying a production-ready LLM inference pipeline to Kubernetes.

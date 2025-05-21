@@ -33,8 +33,8 @@ Dive in: Examples
 
         Demonstrates the basic concepts of Dynamo by creating a simple multi-service pipeline.
 
-    .. grid-item-card:: :doc:`LLM Deployment </examples/llm_deployment>`
-        :link: /examples/llm_deployment
+    .. grid-item-card:: :doc:`LLM Deployment </examples/vllm_v0_deployment>`
+        :link: /examples/vllm_v0_deployment
         :link-type: doc
 
         Presents examples and reference implementations for deploying Large Language Models (LLMs) in various configurations.
@@ -126,7 +126,7 @@ and driven by a transparent, OSS (Open Source Software) first development approa
    :caption: Examples
 
    Hello World Example <examples/hello_world.md>
-   LLM Deployment Examples <examples/llm_deployment.md>
+   LLM Deployment Examples <examples/vllm_v0_deployment.md>
    Multinode Examples <examples/multinode.md>
    LLM Deployment Examples using TensorRT-LLM <examples/trtllm.md>
 

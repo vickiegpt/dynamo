@@ -91,7 +91,7 @@ class Router:
 
     # A dummy hit rate checking endpoint
     # The actual worker selection is based on custom cost function
-    # See details at examples/llm/components/kv_router.py
+    # See details at examples/vllm_v0/components/kv_router.py
     @endpoint()
     async def check_hit_rate(self, request_prompt: str) -> AsyncIterator[WorkerId]:
         max_id, max_hit_rate = self._cost_function(request_prompt)

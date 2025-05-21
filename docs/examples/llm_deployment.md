@@ -133,25 +133,25 @@ _Note_: For a non-dockerized deployment, first export `DYNAMO_HOME` to point to 
 
 #### Aggregated serving
 ```bash
-cd $DYNAMO_HOME/examples/llm
+cd $DYNAMO_HOME/examples/vllm_v0
 dynamo serve graphs.agg:Frontend -f ./configs/agg.yaml
 ```
 
 #### Aggregated serving with KV Routing
 ```bash
-cd $DYNAMO_HOME/examples/llm
+cd $DYNAMO_HOME/examples/vllm_v0
 dynamo serve graphs.agg_router:Frontend -f ./configs/agg_router.yaml
 ```
 
 #### Disaggregated serving
 ```bash
-cd $DYNAMO_HOME/examples/llm
+cd $DYNAMO_HOME/examples/vllm_v0
 dynamo serve graphs.disagg:Frontend -f ./configs/disagg.yaml
 ```
 
 #### Disaggregated serving with KV Routing
 ```bash
-cd $DYNAMO_HOME/examples/llm
+cd $DYNAMO_HOME/examples/vllm_v0
 dynamo serve graphs.disagg_router:Frontend -f ./configs/disagg_router.yaml
 ```
 
@@ -211,7 +211,7 @@ export DYNAMO_CLOUD=http://localhost:8080  # If using port-forward
 export DYNAMO_IMAGE=<your-registry>/<your-image-name>:<your-tag>
 
 # Build the service
-cd $PROJECT_ROOT/examples/llm
+cd $PROJECT_ROOT/examples/vllm_v0
 DYNAMO_TAG=$(dynamo build graphs.agg:Frontend | grep "Successfully built" |  awk '{ print $NF }' | sed 's/\.$//')
 
 # Deploy to Kubernetes

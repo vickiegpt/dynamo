@@ -68,7 +68,7 @@ python -m utils.profile_sla \
 
 The script will first detect the number of available GPUs on the current nodes (multi-node engine not supported yet). Then, it will profile the prefill and decode performance with different TP sizes. For prefill, since there is no in-flight batching (assume isl is long enough to saturate the GPU), the script directly measures the TTFT for a request with given isl without kv-reusing. For decode, since the ITL (or iteration time) is relevant with how many requests are in-flight, the script will measure the ITL under different number of in-flight requests. The range of the number of in-flight requests is from 1 to the maximum number of requests that the kv cache of the engine can hold. To measure the ITL without being affected by piggy-backed prefill requests, the script will enable kv-reuse and warm up the engine by issuing the same prompts before measuring the ITL. Since the kv cache is sufficient for all the requests, it can hold the kv cache of the pre-computed prompts and skip the prefill phase when measuring the ITL.
 
-After the profiling finishes, two plots will be generated in the `output-dir`. For example, here are the profiling results for `examples/llm/configs/disagg.yaml`:
+After the profiling finishes, two plots will be generated in the `output-dir`. For example, here are the profiling results for `examples/vllm_v0/configs/disagg.yaml`:
 
 ![Prefill Performance](images/h100_prefill_performance.png)
 ![Decode Performance](images/h100_decode_performance.png)
@@ -123,10 +123,10 @@ The planner accepts the following configuration options:
 
 Alternatively, you can run the planner as a standalone python process. The configuration options above can be directly passed in as CLI arguments.
 ```bash
-PYTHONPATH=/workspace/examples/llm python components/planner.py <arguments>
+PYTHONPATH=/workspace/examples/vllm_v0 python components/planner.py <arguments>
 
 # Example
-# PYTHONPATH=/workspace/examples/llm python components/planner.py --namespace=dynamo --served-model-name=vllm --no-operation --log-dir=log/planner
+# PYTHONPATH=/workspace/examples/vllm_v0 python components/planner.py --namespace=dynamo --served-model-name=vllm --no-operation --log-dir=log/planner
 ```
 
 

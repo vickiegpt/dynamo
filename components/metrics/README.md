@@ -65,13 +65,13 @@ metrics --component my_component --endpoint my_endpoint
 ### Real Worker
 
 To run a more realistic deployment to gathering metrics from,
-see the examples in [examples/llm](../../examples/llm).
+see the examples in [examples/vllm_v0](../../examples/vllm_v0).
 
 For example, for a VLLM + KV Routing based deployment that
 exposes statistics on an endpoint labeled
 `dynamo/VllmWorker/load_metrics`:
 ```bash
-cd deploy/examples/llm
+cd deploy/examples/vllm_v0
 dynamo serve <vllm kv routing example args>
 ```
 

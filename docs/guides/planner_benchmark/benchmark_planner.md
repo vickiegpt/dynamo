@@ -47,7 +47,7 @@ For other models and GPU SKUs, adjust the request rate ranges accordingly to mat
 To measure the performance of dynamo with planner, we start from a 1p1d deployment and set planner to make adjustments every 10 seconds:
 
 ```bash
-cd examples/llm
+cd examples/vllm_v0
 dynamo serve graphs.disagg:Frontend -f disagg_1p1d.yml
 
 # in terminal 2

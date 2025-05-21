@@ -83,7 +83,7 @@ A basic example to learn Dynamo deployment: [Hello World Example](../examples/he
 - Includes sample output showing the text flow between services
 
 ### LLM Examples
-Example for deploying LLM services: [LLM Example](../examples/llm/README.md#deploy-to-kubernetes)
+Example for deploying LLM services: [LLM Example](../examples/vllm_v0/README.md#deploy-to-kubernetes)
 - Demonstrates deploying and making inference requests against LLM models
 - Includes examples for both aggregated and disaggregated serving
 - Provides detailed deployment steps and testing instructions

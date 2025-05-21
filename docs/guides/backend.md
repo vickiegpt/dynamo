@@ -194,9 +194,9 @@ that does something like the following:
 - Forward responses back to client
 
 This advanced scenario of a separate
-[OpenAI Processor worker](https://github.com/ai-dynamo/dynamo/blob/main/examples/llm/components/processor.py)
+[OpenAI Processor worker](https://github.com/ai-dynamo/dynamo/blob/main/examples/vllm_v0/components/processor.py)
 is demonstrated in this
-[vLLM example](https://github.com/ai-dynamo/dynamo/tree/main/examples/llm).
+[vLLM example](https://github.com/ai-dynamo/dynamo/tree/main/examples/vllm_v0).
 
 For a more minimal example of deploying a pipeline of components with a custom
 API that your client can communicate with, see the
@@ -318,7 +318,7 @@ to a KV Router through the `KvMetricsAggregator`.
 These metrics can then be inputs to a cost function to determine which
 of the available worker's the request should be routed to.
 
-For a [python-based KV Router](../../examples/llm/components/kv_router.py)
+For a [python-based KV Router](../../examples/vllm_v0/components/kv_router.py)
 implementation, the router is like any other worker, and it can expose
 an endpoint that can do arbitrary things based on your use case.
 
@@ -538,7 +538,7 @@ The NIXL connector provides:
 - Efficient block-based KV cache transfers
 - Asynchronous transfer notifications
 
-For a complete implementation example using NIXL for disaggregated serving, see the [vLLM example](../examples/llm_deployment.md).
+For a complete implementation example using NIXL for disaggregated serving, see the [vLLM example](../examples/vllm_v0_deployment.md).
 
 #### Disaggregation in Dynamo
 

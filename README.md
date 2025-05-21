@@ -68,7 +68,7 @@ docker push <your-registry>/dynamo-base:latest-vllm
 ```
 
 Notes about builds for specific frameworks:
-- For specific details on the `--framework vllm` build, see [here](examples/llm/README.md).
+- For specific details on the `--framework vllm` build, see [here](examples/vllm/README.md).
 - For specific details on the `--framework tensorrtllm` build, see [here](examples/tensorrt_llm/README.md).
 
 After building, you can use this image by setting the `DYNAMO_IMAGE` environment variable to point to your built image:
@@ -122,7 +122,7 @@ Next serve a minimal configuration with an http server, basic
 round-robin router, and a single worker.
 
 ```bash
-cd examples/llm
+cd examples/vllm_v0
 dynamo serve graphs.agg:Frontend -f configs/agg.yaml
 ```
 
@@ -183,6 +183,6 @@ pip install ".[all]"
 
 # To test
 docker compose -f deploy/metrics/docker-compose.yml up -d
-cd examples/llm
+cd examples/vllm_v0
 dynamo serve graphs.agg:Frontend -f configs/agg.yaml
 ```

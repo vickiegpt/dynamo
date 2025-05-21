@@ -36,5 +36,5 @@ Dynamo CLI has the following 4 sub-commands.
 - :rocket: (Experimental) dynamo deploy: deploy to K8 with helm charts or custom operators
 - :cloud: (Experimental) dynamo cloud: interact with your dynamo cloud server
 
-For more detailed examples on serving LLMs with disaggregated serving, KV aware routing, etc,  please refer to [LLM deployment examples](https://github.com/ai-dynamo/dynamo/blob/main/examples/llm/README.md)
+For more detailed examples on serving LLMs with disaggregated serving, KV aware routing, etc,  please refer to [LLM deployment examples](https://github.com/ai-dynamo/dynamo/blob/main/examples/vllm_v0/README.md)
 

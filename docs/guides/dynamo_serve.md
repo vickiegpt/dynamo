@@ -56,7 +56,7 @@ Benefits of `depends()`:
 ### Dynamic composition with `.link()`
 
 ```python
-# From examples/llm/graphs/agg.py
+# From examples/vllm_v0/graphs/agg.py
 from components.frontend import Frontend
 from components.processor import Processor
 from components.worker import VllmWorker
@@ -83,7 +83,7 @@ Consider the following example.
 
 ### Guided Example
 
-The files referenced in this example can be found [here](https://github.com/ai-dynamo/dynamo/blob/main/examples/llm/components). You need 1 GPU minimum to run this example. This example can be run from the `examples/llm` directory.
+The files referenced in this example can be found [here](https://github.com/ai-dynamo/dynamo/blob/main/examples/vllm_v0/components). You need 1 GPU minimum to run this example. This example can be run from the `examples/vllm_v0` directory.
 
 This example walks through:
 1. [Defining your components](#define-your-components)
@@ -144,7 +144,7 @@ Frontend.link(Processor).link(VllmWorker)
 
 #### Define your configuration
 
-We provide [basic configurations](https://github.com/ai-dynamo/dynamo/blob/main/examples/llm/configs/agg.yaml) that you can change; you can also override them by passing in CLI flags to `dynamo serve`.
+We provide [basic configurations](https://github.com/ai-dynamo/dynamo/blob/main/examples/vllm_v0/configs/agg.yaml) that you can change; you can also override them by passing in CLI flags to `dynamo serve`.
 
 #### Serve your graph
 

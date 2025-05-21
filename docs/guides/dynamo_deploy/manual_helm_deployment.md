@@ -177,7 +177,7 @@ export DYNAMO_IMAGE=<dynamo_docker_image_name>
 
 # Example: export DYNAMO_IMAGE=nvcr.io/nvidian/nim-llm-dev/dynamo-base-worker:0.0.1
 # Example: ./deploy.sh nvcr.io/nvidian/nim-llm-dev my-namespace ../../../examples/hello_world/ hello_world:Frontend
-# Example: ./deploy.sh nvcr.io/nvidian/nim-llm-dev my-namespace ../../../examples/llm graphs.disagg_router:Frontend ../../../examples/llm/configs/disagg_router.yaml
+# Example: ./deploy.sh nvcr.io/nvidian/nim-llm-dev my-namespace ../../../examples/vllm_v0 graphs.disagg_router:Frontend ../../../examples/vllm_v0/configs/disagg_router.yaml
 ```
 
 This script handles:

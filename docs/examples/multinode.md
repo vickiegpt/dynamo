@@ -46,7 +46,7 @@ Frontend.link(Processor).link(Router).link(VllmWorker)
 **Step 4**: Start the frontend, processor, router, and VllmWorker on node 1.
 ```bash
 # node 1
-cd $DYNAMO_HOME/examples/llm
+cd $DYNAMO_HOME/examples/vllm_v0
 dynamo serve graphs.agg_router:Frontend -f ./configs/multinode-405b.yaml
 ```
 
@@ -58,7 +58,7 @@ Since we only want to start the `PrefillWorker` on node 2, you can simply run ju
 export NATS_SERVER = '<your-nats-server-address>' # note this should start with nats://...
 export ETCD_ENDPOINTS = '<your-etcd-endpoints-address>'
 
-cd $DYNAMO_HOME/examples/llm
+cd $DYNAMO_HOME/examples/vllm_v0
 dynamo serve components.prefill_worker:PrefillWorker -f ./configs/multinode-405b.yaml
 ```
 
@@ -68,7 +68,7 @@ dynamo serve components.prefill_worker:PrefillWorker -f ./configs/multinode-405b
 export NATS_SERVER = '<your-nats-server-address>' # note this should start with nats://...
 export ETCD_ENDPOINTS = '<your-etcd-endpoints-address>'
 
-cd $DYNAMO_HOME/examples/llm
+cd $DYNAMO_HOME/examples/vllm_v0
 dynamo serve components.prefill_worker:PrefillWorker -f ./configs/multinode-405b.yaml
 ```
 
@@ -79,7 +79,7 @@ This example can be extended to more nodes as well. For example, if you want to 
 export NATS_SERVER = '<your-nats-server-address>' # note this should start with nats://...
 export ETCD_ENDPOINTS = '<your-etcd-endpoints-address>'
 
-cd $DYNAMO_HOME/examples/llm
+cd $DYNAMO_HOME/examples/vllm_v0
 dynamo serve components.worker:VllmWorker -f ./configs/multinode-405b.yaml --service-name VllmWorker
 ```
 
@@ -161,11 +161,11 @@ ray status
 #  (no resource demands)
 ```
 
-**Step 2**: On the head node, follow [LLM deployment examples](https://github.com/ai-dynamo/dynamo/blob/main/examples/llm/README.md) to
+**Step 2**: On the head node, follow [LLM deployment examples](https://github.com/ai-dynamo/dynamo/blob/main/examples/vllm_v0/README.md) to
 setup dynamo deployment for aggregated serving, using the configuration file,
 `configs/multinode_agg_r1.yaml`, for DeepSeek-R1:
 ```bash
-cd $DYNAMO_HOME/examples/llm
+cd $DYNAMO_HOME/examples/vllm_v0
 dynamo serve graphs.agg:Frontend -f ./configs/multinode_agg_r1.yaml
 ```
 
@@ -222,7 +222,7 @@ requests to.
 export NATS_SERVER='nats://<nats-server-ip>:4222'
 export ETCD_ENDPOINTS='<etcd-endpoints-ip>:2379'
 
-cd $DYNAMO_HOME/examples/llm
+cd $DYNAMO_HOME/examples/vllm_v0
 dynamo serve graphs.agg:Frontend -f ./configs/mutinode_disagg_r1.yaml
 ```
 
@@ -232,7 +232,7 @@ For prefill:
 export NATS_SERVER='nats://<nats-server-ip>:4222'
 export ETCD_ENDPOINTS='<etcd-endpoints-ip>:2379'
 
-cd $DYNAMO_HOME/examples/llm
+cd $DYNAMO_HOME/examples/vllm_v0
 dynamo serve components.prefill_worker:PrefillWorker -f ./configs/mutinode_disagg_r1.yaml
 ```
 
