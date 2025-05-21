@@ -11,7 +11,7 @@ docker compose -f deploy/docker-compose.yml up --detach
 
 
 ```
-docker build -f tutorials/Dockerfile . -t dynamo:dev
+docker build -f tutorials/Dockerfile . -t dynamo:msbuild-dev
 ```
 
 ```
