@@ -179,6 +179,7 @@ class VllmWorker:
     @dynamo_endpoint()
     async def generate(self, request: vLLMMultimodalRequest):
         video_features = None
+        video_data_for_vllm = None
         if self.do_remote_prefill:
             if self.disaggregated_router is not None:
                 async with PrefillQueue.get_instance(
@@ -214,10 +215,14 @@ class VllmWorker:
                 )
 
             # The decode worker will pre-allocate the memory based on the prompt token length for the prefill worker to transfer the kv cache.
-            # As a workaround, here we manually insert some placeholder dummy tokens based on the embedding size
-            # so that decode worker can pre-allocate the memory with the correct size.
-            # The structure of the prompt will be like: "\nUSER: <image> <dummy_tokens>\n<user_prompt>\nASSISTANT:".
-            # Since the "<image>" token is included in the prompt, only need to insert (embedding_size - 1) dummy tokens after the image token.
+            # As a workaround, here we manually insert placeholder dummy tokens.
+            # The number of dummy tokens depends on the number of input frames and the embedding size per frame,
+            # ensuring the decode worker allocates sufficient memory.
+            # The structure of the prompt will be like: "\\nUSER: <image> <dummy_tokens>\\n<user_prompt>\\nASSISTANT:".
+            # The IMAGE_TOKEN_ID acts as a placeholder for all visual tokens from all frames.
+            # If self.embedding_size is the number of visual tokens *per frame*,
+            # the total number of visual tokens will be num_frames * self.embedding_size.
+            # We then need to insert (total_visual_tokens - 1) dummy tokens, as IMAGE_TOKEN_ID accounts for one position.
             IMAGE_TOKEN_ID = 32000
             DUMMY_TOKEN_ID = 0
             # Find the index of the image token in the prompt token ids
@@ -225,9 +230,20 @@ class VllmWorker:
                 IMAGE_TOKEN_ID
             )
             dummy_token_index = image_token_index + 1
+
+            num_frames = 8  # Number of frames for the video input
+            # self.embedding_size is the number of visual tokens per frame (e.g., number of patches from the vision tower)
+            total_visual_tokens = num_frames * self.embedding_size
+
+            # The IMAGE_TOKEN_ID itself accounts for one of these token positions in the prompt.
+            # So, the number of additional dummy tokens needed is total_visual_tokens - 1.
+            # We use max(0, ...) to ensure num_dummy_tokens is not negative,
+            # which could happen if total_visual_tokens was unexpectedly less than 1.
+            num_dummy_tokens = max(0, total_visual_tokens - 1)
+
             prompt_ids = (
                 request.engine_prompt["prompt_token_ids"][:dummy_token_index]
-                + [DUMMY_TOKEN_ID] * (self.embedding_size - 1)
+                + [DUMMY_TOKEN_ID] * num_dummy_tokens
                 + request.engine_prompt["prompt_token_ids"][dummy_token_index:]
             )
 
