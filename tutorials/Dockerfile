@@ -50,8 +50,8 @@ RUN if [ "$ARCH" = "arm64" ]; then \
 RUN uv pip install ai-dynamo[vllm]==0.2.0 genai-perf
 
 RUN huggingface-cli download deepseek-ai/DeepSeek-R1-Distill-Llama-8B
-RUN COPY ./examples examples/
-RUN COPY ./tutorials tutorials/
+COPY ./examples examples/
+COPY ./tutorials tutorials/
 
 ENTRYPOINT [ "/usr/bin/bash" ]
 CMD []
