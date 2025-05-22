@@ -152,7 +152,7 @@ FrameworkArgs:
 ```
 
 *   `encode-framework`: Set to `"onnx"` to use the ONNX Runtime-based encoder, or `"pytorch"` for the PyTorch-based one.
-*   `onnx-model-path`: (Required for `"onnx"` framework) Specifies the directory containing the converted ONNX models (e.g., `llava_vision_tower.onnx`, `llava_projector.onnx`).
+*   `onnx-model-path`: (Required for `"onnx"` framework) Specifies the directory containing the converted ONNX models (e.g., `llava_vision_tower.onnx`, `llava_projector.onnx`). For guidance on converting models to ONNX and optimizing with TensorRT, refer to the [NVIDIA TensorRT Quick Start Guide](https://docs.nvidia.com/deeplearning/tensorrt/latest/getting-started/quick-start-guide.html#ex-deploy-onnx).
 *   `hf-model-path`: (Required for `"onnx"` framework) Points to the original Hugging Face model directory (e.g., where `preprocessor_config.json` for LLaVA is located). This is used to extract image preprocessing parameters.
 
 The necessary dependencies for the ONNX-based encoder (`onnx`, `onnxruntime-gpu`) are included in `container/deps/requirements.txt`.
