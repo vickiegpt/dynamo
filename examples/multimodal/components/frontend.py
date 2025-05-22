@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 class Frontend:
     processor = depends(Processor)
 
-    @api()(name="v1/chat/completions")
+    @api(name="v1/chat/completions")
     async def generate(self, request: MultiModalRequest):
         async def content_generator():
             async for response in self.processor.generate(request.model_dump_json()):
