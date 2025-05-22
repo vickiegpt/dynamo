@@ -15,6 +15,7 @@
 
 import logging
 from io import BytesIO
+import base64
 from queue import Queue
 from typing import AsyncIterator
 
@@ -73,11 +74,10 @@ class VllmEncodeWorker:
     @endpoint()
     async def encode(self, request: EncodeRequest) -> AsyncIterator[EncodeResponse]:
         logger.debug(
-            f"Received encode request: {{ id: {request.request_id}, image_url: '{request.image_url}' }}."
+            f"Received encode request: {{ id: {request.request_id} }}."
         )
 
         request_id = request.request_id
-        image_url = request.image_url.lower()
 
         # The following steps encode the requested image and provided useful embeddings.
         # 1. Open the image from the provided URL.
@@ -90,26 +90,34 @@ class VllmEncodeWorker:
         # 8. Yield the encode response.
 
         # Either retrieve the image from the cache or download it and then cache it.
-        if request.image_url in self._image_cache:
-            image = self._image_cache[image_url]
-            logger.debug(
-                f"Image found in cache for request: {{ id: {request_id}, image_url: '{image_url}' }}."
-            )
-        else:
-            image = self.open_image(image_url)
-            logger.debug(
-                f"Downloading/opening image for request: {{ id: {request_id}, image_url: '{image_url}' }}."
-            )
-            # Cache the image for future use, and evict the oldest image if the cache is full.
-            if self._cache_queue.full():
-                oldest_image_url = self._cache_queue.get()
-                del self._image_cache[oldest_image_url]
 
-            self._image_cache[request.image_url] = image
-            self._cache_queue.put(request.image_url)
+        # Only cache for url images.
+        if request.image_url.startswith("data:image/"):
+            image = self.open_image(request.image_url)
+        elif request.image_url.startswith("http") or request.image_url.startswith("https"):
+            if request.image_url in self._image_cache:
+                image_url = request.image_url.lower()
+                image = self._image_cache[image_url]
+                logger.debug(
+                    f"Image found in cache for request: {{ id: {request_id} }}."
+                )
+            else:
+                image = self.open_image(request.image_url)
+                logger.debug(
+                    f"Downloading/opening image for request: {{ id: {request_id} }}."
+                )
+                # Cache the image for future use, and evict the oldest image if the cache is full.
+                if self._cache_queue.full():
+                    oldest_image_url = self._cache_queue.get()
+                    del self._image_cache[oldest_image_url]
+
+                self._image_cache[request.image_url] = image
+                self._cache_queue.put(request.image_url)
+        else:
+            raise ValueError(f"Invalid image source: {request.image_url}")
 
         logger.debug(
-            f"Processing image for request: {{ id: {request_id}, image_url: '{image_url}' }}"
+            f"Processing image for request: {{ id: {request_id} }}"
         )
         image_embeds = self.image_processor(images=image, return_tensors="pt")
 
@@ -129,7 +137,7 @@ class VllmEncodeWorker:
 
             if request.serialized_request is None:
                 logger.error(
-                    f"Request serialized_request is None for request: {{ id: {request_id}, image_url: '{image_url}' }}."
+                    f"Request serialized_request is None for request: {{ id: {request_id} }}."
                 )
 
             # Create a descriptor for the embeddings, this will register the memory with the connector (and the NIXL runtime).
@@ -157,15 +165,26 @@ class VllmEncodeWorker:
         await self._connector.initialize()
         logger.info("Startup completed.")
 
-    def open_image(self, image: str) -> Image.Image:
+    def open_image(self, image_url: str) -> Image.Image:
         # TODO: Have a seperate field for url and non url - and avoid auto detection
         try:
-            # Acquire the image and convert it to the format (RGB) the image processor model expects.
-            if image.startswith("http") or image.startswith("https"):
-                response = requests.get(image)
-                image_data = Image.open(BytesIO(response.content)).convert("RGB")
-            else:
-                image_data = Image.open(image).convert("RGB")
+            if image_url.startswith("data:image/"):
+                # Remove the data URL prefix to get just the base64 string
+                base64_data = image_url.split(",", 1)[1]
+                try:
+                    image_bytes = base64.standard_b64decode(base64_data)
+                    image_data = BytesIO(image_bytes)
+                except base64.binascii.Error as e:
+                    raise ValueError(f"Invalid base64 encoding: {e}")
+            elif image_url.startswith("http") or image_url.startswith("https"):
+                response = requests.get(image_url)
+                response.raise_for_status()  # Raise an exception for bad status codes
+
+                if not response.content:
+                    raise ValueError("Empty response content from image URL")
+                image_data = BytesIO(response.content)
+
+            image_data = Image.open(image_data).convert("RGB")
 
             return image_data
         except Exception as e:
