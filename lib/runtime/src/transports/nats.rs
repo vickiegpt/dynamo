@@ -390,6 +390,7 @@ impl NatsQueue {
                 let stream_config = jetstream::stream::Config {
                     name: self.stream_name.clone(),
                     subjects: vec![self.subject.clone()],
+                    max_age: time::Duration::from_secs(60 * 10), // 10 min
                     ..Default::default()
                 };
                 client.jetstream().create_stream(stream_config).await?;
@@ -440,13 +441,14 @@ impl NatsQueue {
     }
 
     /// Dequeue and return a task as raw bytes
-    pub async fn dequeue_task(&mut self) -> Result<Option<Bytes>> {
+    pub async fn dequeue_task(&mut self, timeout: Option<time::Duration>) -> Result<Option<Bytes>> {
         self.ensure_connection().await?;
 
         if let Some(subscriber) = &self.subscriber {
+            let timeout_duration = timeout.unwrap_or(self.dequeue_timeout);
             let mut batch = subscriber
                 .fetch()
-                .expires(self.dequeue_timeout)
+                .expires(timeout_duration)
                 .max_messages(1)
                 .messages()
                 .await?;

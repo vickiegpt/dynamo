@@ -13,7 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import AsyncGenerator, AsyncIterator, Callable, Dict, List, Optional, Union
+from typing import (
+    Any,
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Union,
+)
 
 def log_message(level: str, message: str, module: str, file: str, line: int) -> None:
     """
@@ -49,31 +58,11 @@ class DistributedRuntime:
         """
         ...
 
-class PyLease:
-    """
-    A lease object
-    """
-
-    def id(self) -> int:
+    def shutdown(self) -> None:
         """
-        Return the id of the lease
-        Refer to https://etcd.io/docs/v3.4/learning/api/ for examples on how to use the lease id
+        Shutdown the runtime by triggering the cancellation token
         """
         ...
-
-    def revoke(self) -> None:
-        """
-        Revoke the lease by triggering the cancellation token
-        This will invalidate the kv pairs associated with this lease
-        """
-        ...
-
-    def is_valid(self) -> bool:
-        """
-        Check if the lease is still valid (not revoked)
-        """
-        ...
-
 class EtcdClient:
     """
     Etcd is used for discovery in the DistributedRuntime
@@ -188,6 +177,18 @@ class EtcdKvCache:
         """
         ...
 
+    async def delete(self, key: str) -> None:
+        """
+        Delete a key-value pair from the cache and etcd.
+        """
+        ...
+
+    async def clear_all(self) -> None:
+        """
+        Delete all key-value pairs from the cache and etcd.
+        """
+        ...
+
 class Namespace:
     """
     A namespace is a collection of components
@@ -217,14 +218,6 @@ class Component:
     def endpoint(self, name: str) -> Endpoint:
         """
         Create an endpoint
-        """
-        ...
-
-    def create_service_with_custom_lease(self, ttl: int) -> PyLease:
-        """
-        Create a service with a custom lease
-        The lease needs to be tied to the endpoint of this services when creating the endpoints later
-        TODO: tie the lease to the service instead of the endpoint
         """
         ...
 
@@ -614,3 +607,195 @@ async def register_llm(model_type: ModelType, endpoint: Endpoint, model_path: st
     """Attach the model at path to the given endpoint, and advertise it as model_type"""
     ...
 
+class NatsQueue:
+    """
+    A queue implementation using NATS JetStream for task distribution
+    """
+
+    def __init__(self, stream_name: str, nats_server: str, dequeue_timeout: float) -> None:
+        """
+        Create a new NatsQueue instance.
+
+        Args:
+            stream_name: Name of the NATS JetStream stream
+            nats_server: URL of the NATS server
+            dequeue_timeout: Default timeout in seconds for dequeue operations
+        """
+        ...
+
+    async def connect(self) -> None:
+        """
+        Connect to the NATS server
+        """
+        ...
+
+    async def ensure_connection(self) -> None:
+        """
+        Ensure connection to the NATS server, connecting if not already connected
+        """
+        ...
+
+    async def close(self) -> None:
+        """
+        Close the connection to the NATS server
+        """
+        ...
+
+    async def enqueue_task(self, task_data: bytes) -> None:
+        """
+        Enqueue a task to the NATS JetStream
+
+        Args:
+            task_data: The task data as bytes
+        """
+        ...
+
+    async def dequeue_task(self, timeout: Optional[float] = None) -> Optional[bytes]:
+        """
+        Dequeue a task from the NATS JetStream
+
+        Args:
+            timeout: Optional timeout in seconds for this specific dequeue operation.
+                    If None, uses the default timeout specified during initialization.
+
+        Returns:
+            The task data as bytes if available, None if no task is available
+        """
+        ...
+
+    async def get_queue_size(self) -> int:
+        """
+        Get the current size of the queue
+
+        Returns:
+            The number of messages in the queue
+        """
+        ...
+
+class Block:
+    """
+    A KV cache block
+    """
+
+    ...
+
+    def __dlpack__(self, stream: Optional[Any] = None, max_version: Optional[Any] = None, dl_device: Optional[Any] = None, copy: Optional[bool] = None) -> Any:
+        """
+        Get a dlpack capsule from the block
+        """
+        ...
+
+    def __dlpack_device__(self) -> Any:
+        """
+        Get the dlpack device of the block
+        """
+        ...
+
+class BlockList:
+    """
+    A list of KV cache blocks
+    """
+
+    ...
+
+    def __len__(self) -> int:
+        """
+        Get the number of blocks in the list
+        """
+        ...
+
+    def __getitem__(self, index: int) -> Block:
+        """
+        Get a block by index
+        """
+        ...
+
+    def __iter__(self) -> 'BlockList':
+        """
+        Get an iterator over the blocks
+        """
+        ...
+
+    def __next__(self) -> Block:
+        """
+        Get the next block in the iterator
+        """
+        ...
+
+    def to_list(self) -> List[Block]:
+        """
+        Get a list of blocks
+        """
+        ...
+
+class BlockManager:
+    """
+    A KV cache block manager
+    """
+
+    def __init__(
+        self,
+        worker_id: int,
+        num_layer: int,
+        page_size: int,
+        inner_dim: int,
+        dtype: Optional[str] = None,
+        host_num_blocks: Optional[int] = None,
+        device_num_blocks: Optional[int] = None,
+        device_id: int = 0
+    ) -> None:
+        """
+        Create a `BlockManager` object
+
+        Parameters:
+        -----------
+        worker_id: int
+            The worker ID for this block manager
+        num_layer: int
+            Number of layers in the model
+        page_size: int
+            Page size for blocks
+        inner_dim: int
+            Inner dimension size
+        dtype: Optional[str]
+            Data type (e.g., 'fp16', 'bf16', 'fp32'), defaults to 'fp16' if None
+        host_num_blocks: Optional[int]
+            Number of host blocks to allocate, None means no host blocks
+        device_num_blocks: Optional[int]
+            Number of device blocks to allocate, None means no device blocks
+        device_id: int
+            CUDA device ID, defaults to 0
+        """
+        ...
+
+    def allocate_host_blocks_blocking(self, count: int) -> BlockList:
+        """
+        Allocate a list of host blocks (blocking call)
+
+        Parameters:
+        -----------
+        count: int
+            Number of blocks to allocate
+
+        Returns:
+        --------
+        BlockList
+            List of allocated blocks
+        """
+        ...
+
+    def allocate_device_blocks_blocking(self, count: int) -> BlockList:
+        """
+        Allocate a list of device blocks (blocking call)
+
+        Parameters:
+        -----------
+        count: int
+            Number of blocks to allocate
+
+        Returns:
+        --------
+        BlockList
+            List of allocated blocks
+        """
+        ...
