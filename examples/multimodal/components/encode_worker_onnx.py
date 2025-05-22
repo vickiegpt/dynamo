@@ -29,7 +29,7 @@ from transformers import (
 )
 from utils.protocol import EncodeRequest, EncodeResponse
 
-from dynamo.sdk import dynamo_endpoint, service
+from dynamo.sdk import endpoint, service
 from dynamo.sdk.lib.config import ServiceConfig
 
 logger = logging.getLogger(__name__)
@@ -38,21 +38,18 @@ logger = logging.getLogger(__name__)
 def load_image(image_path_or_url: str) -> Image.Image:
     """Loads an image from a URL or local file path."""
     try:
-        if image_path_or_url.startswith("http"):
+        if image_path_or_url.startswith("http") or image_path_or_url.startswith(
+            "https"
+        ):
             response = requests.get(image_path_or_url)
             response.raise_for_status()
             image = Image.open(BytesIO(response.content)).convert("RGB")
-            logger.debug(f"Loaded image from URL: {image_path_or_url}")
         else:
-            if not os.path.exists(image_path_or_url):
-                logger.error(f"Local image not found: {image_path_or_url}")
-                raise FileNotFoundError(f"Image not found at {image_path_or_url}")
             image = Image.open(image_path_or_url).convert("RGB")
-            logger.debug(f"Loaded image from path: {image_path_or_url}")
-        return image
     except Exception as e:
-        logger.error(f"Error loading image '{image_path_or_url}': {e}")
+        logger.error(f"Error opening image: {e}")
         raise e
+    return image
 
 
 def get_preprocessing_params(model_path: str, device_str: str):
@@ -81,7 +78,7 @@ def get_preprocessing_params(model_path: str, device_str: str):
         logger.error(
             f"Failed to load processor or extract params from {model_path}: {e}"
         )
-        raise RuntimeError(f"Could not initialize preprocessing parameters: {e}")
+        raise RuntimeError(f"Could not initialize preprocessing parameters: {e}") from e
 
 
 def preprocess_image(image: Image.Image, params: dict) -> np.ndarray:
@@ -210,7 +207,8 @@ class EncodeWorker:
                 logger.error(
                     f"Failed to create TensorRT cache directory {self.trt_cache_path}: {e}"
                 )
-                # Decide how to handle this - maybe fall back to CUDA? For now, log and continue.
+                # Decide how to handle this - maybe fall back to CUDA? For now raise an error
+                raise
 
         providers.extend(
             [
@@ -290,7 +288,7 @@ class EncodeWorker:
                 f"Fatal error loading ONNX models or getting metadata during initialization: {e}",
                 exc_info=True,
             )
-            raise RuntimeError(f"Failed to initialize ONNX sessions: {e}")
+            raise RuntimeError(f"Failed to initialize ONNX sessions: {e}") from e
 
     def encode_image_onnx(self, image_path_or_url: str) -> np.ndarray:
         """Loads image, preprocesses, and runs ONNX inference using IOBinding."""
@@ -405,7 +403,7 @@ class EncodeWorker:
             )
             raise e
 
-    @dynamo_endpoint()
+    @endpoint()
     async def encode(self, request: EncodeRequest) -> AsyncIterator[EncodeResponse]:
         """Dynamo endpoint to handle encoding requests using ONNX with IOBinding."""
         logger.info(f"Received IOBinding encode request for image: {request.image_url}")
