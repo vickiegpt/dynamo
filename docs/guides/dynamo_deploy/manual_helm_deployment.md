@@ -100,7 +100,7 @@ helm install --namespace ${NAMESPACE} ${RELEASE_NAME}-nats nats/nats \
 ```bash
 # Install etcd using Bitnami chart
 helm install --namespace ${NAMESPACE} ${RELEASE_NAME}-etcd \
-    oci://registry-1.docker.io/bitnamicharts/etcd \
+    oci://dockerhub.nvidia.com/bitnamicharts/etcd \
     --values etcd-values.yaml
 ```
 
