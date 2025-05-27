@@ -13,16 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+import base64
 import logging
 from io import BytesIO
-import base64
 from queue import Queue
-from typing import AsyncIterator
-import asyncio
+from typing import AsyncIterator, Optional
 
 import connect
 import httpx
-import requests
 import torch
 from PIL import Image
 from transformers import AutoImageProcessor, LlavaForConditionalGeneration
@@ -78,13 +77,13 @@ class VllmEncodeWorker:
 
     async def load_image(self, image_url: str) -> Image.Image:
         """Load and validate an image from a URL or base64 string.
-        
+
         Args:
             image_url: URL or base64 encoded image data
-            
+
         Returns:
             PIL.Image.Image: Loaded and validated image
-            
+
         Raises:
             ValueError: If image source is invalid or image loading fails
             httpx.HTTPError: If HTTP request fails
@@ -101,33 +100,35 @@ class VllmEncodeWorker:
             elif image_url.startswith(("http://", "https://")):
                 if not self._http_client:
                     raise RuntimeError("HTTP client not initialized")
-                    
+
                 response = await self._http_client.get(image_url)
                 response.raise_for_status()
 
                 if not response.content:
                     raise ValueError("Empty response content from image URL")
-                    
+
                 image_data = BytesIO(response.content)
             else:
                 raise ValueError(f"Invalid image source: {image_url}")
 
             # PIL is sync, so offload to a thread to avoid blocking the event loop
             image = await asyncio.to_thread(Image.open, image_data)
-            
+
             # Validate image format and convert to RGB
-            if image.format not in ('JPEG', 'PNG', 'WEBP'):
+            if image.format not in ("JPEG", "PNG", "WEBP"):
                 raise ValueError(f"Unsupported image format: {image.format}")
-                
+
             image = image.convert("RGB")
-            
+
             # Validate image dimensions
             max_dimension = 2048  # Maximum allowed dimension
             if max(image.size) > max_dimension:
-                raise ValueError(f"Image dimension {max(image.size)} exceeds maximum allowed dimension of {max_dimension}")
-                
+                raise ValueError(
+                    f"Image dimension {max(image.size)} exceeds maximum allowed dimension of {max_dimension}"
+                )
+
             return image
-            
+
         except httpx.HTTPError as e:
             logger.error(f"HTTP error loading image: {e}")
             raise
@@ -137,9 +138,7 @@ class VllmEncodeWorker:
 
     @endpoint()
     async def encode(self, request: EncodeRequest) -> AsyncIterator[EncodeResponse]:
-        logger.debug(
-            f"Received encode request: {{ id: {request.request_id} }}."
-        )
+        logger.debug(f"Received encode request: {{ id: {request.request_id} }}.")
 
         request_id = request.request_id
 
@@ -181,9 +180,7 @@ class VllmEncodeWorker:
             else:
                 raise ValueError(f"Invalid image source: {request.image_url}")
 
-            logger.debug(
-                f"Processing image for request: {{ id: {request_id} }}"
-            )
+            logger.debug(f"Processing image for request: {{ id: {request_id} }}")
             image_embeds = self.image_processor(images=image, return_tensors="pt")
 
             with torch.no_grad():

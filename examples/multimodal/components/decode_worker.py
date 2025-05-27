@@ -197,9 +197,7 @@ class VllmDecodeWorker:
     async def generate(self, request: vLLMMultimodalRequest):
         request_id = request.request_id
         image_url = request.image_url
-        logger.info(
-            f"Received multimodal request {{ id: {request_id} }}."
-        )
+        logger.info(f"Received multimodal request {{ id: {request_id} }}.")
         embeddings = None
         if self.do_remote_prefill:
             logger.debug(
