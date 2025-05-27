@@ -15,6 +15,7 @@
 
 import asyncio
 import base64
+import binascii
 import logging
 from io import BytesIO
 from queue import Queue
@@ -95,7 +96,7 @@ class VllmEncodeWorker:
                 try:
                     image_bytes = base64.b64decode(base64_data)
                     image_data = BytesIO(image_bytes)
-                except base64.binascii.Error as e:
+                except binascii.Error as e:
                     raise ValueError(f"Invalid base64 encoding: {e}")
             elif image_url.startswith(("http://", "https://")):
                 if not self._http_client:
