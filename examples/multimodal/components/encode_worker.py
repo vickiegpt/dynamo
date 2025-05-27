@@ -19,13 +19,13 @@ import binascii
 import logging
 from io import BytesIO
 from queue import Queue
-from typing import AsyncIterator, Optional, Union
-from urllib.parse import urlparse, parse_qs
+from typing import AsyncIterator, Optional
+from urllib.parse import urlparse
 
 import connect
 import httpx
 import torch
-from PIL import Image, ImageFile
+from PIL import Image
 from transformers import AutoImageProcessor, LlavaForConditionalGeneration
 from utils.protocol import EncodeRequest, EncodeResponse
 from utils.vllm import parse_vllm_args
@@ -124,23 +124,23 @@ class VllmEncodeWorker:
         """
         try:
             parsed_url = urlparse(image_url)
-            
+
             if parsed_url.scheme == "data":
                 # Parse data URL format: data:[<media type>][;base64],<data>
                 if not parsed_url.path.startswith("image/"):
                     raise ValueError("Data URL must be an image type")
-                    
+
                 # Split the path into media type and data
                 media_type, data = parsed_url.path.split(",", 1)
                 if ";base64" not in media_type:
                     raise ValueError("Data URL must be base64 encoded")
-                    
+
                 try:
                     image_bytes = base64.b64decode(data)
                     image_data = BytesIO(image_bytes)
                 except binascii.Error as e:
                     raise ValueError(f"Invalid base64 encoding: {e}")
-                    
+
             elif parsed_url.scheme in ("http", "https"):
                 if not self._http_client:
                     raise RuntimeError("HTTP client not initialized")
