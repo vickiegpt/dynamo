@@ -78,50 +78,15 @@ class VllmEncodeWorker:
         self._http_timeout = 30.0
 
     async def load_image(self, image_url: str) -> Image.Image:
-        """Load and validate an image from a URL or base64 string.
+        parsed_url = urlparse(image_url)
 
-        Args:
-            image_url: URL or base64 encoded image data
+        # For HTTP(S) URLs, check cache first
+        if parsed_url.scheme in ("http", "https"):
+            image_url_lower = image_url.lower()
+            if image_url_lower in self._image_cache:
+                logger.debug(f"Image found in cache for URL: {image_url}")
+                return self._image_cache[image_url_lower]
 
-        Returns:
-            PIL.Image.Image: Loaded and validated image
-
-        Raises:
-            ValueError: If image source is invalid or image loading fails
-            httpx.HTTPError: If HTTP request fails
-        """
-        # For non-URL images, just load directly
-        if not image_url.startswith(("http://", "https://")):
-            return await self._load_and_validate_image(image_url)
-
-        # For URL images, check cache first
-        image_url_lower = image_url.lower()
-        if image_url_lower in self._image_cache:
-            logger.debug(f"Image found in cache for URL: {image_url}")
-            return self._image_cache[image_url_lower]
-
-        # Load the image if not in cache
-        logger.debug(f"Downloading/opening image for URL: {image_url}")
-        image = await self._load_and_validate_image(image_url)
-
-        # Cache the image for future use, and evict the oldest image if the cache is full
-        if self._cache_queue.full():
-            oldest_image_url = self._cache_queue.get()
-            del self._image_cache[oldest_image_url]
-
-        self._image_cache[image_url_lower] = image
-        self._cache_queue.put(image_url_lower)
-        return image
-
-    async def _load_and_validate_image(self, image_url: str) -> Image.Image:
-        """Internal method to load and validate an image without caching.
-
-        Args:
-            image_url: URL or base64 encoded image data
-
-        Returns:
-            PIL.Image.Image: Loaded and validated image
-        """
         try:
             parsed_url = urlparse(image_url)
 
@@ -140,7 +105,6 @@ class VllmEncodeWorker:
                     image_data = BytesIO(image_bytes)
                 except binascii.Error as e:
                     raise ValueError(f"Invalid base64 encoding: {e}")
-
             elif parsed_url.scheme in ("http", "https"):
                 if not self._http_client:
                     raise RuntimeError("HTTP client not initialized")
@@ -162,14 +126,18 @@ class VllmEncodeWorker:
             if image.format not in ("JPEG", "PNG", "WEBP"):
                 raise ValueError(f"Unsupported image format: {image.format}")
 
-            image = image.convert("RGB")
+            image_converted = image.convert("RGB")
 
-            # Validate image dimensions
-            max_dimension = 2048  # Maximum allowed dimension
-            if max(image.size) > max_dimension:
-                raise ValueError(
-                    f"Image dimension {max(image.size)} exceeds maximum allowed dimension of {max_dimension}"
-                )
+            # Cache HTTP(S) URLs
+            if parsed_url.scheme in ("http", "https"):
+                image_url_lower = image_url.lower()
+                # Cache the image for future use, and evict the oldest image if the cache is full
+                if self._cache_queue.full():
+                    oldest_image_url = self._cache_queue.get()
+                    del self._image_cache[oldest_image_url]
+
+                self._image_cache[image_url_lower] = image_converted
+                self._cache_queue.put(image_url_lower)
 
             return image
 
@@ -197,7 +165,6 @@ class VllmEncodeWorker:
         # 8. Yield the encode response.
 
         try:
-            # Load the image (caching is now handled in load_image)
             image = await self.load_image(request.image_url)
 
             logger.debug(f"Processing image for request: {{ id: {request_id} }}")
