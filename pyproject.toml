@@ -67,7 +67,7 @@ vllm = [
 ]
 
 sglang = [
-    "sglang[all]@git+https://github.com/sgl-project/sglang@4d643f6c7a291c86de64a9e52eca526b2d99775d#subdirectory=python"
+    "sglang[all]@git+https://github.com/sgl-project/sglang@e806f708c954020bda7d1cc98035a44fd6a4eb96#subdirectory=python"
 ]
 
 [project.scripts]

@@ -136,9 +136,9 @@ RUN if [ "$ARCH" = "arm64" ]; then \
     fi
 
 # Install sglang
-# TODO: NIXL transfer is currently broken as of https://github.com/sgl-project/sglang/commit/7513558074adc4c4015b68e2ae7cf719d3401d5d
-# Once this is fixed we will have to install from that commit until a new post is released
-ARG SGLANG_COMMIT="4d643f6c7a291c86de64a9e52eca526b2d99775d"
+# Once either 0.4.6post5 or 0.4.7 is released, we can switch back to using the published version
+# This commit references a fix for DP attention and NIXL https://github.com/sgl-project/sglang/pull/6473
+ARG SGLANG_COMMIT="e806f708c954020bda7d1cc98035a44fd6a4eb96"
 RUN --mount=type=cache,target=/root/.cache/uv \
     git clone https://github.com/sgl-project/sglang.git && \
     cd sglang && \
