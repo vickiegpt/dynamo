@@ -19,12 +19,13 @@ import binascii
 import logging
 from io import BytesIO
 from queue import Queue
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Optional, Union
+from urllib.parse import urlparse, parse_qs
 
 import connect
 import httpx
 import torch
-from PIL import Image
+from PIL import Image, ImageFile
 from transformers import AutoImageProcessor, LlavaForConditionalGeneration
 from utils.protocol import EncodeRequest, EncodeResponse
 from utils.vllm import parse_vllm_args
@@ -89,16 +90,58 @@ class VllmEncodeWorker:
             ValueError: If image source is invalid or image loading fails
             httpx.HTTPError: If HTTP request fails
         """
+        # For non-URL images, just load directly
+        if not image_url.startswith(("http://", "https://")):
+            return await self._load_and_validate_image(image_url)
+
+        # For URL images, check cache first
+        image_url_lower = image_url.lower()
+        if image_url_lower in self._image_cache:
+            logger.debug(f"Image found in cache for URL: {image_url}")
+            return self._image_cache[image_url_lower]
+
+        # Load the image if not in cache
+        logger.debug(f"Downloading/opening image for URL: {image_url}")
+        image = await self._load_and_validate_image(image_url)
+
+        # Cache the image for future use, and evict the oldest image if the cache is full
+        if self._cache_queue.full():
+            oldest_image_url = self._cache_queue.get()
+            del self._image_cache[oldest_image_url]
+
+        self._image_cache[image_url_lower] = image
+        self._cache_queue.put(image_url_lower)
+        return image
+
+    async def _load_and_validate_image(self, image_url: str) -> Image.Image:
+        """Internal method to load and validate an image without caching.
+
+        Args:
+            image_url: URL or base64 encoded image data
+
+        Returns:
+            PIL.Image.Image: Loaded and validated image
+        """
         try:
-            if image_url.startswith("data:image/"):
-                # Remove the data URL prefix to get just the base64 string
-                base64_data = image_url.split(",", 1)[1]
+            parsed_url = urlparse(image_url)
+            
+            if parsed_url.scheme == "data":
+                # Parse data URL format: data:[<media type>][;base64],<data>
+                if not parsed_url.path.startswith("image/"):
+                    raise ValueError("Data URL must be an image type")
+                    
+                # Split the path into media type and data
+                media_type, data = parsed_url.path.split(",", 1)
+                if ";base64" not in media_type:
+                    raise ValueError("Data URL must be base64 encoded")
+                    
                 try:
-                    image_bytes = base64.b64decode(base64_data)
+                    image_bytes = base64.b64decode(data)
                     image_data = BytesIO(image_bytes)
                 except binascii.Error as e:
                     raise ValueError(f"Invalid base64 encoding: {e}")
-            elif image_url.startswith(("http://", "https://")):
+                    
+            elif parsed_url.scheme in ("http", "https"):
                 if not self._http_client:
                     raise RuntimeError("HTTP client not initialized")
 
@@ -110,7 +153,7 @@ class VllmEncodeWorker:
 
                 image_data = BytesIO(response.content)
             else:
-                raise ValueError(f"Invalid image source: {image_url}")
+                raise ValueError(f"Invalid image source scheme: {parsed_url.scheme}")
 
             # PIL is sync, so offload to a thread to avoid blocking the event loop
             image = await asyncio.to_thread(Image.open, image_data)
@@ -153,33 +196,9 @@ class VllmEncodeWorker:
         # 7. Await for the write operation to complete.
         # 8. Yield the encode response.
 
-        # Either retrieve the image from the cache or download it and then cache it.
-
-        # Only cache for url images.
         try:
-            if request.image_url.startswith("data:image/"):
-                image = await self.load_image(request.image_url)
-            elif request.image_url.startswith(("http://", "https://")):
-                image_url = request.image_url.lower()
-                if image_url in self._image_cache:
-                    image = self._image_cache[image_url]
-                    logger.debug(
-                        f"Image found in cache for request: {{ id: {request_id} }}."
-                    )
-                else:
-                    image = await self.load_image(request.image_url)
-                    logger.debug(
-                        f"Downloading/opening image for request: {{ id: {request_id} }}."
-                    )
-                    # Cache the image for future use, and evict the oldest image if the cache is full.
-                    if self._cache_queue.full():
-                        oldest_image_url = self._cache_queue.get()
-                        del self._image_cache[oldest_image_url]
-
-                    self._image_cache[image_url] = image
-                    self._cache_queue.put(image_url)
-            else:
-                raise ValueError(f"Invalid image source: {request.image_url}")
+            # Load the image (caching is now handled in load_image)
+            image = await self.load_image(request.image_url)
 
             logger.debug(f"Processing image for request: {{ id: {request_id} }}")
             image_embeds = self.image_processor(images=image, return_tensors="pt")
