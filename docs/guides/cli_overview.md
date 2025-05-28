@@ -89,7 +89,7 @@ dynamo build hello_world:Frontend
 
 ### `deploy`
 
-The `deploy` commmand creates a dynamo graph on Dynamo Cloud using parameters at the prompt or using a YAML configuration file. For details, see [Deploying Inference Graphs to Kubernetes](dynamo_deploy/README.md).
+The `deploy` command creates a dynamo graph on Dynamo Cloud using parameters at the prompt or using a YAML configuration file. For details, see [Deploying Inference Graphs to Kubernetes](dynamo_deploy/README.md).
 
 **Usage**
 ```bash

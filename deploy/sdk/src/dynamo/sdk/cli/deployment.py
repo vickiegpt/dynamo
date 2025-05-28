@@ -256,7 +256,7 @@ def create(
     envs: t.Optional[t.List[str]] = typer.Option(
         None,
         "--env",
-        help="Environment variable(s) to set (format: KEY=VALUE). Note: These environment variables will be set on ALL services in your Dynamo dynamograph package.",
+        help="Environment variable(s) to set (format: KEY=VALUE). Note: These environment variables will be set on ALL services in your dynamograph package.",
     ),
     target: str = typer.Option(
         DeploymentTargetType.KUBERNETES.value,
@@ -386,7 +386,7 @@ def update(
     envs: t.Optional[t.List[str]] = typer.Option(
         None,
         "--env",
-        help="Environment variable(s) to set (format: KEY=VALUE). Note: These environment variables will be set on ALL services in your Dynamo dynamograph package.",
+        help="Environment variable(s) to set (format: KEY=VALUE). Note: These environment variables will be set on ALL services in your dynamograph package.",
     ),
     endpoint: str = typer.Option(
         ..., "--endpoint", "-e", help="Dynamo Cloud endpoint", envvar="DYNAMO_CLOUD"
