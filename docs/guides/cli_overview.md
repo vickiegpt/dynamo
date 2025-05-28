@@ -23,7 +23,7 @@ The Dynamo CLI lets you:
 - [`run`](#run) - quickly chat with a model
 - [`serve`](#serve) - run a set of services locally (via `depends()` or `.link()`)
 - [`build`](#build) - create a dynamo graph package of your services (called a `bento`)
-- [`deploy`](#deploy) - create a dynamo graph package on Dynamo Cloud
+- [`deploy`](#deploy) - create a dynamo graph on Dynamo Cloud
 
 ## Commands
 

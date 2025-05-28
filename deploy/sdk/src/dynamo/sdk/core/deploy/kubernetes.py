@@ -45,12 +45,12 @@ class KubernetesDeploymentManager(DeploymentManager):
         self.namespace = "default"
 
     def _upload_dynamograph_package(
-        self, dynamo_graph_package: str, entry_service: Service, **kwargs
+        self, dynamograph_package: str, entry_service: Service, **kwargs
     ) -> None:
         """Upload the entire graph as a single component/version, with a manifest of all services."""
         session = self.session
         endpoint = self.endpoint
-        dynamo_graph_name, dynamo_graph_version = dynamo_graph_package.split(":")
+        dynamo_graph_name, dynamo_graph_version = dynamograph_package.split(":")
 
         # Check if component exists before POST
         comp_url = f"{endpoint}/api/v1/dynamo_components"
@@ -92,7 +92,7 @@ class KubernetesDeploymentManager(DeploymentManager):
             }
             ver_payload = {
                 "name": entry_service.name,
-                "description": f"Auto-registered version for {dynamo_graph_package}",
+                "description": f"Auto-registered version for {dynamograph_package}",
                 "resource_type": "dynamo_component_version",
                 "version": entry_service.version,
                 "manifest": manifest,
@@ -122,7 +122,7 @@ class KubernetesDeploymentManager(DeploymentManager):
         """Create a new deployment. Ensures all components and versions are registered/uploaded before creating the deployment."""
         # For each service/component in the deployment, upload it to the API store
         self._upload_dynamograph_package(
-            dynamo_graph_package=deployment.dynamograph_package or deployment.namespace,
+            dynamograph_package=deployment.dynamograph_package or deployment.namespace,
             entry_service=deployment.entry_service,
             **kwargs,
         )

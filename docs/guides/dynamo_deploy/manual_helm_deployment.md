@@ -115,7 +115,7 @@ helm install --namespace ${NAMESPACE} ${RELEASE_NAME}-etcd \
 
 After completing these steps, your cluster has the necessary messaging and storage infrastructure for running Dynamo inference graphs.
 
-### Building and Deploying the dynamo graph
+### Building and Deploying the Dynamo Graph
 
 Follow these steps to containerize and deploy your inference graph:
 

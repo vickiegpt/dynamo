@@ -105,7 +105,7 @@ then
 
 ```bash
 # Run the graph
-dynamo serve graph:Frontend
+dynamo serve dynamo_graph:Frontend
 ```
 
 Once it's up and running, you can make a request to the graph using

@@ -23,7 +23,7 @@ limitations under the License.
 
 | **[Roadmap](https://github.com/ai-dynamo/dynamo/issues/762)** | **[Support Matrix](docs/support_matrix.md)** | **[Guides](docs/guides)** | **[Architecture and Features](docs/architecture/architecture.md)** | **[APIs](lib/bindings/python/README.md)** | **[SDK](deploy/dynamo/sdk/README.md)** |
 
-### 📢 **Please join us for our** [**first Dynamo in-person meetup with vLLM and SGLang leads**](https://events.nvidia.com/nvidiadynamousermeetups) **on 6/5 (Thu) in SF!** ###
+### 📢 **Please join us for our** [** Dynamo in-person meetups with vLLM and SGLang leads**](https://events.nvidia.com/nvidiadynamousermeetups) ###
 
 NVIDIA Dynamo is a high-throughput low-latency inference framework designed for serving generative AI and reasoning models in multi-node distributed environments. Dynamo is designed to be inference engine agnostic (supports TRT-LLM, vLLM, SGLang or others) and captures LLM-specific capabilities such as:
 
