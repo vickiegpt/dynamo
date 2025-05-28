@@ -161,7 +161,9 @@ class VllmEncodeWorker:
                 f"Sampled {len(raw_frames_for_json)} frames. Shape of first frame (if any): {sampled_frames_np_list[0].shape if sampled_frames_np_list else 'N/A'}"
             )
 
-            yield EncodeResponse(raw_frames=raw_frames_for_json).model_dump_json()
+            yield EncodeResponse(
+                request_id=request_id, raw_frames=raw_frames_for_json
+            ).model_dump_json()
 
         except Exception as e:
             logger.error(f"Error processing request {request_id}: {e}")
