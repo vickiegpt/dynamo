@@ -5,8 +5,8 @@ use std::{future::Future, pin::Pin};
 use std::{io::Read, sync::Arc, time::Duration};
 
 use anyhow::Context;
-use dynamo_llm::{backend::ExecutionContext, engines::StreamingEngine, LocalModel};
-use dynamo_runtime::{protocols::Endpoint, CancellationToken, DistributedRuntime};
+use dynamo_llm::{backend::ExecutionContext, engines::StreamingEngine, local_model::LocalModel};
+use dynamo_runtime::{CancellationToken, DistributedRuntime};
 
 mod flags;
 pub use flags::Flags;
@@ -25,9 +25,12 @@ const PYTHON_STR_SCHEME: &str = "pystr:";
 /// Where we will attach the vllm/sglang subprocess. Invisible to users.
 pub const INTERNAL_ENDPOINT: &str = "dyn://dynamo.internal.worker";
 
+/// Default size of a KV cache block. Override with --kv-cache-block-size
+const DEFAULT_KV_CACHE_BLOCK_SIZE: usize = 16;
+
 pub enum EngineConfig {
-    /// An remote networked engine we don't know about yet
-    Dynamic(Endpoint),
+    /// Remote networked engines
+    Dynamic,
 
     /// A Full service engine does it's own tokenization and prompt formatting.
     StaticFull {
@@ -48,7 +51,7 @@ pub async fn run(
     out_opt: Output,
     flags: Flags,
 ) -> anyhow::Result<()> {
-    if matches!(&in_opt, Input::Endpoint(_)) && matches!(&out_opt, Output::Endpoint(_)) {
+    if matches!(&in_opt, Input::Endpoint(_)) && matches!(&out_opt, Output::Dynamic) {
         anyhow::bail!("Cannot use endpoint for both in and out");
     }
 
@@ -58,10 +61,10 @@ pub async fn run(
         .clone()
         .or(flags.model_path_flag.clone());
 
-    let local_model: LocalModel = match out_opt {
-        // If output is an endpoint we are ingress and don't have a local model, but making an
+    let mut local_model: LocalModel = match out_opt {
+        // If output is dynamic we are ingress and don't have a local model, but making an
         // empty one cleans up the code.
-        Output::Endpoint(_) => Default::default(),
+        Output::Dynamic => Default::default(),
 
         // All other output types have a local model
         _ => {
@@ -85,6 +88,17 @@ pub async fn run(
         }
     };
 
+    // Only set if user provides. Usually loaded from tokenizer_config.json
+    if let Some(context_length) = flags.context_length {
+        local_model.set_context_length(context_length);
+    }
+    // Always set, there is no engine provided default
+    local_model.set_kv_cache_block_size(
+        flags
+            .kv_cache_block_size
+            .unwrap_or(DEFAULT_KV_CACHE_BLOCK_SIZE),
+    );
+
     let mut extra: Option<Pin<Box<dyn Future<Output = ()> + Send>>> = None; // vllm and sglang sub-process
 
     let template = if let Some(path) = flags.request_template.as_ref() {
@@ -100,9 +114,15 @@ pub async fn run(
 
     // Create the engine matching `out`
     let engine_config = match out_opt {
-        Output::Endpoint(path) => {
-            let endpoint: Endpoint = path.parse()?;
-            EngineConfig::Dynamic(endpoint)
+        Output::Dynamic => {
+            // Sanity check - TODO probably make a general sanity check at start of method
+            if flags.context_length.is_some() {
+                anyhow::bail!("'--content-length' flag should only be used on the worker node, not on the ingress");
+            }
+            if flags.kv_cache_block_size.is_some() {
+                anyhow::bail!("'--kv-cache-block-size' flag should only be used on the worker node, not on the ingress");
+            }
+            EngineConfig::Dynamic
         }
         Output::EchoFull => EngineConfig::StaticFull {
             model: Box::new(local_model),
@@ -147,18 +167,12 @@ pub async fn run(
                 subprocess::sglang::PY,
                 &local_model,
                 &endpoint,
-                flags.tensor_parallel_size,
-                if flags.base_gpu_id == 0 {
-                    None
-                } else {
-                    Some(flags.base_gpu_id)
-                },
+                flags.clone(),
                 if flags.num_nodes <= 1 {
                     None
                 } else {
                     Some(multi_node_conf)
                 },
-                flags.extra_engine_args.as_deref(),
             )
             .await
             {
@@ -173,7 +187,7 @@ pub async fn run(
             extra = Some(Box::pin(async move {
                 stopper(cancel_token, child, py_script).await;
             }));
-            EngineConfig::Dynamic(endpoint)
+            EngineConfig::Dynamic
         }
         Output::Vllm => {
             if flags.base_gpu_id != 0 {
@@ -191,10 +205,8 @@ pub async fn run(
                 subprocess::vllm::PY,
                 &local_model,
                 &endpoint,
-                flags.tensor_parallel_size,
-                None, // base_gpu_id. vllm uses CUDA_VISIBLE_DEVICES instead
+                flags.clone(),
                 None, // multi-node config. vllm uses `ray`, see guide
-                flags.extra_engine_args.as_deref(),
             )
             .await
             {
@@ -209,7 +221,7 @@ pub async fn run(
             extra = Some(Box::pin(async move {
                 stopper(cancel_token, child, py_script).await;
             }));
-            EngineConfig::Dynamic(endpoint)
+            EngineConfig::Dynamic
         }
 
         #[cfg(feature = "llamacpp")]
@@ -218,8 +230,7 @@ pub async fn run(
                 anyhow::bail!("--model-path should refer to a GGUF file. llama_cpp does not support safetensors.");
             }
             let engine =
-                dynamo_engine_llamacpp::make_engine(cancel_token.clone(), local_model.path())
-                    .await?;
+                dynamo_engine_llamacpp::make_engine(cancel_token.clone(), &local_model).await?;
             EngineConfig::StaticCore {
                 engine,
                 model: Box::new(local_model),

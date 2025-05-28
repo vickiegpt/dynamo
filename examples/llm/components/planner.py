@@ -99,8 +99,8 @@ class Planner:
                 )
                 # TODO: remove this sleep after rust client() is blocking until watching state
                 await asyncio.sleep(0.1)
-            # TODO: use etcd events instead of pulling endpoints_ids
-            p_endpoints = self.prefill_client.endpoint_ids()
+            # TODO: use etcd events instead of pulling instance_ids
+            p_endpoints = self.prefill_client.instance_ids()
         except Exception:
             p_endpoints = []
             self._repeating_log_func(
@@ -116,8 +116,8 @@ class Planner:
                 )
                 # TODO: remove this sleep after rust client() is blocking until watching state
                 await asyncio.sleep(0.1)
-            # TODO: use etcd events instead of pulling endpoints_ids
-            d_endpoints = self.workers_client.endpoint_ids()
+            # TODO: use etcd events instead of pulling instance_ids
+            d_endpoints = self.workers_client.instance_ids()
         except Exception as e:
             raise RuntimeError(f"Failed to get decode worker endpoints: {e}")
         return p_endpoints, d_endpoints
@@ -232,7 +232,9 @@ class Planner:
         )
         logger.info(f"Current engines use {curr_gpu_usage} GPUs")
 
-        avg_prefill_queue_load = np.mean(self.prefill_queue_load)
+        avg_prefill_queue_load = np.mean(self.prefill_queue_load) / len(
+            self.p_endpoints
+        )
         avg_kv_load = np.mean(self.kv_load)
         # first check if we need to scale down any workers
         if (
@@ -467,13 +469,13 @@ if __name__ == "__main__":
         "--prefill-queue-scale-up-threshold",
         type=float,
         default=PlannerDefaults.prefill_queue_scale_up_threshold,
-        help="Queue utilization threshold to scale up prefill workers",
+        help="Queue utilization threshold to scale up prefill workers, this threshold is per prefill worker",
     )
     parser.add_argument(
         "--prefill-queue-scale-down-threshold",
         type=float,
         default=PlannerDefaults.prefill_queue_scale_down_threshold,
-        help="Queue utilization threshold to scale down prefill workers",
+        help="Queue utilization threshold to scale down prefill workers, this threshold is per prefill worker",
     )
     parser.add_argument(
         "--decode-engine-num-gpu",

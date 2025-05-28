@@ -518,6 +518,10 @@ pub(crate) mod tests {
         fn reset_metadata(&mut self) {
             self.priority = 0;
         }
+
+        fn offload_priority(&self) -> Option<u64> {
+            Some(self.priority as u64)
+        }
     }
 
     type TestPriorityKey = PriorityKey<TestMetadata>;
@@ -582,6 +586,7 @@ pub(crate) mod tests {
         let config = LayoutConfigBuilder::default()
             .num_blocks(num_blocks)
             .num_layers(61)
+            .outer_dim(1)
             .page_size(16)
             .inner_dim(576)
             .build()

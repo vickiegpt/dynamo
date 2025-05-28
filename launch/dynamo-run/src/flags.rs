@@ -98,12 +98,22 @@ pub struct Flags {
     #[arg(long)]
     pub leader_addr: Option<String>,
 
-    /// If using `out=dyn://..` with multiple backends, this says how to route the requests.
+    /// If using `out=dyn` with multiple instances, this says how to route the requests.
     ///
     /// Mostly interesting for KV-aware routing.
     /// Defaults to RouterMode::RoundRobin
     #[arg(long, default_value = "round-robin")]
     pub router_mode: RouterMode,
+
+    /// Max model context length. Reduce this if you don't have enough VRAM for the full model
+    /// context length (e.g. Llama 4).
+    /// Defaults to the model's max, which is usually model_max_length in tokenizer_config.json.
+    #[arg(long)]
+    pub context_length: Option<usize>,
+
+    /// KV cache block size (vllm only)
+    #[arg(long)]
+    pub kv_cache_block_size: Option<usize>,
 
     /// Additional engine-specific arguments from a JSON file.
     /// Contains a mapping of parameter names to values.

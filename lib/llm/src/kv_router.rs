@@ -1,23 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use std::sync::Arc;
 
 use anyhow::Result;
 use dynamo_runtime::{
-    component::{Component, EndpointSource},
+    component::{Component, InstanceSource},
     pipeline::{
         async_trait, AsyncEngine, AsyncEngineContextProvider, Error, ManyOut, PushRouter,
         ResponseStream, SingleIn,
@@ -49,9 +37,6 @@ use crate::{
 };
 
 use dynamo_runtime::traits::events::EventSubscriber;
-
-// TODO: Allow user to change
-pub const DEFAULT_KV_BLOCK_SIZE: usize = 16;
 
 // [gluo TODO] shouldn't need to be public
 // this should be discovered from the component
@@ -199,11 +184,11 @@ impl AsyncEngine<SingleIn<BackendInput>, ManyOut<Annotated<LLMEngineOutput>>, Er
         &self,
         request: SingleIn<BackendInput>,
     ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
-        match &self.inner.client.endpoints {
-            EndpointSource::Static => self.inner.r#static(request).await,
-            EndpointSource::Dynamic(_) => {
-                let worker_id = self.chooser.find_best_match(&request.token_ids).await?;
-                self.inner.direct(request, worker_id).await
+        match self.inner.client.instance_source.as_ref() {
+            InstanceSource::Static => self.inner.r#static(request).await,
+            InstanceSource::Dynamic(_) => {
+                let instance_id = self.chooser.find_best_match(&request.token_ids).await?;
+                self.inner.direct(request, instance_id).await
             }
         }
     }
