@@ -447,7 +447,7 @@ The depends() approach is the recommended way for production deployments:
 Our `.link()` syntax is an flexible and experimental way to compose various services. Linking allows you to compose checks at runtime and view behavior. Under the hood - we are editing the dependency graph between various services. This is useful for experimentation and development but we suggest writing a static graph for your final production deployment.
 
 #### Understanding the `.link()` syntax
-Lets take the example of a `Processor` component. This component can currently do 2 things:
+Let's take the example of a `Processor` component. This component can currently do 2 things:
 1. Process a request and send it to a `Router` to decide what worker to send it to.
 2. Process a request and send it to a `Worker` directly.
 

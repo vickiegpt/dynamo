@@ -10,7 +10,7 @@ pip install ai-dynamo
 
 ## Quickstart
 
-Lets build a simple distributed graph with 3 components: `Frontend`, `Middle` and `Backend`. The structure of the graph looks like this:
+Let's build a simple distributed graph with 3 components: `Frontend`, `Middle` and `Backend`. The structure of the graph looks like this:
 
 ```
 Users/Clients (HTTP)
