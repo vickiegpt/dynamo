@@ -156,9 +156,7 @@ def get(
 
 
 def build(
-    dynamo_graph: str = typer.Argument(
-        ..., help="Path to the Dynamo graph to build"
-    ),
+    dynamo_graph: str = typer.Argument(..., help="Path to the Dynamo graph to build"),
     output: str = typer.Option(
         "default",
         "--output",
