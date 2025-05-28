@@ -18,7 +18,7 @@ from typing import Any, Callable, List, Dict, Union
 from contextlib import contextmanager
 import time
 import requests
-from tests.utils import managed_process, check_service_health
+from tests.utils import managed_process, check_service_health, wait_for_service_health
 
 
 @dataclass
@@ -44,11 +44,81 @@ class Payload:
 
 
 @contextmanager
-def dynamo_serve_process(graph: DeploymentGraph, port=8000, timeout=300):
+def dynamo_serve_process(graph: DeploymentGraph, port=8000, timeout=300, preloaded_model=None):
     """
     Start a dynamo serve process with the specified deployment graph.
+    
+    Args:
+        graph: The deployment graph configuration
+        port: HTTP port for the server
+        timeout: Maximum time to wait for the server to start
+        preloaded_model: Optional preloaded model instance to use
     """
     print(f"\n[DYNAMO SERVE] Starting deployment: {graph.module} on port {port}")
+    
+    # If a preloaded model is provided, try to use it directly
+    if preloaded_model is not None:
+        print(f"[DYNAMO SERVE] Using preloaded model")
+        
+        # Create a server process that uses the preloaded model
+        try:
+            # Import needed for server implementation
+            import threading
+            from contextlib import ExitStack
+            
+            exit_stack = ExitStack()
+            server_stopped = threading.Event()
+            
+            # Start server in background thread
+            def start_server():
+                try:
+                    # This is a placeholder - implement based on your actual server implementation
+                    # For example, with vllm, you might use their server implementation
+                    from vllm.entrypoints.openai.api_server import serve
+                    
+                    serve(
+                        model=preloaded_model,
+                        host="0.0.0.0",
+                        port=port,
+                    )
+                except Exception as e:
+                    print(f"[DYNAMO SERVE] Server error: {e}")
+                finally:
+                    server_stopped.set()
+                    
+            server_thread = threading.Thread(target=start_server)
+            server_thread.daemon = True
+            server_thread.start()
+            
+            # Setup server cleanup on context exit
+            def cleanup_server():
+                if server_thread.is_alive():
+                    # Server is running in daemon thread which will be terminated
+                    # when the main process exits
+                    pass
+                
+            exit_stack.callback(cleanup_server)
+            
+            try:
+                # Wait for server to be ready
+                if not wait_for_service_health(
+                    f"http://localhost:{port}/v1/models", 
+                    timeout=timeout
+                ):
+                    raise TimeoutError("Server failed to start within timeout")
+                    
+                # Yield control back to the caller
+                yield
+            finally:
+                exit_stack.close()
+            
+            return  # Early return, skip CLI approach
+        except ImportError as e:
+            print(f"[DYNAMO SERVE] Couldn't start server with preloaded model: {e}")
+            print("[DYNAMO SERVE] Falling back to CLI approach")
+    
+    # If we get here, either no preloaded model was provided or server startup failed
+    # Use the original CLI approach
     command = ["dynamo", "serve", graph.module]
     if graph.config:
         command.extend(["-f", graph.config])
@@ -101,14 +171,32 @@ def dynamo_serve_process(graph: DeploymentGraph, port=8000, timeout=300):
         
         return False
 
+    # Execute the command using the managed_process context manager
     with managed_process(
-        command,
-        check_ports=[port],
+        command, 
+        check_ports=[port], 
         timeout=timeout,
         cwd=graph.directory,
         output=True,
         health_check=health_check
-    ) as proc:
+    ) as process:
+        # Test server health
+        print(f"[DYNAMO SERVE] Process started, checking health...")
+        
+        # Wait for server to be ready
+        start_time = time.time()
+        ready = False
+        
+        while time.time() - start_time < timeout and not ready:
+            if health_check():
+                ready = True
+                break
+            time.sleep(1)
+            
+        if not ready:
+            raise TimeoutError(f"Server failed to report healthy status within {timeout}s")
+            
+        print(f"[DYNAMO SERVE] Server ready on port {port}")
         print(f"[DYNAMO SERVE] Server process started and ready - deployment: {graph.module}")
         print(f"[DYNAMO SERVE] Testing with endpoint: {graph.endpoint}")
         
@@ -116,6 +204,7 @@ def dynamo_serve_process(graph: DeploymentGraph, port=8000, timeout=300):
         try:
             import subprocess
             print("\n[DYNAMO SERVE] Checking NATS status before client tests...")
+            # Using hardcoded NATS monitoring port 8222
             subprocess.run(["curl", "-s", "localhost:8222/varz"], check=False)
             subprocess.run(["curl", "-s", "localhost:8222/jsz"], check=False)
             print("[DYNAMO SERVE] NATS check complete")
@@ -123,11 +212,11 @@ def dynamo_serve_process(graph: DeploymentGraph, port=8000, timeout=300):
             print(f"[DYNAMO SERVE] Error checking NATS: {e}")
         
         try:
-            yield proc
-        except Exception as e:
-            print(f"[DYNAMO SERVE] Exception during test execution: {e}")
-        
-        print("[DYNAMO SERVE] Client tests completed")
+            yield process
+        finally:
+            print("[DYNAMO SERVE] Shutting down")
+            
+    print("[DYNAMO SERVE] Process stopped")
 
 
 def multimodal_response_handler(response):

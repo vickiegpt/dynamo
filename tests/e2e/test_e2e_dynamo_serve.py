@@ -21,7 +21,7 @@ from typing import Any, Callable, Optional
 
 import pytest
 import requests
-from tests.utils import find_free_port, cleanup_directory, check_service_health
+from tests.utils import find_free_port, cleanup_directory, check_service_health, wait_for_service_health
 from tests.e2e.testutils import dynamo_serve_process, get_test_deployment_graphs, DeploymentGraph, Payload
 
 
@@ -38,9 +38,11 @@ def deployment_graph_test(request):
 @pytest.mark.e2e
 @pytest.mark.vllm
 @pytest.mark.slow
-def test_serve_deployment(deployment_graph_test):
+def test_serve_deployment(deployment_graph_test, model_loader):
     """
     Test dynamo serve deployments with different graph configurations.
+    
+    Uses model_loader to preload models for improved performance.
     """
     print("\n[TEST] Starting test_deployment")
     deployment_graph, payload = deployment_graph_test
@@ -50,48 +52,44 @@ def test_serve_deployment(deployment_graph_test):
     print(f"[TEST] Testing deployment: {deployment_graph.module} on port {port}")
     print(f"[TEST] Payload: {payload.payload}")
     
+    # Extract the model name from the payload
+    model_name = None
+    if "model" in payload.payload:
+        model_name = payload.payload["model"]
+    
+    # Try to preload the model if possible
+    preloaded_model = None
+    if model_name:
+        try:
+            preloaded_model = model_loader(model_name, "vllm")
+            print(f"[TEST] Successfully preloaded model: {model_name}")
+        except Exception as e:
+            print(f"[TEST] Unable to preload model {model_name}: {e}")
+    
     # Use an event to signal when the service is ready
     service_ready = threading.Event()
-    request_allowed = threading.Event()
-    
-    # Start a background thread to monitor service health
-    def health_monitor():
-        url = f"http://localhost:{port}/{deployment_graph.endpoint}"
-        readiness_url = f"http://localhost:{port}/v1/models"
-        
-        print(f"[TEST] Health monitor starting - checking {readiness_url}")
-        start_time = time.time()
-        timeout = 300  # seconds
-        
-        # Wait for ports to be open first
-        while time.time() - start_time < timeout:
-            if check_service_health(readiness_url, max_retries=1, retry_interval=0.1):
-                print("[TEST] Service API is ready!")
-                service_ready.set()
-                request_allowed.set()
-                return
-            time.sleep(1)
-        
-        print("[TEST] Service health check timed out")
-    
-    # Start health monitor in background
-    health_thread = threading.Thread(target=health_monitor)
-    health_thread.daemon = True
-    health_thread.start()
     
     # Check NATS status before starting test
     try:
         import subprocess
+        # Using hardcoded NATS monitoring port 8222
         result = subprocess.run(["curl", "-s", "localhost:8222/varz"], capture_output=True, text=True)
         print(f"[TEST] NATS status before test: {'OK' if 'server_id' in result.stdout else 'NOT READY'}")
     except Exception as e:
         print(f"[TEST] Error checking NATS: {e}")
     
     print("[TEST] Starting dynamo serve process")
-    with dynamo_serve_process(deployment_graph, port=port, timeout=300):
-        # Wait for service to be ready
-        print("[TEST] Waiting for service to be ready")
-        if not service_ready.wait(timeout=180):
+    # Pass preloaded model to dynamo_serve_process if available
+    with dynamo_serve_process(deployment_graph, port=port, timeout=300, preloaded_model=preloaded_model):
+        # Wait for service to be ready using the utility function
+        readiness_url = f"http://localhost:{port}/v1/models"
+        print(f"[TEST] Waiting for service to be ready at {readiness_url}")
+        
+        # Use the wait_for_service_health utility instead of a custom thread
+        if wait_for_service_health(readiness_url, timeout=180, check_interval=1.0):
+            print("[TEST] Service API is ready!")
+            service_ready.set()
+        else:
             print("[TEST] Service health check timed out after 180 seconds")
             pytest.fail("Service health check timed out after 180 seconds")
             

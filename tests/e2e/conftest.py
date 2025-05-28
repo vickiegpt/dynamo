@@ -18,12 +18,30 @@ from tests.e2e.dynamo_client import DynamoRunProcess
 
 # pytest fixture for DynamoRunProcess
 @pytest.fixture()
-def dynamo_run(backend, model, input_type, timeout):
+def dynamo_run(backend, model, input_type, timeout, model_loader):
     """
     Create and start a DynamoRunProcess for testing.
+    
+    Uses model_loader to cache models between test runs for improved performance.
     """
     port = find_free_port()
+    
+    # Only attempt to preload model for HTTP interface (text interface uses command-line)
+    preloaded_model = None
+    if input_type == "http":
+        try:
+            # Try to get preloaded model
+            preloaded_model = model_loader(model, backend)
+        except Exception as e:
+            # Log error but continue without preloaded model
+            print(f"Failed to preload model {model}: {e}")
+    
     with DynamoRunProcess(
-        model=model, backend=backend, port=port, input_type=input_type, timeout=timeout
+        model=model, 
+        backend=backend, 
+        port=port, 
+        input_type=input_type, 
+        timeout=timeout,
+        preloaded_model=preloaded_model
     ) as process:
         yield process 

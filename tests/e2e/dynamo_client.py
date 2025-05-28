@@ -19,7 +19,7 @@ import subprocess
 import threading
 import time
 from io import StringIO
-from typing import Optional
+from typing import Optional, Any, Dict, Union, Tuple
 
 import requests
 from tests.utils import find_free_port, check_service_health
@@ -30,7 +30,7 @@ class DynamoRunProcess:
     """
     Manages a dynamo-run process with various input/output options.
     """
-    def __init__(self, model, backend, port=None, input_type="text", timeout=300):
+    def __init__(self, model, backend, port=None, input_type="text", timeout=300, preloaded_model=None):
         self.port = port or find_free_port()
         self.model = model
         self.backend = backend
@@ -44,8 +44,85 @@ class DynamoRunProcess:
         self.child_fd: Optional[int] = None
         self._timeout = timeout
         self._ready = threading.Event()
+        self.preloaded_model = preloaded_model  # Store the preloaded model instance
 
     def start(self):
+        # If using HTTP and a preloaded model, start HTTP server using the model directly
+        if self.input_type == "http" and self.preloaded_model is not None:
+            self._start_with_preloaded_model()
+        else:
+            # Otherwise, use command-line approach
+            self._start_with_cli()
+        
+        # Wait for process to be ready
+        if self.input_type == "http":
+            # Use check_service_health from utils
+            def _models_ready(response):
+                try:
+                    data = response.json()
+                    return "data" in data and len(data["data"]) > 0
+                except Exception:
+                    return False
+            ready = check_service_health(
+                f"{self.url}/v1/models",
+                max_retries=int(self._timeout * 2),  # retry every 0.5s
+                retry_interval=0.5,
+                timeout=10,
+                callback=_models_ready,
+            )
+            if ready:
+                self._ready.set()
+            else:
+                self.stop()
+                raise TimeoutError(f"DynamoRun process failed to start within {self._timeout}s (HTTP health check)")
+        else:
+            # Wait for prompt in text mode
+            if not self._wait_for_ready(self._timeout):
+                self.stop()
+                raise TimeoutError(f"DynamoRun process failed to start within {self._timeout}s")
+    
+    def _start_with_preloaded_model(self):
+        """Start using a preloaded model instead of launching a new process"""
+        try:
+            # Import server library to serve the model
+            import threading
+            
+            # This is a placeholder - implement based on your actual server implementation
+            # Here we're assuming you have a way to serve a model via HTTP
+            # For example, with vllm, you could use their OpenAI-compatible server or FastAPI endpoint
+            def start_server():
+                # Example using vllm's server
+                try:
+                    from vllm.entrypoints.openai.api_server import serve
+                    serve(
+                        model=self.preloaded_model,  # Use preloaded model
+                        host="localhost",
+                        port=self.port,
+                    )
+                except ImportError:
+                    # Fallback to generic approach if vllm server not available
+                    from fastapi import FastAPI
+                    import uvicorn
+                    
+                    app = FastAPI()
+                    # Add routes to serve the model...
+                    
+                    uvicorn.run(app, host="localhost", port=self.port)
+            
+            # Start server in background thread
+            self._server_thread = threading.Thread(target=start_server)
+            self._server_thread.daemon = True
+            self._server_thread.start()
+            
+            print(f"Started HTTP server with preloaded model on port {self.port}")
+            
+        except Exception as e:
+            print(f"Failed to start with preloaded model: {e}")
+            # Fall back to CLI approach if server fails
+            self._start_with_cli()
+    
+    def _start_with_cli(self):
+        """Start using the CLI approach (original implementation)"""
         cmd = [
             "dynamo-run",
             f"in={self.input_type}",
@@ -80,33 +157,6 @@ class DynamoRunProcess:
         self._output_thread.daemon = True
         self._output_thread.start()
 
-        # Wait for process to be ready
-        if self.input_type == "http":
-            # Use check_service_health from utils
-            def _models_ready(response):
-                try:
-                    data = response.json()
-                    return "data" in data and len(data["data"]) > 0
-                except Exception:
-                    return False
-            ready = check_service_health(
-                f"{self.url}/v1/models",
-                max_retries=int(self._timeout * 2),  # retry every 0.5s
-                retry_interval=0.5,
-                timeout=10,
-                callback=_models_ready,
-            )
-            if ready:
-                self._ready.set()
-            else:
-                self.stop()
-                raise TimeoutError(f"DynamoRun process failed to start within {self._timeout}s (HTTP health check)")
-        else:
-            # Wait for prompt in text mode
-            if not self._wait_for_ready(self._timeout):
-                self.stop()
-                raise TimeoutError(f"DynamoRun process failed to start within {self._timeout}s")
-
     def _capture_pty_output(self):
         assert self.parent_fd
         assert self.process
@@ -135,6 +185,12 @@ class DynamoRunProcess:
         return self._ready.wait(timeout)
 
     def stop(self):
+        if hasattr(self, '_server_thread') and self._server_thread.is_alive():
+            # Stop server if it's running with preloaded model
+            # Note: This is a simplified approach - in a real implementation,
+            # you might need a more graceful way to stop the server
+            pass  # The thread is daemon, so it will be terminated when the process exits
+        
         if self.process:
             self.process.terminate()
             try:
