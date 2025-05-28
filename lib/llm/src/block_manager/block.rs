@@ -188,7 +188,7 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
     pub fn parent_sequence_hash(&self) -> Result<Option<SequenceHash>, BlockError> {
         match self.state() {
             BlockState::Complete(state) => Ok(state.token_block().parent_sequence_hash()),
-            BlockState::Registered(state) => Ok(state.parent_sequence_hash()),
+            BlockState::Registered(state, _) => Ok(state.parent_sequence_hash()),
             _ => Err(BlockError::InvalidState(
                 "Block is not complete nor registered.".to_string(),
             )),
@@ -1611,7 +1611,7 @@ mod tests {
 
     // Helper to create a default reset block
     fn create_reset_block() -> Block<impl Storage, BasicMetadata> {
-        let layout = setup_layout(None).unwrap();
+        let layout = setup_layout(None, None).unwrap();
         let data = BlockData::new(Arc::new(layout), 0, 42, 0);
         Block::new(data, BasicMetadata::default()).unwrap()
     }

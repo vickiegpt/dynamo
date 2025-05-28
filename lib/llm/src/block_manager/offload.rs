@@ -52,24 +52,21 @@ use super::{BlockPool, DeviceStorage, DiskStorage, PinnedStorage};
 use nixl_sys::Agent as NixlAgent;
 use std::sync::Arc;
 use tokio::runtime::Handle;
-use tokio::sync::{
-    mpsc::{self, error::TryRecvError},
-    Mutex,
-};
+use tokio::sync::mpsc::{self, error::TryRecvError};
 use tokio_util::sync::CancellationToken;
 
 use anyhow::Result;
 use std::any::Any;
 
-use std::collections::BTreeSet;
-
 mod pending;
+mod queue;
 pub mod request;
 
 use pending::{
     CudaTransferManager, DiskTransferManager, PendingTransfer, TransferBatcher, TransferManager,
 };
-use request::{BlockResult, OffloadRequest, OffloadRequestKey, OnboardRequest};
+use queue::OffloadTreeQueue;
+use request::{BlockResult, OffloadRequest, OnboardRequest};
 
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
 
@@ -90,9 +87,6 @@ pub struct OffloadManager<Metadata: BlockMetadata> {
     /// Queue of pending onboarding requests.
     host_onboard_tx: mpsc::UnboundedSender<OnboardRequest<PinnedStorage, DeviceStorage, Metadata>>,
     disk_onboard_tx: mpsc::UnboundedSender<OnboardRequest<DiskStorage, DeviceStorage, Metadata>>,
-
-    /// An incrementing counter for offloaded blocks. Within the same priority, blocks with lower tick values are processed first.
-    tick: Arc<Mutex<u64>>,
 }
 
 impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
@@ -118,7 +112,6 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
             host_offload_tx,
             host_onboard_tx,
             disk_onboard_tx,
-            tick: Arc::new(Mutex::new(0)),
         });
 
         let this_clone = this.clone();
@@ -255,7 +248,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         let source_pool = source_pool.as_ref().unwrap();
         let target_pool = target_pool.as_ref().unwrap();
 
-        let mut queue = BTreeSet::new();
+        let mut queue = OffloadTreeQueue::new();
 
         loop {
             if cancellation_token.is_cancelled() {
@@ -266,7 +259,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
             loop {
                 match offload_rx.try_recv() {
                     Ok(request) => {
-                        queue.insert(request);
+                        queue.insert(request)?;
                     }
                     Err(TryRecvError::Empty) => {
                         break;
@@ -276,7 +269,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
             }
 
             // If there is a request, process it.
-            if let Some(request) = queue.pop_first() {
+            if let Some(request) = queue.remove() {
                 // Try to upgrade the block to a strong reference.
                 let block = match request.block.upgrade() {
                     Some(block) => Some(block),
@@ -323,7 +316,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                 tokio::select! {
                     _ = cancellation_token.cancelled() => return Ok(()),
                     Some(request) = offload_rx.recv() => {
-                        queue.insert(request);
+                        queue.insert(request)?;
                     }
                 }
             }
@@ -390,14 +383,8 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
             }
         }
 
-        let mut tick = self.tick.lock().await;
-        let key = OffloadRequestKey {
-            priority,
-            timestamp: *tick,
-        };
-        // Increment a counter for each block. Within the same priority, blocks with lower counter values are processed first.
-        *tick += 1;
-        drop(tick);
+        let sequence_hash = block.sequence_hash()?;
+        let parent_sequence_hash = block.parent_sequence_hash()?;
 
         // This can get called by all pools, regardless of whether or not they have a place to offload to.
         // Because of this, we need to check the block type here.
@@ -414,8 +401,9 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
 
             let request = OffloadRequest {
                 block: Arc::downgrade(device_block.mutable_block()),
-                sequence_hash: device_block.sequence_hash()?,
-                key,
+                sequence_hash,
+                parent_sequence_hash,
+                priority,
             };
 
             self.device_offload_tx.send(request).unwrap();
@@ -429,8 +417,9 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
 
             let request = OffloadRequest {
                 block: Arc::downgrade(host_block.mutable_block()),
-                sequence_hash: host_block.sequence_hash()?,
-                key,
+                sequence_hash,
+                parent_sequence_hash,
+                priority,
             };
 
             self.host_offload_tx.send(request).unwrap();
