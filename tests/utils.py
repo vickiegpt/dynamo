@@ -19,7 +19,7 @@ import socket
 import subprocess
 import time
 from contextlib import contextmanager
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Callable
 
 import requests
 
@@ -32,8 +32,26 @@ def managed_process(
     timeout: int = 300,
     cwd: Optional[str] = None,
     output: bool = False,
+    startup_check: Optional[Callable[[subprocess.Popen], bool]] = None,
 ):
-    """Run a process and manage its lifecycle, checking for ports to become available."""
+    """Run a process and manage its lifecycle, checking for ports to become available.
+    
+    Args:
+        command: Command to run
+        env: Environment variables for the process
+        check_ports: List of ports to check for availability
+        timeout: Maximum time to wait for startup (seconds)
+        cwd: Working directory for the process
+        output: Whether to show process output in console
+        startup_check: Optional function to verify process started correctly
+    
+    Yields:
+        The subprocess.Popen object representing the process
+        
+    Raises:
+        TimeoutError: If ports are not available within timeout
+        RuntimeError: If process fails to start
+    """
     check_ports = check_ports or []
 
     print(f"Running command: {' '.join(command)} in {cwd or os.getcwd()}")
@@ -54,31 +72,52 @@ def managed_process(
         stdout=stdout,
         stderr=stderr,
     )
+    
+    # Check if process started successfully
+    if proc.poll() is not None:
+        exit_code = proc.returncode
+        raise RuntimeError(f"Process exited immediately with code {exit_code}")
+    
+    # Run custom startup check if provided
+    if startup_check is not None and not startup_check(proc):
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        raise RuntimeError(f"Process failed custom startup check")
+    
     start_time = time.time()
 
     # Wait for ports to become available
     if check_ports:
         print(f"Waiting for ports: {check_ports}")
         while time.time() - start_time < timeout:
+            # Check if process is still running
+            if proc.poll() is not None:
+                exit_code = proc.returncode
+                raise RuntimeError(f"Process exited unexpectedly with code {exit_code} while waiting for ports")
+                
             if all(is_port_open(p) for p in check_ports):
                 print(f"All ports {check_ports} are ready")
                 break
             time.sleep(0.1)
         else:
             proc.terminate()
-            raise TimeoutError(f"Ports {check_ports} not ready in time")
+            raise TimeoutError(f"Ports {check_ports} not ready within {timeout} seconds")
 
     try:
         yield proc
     finally:
         print(f"Terminating process: {command[0]}")
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            print("Process did not terminate gracefully, killing it")
-            proc.kill()
-            proc.wait()
+        if proc.poll() is None:  # Only terminate if still running
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                print("Process did not terminate gracefully, killing it")
+                proc.kill()
+                proc.wait()
 
 
 def is_port_open(port: int) -> bool:
@@ -102,14 +141,19 @@ def cleanup_directory(path: str) -> None:
         print(f"Warning: Failed to clean up directory {path}: {e}")
 
 
-def check_service_health(url: str, timeout: int = 5, max_retries: int = 3, retry_interval: float = 1.0) -> bool:
+def check_service_health(url: str, timeout: int = 5, max_retries: int = 3, retry_interval: float = 1.0, callback: Optional[Callable] = None) -> bool:
     """Check if a service is healthy by making HTTP requests."""
     for attempt in range(max_retries):
         try:
             response = requests.get(url, timeout=timeout)
             if response.status_code == 200:
-                # If this is the models endpoint, validate that models exist
-                if url.endswith("/v1/models"):
+                # If callback is provided, use it to determine if service is healthy
+                if callback is not None:
+                    if callback(response):
+                        return True
+                    # If callback returns False, we continue retrying
+                # If no callback, check if this is a models endpoint
+                elif url.endswith("/v1/models"):
                     data = response.json()
                     if data.get("data") and len(data["data"]) > 0:
                         print(f"Models found: {data['data']}")
@@ -126,11 +170,11 @@ def check_service_health(url: str, timeout: int = 5, max_retries: int = 3, retry
     return False
 
 
-def wait_for_service_health(url: str, timeout: int = 60, check_interval: float = 1.0) -> bool:
+def wait_for_service_health(url: str, timeout: int = 60, check_interval: float = 1.0, callback: Optional[Callable] = None) -> bool:
     """Wait for a service to become healthy."""
     start_time = time.time()
     while time.time() - start_time < timeout:
-        if check_service_health(url, max_retries=1, retry_interval=0):
+        if check_service_health(url, max_retries=1, retry_interval=0, callback=callback):
             return True
         time.sleep(check_interval)
-    return False
+    return False 

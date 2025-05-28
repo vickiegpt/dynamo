@@ -18,13 +18,16 @@ from tests.e2e.dynamo_client import DynamoRunProcess
 
 # pytest fixture for DynamoRunProcess
 @pytest.fixture()
-def dynamo_run(backend, model, input_type, timeout, model_loader):
+def dynamo_run(backend, model, input_type, timeout, model_loader, service_ports):
     """
     Create and start a DynamoRunProcess for testing.
     
     Uses model_loader to cache models between test runs for improved performance.
+    Uses service_ports for consistent port management.
     """
     port = find_free_port()
+    print(f"[DYNAMO_RUN] Allocated port: {port}")
+    print(f"[DYNAMO_RUN] Service ports: ETCD={service_ports['etcd_client']}, NATS={service_ports['nats_client']}")
     
     # Only attempt to preload model for HTTP interface (text interface uses command-line)
     preloaded_model = None
@@ -32,9 +35,10 @@ def dynamo_run(backend, model, input_type, timeout, model_loader):
         try:
             # Try to get preloaded model
             preloaded_model = model_loader(model, backend)
+            print(f"[DYNAMO_RUN] Successfully loaded cached model: {model}")
         except Exception as e:
             # Log error but continue without preloaded model
-            print(f"Failed to preload model {model}: {e}")
+            print(f"[DYNAMO_RUN] Failed to preload model {model}: {e}")
     
     with DynamoRunProcess(
         model=model, 

@@ -84,40 +84,16 @@ class DynamoRunProcess:
     def _start_with_preloaded_model(self):
         """Start using a preloaded model instead of launching a new process"""
         try:
-            # Import server library to serve the model
-            import threading
+            print(f"[DYNAMO_RUN] Starting HTTP server with preloaded model on port {self.port}")
             
-            # This is a placeholder - implement based on your actual server implementation
-            # Here we're assuming you have a way to serve a model via HTTP
-            # For example, with vllm, you could use their OpenAI-compatible server or FastAPI endpoint
-            def start_server():
-                # Example using vllm's server
-                try:
-                    from vllm.entrypoints.openai.api_server import serve
-                    serve(
-                        model=self.preloaded_model,  # Use preloaded model
-                        host="localhost",
-                        port=self.port,
-                    )
-                except ImportError:
-                    # Fallback to generic approach if vllm server not available
-                    from fastapi import FastAPI
-                    import uvicorn
-                    
-                    app = FastAPI()
-                    # Add routes to serve the model...
-                    
-                    uvicorn.run(app, host="localhost", port=self.port)
-            
-            # Start server in background thread
-            self._server_thread = threading.Thread(target=start_server)
-            self._server_thread.daemon = True
-            self._server_thread.start()
-            
-            print(f"Started HTTP server with preloaded model on port {self.port}")
+            # For now, we'll fall back to CLI approach since the vLLM serve function
+            # doesn't exist in the current version. The model is already cached,
+            # so the CLI approach will be faster due to cached model files.
+            print(f"[DYNAMO_RUN] Using CLI approach with cached model for compatibility")
+            self._start_with_cli()
             
         except Exception as e:
-            print(f"Failed to start with preloaded model: {e}")
+            print(f"[DYNAMO_RUN] Failed to start with preloaded model: {e}")
             # Fall back to CLI approach if server fails
             self._start_with_cli()
     

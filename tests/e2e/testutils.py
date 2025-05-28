@@ -52,173 +52,25 @@ def dynamo_serve_process(graph: DeploymentGraph, port=8000, timeout=300, preload
         graph: The deployment graph configuration
         port: HTTP port for the server
         timeout: Maximum time to wait for the server to start
-        preloaded_model: Optional preloaded model instance to use
+        preloaded_model: Optional preloaded model instance to use (currently ignored)
     """
     print(f"\n[DYNAMO SERVE] Starting deployment: {graph.module} on port {port}")
     
-    # If a preloaded model is provided, try to use it directly
+    # Note: preloaded_model functionality is disabled due to vLLM API compatibility issues
     if preloaded_model is not None:
-        print(f"[DYNAMO SERVE] Using preloaded model")
-        
-        # Create a server process that uses the preloaded model
-        try:
-            # Import needed for server implementation
-            import threading
-            from contextlib import ExitStack
-            
-            exit_stack = ExitStack()
-            server_stopped = threading.Event()
-            
-            # Start server in background thread
-            def start_server():
-                try:
-                    # This is a placeholder - implement based on your actual server implementation
-                    # For example, with vllm, you might use their server implementation
-                    from vllm.entrypoints.openai.api_server import serve
-                    
-                    serve(
-                        model=preloaded_model,
-                        host="0.0.0.0",
-                        port=port,
-                    )
-                except Exception as e:
-                    print(f"[DYNAMO SERVE] Server error: {e}")
-                finally:
-                    server_stopped.set()
-                    
-            server_thread = threading.Thread(target=start_server)
-            server_thread.daemon = True
-            server_thread.start()
-            
-            # Setup server cleanup on context exit
-            def cleanup_server():
-                if server_thread.is_alive():
-                    # Server is running in daemon thread which will be terminated
-                    # when the main process exits
-                    pass
-                
-            exit_stack.callback(cleanup_server)
-            
-            try:
-                # Wait for server to be ready
-                if not wait_for_service_health(
-                    f"http://localhost:{port}/v1/models", 
-                    timeout=timeout
-                ):
-                    raise TimeoutError("Server failed to start within timeout")
-                    
-                # Yield control back to the caller
-                yield
-            finally:
-                exit_stack.close()
-            
-            return  # Early return, skip CLI approach
-        except ImportError as e:
-            print(f"[DYNAMO SERVE] Couldn't start server with preloaded model: {e}")
-            print("[DYNAMO SERVE] Falling back to CLI approach")
+        print(f"[DYNAMO SERVE] Preloaded model provided but using CLI approach for compatibility")
     
-    # If we get here, either no preloaded model was provided or server startup failed
-    # Use the original CLI approach
+    # Use the CLI approach
     command = ["dynamo", "serve", graph.module]
     if graph.config:
         command.extend(["-f", graph.config])
     
     if port != 8000:
         command.extend(["--port", str(port)])
-    def health_check(port=8000, model_name="deepseek-ai/DeepSeek-R1-Distill-Llama-8B"):
 
-            def try_post_chat_completion():
-
-                url = f"http://localhost:{port}/v1/chat/completions"
-
-                payload = {
-
-                    "model": model_name,
-
-                    "messages": [{"role": "user", "content": "ping"}],
-
-                    "stream": False,
-
-                    "max_tokens": 1
-
-                }
-
-
-
-                for attempt in range(3):
-
-                    try:
-
-                        response = requests.post(url, json=payload, timeout=1)
-
-                        if response.status_code == 200:
-
-                            data = response.json()
-
-                            if "choices" in data:
-
-                                print(f"[HEALTH] Chat completions OK on attempt {attempt + 1}")
-
-                                return True
-
-                            else:
-
-                                print(f"[HEALTH] No 'choices' in response: {data}")
-
-                        else:
-
-                            print(f"[HEALTH] Status {response.status_code} from chat endpoint")
-
-                    except Exception as e:
-
-                        print(f"[HEALTH] Chat check error: {e}")
-
-                    time.sleep(0.5)
-
-                return False
-
-
-
-            def try_get_models():
-
-                url = f"http://localhost:{port}/v1/models"
-
-                for attempt in range(2):
-
-                    try:
-
-                        response = requests.get(url, timeout=1)
-
-                        if response.status_code == 200:
-
-                            data = response.json()
-
-                            if "data" in data and len(data["data"]) > 0:
-
-                                print(f"[HEALTH] Models ready: {data['data']}")
-
-                                return True
-
-                            else:
-
-                                print(f"[HEALTH] Models not ready: {data}")
-
-                    except Exception as e:
-
-                        print(f"[HEALTH] Models check error: {e}")
-
-                    time.sleep(0.5)
-
-                return False
-
-
-
-            print(f"[HEALTH] Checking /v1/chat/completions and /v1/models on port {port}")
-
-            return try_post_chat_completion() and try_get_models()
     # Create a health check function for the server
-    def health_chec_1k():
-        health_url = f"http://localhost:{port}/chat/completions"
+    def health_check(proc=None):
+        health_url = f"http://localhost:{port}/health"
         readiness_url = f"http://localhost:{port}/v1/models"
         
         print(f"[DYNAMO SERVE] Checking health: {health_url}")
@@ -268,24 +120,12 @@ def dynamo_serve_process(graph: DeploymentGraph, port=8000, timeout=300, preload
         timeout=timeout,
         cwd=graph.directory,
         output=True,
-        health_check=health_check
+        startup_check=health_check
     ) as process:
         # Test server health
         print(f"[DYNAMO SERVE] Process started, checking health...")
         
-        # Wait for server to be ready
-        start_time = time.time()
-        ready = False
-        
-        while time.time() - start_time < timeout and not ready:
-            if health_check():
-                ready = True
-                break
-            time.sleep(1)
-            
-        if not ready:
-            raise TimeoutError(f"Server failed to report healthy status within {timeout}s")
-            
+        # The startup_check already verified the server is ready, so we can proceed
         print(f"[DYNAMO SERVE] Server ready on port {port}")
         print(f"[DYNAMO SERVE] Server process started and ready - deployment: {graph.module}")
         print(f"[DYNAMO SERVE] Testing with endpoint: {graph.endpoint}")
@@ -294,9 +134,19 @@ def dynamo_serve_process(graph: DeploymentGraph, port=8000, timeout=300, preload
         try:
             import subprocess
             print("\n[DYNAMO SERVE] Checking NATS status before client tests...")
-            # Using hardcoded NATS monitoring port 8222
-            subprocess.run(["curl", "-s", "localhost:8222/varz"], check=False)
-            subprocess.run(["curl", "-s", "localhost:8222/jsz"], check=False)
+            # Use service_ports if available, otherwise fallback to hardcoded port
+            nats_port = 8222  # Default fallback
+            try:
+                # Try to get service_ports from pytest context if available
+                import pytest
+                if hasattr(pytest, '_current_request') and pytest._current_request:
+                    service_ports = pytest._current_request.getfixturevalue('service_ports')
+                    nats_port = service_ports.get('nats_http', 8222)
+            except:
+                pass  # Use default port if service_ports not available
+            
+            subprocess.run(["curl", "-s", f"localhost:{nats_port}/varz"], check=False)
+            subprocess.run(["curl", "-s", f"localhost:{nats_port}/jsz"], check=False)
             print("[DYNAMO SERVE] NATS check complete")
         except Exception as e:
             print(f"[DYNAMO SERVE] Error checking NATS: {e}")

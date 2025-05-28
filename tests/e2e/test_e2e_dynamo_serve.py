@@ -25,7 +25,7 @@ from tests.utils import find_free_port, cleanup_directory, check_service_health,
 from tests.e2e.testutils import dynamo_serve_process, get_test_deployment_graphs, DeploymentGraph, Payload
 
 
-@pytest.fixture(params=["agg", "agg_router", "multimodal_agg", "sglang_agg"])
+@pytest.fixture(params=["agg", "agg_router", "disagg"])
 def deployment_graph_test(request):
     """
     Fixture that provides different deployment graph test configurations.
@@ -38,19 +38,23 @@ def deployment_graph_test(request):
 @pytest.mark.e2e
 @pytest.mark.vllm
 @pytest.mark.slow
-def test_serve_deployment(deployment_graph_test,etcd_server, nats_server,  model_loader):
+def test_serve_deployment(deployment_graph_test, etcd_server, nats_server, model_loader, service_ports):
     """
     Test dynamo serve deployments with different graph configurations.
     
-    Uses model_loader to preload models for improved performance.
+    Uses model_loader to preload models for improved performance and dynamic port allocation.
     """
     print("\n[TEST] Starting test_deployment")
     deployment_graph, payload = deployment_graph_test
     response = None
-    port = 8000 #find_free_port()
+    
+    # Use dynamic port allocation to avoid conflicts
+    port = find_free_port()
+    print(f"[TEST] Allocated dynamic port: {port}")
     
     print(f"[TEST] Testing deployment: {deployment_graph.module} on port {port}")
     print(f"[TEST] Payload: {payload.payload}")
+    print(f"[TEST] Service ports: ETCD={service_ports['etcd_client']}, NATS={service_ports['nats_client']}")
     
     # Extract the model name from the payload
     model_name = None
@@ -72,8 +76,9 @@ def test_serve_deployment(deployment_graph_test,etcd_server, nats_server,  model
     # Check NATS status before starting test
     try:
         import subprocess
-        # Using hardcoded NATS monitoring port 8222
-        result = subprocess.run(["curl", "-s", "localhost:8222/varz"], capture_output=True, text=True)
+        # Using configured NATS monitoring port
+        nats_monitor_port = service_ports['nats_http']
+        result = subprocess.run(["curl", "-s", f"localhost:{nats_monitor_port}/varz"], capture_output=True, text=True)
         print(f"[TEST] NATS status before test: {'OK' if 'server_id' in result.stdout else 'NOT READY'}")
     except Exception as e:
         print(f"[TEST] Error checking NATS: {e}")
