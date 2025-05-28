@@ -93,11 +93,11 @@ The `deploy` commmand creates a dynamo graph on Dynamo Cloud using parameters at
 
 **Usage**
 ```bash
-dynamo deploy [DYNAMO_GRPAH_PACKAGE]
+dynamo deploy [DYNAMOGRAPH_PACKAGE]
 ```
 
 **Arguments**
-- `DYNAMO_GRPAH_PACKAGE` - The dynamo graph package to deploy. Defaults to *None*; required.
+- `DYNAMOGRAPH_PACKAGE` - The dynamo graph package to deploy. Defaults to *None*; required.
 
 **Flags**
 - `--name` or `-n` - Deployment name. Defaults to *None*; required.
