@@ -38,7 +38,7 @@ def deployment_graph_test(request):
 @pytest.mark.e2e
 @pytest.mark.vllm
 @pytest.mark.slow
-def test_serve_deployment(deployment_graph_test, model_loader):
+def test_serve_deployment(deployment_graph_test,etcd_server, nats_server,  model_loader):
     """
     Test dynamo serve deployments with different graph configurations.
     
@@ -47,7 +47,7 @@ def test_serve_deployment(deployment_graph_test, model_loader):
     print("\n[TEST] Starting test_deployment")
     deployment_graph, payload = deployment_graph_test
     response = None
-    port = find_free_port()
+    port = 8000 #find_free_port()
     
     print(f"[TEST] Testing deployment: {deployment_graph.module} on port {port}")
     print(f"[TEST] Payload: {payload.payload}")

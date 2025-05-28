@@ -125,10 +125,100 @@ def dynamo_serve_process(graph: DeploymentGraph, port=8000, timeout=300, preload
     
     if port != 8000:
         command.extend(["--port", str(port)])
+    def health_check(port=8000, model_name="deepseek-ai/DeepSeek-R1-Distill-Llama-8B"):
 
+            def try_post_chat_completion():
+
+                url = f"http://localhost:{port}/v1/chat/completions"
+
+                payload = {
+
+                    "model": model_name,
+
+                    "messages": [{"role": "user", "content": "ping"}],
+
+                    "stream": False,
+
+                    "max_tokens": 1
+
+                }
+
+
+
+                for attempt in range(3):
+
+                    try:
+
+                        response = requests.post(url, json=payload, timeout=1)
+
+                        if response.status_code == 200:
+
+                            data = response.json()
+
+                            if "choices" in data:
+
+                                print(f"[HEALTH] Chat completions OK on attempt {attempt + 1}")
+
+                                return True
+
+                            else:
+
+                                print(f"[HEALTH] No 'choices' in response: {data}")
+
+                        else:
+
+                            print(f"[HEALTH] Status {response.status_code} from chat endpoint")
+
+                    except Exception as e:
+
+                        print(f"[HEALTH] Chat check error: {e}")
+
+                    time.sleep(0.5)
+
+                return False
+
+
+
+            def try_get_models():
+
+                url = f"http://localhost:{port}/v1/models"
+
+                for attempt in range(2):
+
+                    try:
+
+                        response = requests.get(url, timeout=1)
+
+                        if response.status_code == 200:
+
+                            data = response.json()
+
+                            if "data" in data and len(data["data"]) > 0:
+
+                                print(f"[HEALTH] Models ready: {data['data']}")
+
+                                return True
+
+                            else:
+
+                                print(f"[HEALTH] Models not ready: {data}")
+
+                    except Exception as e:
+
+                        print(f"[HEALTH] Models check error: {e}")
+
+                    time.sleep(0.5)
+
+                return False
+
+
+
+            print(f"[HEALTH] Checking /v1/chat/completions and /v1/models on port {port}")
+
+            return try_post_chat_completion() and try_get_models()
     # Create a health check function for the server
-    def health_check():
-        health_url = f"http://localhost:{port}/health"
+    def health_chec_1k():
+        health_url = f"http://localhost:{port}/chat/completions"
         readiness_url = f"http://localhost:{port}/v1/models"
         
         print(f"[DYNAMO SERVE] Checking health: {health_url}")
