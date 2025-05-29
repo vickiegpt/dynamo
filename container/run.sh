@@ -40,6 +40,7 @@ ENVIRONMENT_VARIABLES=
 REMAINING_ARGS=
 INTERACTIVE=
 USE_NIXL_GDS=
+WORKDIR=/workspace
 
 get_options() {
     while :; do
@@ -113,6 +114,14 @@ get_options() {
 		missing_requirement "$1"
             fi
             ;;
+	--workdir)
+	    if [ "$2" ]; then
+	        WORKDIR="/workspace/$2"
+	        shift
+	    else
+	        missing_requirement "$1"
+	    fi
+	    ;;
 	--rm)
             if [ "$2" ]; then
                 RM=$2
@@ -271,6 +280,7 @@ show_help() {
     echo "  [--framework framework one of ${!FRAMEWORKS[*]}]"
     echo "  [--name name for launched container, default NONE] "
     echo "  [--privileged whether to launch in privileged mode, default FALSE unless mounting workspace]"
+    echo "  [--workdir relative_path_inside_workspace]"
     echo "  [--dry-run print docker commands without running]"
     echo "  [--hf-cache directory to volume mount as the hf cache, default is NONE unless mounting workspace]"
     echo "  [--gpus gpus to enable, default is 'all', 'none' disables gpu support]"
@@ -310,7 +320,7 @@ ${RUN_PREFIX} docker run \
     --ulimit nofile=65536:65536 \
     ${ENVIRONMENT_VARIABLES} \
     ${VOLUME_MOUNTS} \
-    -w /workspace \
+    -w "$WORKDIR" \
     --cap-add CAP_SYS_PTRACE \
     ${NIXL_GDS_CAPS} \
     --ipc host \
