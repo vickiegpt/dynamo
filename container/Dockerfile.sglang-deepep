@@ -78,4 +78,7 @@ RUN wget --tries=3 --waitretry=5 https://github.com/etcd-io/etcd/releases/downlo
     rm /tmp/etcd.tar.gz
 ENV PATH=/usr/local/bin/etcd/:$PATH
 
+RUN mkdir -p /sgl-workspace/dynamo/examples/sglang/configs/deepep
+COPY examples/sglang/configs/deepep/* /sgl-workspace/dynamo/examples/sglang/configs/deepep/
+
 WORKDIR /sgl-workspace
