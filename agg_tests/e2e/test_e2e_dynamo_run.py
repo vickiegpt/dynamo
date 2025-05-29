@@ -54,7 +54,6 @@ def dynamo_run(backend, model, input_type, timeout):
 )
 @pytest.mark.parametrize("prompt", [("Hello!", "Hello! How can I assist you today?")])
 @pytest.mark.gpu
-@pytest.mark.e2e
 @pytest.mark.vllm
 @pytest.mark.slow
 def test_run(dynamo_run, backend, model, input_type, prompt, stream, timeout):
