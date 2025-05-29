@@ -74,13 +74,17 @@ impl CriticalTaskExecutionHandle {
             match future.await {
                 Ok(()) => {
                     tracing::debug!(
-                        "Critical task '{}' completed successfully",
-                        description_clone
+                        task_description = %description_clone,
+                        "Critical task completed successfully"
                     );
                     Ok(())
                 }
                 Err(e) => {
-                    tracing::error!("Critical task '{}' failed: {:#}", description_clone, e);
+                    tracing::error!(
+                        task_description = %description_clone,
+                        error = %e,
+                        "Critical task failed"
+                    );
                     Err(e.context(format!("Critical task '{}' failed", description_clone)))
                 }
             }
@@ -118,9 +122,9 @@ impl CriticalTaskExecutionHandle {
                             };
 
                             tracing::error!(
-                                "Critical task '{}' panicked: {}",
-                                description_monitor,
-                                panic_msg
+                                task_description = %description_monitor,
+                                panic_msg = %panic_msg,
+                                "Critical task panicked"
                             );
                             parent_token_monitor.cancel(); // Trigger parent cancellation immediately
                             Err(anyhow::anyhow!(
