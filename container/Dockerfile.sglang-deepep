@@ -12,7 +12,8 @@ WORKDIR /sgl-workspace
 # need our fixed nixl version
 RUN pip uninstall -y sglang
 RUN rm -rf sglang 
-ARG SGLANG_COMMIT="e806f708c954020bda7d1cc98035a44fd6a4eb96"
+# main as of 5/29 10:38AM PST - https://github.com/sgl-project/sglang/pull/6742
+ARG SGLANG_COMMIT="6df81e8a391961ed6c0a243010175e36371b42c5"
 RUN git clone https://github.com/sgl-project/sglang.git && cd sglang && git checkout ${SGLANG_COMMIT} && pip install -e "python[all]"
 
 RUN git clone https://github.com/ai-dynamo/dynamo.git
@@ -78,7 +79,6 @@ RUN wget --tries=3 --waitretry=5 https://github.com/etcd-io/etcd/releases/downlo
     rm /tmp/etcd.tar.gz
 ENV PATH=/usr/local/bin/etcd/:$PATH
 
-RUN mkdir -p /sgl-workspace/dynamo/examples/sglang/configs/deepep
-COPY examples/sglang/configs/deepep/* /sgl-workspace/dynamo/examples/sglang/configs/deepep/
+COPY examples/sglang/configs/deepep/* /sgl-workspace/dynamo/examples/sglang/configs/
 
 WORKDIR /sgl-workspace
