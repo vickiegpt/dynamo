@@ -73,14 +73,14 @@ impl CriticalTaskExecutionHandle {
 
             match future.await {
                 Ok(()) => {
-                    log::debug!(
+                    tracing::debug!(
                         "Critical task '{}' completed successfully",
                         description_clone
                     );
                     Ok(())
                 }
                 Err(e) => {
-                    log::error!("Critical task '{}' failed: {:#}", description_clone, e);
+                    tracing::error!("Critical task '{}' failed: {:#}", description_clone, e);
                     Err(e.context(format!("Critical task '{}' failed", description_clone)))
                 }
             }
@@ -117,7 +117,7 @@ impl CriticalTaskExecutionHandle {
                                 "Panic occurred but reason unavailable".to_string()
                             };
 
-                            log::error!(
+                            tracing::error!(
                                 "Critical task '{}' panicked: {}",
                                 description_monitor,
                                 panic_msg
