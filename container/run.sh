@@ -38,6 +38,7 @@ VOLUME_MOUNTS=
 MOUNT_WORKSPACE=
 ENVIRONMENT_VARIABLES=
 REMAINING_ARGS=
+RUNTIME=nvidia
 INTERACTIVE=
 USE_NIXL_GDS=
 WORKDIR=/workspace
@@ -93,6 +94,14 @@ get_options() {
 	--gpus)
             if [ "$2" ]; then
                 GPUS=$2
+                shift
+            else
+		missing_requirement "$1"
+            fi
+            ;;
+	--runtime)
+            if [ "$2" ]; then
+                RUNTIME=$2
                 shift
             else
 		missing_requirement "$1"
@@ -271,6 +280,10 @@ get_options() {
         NIXL_GDS_CAPS=""
     fi
 
+    if [[ "$GPUS" == "none" || "$GPUS" == "NONE" ]]; then
+    	RUNTIME=""
+    fi
+
     REMAINING_ARGS=("$@")
 }
 
@@ -287,6 +300,7 @@ show_help() {
     echo "  [--use-nixl-gds add volume mounts and capabilities needed for NVIDIA GPUDirect Storage]"
     echo "  [-v add volume mount]"
     echo "  [-e add environment variable]"
+    echo "  [--runtime add runtime variables]"
     echo "  [--mount-workspace set up for local development]"
     echo "  [-- stop processing and pass remaining args as command to docker run]"
     exit 0
@@ -314,6 +328,7 @@ ${RUN_PREFIX} docker run \
     ${INTERACTIVE} \
     ${RM_STRING} \
     --network host \
+    ${RUNTIME:+--runtime $RUNTIME} \
     --shm-size=10G \
     --ulimit memlock=-1 \
     --ulimit stack=67108864 \
