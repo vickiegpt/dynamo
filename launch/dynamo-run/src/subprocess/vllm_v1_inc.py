@@ -5,9 +5,13 @@
 # Can also be used standalone: `python3 vllm_inc.py` - lots of optional cmd line params
 
 # Setup checklist:
-# - We are in a virtualenv with vllm installed - and patched if using kv routing.
-# - `libdynamo_llm_capi.so` is in system lib path or it's containing folder is in LD_LIBRARY_PATH
-#   It builds in target/debug/ by default.
+# - We are in a virtualenv with vllm installed. Must be newer than v0.9.0 (currently pre-release)
+# 1f079540db5f1080a2f61a730da50d3009934c5a - this commit is working for me
+# Steps:
+# git clone https://github.com/vllm-project/vllm.git
+# cd vllm && git checkout 1f079540db5f1080a2f61a730da50d3009934c5a
+# uv pip uninstall ai-dynamo-vllm
+# VLLM_USE_PRECOMPILED=1 uv pip install --editable .
 
 import argparse
 import asyncio
@@ -19,21 +23,31 @@ import uuid
 from typing import Optional
 
 import uvloop
-from vllm import SamplingParams
+from vllm.config import VllmConfig
+from vllm.distributed.kv_events import KVEventsConfig
 from vllm.engine.arg_utils import AsyncEngineArgs
-from vllm.entrypoints.openai.api_server import (
-    build_async_engine_client_from_engine_args,
-)
 from vllm.inputs import TokensPrompt
+from vllm.sampling_params import SamplingParams
+from vllm.usage.usage_lib import UsageContext
+from vllm.v1.engine.async_llm import AsyncLLM
+from vllm.v1.metrics.loggers import StatLoggerBase
+from vllm.v1.metrics.stats import IterationStats, SchedulerStats
 
-from dynamo.llm import KvMetricsPublisher, ModelType, register_llm
-from dynamo.runtime import DistributedRuntime, dynamo_worker
+from dynamo.llm import (
+    KvEventPublisherFromZmq,
+    KvEventPublisherFromZmqConfig,
+    KvMetricsPublisher,
+    ModelType,
+    register_llm,
+)
+from dynamo.runtime import Component, DistributedRuntime, dynamo_worker
 
 # Only used if you run it manually from the command line
 DEFAULT_ENDPOINT = "dyn://dynamo.backend.generate"
 DEFAULT_MODEL = "Qwen/Qwen3-0.6B"
 
 logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 
 class Config:
@@ -50,6 +64,56 @@ class Config:
     extra_engine_args: str
 
 
+class DynamoStatLoggerPublisher(StatLoggerBase):
+    """Stat logger publisher. Wrapper for the KvMetricsPublisher to match the StatLoggerBase interface."""
+
+    def __init__(self, component: Component, dp_rank: int) -> None:
+        self.inner = KvMetricsPublisher()
+        self.inner.create_endpoint(component)
+        self.dp_rank = dp_rank
+
+    def record(
+        self, scheduler_stats: SchedulerStats, iteration_stats: Optional[IterationStats]
+    ):
+        # request_total_slots and kv_total_blocks are properties of model + gpu
+        # we should only publish them once, not every metric update
+        # they should be part of some runtime metadata tied to MDC or put in etcd ?
+        hit_rate = 0
+        if scheduler_stats.prefix_cache_stats.queries > 0:
+            hit_rate = (
+                scheduler_stats.prefix_cache_stats.hits
+                / scheduler_stats.prefix_cache_stats.queries
+            )
+
+        # TODO Manage DP Ranks in metrics aggregation.
+        self.inner.publish(
+            request_active_slots=scheduler_stats.num_running_reqs,
+            request_total_slots=0,  # TODO - remove from metrics
+            kv_active_blocks=0,  # TODO - need to calculate this
+            kv_total_blocks=0,  # TODO - remove from metrics
+            num_requests_waiting=scheduler_stats.num_waiting_reqs,  # used in current cost function
+            gpu_cache_usage_perc=scheduler_stats.gpu_cache_usage,  # used in current cost function
+            gpu_prefix_cache_hit_rate=hit_rate,
+            data_parallel_rank=self.dp_rank,
+        )
+
+    def log_engine_initialized(self) -> None:
+        pass
+
+
+class StatLoggerFactory:
+    """Factory for creating stat logger publishers. Required by vLLM."""
+
+    def __init__(self, component: Component) -> None:
+        self.component = component
+
+    def create_stat_logger(self, dp_rank: int) -> StatLoggerBase:
+        return DynamoStatLoggerPublisher(self.component, dp_rank)
+
+    def __call__(self, vllm_config: VllmConfig, dp_rank: int) -> StatLoggerBase:
+        return self.create_stat_logger(dp_rank=dp_rank)
+
+
 class RequestHandler:
     """
     Request handler for the generate endpoint
@@ -59,36 +123,8 @@ class RequestHandler:
         self.component = component
         self.engine_client = engine
         self.default_sampling_params = default_sampling_params
-        self.metrics_publisher = KvMetricsPublisher()
-
-    def setup_kv_metrics(self):
-        if not hasattr(self.engine_client, "set_metrics_publisher"):
-            logging.debug("VLLM version does not support KV metrics")
-            return
-
-        self.engine_client.set_metrics_publisher(self.metrics_publisher)
-        # Initially send dummy metrics to kick start,
-        # vLLM will not update stat until forward pass is triggered
-        self.metrics_publisher.publish(
-            0,  # request_active_slots
-            1024,  # request_total_slots
-            0,  # kv_active_blocks
-            1024,  # kv_total_blocks
-            0,  # num_requests_waiting
-            0.0,  # gpu_cache_usage_perc
-            0.0,  # gpu_prefix_cache_hit_rate
-        )
-        task = asyncio.create_task(self.create_metrics_publisher_endpoint())
-        task.add_done_callback(
-            lambda _: logging.debug("metrics publisher endpoint created")
-        )
-
-    async def create_metrics_publisher_endpoint(self):
-        logging.debug("Creating metrics publisher endpoint")
-        await self.metrics_publisher.create_endpoint(self.component)
 
     async def generate(self, request):
-        # logging.debug(f"Received request: {request}")
         request_id = str(uuid.uuid4().hex)
 
         prompt = TokensPrompt(prompt_token_ids=request["token_ids"])
@@ -135,18 +171,21 @@ async def worker(runtime: DistributedRuntime):
     await init(runtime, cmd_line_args())
 
 
-def _check_and_set_env_value(key, expected, allow_override=False):
-    if not allow_override and key in os.environ and os.environ[key] != expected:
-        raise ValueError(
-            f"{key} is set and doesn't equal expected {expected}. Please unset variable before launch."
-        )
-    os.environ.setdefault(key, expected)
-
-
 async def init(runtime: DistributedRuntime, config: Config):
     """
     Instantiate and serve
     """
+    component = runtime.namespace(config.namespace).component(config.component)
+    await component.create_service()
+
+    endpoint = component.endpoint(config.endpoint)
+    await register_llm(
+        ModelType.Backend,
+        endpoint,
+        config.model_path,
+        config.model_name,
+        kv_cache_block_size=config.kv_block_size,
+    )
 
     arg_map = {
         "model": config.model_path,
@@ -157,13 +196,17 @@ async def init(runtime: DistributedRuntime, config: Config):
         "enable_prefix_caching": True,
         # KV routing relies on logging KV metrics
         "disable_log_stats": False,
+        "kv_events_config": KVEventsConfig(
+            enable_kv_cache_events=True, publisher="zmq"
+        ),
     }
-    assert config.kv_block_size > 0, "Must use non-negative integer for KV Block Size"
-    arg_map["block_size"] = config.kv_block_size
 
     if config.context_length:
         # Usually we want it to default to the max (from tokenizer_config.json)
         arg_map["max_model_len"] = config.context_length
+
+    if config.kv_block_size > 0:
+        arg_map["block_size"] = config.kv_block_size
 
     if config.extra_engine_args != "":
         json_map = {}
@@ -178,41 +221,40 @@ async def init(runtime: DistributedRuntime, config: Config):
         logging.debug(f"Adding extra engine arguments: {json_map}")
         arg_map = {**arg_map, **json_map}  # json_map gets precedence
 
-    # Patch won't start KVCacheEventManager unless these four are set
+    logger.info(f"VLLM config: {arg_map}")
 
-    component = runtime.namespace(config.namespace).component(config.component)
-    await component.create_service()
-    endpoint = component.endpoint(config.endpoint)
+    os.environ["VLLM_NO_USAGE_STATS"] = "1"  # Avoid internal HTTP requests
+    os.environ[
+        "VLLM_WORKER_MULTIPROC_METHOD"
+    ] = "spawn"  # Ensure our publisher makes it to the new process
 
-    _check_and_set_env_value("VLLM_WORKER_ID", str(endpoint.lease_id()))
-    _check_and_set_env_value(
-        "VLLM_KV_CAPI_PATH", "libdynamo_llm_capi.so", allow_override=True
-    )
-    _check_and_set_env_value("VLLM_KV_NAMESPACE", config.namespace)
-    _check_and_set_env_value("VLLM_KV_COMPONENT", config.component)
-    _check_and_set_env_value(
-        "VLLM_NO_USAGE_STATS", "1", allow_override=True
-    )  # Avoid internal HTTP requests
     engine_args = AsyncEngineArgs(**arg_map)
     model_config = engine_args.create_model_config()
     # Load default sampling params from `generation_config.json`
     default_sampling_params = model_config.get_diff_sampling_param()
 
-    engine_context = build_async_engine_client_from_engine_args(engine_args)
-    engine_client = await engine_context.__aenter__()
+    # Taken from build_async_engine_client_from_engine_args()
+    usage_context = UsageContext.OPENAI_API_SERVER
+    vllm_config = engine_args.create_engine_config(usage_context=usage_context)
 
-    await register_llm(
-        ModelType.Backend,
-        endpoint,
-        config.model_path,
-        config.model_name,
-        context_length=arg_map.get(
-            "max_model_len", None
-        ),  # if None, takes length from tokenizer
-        kv_cache_block_size=arg_map["block_size"],
+    # Explicitly pass our custom stat logger for metrics
+    engine_client = AsyncLLM.from_vllm_config(
+        vllm_config=vllm_config,
+        usage_context=usage_context,
+        stat_loggers=[StatLoggerFactory(component)],
+        disable_log_requests=engine_args.disable_log_requests,
+        disable_log_stats=engine_args.disable_log_stats,
     )
+
+    logger.info("VllmWorker has been initialized")
+
+    zmq_config = KvEventPublisherFromZmqConfig(
+        worker_id=endpoint.lease_id(), kv_block_size=engine_args.block_size
+    )
+
+    _ = KvEventPublisherFromZmq(component=component, config=zmq_config)
+
     handler = RequestHandler(component, engine_client, default_sampling_params)
-    handler.setup_kv_metrics()
 
     # the server will gracefully shutdown (i.e., keep opened TCP streams finishes)
     # after the lease is revoked
