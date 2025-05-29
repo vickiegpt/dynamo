@@ -8,6 +8,13 @@ RUN pip install . --config-settings=setup-args="-Ducx_path=/opt/hpcx/ucx"
 RUN pip3 install mooncake-transfer-engine
 
 WORKDIR /sgl-workspace
+
+# need our fixed nixl version
+RUN pip uninstall -y sglang
+RUN rm -rf sglang 
+ARG SGLANG_COMMIT="e806f708c954020bda7d1cc98035a44fd6a4eb96"
+RUN git clone https://github.com/sgl-project/sglang.git && cd sglang && git checkout ${SGLANG_COMMIT} && pip install -e "python[all]"
+
 RUN git clone https://github.com/ai-dynamo/dynamo.git
 
 # install dynamo in editable mode
