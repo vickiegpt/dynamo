@@ -257,7 +257,7 @@ impl<T: WorkerGeneral> RadixTree<T> {
     ///
     /// * `event` - The `RouterEvent` to apply.
     pub fn apply_event(&mut self, event: RouterEvent<T>) {
-        let (worker_id, event) = (event.worker_id, event.event);
+        let (worker_id, event) = (event.worker_id_general, event.event);
         let (id, op) = (event.event_id, event.data);
         tracing::trace!(id, "Store operation: {:?}", op);
 
@@ -363,7 +363,7 @@ impl<T: WorkerGeneral> RadixTree<T> {
         }
     }
 
-    pub fn clear_all_blocks(&mut self, worker: WorkerId) {
+    pub fn clear_all_blocks(&mut self, worker: T) {
         // Check if the worker has any blocks to clear
         if let Some(blocks) = self.lookup.get(&worker) {
             let blocks_to_clear: Vec<_> = blocks.values().collect();
@@ -845,7 +845,10 @@ impl<T: WorkerGeneral> KvIndexerInterface<T> for KvIndexerSharded<T> {
 
     async fn apply_event(&mut self, event: RouterEvent<T>) {
         #[allow(clippy::map_entry)]
-        if !self.worker_assignments.contains_key(&event.worker_id) {
+        if !self
+            .worker_assignments
+            .contains_key(&event.worker_id_general)
+        {
             // Get the shard with the smallest amount of workers.
             let selected_shard = self
                 .worker_counts
@@ -856,11 +859,11 @@ impl<T: WorkerGeneral> KvIndexerInterface<T> for KvIndexerSharded<T> {
                 .0;
 
             self.worker_assignments
-                .insert(event.worker_id.clone(), selected_shard);
+                .insert(event.worker_id_general.clone(), selected_shard);
             self.worker_counts[selected_shard] += 1;
         }
 
-        self.event_tx[self.worker_assignments[&event.worker_id]]
+        self.event_tx[self.worker_assignments[&event.worker_id_general]]
             .send(event)
             .await
             .unwrap();
@@ -924,7 +927,7 @@ mod tests {
         parent: Option<ExternalSequenceBlockHash>,
     ) -> RouterEvent<TestWorkerId> {
         RouterEvent {
-            worker_id,
+            worker_id_general: worker_id,
             event: KvCacheEvent {
                 event_id,
                 data: add_blocks(hashes, parent),
@@ -938,7 +941,7 @@ mod tests {
         hashes: Vec<u64>,
     ) -> RouterEvent<TestWorkerId> {
         RouterEvent {
-            worker_id,
+            worker_id_general: worker_id,
             event: KvCacheEvent {
                 event_id,
                 data: KvCacheEventData::Removed(KvCacheRemoveData {
@@ -1515,7 +1518,7 @@ mod tests {
         };
         let router_event = RouterEvent::new(worker_id, kv_cache_event);
 
-        assert_eq!(router_event.worker_id, worker_id);
+        assert_eq!(router_event.worker_id_general, worker_id);
         assert_eq!(router_event.event.event_id, 1);
         if let KvCacheEventData::Stored(store_op) = &router_event.event.data {
             assert_eq!(store_op.blocks.len(), 1);

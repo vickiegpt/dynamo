@@ -14,6 +14,7 @@ use dynamo_runtime::{
     protocols::annotated::Annotated,
 };
 use futures::stream::{self, StreamExt};
+use protocols::{WorkerId, WorkerWithDpRank};
 
 pub mod indexer;
 pub mod metrics_aggregator;
@@ -28,8 +29,7 @@ use crate::{
         indexer::{KvIndexer, KvIndexerInterface},
         metrics_aggregator::KvMetricsAggregator,
         protocols::{
-            DpRank, LocalBlockHash, RouterEvent, RouterRequest, RouterResponse, WorkerId,
-            WorkerSelectionResult,
+            LocalBlockHash, RouterEvent, RouterRequest, RouterResponse, WorkerSelectionResult,
         },
         scheduler::{KvScheduler, KvSchedulerError, SchedulingRequest},
         scoring::ProcessedEndpoints,
@@ -54,13 +54,13 @@ pub trait WorkerSelector {
         workers: &ProcessedEndpoints,
         request: &SchedulingRequest,
         block_size: usize,
-    ) -> Result<WorkerSelectionResult<(WorkerId, DpRank)>, KvSchedulerError>;
+    ) -> Result<WorkerSelectionResult<WorkerWithDpRank>, KvSchedulerError>;
 }
 
 /// A KvRouter only decides which worker you should use. It doesn't send you there.
 /// TODO: Rename this to indicate it only selects a worker, it does not route.
 pub struct KvRouter {
-    indexer: KvIndexer<(WorkerId, DpRank)>,
+    indexer: KvIndexer<WorkerWithDpRank>,
     scheduler: KvScheduler,
     block_size: usize,
 }
@@ -95,7 +95,7 @@ impl KvRouter {
 
         tokio::spawn(async move {
             while let Some(event) = kv_events_rx.next().await {
-                let event: RouterEvent<(WorkerId, DpRank)> =
+                let event: RouterEvent<WorkerWithDpRank> =
                     match serde_json::from_slice(&event.payload) {
                         Ok(event) => event,
                         Err(e) => {
@@ -119,11 +119,7 @@ impl KvRouter {
     }
 
     // [TODO] indexer needs to take 'lora_id' as parameter
-    pub async fn schedule(
-        &self,
-        token_ids: &Vec<u32>,
-        _lora_id: u64,
-    ) -> Result<(WorkerId, DpRank)> {
+    pub async fn schedule(&self, token_ids: &Vec<u32>, _lora_id: u64) -> Result<WorkerWithDpRank> {
         // Extracting part of the code in KvRouter::generate() for only
         // the decision making part, routing is done by the caller
         let isl_tokens = token_ids.len();
@@ -138,7 +134,7 @@ impl KvRouter {
 
     /// Give these tokens, find the worker with the best match in it's KV cache.
     /// Returned overlap amount is in number of blocks.
-    async fn find_best_match(&self, tokens: &[u32]) -> anyhow::Result<((WorkerId, DpRank), u32)> {
+    async fn find_best_match(&self, tokens: &[u32]) -> anyhow::Result<(WorkerWithDpRank, u32)> {
         let isl_tokens = tokens.len();
         let block_size = self.block_size;
 
@@ -168,18 +164,21 @@ impl KvRouter {
 impl
     AsyncEngine<
         SingleIn<RouterRequest>,
-        ManyOut<Annotated<RouterResponse<(WorkerId, DpRank)>>>,
+        ManyOut<Annotated<RouterResponse<WorkerWithDpRank>>>,
         Error,
     > for KvRouter
 {
     async fn generate(
         &self,
         request: SingleIn<RouterRequest>,
-    ) -> Result<ManyOut<Annotated<RouterResponse<(WorkerId, DpRank)>>>> {
+    ) -> Result<ManyOut<Annotated<RouterResponse<WorkerId>>>> {
         let (request, ctx) = request.into_parts();
-        let (worker_id, _) = self.find_best_match(&request.tokens).await?;
+        let (best_match, _) = self.find_best_match(&request.tokens).await?;
 
-        let response = RouterResponse { worker_id };
+        // NOTE: this ignores dp routing
+        let response = RouterResponse {
+            worker_id_general: best_match.worker_id,
+        };
         let response = Annotated::from_data(response);
         let stream = stream::iter(vec![response]);
         Ok(ResponseStream::new(Box::pin(stream), ctx.context()))
@@ -218,7 +217,9 @@ impl AsyncEngine<SingleIn<BackendInput>, ManyOut<Annotated<LLMEngineOutput>>, Er
                 backend_input.estimated_prefix_hit_num_blocks = Some(overlap_amount);
                 let updated_request = context.map(|_| backend_input);
                 // TODO: this does not do dp routing
-                self.inner.direct(updated_request, instance_id.0).await
+                self.inner
+                    .direct(updated_request, instance_id.worker_id)
+                    .await
             }
         }
     }

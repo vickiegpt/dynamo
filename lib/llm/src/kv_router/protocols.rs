@@ -21,8 +21,13 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 pub type WorkerId = i64;
-
 pub type DpRank = u32;
+
+#[derive(Hash, PartialEq, Eq, Debug, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct WorkerWithDpRank {
+    pub worker_id: WorkerId,
+    pub dp_rank: Option<DpRank>,
+}
 
 pub trait WorkerGeneral:
     Hash + Eq + Debug + Clone + Send + Sync + Default + 'static + Serialize
@@ -41,13 +46,13 @@ pub struct RouterRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RouterResponse<T: WorkerGeneral> {
-    pub worker_id: T,
+    pub worker_id_general: T,
 }
 
 #[derive(Debug)]
 pub struct WorkerSelectionResult<T: WorkerGeneral> {
     /// The worker id of the selected worker
-    pub worker_id: T,
+    pub worker_id_general: T,
 
     /// The total number of blocks required to prefill the request
     pub required_blocks: u64,
@@ -157,7 +162,7 @@ pub struct KvCacheRemoveData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KVHitRateEvent<T: WorkerGeneral> {
-    pub worker_id: T,
+    pub worker_id_general: T,
     pub isl_blocks: usize,
     pub overlap_blocks: usize,
 }
@@ -166,7 +171,7 @@ pub struct KVHitRateEvent<T: WorkerGeneral> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouterEvent<T: WorkerGeneral> {
     /// The ID of the worker emitting the event.
-    pub worker_id: T,
+    pub worker_id_general: T,
     /// The cache event associated with the worker.
     pub event: KvCacheEvent,
 }
@@ -182,8 +187,11 @@ impl<T: WorkerGeneral> RouterEvent<T> {
     /// ### Returns
     ///
     /// A new `RouterEvent`.
-    pub fn new(worker_id: T, event: KvCacheEvent) -> Self {
-        Self { worker_id, event }
+    pub fn new(worker_id_general: T, event: KvCacheEvent) -> Self {
+        Self {
+            worker_id_general,
+            event,
+        }
     }
 }
 

@@ -22,7 +22,7 @@ use rs::traits::events::EventSubscriber;
 use tracing;
 
 use llm_rs::kv_router::protocols::*;
-use llm_rs::kv_router::publisher::{create_stored_blocks, KvEventSourceConfig};
+use llm_rs::kv_router::publisher::{create_stored_blocks, KvEventSourceConfig, KvCacheEventWithDp};
 
 #[pyclass]
 pub(crate) struct KvRouter {
@@ -243,8 +243,11 @@ impl KvEventPublisher {
                 ),
             }),
         };
+        let event_with_dp = KvCacheEventWithDp {
+            kv_cache_event: event, dp_rank: None,
+        };
 
-        self.inner.publish(event).map_err(to_pyerr)
+        self.inner.publish(event_with_dp).map_err(to_pyerr)
     }
 
     fn publish_removed(&self, _py: Python, event_id: u64, block_hashes: Vec<i64>) -> PyResult<()> {
@@ -256,21 +259,24 @@ impl KvEventPublisher {
             event_id,
             data: KvCacheEventData::Removed(KvCacheRemoveData { block_hashes }),
         };
+        let event_with_dp = KvCacheEventWithDp {
+            kv_cache_event: event, dp_rank: None,
+        };
 
-        self.inner.publish(event).map_err(to_pyerr)
+        self.inner.publish(event_with_dp).map_err(to_pyerr)
     }
 }
 
 #[pyclass]
 #[derive(Clone)]
 pub(crate) struct OverlapScores {
-    inner: llm_rs::kv_router::indexer::OverlapScores,
+    inner: llm_rs::kv_router::indexer::OverlapScores<(WorkerId, DpRank)>,
 }
 
 #[pymethods]
 impl OverlapScores {
     #[getter]
-    fn scores(&self) -> HashMap<llm_rs::kv_router::indexer::WorkerId, u32> {
+    fn scores(&self) -> HashMap<(WorkerId, DpRank), u32> {
         self.inner.scores.clone()
     }
 
@@ -282,7 +288,7 @@ impl OverlapScores {
 
 #[pyclass]
 pub(crate) struct KvIndexer {
-    inner: Arc<llm_rs::kv_router::indexer::KvIndexer>,
+    inner: Arc<llm_rs::kv_router::indexer::KvIndexer<(WorkerId, DpRank)>>,
 }
 
 #[pymethods]
@@ -291,7 +297,7 @@ impl KvIndexer {
     fn new(component: Component, kv_block_size: usize) -> PyResult<Self> {
         let runtime = pyo3_async_runtimes::tokio::get_runtime();
         runtime.block_on(async {
-            let inner: Arc<llm_rs::kv_router::indexer::KvIndexer> =
+            let inner: Arc<llm_rs::kv_router::indexer::KvIndexer<(WorkerId, DpRank)>> =
                 llm_rs::kv_router::indexer::KvIndexer::new(
                     component.inner.drt().runtime().child_token(),
                     kv_block_size,
@@ -310,7 +316,7 @@ impl KvIndexer {
             // should have been made to a trait and implemented here? i.e. AsyncEngine style
             tokio::spawn(async move {
                 while let Some(event) = kv_events_rx.next().await {
-                    let event: llm_rs::kv_router::indexer::RouterEvent =
+                    let event: llm_rs::kv_router::protocols::RouterEvent<(WorkerId, DpRank)> =
                         serde_json::from_slice(&event.payload).unwrap();
                     tracing::debug!("received kv event: {:?}", event);
                     if let Err(e) = kv_events_tx.send(event).await {

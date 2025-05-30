@@ -24,7 +24,7 @@ pub use crate::kv_router::protocols::ForwardPassMetrics;
 use crate::kv_router::scoring::ProcessedEndpoints;
 use crate::kv_router::KV_HIT_RATE_SUBJECT;
 
-use super::protocols::{DpRank, KVHitRateEvent, WorkerId, WorkerSelectionResult};
+use super::protocols::{KVHitRateEvent, WorkerSelectionResult, WorkerWithDpRank};
 use super::WorkerSelector;
 
 #[derive(Debug, thiserror::Error)]
@@ -41,12 +41,12 @@ pub enum KvSchedulerError {
 
 pub struct SchedulingRequest {
     pub isl_tokens: usize,
-    pub overlap: OverlapScores<(WorkerId, DpRank)>,
-    resp_tx: tokio::sync::oneshot::Sender<(WorkerId, DpRank)>,
+    pub overlap: OverlapScores<WorkerWithDpRank>,
+    resp_tx: tokio::sync::oneshot::Sender<WorkerWithDpRank>,
 }
 
 impl SchedulingRequest {
-    pub fn respond(self, identifier: (WorkerId, DpRank)) {
+    pub fn respond(self, identifier: WorkerWithDpRank) {
         if self.resp_tx.send(identifier).is_err() {
             tracing::trace!("failed to send response to requestor");
         }
@@ -69,7 +69,7 @@ impl KvScheduler {
         let mut endpoints: ProcessedEndpoints = endpoints_rx.borrow_and_update().clone();
 
         let (event_tx, event_rx) =
-            tokio::sync::mpsc::unbounded_channel::<KVHitRateEvent<(WorkerId, DpRank)>>();
+            tokio::sync::mpsc::unbounded_channel::<KVHitRateEvent<WorkerWithDpRank>>();
         tokio::spawn(async move {
             let mut event_rx = event_rx;
             while let Some(event) = event_rx.recv().await {
@@ -147,9 +147,9 @@ impl KvScheduler {
 
     pub async fn schedule(
         &self,
-        overlap: OverlapScores<(WorkerId, DpRank)>,
+        overlap: OverlapScores<WorkerWithDpRank>,
         isl_tokens: usize,
-    ) -> Result<(WorkerId, DpRank), KvSchedulerError> {
+    ) -> Result<WorkerWithDpRank, KvSchedulerError> {
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
         let request = SchedulingRequest {
             isl_tokens,
@@ -170,15 +170,15 @@ impl KvScheduler {
 // This becomes the driver function that handles the selection result
 pub fn process_worker_selection(
     workers: &mut ProcessedEndpoints,
-    selection: WorkerSelectionResult<(WorkerId, DpRank)>,
-    event_tx: &tokio::sync::mpsc::UnboundedSender<KVHitRateEvent<(WorkerId, DpRank)>>,
-) -> (WorkerId, DpRank) {
+    selection: WorkerSelectionResult<WorkerWithDpRank>,
+    event_tx: &tokio::sync::mpsc::UnboundedSender<KVHitRateEvent<WorkerWithDpRank>>,
+) -> WorkerWithDpRank {
     let worker = workers
         .endpoints
-        .get_mut(&selection.worker_id.0)
+        .get_mut(&selection.worker_id_general.worker_id)
         .expect("worker not found");
 
-    let dp_rank = selection.worker_id.1 as usize;
+    let dp_rank = selection.worker_id_general.dp_rank.unwrap_or(0) as usize;
 
     // Update worker state predictively
     // Will be overwritten on next polling of metrics
@@ -191,14 +191,14 @@ pub fn process_worker_selection(
 
     // Emit event
     if let Err(e) = event_tx.send(KVHitRateEvent {
-        worker_id: selection.worker_id,
+        worker_id_general: selection.worker_id_general,
         isl_blocks: selection.required_blocks as usize,
         overlap_blocks: selection.overlap_blocks,
     }) {
         tracing::warn!("Failed to send KV hit rate event: {:?}", e);
     }
 
-    (selection.worker_id.0, selection.worker_id.1)
+    selection.worker_id_general
 }
 
 // Default implementation matching the Python _cost_function
@@ -211,7 +211,7 @@ impl WorkerSelector for DefaultWorkerSelector {
         workers: &ProcessedEndpoints,
         request: &SchedulingRequest,
         block_size: usize,
-    ) -> Result<WorkerSelectionResult<(WorkerId, DpRank)>, KvSchedulerError> {
+    ) -> Result<WorkerSelectionResult<WorkerWithDpRank>, KvSchedulerError> {
         assert!(request.isl_tokens > 0);
 
         if workers.endpoints.is_empty() {
@@ -223,16 +223,19 @@ impl WorkerSelector for DefaultWorkerSelector {
 
         // Calculate worker scores and find max waiting requests
         for (worker_id, ep) in workers.endpoints.iter() {
-            for dp_rank_maybe in ep.data.iter().map(|metrics| metrics.data_parallel_rank) {
-                let dp_rank = dp_rank_maybe.unwrap_or(0);
-                if let Some(score) = request.overlap.scores.get(&(*worker_id, dp_rank)) {
+            for dp_rank in ep.data.iter().map(|metrics| metrics.data_parallel_rank) {
+                let worker_with_dp_rank = WorkerWithDpRank {
+                    worker_id: *worker_id,
+                    dp_rank: dp_rank,
+                };
+                if let Some(score) = request.overlap.scores.get(&worker_with_dp_rank) {
                     let score = *score as f64 * block_size as f64 / request.isl_tokens as f64;
-                    worker_scores.insert((*worker_id, dp_rank), score);
+                    worker_scores.insert(worker_with_dp_rank, score);
                 }
                 // Track max waiting requests
                 max_waiting = f64::max(
                     max_waiting,
-                    ep.data[dp_rank as usize].num_requests_waiting as f64,
+                    ep.data[dp_rank.unwrap_or(0) as usize].num_requests_waiting as f64,
                 );
             }
         }
@@ -248,18 +251,20 @@ impl WorkerSelector for DefaultWorkerSelector {
         for (worker_id, ep) in workers.endpoints.iter() {
             let worker_id = *worker_id;
             for fwd_pass_metrics in ep.data.iter() {
-                let dp_rank = fwd_pass_metrics.data_parallel_rank.unwrap_or(0);
+                let dp_rank = fwd_pass_metrics.data_parallel_rank;
+                let worker_with_dp_rank = WorkerWithDpRank { worker_id, dp_rank };
 
                 // Get score or default to 0.0
                 let score = worker_scores
-                    .get(&(worker_id, dp_rank))
+                    .get(&worker_with_dp_rank)
                     .copied()
                     .unwrap_or(0.0);
 
                 // Calculate normalized metrics
-                let gpu_cache_usage = ep.data[dp_rank as usize].gpu_cache_usage_perc as f64;
+                let gpu_cache_usage =
+                    ep.data[dp_rank.unwrap_or(0) as usize].gpu_cache_usage_perc as f64;
                 let normalized_waiting = if max_waiting > 0.0 {
-                    ep.data[dp_rank as usize].num_requests_waiting as f64 / max_waiting
+                    ep.data[dp_rank.unwrap_or(0) as usize].num_requests_waiting as f64 / max_waiting
                 } else {
                     0.0
                 };
@@ -276,10 +281,10 @@ impl WorkerSelector for DefaultWorkerSelector {
                     Some(std::cmp::Ordering::Greater) => {
                         best_logit = logit;
                         best_workers.clear();
-                        best_workers.push((worker_id, dp_rank));
+                        best_workers.push(worker_with_dp_rank);
                     }
                     Some(std::cmp::Ordering::Equal) => {
-                        best_workers.push((worker_id, dp_rank));
+                        best_workers.push(worker_with_dp_rank);
                     }
                     _ => {}
                 }
@@ -293,7 +298,7 @@ impl WorkerSelector for DefaultWorkerSelector {
             tracing::debug!("best worker logit is 0");
         }
 
-        let worker_id = if best_workers.len() == 1 {
+        let best_worker_and_dp = if best_workers.len() == 1 {
             best_workers[0]
         } else {
             // Randomly select from best workers
@@ -302,14 +307,19 @@ impl WorkerSelector for DefaultWorkerSelector {
         };
 
         // Lower to trace level eventually. Nice to see KV routing working for now.
-        tracing::debug!("Selected worker: {worker_id:?}, logit: {best_logit:.3}");
+        tracing::debug!("Selected worker: {best_worker_and_dp:?}, logit: {best_logit:.3}");
 
         // Log selection metrics
         let total_blocks = std::cmp::max(request.isl_tokens / block_size, 1) as u64;
-        let overlap_blocks = request.overlap.scores.get(&worker_id).copied().unwrap_or(0) as usize;
+        let overlap_blocks = request
+            .overlap
+            .scores
+            .get(&best_worker_and_dp)
+            .copied()
+            .unwrap_or(0) as usize;
 
         Ok(WorkerSelectionResult {
-            worker_id,
+            worker_id_general: best_worker_and_dp,
             required_blocks: total_blocks,
             overlap_blocks,
         })

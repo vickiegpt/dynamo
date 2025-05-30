@@ -89,7 +89,7 @@ async fn mock_event_publisher(namespace: Namespace) {
         let overlap_blocks = rand::rng().random_range(0..=isl_blocks);
 
         let event = KVHitRateEvent {
-            worker_id,
+            worker_id_general: worker_id,
             isl_blocks,
             overlap_blocks,
         };
