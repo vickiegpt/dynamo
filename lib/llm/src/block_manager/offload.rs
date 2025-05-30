@@ -79,8 +79,8 @@ pub struct OffloadManager<Metadata: BlockMetadata> {
     device: Option<Arc<BlockPool<DeviceStorage, Metadata>>>,
 
     /// Queue of offloading requests.
-    device_offload_tx: mpsc::UnboundedSender<OffloadRequest<DeviceStorage, Metadata>>,
-    host_offload_tx: mpsc::UnboundedSender<OffloadRequest<PinnedStorage, Metadata>>,
+    device_offload_tx: mpsc::UnboundedSender<Vec<OffloadRequest<DeviceStorage, Metadata>>>,
+    host_offload_tx: mpsc::UnboundedSender<Vec<OffloadRequest<PinnedStorage, Metadata>>>,
 
     /// Queue of pending onboarding requests.
     host_onboard_tx: mpsc::UnboundedSender<OnboardRequest<PinnedStorage, DeviceStorage, Metadata>>,
@@ -235,7 +235,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
     async fn offload_worker<Source: Storage, Target: Storage>(
         source_pool: Option<Arc<BlockPool<Source, Metadata>>>,
         target_pool: Option<Arc<BlockPool<Target, Metadata>>>,
-        mut offload_rx: mpsc::UnboundedReceiver<OffloadRequest<Source, Metadata>>,
+        mut offload_rx: mpsc::UnboundedReceiver<Vec<OffloadRequest<Source, Metadata>>>,
         transfer_manager: Arc<dyn TransferManager<Source, Target, Metadata>>,
         cancellation_token: CancellationToken,
     ) -> Result<()> {
@@ -256,8 +256,8 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
             // Try to check the offload queue.
             loop {
                 match offload_rx.try_recv() {
-                    Ok(request) => {
-                        queue.insert(request)?;
+                    Ok(requests) => {
+                        queue.insert(requests)?;
                     }
                     Err(TryRecvError::Empty) => {
                         break;
@@ -313,8 +313,8 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                 // Await the next request.
                 tokio::select! {
                     _ = cancellation_token.cancelled() => return Ok(()),
-                    Some(request) = offload_rx.recv() => {
-                        queue.insert(request)?;
+                    Some(requests) = offload_rx.recv() => {
+                        queue.insert(requests)?;
                     }
                 }
             }
@@ -370,57 +370,94 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
     pub async fn offload<S: Storage>(
         &self,
         block: &ImmutableBlock<S, Metadata>,
-        priority: u64,
     ) -> core::result::Result<(), BlockPoolError> {
-        match block.state() {
-            BlockState::Registered(_, _) => {}
-            _ => {
-                return Err(BlockPoolError::BlockError(BlockError::InvalidState(
-                    "Block is not registered.".to_string(),
-                )));
+        self.offload_batch(vec![block.clone()]).await
+    }
+
+    fn downcast_blocks<S: Storage, T: Storage>(
+        blocks: Vec<ImmutableBlock<S, Metadata>>,
+    ) -> impl Iterator<Item = ImmutableBlock<T, Metadata>> {
+        blocks.into_iter().map(|b| {
+            (&b as &dyn Any)
+                .downcast_ref::<ImmutableBlock<T, Metadata>>()
+                .unwrap()
+                .clone()
+        })
+    }
+
+    fn build_offload_requests<S: Storage>(
+        blocks: impl Iterator<Item = ImmutableBlock<S, Metadata>>,
+    ) -> Vec<OffloadRequest<S, Metadata>> {
+        blocks
+            .filter_map(|b| {
+                if let Some(priority) = b.metadata().offload_priority() {
+                    Some(OffloadRequest {
+                        block: Arc::downgrade(b.mutable_block()),
+                        sequence_hash: b.sequence_hash().unwrap(),
+                        parent_sequence_hash: b.parent_sequence_hash().unwrap(),
+                        priority,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub async fn offload_batch<S: Storage>(
+        &self,
+        mut blocks: Vec<ImmutableBlock<S, Metadata>>,
+    ) -> core::result::Result<(), BlockPoolError> {
+        blocks.retain(|b| b.metadata().offload_priority().is_some());
+
+        if blocks.is_empty() {
+            return Ok(());
+        }
+
+        for block in &blocks {
+            match block.state() {
+                BlockState::Registered(_, _) => {}
+                _ => {
+                    return Err(BlockPoolError::BlockError(BlockError::InvalidState(
+                        "Block is not registered.".to_string(),
+                    )));
+                }
             }
         }
 
-        let sequence_hash = block.sequence_hash()?;
-        let parent_sequence_hash = block.parent_sequence_hash()?;
-
         // This can get called by all pools, regardless of whether or not they have a place to offload to.
         // Because of this, we need to check the block type here.
-        let any_block = block as &dyn Any;
+        let any_block = &blocks[0] as &dyn Any;
 
         // TODO: What's the performance penalty of this runtime type-checking?
-        if let Some(device_block) =
-            any_block.downcast_ref::<ImmutableBlock<DeviceStorage, Metadata>>()
+        if any_block
+            .downcast_ref::<ImmutableBlock<DeviceStorage, Metadata>>()
+            .is_some()
         {
             // The host pool doesn't exist, so we can't offload to it.
             if self.device_offload_tx.is_closed() {
                 return Ok(());
             }
 
-            let request = OffloadRequest {
-                block: Arc::downgrade(device_block.mutable_block()),
-                sequence_hash,
-                parent_sequence_hash,
-                priority,
-            };
+            let blocks = Self::downcast_blocks(blocks);
 
-            self.device_offload_tx.send(request).unwrap();
-        } else if let Some(host_block) =
-            any_block.downcast_ref::<ImmutableBlock<PinnedStorage, Metadata>>()
+            let requests = Self::build_offload_requests(blocks);
+
+            self.device_offload_tx.send(requests).unwrap();
+        } else if any_block
+            .downcast_ref::<ImmutableBlock<PinnedStorage, Metadata>>()
+            .is_some()
         {
             // The disk pool doesn't exist, so we can't offload to it.
             if self.host_offload_tx.is_closed() {
                 return Ok(());
             }
 
-            let request = OffloadRequest {
-                block: Arc::downgrade(host_block.mutable_block()),
-                sequence_hash,
-                parent_sequence_hash,
-                priority,
-            };
+            let blocks = Self::downcast_blocks(blocks);
 
-            self.host_offload_tx.send(request).unwrap();
+            let requests = Self::build_offload_requests(blocks);
+
+            self.host_offload_tx.send(requests).unwrap();
         }
 
         Ok(())
@@ -454,15 +491,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
             .downcast_ref::<ImmutableBlock<PinnedStorage, Metadata>>()
             .is_some()
         {
-            let host_blocks = blocks
-                .iter()
-                .map(|b| {
-                    (b as &dyn Any)
-                        .downcast_ref::<ImmutableBlock<PinnedStorage, Metadata>>()
-                        .unwrap()
-                        .clone()
-                })
-                .collect();
+            let host_blocks = Self::downcast_blocks(blocks).collect();
 
             self.host_onboard_tx
                 .send(OnboardRequest::new(host_blocks, tx))
@@ -471,15 +500,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
             .downcast_ref::<ImmutableBlock<DiskStorage, Metadata>>()
             .is_some()
         {
-            let disk_blocks = blocks
-                .iter()
-                .map(|b| {
-                    (b as &dyn Any)
-                        .downcast_ref::<ImmutableBlock<DiskStorage, Metadata>>()
-                        .unwrap()
-                        .clone()
-                })
-                .collect();
+            let disk_blocks = Self::downcast_blocks(blocks).collect();
 
             self.disk_onboard_tx
                 .send(OnboardRequest::new(disk_blocks, tx))
@@ -747,14 +768,14 @@ pub mod tests {
         let immutable_block = ImmutableBlock::new(Arc::new(get_block(device_pool).await?));
 
         assert!(matches!(
-            offload_manager.offload(&immutable_block, 0).await,
+            offload_manager.offload(&immutable_block).await,
             Err(BlockPoolError::BlockError(BlockError::InvalidState(_)))
         ));
 
         // Check blocks in the 'PARTIAL' state.
         let immutable_block = ImmutableBlock::new(Arc::new(partial_block(device_pool, 0).await?));
         assert!(matches!(
-            offload_manager.offload(&immutable_block, 0).await,
+            offload_manager.offload(&immutable_block).await,
             Err(BlockPoolError::BlockError(BlockError::InvalidState(_)))
         ));
 
@@ -763,7 +784,7 @@ pub mod tests {
             completed_block(device_pool, [0; BLOCK_SIZE]).await?,
         ));
         assert!(matches!(
-            offload_manager.offload(&immutable_block, 0).await,
+            offload_manager.offload(&immutable_block).await,
             Err(BlockPoolError::BlockError(BlockError::InvalidState(_)))
         ));
 
@@ -790,7 +811,7 @@ pub mod tests {
         populate_block(&immutable_device_block, 42)?;
 
         // Offloads should only go to G2 (for now)
-        offload_manager.offload(&immutable_device_block, 0).await?;
+        offload_manager.offload(&immutable_device_block).await?;
 
         // Wait for it to be processed.
         // TODO: This is a bit of a hack, and may lead to non-deterministic behavior.
@@ -831,7 +852,7 @@ pub mod tests {
             .next()
             .unwrap();
 
-        offload_manager.offload(&immutable_device_block, 0).await?;
+        offload_manager.offload(&immutable_device_block).await?;
 
         // Wait for offload to be processed.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -847,7 +868,7 @@ pub mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Try the offload again.
-        offload_manager.offload(&immutable_device_block, 0).await?;
+        offload_manager.offload(&immutable_device_block).await?;
 
         // Wait for offload to be processed.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -932,7 +953,7 @@ pub mod tests {
 
         populate_block(&immutable_device_block, 42)?;
         // Offload the block to the host.
-        offload_manager.offload(&immutable_device_block, 0).await?;
+        offload_manager.offload(&immutable_device_block).await?;
 
         // Wait for the offload to be processed.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1027,7 +1048,7 @@ pub mod tests {
             .next()
             .unwrap();
 
-        offload_manager.offload(&immutable_device_block, 0).await?;
+        offload_manager.offload(&immutable_device_block).await?;
 
         Ok(())
     }
@@ -1049,7 +1070,7 @@ pub mod tests {
 
         populate_block(&immutable_host_block, 42)?;
 
-        offload_manager.offload(&immutable_host_block, 0).await?;
+        offload_manager.offload(&immutable_host_block).await?;
 
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
@@ -1126,7 +1147,7 @@ pub mod tests {
         let immutable_host_blocks = host_pool.register_blocks(host_blocks).await?;
 
         for block in &immutable_host_blocks {
-            offload_manager.offload(block, 0).await?;
+            offload_manager.offload(block).await?;
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -1238,7 +1259,7 @@ pub mod tests {
             .into_iter()
             .next()
             .unwrap();
-        offload_manager.offload(&immutable_device_block, 0).await?;
+        offload_manager.offload(&immutable_device_block).await?;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -1270,7 +1291,7 @@ pub mod tests {
 
         populate_block(&immutable_device_block, 42)?;
 
-        offload_manager.offload(&immutable_device_block, 0).await?;
+        offload_manager.offload(&immutable_device_block).await?;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -1318,7 +1339,7 @@ pub mod tests {
             .unwrap();
 
         // Offload to host.
-        offload_manager.offload(&immutable_device_block, 0).await?;
+        offload_manager.offload(&immutable_device_block).await?;
 
         // Wait for the offload to be processed.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1330,7 +1351,7 @@ pub mod tests {
         check_block_contents(&immutable_device_block, &host_blocks[0], 42)?;
 
         // Offload to disk
-        offload_manager.offload(&host_blocks[0], 0).await?;
+        offload_manager.offload(&host_blocks[0]).await?;
 
         // Wait for the offload to be processed.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
