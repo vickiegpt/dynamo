@@ -285,6 +285,7 @@ pub unsafe extern "C" fn dynamo_kv_event_publish_stored(
     };
     let publisher = KV_PUB.get().unwrap();
     let event = kv_event_create_stored_from_parts(kv_params, publisher.kv_block_size());
+    // NOTE: dummy dp_rank for now
     let event_with_dp = KvCacheEventWithDp {
         kv_cache_event: event,
         dp_rank: None,
@@ -306,6 +307,7 @@ pub extern "C" fn dynamo_kv_event_publish_removed(
 ) -> DynamoLlmResult {
     let publisher = KV_PUB.get().unwrap();
     let event = kv_event_create_removed_from_parts(event_id, block_ids, num_blocks);
+    // NOTE: dummy dp_rank for now
     let event_with_dp = KvCacheEventWithDp {
         kv_cache_event: event,
         dp_rank: None,
