@@ -25,7 +25,7 @@ use std::sync::Arc;
 use clap::Parser;
 
 use dynamo_llm::kv_router::{
-    protocols::{WorkerWithDpRank, WorkerSelectionResult},
+    protocols::{WorkerSelectionResult, WorkerWithDpRank},
     scheduler::{DefaultWorkerSelector, KvSchedulerError, SchedulingRequest},
     scoring::ProcessedEndpoints,
     KvRouter, WorkerSelector,

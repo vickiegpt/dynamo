@@ -60,7 +60,7 @@ impl ProcessedEndpoints {
             .flat_map(|endpoint| endpoint.data.iter())
             .map(|metrics| metrics.kv_active_blocks as f64)
             .collect();
-        if load_values.len() == 0 {
+        if load_values.is_empty() {
             panic!("No endpoints to process!")
         };
         let load_avg = load_values.iter().copied().sum::<f64>() / load_values.len() as f64;

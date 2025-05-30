@@ -226,7 +226,7 @@ impl WorkerSelector for DefaultWorkerSelector {
             for dp_rank in ep.data.iter().map(|metrics| metrics.data_parallel_rank) {
                 let worker_with_dp_rank = WorkerWithDpRank {
                     worker_id: *worker_id,
-                    dp_rank: dp_rank,
+                    dp_rank,
                 };
                 if let Some(score) = request.overlap.scores.get(&worker_with_dp_rank) {
                     let score = *score as f64 * block_size as f64 / request.isl_tokens as f64;

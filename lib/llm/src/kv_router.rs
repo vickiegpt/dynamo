@@ -14,7 +14,7 @@ use dynamo_runtime::{
     protocols::annotated::Annotated,
 };
 use futures::stream::{self, StreamExt};
-use protocols::{WorkerId, WorkerWithDpRank};
+use protocols::WorkerWithDpRank;
 
 pub mod indexer;
 pub mod metrics_aggregator;
@@ -171,13 +171,12 @@ impl
     async fn generate(
         &self,
         request: SingleIn<RouterRequest>,
-    ) -> Result<ManyOut<Annotated<RouterResponse<WorkerId>>>> {
+    ) -> Result<ManyOut<Annotated<RouterResponse<WorkerWithDpRank>>>> {
         let (request, ctx) = request.into_parts();
         let (best_match, _) = self.find_best_match(&request.tokens).await?;
 
-        // NOTE: this ignores dp routing
         let response = RouterResponse {
-            worker_id_general: best_match.worker_id,
+            worker_id_general: best_match,
         };
         let response = Annotated::from_data(response);
         let stream = stream::iter(vec![response]);
