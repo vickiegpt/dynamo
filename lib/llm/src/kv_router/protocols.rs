@@ -15,24 +15,47 @@
 
 use crate::tokens::Token;
 use serde::{Deserialize, Serialize};
+use std::cmp::Eq;
+use std::fmt::Debug;
+use std::hash::Hash;
+
+pub type WorkerId = i64;
+
+pub type DpRank = u32;
+
+pub trait WorkerGeneral:
+    Hash + Eq + Debug + Clone + Send + Sync + Default + 'static + Serialize
+{
+}
+
+impl<T> WorkerGeneral for T where
+    T: Hash
+        + Eq
+        + Debug
+        + Clone
+        + Send
+        + Sync
+        + Default
+        + 'static
+        + Serialize
+        + for<'de> Deserialize<'de>
+{
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RouterRequest {
     pub tokens: Vec<Token>,
 }
 
-/// Identifier of a LLM worker which emits events to the router.
-pub type WorkerId = i64;
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct RouterResponse {
-    pub worker_id: WorkerId,
+pub struct RouterResponse<T: WorkerGeneral> {
+    pub worker_id: T,
 }
 
 #[derive(Debug)]
-pub struct WorkerSelectionResult {
+pub struct WorkerSelectionResult<T: WorkerGeneral> {
     /// The worker id of the selected worker
-    pub worker_id: WorkerId,
+    pub worker_id: T,
 
     /// The total number of blocks required to prefill the request
     pub required_blocks: u64,
@@ -141,16 +164,23 @@ pub struct KvCacheRemoveData {
     pub block_hashes: Vec<ExternalSequenceBlockHash>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KVHitRateEvent<T: WorkerGeneral> {
+    pub worker_id: T,
+    pub isl_blocks: usize,
+    pub overlap_blocks: usize,
+}
+
 /// A [`KvCacheEvent`] on a specific LLM worker denoted by [`WorkerId`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RouterEvent {
+pub struct RouterEvent<T: WorkerGeneral> {
     /// The ID of the worker emitting the event.
-    pub worker_id: WorkerId,
+    pub worker_id: T,
     /// The cache event associated with the worker.
     pub event: KvCacheEvent,
 }
 
-impl RouterEvent {
+impl<T: WorkerGeneral> RouterEvent<T> {
     /// Create a new `RouterEvent`.
     ///
     /// ### Arguments
@@ -161,7 +191,7 @@ impl RouterEvent {
     /// ### Returns
     ///
     /// A new `RouterEvent`.
-    pub fn new(worker_id: WorkerId, event: KvCacheEvent) -> Self {
+    pub fn new(worker_id: T, event: KvCacheEvent) -> Self {
         Self { worker_id, event }
     }
 }

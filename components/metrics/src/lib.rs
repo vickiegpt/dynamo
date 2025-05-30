@@ -84,8 +84,7 @@ use std::net::SocketAddr;
 use std::time::Duration as StdDuration;
 
 use dynamo_llm::kv_router::protocols::ForwardPassMetrics;
-use dynamo_llm::kv_router::scheduler::Endpoint;
-use dynamo_llm::kv_router::scoring::ProcessedEndpoints;
+use dynamo_llm::kv_router::scoring::{Endpoint, ProcessedEndpoints};
 
 use dynamo_runtime::{
     distributed::Component, error, service::EndpointInfo, utils::Duration, Result,
@@ -455,31 +454,31 @@ impl PrometheusMetrics {
                 &self.kv_blocks_active,
                 config,
                 &worker_id,
-                metrics.kv_active_blocks as f64,
+                metrics[0].kv_active_blocks as f64,
             );
             self.set_worker_gauge(
                 &self.kv_blocks_total,
                 config,
                 &worker_id,
-                metrics.kv_total_blocks as f64,
+                metrics[0].kv_total_blocks as f64,
             );
             self.set_worker_gauge(
                 &self.requests_active,
                 config,
                 &worker_id,
-                metrics.request_active_slots as f64,
+                metrics[0].request_active_slots as f64,
             );
             self.set_worker_gauge(
                 &self.requests_total,
                 config,
                 &worker_id,
-                metrics.request_total_slots as f64,
+                metrics[0].request_total_slots as f64,
             );
             self.set_worker_gauge(
                 &self.kv_hit_rate_percent,
                 config,
                 &worker_id,
-                metrics.gpu_prefix_cache_hit_rate as f64,
+                metrics[0].gpu_prefix_cache_hit_rate as f64,
             );
         }
 
@@ -602,7 +601,7 @@ pub fn postprocess_metrics(
             e.id().ok().map(|id| Endpoint {
                 name: format!("worker-{id}"),
                 subject: e.subject.clone(),
-                data: m.clone(),
+                data: vec![m.clone()],
             })
         })
         .collect();

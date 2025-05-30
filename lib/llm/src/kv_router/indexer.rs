@@ -78,7 +78,7 @@ pub enum KvRouterError {
 }
 
 /// A shared reference to a [`RadixBlock`].
-type SharedRadixBlock = Rc<RefCell<RadixBlock>>;
+type SharedRadixBlock<T> = Rc<RefCell<RadixBlock<T>>>;
 
 pub fn compute_hash(data: &[u8]) -> u64 {
     xxh3::xxh3_64_with_seed(data, XXH3_SEED)
@@ -132,16 +132,16 @@ pub fn compute_block_hash_for_seq(tokens: &[u32], kv_block_size: usize) -> Vec<L
 
 /// A block in the Radix Tree.
 #[derive(Debug)]
-struct RadixBlock {
+struct RadixBlock<T: WorkerGeneral> {
     /// A map of child blocks, keyed by their local block hash.
-    children: HashMap<LocalBlockHash, SharedRadixBlock>,
+    children: HashMap<LocalBlockHash, SharedRadixBlock<T>>,
     /// A set of worker IDs associated with this block.
-    workers: HashSet<WorkerId>,
+    workers: HashSet<T>,
     /// A buffer of times that this block was last traversed
     recent_uses: VecDeque<Instant>,
 }
 
-impl RadixBlock {
+impl<T: WorkerGeneral> RadixBlock<T> {
     /// Create a new `RadixBlock`.
     ///
     /// ### Returns
@@ -156,10 +156,10 @@ impl RadixBlock {
     }
 }
 
-pub struct RadixTree {
+pub struct RadixTree<T: WorkerGeneral> {
     /// This is the root of the radix/prefix tree
     /// This will only contain root blocks
-    root: SharedRadixBlock,
+    root: SharedRadixBlock<T>,
 
     /// This is a global lookup table for all blocks which will let you jump into
     /// the radix tree at any point
@@ -169,18 +169,18 @@ pub struct RadixTree {
     /// Transitioning to a radix tree only would require a change in the messaging structure
     /// as the entire prefix would need to be sent. Alternatively, we could use block_depth
     /// integers to indicate how many blocks to skip and use a radix/prefix tree at each level.
-    lookup: HashMap<WorkerId, HashMap<ExternalSequenceBlockHash, SharedRadixBlock>>,
+    lookup: HashMap<T, HashMap<ExternalSequenceBlockHash, SharedRadixBlock<T>>>,
     /// The time buffer the radix tree should check when considering frequence of block accesses
     expiration_duration: Option<Duration>,
 }
 
-impl Default for RadixTree {
+impl<T: WorkerGeneral> Default for RadixTree<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl RadixTree {
+impl<T: WorkerGeneral> RadixTree<T> {
     /// Create a new `RadixTree`.
     ///
     /// ### Returns
@@ -208,7 +208,11 @@ impl RadixTree {
     /// ### Returns
     ///
     /// An `OverlapScores` representing the match scores.
-    pub fn find_matches(&self, sequence: Vec<LocalBlockHash>, early_exit: bool) -> OverlapScores {
+    pub fn find_matches(
+        &self,
+        sequence: Vec<LocalBlockHash>,
+        early_exit: bool,
+    ) -> OverlapScores<T> {
         let mut scores = OverlapScores::new();
         let mut current = self.root.clone();
         let now = Instant::now();
@@ -252,12 +256,12 @@ impl RadixTree {
     /// ### Arguments
     ///
     /// * `event` - The `RouterEvent` to apply.
-    pub fn apply_event(&mut self, event: RouterEvent) {
+    pub fn apply_event(&mut self, event: RouterEvent<T>) {
         let (worker_id, event) = (event.worker_id, event.event);
         let (id, op) = (event.event_id, event.data);
         tracing::trace!(id, "Store operation: {:?}", op);
 
-        let worker_lookup = self.lookup.entry(worker_id).or_default();
+        let worker_lookup = self.lookup.entry(worker_id.clone()).or_default();
 
         match op {
             KvCacheEventData::Stored(op) => {
@@ -273,7 +277,7 @@ impl RadixTree {
                     Some(current) => current.clone(),
                     None => {
                         tracing::warn!(
-                            worker_id = worker_id.to_string(),
+                            worker_id = ?worker_id,
                             id,
                             parent_hash = ?op.parent_hash,
                             "Failed to find parent block; skipping store operation"
@@ -303,7 +307,7 @@ impl RadixTree {
                     };
 
                     // add our worker_id to the block
-                    block.borrow_mut().workers.insert(worker_id);
+                    block.borrow_mut().workers.insert(worker_id.clone());
 
                     // add the block to the worker_id lookup table
                     worker_lookup.insert(block_id.block_hash, block.clone());
@@ -327,7 +331,7 @@ impl RadixTree {
                         Some(entry) => entry.clone(),
                         None => {
                             tracing::warn!(
-                                worker_id = worker_id.to_string(),
+                                worker_id = ?worker_id,
                                 id,
                                 "Failed to find block to remove; skipping remove operation"
                             );
@@ -348,7 +352,7 @@ impl RadixTree {
         }
     }
 
-    pub fn remove_worker(&mut self, worker: WorkerId) {
+    pub fn remove_worker(&mut self, worker: T) {
         if let Some((_, blocks)) = self.lookup.remove_entry(&worker) {
             blocks.iter().for_each(|(_, block)| {
                 block.borrow_mut().workers.remove(&worker);
@@ -359,20 +363,20 @@ impl RadixTree {
 
 /// Scores representing the overlap of workers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OverlapScores {
+pub struct OverlapScores<T: WorkerGeneral> {
     // map of worker_id to score
-    pub scores: HashMap<WorkerId, u32>,
+    pub scores: HashMap<T, u32>,
     // List of frequencies that the blocks have been accessed. Entries with value 0 are omitted.
     pub frequencies: Vec<usize>,
 }
 
-impl Default for OverlapScores {
+impl<T: WorkerGeneral> Default for OverlapScores<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl OverlapScores {
+impl<T: WorkerGeneral> OverlapScores<T> {
     /// Create a new `OverlapScores`.
     ///
     /// ### Returns
@@ -389,10 +393,10 @@ impl OverlapScores {
     ///
     /// ### Arguments
     ///
-    /// * `workers` - A reference to a `HashSet` of `WorkerId`s.
-    pub fn update_scores(&mut self, workers: &HashSet<WorkerId>) {
+    /// * `workers` - A reference to a `HashSet` of worker IDs.
+    pub fn update_scores(&mut self, workers: &HashSet<T>) {
         for worker in workers {
-            let score = self.scores.entry(*worker).or_insert(0);
+            let score = self.scores.entry(worker.clone()).or_insert(0);
             *score += 1;
         }
     }
@@ -409,17 +413,17 @@ impl OverlapScores {
 }
 
 /// A request to find matches in the Radix Tree.
-pub struct MatchRequest {
+pub struct MatchRequest<T: WorkerGeneral> {
     /// A vector of `LocalBlockHash` representing the sequence to match.
     sequence: Vec<LocalBlockHash>,
     /// A boolean indicating whether to exit early if a single match is found.
     early_exit: bool,
     /// A channel sender to send the `OverlapScores` response.
-    resp: oneshot::Sender<OverlapScores>,
+    resp: oneshot::Sender<OverlapScores<T>>,
 }
 
 #[async_trait]
-pub trait KvIndexerInterface {
+pub trait KvIndexerInterface<T: WorkerGeneral> {
     /// Find matches for a given sequence of `LocalBlockHash`es.
     ///
     /// ### Arguments
@@ -432,7 +436,7 @@ pub trait KvIndexerInterface {
     async fn find_matches(
         &self,
         sequence: Vec<LocalBlockHash>,
-    ) -> Result<OverlapScores, KvRouterError>;
+    ) -> Result<OverlapScores<T>, KvRouterError>;
 
     /// Find matches for a given sequence of tokens.
     ///
@@ -446,43 +450,43 @@ pub trait KvIndexerInterface {
     async fn find_matches_for_request(
         &self,
         tokens: &[u32],
-    ) -> Result<OverlapScores, KvRouterError>;
+    ) -> Result<OverlapScores<T>, KvRouterError>;
 
     /// Apply a `RouterEvent` to the KV store.
     ///
     /// ### Arguments
     ///
     /// * `event` - The `RouterEvent` to apply.
-    async fn apply_event(&mut self, event: RouterEvent);
+    async fn apply_event(&mut self, event: RouterEvent<T>);
 
     /// Remove a worker's entries from the trie.
     ///
     /// ### Arguments
     ///
     /// * `worker` - The worker to remove from the trie.
-    async fn remove_worker(&mut self, worker: WorkerId);
+    async fn remove_worker(&mut self, worker: T);
 
     /// Shutdown the KV Indexer.
     fn shutdown(&mut self);
 }
 
 /// The KV Indexer, managing the KV store and handling events and match requests.
-pub struct KvIndexer {
+pub struct KvIndexer<T: WorkerGeneral> {
     /// A `CancellationToken` for managing shutdown.
     cancel: CancellationToken,
     /// A sender for `RouterEvent`s.
-    event_tx: mpsc::Sender<RouterEvent>,
+    event_tx: mpsc::Sender<RouterEvent<T>>,
     /// A sender for `MatchRequest`s.
-    match_tx: mpsc::Sender<MatchRequest>,
+    match_tx: mpsc::Sender<MatchRequest<T>>,
     /// A sender for remove worker requests.
-    remove_worker_tx: mpsc::Sender<WorkerId>,
+    remove_worker_tx: mpsc::Sender<T>,
     /// A handle to the background task managing the KV store.
     task: OnceLock<std::thread::JoinHandle<()>>,
     /// The size of the KV block this indexer can handle.
     kv_block_size: usize,
 }
 
-impl KvIndexer {
+impl<T: WorkerGeneral> KvIndexer<T> {
     /// Create a new `KvIndexer`.
     ///
     /// ### Arguments
@@ -498,9 +502,9 @@ impl KvIndexer {
         expiration_duration: Option<Duration>,
         kv_block_size: usize,
     ) -> Self {
-        let (event_tx, event_rx) = mpsc::channel::<RouterEvent>(2048);
-        let (match_tx, match_rx) = mpsc::channel::<MatchRequest>(128);
-        let (remove_worker_tx, remove_worker_rx) = mpsc::channel::<WorkerId>(16);
+        let (event_tx, event_rx) = mpsc::channel::<RouterEvent<T>>(2048);
+        let (match_tx, match_rx) = mpsc::channel::<MatchRequest<T>>(128);
+        let (remove_worker_tx, remove_worker_rx) = mpsc::channel::<T>(16);
         let cancel_clone = token.clone();
         let task = std::thread::spawn(move || {
             // create a new tokio runtime which will only perform work on a single thread
@@ -576,17 +580,17 @@ impl KvIndexer {
     /// ### Returns
     ///
     /// A `mpsc::Sender` for `RouterEvent`s.
-    pub fn event_sender(&self) -> mpsc::Sender<RouterEvent> {
+    pub fn event_sender(&self) -> mpsc::Sender<RouterEvent<T>> {
         self.event_tx.clone()
     }
 }
 
 #[async_trait]
-impl KvIndexerInterface for KvIndexer {
+impl<T: WorkerGeneral> KvIndexerInterface<T> for KvIndexer<T> {
     async fn find_matches(
         &self,
         sequence: Vec<LocalBlockHash>,
-    ) -> Result<OverlapScores, KvRouterError> {
+    ) -> Result<OverlapScores<T>, KvRouterError> {
         let (resp_tx, resp_rx) = oneshot::channel();
         let req = MatchRequest {
             sequence,
@@ -610,7 +614,7 @@ impl KvIndexerInterface for KvIndexer {
     async fn find_matches_for_request(
         &self,
         tokens: &[u32],
-    ) -> Result<OverlapScores, KvRouterError> {
+    ) -> Result<OverlapScores<T>, KvRouterError> {
         tracing::debug!(
             "Finding matches for request tokens: {:?} / len: {}",
             tokens,
@@ -621,11 +625,11 @@ impl KvIndexerInterface for KvIndexer {
         self.find_matches(sequence).await
     }
 
-    async fn apply_event(&mut self, event: RouterEvent) {
+    async fn apply_event(&mut self, event: RouterEvent<T>) {
         self.event_tx.send(event).await.unwrap();
     }
 
-    async fn remove_worker(&mut self, worker: WorkerId) {
+    async fn remove_worker(&mut self, worker: T) {
         self.remove_worker_tx.send(worker).await.unwrap();
     }
 
@@ -638,28 +642,28 @@ impl KvIndexerInterface for KvIndexer {
 }
 
 #[derive(Debug, Clone)]
-pub struct ShardedMatchRequest {
+pub struct ShardedMatchRequest<T: WorkerGeneral> {
     sequence: Vec<LocalBlockHash>,
     early_exit: bool,
-    resp: mpsc::Sender<OverlapScores>,
+    resp: mpsc::Sender<OverlapScores<T>>,
 }
 
 /// The KV Indexer, managing the KV store and handling events and match requests.
-pub struct KvIndexerSharded {
+pub struct KvIndexerSharded<T: WorkerGeneral> {
     /// A `CancellationToken` for managing shutdown.
     cancel: CancellationToken,
     /// The size of the KV block this indexer can handle.
     kv_block_size: usize,
-    worker_assignments: HashMap<WorkerId, usize>,
+    worker_assignments: HashMap<T, usize>,
     worker_counts: Vec<usize>,
 
-    event_tx: Vec<mpsc::Sender<RouterEvent>>,
-    request_broadcast_tx: broadcast::Sender<ShardedMatchRequest>,
-    remove_worker_tx: Vec<mpsc::Sender<WorkerId>>,
+    event_tx: Vec<mpsc::Sender<RouterEvent<T>>>,
+    request_broadcast_tx: broadcast::Sender<ShardedMatchRequest<T>>,
+    remove_worker_tx: Vec<mpsc::Sender<T>>,
     tasks: Vec<JoinHandle<()>>,
 }
 
-impl KvIndexerSharded {
+impl<T: WorkerGeneral> KvIndexerSharded<T> {
     /// Create a new `KvIndexerSharded`.
     ///
     /// ### Arguments
@@ -677,19 +681,18 @@ impl KvIndexerSharded {
         expiration_duration: Option<Duration>,
         kv_block_size: usize,
     ) -> Self {
-        let worker_assignments: HashMap<WorkerId, usize> = HashMap::new();
+        let worker_assignments: HashMap<T, usize> = HashMap::new();
         let worker_counts: Vec<usize> = vec![0; num_shards];
 
         let mut event_tx = Vec::new();
         let mut remove_worker_tx = Vec::new();
         let mut tasks = Vec::new();
 
-        let (request_broadcast_tx, _) = broadcast::channel::<ShardedMatchRequest>(1048576);
+        let (request_broadcast_tx, _) = broadcast::channel::<ShardedMatchRequest<T>>(1048576);
 
         for _ in 0..num_shards {
-            let (shard_event_tx, mut shard_event_rx) = mpsc::channel::<RouterEvent>(2048);
-            let (shard_remove_worker_tx, mut shard_remove_worker_rx) =
-                mpsc::channel::<WorkerId>(16);
+            let (shard_event_tx, mut shard_event_rx) = mpsc::channel::<RouterEvent<T>>(2048);
+            let (shard_remove_worker_tx, mut shard_remove_worker_rx) = mpsc::channel::<T>(16);
             let mut shard_broadcast_rx = request_broadcast_tx.subscribe();
             let cancel = token.clone();
 
@@ -764,11 +767,11 @@ impl KvIndexerSharded {
 }
 
 #[async_trait]
-impl KvIndexerInterface for KvIndexerSharded {
+impl<T: WorkerGeneral> KvIndexerInterface<T> for KvIndexerSharded<T> {
     async fn find_matches(
         &self,
         sequence: Vec<LocalBlockHash>,
-    ) -> Result<OverlapScores, KvRouterError> {
+    ) -> Result<OverlapScores<T>, KvRouterError> {
         'match_loop: loop {
             let (match_tx, mut match_rx) = mpsc::channel(self.event_tx.len());
             self.request_broadcast_tx
@@ -815,12 +818,12 @@ impl KvIndexerInterface for KvIndexerSharded {
     async fn find_matches_for_request(
         &self,
         tokens: &[u32],
-    ) -> Result<OverlapScores, KvRouterError> {
+    ) -> Result<OverlapScores<T>, KvRouterError> {
         let sequence = compute_block_hash_for_seq(tokens, self.kv_block_size);
         self.find_matches(sequence).await
     }
 
-    async fn apply_event(&mut self, event: RouterEvent) {
+    async fn apply_event(&mut self, event: RouterEvent<T>) {
         #[allow(clippy::map_entry)]
         if !self.worker_assignments.contains_key(&event.worker_id) {
             // Get the shard with the smallest amount of workers.
@@ -833,7 +836,7 @@ impl KvIndexerInterface for KvIndexerSharded {
                 .0;
 
             self.worker_assignments
-                .insert(event.worker_id, selected_shard);
+                .insert(event.worker_id.clone(), selected_shard);
             self.worker_counts[selected_shard] += 1;
         }
 
@@ -843,7 +846,7 @@ impl KvIndexerInterface for KvIndexerSharded {
             .unwrap();
     }
 
-    async fn remove_worker(&mut self, worker: WorkerId) {
+    async fn remove_worker(&mut self, worker: T) {
         if let Some((_, shard)) = self.worker_assignments.remove_entry(&worker) {
             self.worker_counts[shard] -= 1;
             self.remove_worker_tx[shard].send(worker).await.unwrap();
@@ -861,12 +864,14 @@ impl KvIndexerInterface for KvIndexerSharded {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use rstest::rstest;
     use rstest_reuse::{self, *};
     use tokio::time;
     use tokio_util::sync::CancellationToken;
+
+    // Use u64 as a simple WorkerIdTrait implementation for tests
+    type TestWorkerId = u64;
 
     fn setup() {
         dynamo_runtime::logging::init();
@@ -893,11 +898,11 @@ mod tests {
     }
 
     fn create_store_event(
-        worker_id: WorkerId,
+        worker_id: TestWorkerId,
         event_id: u64,
         hashes: Vec<u64>,
         parent: Option<ExternalSequenceBlockHash>,
-    ) -> RouterEvent {
+    ) -> RouterEvent<TestWorkerId> {
         RouterEvent {
             worker_id,
             event: KvCacheEvent {
@@ -907,7 +912,11 @@ mod tests {
         }
     }
 
-    fn create_remove_event(worker_id: WorkerId, event_id: u64, hashes: Vec<u64>) -> RouterEvent {
+    fn create_remove_event(
+        worker_id: TestWorkerId,
+        event_id: u64,
+        hashes: Vec<u64>,
+    ) -> RouterEvent<TestWorkerId> {
         RouterEvent {
             worker_id,
             event: KvCacheEvent {
@@ -1208,7 +1217,7 @@ mod tests {
         token: &CancellationToken,
         num_shards: usize,
         kv_block_size: usize,
-    ) -> Box<dyn KvIndexerInterface> {
+    ) -> Box<dyn KvIndexerInterface<TestWorkerId>> {
         if num_shards == 1 {
             Box::new(KvIndexer::new(token.clone(), kv_block_size))
         } else {
@@ -1293,7 +1302,7 @@ mod tests {
         const ONE_MILLIS: Duration = Duration::from_millis(1);
 
         setup();
-        let mut kv_indexer: Box<dyn KvIndexerInterface>;
+        let mut kv_indexer: Box<dyn KvIndexerInterface<TestWorkerId>>;
         let token = CancellationToken::new();
         let expiration = Duration::from_millis(50);
 
@@ -1421,7 +1430,7 @@ mod tests {
     #[test]
     fn test_radix_tree_default() {
         setup();
-        let radix_tree: RadixTree = Default::default();
+        let radix_tree: RadixTree<TestWorkerId> = Default::default();
         assert!(radix_tree.root.borrow().children.is_empty());
         assert!(radix_tree.root.borrow().workers.is_empty());
         assert!(radix_tree.lookup.is_empty());
@@ -1430,7 +1439,7 @@ mod tests {
     #[test]
     fn test_overlap_scores_default() {
         setup();
-        let overlap_scores: OverlapScores = Default::default();
+        let overlap_scores: OverlapScores<TestWorkerId> = Default::default();
         assert!(overlap_scores.scores.is_empty());
     }
 }
