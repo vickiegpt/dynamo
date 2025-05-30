@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::kv_router::indexer::RouterEvent;
+use crate::kv_router::protocols::*;
 use crate::recorder::Recorder;
 
 // Type alias for backward compatibility
@@ -23,8 +23,6 @@ pub type KvRecorder = Recorder<RouterEvent>;
 mod tests {
     use super::*;
     use crate::kv_router::indexer::KvIndexer;
-    use crate::kv_router::indexer::WorkerId;
-    use crate::kv_router::protocols::*;
     use std::time::Duration;
     use tempfile::tempdir;
     use tokio::fs;

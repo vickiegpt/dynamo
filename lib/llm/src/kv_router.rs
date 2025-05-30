@@ -25,9 +25,11 @@ pub mod scoring;
 
 use crate::{
     kv_router::{
-        indexer::{KvIndexer, KvIndexerInterface, RouterEvent},
+        indexer::{KvIndexer, KvIndexerInterface},
         metrics_aggregator::KvMetricsAggregator,
-        protocols::{LocalBlockHash, RouterRequest, RouterResponse, WorkerSelectionResult},
+        protocols::{
+            LocalBlockHash, RouterEvent, RouterRequest, RouterResponse, WorkerSelectionResult,
+        },
         scheduler::{KvScheduler, KvSchedulerError, SchedulingRequest},
         scoring::ProcessedEndpoints,
     },

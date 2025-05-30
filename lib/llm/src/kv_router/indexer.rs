@@ -77,9 +77,6 @@ pub enum KvRouterError {
     IndexerDroppedRequest,
 }
 
-/// Identifier of a LLM worker which emits events to the router.
-pub type WorkerId = i64;
-
 /// A shared reference to a [`RadixBlock`].
 type SharedRadixBlock = Rc<RefCell<RadixBlock>>;
 
@@ -131,31 +128,6 @@ pub fn compute_block_hash_for_seq(tokens: &[u32], kv_block_size: usize) -> Vec<L
             compute_block_hash(&Bytes::from(bytes)) // Convert the byte Vec to Bytes
         })
         .collect()
-}
-
-/// A [`KvCacheEvent`] on a specific LLM worker denoted by [`WorkerId`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RouterEvent {
-    /// The ID of the worker emitting the event.
-    worker_id: WorkerId,
-    /// The cache event associated with the worker.
-    event: KvCacheEvent,
-}
-
-impl RouterEvent {
-    /// Create a new `RouterEvent`.
-    ///
-    /// ### Arguments
-    ///
-    /// * `worker_id` - The ID of the worker emitting the event.
-    /// * `event` - The cache event.
-    ///
-    /// ### Returns
-    ///
-    /// A new `RouterEvent`.
-    pub fn new(worker_id: WorkerId, event: KvCacheEvent) -> Self {
-        Self { worker_id, event }
-    }
 }
 
 /// A block in the Radix Tree.

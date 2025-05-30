@@ -14,9 +14,7 @@
 // limitations under the License.
 
 use crate::kv_router::{
-    indexer::{compute_block_hash_for_seq, RouterEvent},
-    protocols::*,
-    KV_EVENT_SUBJECT, KV_METRICS_ENDPOINT,
+    indexer::compute_block_hash_for_seq, protocols::*, KV_EVENT_SUBJECT, KV_METRICS_ENDPOINT,
 };
 use async_trait::async_trait;
 use dynamo_runtime::traits::{events::EventPublisher, DistributedRuntimeProvider, RuntimeProvider};

@@ -21,15 +21,18 @@ pub struct RouterRequest {
     pub tokens: Vec<Token>,
 }
 
+/// Identifier of a LLM worker which emits events to the router.
+pub type WorkerId = i64;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RouterResponse {
-    pub worker_id: i64,
+    pub worker_id: WorkerId,
 }
 
 #[derive(Debug)]
 pub struct WorkerSelectionResult {
     /// The worker id of the selected worker
-    pub worker_id: i64,
+    pub worker_id: WorkerId,
 
     /// The total number of blocks required to prefill the request
     pub required_blocks: u64,
@@ -58,14 +61,14 @@ pub struct ForwardPassMetrics {
 
 /// A [`LocalBlockHash`] is a hash computed from the tokens_ids, extra_token_ids and the optional
 /// lora_id of a block.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LocalBlockHash(pub u64);
 
 /// A sequence aware hash of a block where the hash is computed from the tokens_ids, extra_token_ids
 /// and the optional lora_id of a block, PLUS the hash of the parent block.
 ///
 /// In this case, the hashing function is external and unknown.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ExternalSequenceBlockHash(pub u64);
 
 // Implement From trait for convenient conversion
@@ -136,6 +139,31 @@ pub struct KvCacheStoredBlockData {
 pub struct KvCacheRemoveData {
     /// A list of block hashes to remove.
     pub block_hashes: Vec<ExternalSequenceBlockHash>,
+}
+
+/// A [`KvCacheEvent`] on a specific LLM worker denoted by [`WorkerId`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouterEvent {
+    /// The ID of the worker emitting the event.
+    pub worker_id: WorkerId,
+    /// The cache event associated with the worker.
+    pub event: KvCacheEvent,
+}
+
+impl RouterEvent {
+    /// Create a new `RouterEvent`.
+    ///
+    /// ### Arguments
+    ///
+    /// * `worker_id` - The ID of the worker emitting the event.
+    /// * `event` - The cache event.
+    ///
+    /// ### Returns
+    ///
+    /// A new `RouterEvent`.
+    pub fn new(worker_id: WorkerId, event: KvCacheEvent) -> Self {
+        Self { worker_id, event }
+    }
 }
 
 impl Serialize for LocalBlockHash {
