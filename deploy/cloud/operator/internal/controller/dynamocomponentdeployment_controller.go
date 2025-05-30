@@ -1569,6 +1569,12 @@ func (r *DynamoComponentDeploymentReconciler) generatePodTemplateSpec(ctx contex
 	// Set default probes if none are provided
 	if livenessProbe == nil {
 		container.LivenessProbe = &corev1.Probe{
+			// TODO: Initial delay and other probe settings should be read off sdk, these are default settings that should cover vllm / hello-world
+			InitialDelaySeconds: 180, // 3 minutes
+			PeriodSeconds:       30,  // Check every 30 seconds
+			TimeoutSeconds:      5,   // 5 second timeout
+			FailureThreshold:    10,  // Allow 10 failures before declaring unhealthy
+			SuccessThreshold:    1,   // Need 1 success to be considered healthy
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
 					Path: "/healthz",
@@ -1580,6 +1586,12 @@ func (r *DynamoComponentDeploymentReconciler) generatePodTemplateSpec(ctx contex
 
 	if readinessProbe == nil {
 		container.ReadinessProbe = &corev1.Probe{
+			// TODO: Initial delay and other probe settings should be read off sdk, these are default settings that should cover vllm / hello-world
+			InitialDelaySeconds: 180, // 3 minutes
+			PeriodSeconds:       30,  // Check every 30 seconds
+			TimeoutSeconds:      5,   // 5 second timeout
+			FailureThreshold:    10,  // Allow 10 failures before declaring not ready
+			SuccessThreshold:    1,   // Need 1 success to be considered ready
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
 					Path: "/readyz",
