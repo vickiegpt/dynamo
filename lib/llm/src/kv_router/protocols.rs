@@ -14,6 +14,7 @@
 // limitations under the License.
 
 use crate::tokens::Token;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::cmp::Eq;
 use std::fmt::Debug;
@@ -29,16 +30,7 @@ pub trait WorkerGeneral:
 }
 
 impl<T> WorkerGeneral for T where
-    T: Hash
-        + Eq
-        + Debug
-        + Clone
-        + Send
-        + Sync
-        + Default
-        + 'static
-        + Serialize
-        + for<'de> Deserialize<'de>
+    T: Hash + Eq + Debug + Clone + Send + Sync + Default + 'static + Serialize + DeserializeOwned
 {
 }
 

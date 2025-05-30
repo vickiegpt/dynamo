@@ -224,7 +224,7 @@ impl WorkerSelector for DefaultWorkerSelector {
         // Calculate worker scores and find max waiting requests
         for (worker_id, ep) in workers.endpoints.iter() {
             for dp_rank_maybe in ep.data.iter().map(|metrics| metrics.data_parallel_rank) {
-                let dp_rank = dp_rank_maybe.unwrap();
+                let dp_rank = dp_rank_maybe.unwrap_or(0);
                 if let Some(score) = request.overlap.scores.get(&(*worker_id, dp_rank)) {
                     let score = *score as f64 * block_size as f64 / request.isl_tokens as f64;
                     worker_scores.insert((*worker_id, dp_rank), score);
@@ -248,7 +248,7 @@ impl WorkerSelector for DefaultWorkerSelector {
         for (worker_id, ep) in workers.endpoints.iter() {
             let worker_id = *worker_id;
             for fwd_pass_metrics in ep.data.iter() {
-                let dp_rank = fwd_pass_metrics.data_parallel_rank.unwrap();
+                let dp_rank = fwd_pass_metrics.data_parallel_rank.unwrap_or(0);
 
                 // Get score or default to 0.0
                 let score = worker_scores
