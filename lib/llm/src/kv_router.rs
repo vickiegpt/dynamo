@@ -14,7 +14,7 @@ use dynamo_runtime::{
     protocols::annotated::Annotated,
 };
 use futures::stream::{self, StreamExt};
-use protocols::WorkerWithDpRank;
+use protocols::WorkerDp;
 
 pub mod indexer;
 pub mod metrics_aggregator;
@@ -54,13 +54,13 @@ pub trait WorkerSelector {
         workers: &ProcessedEndpoints,
         request: &SchedulingRequest,
         block_size: usize,
-    ) -> Result<WorkerSelectionResult<WorkerWithDpRank>, KvSchedulerError>;
+    ) -> Result<WorkerSelectionResult<WorkerDp>, KvSchedulerError>;
 }
 
 /// A KvRouter only decides which worker you should use. It doesn't send you there.
 /// TODO: Rename this to indicate it only selects a worker, it does not route.
 pub struct KvRouter {
-    indexer: KvIndexer<WorkerWithDpRank>,
+    indexer: KvIndexer<WorkerDp>,
     scheduler: KvScheduler,
     block_size: usize,
 }
@@ -95,16 +95,15 @@ impl KvRouter {
 
         tokio::spawn(async move {
             while let Some(event) = kv_events_rx.next().await {
-                let event: RouterEvent<WorkerWithDpRank> =
-                    match serde_json::from_slice(&event.payload) {
-                        Ok(event) => event,
-                        Err(e) => {
-                            tracing::warn!("Failed to deserialize RouterEvent: {:?}", e);
-                            // Choosing warn and continue to process other events from other workers
-                            // A bad event likely signals a problem with a worker, but potentially other workers are still healthy
-                            continue;
-                        }
-                    };
+                let event: RouterEvent<WorkerDp> = match serde_json::from_slice(&event.payload) {
+                    Ok(event) => event,
+                    Err(e) => {
+                        tracing::warn!("Failed to deserialize RouterEvent: {:?}", e);
+                        // Choosing warn and continue to process other events from other workers
+                        // A bad event likely signals a problem with a worker, but potentially other workers are still healthy
+                        continue;
+                    }
+                };
                 if let Err(e) = kv_events_tx.send(event).await {
                     tracing::debug!("failed to send kv event to indexer; shutting down: {:?}", e);
                 }
@@ -119,7 +118,7 @@ impl KvRouter {
     }
 
     // [TODO] indexer needs to take 'lora_id' as parameter
-    pub async fn schedule(&self, token_ids: &Vec<u32>, _lora_id: u64) -> Result<WorkerWithDpRank> {
+    pub async fn schedule(&self, token_ids: &Vec<u32>, _lora_id: u64) -> Result<WorkerDp> {
         // Extracting part of the code in KvRouter::generate() for only
         // the decision making part, routing is done by the caller
         let isl_tokens = token_ids.len();
@@ -134,7 +133,7 @@ impl KvRouter {
 
     /// Give these tokens, find the worker with the best match in it's KV cache.
     /// Returned overlap amount is in number of blocks.
-    async fn find_best_match(&self, tokens: &[u32]) -> anyhow::Result<(WorkerWithDpRank, u32)> {
+    async fn find_best_match(&self, tokens: &[u32]) -> anyhow::Result<(WorkerDp, u32)> {
         let isl_tokens = tokens.len();
         let block_size = self.block_size;
 
@@ -161,23 +160,17 @@ impl KvRouter {
 }
 
 #[async_trait]
-impl
-    AsyncEngine<
-        SingleIn<RouterRequest>,
-        ManyOut<Annotated<RouterResponse<WorkerWithDpRank>>>,
-        Error,
-    > for KvRouter
+impl AsyncEngine<SingleIn<RouterRequest>, ManyOut<Annotated<RouterResponse<WorkerDp>>>, Error>
+    for KvRouter
 {
     async fn generate(
         &self,
         request: SingleIn<RouterRequest>,
-    ) -> Result<ManyOut<Annotated<RouterResponse<WorkerWithDpRank>>>> {
+    ) -> Result<ManyOut<Annotated<RouterResponse<WorkerDp>>>> {
         let (request, ctx) = request.into_parts();
         let (best_match, _) = self.find_best_match(&request.tokens).await?;
 
-        let response = RouterResponse {
-            worker_id_general: best_match,
-        };
+        let response = RouterResponse { worker: best_match };
         let response = Annotated::from_data(response);
         let stream = stream::iter(vec![response]);
         Ok(ResponseStream::new(Box::pin(stream), ctx.context()))

@@ -22,19 +22,19 @@ use rs::traits::events::EventSubscriber;
 use tracing;
 
 use llm_rs::kv_router::protocols::*;
-use llm_rs::kv_router::publisher::{create_stored_blocks, KvEventSourceConfig, KvCacheEventWithDp};
+use llm_rs::kv_router::publisher::{create_stored_blocks, KvCacheEventWithDp, KvEventSourceConfig};
 
 #[pyclass]
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct WorkerWithDpRank {
+pub struct WorkerDp {
     #[pyo3(get, set)]
     pub worker_id: i64,
     #[pyo3(get, set)]
     pub dp_rank: Option<u32>,
 }
 
-impl From<llm_rs::kv_router::protocols::WorkerWithDpRank> for WorkerWithDpRank {
-    fn from(value: llm_rs::kv_router::protocols::WorkerWithDpRank) -> Self {
+impl From<llm_rs::kv_router::protocols::WorkerDp> for WorkerDp {
+    fn from(value: llm_rs::kv_router::protocols::WorkerDp) -> Self {
         Self {
             worker_id: value.worker_id,
             dp_rank: value.dp_rank,
@@ -75,7 +75,7 @@ impl KvRouter {
                 .schedule(&token_ids, lora_id)
                 .await
                 .map_err(to_pyerr)?;
-            Ok(WorkerWithDpRank::from(worker_id))
+            Ok(WorkerDp::from(worker_id))
         })
     }
 }
@@ -263,14 +263,21 @@ impl KvEventPublisher {
             }),
         };
         let event_with_dp = KvCacheEventWithDp {
-            kv_cache_event: event, dp_rank,
+            kv_cache_event: event,
+            dp_rank,
         };
 
         self.inner.publish(event_with_dp).map_err(to_pyerr)
     }
 
     #[pyo3(signature = (event_id, block_hashes, dp_rank=None))]
-    fn publish_removed(&self, _py: Python, event_id: u64, block_hashes: Vec<i64>, dp_rank: Option<DpRank>) -> PyResult<()> {
+    fn publish_removed(
+        &self,
+        _py: Python,
+        event_id: u64,
+        block_hashes: Vec<i64>,
+        dp_rank: Option<DpRank>,
+    ) -> PyResult<()> {
         let block_hashes: Vec<ExternalSequenceBlockHash> = block_hashes
             .iter()
             .map(|&h| ExternalSequenceBlockHash::from(h))
@@ -280,7 +287,8 @@ impl KvEventPublisher {
             data: KvCacheEventData::Removed(KvCacheRemoveData { block_hashes }),
         };
         let event_with_dp = KvCacheEventWithDp {
-            kv_cache_event: event, dp_rank,
+            kv_cache_event: event,
+            dp_rank,
         };
 
         self.inner.publish(event_with_dp).map_err(to_pyerr)
@@ -290,15 +298,17 @@ impl KvEventPublisher {
 #[pyclass]
 #[derive(Clone)]
 pub(crate) struct OverlapScores {
-    inner: llm_rs::kv_router::indexer::OverlapScores<llm_rs::kv_router::protocols::WorkerWithDpRank>,
+    inner: llm_rs::kv_router::indexer::OverlapScores<llm_rs::kv_router::protocols::WorkerDp>,
 }
 
 #[pymethods]
 impl OverlapScores {
     #[getter]
-    fn scores(&self) -> HashMap<WorkerWithDpRank, u32> {
-        self.inner.scores.iter()
-            .map(|(k, v)| (WorkerWithDpRank::from(*k), *v))
+    fn scores(&self) -> HashMap<WorkerDp, u32> {
+        self.inner
+            .scores
+            .iter()
+            .map(|(k, v)| (WorkerDp::from(*k), *v))
             .collect()
     }
 
@@ -310,7 +320,7 @@ impl OverlapScores {
 
 #[pyclass]
 pub(crate) struct KvIndexer {
-    inner: Arc<llm_rs::kv_router::indexer::KvIndexer<llm_rs::kv_router::protocols::WorkerWithDpRank>>,
+    inner: Arc<llm_rs::kv_router::indexer::KvIndexer<llm_rs::kv_router::protocols::WorkerDp>>,
 }
 
 #[pymethods]
@@ -319,12 +329,13 @@ impl KvIndexer {
     fn new(component: Component, kv_block_size: usize) -> PyResult<Self> {
         let runtime = pyo3_async_runtimes::tokio::get_runtime();
         runtime.block_on(async {
-            let inner: Arc<llm_rs::kv_router::indexer::KvIndexer<llm_rs::kv_router::protocols::WorkerWithDpRank>> =
-                llm_rs::kv_router::indexer::KvIndexer::new(
-                    component.inner.drt().runtime().child_token(),
-                    kv_block_size,
-                )
-                .into();
+            let inner: Arc<
+                llm_rs::kv_router::indexer::KvIndexer<llm_rs::kv_router::protocols::WorkerDp>,
+            > = llm_rs::kv_router::indexer::KvIndexer::new(
+                component.inner.drt().runtime().child_token(),
+                kv_block_size,
+            )
+            .into();
             // [gluo TODO] try subscribe_with_type::<RouterEvent>,
             // error checking below will be different.
             let mut kv_events_rx = component
@@ -338,8 +349,9 @@ impl KvIndexer {
             // should have been made to a trait and implemented here? i.e. AsyncEngine style
             tokio::spawn(async move {
                 while let Some(event) = kv_events_rx.next().await {
-                    let event: llm_rs::kv_router::protocols::RouterEvent<llm_rs::kv_router::protocols::WorkerWithDpRank> =
-                        serde_json::from_slice(&event.payload).unwrap();
+                    let event: llm_rs::kv_router::protocols::RouterEvent<
+                        llm_rs::kv_router::protocols::WorkerDp,
+                    > = serde_json::from_slice(&event.payload).unwrap();
                     tracing::debug!("received kv event: {:?}", event);
                     if let Err(e) = kv_events_tx.send(event).await {
                         tracing::trace!(
@@ -463,7 +475,7 @@ impl KvMetricsAggregator {
 
 #[pyclass]
 pub(crate) struct KvRecorder {
-    inner: Arc<llm_rs::kv_router::recorder::KvRecorder<llm_rs::kv_router::protocols::WorkerWithDpRank>>,
+    inner: Arc<llm_rs::kv_router::recorder::KvRecorder<llm_rs::kv_router::protocols::WorkerDp>>,
 }
 
 #[pymethods]
@@ -514,8 +526,9 @@ impl KvRecorder {
             // Spawn a task to forward events to the recorder
             tokio::spawn(async move {
                 while let Some(event) = kv_events_rx.next().await {
-                    let event: llm_rs::kv_router::protocols::RouterEvent<llm_rs::kv_router::protocols::WorkerWithDpRank> =
-                        serde_json::from_slice(&event.payload).unwrap();
+                    let event: llm_rs::kv_router::protocols::RouterEvent<
+                        llm_rs::kv_router::protocols::WorkerDp,
+                    > = serde_json::from_slice(&event.payload).unwrap();
                     tracing::debug!("KvRecorder received kv event: {:?}", event);
                     if let Err(e) = event_tx.send(event).await {
                         tracing::trace!(

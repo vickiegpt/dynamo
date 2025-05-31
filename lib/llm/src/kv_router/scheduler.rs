@@ -24,7 +24,7 @@ pub use crate::kv_router::protocols::ForwardPassMetrics;
 use crate::kv_router::scoring::ProcessedEndpoints;
 use crate::kv_router::KV_HIT_RATE_SUBJECT;
 
-use super::protocols::{KVHitRateEvent, WorkerSelectionResult, WorkerWithDpRank};
+use super::protocols::{KVHitRateEvent, WorkerDp, WorkerSelectionResult};
 use super::WorkerSelector;
 
 #[derive(Debug, thiserror::Error)]
@@ -41,12 +41,12 @@ pub enum KvSchedulerError {
 
 pub struct SchedulingRequest {
     pub isl_tokens: usize,
-    pub overlap: OverlapScores<WorkerWithDpRank>,
-    resp_tx: tokio::sync::oneshot::Sender<WorkerWithDpRank>,
+    pub overlap: OverlapScores<WorkerDp>,
+    resp_tx: tokio::sync::oneshot::Sender<WorkerDp>,
 }
 
 impl SchedulingRequest {
-    pub fn respond(self, identifier: WorkerWithDpRank) {
+    pub fn respond(self, identifier: WorkerDp) {
         if self.resp_tx.send(identifier).is_err() {
             tracing::trace!("failed to send response to requestor");
         }
@@ -69,7 +69,7 @@ impl KvScheduler {
         let mut endpoints: ProcessedEndpoints = endpoints_rx.borrow_and_update().clone();
 
         let (event_tx, event_rx) =
-            tokio::sync::mpsc::unbounded_channel::<KVHitRateEvent<WorkerWithDpRank>>();
+            tokio::sync::mpsc::unbounded_channel::<KVHitRateEvent<WorkerDp>>();
         tokio::spawn(async move {
             let mut event_rx = event_rx;
             while let Some(event) = event_rx.recv().await {
@@ -147,9 +147,9 @@ impl KvScheduler {
 
     pub async fn schedule(
         &self,
-        overlap: OverlapScores<WorkerWithDpRank>,
+        overlap: OverlapScores<WorkerDp>,
         isl_tokens: usize,
-    ) -> Result<WorkerWithDpRank, KvSchedulerError> {
+    ) -> Result<WorkerDp, KvSchedulerError> {
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
         let request = SchedulingRequest {
             isl_tokens,
@@ -170,15 +170,15 @@ impl KvScheduler {
 // This becomes the driver function that handles the selection result
 pub fn process_worker_selection(
     workers: &mut ProcessedEndpoints,
-    selection: WorkerSelectionResult<WorkerWithDpRank>,
-    event_tx: &tokio::sync::mpsc::UnboundedSender<KVHitRateEvent<WorkerWithDpRank>>,
-) -> WorkerWithDpRank {
+    selection: WorkerSelectionResult<WorkerDp>,
+    event_tx: &tokio::sync::mpsc::UnboundedSender<KVHitRateEvent<WorkerDp>>,
+) -> WorkerDp {
     let worker = workers
         .endpoints
-        .get_mut(&selection.worker_id_general.worker_id)
+        .get_mut(&selection.worker.worker_id)
         .expect("worker not found");
 
-    let dp_rank = selection.worker_id_general.dp_rank.unwrap_or(0) as usize;
+    let dp_rank = selection.worker.dp_rank.unwrap_or(0) as usize;
 
     // Update worker state predictively
     // Will be overwritten on next polling of metrics
@@ -191,14 +191,14 @@ pub fn process_worker_selection(
 
     // Emit event
     if let Err(e) = event_tx.send(KVHitRateEvent {
-        worker_id_general: selection.worker_id_general,
+        worker: selection.worker,
         isl_blocks: selection.required_blocks as usize,
         overlap_blocks: selection.overlap_blocks,
     }) {
         tracing::warn!("Failed to send KV hit rate event: {:?}", e);
     }
 
-    selection.worker_id_general
+    selection.worker
 }
 
 // Default implementation matching the Python _cost_function
@@ -211,7 +211,7 @@ impl WorkerSelector for DefaultWorkerSelector {
         workers: &ProcessedEndpoints,
         request: &SchedulingRequest,
         block_size: usize,
-    ) -> Result<WorkerSelectionResult<WorkerWithDpRank>, KvSchedulerError> {
+    ) -> Result<WorkerSelectionResult<WorkerDp>, KvSchedulerError> {
         assert!(request.isl_tokens > 0);
 
         if workers.endpoints.is_empty() {
@@ -224,7 +224,7 @@ impl WorkerSelector for DefaultWorkerSelector {
         // Calculate worker scores and find max waiting requests
         for (worker_id, ep) in workers.endpoints.iter() {
             for dp_rank in ep.data.iter().map(|metrics| metrics.data_parallel_rank) {
-                let worker_with_dp_rank = WorkerWithDpRank {
+                let worker_with_dp_rank = WorkerDp {
                     worker_id: *worker_id,
                     dp_rank,
                 };
@@ -252,7 +252,7 @@ impl WorkerSelector for DefaultWorkerSelector {
             let worker_id = *worker_id;
             for fwd_pass_metrics in ep.data.iter() {
                 let dp_rank = fwd_pass_metrics.data_parallel_rank;
-                let worker_with_dp_rank = WorkerWithDpRank { worker_id, dp_rank };
+                let worker_with_dp_rank = WorkerDp { worker_id, dp_rank };
 
                 // Get score or default to 0.0
                 let score = worker_scores
@@ -319,7 +319,7 @@ impl WorkerSelector for DefaultWorkerSelector {
             .unwrap_or(0) as usize;
 
         Ok(WorkerSelectionResult {
-            worker_id_general: best_worker_and_dp,
+            worker: best_worker_and_dp,
             required_blocks: total_blocks,
             overlap_blocks,
         })

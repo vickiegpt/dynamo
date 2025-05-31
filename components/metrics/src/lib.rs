@@ -450,6 +450,8 @@ impl PrometheusMetrics {
             let worker_id = worker_id.to_string();
             let metrics = endpoint.data.clone();
 
+            // NOTE: using metrics[0] just to get the first dp_rank for now
+            // to not change the existing behavior
             self.set_worker_gauge(
                 &self.kv_blocks_active,
                 config,
