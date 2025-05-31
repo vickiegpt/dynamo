@@ -215,7 +215,7 @@ def update_dynamo_deployment(
     Args:
         name: Deployment name
         namespace: Target namespace
-        dynamo_component: Bento name and version (format: name:version)
+        dynamo_component: Dynamo component name and version (format: name:version)
         labels: Resource labels
         envs: Optional list of environment variables
 
