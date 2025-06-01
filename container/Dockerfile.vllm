@@ -176,10 +176,9 @@ RUN uv pip install /workspace/wheels/nixl/*.whl
 
 # Install patched vllm - keep this early in Dockerfile to avoid
 # rebuilds from unrelated source code changes
-ARG VLLM_REF="0.8.4"
-ARG VLLM_PATCH="vllm_v${VLLM_REF}-dynamo-kv-disagg-patch.patch"
-ARG VLLM_PATCHED_PACKAGE_NAME="ai_dynamo_vllm"
-ARG VLLM_PATCHED_PACKAGE_VERSION="0.8.4.post2"
+# Checkout fixed commit on main until vLLM release contains needed changes.
+ARG VLLM_COMMIT=bbfa0c61d195968dd0e9a6169243019109098a2c
+ARG VLLM_REF="main"
 ARG VLLM_MAX_JOBS=4
 RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
     --mount=type=cache,target=/root/.cache/uv \
@@ -191,14 +190,10 @@ RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
         # NIXL has a torch dependency, so need to force-reinstall to install the correct version
         uv pip install torch==2.7.0 torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/cu128 && \
         # Download vLLM source with version matching patch
-        git clone --branch v${VLLM_REF} --depth 1 https://github.com/vllm-project/vllm.git /tmp/vllm/vllm-${VLLM_REF} && \
+        # git clone --branch v${VLLM_REF} --depth 1 https://github.com/vllm-project/vllm.git /tmp/vllm/vllm-${VLLM_REF} && \
+        git clone https://github.com/vllm-project/vllm.git /tmp/vllm/vllm-${VLLM_REF} && \
         cd /tmp/vllm/vllm-${VLLM_REF}/ && \
-        # Patch vLLM source with dynamo additions
-        patch -p1 < /tmp/deps/vllm/${VLLM_PATCH} && \
-        # WAR: Set package version check to 'vllm' instead of 'ai_dynamo_vllm' to avoid
-        # platform detection issues on ARM install.
-        # TODO: Rename package from vllm to ai_dynamo_vllm like x86 path below to remove this WAR.
-        sed -i 's/version("ai_dynamo_vllm")/version("vllm")/g' vllm/platforms/__init__.py && \
+        git checkout ${VLLM_COMMIT} && \
         # Remove pytorch from vllm install dependencies
         python use_existing_torch.py && \
         # Build/install vllm from source
@@ -209,23 +204,7 @@ RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
         MAX_JOBS=${VLLM_MAX_JOBS} uv pip install -vv . --no-build-isolation ; \
     # Handle x86_64: Download wheel, unpack, setup for later steps
     else \
-        python -m pip download --only-binary=:all: --no-deps --dest /tmp/vllm vllm==v${VLLM_REF} && \
-        # Patch vLLM pre-built download with dynamo additions
-        cd /tmp/vllm && \
-        wheel unpack *.whl && \
-        cd vllm-${VLLM_REF}/ && \
-        patch -p1 < /tmp/deps/vllm/${VLLM_PATCH} && \
-        # Rename the package from vllm to ai_dynamo_vllm
-        mv vllm-${VLLM_REF}.dist-info ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info && \
-        sed -i "s/^Name: vllm/Name: ${VLLM_PATCHED_PACKAGE_NAME}/g" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/METADATA && \
-        sed -i "s/^Version: ${VLLM_REF}/Version: ${VLLM_PATCHED_PACKAGE_VERSION}/g" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/METADATA && \
-        # Update wheel tag from linux_${ARCH_ALT} to manylinux1_${ARCH_ALT} in WHEEL file
-        sed -i "s/Tag: cp38-abi3-linux_${ARCH_ALT}/Tag: cp38-abi3-manylinux1_${ARCH_ALT}/g" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/WHEEL && \
-        # Also update the tag in RECORD file to match
-        sed -i "s/-cp38-abi3-linux_${ARCH_ALT}.whl/-cp38-abi3-manylinux1_${ARCH_ALT}.whl/g" ${VLLM_PATCHED_PACKAGE_NAME}-${VLLM_PATCHED_PACKAGE_VERSION}.dist-info/RECORD && \
-        mkdir -p /workspace/dist && \
-        wheel pack . --dest-dir /workspace/dist && \
-        uv pip install /workspace/dist/${VLLM_PATCHED_PACKAGE_NAME}-*.whl ; \
+        uv pip install vllm --torch-backend=auto --extra-index-url https://wheels.vllm.ai/${VLLM_COMMIT} ; \
     fi
 
 # Common dependencies
