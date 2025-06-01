@@ -19,11 +19,13 @@ use crate::block_manager::{
 };
 
 use super::*;
+use tokio::sync::broadcast;
 
 impl<S: Storage, M: BlockMetadata> State<S, M> {
     fn new(
         event_manager: Arc<dyn EventManager>,
         return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
+        offload_tx: broadcast::Sender<Vec<ImmutableBlock<S, M>>>,
         global_registry: GlobalRegistry,
         async_runtime: Handle,
     ) -> Self {
@@ -32,6 +34,7 @@ impl<S: Storage, M: BlockMetadata> State<S, M> {
             inactive: InactiveBlockPool::new(),
             registry: BlockRegistry::new(event_manager.clone(), global_registry, async_runtime),
             return_tx,
+            offload_tx,
             event_manager,
         }
     }
@@ -195,18 +198,7 @@ impl<S: Storage, M: BlockMetadata> State<S, M> {
 
         assert_eq!(immutable_blocks.len(), expected_len);
 
-        if !offload_blocks.is_empty() {
-            let manager = offload_blocks[0].manager().cloned();
-            if let Some(manager) = manager {
-                manager.offload_blocks(offload_blocks).await.map_err(|_| {
-                    BlockPoolError::BlockError(BlockError::Other(anyhow::anyhow!(
-                        "failed to offload blocks"
-                    )))
-                })?;
-            } else {
-                tracing::warn!("Block is not managed. Unable to enqueue offload.");
-            }
-        }
+        let _ = self.offload_tx.send(offload_blocks);
 
         Ok(immutable_blocks)
     }
@@ -267,18 +259,25 @@ impl<S: Storage, M: BlockMetadata> State<S, M> {
 }
 
 impl<S: Storage, M: BlockMetadata> ProgressEngine<S, M> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         event_manager: Arc<dyn EventManager>,
         priority_rx: tokio::sync::mpsc::UnboundedReceiver<PriorityRequest<S, M>>,
         ctrl_rx: tokio::sync::mpsc::UnboundedReceiver<ControlRequest<S, M>>,
+        offload_tx: broadcast::Sender<Vec<ImmutableBlock<S, M>>>,
         cancel_token: CancellationToken,
         blocks: Vec<Block<S, M>>,
         global_registry: GlobalRegistry,
         async_runtime: Handle,
     ) -> Self {
         let (return_tx, return_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut state =
-            State::<S, M>::new(event_manager, return_tx, global_registry, async_runtime);
+        let mut state = State::<S, M>::new(
+            event_manager,
+            return_tx,
+            offload_tx,
+            global_registry,
+            async_runtime,
+        );
 
         tracing::debug!(count = blocks.len(), "adding blocks to inactive pool");
         state.inactive.add_blocks(blocks);

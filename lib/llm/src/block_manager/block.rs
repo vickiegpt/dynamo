@@ -161,7 +161,6 @@ pub struct Block<S: Storage, M: BlockMetadata> {
     data: BlockData<S>,
     metadata: M,
     state: BlockState,
-    manager: Option<Arc<BlockManager<M>>>,
 }
 
 impl<S: Storage, M: BlockMetadata> Block<S, M> {
@@ -171,7 +170,6 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
             data,
             metadata,
             state: BlockState::Reset,
-            manager: None,
         })
     }
 
@@ -198,14 +196,6 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
     pub(crate) fn reset(&mut self) {
         self.state = BlockState::Reset;
         self.metadata.reset_metadata();
-    }
-
-    pub(crate) fn set_manager(&mut self, manager: Arc<BlockManager<M>>) {
-        self.manager = Some(manager);
-    }
-
-    pub(crate) fn manager(&self) -> Option<&Arc<BlockManager<M>>> {
-        self.manager.as_ref()
     }
 
     /// Get the metadata of the block

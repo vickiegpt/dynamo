@@ -82,6 +82,7 @@ use std::{
     sync::{Arc, Weak},
 };
 use tokio::runtime::Handle;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use dynamo_runtime::Result;
@@ -147,6 +148,7 @@ impl<S: Storage, M: BlockMetadata> BlockPoolArgsBuilder<S, M> {
 pub struct BlockPool<S: Storage, M: BlockMetadata> {
     priority_tx: tokio::sync::mpsc::UnboundedSender<PriorityRequest<S, M>>,
     ctrl_tx: tokio::sync::mpsc::UnboundedSender<ControlRequest<S, M>>,
+    offload_tx: broadcast::Sender<Vec<ImmutableBlock<S, M>>>,
 }
 
 impl<S: Storage, M: BlockMetadata> Clone for BlockPool<S, M> {
@@ -154,6 +156,7 @@ impl<S: Storage, M: BlockMetadata> Clone for BlockPool<S, M> {
         Self {
             priority_tx: self.priority_tx.clone(),
             ctrl_tx: self.ctrl_tx.clone(),
+            offload_tx: self.offload_tx.clone(),
         }
     }
 }
@@ -265,11 +268,13 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
     ) -> (Self, ProgressEngine<S, M>) {
         let (priority_tx, priority_rx) = tokio::sync::mpsc::unbounded_channel();
         let (ctrl_tx, ctrl_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (offload_tx, _) = broadcast::channel(16384);
 
         let progress_engine = ProgressEngine::<S, M>::new(
             event_manager,
             priority_rx,
             ctrl_rx,
+            offload_tx.clone(),
             cancel_token,
             blocks,
             global_registry,
@@ -280,6 +285,7 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
             Self {
                 priority_tx,
                 ctrl_tx,
+                offload_tx,
             },
             progress_engine,
         )
@@ -466,6 +472,10 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         // Await a response
         Ok(resp_rx)
     }
+
+    pub(crate) fn offload_tx(&self) -> broadcast::Sender<Vec<ImmutableBlock<S, M>>> {
+        self.offload_tx.clone()
+    }
 }
 
 struct State<S: Storage, M: BlockMetadata> {
@@ -473,6 +483,7 @@ struct State<S: Storage, M: BlockMetadata> {
     inactive: InactiveBlockPool<S, M>,
     registry: BlockRegistry,
     return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
+    offload_tx: broadcast::Sender<Vec<ImmutableBlock<S, M>>>,
     event_manager: Arc<dyn EventManager>,
 }
 

@@ -228,11 +228,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
             offload_manager,
         });
 
-        if let Some(mut blocks) = disk_blocks {
-            blocks.iter_mut().for_each(|block| {
-                block.set_manager(state.clone());
-            });
-
+        if let Some(blocks) = disk_blocks {
             state
                 .disk_pool
                 .as_ref()
@@ -241,11 +237,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
                 .add_blocks_blocking(blocks)?;
         }
 
-        if let Some(mut blocks) = host_blocks {
-            blocks.iter_mut().for_each(|block| {
-                block.set_manager(state.clone());
-            });
-
+        if let Some(blocks) = host_blocks {
             state
                 .host_pool
                 .as_ref()
@@ -254,11 +246,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
                 .add_blocks_blocking(blocks)?;
         }
 
-        if let Some(mut blocks) = device_blocks {
-            blocks.iter_mut().for_each(|block| {
-                block.set_manager(state.clone());
-            });
-
+        if let Some(blocks) = device_blocks {
             state
                 .device_pool
                 .as_ref()
@@ -436,15 +424,6 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
 
     pub fn worker_id(&self) -> WorkerID {
         self.worker_id
-    }
-
-    pub(crate) async fn offload_blocks<S: Storage + 'static>(
-        &self,
-        blocks: Vec<ImmutableBlock<S, Metadata>>,
-    ) -> Result<()> {
-        self.offload_manager.offload_batch(blocks).await?;
-
-        Ok(())
     }
 
     pub async fn onboard_blocks<S: Storage>(
