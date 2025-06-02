@@ -52,14 +52,16 @@ use super::pool::BlockPoolError;
 use super::state::TransferContext;
 use super::storage::{Cuda, Storage};
 use super::{BlockPool, DeviceStorage, DiskStorage, PinnedStorage};
+use anyhow::Result;
 use nixl_sys::Agent as NixlAgent;
+use std::any::Any;
 use std::sync::Arc;
 use tokio::runtime::Handle;
-use tokio::sync::{broadcast::error::TryRecvError, mpsc};
+use tokio::sync::{
+    broadcast::error::{RecvError, TryRecvError},
+    mpsc,
+};
 use tokio_util::sync::CancellationToken;
-
-use anyhow::Result;
-use std::any::Any;
 
 mod pending;
 mod queue;
@@ -254,10 +256,15 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                     Ok(requests) => {
                         queue.insert(Self::build_offload_requests(requests))?;
                     }
-                    Err(TryRecvError::Empty) => {
+                    Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => {
                         break;
                     }
-                    Err(e) => return Err(e.into()),
+                    Err(TryRecvError::Lagged(num_lagged)) => {
+                        tracing::warn!(
+                            "Offload queue is lagging. Skipping {} requests",
+                            num_lagged
+                        );
+                    }
                 }
             }
 
@@ -306,10 +313,26 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                 }
             } else {
                 // Await the next request.
-                tokio::select! {
-                    _ = cancellation_token.cancelled() => return Ok(()),
-                    Ok(requests) = offload_rx.recv() => {
-                        queue.insert(Self::build_offload_requests(requests))?;
+                loop {
+                    tokio::select! {
+                        _ = cancellation_token.cancelled() => return Ok(()),
+                        requests = offload_rx.recv() => {
+                            match requests {
+                                Ok(requests) => {
+                                    queue.insert(Self::build_offload_requests(requests))?;
+                                    break;
+                                }
+                                Err(RecvError::Closed) => {
+                                    return Ok(());
+                                }
+                                Err(RecvError::Lagged(num_lagged)) => {
+                                    tracing::warn!(
+                                        "Offload queue is lagging. Skipping {} requests",
+                                        num_lagged
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
             }
