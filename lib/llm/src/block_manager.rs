@@ -29,6 +29,8 @@ pub mod offload;
 pub mod pool;
 pub mod storage;
 
+pub mod vllm;
+
 pub use crate::common::dtype::DType;
 pub use block::{
     nixl::{

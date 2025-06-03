@@ -22,6 +22,7 @@ mod block;
 mod block_list;
 mod dlpack;
 mod layer;
+mod vllm;
 
 /// Add bingings from this crate to the provided module
 pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
