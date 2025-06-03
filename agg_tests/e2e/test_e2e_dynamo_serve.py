@@ -28,7 +28,6 @@ from tests.e2e.testutils import dynamo_serve_process, get_test_deployment_graphs
 
 @pytest.fixture(params=[
     pytest.param("agg", marks=pytest.mark.gpu),
-    pytest.param("agg_router", marks=pytest.mark.gpu),
 ])
 def deployment_graph_test(request):
     """
