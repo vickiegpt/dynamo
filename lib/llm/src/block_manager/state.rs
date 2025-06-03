@@ -98,7 +98,9 @@ impl TransferContext {
             .record_event(Some(CUevent_flags::CU_EVENT_BLOCKING_SYNC))
             .map_err(|e| TransferError::ExecutionError(e.to_string()))?;
 
-        self.cuda_event_tx.send((event, tx)).map_err(|_| TransferError::ExecutionError("CUDA event worker exited.".into()))?;
+        self.cuda_event_tx
+            .send((event, tx))
+            .map_err(|_| TransferError::ExecutionError("CUDA event worker exited.".into()))?;
         Ok(())
     }
 }
