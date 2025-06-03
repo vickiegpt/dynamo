@@ -128,7 +128,11 @@ class ServiceInfo(BaseModel):
         for ep_name, endpoint in service.get_dynamo_endpoints().items():
             if DynamoTransport.HTTP in endpoint.transports:
                 api_endpoints.append(f"/{ep_name}")
-        http_exposed = service.config.http_exposed or len(api_endpoints) > 0
+        http_exposed = service.config.http_exposed
+        if len(api_endpoints) > 0:
+            assert (
+                http_exposed
+            ), "HTTP exposed must be True if API endpoints are defined"
 
         image = service.config.image or DYNAMO_IMAGE
         assert (
