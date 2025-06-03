@@ -128,16 +128,13 @@ class ServiceInfo(BaseModel):
         for ep_name, endpoint in service.get_dynamo_endpoints().items():
             if DynamoTransport.HTTP in endpoint.transports:
                 api_endpoints.append(f"/{ep_name}")
-        http_exposed = service.config.http_exposed
-        if len(api_endpoints) > 0:
-            assert (
-                http_exposed
-            ), "HTTP exposed must be True if API endpoints are defined"
-
         image = service.config.image or DYNAMO_IMAGE
         assert (
             image is not None
         ), "Please set DYNAMO_IMAGE environment variable or image field in service config"
+
+        if service.config.http_exposed:
+            logger.info(f"exposing HTTP service for {name}")
 
         # Create config
         config = ServiceConfig(
@@ -147,7 +144,7 @@ class ServiceInfo(BaseModel):
             workers=service.config.workers,
             image=image,
             dynamo=service.config.dynamo.model_dump(),
-            http_exposed=http_exposed,
+            http_exposed=service.config.http_exposed,
             api_endpoints=api_endpoints,
         )
 
