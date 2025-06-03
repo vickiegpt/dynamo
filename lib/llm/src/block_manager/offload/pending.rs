@@ -225,7 +225,7 @@ where
                 true,
                 self.transfer_ctx.clone(),
             )?
-            .unwrap();
+            .ok_or_else(|| anyhow::anyhow!("write_to returned None when notify was true. This should never happen!"))?;
 
         // Send the pending transfer and event to the worker thread.
         // If the queue is full, we block the worker until space becomes available.
@@ -311,7 +311,7 @@ where
                 true,
                 self.transfer_ctx.clone(),
             )?
-            .unwrap();
+            .ok_or_else(|| anyhow::anyhow!("write_to returned None when notify was true. This should never happen!"))?;
 
         let completion_future = async move {
             let _ = notify.await;

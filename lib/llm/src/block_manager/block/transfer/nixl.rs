@@ -134,9 +134,9 @@ where
         None,
     )?;
 
-    let status = nixl_agent.post_xfer_req(&xfer_req, None)?;
+    let still_pending = nixl_agent.post_xfer_req(&xfer_req, None)?;
 
-    if status {
+    if still_pending {
         Ok(Box::new(Box::pin(async move {
             let nixl_agent = nixl_agent_arc
                 .as_ref()
@@ -144,11 +144,14 @@ where
                 .expect("NIXL agent not found");
 
             loop {
-                let status = nixl_agent.get_xfer_status(&xfer_req).unwrap();
-                if !status {
-                    break;
+                match nixl_agent.get_xfer_status(&xfer_req) {
+                    Ok(false) => break, // Transfer is complete.
+                    Ok(true) => tokio::time::sleep(std::time::Duration::from_millis(5)).await, // Transfer is still in progress.
+                    Err(e) => {
+                        tracing::error!("Error getting transfer status: {}", e);
+                        break;
+                    }
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }
         })))
     } else {

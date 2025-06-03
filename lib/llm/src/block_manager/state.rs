@@ -21,7 +21,7 @@ use super::{
     config::NixlOptions,
 };
 use cudarc::driver::{sys::CUevent_flags, CudaEvent, CudaStream};
-use std::sync::Arc;
+use std::{sync::Arc, thread::JoinHandle};
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 
@@ -31,6 +31,8 @@ pub struct TransferContext {
     async_rt_handle: Handle,
 
     cuda_event_tx: mpsc::UnboundedSender<(CudaEvent, oneshot::Sender<()>)>,
+    cuda_event_worker: Option<JoinHandle<()>>,
+    cancel_token: CancellationToken,
 }
 
 impl TransferContext {
@@ -42,18 +44,39 @@ impl TransferContext {
         let (cuda_event_tx, mut cuda_event_rx) =
             mpsc::unbounded_channel::<(CudaEvent, oneshot::Sender<()>)>();
 
-        drop(std::thread::spawn(move || {
-            while let Some((event, tx)) = cuda_event_rx.blocking_recv() {
-                event.synchronize().unwrap();
-                let _ = tx.send(());
-            }
-        }));
+        let cancel_token = CancellationToken::new();
+
+        let cancel_token_clone = cancel_token.clone();
+        let cuda_event_worker = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to build Tokio runtime for CUDA event worker.");
+
+            runtime.block_on(async move {
+                loop {
+                    tokio::select! {
+                        Some((event, tx)) = cuda_event_rx.recv() => {
+                            if let Err(e) = event.synchronize() {
+                                tracing::error!("Error synchronizing CUDA event: {}", e);
+                            }
+                            let _ = tx.send(());
+                        }
+                        _ = cancel_token_clone.cancelled() => {
+                            break;
+                        }
+                    }
+                }
+            });
+        });
 
         Self {
             nixl_agent,
             stream,
             async_rt_handle,
             cuda_event_tx,
+            cuda_event_worker: Some(cuda_event_worker),
+            cancel_token,
         }
     }
 
@@ -74,8 +97,18 @@ impl TransferContext {
             .stream
             .record_event(Some(CUevent_flags::CU_EVENT_BLOCKING_SYNC))
             .map_err(|e| TransferError::ExecutionError(e.to_string()))?;
-        self.cuda_event_tx.send((event, tx)).unwrap();
+
+        self.cuda_event_tx.send((event, tx)).map_err(|_| TransferError::ExecutionError("CUDA event worker exited.".into()))?;
         Ok(())
+    }
+}
+
+impl Drop for TransferContext {
+    fn drop(&mut self) {
+        self.cancel_token.cancel();
+        if let Some(handle) = self.cuda_event_worker.take() {
+            handle.join().unwrap();
+        }
     }
 }
 
