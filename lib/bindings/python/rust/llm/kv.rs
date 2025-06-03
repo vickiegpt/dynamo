@@ -96,17 +96,18 @@ impl WorkerMetricsPublisher {
         })
     }
 
-    #[pyo3(signature = (component))]
+    #[pyo3(signature = (component, dp_rank = None))]
     fn create_endpoint<'p>(
         &self,
         py: Python<'p>,
         component: Component,
+        dp_rank: Option<DpRank>,
     ) -> PyResult<Bound<'p, PyAny>> {
         let rs_publisher = self.inner.clone();
         let rs_component = component.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             rs_publisher
-                .create_endpoint(rs_component)
+                .create_endpoint(rs_component, dp_rank.as_ref().map(|v| v.to_string()).as_deref())
                 .await
                 .map_err(to_pyerr)?;
             Ok(())
@@ -449,18 +450,16 @@ impl KvMetricsAggregator {
         let endpoint_kv_metrics = endpoints
             .endpoints
             .iter()
-            .flat_map(|(worker_id, x)| {
-                x.data.iter().map(move |data_item| EndpointKvMetrics {
-                    worker_id: *worker_id,
-                    dp_rank: data_item.data_parallel_rank,
-                    request_active_slots: data_item.request_active_slots,
-                    request_total_slots: data_item.request_total_slots,
-                    kv_active_blocks: data_item.kv_active_blocks,
-                    kv_total_blocks: data_item.kv_total_blocks,
-                    num_requests_waiting: data_item.num_requests_waiting,
-                    gpu_cache_usage_perc: data_item.gpu_cache_usage_perc,
-                    gpu_prefix_cache_hit_rate: data_item.gpu_prefix_cache_hit_rate,
-                })
+            .map(|(worker_dp, x)| EndpointKvMetrics {
+                worker_id: worker_dp.worker_id,
+                dp_rank: worker_dp.dp_rank,
+                request_active_slots: x.data.request_active_slots,
+                request_total_slots: x.data.request_total_slots,
+                kv_active_blocks: x.data.kv_active_blocks,
+                kv_total_blocks: x.data.kv_total_blocks,
+                num_requests_waiting: x.data.num_requests_waiting,
+                gpu_cache_usage_perc: x.data.gpu_cache_usage_perc,
+                gpu_prefix_cache_hit_rate: x.data.gpu_prefix_cache_hit_rate,
             })
             .collect();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {

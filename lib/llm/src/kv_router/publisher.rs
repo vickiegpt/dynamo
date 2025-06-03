@@ -491,13 +491,18 @@ impl WorkerMetricsPublisher {
         self.tx.send(metrics)
     }
 
-    pub async fn create_endpoint(&self, component: Component) -> Result<()> {
+    pub async fn create_endpoint(&self, component: Component, suffix: Option<&str>) -> Result<()> {
         let mut metrics_rx = self.rx.clone();
         let handler = Arc::new(KvLoadEndpoingHander::new(metrics_rx.clone()));
         let handler = Ingress::for_engine(handler)?;
 
+        let endpoint_name = match suffix {
+            Some(s) => format!("{}_{}", KV_METRICS_ENDPOINT, s),
+            None => KV_METRICS_ENDPOINT.to_string(),
+        };
+
         component
-            .endpoint(KV_METRICS_ENDPOINT)
+            .endpoint(&endpoint_name)
             .endpoint_builder()
             .stats_handler(move |_| {
                 let metrics = metrics_rx.borrow_and_update().clone();

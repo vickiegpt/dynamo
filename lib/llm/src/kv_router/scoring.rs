@@ -18,16 +18,17 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::kv_router::protocols::{ForwardPassMetrics, WorkerId};
+use crate::kv_router::protocols::{DpRank, ForwardPassMetrics, WorkerDp};
 
 /// [gluo FIXME] exactly the same as EndpointInfo except that 'data'
 /// is cleaned (not optional)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Endpoint {
     pub name: String,
+    // contains dp
     pub subject: String,
     // one set of metrics for each dp worker
-    pub data: Vec<ForwardPassMetrics>,
+    pub data: ForwardPassMetrics,
 }
 
 impl Endpoint {
@@ -43,11 +44,20 @@ impl Endpoint {
         )
         .expect("invalid worker id")
     }
-}
+
+    pub fn dp_rank(&self) -> Option<DpRank> {
+        let parts: Vec<&str> = self.subject.split("-").collect();
+        if parts.len() < 2 {
+            return None;
+        }
+        let second_to_last = parts[parts.len() - 2];
+        second_to_last.parse::<DpRank>().ok()
+    }
+} // TODO: make dp_rank
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct ProcessedEndpoints {
-    pub endpoints: HashMap<WorkerId, Endpoint>,
+    pub endpoints: HashMap<WorkerDp, Endpoint>,
     pub load_avg: f64,
     pub load_std: f64,
 }
@@ -57,8 +67,7 @@ impl ProcessedEndpoints {
         // compute some basic statistics
         let load_values: Vec<f64> = endpoints
             .iter()
-            .flat_map(|endpoint| endpoint.data.iter())
-            .map(|metrics| metrics.kv_active_blocks as f64)
+            .map(|endpoint| endpoint.data.kv_active_blocks as f64)
             .collect();
         if load_values.is_empty() {
             panic!("No endpoints to process!")
@@ -71,7 +80,19 @@ impl ProcessedEndpoints {
             / load_values.len() as f64;
         let load_std = variance.sqrt();
 
-        let endpoints = endpoints.into_iter().map(|e| (e.worker_id(), e)).collect();
+        // pass in (worker_id, dp_rank) tuple
+        let endpoints = endpoints
+            .into_iter()
+            .map(|e| {
+                (
+                    WorkerDp {
+                        worker_id: e.worker_id(),
+                        dp_rank: e.dp_rank(),
+                    },
+                    e,
+                )
+            })
+            .collect();
 
         ProcessedEndpoints {
             endpoints,

@@ -175,17 +175,15 @@ pub fn process_worker_selection(
 ) -> WorkerDp {
     let worker = workers
         .endpoints
-        .get_mut(&selection.worker.worker_id)
+        .get_mut(&selection.worker)
         .expect("worker not found");
-
-    let dp_rank = selection.worker.dp_rank.unwrap_or(0) as usize;
 
     // Update worker state predictively
     // Will be overwritten on next polling of metrics
-    worker.data[dp_rank].num_requests_waiting += 1;
+    worker.data.num_requests_waiting += 1;
     // Assumes radix attention so KV load is only incremented by uncached blocks
     // overlap_blocks can be bigger than required_blocks. I don't know if that's a bug or not.
-    worker.data[dp_rank].kv_active_blocks += selection
+    worker.data.kv_active_blocks += selection
         .required_blocks
         .saturating_sub(selection.overlap_blocks as u64);
 
@@ -222,22 +220,13 @@ impl WorkerSelector for DefaultWorkerSelector {
         let mut max_waiting = 0.0;
 
         // Calculate worker scores and find max waiting requests
-        for (worker_id, ep) in workers.endpoints.iter() {
-            for dp_rank in ep.data.iter().map(|metrics| metrics.data_parallel_rank) {
-                let worker_with_dp_rank = WorkerDp {
-                    worker_id: *worker_id,
-                    dp_rank,
-                };
-                if let Some(score) = request.overlap.scores.get(&worker_with_dp_rank) {
-                    let score = *score as f64 * block_size as f64 / request.isl_tokens as f64;
-                    worker_scores.insert(worker_with_dp_rank, score);
-                }
-                // Track max waiting requests
-                max_waiting = f64::max(
-                    max_waiting,
-                    ep.data[dp_rank.unwrap_or(0) as usize].num_requests_waiting as f64,
-                );
+        for (worker_dp, ep) in workers.endpoints.iter() {
+            if let Some(score) = request.overlap.scores.get(worker_dp) {
+                let score = *score as f64 * block_size as f64 / request.isl_tokens as f64;
+                worker_scores.insert(worker_dp, score);
             }
+            // Track max waiting requests
+            max_waiting = f64::max(max_waiting, ep.data.num_requests_waiting as f64);
         }
 
         // make immutable
@@ -246,80 +235,70 @@ impl WorkerSelector for DefaultWorkerSelector {
 
         // Calculate logits for each worker
         let mut best_logit = f64::NEG_INFINITY;
-        let mut best_workers = Vec::new();
+        let mut best_worker_dps = Vec::new();
 
-        for (worker_id, ep) in workers.endpoints.iter() {
-            let worker_id = *worker_id;
-            for fwd_pass_metrics in ep.data.iter() {
-                let dp_rank = fwd_pass_metrics.data_parallel_rank;
-                let worker_with_dp_rank = WorkerDp { worker_id, dp_rank };
+        for (worker_dp, ep) in workers.endpoints.iter() {
+            // Get score or default to 0.0
+            let score = worker_scores.get(worker_dp).copied().unwrap_or(0.0);
 
-                // Get score or default to 0.0
-                let score = worker_scores
-                    .get(&worker_with_dp_rank)
-                    .copied()
-                    .unwrap_or(0.0);
+            // Calculate normalized metrics
+            let gpu_cache_usage = ep.data.gpu_cache_usage_perc as f64;
+            let normalized_waiting = if max_waiting > 0.0 {
+                ep.data.num_requests_waiting as f64 / max_waiting
+            } else {
+                0.0
+            };
 
-                // Calculate normalized metrics
-                let gpu_cache_usage =
-                    ep.data[dp_rank.unwrap_or(0) as usize].gpu_cache_usage_perc as f64;
-                let normalized_waiting = if max_waiting > 0.0 {
-                    ep.data[dp_rank.unwrap_or(0) as usize].num_requests_waiting as f64 / max_waiting
-                } else {
-                    0.0
-                };
+            // Calculate logit using same formula as Python
+            let logit = 2.0 * score - gpu_cache_usage - normalized_waiting;
 
-                // Calculate logit using same formula as Python
-                let logit = 2.0 * score - gpu_cache_usage - normalized_waiting;
+            tracing::trace!(
+                "Formula for {worker_dp:?}: {logit:.3} = 2.0 * {score:.3} - {gpu_cache_usage:.3} - {normalized_waiting:.3}",
+            );
 
-                tracing::trace!(
-                    "Formula for {worker_id}: {logit:.3} = 2.0 * {score:.3} - {gpu_cache_usage:.3} - {normalized_waiting:.3}",
-                );
-
-                // Track best workers
-                match logit.partial_cmp(&best_logit) {
-                    Some(std::cmp::Ordering::Greater) => {
-                        best_logit = logit;
-                        best_workers.clear();
-                        best_workers.push(worker_with_dp_rank);
-                    }
-                    Some(std::cmp::Ordering::Equal) => {
-                        best_workers.push(worker_with_dp_rank);
-                    }
-                    _ => {}
+            // Track best workers
+            match logit.partial_cmp(&best_logit) {
+                Some(std::cmp::Ordering::Greater) => {
+                    best_logit = logit;
+                    best_worker_dps.clear();
+                    best_worker_dps.push(worker_dp);
                 }
+                Some(std::cmp::Ordering::Equal) => {
+                    best_worker_dps.push(worker_dp);
+                }
+                _ => {}
             }
         }
 
         // Return early if no valid workers found
-        if best_workers.is_empty() {
+        if best_worker_dps.is_empty() {
             return Err(KvSchedulerError::NoEndpoints);
         } else if best_logit == 0.0 {
             tracing::debug!("best worker logit is 0");
         }
 
-        let best_worker_and_dp = if best_workers.len() == 1 {
-            best_workers[0]
+        let best_worker_dp = if best_worker_dps.len() == 1 {
+            best_worker_dps[0]
         } else {
             // Randomly select from best workers
             let mut rng = rand::rng();
-            best_workers[rng.random_range(0..best_workers.len())]
+            best_worker_dps[rng.random_range(0..best_worker_dps.len())]
         };
 
         // Lower to trace level eventually. Nice to see KV routing working for now.
-        tracing::debug!("Selected worker: {best_worker_and_dp:?}, logit: {best_logit:.3}");
+        tracing::debug!("Selected worker: {best_worker_dp:?}, logit: {best_logit:.3}");
 
         // Log selection metrics
         let total_blocks = std::cmp::max(request.isl_tokens / block_size, 1) as u64;
         let overlap_blocks = request
             .overlap
             .scores
-            .get(&best_worker_and_dp)
+            .get(best_worker_dp)
             .copied()
             .unwrap_or(0) as usize;
 
         Ok(WorkerSelectionResult {
-            worker: best_worker_and_dp,
+            worker: *best_worker_dp,
             required_blocks: total_blocks,
             overlap_blocks,
         })

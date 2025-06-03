@@ -118,7 +118,7 @@ pub async fn collect_endpoints_task(
                     .into_iter()
                     .filter(|s| s.data.is_some())
                     .filter_map(|s|
-                        match s.data.unwrap().decode::<Vec<ForwardPassMetrics>>() {
+                        match s.data.unwrap().decode::<ForwardPassMetrics>() {
                             Ok(data) => Some(Endpoint {
                                 name: s.name,
                                 subject: s.subject,

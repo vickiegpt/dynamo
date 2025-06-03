@@ -29,6 +29,15 @@ pub struct WorkerDp {
     pub dp_rank: Option<DpRank>,
 }
 
+impl std::fmt::Display for WorkerDp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.dp_rank {
+            Some(dp_rank) => write!(f, "{}_{}", self.worker_id, dp_rank),
+            None => write!(f, "{}", self.worker_id),
+        }
+    }
+}
+
 pub trait WorkerGeneral:
     Hash + Eq + Debug + Clone + Send + Sync + Default + 'static + Serialize
 {

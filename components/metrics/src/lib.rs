@@ -456,31 +456,31 @@ impl PrometheusMetrics {
                 &self.kv_blocks_active,
                 config,
                 &worker_id,
-                metrics[0].kv_active_blocks as f64,
+                metrics.kv_active_blocks as f64,
             );
             self.set_worker_gauge(
                 &self.kv_blocks_total,
                 config,
                 &worker_id,
-                metrics[0].kv_total_blocks as f64,
+                metrics.kv_total_blocks as f64,
             );
             self.set_worker_gauge(
                 &self.requests_active,
                 config,
                 &worker_id,
-                metrics[0].request_active_slots as f64,
+                metrics.request_active_slots as f64,
             );
             self.set_worker_gauge(
                 &self.requests_total,
                 config,
                 &worker_id,
-                metrics[0].request_total_slots as f64,
+                metrics.request_total_slots as f64,
             );
             self.set_worker_gauge(
                 &self.kv_hit_rate_percent,
                 config,
                 &worker_id,
-                metrics[0].gpu_prefix_cache_hit_rate as f64,
+                metrics.gpu_prefix_cache_hit_rate as f64,
             );
         }
 
@@ -603,7 +603,7 @@ pub fn postprocess_metrics(
             e.id().ok().map(|id| Endpoint {
                 name: format!("worker-{id}"),
                 subject: e.subject.clone(),
-                data: vec![m.clone()],
+                data: m.clone(),
             })
         })
         .collect();
