@@ -129,6 +129,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         let device_offload_transfer_ctx = Arc::new(TransferContext::new(
             nixl_agent.clone(),
             cuda_ctx.new_stream()?,
+            async_rt_handle.clone(),
         ));
 
         // Device -> Host offload
@@ -159,6 +160,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         let transfer_ctx = Arc::new(TransferContext::new(
             nixl_agent.clone(),
             cuda_ctx.new_stream()?,
+            async_rt_handle.clone(),
         ));
 
         // Host -> Disk offload
@@ -549,8 +551,10 @@ mod tests {
             let agent = NixlAgent::new("offload-manager").unwrap();
             let (_, ucx_params) = agent.get_plugin_params("UCX").unwrap();
             let (_, gds_params) = agent.get_plugin_params("GDS").unwrap();
+            let (_, posix_params) = agent.get_plugin_params("POSIX").unwrap();
             agent.create_backend("UCX", &ucx_params).unwrap();
             agent.create_backend("GDS", &gds_params).unwrap();
+            agent.create_backend("POSIX", &posix_params).unwrap();
             Arc::new(Some(agent))
         };
     }

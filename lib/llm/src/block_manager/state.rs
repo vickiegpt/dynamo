@@ -17,21 +17,44 @@ use super::*;
 
 use super::offload::OffloadManager;
 use super::{
-    block::{Block, GlobalRegistry, ImmutableBlock},
+    block::{transfer::TransferError, Block, GlobalRegistry, ImmutableBlock},
     config::NixlOptions,
 };
-use cudarc::driver::CudaStream;
+use cudarc::driver::{sys::CUevent_flags, CudaEvent, CudaStream};
 use std::sync::Arc;
 use tokio::runtime::Handle;
+use tokio::sync::{mpsc, oneshot};
 
 pub struct TransferContext {
     nixl_agent: Arc<Option<NixlAgent>>,
     stream: Arc<CudaStream>,
+    async_rt_handle: Handle,
+
+    cuda_event_tx: mpsc::UnboundedSender<(CudaEvent, oneshot::Sender<()>)>,
 }
 
 impl TransferContext {
-    pub fn new(nixl_agent: Arc<Option<NixlAgent>>, stream: Arc<CudaStream>) -> Self {
-        Self { nixl_agent, stream }
+    pub fn new(
+        nixl_agent: Arc<Option<NixlAgent>>,
+        stream: Arc<CudaStream>,
+        async_rt_handle: Handle,
+    ) -> Self {
+        let (cuda_event_tx, mut cuda_event_rx) =
+            mpsc::unbounded_channel::<(CudaEvent, oneshot::Sender<()>)>();
+
+        drop(std::thread::spawn(move || {
+            while let Some((event, tx)) = cuda_event_rx.blocking_recv() {
+                event.synchronize().unwrap();
+                let _ = tx.send(());
+            }
+        }));
+
+        Self {
+            nixl_agent,
+            stream,
+            async_rt_handle,
+            cuda_event_tx,
+        }
     }
 
     pub fn nixl_agent(&self) -> Arc<Option<NixlAgent>> {
@@ -40,6 +63,19 @@ impl TransferContext {
 
     pub fn stream(&self) -> &Arc<CudaStream> {
         &self.stream
+    }
+
+    pub fn async_rt_handle(&self) -> &Handle {
+        &self.async_rt_handle
+    }
+
+    pub fn cuda_event(&self, tx: oneshot::Sender<()>) -> Result<(), TransferError> {
+        let event = self
+            .stream
+            .record_event(Some(CUevent_flags::CU_EVENT_BLOCKING_SYNC))
+            .map_err(|e| TransferError::ExecutionError(e.to_string()))?;
+        self.cuda_event_tx.send((event, tx)).unwrap();
+        Ok(())
     }
 }
 

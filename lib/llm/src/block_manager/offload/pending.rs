@@ -41,7 +41,6 @@
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::thread::spawn;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -57,7 +56,6 @@ use crate::block_manager::BlockPool;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use cudarc::driver::{sys::CUevent_flags, CudaEvent};
 use futures::{stream::FuturesUnordered, StreamExt};
 
 use super::BlockResult;
@@ -110,7 +108,9 @@ impl<Source: Storage, Target: Storage, Metadata: BlockMetadata>
         let blocks = target_pool.register_blocks_blocking(targets)?;
 
         if let Some(completion_indicator) = completion_indicator {
-            completion_indicator.send(Ok(blocks))?;
+            completion_indicator
+                .send(Ok(blocks))
+                .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
         }
 
         Ok(())
@@ -150,7 +150,10 @@ pub trait TransferManager<Source: Storage, Target: Storage, Metadata: BlockMetad
 }
 
 pub struct CudaTransferManager<Source: Storage, Target: Storage, Metadata: BlockMetadata> {
-    pending_transfer_q: mpsc::Sender<(PendingTransfer<Source, Target, Metadata>, CudaEvent)>,
+    pending_transfer_q: mpsc::Sender<(
+        PendingTransfer<Source, Target, Metadata>,
+        tokio::sync::oneshot::Receiver<()>,
+    )>,
     transfer_ctx: Arc<TransferContext>,
 }
 
@@ -162,14 +165,15 @@ impl<Source: Storage, Target: Storage, Metadata: BlockMetadata>
         max_concurrent_transfers: usize,
         cancellation_token: CancellationToken,
     ) -> Self {
-        let (tx, mut rx) = mpsc::channel::<(PendingTransfer<Source, Target, Metadata>, CudaEvent)>(
-            max_concurrent_transfers,
-        );
+        let (tx, mut rx) = mpsc::channel::<(
+            PendingTransfer<Source, Target, Metadata>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>(max_concurrent_transfers);
 
-        spawn(move || {
-            while let Some((pending_transfer, event)) = rx.blocking_recv() {
+        transfer_ctx.async_rt_handle().spawn(async move {
+            while let Some((pending_transfer, notify)) = rx.recv().await {
                 // Wait for the event.
-                event.synchronize()?;
+                notify.await.unwrap();
                 // Only finalize the transfer after the event is signaled.
                 match pending_transfer.handle_complete() {
                     Ok(_) => {}
@@ -214,22 +218,19 @@ where
         &self,
         mut pending_transfer: PendingTransfer<Source, Target, Metadata>,
     ) -> Result<()> {
-        pending_transfer.sources.write_to(
-            &mut pending_transfer.targets,
-            None,
-            self.transfer_ctx.clone(),
-        )?;
-
-        // Use a cuda event to record the completion of the transfers.
-        let event = self
-            .transfer_ctx
-            .stream()
-            .record_event(Some(CUevent_flags::CU_EVENT_BLOCKING_SYNC))?;
+        let notify = pending_transfer
+            .sources
+            .write_to(
+                &mut pending_transfer.targets,
+                true,
+                self.transfer_ctx.clone(),
+            )?
+            .unwrap();
 
         // Send the pending transfer and event to the worker thread.
         // If the queue is full, we block the worker until space becomes available.
         self.pending_transfer_q
-            .send((pending_transfer, event))
+            .send((pending_transfer, notify))
             .await?;
 
         Ok(())
@@ -303,14 +304,17 @@ where
         &self,
         mut pending_transfer: PendingTransfer<Source, Target, Metadata>,
     ) -> Result<()> {
-        let future = pending_transfer.sources.nixl_write_to(
-            &mut pending_transfer.targets,
-            None,
-            self.transfer_ctx.clone(),
-        )?;
+        let notify = pending_transfer
+            .sources
+            .write_to(
+                &mut pending_transfer.targets,
+                true,
+                self.transfer_ctx.clone(),
+            )?
+            .unwrap();
 
         let completion_future = async move {
-            let _ = future.await;
+            let _ = notify.await;
             match pending_transfer.handle_complete() {
                 Ok(_) => {}
                 Err(e) => {

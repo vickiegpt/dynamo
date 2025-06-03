@@ -16,9 +16,8 @@
 use super::*;
 
 use anyhow::Result;
-use nixl_sys::{MemoryRegion, NixlDescriptor, OptArgs, XferDescList};
-use std::future::{poll_fn, Future};
-use std::task::Poll;
+use nixl_sys::{MemoryRegion, NixlDescriptor, XferDescList};
+use std::future::Future;
 
 fn append_xfer_request<Source, Destination>(
     src: &Arc<Source>,
@@ -87,8 +86,7 @@ where
 pub fn write_blocks_to<Source, Destination>(
     src: &[Arc<Source>],
     dst: &mut [Destination],
-    ctx: Arc<TransferContext>,
-    notify: Option<String>,
+    ctx: &Arc<TransferContext>,
     transfer_type: NixlTransfer,
 ) -> Result<Box<dyn Future<Output = ()> + Send + Sync + Unpin>>
 where
@@ -136,26 +134,24 @@ where
         None,
     )?;
 
-    let mut xfer_args = OptArgs::new()?;
+    let status = nixl_agent.post_xfer_req(&xfer_req, None)?;
 
-    if let Some(notify) = notify {
-        xfer_args.set_has_notification(true)?;
-        xfer_args.set_notification_message(notify.as_bytes())?;
+    if status {
+        Ok(Box::new(Box::pin(async move {
+            let nixl_agent = nixl_agent_arc
+                .as_ref()
+                .as_ref()
+                .expect("NIXL agent not found");
+
+            loop {
+                let status = nixl_agent.get_xfer_status(&xfer_req).unwrap();
+                if !status {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })))
+    } else {
+        Ok(Box::new(std::future::ready(())))
     }
-
-    let _ = nixl_agent.post_xfer_req(&xfer_req, Some(&xfer_args))?;
-
-    Ok(Box::new(poll_fn(move |_cx| {
-        let nixl_agent = nixl_agent_arc
-            .as_ref()
-            .as_ref()
-            .expect("NIXL agent not found");
-
-        // The nixl agent returns true if the transfer is still in progress.
-        if !nixl_agent.get_xfer_status(&xfer_req).unwrap() {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
-        }
-    })))
 }
