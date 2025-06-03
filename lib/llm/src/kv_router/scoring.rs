@@ -46,12 +46,14 @@ impl Endpoint {
     }
 
     pub fn dp_rank(&self) -> Option<DpRank> {
+        tracing::info!("Parsing dp_rank from subject: {}", self.subject);
         let parts: Vec<&str> = self.subject.split("-").collect();
-        if parts.len() < 2 {
+        if parts.len() < 3 {
             return None;
         }
         let second_to_last = parts[parts.len() - 2];
-        second_to_last.parse::<DpRank>().ok()
+        let result = second_to_last.parse::<DpRank>().ok();
+        result
     }
 } // TODO: make dp_rank
 
@@ -70,6 +72,7 @@ impl ProcessedEndpoints {
             .map(|endpoint| endpoint.data.kv_active_blocks as f64)
             .collect();
         if load_values.is_empty() {
+            // TODO we hit this panic while vLLM is starting the ranks up. Need to avoid this
             panic!("No endpoints to process!")
         };
         let load_avg = load_values.iter().copied().sum::<f64>() / load_values.len() as f64;

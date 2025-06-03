@@ -23,7 +23,7 @@ from typing import Optional
 
 import uvloop
 from vllm.config import VllmConfig
-from vllm.distributed.kv_events import KVEventsConfig
+from vllm.distributed.kv_events import KVEventsConfig, ZmqEventPublisher
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.inputs import TokensPrompt
 from vllm.sampling_params import SamplingParams
@@ -68,7 +68,7 @@ class DynamoStatLoggerPublisher(StatLoggerBase):
 
     def __init__(self, component: Component, dp_rank: int) -> None:
         self.inner = WorkerMetricsPublisher()
-        self.inner.create_endpoint(component)
+        self.inner.create_endpoint(component, dp_rank=dp_rank)
         self.dp_rank = dp_rank
 
     def record(
@@ -246,12 +246,23 @@ async def init(runtime: DistributedRuntime, config: Config):
     )
 
     logger.info("VllmWorker has been initialized")
+    base_zmq_endpoint = "tcp://127.0.0.1:5557"
+    dp_rank_size = vllm_config.parallel_config.data_parallel_size
 
-    zmq_config = ZmqKvEventPublisherConfig(
-        worker_id=endpoint.lease_id(), kv_block_size=engine_args.block_size
-    )
+    # TODO This isn't working still
+    for dp_rank in range(dp_rank_size):
+        print(f"DP_RANK in Dynamo: {dp_rank}")
+        zmq_endpoint = ZmqEventPublisher.offset_endpoint_port(
+            base_zmq_endpoint, data_parallel_rank=dp_rank
+        )
+        print(f"ZMQ_ENPDPOINT in Dynamo: {zmq_endpoint}")
+        zmq_config = ZmqKvEventPublisherConfig(
+            worker_id=endpoint.lease_id(),
+            kv_block_size=engine_args.block_size,
+            zmq_endpoint=zmq_endpoint,
+        )
 
-    _ = ZmqKvEventPublisher(component=component, config=zmq_config)
+        _ = ZmqKvEventPublisher(component=component, config=zmq_config)
 
     handler = RequestHandler(component, engine_client, default_sampling_params)
 

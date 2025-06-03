@@ -497,7 +497,7 @@ impl WorkerMetricsPublisher {
         let handler = Ingress::for_engine(handler)?;
 
         let endpoint_name = match suffix {
-            Some(s) => format!("{}_{}", KV_METRICS_ENDPOINT, s),
+            Some(s) => format!("{}-{}", KV_METRICS_ENDPOINT, s),
             None => KV_METRICS_ENDPOINT.to_string(),
         };
 
