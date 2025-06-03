@@ -249,20 +249,30 @@ async def init(runtime: DistributedRuntime, config: Config):
     base_zmq_endpoint = "tcp://127.0.0.1:5557"
     dp_rank_size = vllm_config.parallel_config.data_parallel_size
 
-    # TODO This isn't working still
+    # Store references to prevent garbage collection
+    kv_publishers = []
+
     for dp_rank in range(dp_rank_size):
-        print(f"DP_RANK in Dynamo: {dp_rank}")
         zmq_endpoint = ZmqEventPublisher.offset_endpoint_port(
             base_zmq_endpoint, data_parallel_rank=dp_rank
         )
-        print(f"ZMQ_ENPDPOINT in Dynamo: {zmq_endpoint}")
         zmq_config = ZmqKvEventPublisherConfig(
             worker_id=endpoint.lease_id(),
             kv_block_size=engine_args.block_size,
             zmq_endpoint=zmq_endpoint,
         )
 
-        _ = ZmqKvEventPublisher(component=component, config=zmq_config)
+        try:
+            publisher = ZmqKvEventPublisher(component=component, config=zmq_config)
+            kv_publishers.append(publisher)
+        except Exception as e:
+            logger.error(
+                f"Failed to create ZmqKvEventPublisher for dp_rank {dp_rank}: {e}"
+            )
+
+    logger.debug(
+        f"Successfully created {len(kv_publishers)} ZmqKvEventPublishers out of {dp_rank_size} expected"
+    )
 
     handler = RequestHandler(component, engine_client, default_sampling_params)
 
@@ -324,7 +334,7 @@ def cmd_line_args():
     endpoint_str = args.endpoint.replace("dyn://", "", 1)
     endpoint_parts = endpoint_str.split(".")
     if len(endpoint_parts) != 3:
-        logging.error(
+        logger.error(
             f"Invalid endpoint format: '{args.endpoint}'. Expected 'dyn://namespace.component.endpoint' or 'namespace.component.endpoint'."
         )
         sys.exit(1)

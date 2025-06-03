@@ -52,10 +52,9 @@ impl Endpoint {
             return None;
         }
         let second_to_last = parts[parts.len() - 2];
-        let result = second_to_last.parse::<DpRank>().ok();
-        result
+        second_to_last.parse::<DpRank>().ok()
     }
-} // TODO: make dp_rank
+}
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct ProcessedEndpoints {

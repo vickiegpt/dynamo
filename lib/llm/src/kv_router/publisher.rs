@@ -189,15 +189,17 @@ async fn start_event_processor<P: EventPublisher + Send + Sync + 'static>(
     cancellation_token: CancellationToken,
     mut rx: mpsc::UnboundedReceiver<KvCacheEventWithDp>,
 ) {
+    tracing::debug!("KV Event processor starting for worker_id: {}", worker_id);
+
     loop {
         tokio::select! {
             _ = cancellation_token.cancelled() => {
-                tracing::info!("KV Event source received cancellation signal");
+                tracing::debug!("KV Event processor received cancellation signal for worker_id: {}", worker_id);
                 break;
             }
             maybe_data = rx.recv() => {
                 let Some(data) = maybe_data else {
-                    tracing::debug!("Event processor channel closed.");
+                    tracing::debug!("KV Event processor channel closed for worker_id: {}", worker_id);
                     break;
                 };
 
@@ -207,11 +209,12 @@ async fn start_event_processor<P: EventPublisher + Send + Sync + 'static>(
 
                 let router_event = RouterEvent::new((worker_id, dp_rank), event);
                 if let Err(e) = publisher.publish(KV_EVENT_SUBJECT, &router_event).await {
-                    tracing::error!("Failed to publish event: {}", e);
+                    tracing::error!("Failed to publish event for worker_id: {}, dp_rank: {}, error: {}", worker_id, dp_rank, e);
                 }
             }
         }
     }
+    tracing::debug!("KV Event processor exiting for worker_id: {}", worker_id);
 }
 
 // Error handling configuration for ZMQ operations
@@ -236,7 +239,7 @@ async fn start_zmq_listener(
     kv_block_size: usize,
 ) {
     tracing::debug!(
-        "KVEventPublisher connecting to ZMQ endpoint {} (topic '{}')",
+        "ZMQ listener starting - connecting to endpoint: {}, topic: '{}'",
         zmq_endpoint,
         zmq_topic
     );
@@ -247,16 +250,19 @@ async fn start_zmq_listener(
 
     // Subscribe to the requested topic (empty string == all topics)
     if let Err(e) = socket.subscribe(&zmq_topic).await {
-        tracing::error!("Failed to subscribe on ZMQ socket: {}", e);
+        tracing::error!("Failed to subscribe on ZMQ socket for {}: {}", zmq_endpoint, e);
         return;
     }
 
     if let Err(e) = socket.connect(&zmq_endpoint).await {
-        tracing::error!("Failed to connect ZMQ SUB socket: {}", e);
+        tracing::error!("Failed to connect ZMQ SUB socket to {}: {}", zmq_endpoint, e);
         return;
     }
 
+    tracing::debug!("ZMQ listener successfully connected to {}", zmq_endpoint);
+
     let mut consecutive_errors = 0u32;
+    let mut message_count = 0u64;
 
     loop {
         tokio::select! {
@@ -264,7 +270,7 @@ async fn start_zmq_listener(
 
             // Check for cancellation
             _ = cancellation_token.cancelled() => {
-                tracing::info!("ZMQ listener received cancellation signal");
+                tracing::debug!("ZMQ listener received cancellation signal for {}", zmq_endpoint);
                 break;
             }
 
@@ -278,6 +284,7 @@ async fn start_zmq_listener(
                         tracing::error!(
                             error=%e,
                             consecutive_errors=%consecutive_errors,
+                            endpoint=%zmq_endpoint,
                             "Too many consecutive ZMQ errors, terminating listener"
                         );
                         break;
@@ -290,6 +297,7 @@ async fn start_zmq_listener(
                         error=%e,
                         consecutive_errors=%consecutive_errors,
                         backoff_ms=%backoff_ms,
+                        endpoint=%zmq_endpoint,
                         "Error reading from ZMQ socket, applying exponential backoff"
                     );
 
@@ -298,12 +306,13 @@ async fn start_zmq_listener(
                 };
                 // Reset error count on successful message
                 consecutive_errors = 0;
+                message_count += 1;
 
                 // We expect multipart frames: [topic, seq, payload]
                 let mut frames: Vec<Vec<u8>> = msg.into_vec().into_iter().map(|frame| frame.to_vec()).collect();
 
                 if frames.len() != 3 {
-                    tracing::warn!(expected=3, actual=%frames.len(), "Received unexpected ZMQ frame count");
+                    tracing::warn!(expected=3, actual=%frames.len(), endpoint=%zmq_endpoint, "Received unexpected ZMQ frame count");
                     continue;
                 }
 
@@ -312,7 +321,7 @@ async fn start_zmq_listener(
                 let seq_bytes = frames.pop().unwrap();
 
                 if seq_bytes.len() != 8 {
-                    tracing::warn!(expected=8, actual=%seq_bytes.len(), "Invalid sequence number byte length");
+                    tracing::warn!(expected=8, actual=%seq_bytes.len(), endpoint=%zmq_endpoint, "Invalid sequence number byte length");
                     continue;
                 }
 
@@ -322,23 +331,25 @@ async fn start_zmq_listener(
                 let batch_result = rmps::from_slice::<KvEventBatch>(&payload);
                 let Ok(batch) = batch_result else {
                     let e = batch_result.unwrap_err();
-                    tracing::warn!(error=%e, "Failed to decode KVEventBatch msgpack");
+                    tracing::warn!(error=%e, endpoint=%zmq_endpoint, "Failed to decode KVEventBatch msgpack");
                     continue;
                 };
 
+                tracing::trace!("ZMQ listener decoded batch with {} events, dp_rank: {:?} from {}", batch.events.len(), batch.data_parallel_rank, zmq_endpoint);
+
                 // For each of our events, convert them to [`KvCacheEvent`] and send to the event_processor.
-                let dp_rank = batch.dp_rank;
+                let dp_rank = batch.data_parallel_rank;
                 for raw_event in batch.events.into_iter() {
                     let kv_cache_event = convert_event(raw_event, seq, kv_block_size, &warning_count);
                     if tx.send(KvCacheEventWithDp { kv_cache_event, dp_rank }).is_err() {
-                        tracing::warn!("Failed to send message to channel - receiver dropped");
+                        tracing::warn!("Failed to send message to channel - receiver dropped for {}", zmq_endpoint);
                         return;
                     }
                 }
             }
         }
-        tracing::debug!("ZMQ listener exiting");
     }
+    tracing::debug!("ZMQ listener exiting for {}", zmq_endpoint);
 }
 
 /// Convert a raw event coming from the ZMQ channel into the internal
@@ -449,7 +460,8 @@ pub fn create_stored_blocks(
 struct KvEventBatch {
     ts: f64,
     events: Vec<RawKvEvent>,
-    dp_rank: Option<DpRank>,
+    #[serde(alias = "dp_rank")]
+    data_parallel_rank: Option<DpRank>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -795,7 +807,7 @@ mod tests_startup_helpers {
         let batch = KvEventBatch {
             ts: 0.0,
             events,
-            dp_rank: None,
+            data_parallel_rank: None,
         };
 
         let payload = Bytes::from(rmps::to_vec(&batch).unwrap());
