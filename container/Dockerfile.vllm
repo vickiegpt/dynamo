@@ -205,7 +205,7 @@ RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
     # Handle x86_64: Download wheel, unpack, setup for later steps
     else \
         # [gluo FIXME] currently on forked branch
-        git clone https://github.com/ptarasiewiczNV/vllm.git && \
+        git clone https://github.com/GuanLuo/vllm.git && \
         cd vllm && \
         git checkout nixl-handshake-single-socket && \
         VLLM_USE_PRECOMPILED=1 uv pip install --editable .
