@@ -108,7 +108,9 @@ impl Drop for TransferContext {
     fn drop(&mut self) {
         self.cancel_token.cancel();
         if let Some(handle) = self.cuda_event_worker.take() {
-            handle.join().unwrap();
+            if let Err(e) = handle.join() {
+                tracing::error!("Error joining CUDA event worker: {:?}", e);
+            }
         }
     }
 }
