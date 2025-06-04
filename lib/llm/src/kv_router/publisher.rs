@@ -305,7 +305,6 @@ async fn start_zmq_listener(
                 };
                 // Reset error count on successful message
                 consecutive_errors = 0;
-                message_count += 1;
 
                 // We expect multipart frames: [topic, seq, payload]
                 let mut frames: Vec<Vec<u8>> = msg.into_vec().into_iter().map(|frame| frame.to_vec()).collect();

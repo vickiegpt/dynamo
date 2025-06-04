@@ -23,19 +23,79 @@ from typing import Optional
 
 from utils.args import parse_vllm_args
 from utils.protocol import MyRequestOutput, vLLMGenerateRequest
-from vllm.entrypoints.openai.api_server import (
-    build_async_engine_client_from_engine_args,
-)
+from vllm.config import VllmConfig
+from vllm.distributed.kv_events import ZmqEventPublisher
+from vllm.usage.usage_lib import UsageContext
+from vllm.v1.engine.async_llm import AsyncLLM
+from vllm.v1.metrics.loggers import StatLoggerBase
+from vllm.v1.metrics.stats import IterationStats, SchedulerStats
 
-from dynamo.sdk import async_on_start, endpoint, service
+from dynamo.llm import (
+    WorkerMetricsPublisher,
+    ZmqKvEventPublisher,
+    ZmqKvEventPublisherConfig,
+)
+from dynamo.runtime import Component
+from dynamo.sdk import async_on_start, dynamo_context, endpoint, service
 
 logger = logging.getLogger(__name__)
+
+
+class DynamoStatLoggerPublisher(StatLoggerBase):
+    """Stat logger publisher. Wrapper for the WorkerMetricsPublisher to match the StatLoggerBase interface."""
+
+    def __init__(self, component: Component, dp_rank: int) -> None:
+        self.inner = WorkerMetricsPublisher()
+        self.inner.create_endpoint(component, dp_rank=dp_rank)
+        self.dp_rank = dp_rank
+
+    def record(
+        self, scheduler_stats: SchedulerStats, iteration_stats: Optional[IterationStats]
+    ):
+        # request_total_slots and kv_total_blocks are properties of model + gpu
+        # we should only publish them once, not every metric update
+        # they should be part of some runtime metadata tied to MDC or put in etcd ?
+        hit_rate = 0
+        if scheduler_stats.prefix_cache_stats.queries > 0:
+            hit_rate = (
+                scheduler_stats.prefix_cache_stats.hits
+                / scheduler_stats.prefix_cache_stats.queries
+            )
+
+        # TODO Manage DP Ranks in metrics aggregation.
+        self.inner.publish(
+            request_active_slots=scheduler_stats.num_running_reqs,
+            request_total_slots=0,  # TODO - remove from metrics
+            kv_active_blocks=0,  # TODO - need to calculate this
+            kv_total_blocks=0,  # TODO - remove from metrics
+            num_requests_waiting=scheduler_stats.num_waiting_reqs,  # used in current cost function
+            gpu_cache_usage_perc=scheduler_stats.gpu_cache_usage,  # used in current cost function
+            gpu_prefix_cache_hit_rate=hit_rate,
+            data_parallel_rank=self.dp_rank,
+        )
+
+    def log_engine_initialized(self) -> None:
+        pass
+
+
+class StatLoggerFactory:
+    """Factory for creating stat logger publishers. Required by vLLM."""
+
+    def __init__(self, component: Component) -> None:
+        self.component = component
+
+    def create_stat_logger(self, dp_rank: int) -> StatLoggerBase:
+        return DynamoStatLoggerPublisher(self.component, dp_rank)
+
+    def __call__(self, vllm_config: VllmConfig, dp_rank: int) -> StatLoggerBase:
+        return self.create_stat_logger(dp_rank=dp_rank)
 
 
 class VllmBaseWorker:
     def __init__(self):
         class_name = self.__class__.__name__
         self.engine_args = parse_vllm_args(class_name, "")
+        self.kv_publishers = []
 
         signal.signal(signal.SIGTERM, self.shutdown_vllm_engine)
         signal.signal(signal.SIGINT, self.shutdown_vllm_engine)
@@ -43,15 +103,49 @@ class VllmBaseWorker:
         self.set_side_channel_port()
 
     async def async_init(self):
-        self._engine_context = build_async_engine_client_from_engine_args(
-            self.engine_args
+        # Taken from build_async_engine_client_from_engine_args()
+        usage_context = UsageContext.OPENAI_API_SERVER
+        vllm_config = self.engine_args.create_engine_config(usage_context=usage_context)
+
+        # Explicitly pass our custom stat logger for metrics
+        self.engine_client = AsyncLLM.from_vllm_config(
+            vllm_config=vllm_config,
+            usage_context=usage_context,
+            stat_loggers=[StatLoggerFactory(dynamo_context["component"])],
+            disable_log_requests=self.engine_args.disable_log_requests,
+            disable_log_stats=self.engine_args.disable_log_stats,
         )
-        if self._engine_context is not None:
-            self.engine_client = await self._engine_context.__aenter__()
-        else:
-            raise RuntimeError("Failed to initialize engine client")
 
         logger.info("VllmWorker has been initialized")
+
+        base_zmq_endpoint = "tcp://127.0.0.1:5557"
+        dp_rank_size = vllm_config.parallel_config.data_parallel_size
+
+        # Store references to prevent garbage collection
+
+        for dp_rank in range(dp_rank_size):
+            zmq_endpoint = ZmqEventPublisher.offset_endpoint_port(
+                base_zmq_endpoint, data_parallel_rank=dp_rank
+            )
+            zmq_config = ZmqKvEventPublisherConfig(
+                worker_id=dynamo_context["endpoints"][0].lease_id(),
+                kv_block_size=self.engine_args.block_size,
+                zmq_endpoint=zmq_endpoint,
+            )
+
+            try:
+                publisher = ZmqKvEventPublisher(
+                    component=dynamo_context["component"], config=zmq_config
+                )
+                self.kv_publishers.append(publisher)
+            except Exception as e:
+                logger.error(
+                    f"Failed to create ZmqKvEventPublisher for dp_rank {dp_rank}: {e}"
+                )
+
+        logger.debug(
+            f"Successfully created {len(self.kv_publishers)} ZmqKvEventPublishers out of {dp_rank_size} expected"
+        )
 
     def shutdown_vllm_engine(self, signum, frame):
         """Shutdown the background loop"""
@@ -59,6 +153,8 @@ class VllmBaseWorker:
         loop = asyncio.get_event_loop()
         try:
             self.engine_client.close()
+            for publisher in self.kv_publishers:
+                publisher.shutdown()
             logger.info("VllmWorker shutdown complete")
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
