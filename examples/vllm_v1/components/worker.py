@@ -19,21 +19,26 @@ import logging
 import os
 import signal
 import socket
+import uuid
 from typing import Optional
 
 from utils.args import parse_vllm_args
-from utils.protocol import MyRequestOutput, vLLMGenerateRequest
+from utils.protocol import PreprocessedRequest
 from vllm.config import VllmConfig
 from vllm.distributed.kv_events import ZmqEventPublisher
+from vllm.inputs import TokensPrompt
+from vllm.sampling_params import SamplingParams
 from vllm.usage.usage_lib import UsageContext
 from vllm.v1.engine.async_llm import AsyncLLM
 from vllm.v1.metrics.loggers import StatLoggerBase
 from vllm.v1.metrics.stats import IterationStats, SchedulerStats
 
 from dynamo.llm import (
+    ModelType,
     WorkerMetricsPublisher,
     ZmqKvEventPublisher,
     ZmqKvEventPublisherConfig,
+    register_llm,
 )
 from dynamo.runtime import Component
 from dynamo.sdk import async_on_start, dynamo_context, endpoint, service
@@ -91,10 +96,20 @@ class StatLoggerFactory:
         return self.create_stat_logger(dp_rank=dp_rank)
 
 
+BLOCK_SIZE = 16
+
+
 class VllmBaseWorker:
     def __init__(self):
         class_name = self.__class__.__name__
         self.engine_args = parse_vllm_args(class_name, "")
+        if not self.engine_args.block_size:
+            logger.info(f"block_size not set, default to {BLOCK_SIZE}")
+            self.engine_args.block_size = BLOCK_SIZE
+
+        model_config = self.engine_args.create_model_config()
+        self.default_sampling_params = model_config.get_diff_sampling_param()
+
         self.kv_publishers = []
 
         signal.signal(signal.SIGTERM, self.shutdown_vllm_engine)
@@ -106,6 +121,15 @@ class VllmBaseWorker:
         # Taken from build_async_engine_client_from_engine_args()
         usage_context = UsageContext.OPENAI_API_SERVER
         vllm_config = self.engine_args.create_engine_config(usage_context=usage_context)
+
+        await register_llm(
+            ModelType.Backend,
+            dynamo_context["endpoints"][0],
+            self.engine_args.model,
+            self.engine_args.served_model_name[0],
+            context_length=self.engine_args.max_model_len,
+            kv_cache_block_size=self.engine_args.block_size,
+        )
 
         # Explicitly pass our custom stat logger for metrics
         self.engine_client = AsyncLLM.from_vllm_config(
@@ -152,7 +176,7 @@ class VllmBaseWorker:
         logger.info(f"Received signal {signum}, shutting down")
         loop = asyncio.get_event_loop()
         try:
-            self.engine_client.close()
+            self.engine_client.shutdown()
             for publisher in self.kv_publishers:
                 publisher.shutdown()
             logger.info("VllmWorker shutdown complete")
@@ -162,24 +186,51 @@ class VllmBaseWorker:
             loop.stop()
 
     @endpoint()
-    async def generate(self, request: vLLMGenerateRequest):
-        gen = self.engine_client.generate(
-            prompt=request.prompt,
-            sampling_params=request.sampling_params,
-            request_id=request.request_id,
-        )
+    async def generate(self, request: PreprocessedRequest):
+        request_id = str(uuid.uuid4().hex)
 
-        async for response in gen:
-            yield MyRequestOutput(
-                request_id=response.request_id,
-                prompt=response.prompt,
-                prompt_token_ids=response.prompt_token_ids,
-                prompt_logprobs=response.prompt_logprobs,
-                outputs=response.outputs,
-                finished=response.finished,
-                metrics=response.metrics,
-                kv_transfer_params=response.kv_transfer_params,
-            ).model_dump_json()
+        prompt = TokensPrompt(prompt_token_ids=request.token_ids)
+
+        sampling_params = SamplingParams(**self.default_sampling_params)
+        for key, value in request.sampling_options.model_dump().items():
+            if not value:
+                continue
+            if hasattr(sampling_params, key):
+                setattr(sampling_params, key, value)
+
+        max_tokens = request.stop_conditions.max_tokens
+        if max_tokens:
+            sampling_params.max_tokens = max_tokens
+
+        gen = self.engine_client.generate(
+            prompt=prompt,
+            sampling_params=sampling_params,
+            request_id=request_id,
+            data_parallel_rank=request.dp_rank,
+        )
+        num_output_tokens_so_far = 0
+        async for res in gen:
+            # res is vllm's RequestOutput
+
+            # This is the expected way for a request to end.
+            # The new token ID will be eos, don't forward it.
+            if res.finished:
+                yield {"finish_reason": "stop", "token_ids": []}
+                break
+
+            if not res.outputs:
+                yield {"finish_reason": "error", "token_ids": []}
+                break
+
+            output = res.outputs[0]
+            next_total_toks = len(output.token_ids)
+            out = {"token_ids": output.token_ids[num_output_tokens_so_far:]}
+            if output.finish_reason:
+                out["finish_reason"] = output.finish_reason
+            if output.stop_reason:
+                out["stop_reason"] = output.stop_reason
+            yield out
+            num_output_tokens_so_far = next_total_toks
 
     def set_side_channel_port(self, port: Optional[int] = None):
         """vLLM V1 NixlConnector creates a side channel to exchange metadata with other NIXL connectors.

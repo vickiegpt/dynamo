@@ -13,25 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 Common:
-  model: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+  model: Qwen/Qwen3-0.6B
   data-parallel-size: 2
   router: kv
   block-size: 64
   max-model-len: 16384
-  served_model_name: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+  served_model_name: Qwen/Qwen3-0.6B
 
 Frontend:
-  endpoint: dynamo.SimpleLoadBalancer.generate_agg
   port: 8000
-  served_model_name: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
-
-Router:
-  min-workers: 2
-  common-configs: [model, block-size, router, served_model_name, data-parallel-size]
-
-SimpleLoadBalancer:
-  enable_disagg: false
-  common-configs: [model, served_model_name]
+  router_mode: kv
 
 VllmDecodeWorker:
   enforce-eager: true
