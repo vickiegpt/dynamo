@@ -80,5 +80,4 @@ def get_vision_embedding_size(model_id: str) -> int:
 
     num_patches = (h // ph) * (w // pw)
 
-    # 4. Add CLS token (standard in ViT architectures)
-    return num_patches + 1
+    return num_patches

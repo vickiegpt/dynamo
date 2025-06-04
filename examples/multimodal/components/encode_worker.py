@@ -173,7 +173,7 @@ class VllmEncodeWorker:
             with torch.no_grad():
                 embeddings = self.vision_model.get_multimodal_embeddings(**image_embeds)
 
-                logger.info(
+                logger.debug(
                     f"Embeddings: {{ shape: {embeddings.shape}, dtype: {embeddings.dtype}, device: {embeddings.device}, ptr: {embeddings.data_ptr()}, elements: {{ count: {embeddings.numel()}, size: {embeddings.element_size()} }} }}."
                 )
 

@@ -136,7 +136,7 @@ class VllmDecodeWorker:
 
             self.embedding_size = get_vision_embedding_size(self.engine_args.model)
         else:
-            EMBEDDINGS_SHAPE = (1, 577, 4096)
+            EMBEDDINGS_SHAPE = (1, 576, 4096)
             EMBEDDINGS_DTYPE = torch.float16
             EMBEDDINGS_DEVICE = "cuda"
 
@@ -345,7 +345,7 @@ class VllmDecodeWorker:
         # As a workaround, here we manually insert some placeholder dummy tokens based on the embedding size
         # so that decode worker can pre-allocate the memory with the correct size.
         # The structure of the prompt will be like: "\nUSER: <image> <dummy_tokens>\n<user_prompt>\nASSISTANT:".
-        # Since the "<image>" token is included in the prompt, only need to insert (embedding_size - 1) dummy tokens after the image token.
+        # Since the "<image>" token is included in the prompt, only need to insert embedding_size dummy tokens after the image token.
         IMAGE_TOKEN_ID = 32000
         DUMMY_TOKEN_ID = 0
         # Find the index of the image token in the prompt token ids
@@ -355,7 +355,7 @@ class VllmDecodeWorker:
         dummy_token_index = image_token_index + 1
         prompt_ids = (
             request.engine_prompt["prompt_token_ids"][:dummy_token_index]
-            + [DUMMY_TOKEN_ID] * (self.embedding_size - 1)
+            + [DUMMY_TOKEN_ID] * self.embedding_size
             + request.engine_prompt["prompt_token_ids"][dummy_token_index:]
         )
         logger.debug(

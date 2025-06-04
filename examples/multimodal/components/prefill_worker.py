@@ -250,7 +250,7 @@ class VllmPrefillWorker:
             # TODO: make this more flexible/model-dependent
             IMAGE_TOKEN_ID = 32000
             embedding_size = embeddings.shape[1]
-            padding_size = embedding_size - 1
+            padding_size = embedding_size
             image_token_index = request.prompt_token_ids.index(IMAGE_TOKEN_ID)
             dummy_token_index = image_token_index + 1
             prompt_token_ids = (
