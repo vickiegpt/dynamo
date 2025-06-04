@@ -14,6 +14,10 @@
 # limitations under the License.
 Common:
   model: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+  data-parallel-size: 2
+  router: kv
+  block-size: 64
+  max-model-len: 16384
   served_model_name: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
 
 Frontend:
@@ -21,14 +25,21 @@ Frontend:
   port: 8000
   served_model_name: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
 
+Router:
+  min-workers: 2
+  common-configs: [model, block-size, router, served_model_name, data-parallel-size]
+
 SimpleLoadBalancer:
   enable_disagg: false
   common-configs: [model, served_model_name]
 
 VllmDecodeWorker:
   enforce-eager: true
+  max-num-batched-tokens: 16384
+  enable-prefix-caching: true
   ServiceArgs:
-    workers: 1
+    workers: 2  # 2 workers
     resources:
-      gpu: 1
-  common-configs: [model, served_model_name]
+      gpu: 2  # 2 dp ranks
+  common-configs: [model, served_model_name, block-size, data-parallel-size, max-model-len]
+
