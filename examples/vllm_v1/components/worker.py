@@ -25,7 +25,7 @@ from typing import Optional
 from utils.args import parse_vllm_args
 from utils.protocol import PreprocessedRequest
 from vllm.config import VllmConfig
-from vllm.distributed.kv_events import ZmqEventPublisher
+from vllm.distributed.kv_events import KVEventsConfig, ZmqEventPublisher
 from vllm.inputs import TokensPrompt
 from vllm.sampling_params import SamplingParams
 from vllm.usage.usage_lib import UsageContext
@@ -103,9 +103,14 @@ class VllmBaseWorker:
     def __init__(self):
         class_name = self.__class__.__name__
         self.engine_args = parse_vllm_args(class_name, "")
+        self.engine_args.kv_events_config = KVEventsConfig(
+            enable_kv_cache_events=True, publisher="zmq"
+        )
         if not self.engine_args.block_size:
             logger.info(f"block_size not set, default to {BLOCK_SIZE}")
             self.engine_args.block_size = BLOCK_SIZE
+
+        os.environ["VLLM_NO_USAGE_STATS"] = "1"  # Avoid internal HTTP requests
 
         model_config = self.engine_args.create_model_config()
         self.default_sampling_params = model_config.get_diff_sampling_param()
