@@ -1,45 +1,28 @@
-use super::*;
-use pyo3::PyResult;
+// SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::sync::Arc;
+
+use pyo3::prelude::*;
 
 use dynamo_llm::block_manager::{self as bm, block::BlockIdentifier};
-use dynamo_llm::tokens::{compute_hash_v2, SaltHash, TokenBlockSequence, Tokens};
+use dynamo_llm::tokens::{compute_hash_v2, TokenBlockSequence, Tokens};
 
-use super::BlockManager as PyBlockManager;
+use crate::to_pyerr;
 
 type DeviceStorageType = bm::storage::DeviceStorage;
-
-#[pyclass]
-struct DynamoVllmKvCacheManager {
-    block_manager: PyBlockManager,
-}
-
-impl DynamoVllmKvCacheManager {
-    #[inline(always)]
-    fn block_manager(&self) -> &bm::KvBlockManager<bm::BasicMetadata> {
-        self.block_manager.get_block_manager()
-    }
-}
-
-#[pymethods]
-impl DynamoVllmKvCacheManager {
-    #[new]
-    #[pyo3(signature = (block_manager))]
-    fn new(block_manager: PyBlockManager) -> PyResult<Self> {
-        Ok(Self { block_manager })
-    }
-
-    fn get_computed_blocks(&self, request: KvRequest) -> PyResult<DynamoVllmKvBlockList> {
-        let sequence_hashes = request.sequence_hashes();
-        let blocks = self
-            .block_manager()
-            .device()
-            .unwrap()
-            .match_sequence_hashes_blocking(&sequence_hashes)
-            .map_err(to_pyerr)?;
-
-        Ok(DynamoVllmKvBlockList::new(BlockListType::Immutable(blocks)))
-    }
-}
 
 /// Request Inputs
 #[pyclass]
@@ -92,7 +75,7 @@ impl KvRequest {
         }
     }
 
-    fn sequence_hashes(&self) -> Vec<u64> {
+    pub fn sequence_hashes(&self) -> Vec<u64> {
         self.tbs
             .blocks()
             .iter()
@@ -102,19 +85,19 @@ impl KvRequest {
 }
 
 #[derive(Debug)]
-enum BlockListType {
+pub enum BlockListType {
     Immutable(Vec<bm::block::ImmutableBlock<DeviceStorageType, bm::BasicMetadata>>),
     Mutable(Vec<bm::block::MutableBlock<DeviceStorageType, bm::BasicMetadata>>),
 }
 
 #[pyclass]
 #[derive(Debug, Clone)]
-struct DynamoVllmKvBlockList {
+pub struct DynamoKvBlockList {
     blocks: Arc<std::sync::Mutex<BlockListType>>,
 }
 
-impl DynamoVllmKvBlockList {
-    fn new(blocks: BlockListType) -> Self {
+impl DynamoKvBlockList {
+    pub fn new(blocks: BlockListType) -> Self {
         Self {
             blocks: Arc::new(std::sync::Mutex::new(blocks)),
         }
@@ -122,7 +105,7 @@ impl DynamoVllmKvBlockList {
 }
 
 #[pymethods]
-impl DynamoVllmKvBlockList {
+impl DynamoKvBlockList {
     fn get_block_id(&self, block_idx: usize) -> PyResult<usize> {
         let blocks = self.blocks.lock().unwrap();
         let block_id = match &*blocks {
@@ -130,19 +113,19 @@ impl DynamoVllmKvBlockList {
             BlockListType::Mutable(blocks) => blocks.get(block_idx).map(|b| b.block_id()),
         };
 
-        Ok(block_id.ok_or_else(|| to_pyerr("block not found"))?)
+        block_id.ok_or_else(|| to_pyerr("block not found"))
     }
 
     fn get_block_hash(&self, block_idx: usize) -> PyResult<Option<u64>> {
         let blocks = self.blocks.lock().unwrap();
         let sequence_hash = match &*blocks {
             BlockListType::Immutable(blocks) => blocks
-                .get(block_idx as usize)
+                .get(block_idx)
                 .ok_or_else(|| to_pyerr("block not found"))?
                 .sequence_hash()
                 .ok(),
             BlockListType::Mutable(blocks) => blocks
-                .get(block_idx as usize)
+                .get(block_idx)
                 .ok_or_else(|| to_pyerr("block not found"))?
                 .sequence_hash()
                 .ok(),

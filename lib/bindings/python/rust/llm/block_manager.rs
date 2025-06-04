@@ -21,8 +21,8 @@ use pyo3::PyResult;
 mod block;
 mod block_list;
 mod dlpack;
+mod integrations;
 mod layer;
-mod vllm;
 
 /// Add bingings from this crate to the provided module
 pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -91,7 +91,7 @@ impl BlockManager {
                 }
             };
         }
-        model_config = model_config.dtype(dtype_.clone());
+        model_config = model_config.dtype(dtype_);
         config = config.model(model_config.build().map_err(to_pyerr)?);
         if let Some(host_num_blocks) = host_num_blocks {
             config = config.host_layout(
@@ -128,7 +128,7 @@ impl BlockManager {
                     .map_err(to_pyerr)?,
             ),
             dtype: dtype_,
-            device_id: device_id,
+            device_id,
         })
     }
 
@@ -144,11 +144,11 @@ impl BlockManager {
         // Wrap each block in an enum accounting for Pinned & Device block
         let blocks = blocks
             .into_iter()
-            .map(|b| block::BlockType::Pinned(b))
+            .map(block::BlockType::Pinned)
             .collect();
         Ok(block_list::BlockList::from_rust(
             blocks,
-            self.dtype.clone(),
+            self.dtype,
             self.device_id,
         ))
     }
@@ -160,7 +160,7 @@ impl BlockManager {
         count: usize,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let dtype = self.dtype.clone();
+        let dtype = self.dtype;
         let device_id = self.device_id;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let blocks = inner
@@ -174,7 +174,7 @@ impl BlockManager {
             // Wrap each block in an enum accounting for Pinned & Device block
             let blocks = blocks
                 .into_iter()
-                .map(|b| block::BlockType::Pinned(b))
+                .map(block::BlockType::Pinned)
                 .collect();
             Ok(block_list::BlockList::from_rust(blocks, dtype, device_id))
         })
@@ -192,11 +192,11 @@ impl BlockManager {
         // Wrap each block in an enum accounting for Pinned & Device block
         let blocks = blocks
             .into_iter()
-            .map(|b| block::BlockType::Device(b))
+            .map(block::BlockType::Device)
             .collect();
         Ok(block_list::BlockList::from_rust(
             blocks,
-            self.dtype.clone(),
+            self.dtype,
             self.device_id,
         ))
     }
@@ -208,7 +208,7 @@ impl BlockManager {
         count: usize,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let dtype = self.dtype.clone();
+        let dtype = self.dtype;
         let device_id = self.device_id;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let blocks = inner
@@ -222,7 +222,7 @@ impl BlockManager {
             // Wrap each block in an enum accounting for Pinned & Device block
             let blocks = blocks
                 .into_iter()
-                .map(|b| block::BlockType::Device(b))
+                .map(block::BlockType::Device)
                 .collect();
             Ok(block_list::BlockList::from_rust(blocks, dtype, device_id))
         })
