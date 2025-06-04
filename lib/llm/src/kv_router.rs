@@ -207,6 +207,7 @@ impl AsyncEngine<SingleIn<BackendInput>, ManyOut<Annotated<LLMEngineOutput>>, Er
                 // Update the request with the estimated prefix hit blocks
                 let (mut backend_input, context) = request.into_parts();
                 backend_input.estimated_prefix_hit_num_blocks = Some(overlap_amount);
+                backend_input.dp_rank = instance_id.dp_rank;
                 let updated_request = context.map(|_| backend_input);
                 // TODO: this does not do dp routing
                 self.inner
