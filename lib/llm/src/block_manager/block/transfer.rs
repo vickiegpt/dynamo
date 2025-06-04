@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod context;
 mod cuda;
 mod memcpy;
 mod nixl;
@@ -32,9 +33,9 @@ use nixl_sys::XferOp::{Read, Write};
 use std::ops::Range;
 use tokio::sync::oneshot;
 
-pub use crate::block_manager::state::TransferContext;
 pub use crate::block_manager::storage::{CudaAccessible, Local, Remote};
 pub use async_trait::async_trait;
+pub use context::TransferContext;
 
 /// A block that can be the target of a write
 pub trait Writable {}

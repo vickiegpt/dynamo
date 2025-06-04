@@ -44,9 +44,8 @@
 //! The kind of offloads/onboards they perform is dictated by the source and target arguments
 //! of the [`OffloadManager::offload`] and [`OffloadManager::onboard`] methods.
 
-use super::block::{BlockError, BlockMetadata, BlockState, ImmutableBlock};
+use super::block::{BlockError, BlockMetadata, BlockState, ImmutableBlock, TransferContext};
 use super::pool::BlockPoolError;
-use super::state::TransferContext;
 use super::storage::{Cuda, Storage};
 use super::{BlockPool, DeviceStorage, DiskStorage, PinnedStorage};
 use nixl_sys::Agent as NixlAgent;
@@ -141,8 +140,9 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                 CudaTransferManager::new(
                     device_offload_transfer_ctx,
                     MAX_CONCURRENT_TRANSFERS,
+                    &async_rt_handle,
                     cancellation_token.clone(),
-                ),
+                )?,
                 MAX_TRANSFER_BATCH_SIZE,
                 &async_rt_handle,
                 cancellation_token.clone(),
@@ -174,7 +174,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                     MAX_CONCURRENT_TRANSFERS,
                     &async_rt_handle,
                     cancellation_token.clone(),
-                ),
+                )?,
                 MAX_TRANSFER_BATCH_SIZE,
                 &async_rt_handle,
                 cancellation_token.clone(),
@@ -198,8 +198,9 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                 CudaTransferManager::new(
                     transfer_ctx.clone(),
                     MAX_CONCURRENT_TRANSFERS,
+                    &async_rt_handle,
                     cancellation_token.clone(),
-                ),
+                )?,
                 MAX_TRANSFER_BATCH_SIZE,
                 &async_rt_handle,
                 cancellation_token.clone(),
@@ -225,7 +226,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                     MAX_CONCURRENT_TRANSFERS,
                     &async_rt_handle,
                     cancellation_token.clone(),
-                ),
+                )?,
                 MAX_TRANSFER_BATCH_SIZE,
                 &async_rt_handle,
                 cancellation_token.clone(),

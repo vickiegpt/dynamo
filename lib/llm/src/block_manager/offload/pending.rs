@@ -47,10 +47,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::block_manager::block::{
     transfer::{WriteTo, WriteToStrategy},
-    BlockError, BlockExt, BlockMetadata, BlockState, MutableBlock, ReadableBlock, WritableBlock,
+    BlockError, BlockExt, BlockMetadata, BlockState, MutableBlock, ReadableBlock, TransferContext,
+    WritableBlock,
 };
 use crate::block_manager::pool::BlockPoolError;
-use crate::block_manager::state::TransferContext;
 use crate::block_manager::storage::{Local, Storage};
 use crate::block_manager::BlockPool;
 
@@ -163,40 +163,48 @@ impl<Source: Storage, Target: Storage, Metadata: BlockMetadata>
     pub fn new(
         transfer_ctx: Arc<TransferContext>,
         max_concurrent_transfers: usize,
+        runtime: &Handle,
         cancellation_token: CancellationToken,
-    ) -> Self {
+    ) -> Result<Self> {
         let (tx, mut rx) = mpsc::channel::<(
             PendingTransfer<Source, Target, Metadata>,
             tokio::sync::oneshot::Receiver<()>,
         )>(max_concurrent_transfers);
 
-        transfer_ctx.async_rt_handle().spawn(async move {
-            while let Some((pending_transfer, notify)) = rx.recv().await {
-                // Wait for the event.
-                notify.await.unwrap();
-                // Only finalize the transfer after the event is signaled.
-                match pending_transfer.handle_complete() {
-                    Ok(_) => {}
-                    Err(e) => {
-                        // The only case where this can fail is if the progress engine is shutdown.
-                        // This is not a problem, so we can just ignore it.
-                        tracing::warn!("Error handling transfer completion: {:?}", e);
+        CriticalTaskExecutionHandle::new_with_runtime(
+            move |cancel_token| async move {
+                loop {
+                    tokio::select! {
+                        Some((pending_transfer, notify)) = rx.recv() => {
+                            // Wait for the event.
+                            notify.await.map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
+                            // Only finalize the transfer after the event is signaled.
+                            match pending_transfer.handle_complete() {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    // The only case where this can fail is if the progress engine is being shutdown.
+                                    // This is not a problem, so we can just ignore it.
+                                    tracing::warn!("Error handling transfer completion: {:?}", e);
+                                }
+                            }
+                        }
+
+                        _ = cancel_token.cancelled() => {
+                            return Ok(());
+                        }
                     }
                 }
+            },
+            cancellation_token.clone(),
+            "Cuda Transfer Manager",
+            runtime,
+        )?
+        .detach();
 
-                // Flush any remaining transfers.
-                if cancellation_token.is_cancelled() {
-                    while rx.blocking_recv().is_some() {}
-                    break;
-                }
-            }
-            Ok::<(), anyhow::Error>(())
-        });
-
-        Self {
+        Ok(Self {
             pending_transfer_q: tx,
             transfer_ctx,
-        }
+        })
     }
 }
 
@@ -252,42 +260,46 @@ impl DiskTransferManager {
         max_concurrent_transfers: usize,
         runtime: &Handle,
         cancellation_token: CancellationToken,
-    ) -> Self {
+    ) -> Result<Self> {
         let (futures_tx, mut futures_rx) = mpsc::channel(1);
 
-        runtime.spawn(async move {
-            // Keep track of our pending transfers.
-            // Consume the futures as they complete, while also receiving new ones.
+        CriticalTaskExecutionHandle::new_with_runtime(
+            move |cancel_token| async move {
+                // Keep track of our pending transfers.
+                // Consume the futures as they complete, while also receiving new ones.
 
-            let mut pending_transfers = FuturesUnordered::new();
-            loop {
-                tokio::select! {
+                let mut pending_transfers = FuturesUnordered::new();
+                loop {
+                    tokio::select! {
 
-                    _ = cancellation_token.cancelled() => {
-                        // Flush remaining transfers.
-                        while (pending_transfers.next().await).is_some() {}
-                        return;
-                    }
-
-                    Some(future) = futures_rx.recv() => {
-                        // If we're at max size, block the worker thread on the next() call until we have capacity.
-                        while pending_transfers.len() >= max_concurrent_transfers {
-                            pending_transfers.next().await;
+                        _ = cancel_token.cancelled() => {
+                            return Ok(());
                         }
-                        // Once we have capacity, push the new future onto the queue.
-                        pending_transfers.push(future);
-                    }
-                    Some(_) = pending_transfers.next(), if !pending_transfers.is_empty() => {
-                        // A transfer completed, just continue to process more
+
+                        Some(future) = futures_rx.recv() => {
+                            // If we're at max size, block the worker thread on the next() call until we have capacity.
+                            while pending_transfers.len() >= max_concurrent_transfers {
+                                pending_transfers.next().await;
+                            }
+                            // Once we have capacity, push the new future onto the queue.
+                            pending_transfers.push(future);
+                        }
+                        Some(_) = pending_transfers.next(), if !pending_transfers.is_empty() => {
+                            // A transfer completed, just continue to process more
+                        }
                     }
                 }
-            }
-        });
+            },
+            cancellation_token.clone(),
+            "Disk Transfer Manager",
+            runtime,
+        )?
+        .detach();
 
-        Self {
+        Ok(Self {
             futures_tx,
             transfer_ctx,
-        }
+        })
     }
 }
 
