@@ -107,7 +107,10 @@ impl WorkerMetricsPublisher {
         let rs_component = component.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             rs_publisher
-                .create_endpoint(rs_component, dp_rank.as_ref().map(|v| v.to_string()).as_deref())
+                .create_endpoint(
+                    rs_component,
+                    dp_rank.as_ref().map(|v| v.to_string()).as_deref(),
+                )
                 .await
                 .map_err(to_pyerr)?;
             Ok(())
