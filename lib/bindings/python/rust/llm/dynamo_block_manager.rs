@@ -1,10 +1,21 @@
+#![cfg(feature = "block-manager")]
+
+
 use pyo3::prelude::*;
 
 use dynamo_llm::block_manager::{self as bm};
 
-use super::utils::*;
 use crate::llm::block_manager::BlockManager as PyBlockManager;
 use crate::to_pyerr;
+use crate::llm::kvbm_utils::*;
+
+
+/// Add bingings from this crate to the provided module
+pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<DynamoVllmKvCacheManager>()?;
+    Ok(())
+}
+
 
 #[pyclass]
 struct DynamoVllmKvCacheManager {

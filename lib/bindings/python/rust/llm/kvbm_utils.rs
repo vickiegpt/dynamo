@@ -12,6 +12,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+#![cfg(feature = "block-manager")]
 
 use std::sync::Arc;
 
@@ -23,6 +24,12 @@ use dynamo_llm::tokens::{compute_hash_v2, TokenBlockSequence, Tokens};
 use crate::to_pyerr;
 
 type DeviceStorageType = bm::storage::DeviceStorage;
+
+/// Add bingings from this crate to the provided module
+pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<KvRequest>()?;
+    Ok(())
+}
 
 /// Request Inputs
 #[pyclass]

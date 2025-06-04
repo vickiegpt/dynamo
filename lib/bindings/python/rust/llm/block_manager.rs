@@ -21,7 +21,6 @@ use pyo3::PyResult;
 mod block;
 mod block_list;
 mod dlpack;
-mod integrations;
 mod layer;
 
 /// Add bingings from this crate to the provided module
@@ -223,7 +222,7 @@ impl BlockManager {
 
 impl BlockManager {
     #[inline(always)]
-    fn get_block_manager(
+    pub fn get_block_manager(
         &self,
     ) -> &dynamo_llm::block_manager::KvBlockManager<dynamo_llm::block_manager::BasicMetadata> {
         self.inner.as_ref()

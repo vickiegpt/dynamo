@@ -40,6 +40,8 @@ use super::*;
 
 pub mod backend;
 pub mod block_manager;
+pub mod dynamo_block_manager;
+pub mod kvbm_utils;
 pub mod disagg_router;
 pub mod kv;
 pub mod model_card;

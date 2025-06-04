@@ -19,6 +19,8 @@ from dynamo._core import AggregatedMetrics as AggregatedMetrics
 
 try:
     from dynamo._core import BlockManager as BlockManager
+    from dynamo._core import DynamoVllmKvCacheManager as DynamoVllmKvCacheManager
+    from dynamo._core import KvRequest as KvRequest
 except ImportError:
     pass  # BlockManager is not enabled by default
 

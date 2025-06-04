@@ -919,3 +919,19 @@ class BlockManager:
             List of allocated blocks
         """
         ...
+
+class DynamoVllmKvCacheManager:
+    """
+    A KV cache manager for VLLM
+    """
+
+    def __init__(self, block_manager: BlockManager) -> None:
+        ...
+
+class KvRequest:
+    """
+    A request for KV cache
+    """
+
+    def __init__(self, request_id: int, tokens: List[int], block_size: int) -> None:
+        ...

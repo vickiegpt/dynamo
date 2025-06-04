@@ -76,6 +76,12 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "block-manager")]
     llm::block_manager::add_to_module(m)?;
 
+    #[cfg(feature = "block-manager")]
+    llm::dynamo_block_manager::add_to_module(m)?;
+
+    #[cfg(feature = "block-manager")]
+    llm::kvbm_utils::add_to_module(m)?;
+
     Ok(())
 }
 
