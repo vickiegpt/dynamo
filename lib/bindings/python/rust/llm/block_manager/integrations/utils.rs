@@ -34,6 +34,16 @@ pub struct KvRequest {
     tbs: Arc<TokenBlockSequence>,
 }
 
+impl KvRequest {
+    pub fn request_id(&self) -> usize {
+        self.request_id
+    }
+
+    pub fn tbs(&self) -> Arc<TokenBlockSequence> {
+        self.tbs.clone()
+    }
+}
+
 #[pymethods]
 impl KvRequest {
     #[new]
