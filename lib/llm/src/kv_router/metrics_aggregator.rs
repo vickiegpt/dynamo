@@ -133,11 +133,16 @@ pub async fn collect_endpoints_task(
                     .collect();
                 tracing::trace!("Found {} endpoints for service: {service_subject}", endpoints.len());
 
-                let processed = ProcessedEndpoints::new(endpoints);
+                // Only create and send ProcessedEndpoints if we have valid endpoints
+                if !endpoints.is_empty() {
+                    let processed = ProcessedEndpoints::new(endpoints);
 
-                if watch_tx.send(processed).is_err() {
-                    tracing::trace!("failed to send processed endpoints; shutting down");
-                    break;
+                    if watch_tx.send(processed).is_err() {
+                        tracing::trace!("failed to send processed endpoints; shutting down");
+                        break;
+                    }
+                } else {
+                    tracing::trace!("No valid endpoints found, skipping ProcessedEndpoints creation");
                 }
             }
         }

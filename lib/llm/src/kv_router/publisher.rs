@@ -262,7 +262,6 @@ async fn start_zmq_listener(
     tracing::debug!("ZMQ listener successfully connected to {}", zmq_endpoint);
 
     let mut consecutive_errors = 0u32;
-    let mut message_count = 0u64;
 
     loop {
         tokio::select! {
