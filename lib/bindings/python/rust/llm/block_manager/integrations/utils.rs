@@ -28,6 +28,7 @@ type DeviceStorageType = bm::storage::DeviceStorage;
 #[pyclass]
 #[derive(Debug, Clone)]
 pub struct KvRequest {
+    request_id: usize,
     lora_name: Option<String>,
     salt_hash: u64,
     tbs: Arc<TokenBlockSequence>,
@@ -36,8 +37,9 @@ pub struct KvRequest {
 #[pymethods]
 impl KvRequest {
     #[new]
-    #[pyo3(signature = (tokens, block_size, lora_name=None, salt_hash=None))]
+    #[pyo3(signature = (request_id, tokens, block_size, lora_name=None, salt_hash=None))]
     fn new(
+        request_id: usize,
         tokens: Vec<usize>,
         block_size: usize,
         lora_name: Option<String>,
@@ -69,6 +71,7 @@ impl KvRequest {
         let sequence = Arc::new(TokenBlockSequence::new(tokens, block_size, Some(salt_hash)));
 
         Self {
+            request_id,
             lora_name,
             salt_hash,
             tbs: sequence,

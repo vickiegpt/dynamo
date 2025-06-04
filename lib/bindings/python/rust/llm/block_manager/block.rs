@@ -77,12 +77,7 @@ impl Block {
     fn to_list<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let layers: Vec<layer::Layer> = (0..self.num_layers())
             .map(|layer_idx| {
-                layer::Layer::from_rust(
-                    self.inner.clone(),
-                    layer_idx,
-                    self.dtype,
-                    self.device_id,
-                )
+                layer::Layer::from_rust(self.inner.clone(), layer_idx, self.dtype, self.device_id)
             })
             .collect();
         PyList::new(py, layers)
@@ -100,12 +95,7 @@ impl Block {
                 index, num_layers
             )));
         }
-        let layer = layer::Layer::from_rust(
-            self.inner.clone(),
-            index,
-            self.dtype,
-            self.device_id,
-        );
+        let layer = layer::Layer::from_rust(self.inner.clone(), index, self.dtype, self.device_id);
         Ok(layer)
     }
 

@@ -29,7 +29,6 @@ pub mod offload;
 pub mod pool;
 pub mod storage;
 
-pub mod vllm;
 // pub mod distributed;
 
 pub use crate::common::dtype::DType;

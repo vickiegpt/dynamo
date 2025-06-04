@@ -71,11 +71,7 @@ impl BlockList {
                 self.inner.len()
             )));
         }
-        let block = block::Block::from_rust(
-            self.inner[index].clone(),
-            self.dtype,
-            self.device_id,
-        );
+        let block = block::Block::from_rust(self.inner[index].clone(), self.dtype, self.device_id);
         Ok(block)
     }
 

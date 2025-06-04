@@ -142,10 +142,7 @@ impl BlockManager {
             .allocate_blocks_blocking(count)
             .map_err(to_pyerr)?;
         // Wrap each block in an enum accounting for Pinned & Device block
-        let blocks = blocks
-            .into_iter()
-            .map(block::BlockType::Pinned)
-            .collect();
+        let blocks = blocks.into_iter().map(block::BlockType::Pinned).collect();
         Ok(block_list::BlockList::from_rust(
             blocks,
             self.dtype,
@@ -172,10 +169,7 @@ impl BlockManager {
                 .await
                 .map_err(to_pyerr)?;
             // Wrap each block in an enum accounting for Pinned & Device block
-            let blocks = blocks
-                .into_iter()
-                .map(block::BlockType::Pinned)
-                .collect();
+            let blocks = blocks.into_iter().map(block::BlockType::Pinned).collect();
             Ok(block_list::BlockList::from_rust(blocks, dtype, device_id))
         })
     }
@@ -190,10 +184,7 @@ impl BlockManager {
             .allocate_blocks_blocking(count)
             .map_err(to_pyerr)?;
         // Wrap each block in an enum accounting for Pinned & Device block
-        let blocks = blocks
-            .into_iter()
-            .map(block::BlockType::Device)
-            .collect();
+        let blocks = blocks.into_iter().map(block::BlockType::Device).collect();
         Ok(block_list::BlockList::from_rust(
             blocks,
             self.dtype,
@@ -220,10 +211,7 @@ impl BlockManager {
                 .await
                 .map_err(to_pyerr)?;
             // Wrap each block in an enum accounting for Pinned & Device block
-            let blocks = blocks
-                .into_iter()
-                .map(block::BlockType::Device)
-                .collect();
+            let blocks = blocks.into_iter().map(block::BlockType::Device).collect();
             Ok(block_list::BlockList::from_rust(blocks, dtype, device_id))
         })
     }
