@@ -266,7 +266,10 @@ impl WorkerSelector for DefaultWorkerSelector {
                 - self.kv_router_config.waiting_requests_weight * normalized_waiting;
 
             tracing::trace!(
-                "Formula for {worker_dp:?}: {logit:.3} = 2.0 * {score:.3} - {gpu_cache_usage:.3} - {normalized_waiting:.3}",
+                "Formula for {worker_dp:?}: {logit:.3} = {:.3} * {score:.3} - {:.3} * {gpu_cache_usage:.3} - {:.3} * {normalized_waiting:.3}",
+                self.kv_router_config.overlap_score_weight,
+                self.kv_router_config.gpu_cache_usage_weight,
+                self.kv_router_config.waiting_requests_weight,
             );
 
             // Track best workers
