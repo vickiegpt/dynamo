@@ -46,7 +46,6 @@ impl Endpoint {
     }
 
     pub fn dp_rank(&self) -> Option<DpRank> {
-        tracing::info!("Parsing dp_rank from subject: {}", self.subject);
         let parts: Vec<&str> = self.subject.split("-").collect();
         if parts.len() < 3 {
             return None;
