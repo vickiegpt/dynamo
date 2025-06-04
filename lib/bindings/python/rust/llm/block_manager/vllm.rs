@@ -1,4 +1,5 @@
 use super::*;
+use dynamo_llm::block_manager::vllm::RequestID;
 use pyo3::PyResult;
 
 use dynamo_llm::block_manager::{self as bm, block::BlockIdentifier};
@@ -110,14 +111,26 @@ enum BlockListType {
 #[pyclass]
 #[derive(Debug, Clone)]
 struct DynamoVllmKvBlockList {
-    blocks: Arc<std::sync::Mutex<BlockListType>>,
+    blocks: Arc<std::sync::Mutex<Option<BlockListType>>>,
+    count: usize,
 }
 
 impl DynamoVllmKvBlockList {
     fn new(blocks: BlockListType) -> Self {
+        let count = match &blocks {
+            BlockListType::Immutable(blocks) => blocks.len(),
+            BlockListType::Mutable(blocks) => blocks.len(),
+        };
+
         Self {
-            blocks: Arc::new(std::sync::Mutex::new(blocks)),
+            blocks: Arc::new(std::sync::Mutex::new(Some(blocks))),
+            count,
         }
+    }
+
+    fn take_blocks(&self) -> Option<BlockListType> {
+        let mut blocks = self.blocks.lock().unwrap();
+        blocks.take()
     }
 }
 
@@ -126,8 +139,9 @@ impl DynamoVllmKvBlockList {
     fn get_block_id(&self, block_idx: usize) -> PyResult<usize> {
         let blocks = self.blocks.lock().unwrap();
         let block_id = match &*blocks {
-            BlockListType::Immutable(blocks) => blocks.get(block_idx).map(|b| b.block_id()),
-            BlockListType::Mutable(blocks) => blocks.get(block_idx).map(|b| b.block_id()),
+            Some(BlockListType::Immutable(blocks)) => blocks.get(block_idx).map(|b| b.block_id()),
+            Some(BlockListType::Mutable(blocks)) => blocks.get(block_idx).map(|b| b.block_id()),
+            None => None,
         };
 
         Ok(block_id.ok_or_else(|| to_pyerr("block not found"))?)
@@ -135,44 +149,59 @@ impl DynamoVllmKvBlockList {
 
     fn get_block_hash(&self, block_idx: usize) -> PyResult<Option<u64>> {
         let blocks = self.blocks.lock().unwrap();
-        let sequence_hash = match &*blocks {
-            BlockListType::Immutable(blocks) => blocks
-                .get(block_idx as usize)
-                .ok_or_else(|| to_pyerr("block not found"))?
+        let block_id = match &*blocks {
+            Some(BlockListType::Immutable(blocks)) => blocks
+                .get(block_idx)
+                .ok_or(to_pyerr("block not found"))?
                 .sequence_hash()
                 .ok(),
-            BlockListType::Mutable(blocks) => blocks
-                .get(block_idx as usize)
-                .ok_or_else(|| to_pyerr("block not found"))?
+            Some(BlockListType::Mutable(blocks)) => blocks
+                .get(block_idx)
+                .ok_or(to_pyerr("block not found"))?
                 .sequence_hash()
                 .ok(),
+            None => None,
         };
 
-        Ok(sequence_hash)
-    }
-
-    fn block_ids(&self) -> Vec<usize> {
-        let blocks = self.blocks.lock().unwrap();
-        match &*blocks {
-            BlockListType::Immutable(blocks) => blocks.iter().map(|b| b.block_id()).collect(),
-            BlockListType::Mutable(blocks) => blocks.iter().map(|b| b.block_id()).collect(),
-        }
-    }
-
-    fn unhashed_block_ids(&self) -> Vec<usize> {
-        let blocks = self.blocks.lock().unwrap();
-        match &*blocks {
-            BlockListType::Immutable(_blocks) => vec![],
-            BlockListType::Mutable(blocks) => blocks.iter().map(|b| b.block_id()).collect(),
-        }
+        Ok(block_id)
     }
 
     #[pyo3(name = "__len__")]
     fn len(&self) -> usize {
-        let blocks = self.blocks.lock().unwrap();
-        match &*blocks {
-            BlockListType::Immutable(blocks) => blocks.len(),
-            BlockListType::Mutable(blocks) => blocks.len(),
-        }
+        self.count
     }
 }
+
+// struct SlotUpdate {
+//     /// The request ID.
+//     request_id: RequestID,
+
+//     /// External state about the number of computed tokens in the request.
+//     /// This should match the slots expectation.
+//     request_num_computed_tokens: usize,
+
+//     /// The number of new tokens which advances the sequence state.
+//     /// This is the number of tokens which will be computed in the near future.
+//     /// When [BaseKvCacheManager::update_slot] is called again, these tokens will be committed.
+//     num_new_tokens: usize,
+
+//     /// The number of new computed tokens in the request.
+//     /// The `num_new_tokens / block_size` should be equal to the length of the `new_computed_blocks`,
+//     /// it may have a remainder for the partial block state.
+//     num_new_computed_tokens: Option<usize>,
+
+//     /// The new computed blocks which advance the sequence state.
+//     new_computed_blocks: Option<BlockList<DeviceStorage, BasicMetadata>>,
+
+//     /// The number of lookahead blocks to cache.
+//     num_lookahead_blocks: Option<usize>,
+
+//     /// Whether to delay caching the blocks.
+//     delay_cache_blocks: Option<bool>,
+// }
+
+// struct Slot {
+//     num_computed_tokens: usize,
+//     sequence_blocks: Vec<bm::block::ImmutableBlock<DeviceStorageType, bm::BasicMetadata>>,
+//     inflight_blocks: Vec<bm::block::MutableBlock<DeviceStorage, BasicMetadata>>,
+// }

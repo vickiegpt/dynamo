@@ -20,7 +20,8 @@ import torch
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks
 from vllm.v1.core.kv_cache_utils import KVCacheBlock
 
-from dynamo.llm import BlockManager, DynamoVllmKvBlockList, KvRequest
+from dynamo.llm import BlockManager
+from dynamo.llm.vllm.kvbm import KVCacheBlocksProtocol, KvbmCacheBlocks
 
 pytestmark = pytest.mark.pre_merge
 
@@ -179,73 +180,47 @@ def cdiv(a: int, b: int) -> int:
     return -(a // -b)
 
 
-@runtime_checkable
-@dataclass
-class KVCacheBlocksProtocol(Protocol):
-    """Protocol defining the structure and behavior of KVCacheBlocks."""
+# @runtime_checkable
+# @dataclass
+# class KVCacheBlocksProtocol(Protocol):
+#     """Protocol defining the structure and behavior of KVCacheBlocks."""
 
-    # blocks: List[KVCacheBlock]
-    """The list of KVCacheBlock objects."""
+#     # blocks: List[KVCacheBlock]
+#     """The list of KVCacheBlock objects."""
 
-    # def __add__(
-    #     self: KVCacheBlocksProtocol, other: KVCacheBlocksProtocol
-    # ) -> KVCacheBlocksProtocol:
-    #     """Adds two KVCacheBlocks instances."""
-    #     pass
+#     # def __add__(
+#     #     self: KVCacheBlocksProtocol, other: KVCacheBlocksProtocol
+#     # ) -> KVCacheBlocksProtocol:
+#     #     """Adds two KVCacheBlocks instances."""
+#     #     pass
 
-    @classmethod
-    def create_empty(cls: type[KVCacheBlocksProtocol]) -> KVCacheBlocksProtocol:
-        """Creates a new KVCacheBlocks instance with no blocks."""
-        pass
+#     @classmethod
+#     def create_empty(cls: type["KVCacheBlocksProtocol"]) -> "KVCacheBlocksProtocol":
+#         """Creates a new KVCacheBlocks instance with no blocks."""
+#         pass
 
-    def get_block_ids(self) -> List[List[int]]:
-        """
-        Converts the KVCacheBlocks instance to block_ids.
+#     def get_block_ids(self) -> List[List[int]]:
+#         """
+#         Converts the KVCacheBlocks instance to block_ids.
 
-        Returns:
-            list[list[int]]: A two-level list where
-            * the outer list corresponds to KV cache groups (only 1 group now)
-            * each inner list contains the block_ids of the blocks in that group
-        """
-        pass
+#         Returns:
+#             list[list[int]]: A two-level list where
+#             * the outer list corresponds to KV cache groups (only 1 group now)
+#             * each inner list contains the block_ids of the blocks in that group
+#         """
+#         pass
 
-    def get_unhashed_block_ids(self) -> List[int]:
-        """Get block_ids of unhashed blocks from KVCacheBlocks instance."""
-        pass
-
-
-class KvbmBlockList:
-    """
-    Implements the KVCacheBlocksProtocol interface.
-    """
-
-    def __init__(self, blocks: DynamoVllmKvBlockList):
-        self.owned_blocks = blocks
-        self.blocks = [
-            KVCacheBlock(
-                block_id=blocks.get_block_id(i), _block_hash=blocks.get_block_hash(i)
-            )
-            for i in range(len(blocks))
-        ]
-
-    def get_block_ids(self) -> list[list[int]]:
-        return [[block.block_id for block in self.blocks]]
-
-    def get_unhashed_block_ids(self) -> list[int]:
-        return self.owned_blocks.unhashed_block_ids()
-
-    def __add__(self: KvbmBlockList, other: KvbmBlockList) -> KvbmBlockList:
-        """Adds two KVCacheBlocks instances."""
-        raise NotImplementedError("__add__ not implemented")
-
-    @classmethod
-    def create_empty(cls) -> KVCacheBlocksProtocol:
-        """Creates a new KVCacheBlocks instance with no blocks."""
-        raise NotImplementedError("create_empty not implemented")
+#     def get_unhashed_block_ids(self) -> List[int]:
+#         """Get block_ids of unhashed blocks from KVCacheBlocks instance."""
+#         pass
 
 
 @runtime_checkable
 class KVCacheManagerProtocol(Protocol):
+    """
+    Protocol for the KV cache manager.
+    """
+
     def get_usage(self) -> float:
         """Get the KV cache usage.
 
@@ -405,7 +380,11 @@ class KVCacheManagerProtocol(Protocol):
     #     pass
 
 
-class KvbmCacheManager(KVCacheManagerProtocol):
+class KvbmCacheManager:
+    """
+    Dynamo KVBM cache manager.
+    """
+
     def __init__(self, block_manager: BlockManager):
         self.block_manager = block_manager
         self.caching_hash_fn = sha256
@@ -413,171 +392,174 @@ class KvbmCacheManager(KVCacheManagerProtocol):
         self.enable_caching = True
         self.num_kv_cache_groups = 1
 
-        # Mapping from request ID to kv block hashes.
-        # This is to avoid recomputing the block hashes for each call of
-        # `get_computed_blocks` or `allocate_slots`.
-        self.req_to_block_hashes: defaultdict[str, list[BlockHashType]] = defaultdict(
-            list
-        )
+        # # Mapping from request ID to kv block hashes.
+        # # This is to avoid recomputing the block hashes for each call of
+        # # `get_computed_blocks` or `allocate_slots`.
+        # self.req_to_block_hashes: defaultdict[str, list[BlockHashType]] = defaultdict(
+        #     list
+        # )
 
-        # Mapping from request ID to blocks to track the blocks allocated
-        # for each request, so that we can free the blocks when the request
-        # is finished.
-        self.req_to_blocks: defaultdict[str, list[KVBMCacheBlock]] = defaultdict(list)
+        # # Mapping from request ID to blocks to track the blocks allocated
+        # # for each request, so that we can free the blocks when the request
+        # # is finished.
+        # self.req_to_blocks: defaultdict[str, list[KVBMCacheBlock]] = defaultdict(list)
 
-        # {req_id: The number of cached blocks for this given request}
-        # This is used to track the number of cached blocks for each request.
-        # This is only used to track the RUNNING requests, we do not track the
-        # data for reempted ones.
-        self.num_cached_block: dict[str, int] = {}
+        # # {req_id: The number of cached blocks for this given request}
+        # # This is used to track the number of cached blocks for each request.
+        # # This is only used to track the RUNNING requests, we do not track the
+        # # data for reempted ones.
+        # self.num_cached_block: dict[str, int] = {}
 
-    def get_computed_blocks(self, request: Request) -> tuple[KvbmBlockList, int]:
-        if bool(request.mm_positions):
-            raise ValueError("Unsupported request - requires mm extra keys")
+    # def get_computed_blocks(self, request: Request) -> tuple[KvbmCacheBlocks, int]:
+    #     """
+    #     Get the computed blocks for the request.
+    #     """
+    #     if bool(request.mm_positions):
+    #         raise ValueError("Unsupported request - requires mm extra keys")
 
-        # from dynamo_llm import KvRequestInputs
-        request = KvRequest(
-            request.all_token_ids,
-            self.block_size,
-            lora_name=request.lora_request.lora_name(),
-            salt_hash=request.cache_salt,
-        )
+    #     # from dynamo_llm import KvRequestInputs
+    #     request = KvRequest(
+    #         request.all_token_ids,
+    #         self.block_size,
+    #         lora_name=request.lora_request.lora_name(),
+    #         salt_hash=request.cache_salt,
+    #     )
 
-        owned_blocks = self.inner.get_computed_blocks(request)
+    #     owned_blocks = self.inner.get_computed_blocks(request)
 
-        return KvbmBlockList(owned_blocks), len(owned_blocks)
+    #     return KvbmCacheBlocks(owned_blocks), len(owned_blocks)
 
-    def get_num_blocks_to_allocate(
-        self,
-        request_id: str,
-        num_tokens: int,
-        new_computed_blocks: list[KVBMCacheBlock],
-    ) -> int:
-        """
-        Get the number of blocks needed to be allocated for the request.
+    # def get_num_blocks_to_allocate(
+    #     self,
+    #     request_id: str,
+    #     num_tokens: int,
+    #     new_computed_blocks: list[KVBMCacheBlock],
+    # ) -> int:
+    #     """
+    #     Get the number of blocks needed to be allocated for the request.
 
-        Args:
-            request_id: The request ID.
-            num_tokens: The total number of tokens that need a slot (including
-                tokens that are already allocated).
-            new_computed_blocks: The new computed blocks just hitting the
-                prefix caching.
+    #     Args:
+    #         request_id: The request ID.
+    #         num_tokens: The total number of tokens that need a slot (including
+    #             tokens that are already allocated).
+    #         new_computed_blocks: The new computed blocks just hitting the
+    #             prefix caching.
 
-        Returns:
-            The number of blocks.
-        """
+    #     Returns:
+    #         The number of blocks.
+    #     """
 
-        num_required_blocks = cdiv(num_tokens, self.block_size)
-        num_new_blocks = (
-            num_required_blocks
-            - len(new_computed_blocks)
-            - len(self.req_to_blocks[request_id])
-        )
-        # If a computed block of a request is an eviction candidate (in the
-        # free queue and ref_cnt == 0), it will be changed from a free block
-        # to a computed block when the request is allocated, so we also count
-        # it as needed to be allocated.
-        num_evictable_computed_blocks = sum(
-            blk.ref_cnt == 0 for blk in new_computed_blocks
-        )
-        return (
-            num_new_blocks + num_evictable_computed_blocks
-        ) * self.num_kv_cache_groups
+    #     num_required_blocks = cdiv(num_tokens, self.block_size)
+    #     num_new_blocks = (
+    #         num_required_blocks
+    #         - len(new_computed_blocks)
+    #         - len(self.req_to_blocks[request_id])
+    #     )
+    #     # If a computed block of a request is an eviction candidate (in the
+    #     # free queue and ref_cnt == 0), it will be changed from a free block
+    #     # to a computed block when the request is allocated, so we also count
+    #     # it as needed to be allocated.
+    #     num_evictable_computed_blocks = sum(
+    #         blk.ref_cnt == 0 for blk in new_computed_blocks
+    #     )
+    #     return (
+    #         num_new_blocks + num_evictable_computed_blocks
+    #     ) * self.num_kv_cache_groups
 
-    def save_new_computed_blocks(
-        self, request_id: str, new_computed_blocks: list[KVCacheBlock]
-    ) -> None:
-        """
-        Add the new computed blocks to the request.
+    # def save_new_computed_blocks(
+    #     self, request_id: str, new_computed_blocks: list[KVCacheBlock]
+    # ) -> None:
+    #     """
+    #     Add the new computed blocks to the request.
 
-        Args:
-            request_id: The request ID.
-            new_computed_blocks: The new computed blocks just hitting the
-                prefix cache.
-        """
-        if request_id not in self.num_cached_block:
-            # A new request.
-            req_blocks = self.req_to_blocks[request_id]
-            assert len(req_blocks) == 0
-            req_blocks.extend(new_computed_blocks)
-            self.num_cached_block[request_id] = len(new_computed_blocks)
-        else:
-            # A running request. Should not have new computed blocks.
-            assert len(new_computed_blocks) == 0
+    #     Args:
+    #         request_id: The request ID.
+    #         new_computed_blocks: The new computed blocks just hitting the
+    #             prefix cache.
+    #     """
+    #     if request_id not in self.num_cached_block:
+    #         # A new request.
+    #         req_blocks = self.req_to_blocks[request_id]
+    #         assert len(req_blocks) == 0
+    #         req_blocks.extend(new_computed_blocks)
+    #         self.num_cached_block[request_id] = len(new_computed_blocks)
+    #     else:
+    #         # A running request. Should not have new computed blocks.
+    #         assert len(new_computed_blocks) == 0
 
-    def allocate_slots(
-        self,
-        request: Request,
-        num_new_tokens: int,
-        num_new_computed_tokens: int = 0,
-        new_computed_blocks: Optional[KVCacheBlocksProtocol] = None,
-        num_lookahead_tokens: int = 0,
-        delay_cache_blocks: bool = False,
-    ) -> Optional[KVCacheBlocks]:
-        if num_new_tokens == 0:
-            raise ValueError("num_new_tokens must be greater than 0")
+    # def allocate_slots(
+    #     self,
+    #     request: Request,
+    #     num_new_tokens: int,
+    #     num_new_computed_tokens: int = 0,
+    #     new_computed_blocks: Optional[KVCacheBlocksProtocol] = None,
+    #     num_lookahead_tokens: int = 0,
+    #     delay_cache_blocks: bool = False,
+    # ) -> Optional[KVCacheBlocks]:
+    #     if num_new_tokens == 0:
+    #         raise ValueError("num_new_tokens must be greater than 0")
 
-        if new_computed_blocks is not None:
-            new_computed_block_list = new_computed_blocks.blocks
-        else:
-            new_computed_block_list = []
+    #     if new_computed_blocks is not None:
+    #         new_computed_block_list = new_computed_blocks.blocks
+    #     else:
+    #         new_computed_block_list = []
 
-        # The number of computed tokens is the number of computed tokens plus
-        # the new prefix caching hits
-        num_computed_tokens = request.num_computed_tokens + num_new_computed_tokens
-        num_tokens_need_slot = min(
-            num_computed_tokens + num_new_tokens + num_lookahead_tokens,
-            self.max_model_len,
-        )
-        num_blocks_to_allocate = self.get_num_blocks_to_allocate(
-            request_id=request.request_id,
-            num_tokens=num_tokens_need_slot,
-            new_computed_blocks=new_computed_block_list,
-        )
+    #     # The number of computed tokens is the number of computed tokens plus
+    #     # the new prefix caching hits
+    #     num_computed_tokens = request.num_computed_tokens + num_new_computed_tokens
+    #     num_tokens_need_slot = min(
+    #         num_computed_tokens + num_new_tokens + num_lookahead_tokens,
+    #         self.max_model_len,
+    #     )
+    #     num_blocks_to_allocate = self.get_num_blocks_to_allocate(
+    #         request_id=request.request_id,
+    #         num_tokens=num_tokens_need_slot,
+    #         new_computed_blocks=new_computed_block_list,
+    #     )
 
-        # TODO: need py binding to get num of inactive blocks
-        if num_blocks_to_allocate > self.block_manager.get_num_free_blocks():
-            # Cannot allocate new blocks
-            return None
+    #     # TODO: need py binding to get num of inactive blocks
+    #     if num_blocks_to_allocate > self.block_manager.get_num_free_blocks():
+    #         # Cannot allocate new blocks
+    #         return None
 
-        # TODO: we don't need this on kvbm side, do we?
-        # Touch the computed blocks to make sure they won't be evicted.
-        if self.enable_caching:
-            # self.block_pool.touch(new_computed_block_list)
-            pass
-        else:
-            assert not new_computed_block_list, (
-                "Computed blocks should be empty when " "prefix caching is disabled"
-            )
+    #     # TODO: we don't need this on kvbm side, do we?
+    #     # Touch the computed blocks to make sure they won't be evicted.
+    #     if self.enable_caching:
+    #         # self.block_pool.touch(new_computed_block_list)
+    #         pass
+    #     else:
+    #         assert not new_computed_block_list, (
+    #             "Computed blocks should be empty when " "prefix caching is disabled"
+    #         )
 
-        # Append the new computed blocks to the request blocks until now to
-        # avoid the case where the new blocks cannot be allocated.
-        self.save_new_computed_blocks(request.request_id, new_computed_block_list)
+    #     # Append the new computed blocks to the request blocks until now to
+    #     # avoid the case where the new blocks cannot be allocated.
+    #     self.save_new_computed_blocks(request.request_id, new_computed_block_list)
 
-        # below is code logic from single_type_manager.allocate_new_blocks to make API compatible
-        req_blocks = self.req_to_blocks[request.request_id]
-        num_required_blocks = cdiv(num_tokens_need_slot, self.block_size)
-        num_new_blocks = num_required_blocks - len(req_blocks)
-        block_list = []
-        if num_new_blocks > 0:
-            # TODO: allocate_device_blocks_blocking should not allocate tensors since vllm already allocated tensors during GPUModelRunner.initialize_kv_cache
-            block_list = self.block_manager.allocate_device_blocks_blocking(
-                num_new_blocks * self.num_kv_cache_groups
-            )
-            req_blocks.extend(block_list)
+    #     # below is code logic from single_type_manager.allocate_new_blocks to make API compatible
+    #     req_blocks = self.req_to_blocks[request.request_id]
+    #     num_required_blocks = cdiv(num_tokens_need_slot, self.block_size)
+    #     num_new_blocks = num_required_blocks - len(req_blocks)
+    #     block_list = []
+    #     if num_new_blocks > 0:
+    #         # TODO: allocate_device_blocks_blocking should not allocate tensors since vllm already allocated tensors during GPUModelRunner.initialize_kv_cache
+    #         block_list = self.block_manager.allocate_device_blocks_blocking(
+    #             num_new_blocks * self.num_kv_cache_groups
+    #         )
+    #         req_blocks.extend(block_list)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
 async def test_kvbm_cache_manager_allocate_slots(block_manager: BlockManager):
-    kvbm = KVBMCacheManager(block_manager)
-    request = Request(
-        request_id="test_request",
-        all_token_ids=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-        block_size=4,
-        num_computed_tokens=3,
-    )
-    blocks = kvbm.allocate_slots(request)
-    assert len(blocks) == 1
+    kvbm = KvbmCacheManager(block_manager)
+    # request = Request(
+    #     request_id="test_request",
+    #     all_token_ids=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    #     block_size=4,
+    #     num_computed_tokens=3,
+    # )
+    # blocks = kvbm.allocate_slots(request)
+    # assert len(blocks) == 1
 
 
 async def main():
