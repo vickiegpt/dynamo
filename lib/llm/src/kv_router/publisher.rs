@@ -250,12 +250,20 @@ async fn start_zmq_listener(
 
     // Subscribe to the requested topic (empty string == all topics)
     if let Err(e) = socket.subscribe(&zmq_topic).await {
-        tracing::error!("Failed to subscribe on ZMQ socket for {}: {}", zmq_endpoint, e);
+        tracing::error!(
+            "Failed to subscribe on ZMQ socket for {}: {}",
+            zmq_endpoint,
+            e
+        );
         return;
     }
 
     if let Err(e) = socket.connect(&zmq_endpoint).await {
-        tracing::error!("Failed to connect ZMQ SUB socket to {}: {}", zmq_endpoint, e);
+        tracing::error!(
+            "Failed to connect ZMQ SUB socket to {}: {}",
+            zmq_endpoint,
+            e
+        );
         return;
     }
 
