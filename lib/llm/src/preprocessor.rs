@@ -106,8 +106,11 @@ pub struct OpenAIPreprocessor {
 impl OpenAIPreprocessor {
     pub async fn new(mdc: ModelDeploymentCard) -> Result<Arc<Self>> {
         let mdcsum = mdc.mdcsum();
+        tracing::info!("mdcsum: {:?}", mdcsum);
         let formatter = PromptFormatter::from_mdc(mdc.clone()).await?;
+        tracing::info!("formatter: ");
         let PromptFormatter::OAI(formatter) = formatter;
+        tracing::info!("formatter: ");
 
         let tokenizer = match &mdc.tokenizer {
             Some(TokenizerKind::HfTokenizerJson(file)) => HuggingFaceTokenizer::from_file(file)?,

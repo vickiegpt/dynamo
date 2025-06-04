@@ -183,11 +183,16 @@ impl ModelWatcher {
             }
         };
 
+        tracing::info!("card handle put: {:?}", card);
+        if card.is_some() && card.clone().unwrap().prompt_formatter.is_none() {
+            anyhow::bail!("Chat Completions endpoint can't be deployed: Model tokenizer does not contain chat template.");
+        }
+
         match model_entry.model_type {
             ModelType::Backend => {
                 // A Backend model expects pre-processed requests meaning it's up to us whether we
                 // handle Chat or Completions requests, so handle both.
-
+                tracing::info!("ModelType::Backend");
                 let Some(mut card) = card else {
                     anyhow::bail!("Missing model deployment card");
                 };
@@ -195,18 +200,20 @@ impl ModelWatcher {
                 // This cache_dir is a tempfile::TempDir will be deleted on drop. I _think_
                 // OpenAIPreprocessor::new loads the files, so we can delete them after this
                 // function. Needs checking carefully, possibly we need to store it in state.
+                tracing::info!("!!!!!!!!!!!!!!!!");
+                tracing::info!("move from nats");
                 let _cache_dir = Some(card.move_from_nats(self.drt.nats_client()).await?);
-
-                if card.prompt_formatter.is_none() {
-                    anyhow::bail!("Chat Completions endpoint can't be deployed: Model tokenizer does not contain chat template.");
-                }
-
+                tracing::info!("move from nats done");
                 let frontend = SegmentSource::<
                     SingleIn<NvCreateChatCompletionRequest>,
                     ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>,
                 >::new();
+                tracing::info!("OpenAIPreprocessor::new");
                 let preprocessor = OpenAIPreprocessor::new(card.clone()).await?.into_operator();
+                tracing::info!("OpenAIPreprocessor::new");
+                tracing::info!("Backend from_mdc: {:?}", card);
                 let backend = Backend::from_mdc(card.clone()).await?.into_operator();
+                tracing::info!("Backend: {:?}", card);
                 let router =
                     PushRouter::<PreprocessedRequest, Annotated<LLMEngineOutput>>::from_client(
                         client.clone(),
@@ -284,6 +291,7 @@ impl ModelWatcher {
                     .add_completions_model(&model_entry.name, completions_engine)?;
             }
             ModelType::Chat => {
+                tracing::info!("ModelType::Chat");
                 let push_router = PushRouter::<
                     NvCreateChatCompletionRequest,
                     Annotated<NvCreateChatCompletionStreamResponse>,
@@ -304,6 +312,7 @@ impl ModelWatcher {
                     .add_completions_model(&model_entry.name, engine)?;
             }
             ModelType::Embedding => {
+                tracing::info!("ModelType::Embedding");
                 let push_router = PushRouter::<
                     NvCreateEmbeddingRequest,
                     Annotated<NvCreateEmbeddingResponse>,

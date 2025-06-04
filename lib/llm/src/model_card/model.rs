@@ -233,8 +233,10 @@ impl ModelDeploymentCard {
         tracing::debug!(
             nats_addr,
             %bucket_name,
-            "Uploading model deployment card fields to NATS"
+            "======>>>>>Uploading model deployment card fields to NATS"
         );
+        tracing::debug!("uploading model info config json to nats");
+        tracing::debug!("self.model_info: {:?}", self.model_info);
 
         macro_rules! nats_upload {
             ($field:expr, $enum_variant:path, $filename:literal) => {

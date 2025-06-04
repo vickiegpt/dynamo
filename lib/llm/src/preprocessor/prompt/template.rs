@@ -30,6 +30,7 @@ use tokcfg::ChatTemplate;
 
 impl PromptFormatter {
     pub async fn from_mdc(mdc: ModelDeploymentCard) -> Result<PromptFormatter> {
+        tracing::info!("mdc: {:?}", mdc);
         let prompt_formatter = match mdc.prompt_formatter {
             Some(prompt_formatter) => prompt_formatter,
             None => {
@@ -37,8 +38,10 @@ impl PromptFormatter {
                 return Ok(Self::OAI(Arc::new(NoOpFormatter::default())));
             }
         };
+        tracing::info!("matching prompt formatter: {:?}", prompt_formatter);
         match prompt_formatter {
             PromptFormatterArtifact::HfTokenizerConfigJson(file) => {
+                tracing::info!("loading hf tokenizer config json: {:?}", file);
                 let content = std::fs::read_to_string(&file)
                     .with_context(|| format!("fs:read_to_string '{file}'"))?;
                 let config: ChatTemplate = serde_json::from_str(&content)?;
@@ -56,7 +59,9 @@ impl PromptFormatter {
     }
 
     pub fn from_parts(config: ChatTemplate, context: ContextMixins) -> Result<PromptFormatter> {
+        tracing::info!("CREATING FORMATTER");
         let formatter = HfTokenizerConfigJsonFormatter::new(config, context)?;
+        tracing::info!("CREATED FORMATTER");
         Ok(Self::OAI(Arc::new(formatter)))
     }
 }
