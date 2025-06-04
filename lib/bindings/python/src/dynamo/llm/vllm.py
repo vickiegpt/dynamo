@@ -1,19 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional
 
 from vllm.distributed.kv_events import KVCacheEvent
 from vllm.logger import init_logger
-from vllm.utils import sha256
-from vllm.v1.core.block_pool import BlockPool
-from vllm.v1.core.kv_cache_utils import (BlockHashType, KVCacheBlock,
-                                         hash_request_tokens)
-from vllm.v1.core.single_type_kv_cache_manager import (
-    get_manager_for_kv_cache_spec)
+from vllm.v1.core.kv_cache_utils import (
+    KVCacheBlock,
+    hash_request_tokens,
+)
 from vllm.v1.kv_cache_interface import KVCacheConfig
-from vllm.v1.core.kv_cache_utils import need_extra_keys
 from vllm.v1.metrics.stats import PrefixCacheStats
 from vllm.v1.request import Request, RequestStatus
 
@@ -46,13 +42,10 @@ class KVCacheBlocks:
 
     def get_unhashed_block_ids(self) -> list[int]:
         """Get block_ids of unhashed blocks from KVCacheBlocks instance."""
-        return [
-            block.block_id for block in self.blocks if block.block_hash is None
-        ]
+        return [block.block_id for block in self.blocks if block.block_hash is None]
 
 
 class KVCacheManager:
-
     def __init__(
         self,
         kv_cache_config: KVCacheConfig,
@@ -65,7 +58,8 @@ class KVCacheManager:
     ) -> None:
         assert len(kv_cache_config.kv_cache_groups) == 1, (
             "KVCacheManager does not support hybrid models with more than 1 "
-            "kv cache group")
+            "kv cache group"
+        )
         kv_cache_spec = kv_cache_config.kv_cache_groups[0].kv_cache_spec
         self.block_size = kv_cache_spec.block_size
         self.num_gpu_blocks = kv_cache_config.num_blocks
@@ -117,8 +111,7 @@ class KVCacheManager:
         self.prefix_cache_stats = PrefixCacheStats()
         return stats
 
-    def get_computed_blocks(self,
-                            request: Request) -> tuple[KVCacheBlocks, int]:
+    def get_computed_blocks(self, request: Request) -> tuple[KVCacheBlocks, int]:
         """Get the computed (cached) blocks for the request.
         Note that the computed blocks must be full.
 
@@ -134,13 +127,19 @@ class KVCacheManager:
             raise ValueError("Unsupported request - requires mm extra keys")
 
         # from dynamo_llm import KvRequestInputs
-        request_inputs = KvRequest(request.all_token_ids, self.block_size, lora_name=request.lora_name, salt_hash=request.cache_salt)
-
+        request_inputs = KvRequest(
+            request.all_token_ids,
+            self.block_size,
+            lora_name=request.lora_name,
+            salt_hash=request.cache_salt,
+        )
 
         # Prefix caching is disabled or
         # When the request requires prompt logprobs, we skip prefix caching.
-        if (not self.enable_caching
-                or request.sampling_params.prompt_logprobs is not None):
+        if (
+            not self.enable_caching
+            or request.sampling_params.prompt_logprobs is not None
+        ):
             # TODO: fail here for now until we can ensure we support it properly
             assert False, "Prefix caching is disabled or prompt logprobs is not None"
             return KVCacheBlocks.create_empty(), 0
@@ -162,8 +161,9 @@ class KVCacheManager:
         # if the scheduler has tried to schedule the request before.
         block_hashes = self.req_to_block_hashes[request.request_id]
         if not block_hashes:
-            block_hashes = hash_request_tokens(self.caching_hash_fn,
-                                               self.block_size, request)
+            block_hashes = hash_request_tokens(
+                self.caching_hash_fn, self.block_size, request
+            )
             self.req_to_block_hashes[request.request_id] = block_hashes
 
         if self.log_stats:
@@ -179,7 +179,8 @@ class KVCacheManager:
         max_cache_hit_length = request.num_tokens - 1
 
         computed_blocks = self.single_type_manager.find_longest_cache_hit(
-            block_hashes, max_cache_hit_length)
+            block_hashes, max_cache_hit_length
+        )
         # NOTE(woosuk): Since incomplete blocks are not eligible for
         # sharing, `num_computed_tokens` is always a multiple of
         # `block_size`.
@@ -251,21 +252,21 @@ class KVCacheManager:
         # Should call this function before allocating new blocks to reduce
         # the number of evicted blocks.
         self.single_type_manager.remove_skipped_blocks(
-            request.request_id, request.num_computed_tokens)
+            request.request_id, request.num_computed_tokens
+        )
 
         # The number of computed tokens is the number of computed tokens plus
         # the new prefix caching hits
-        num_computed_tokens = (request.num_computed_tokens +
-                               num_new_computed_tokens)
+        num_computed_tokens = request.num_computed_tokens + num_new_computed_tokens
         num_tokens_need_slot = min(
             num_computed_tokens + num_new_tokens + num_lookahead_tokens,
-            self.max_model_len)
-        num_blocks_to_allocate = (
-            self.single_type_manager.get_num_blocks_to_allocate(
-                request_id=request.request_id,
-                num_tokens=num_tokens_need_slot,
-                new_computed_blocks=new_computed_block_list,
-            ))
+            self.max_model_len,
+        )
+        num_blocks_to_allocate = self.single_type_manager.get_num_blocks_to_allocate(
+            request_id=request.request_id,
+            num_tokens=num_tokens_need_slot,
+            new_computed_blocks=new_computed_block_list,
+        )
 
         if num_blocks_to_allocate > self.block_pool.get_num_free_blocks():
             # Cannot allocate new blocks
@@ -276,16 +277,18 @@ class KVCacheManager:
             self.block_pool.touch(new_computed_block_list)
         else:
             assert not new_computed_block_list, (
-                "Computed blocks should be empty when "
-                "prefix caching is disabled")
+                "Computed blocks should be empty when " "prefix caching is disabled"
+            )
 
         # Append the new computed blocks to the request blocks until now to
         # avoid the case where the new blocks cannot be allocated.
         self.single_type_manager.save_new_computed_blocks(
-            request.request_id, new_computed_block_list)
+            request.request_id, new_computed_block_list
+        )
 
         new_blocks = self.single_type_manager.allocate_new_blocks(
-            request.request_id, num_tokens_need_slot)
+            request.request_id, num_tokens_need_slot
+        )
 
         # P/D: delay caching blocks if we have to recv from
         # remote. Update state for locally cached blocks.
@@ -296,8 +299,10 @@ class KVCacheManager:
         # not cache any speculated tokens. We only cache blocks with
         # generated (accepted) tokens.
         self.single_type_manager.cache_blocks(
-            request, self.req_to_block_hashes[request.request_id],
-            num_computed_tokens + num_new_tokens - len(request.spec_token_ids))
+            request,
+            self.req_to_block_hashes[request.request_id],
+            num_computed_tokens + num_new_tokens - len(request.spec_token_ids),
+        )
 
         return KVCacheBlocks(new_blocks)
 
@@ -369,7 +374,8 @@ class KVCacheManager:
         assert request.status == RequestStatus.RUNNING
         return [
             self.single_type_manager.get_num_common_prefix_blocks(
-                request.request_id, num_running_requests)
+                request.request_id, num_running_requests
+            )
         ]
 
     def free_block_hashes(self, request: Request) -> None:
@@ -391,5 +397,6 @@ class KVCacheManager:
     def get_block_ids(self, request_id: str) -> list[list[int]]:
         """Get the block ids of a request."""
         assert request_id in self.single_type_manager.req_to_blocks
-        return KVCacheBlocks(self.single_type_manager.req_to_blocks[request_id]
-                             ).get_block_ids()
+        return KVCacheBlocks(
+            self.single_type_manager.req_to_blocks[request_id]
+        ).get_block_ids()

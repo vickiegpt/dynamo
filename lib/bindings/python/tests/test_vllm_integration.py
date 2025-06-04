@@ -17,11 +17,10 @@ from typing import (
 
 import pytest
 import torch
-
-from dynamo.llm import BlockManager, DynamoVllmKvBlockList, KvRequest
-
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks
 from vllm.v1.core.kv_cache_utils import KVCacheBlock
+
+from dynamo.llm import BlockManager, DynamoVllmKvBlockList, KvRequest
 
 pytestmark = pytest.mark.pre_merge
 
@@ -180,11 +179,6 @@ def cdiv(a: int, b: int) -> int:
     return -(a // -b)
 
 
-
-
-
-
-
 @runtime_checkable
 @dataclass
 class KVCacheBlocksProtocol(Protocol):
@@ -220,14 +214,19 @@ class KVCacheBlocksProtocol(Protocol):
         pass
 
 
-
 class KvbmBlockList:
     """
     Implements the KVCacheBlocksProtocol interface.
     """
+
     def __init__(self, blocks: DynamoVllmKvBlockList):
         self.owned_blocks = blocks
-        self.blocks = [KVCacheBlock(block_id=blocks.get_block_id(i), _block_hash=blocks.get_block_hash(i)) for i in range(len(blocks))]
+        self.blocks = [
+            KVCacheBlock(
+                block_id=blocks.get_block_id(i), _block_hash=blocks.get_block_hash(i)
+            )
+            for i in range(len(blocks))
+        ]
 
     def get_block_ids(self) -> list[list[int]]:
         return [[block.block_id for block in self.blocks]]
@@ -235,9 +234,7 @@ class KvbmBlockList:
     def get_unhashed_block_ids(self) -> list[int]:
         return self.owned_blocks.unhashed_block_ids()
 
-    def __add__(
-        self: KvbmBlockList, other: KvbmBlockList
-    ) -> KvbmBlockList:
+    def __add__(self: KvbmBlockList, other: KvbmBlockList) -> KvbmBlockList:
         """Adds two KVCacheBlocks instances."""
         raise NotImplementedError("__add__ not implemented")
 
@@ -439,12 +436,16 @@ class KvbmCacheManager(KVCacheManagerProtocol):
             raise ValueError("Unsupported request - requires mm extra keys")
 
         # from dynamo_llm import KvRequestInputs
-        request = KvRequest(request.all_token_ids, self.block_size, lora_name=request.lora_request.lora_name(), salt_hash=request.cache_salt)
+        request = KvRequest(
+            request.all_token_ids,
+            self.block_size,
+            lora_name=request.lora_request.lora_name(),
+            salt_hash=request.cache_salt,
+        )
 
         owned_blocks = self.inner.get_computed_blocks(request)
 
         return KvbmBlockList(owned_blocks), len(owned_blocks)
-
 
     def get_num_blocks_to_allocate(
         self,

@@ -37,9 +37,7 @@ impl DynamoVllmKvCacheManager {
             .match_sequence_hashes_blocking(&sequence_hashes)
             .map_err(to_pyerr)?;
 
-        Ok(DynamoVllmKvBlockList {
-            blocks: BlockListType::Immutable(blocks),
-        })
+        Ok(DynamoVllmKvBlockList::new(BlockListType::Immutable(blocks)))
     }
 }
 
@@ -47,9 +45,8 @@ impl DynamoVllmKvCacheManager {
 #[pyclass]
 #[derive(Debug, Clone)]
 pub struct KvRequest {
-    tokens: Tokens,
     lora_name: Option<String>,
-    salt_hash: Option<String>,
+    salt_hash: u64,
     tbs: Arc<TokenBlockSequence>,
 }
 
@@ -63,7 +60,11 @@ impl KvRequest {
         lora_name: Option<String>,
         salt_hash: Option<String>,
     ) -> Self {
-        let tokens: Tokens = tokens.iter().map(|t| *t as u32).collect::<Vec<_>>().into();
+        let tokens: Tokens = tokens
+            .into_iter()
+            .map(|t| t as u32)
+            .collect::<Vec<_>>()
+            .into();
 
         // compute salt
         #[derive(serde::Serialize)]
@@ -75,7 +76,7 @@ impl KvRequest {
         }
 
         let salt = Salt {
-            salt: salt_hash.clone(),
+            salt: salt_hash,
             lora_name: lora_name.clone(),
         };
 
@@ -85,7 +86,6 @@ impl KvRequest {
         let sequence = Arc::new(TokenBlockSequence::new(tokens, block_size, Some(salt_hash)));
 
         Self {
-            tokens,
             lora_name,
             salt_hash,
             tbs: sequence,
@@ -101,6 +101,7 @@ impl KvRequest {
     }
 }
 
+#[derive(Debug)]
 enum BlockListType {
     Immutable(Vec<bm::block::ImmutableBlock<DeviceStorageType, bm::BasicMetadata>>),
     Mutable(Vec<bm::block::MutableBlock<DeviceStorageType, bm::BasicMetadata>>),
@@ -109,48 +110,67 @@ enum BlockListType {
 #[pyclass]
 #[derive(Debug, Clone)]
 struct DynamoVllmKvBlockList {
-    blocks: BlockListType,
+    blocks: Arc<std::sync::Mutex<BlockListType>>,
+}
+
+impl DynamoVllmKvBlockList {
+    fn new(blocks: BlockListType) -> Self {
+        Self {
+            blocks: Arc::new(std::sync::Mutex::new(blocks)),
+        }
+    }
 }
 
 #[pymethods]
 impl DynamoVllmKvBlockList {
-    fn get_block_id(&self, block_idx: u64) -> PyResult<u64> {
-        match &self.blocks {
-            BlockListType::Immutable(blocks) => {
-                blocks.get(block_idx as usize).map(|b| b.block_id())
-            }
-            BlockListType::Mutable(blocks) => blocks.get(block_idx as usize).map(|b| b.block_id()),
-        }
+    fn get_block_id(&self, block_idx: usize) -> PyResult<usize> {
+        let blocks = self.blocks.lock().unwrap();
+        let block_id = match &*blocks {
+            BlockListType::Immutable(blocks) => blocks.get(block_idx).map(|b| b.block_id()),
+            BlockListType::Mutable(blocks) => blocks.get(block_idx).map(|b| b.block_id()),
+        };
+
+        Ok(block_id.ok_or_else(|| to_pyerr("block not found"))?)
     }
 
-    fn get_block_hash(&self, block_idx: u64) -> PyResult<Option<u64>> {
-        match &self.blocks {
-            BlockListType::Immutable(blocks) => {
-                blocks.get(block_idx as usize).map(|b| b.sequence_hash())
-            }
-            BlockListType::Mutable(blocks) => {
-                blocks.get(block_idx as usize).map(|b| b.sequence_hash())
-            }
-        }
+    fn get_block_hash(&self, block_idx: usize) -> PyResult<Option<u64>> {
+        let blocks = self.blocks.lock().unwrap();
+        let sequence_hash = match &*blocks {
+            BlockListType::Immutable(blocks) => blocks
+                .get(block_idx as usize)
+                .ok_or_else(|| to_pyerr("block not found"))?
+                .sequence_hash()
+                .ok(),
+            BlockListType::Mutable(blocks) => blocks
+                .get(block_idx as usize)
+                .ok_or_else(|| to_pyerr("block not found"))?
+                .sequence_hash()
+                .ok(),
+        };
+
+        Ok(sequence_hash)
     }
 
-    fn block_ids(&self) -> Vec<u64> {
-        match &self.blocks {
+    fn block_ids(&self) -> Vec<usize> {
+        let blocks = self.blocks.lock().unwrap();
+        match &*blocks {
             BlockListType::Immutable(blocks) => blocks.iter().map(|b| b.block_id()).collect(),
             BlockListType::Mutable(blocks) => blocks.iter().map(|b| b.block_id()).collect(),
         }
     }
 
-    fn unhashed_block_ids(&self) -> Vec<u64> {
-        match &self.blocks {
-            BlockListType::Immutable(blocks) => vec![],
+    fn unhashed_block_ids(&self) -> Vec<usize> {
+        let blocks = self.blocks.lock().unwrap();
+        match &*blocks {
+            BlockListType::Immutable(_blocks) => vec![],
             BlockListType::Mutable(blocks) => blocks.iter().map(|b| b.block_id()).collect(),
         }
     }
 
     #[pyo3(name = "__len__")]
     fn len(&self) -> usize {
-        match &self.blocks {
+        let blocks = self.blocks.lock().unwrap();
+        match &*blocks {
             BlockListType::Immutable(blocks) => blocks.len(),
             BlockListType::Mutable(blocks) => blocks.len(),
         }
