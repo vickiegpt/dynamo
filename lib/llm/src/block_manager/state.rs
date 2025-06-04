@@ -461,7 +461,7 @@ impl<Metadata: BlockMetadata> std::fmt::Debug for KvBlockManagerState<Metadata> 
     }
 }
 
-fn create_layout<S: Storage + NixlRegisterableStorage>(
+pub(crate) fn create_layout<S: Storage + NixlRegisterableStorage>(
     mut builder: LayoutConfigBuilder,
     config: KvManagerLayoutConfig<S>,
     nixl_agent: Option<&NixlAgent>,
@@ -487,7 +487,7 @@ fn create_layout<S: Storage + NixlRegisterableStorage>(
 }
 
 #[expect(clippy::type_complexity)]
-fn create_block_pool<S: Storage + NixlRegisterableStorage, M: BlockMetadata>(
+pub(crate) fn create_block_pool<S: Storage + NixlRegisterableStorage, M: BlockMetadata>(
     layout: Arc<dyn NixlLayout<StorageType = S>>,
     block_set_idx: usize,
     cancellation_token: CancellationToken,

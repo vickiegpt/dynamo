@@ -184,7 +184,7 @@ pub struct LocalMemoryRegion {
 }
 
 /// Core trait for block layouts
-pub trait BlockLayout: BlockLayoutConfig + Send + Sync + std::fmt::Debug {
+pub trait BlockLayout: GenericBlockLayout {
     /// The type of storage this layout uses
     type StorageType: Storage;
 
@@ -193,7 +193,10 @@ pub trait BlockLayout: BlockLayoutConfig + Send + Sync + std::fmt::Debug {
 
     /// Get the mutable memory regions for all blocks and layers
     fn storage_mut(&mut self) -> Vec<&mut Self::StorageType>;
+}
 
+/// Generic trait for block layouts - type-erased on the [Storage] object.
+pub trait GenericBlockLayout: BlockLayoutConfig + Send + Sync {
     /// Storage type for the layout
     fn storage_type(&self) -> StorageType;
 
@@ -552,7 +555,9 @@ impl<S: Storage> BlockLayout for FullyContiguous<S> {
     fn storage_mut(&mut self) -> Vec<&mut Self::StorageType> {
         vec![&mut self.storage]
     }
+}
 
+impl<S: Storage> GenericBlockLayout for FullyContiguous<S> {
     fn storage_type(&self) -> StorageType {
         self.storage_type.clone()
     }

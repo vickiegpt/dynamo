@@ -108,7 +108,9 @@
 
 use crate::block_manager::storage::StorageType;
 
-use super::{BlockLayout, BlockLayoutConfig, LayoutConfig, LayoutError, LayoutType};
+use super::{
+    BlockLayout, BlockLayoutConfig, GenericBlockLayout, LayoutConfig, LayoutError, LayoutType,
+};
 
 use super::super::storage::{
     nixl::{MemType, NixlAgent, NixlRegisterableStorage, NixlStorage, OptArgs},
@@ -355,6 +357,8 @@ mod tests {
         let remote_storage_type = remote_layout.storage_type();
 
         assert_eq!(local_storage_type, remote_storage_type);
+
+        let type_erased_layout: Arc<dyn GenericBlockLayout> = remote_layout;
 
         drop(layout);
         tracing::info!("Layout dropped");
