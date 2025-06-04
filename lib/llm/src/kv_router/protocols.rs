@@ -38,6 +38,7 @@ impl std::fmt::Display for WorkerDp {
     }
 }
 
+// Cannot add DeserializedOwned otherwise compiler will complain
 pub trait WorkerGeneral:
     Hash + Eq + Debug + Clone + Send + Sync + Default + 'static + Serialize
 {

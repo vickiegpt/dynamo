@@ -209,7 +209,6 @@ impl AsyncEngine<SingleIn<BackendInput>, ManyOut<Annotated<LLMEngineOutput>>, Er
                 backend_input.estimated_prefix_hit_num_blocks = Some(overlap_amount);
                 backend_input.dp_rank = instance_id.dp_rank;
                 let updated_request = context.map(|_| backend_input);
-                // TODO: this does not do dp routing
                 self.inner
                     .direct(updated_request, instance_id.worker_id)
                     .await
