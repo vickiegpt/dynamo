@@ -34,6 +34,7 @@ pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[pyclass]
+#[derive(Clone)]
 pub struct BlockManager {
     inner: Arc<dynamo_llm::block_manager::ReferenceBlockManager>,
     // TODO: Metadata should be stored in the block manager?
@@ -225,5 +226,18 @@ impl BlockManager {
                 .collect();
             Ok(block_list::BlockList::from_rust(blocks, dtype, device_id))
         })
+    }
+
+    fn block_size(&self) -> usize {
+        self.inner.block_size()
+    }
+}
+
+impl BlockManager {
+    #[inline(always)]
+    fn get_block_manager(
+        &self,
+    ) -> &dynamo_llm::block_manager::KvBlockManager<dynamo_llm::block_manager::BasicMetadata> {
+        self.inner.as_ref()
     }
 }

@@ -18,7 +18,10 @@ from typing import (
 import pytest
 import torch
 
-from dynamo.llm import BlockManager
+from dynamo.llm import BlockManager, DynamoVllmKvBlockList, KvRequest
+
+from vllm.v1.core.kv_cache_manager import KVCacheBlocks
+from vllm.v1.core.kv_cache_utils import KVCacheBlock
 
 pytestmark = pytest.mark.pre_merge
 
@@ -177,17 +180,9 @@ def cdiv(a: int, b: int) -> int:
     return -(a // -b)
 
 
-class KVCacheBlockProtocol(Protocol):
-    pass
 
 
-class KVBMCacheBlock(KVCacheBlockProtocol):
-    # Block ID, ranging from 0 to num_gpu_blocks - 1.
-    block_id: int
 
-    # The hash of the block composed of (block hash, tuple of token IDs).
-    # It is only available when the block is full.
-    _block_hash: Optional[BlockHashType] = None
 
 
 @runtime_checkable
@@ -198,14 +193,14 @@ class KVCacheBlocksProtocol(Protocol):
     # blocks: List[KVCacheBlock]
     """The list of KVCacheBlock objects."""
 
-    def __add__(
-        self: KVCacheBlockProtocol, other: KVCacheBlockProtocol
-    ) -> KVCacheBlockProtocol:
-        """Adds two KVCacheBlocks instances."""
-        pass
+    # def __add__(
+    #     self: KVCacheBlocksProtocol, other: KVCacheBlocksProtocol
+    # ) -> KVCacheBlocksProtocol:
+    #     """Adds two KVCacheBlocks instances."""
+    #     pass
 
     @classmethod
-    def create_empty(cls: type[KVCacheBlockProtocol]) -> KVCacheBlockProtocol:
+    def create_empty(cls: type[KVCacheBlocksProtocol]) -> KVCacheBlocksProtocol:
         """Creates a new KVCacheBlocks instance with no blocks."""
         pass
 
@@ -225,18 +220,31 @@ class KVCacheBlocksProtocol(Protocol):
         pass
 
 
-class KVBMCacheBlocks(KVCacheBlocksProtocol):
-    blocks: list[KVBMCacheBlock]
 
-    @classmethod
-    def create_empty(cls) -> "KVBMCacheBlocks":
-        return cls([])
+class KvbmBlockList:
+    """
+    Implements the KVCacheBlocksProtocol interface.
+    """
+    def __init__(self, blocks: DynamoVllmKvBlockList):
+        self.owned_blocks = blocks
+        self.blocks = [KVCacheBlock(block_id=blocks.get_block_id(i), _block_hash=blocks.get_block_hash(i)) for i in range(len(blocks))]
 
     def get_block_ids(self) -> list[list[int]]:
         return [[block.block_id for block in self.blocks]]
 
     def get_unhashed_block_ids(self) -> list[int]:
-        return [block.block_id for block in self.blocks if block.block_hash is None]
+        return self.owned_blocks.unhashed_block_ids()
+
+    def __add__(
+        self: KvbmBlockList, other: KvbmBlockList
+    ) -> KvbmBlockList:
+        """Adds two KVCacheBlocks instances."""
+        raise NotImplementedError("__add__ not implemented")
+
+    @classmethod
+    def create_empty(cls) -> KVCacheBlocksProtocol:
+        """Creates a new KVCacheBlocks instance with no blocks."""
+        raise NotImplementedError("create_empty not implemented")
 
 
 @runtime_checkable
@@ -400,7 +408,7 @@ class KVCacheManagerProtocol(Protocol):
     #     pass
 
 
-class KVBMCacheManager(KVCacheManagerProtocol):
+class KvbmCacheManager(KVCacheManagerProtocol):
     def __init__(self, block_manager: BlockManager):
         self.block_manager = block_manager
         self.caching_hash_fn = sha256
@@ -426,27 +434,17 @@ class KVBMCacheManager(KVCacheManagerProtocol):
         # data for reempted ones.
         self.num_cached_block: dict[str, int] = {}
 
-    def get_computed_blocks(self, request: Request) -> tuple[KVBMCacheBlocks, int]:
-        # The block hashes for the request may already be computed
-        # if the scheduler has tried to schedule the request before.
-        block_hashes = self.req_to_block_hashes[request.request_id]
-        if not block_hashes:
-            block_hashes = hash_request_tokens(
-                self.caching_hash_fn, self.block_size, request
-            )
-            self.req_to_block_hashes[request.request_id] = block_hashes
+    def get_computed_blocks(self, request: Request) -> tuple[KvbmBlockList, int]:
+        if bool(request.mm_positions):
+            raise ValueError("Unsupported request - requires mm extra keys")
 
-        # NOTE: When all tokens hit the cache, we must recompute the last token
-        # to obtain logits. Thus, set max_cache_hit_length to prompt_length - 1.
-        # This can trigger recomputation of an entire block, rather than just
-        # the single last token, because allocate_slots() requires
-        # num_computed_tokens to be block-size aligned. Removing this limitation
-        # could slightly improve performance in the future.
-        # max_cache_hit_length = request.num_tokens - 1
+        # from dynamo_llm import KvRequestInputs
+        request = KvRequest(request.all_token_ids, self.block_size, lora_name=request.lora_request.lora_name(), salt_hash=request.cache_salt)
 
-        # TODO: py binding to call self.block_manager to do RegisterBlocks and MatchSequenceHashes are missing
-        # computed_blocks = self.single_type_manager.find_longest_cache_hit(
-        #     block_hashes, max_cache_hit_length)
+        owned_blocks = self.inner.get_computed_blocks(request)
+
+        return KvbmBlockList(owned_blocks), len(owned_blocks)
+
 
     def get_num_blocks_to_allocate(
         self,
@@ -486,7 +484,7 @@ class KVBMCacheManager(KVCacheManagerProtocol):
         ) * self.num_kv_cache_groups
 
     def save_new_computed_blocks(
-        self, request_id: str, new_computed_blocks: list[KVBMCacheBlock]
+        self, request_id: str, new_computed_blocks: list[KVCacheBlock]
     ) -> None:
         """
         Add the new computed blocks to the request.
@@ -511,10 +509,10 @@ class KVBMCacheManager(KVCacheManagerProtocol):
         request: Request,
         num_new_tokens: int,
         num_new_computed_tokens: int = 0,
-        new_computed_blocks: Optional[KVBMCacheBlocks] = None,
+        new_computed_blocks: Optional[KVCacheBlocksProtocol] = None,
         num_lookahead_tokens: int = 0,
         delay_cache_blocks: bool = False,
-    ) -> Optional[KVBMCacheBlocks]:
+    ) -> Optional[KVCacheBlocks]:
         if num_new_tokens == 0:
             raise ValueError("num_new_tokens must be greater than 0")
 

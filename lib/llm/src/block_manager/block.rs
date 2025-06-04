@@ -62,6 +62,12 @@ pub type BlockSetId = usize;
 /// Result type for Block operations
 pub type BlockResult<T> = std::result::Result<T, BlockError>;
 
+pub trait BlockIdentifier {
+    fn block_id(&self) -> BlockId;
+    fn block_set_id(&self) -> BlockSetId;
+    fn worker_id(&self) -> WorkerID;
+}
+
 /// Errors specific to block storage operations
 #[derive(Debug, Error)]
 pub enum BlockError {
@@ -246,6 +252,20 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
 
     pub(crate) fn metadata_on_returned(&mut self, tick: u64) {
         self.metadata.on_returned(tick);
+    }
+}
+
+impl<S: Storage, M: BlockMetadata> BlockIdentifier for Block<S, M> {
+    fn block_id(&self) -> BlockId {
+        self.data.block_idx
+    }
+
+    fn block_set_id(&self) -> BlockSetId {
+        self.data.block_set_idx
+    }
+
+    fn worker_id(&self) -> WorkerID {
+        self.data.worker_id
     }
 }
 
@@ -451,6 +471,20 @@ where
     }
 }
 
+impl<S: Storage> BlockIdentifier for BlockData<S> {
+    fn block_id(&self) -> BlockId {
+        self.block_idx
+    }
+
+    fn block_set_id(&self) -> BlockSetId {
+        self.block_set_idx
+    }
+
+    fn worker_id(&self) -> WorkerID {
+        self.worker_id
+    }
+}
+
 impl<S: Storage + NixlDescriptor> BlockDataExt<S> for BlockData<S>
 where
     S: Storage + NixlDescriptor,
@@ -607,6 +641,23 @@ pub struct MutableBlock<S: Storage, M: BlockMetadata> {
     return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
 }
 
+impl<S: Storage, M: BlockMetadata> BlockIdentifier for MutableBlock<S, M> {
+    fn block_id(&self) -> BlockId {
+        self.block.as_ref().expect("block was dropped").block_id()
+    }
+
+    fn block_set_id(&self) -> BlockSetId {
+        self.block
+            .as_ref()
+            .expect("block was dropped")
+            .block_set_id()
+    }
+
+    fn worker_id(&self) -> WorkerID {
+        self.block.as_ref().expect("block was dropped").worker_id()
+    }
+}
+
 impl<S: Storage + NixlDescriptor, M: BlockMetadata> WritableBlock for MutableBlock<S, M> {
     type StorageType = S;
 }
@@ -754,6 +805,20 @@ impl<S: Storage + NixlDescriptor, M: BlockMetadata> IntoReadableBlocks<M> for Mu
 #[derive(Debug)]
 pub struct ImmutableBlock<S: Storage, M: BlockMetadata> {
     block: Arc<MutableBlock<S, M>>,
+}
+
+impl<S: Storage, M: BlockMetadata> BlockIdentifier for ImmutableBlock<S, M> {
+    fn block_id(&self) -> BlockId {
+        self.block.block_id()
+    }
+
+    fn block_set_id(&self) -> BlockSetId {
+        self.block.block_set_id()
+    }
+
+    fn worker_id(&self) -> WorkerID {
+        self.block.worker_id()
+    }
 }
 
 impl<S: Storage, M: BlockMetadata> Clone for ImmutableBlock<S, M> {
@@ -1357,40 +1422,6 @@ pub mod nixl {
         pub mutability: BlockMutability,
     }
 
-    // Placeholder Trait: Real pool handles must provide this info.
-    // This trait allows BlockDescriptorList constructors to be generic.
-    pub trait BlockHandleInfo {
-        fn worker_id(&self) -> WorkerID; // Needs access to the parent KvBlockManager's ID
-        fn block_set_idx(&self) -> usize;
-        fn block_idx(&self) -> usize;
-    }
-
-    impl<S: Storage> BlockHandleInfo for BlockData<S> {
-        fn worker_id(&self) -> WorkerID {
-            self.worker_id
-        }
-        fn block_set_idx(&self) -> usize {
-            self.block_set_idx
-        }
-        fn block_idx(&self) -> usize {
-            self.block_idx
-        }
-    }
-
-    impl<S: Storage, M: BlockMetadata> BlockHandleInfo for Block<S, M> {
-        fn worker_id(&self) -> WorkerID {
-            self.data.worker_id
-        }
-
-        fn block_set_idx(&self) -> usize {
-            self.data.block_set_idx
-        }
-
-        fn block_idx(&self) -> usize {
-            self.data.block_idx
-        }
-    }
-
     /// A validated, homogeneous, and serializable collection of BlockDescriptors.
     /// Primarily used to describe sets of remote blocks for transfer operations.
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Getters)]
@@ -1447,17 +1478,17 @@ pub mod nixl {
 
             let first = blocks[0];
             let worker_id = first.worker_id();
-            let block_set_idx = first.block_set_idx();
+            let block_set_idx = first.block_set_id();
 
             let mut block_indices = Vec::with_capacity(blocks.len());
-            block_indices.push(first.block_idx());
+            block_indices.push(first.block_id());
 
             for block in blocks.iter().skip(1) {
                 // Validate homogeneity
-                if block.worker_id() != worker_id || block.block_set_idx() != block_set_idx {
+                if block.worker_id() != worker_id || block.block_set_id() != block_set_idx {
                     return Err(BlockDescriptorSetError::NotHomogeneous);
                 }
-                block_indices.push(block.block_idx());
+                block_indices.push(block.block_id());
             }
 
             // TODO: Potentially validate MemType derived from block_set_idx here if possible
@@ -1819,14 +1850,14 @@ mod tests {
         let layout = Arc::new(layout);
 
         let data = BlockData::new(layout.clone(), 0, 42, 0);
-        assert_eq!(data.block_idx(), 0);
-        assert_eq!(data.block_set_idx(), 42);
+        assert_eq!(data.block_id(), 0);
+        assert_eq!(data.block_set_id(), 42);
         let block_desc = data.as_block_descriptor().unwrap();
         println!("Block descriptor: {:?}", block_desc);
 
         let data = BlockData::new(layout.clone(), 1, 42, 0);
-        assert_eq!(data.block_idx(), 1);
-        assert_eq!(data.block_set_idx(), 42);
+        assert_eq!(data.block_id(), 1);
+        assert_eq!(data.block_set_id(), 42);
         let block_desc = data.as_block_descriptor().unwrap();
         println!("Block descriptor: {:?}", block_desc);
 

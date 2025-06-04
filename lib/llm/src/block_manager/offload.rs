@@ -469,8 +469,8 @@ mod tests {
 
     use crate::block_manager::{
         block::{
-            nixl::BlockHandleInfo, BasicMetadata, BlockDataExt, BlockDataProvider, BlockExt,
-            Blocks, MutableBlock,
+            BasicMetadata, BlockDataExt, BlockDataProvider, BlockExt, BlockIdentifier, Blocks,
+            MutableBlock,
         },
         layout::{nixl::NixlLayout, FullyContiguous},
         pool::BlockPool,
@@ -1252,8 +1252,8 @@ mod tests {
         // This should be the same block that we put on the device.
         // The block that was copied should be discarded by the block pool.
         assert_eq!(
-            onboarded_blocks[0].block_idx(),
-            immutable_device_block.block_idx()
+            onboarded_blocks[0].block_id(),
+            immutable_device_block.block_id()
         );
 
         Ok(())

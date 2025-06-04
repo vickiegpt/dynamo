@@ -82,6 +82,16 @@ pub enum CacheLevel {
     G4,
 }
 
+struct CancelOnLastDrop {
+    cancellation_token: CancellationToken,
+}
+
+impl Drop for CancelOnLastDrop {
+    fn drop(&mut self) {
+        self.cancellation_token.cancel();
+    }
+}
+
 // When we construct the pool:
 // 1. instantiate the runtime,
 // 2. build layout::LayoutConfigs for each of the requested storage types
@@ -89,9 +99,11 @@ pub enum CacheLevel {
 // 4. construct a Blocks object for each layout providing a unique block_set_idx
 //    for each layout type.
 // 5. initialize the pools for each set of blocks
+#[derive(Clone)]
 pub struct KvBlockManager<Metadata: BlockMetadata> {
     state: Arc<state::KvBlockManagerState<Metadata>>,
-    cancellation_token: CancellationToken,
+    _cancellation_token: Arc<CancelOnLastDrop>,
+    block_size: usize,
 }
 
 impl<Metadata: BlockMetadata> KvBlockManager<Metadata> {
@@ -110,13 +122,22 @@ impl<Metadata: BlockMetadata> KvBlockManager<Metadata> {
         // The internal state will use a child token of the original token
         config.runtime.cancellation_token = cancellation_token.child_token();
 
+        let block_size = config.model.page_size;
+
         // Create the internal state
         let state = state::KvBlockManagerState::new(config)?;
 
+        let _cancellation_token = Arc::new(CancelOnLastDrop { cancellation_token });
+
         Ok(Self {
             state,
-            cancellation_token,
+            _cancellation_token,
+            block_size,
         })
+    }
+
+    pub fn block_size(&self) -> usize {
+        self.block_size
     }
 
     /// Exports the local blockset configuration as a serialized object.
@@ -173,12 +194,6 @@ impl<Metadata: BlockMetadata> KvBlockManager<Metadata> {
         blocks: Vec<ImmutableBlock<S, Metadata>>,
     ) -> BlockResult<DeviceStorage, Metadata> {
         self.state.onboard_blocks(blocks).await
-    }
-}
-
-impl<Metadata: BlockMetadata> Drop for KvBlockManager<Metadata> {
-    fn drop(&mut self) {
-        self.cancellation_token.cancel();
     }
 }
 
