@@ -24,8 +24,8 @@ import torch
 from components.disagg_router import PyDisaggregatedRouter
 from components.encode_worker import VllmEncodeWorker
 from components.prefill_worker import VllmPrefillWorker
-from transformers import LlavaForConditionalGeneration
 from utils.logging import check_required_workers
+from utils.model import get_vision_embedding_size
 from utils.nixl import NixlMetadataStore
 from utils.prefill_queue import PrefillQueue
 from utils.protocol import (
@@ -134,15 +134,7 @@ class VllmDecodeWorker:
             else:
                 self.disaggregated_router = None
 
-            model = LlavaForConditionalGeneration.from_pretrained(
-                self.engine_args.model,
-                device_map="auto",
-                torch_dtype=torch.bfloat16,
-            ).eval()
-            vision_tower = model.vision_tower
-            self.embedding_size = (
-                vision_tower.vision_model.embeddings.position_embedding.num_embeddings
-            )
+            self.embedding_size = get_vision_embedding_size(self.engine_args.model)
         else:
             EMBEDDINGS_SHAPE = (1, 577, 4096)
             EMBEDDINGS_DTYPE = torch.float16

@@ -26,7 +26,8 @@ import connect
 import httpx
 import torch
 from PIL import Image
-from transformers import AutoImageProcessor, LlavaForConditionalGeneration
+from transformers import AutoImageProcessor
+from utils.model import load_vision_model
 from utils.protocol import EncodeRequest, EncodeResponse
 from utils.vllm import parse_vllm_args
 
@@ -66,10 +67,7 @@ class VllmEncodeWorker:
         self.image_processor = AutoImageProcessor.from_pretrained(
             self.MODEL_ID, trust_remote_code=True
         )
-
-        self.vision_model = LlavaForConditionalGeneration.from_pretrained(
-            self.MODEL_ID, device_map="auto", torch_dtype=torch.float16
-        ).eval()
+        self.vision_model = load_vision_model(self.MODEL_ID)
 
         self._image_cache: dict[str, Image.Image] = {}
         self._cache_queue: Queue[str] = Queue(maxsize=CACHE_SIZE_MAXIMUM)
@@ -167,18 +165,15 @@ class VllmEncodeWorker:
 
             logger.debug(f"Processing image for request: {{ id: {request_id} }}")
             image_embeds = self.image_processor(images=image, return_tensors="pt")
+            # Add a batch dimension to the pixel values
+            image_embeds["pixel_values"] = (
+                image_embeds["pixel_values"].unsqueeze(0).to(DEVICE)
+            )
 
             with torch.no_grad():
-                logger.debug(f"Vision model device: {self.vision_model.device}")
-                vision_outputs = self.vision_model.vision_tower(
-                    image_embeds["pixel_values"].to(self.vision_model.device)
-                )
-                logger.debug("Vision model completed.")
+                embeddings = self.vision_model.get_multimodal_embeddings(**image_embeds)
 
-                embeddings = vision_outputs.last_hidden_state
-                embeddings = self.vision_model.multi_modal_projector(embeddings)
-
-                logger.debug(
+                logger.info(
                     f"Embeddings: {{ shape: {embeddings.shape}, dtype: {embeddings.dtype}, device: {embeddings.device}, ptr: {embeddings.data_ptr()}, elements: {{ count: {embeddings.numel()}, size: {embeddings.element_size()} }} }}."
                 )
 
