@@ -36,7 +36,7 @@ def new_block_manager():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
-async def test_kvbm_cache_manager_allocate_slots(
+async def test_dynamo_vllm_cache_manager_get_computed_blocks(
     block_manager: DynamoVllmKvCacheManager,
 ):
     request = KvRequest(
@@ -49,7 +49,7 @@ async def test_kvbm_cache_manager_allocate_slots(
 
 
 async def main():
-    await test_kvbm_cache_manager_allocate_slots(new_block_manager())
+    await test_dynamo_vllm_cache_manager_get_computed_blocks(new_block_manager())
 
 
 if __name__ == "__main__":
