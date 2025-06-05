@@ -33,6 +33,15 @@ pub struct WorkerDp {
     pub dp_rank: Option<u32>,
 }
 
+#[pymethods]
+impl WorkerDp {
+    #[new]
+    #[pyo3(signature = (worker_id, dp_rank = None))]
+    pub fn new(worker_id: i64, dp_rank: Option<u32>) -> Self {
+        Self { worker_id, dp_rank }
+    }
+}
+
 impl From<llm_rs::kv_router::protocols::WorkerDp> for WorkerDp {
     fn from(value: llm_rs::kv_router::protocols::WorkerDp) -> Self {
         Self {

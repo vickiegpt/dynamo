@@ -28,6 +28,7 @@ from dynamo.llm import (
     KvEventPublisher,
     KvIndexer,
     KvMetricsAggregator,
+    WorkerDp,
     WorkerMetricsPublisher,
 )
 from dynamo.runtime import Component, DistributedRuntime
@@ -89,8 +90,9 @@ async def test_event_handler(distributed_runtime):
     await asyncio.sleep(1)
     scores = await indexer.find_matches_for_request(test_token, lora_id)
     assert scores.scores
-    assert (worker_id, None) in scores.scores
-    assert scores.scores[(worker_id, None)] == 1
+    worker_dp = WorkerDp(worker_id=worker_id, dp_rank=None)
+    assert worker_dp in scores.scores
+    assert scores.scores[worker_dp] == 1
 
     # remove event
     event_publisher.remove_event()
