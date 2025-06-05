@@ -47,6 +47,7 @@ use zeromq::{Socket, SocketRecv, SubSocket};
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct KvCacheEventWithDp {
     pub kv_cache_event: KvCacheEvent,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dp_rank: Option<DpRank>,
 }
 
