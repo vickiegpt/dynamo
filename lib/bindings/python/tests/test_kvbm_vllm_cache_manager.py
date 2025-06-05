@@ -1,3 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Test the KVBM cache manager with vLLM.
+"""
+
 import asyncio
 
 import pytest
@@ -22,6 +29,12 @@ DEVICE_ID = 0
 
 
 def new_kv_cache_manager():
+    """
+    Creates a new KVBM cache manager.
+
+    Returns:
+        KvbmCacheManager: The KVBM cache manager.
+    """
     return KvbmCacheManager(
         BlockManager(
             WORKER_ID,
@@ -41,6 +54,12 @@ def new_kv_cache_manager():
 async def test_dynamo_vllm_cache_manager_get_computed_blocks(
     block_manager: KvbmCacheManager,
 ):
+    """
+    Tests the KVBM cache manager's get_computed_blocks method.
+
+    Args:
+        block_manager: The KVBM cache manager.
+    """
     request = Request(
         request_id="1",
         prompt_token_ids=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
@@ -60,6 +79,9 @@ async def test_dynamo_vllm_cache_manager_get_computed_blocks(
 
 
 async def main():
+    """
+    Main function to run the test.
+    """
     await test_dynamo_vllm_cache_manager_get_computed_blocks(new_kv_cache_manager())
 
 

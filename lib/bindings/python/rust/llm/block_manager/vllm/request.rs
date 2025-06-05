@@ -5,14 +5,12 @@ use super::*;
 
 use std::sync::Arc;
 
-use dynamo_llm::block_manager::{self as bm};
 use dynamo_llm::tokens::{compute_hash_v2, TokenBlockSequence, Tokens};
-
-type DeviceStorageType = bm::storage::DeviceStorage;
 
 /// Request Inputs
 #[pyclass]
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct KvbmRequest {
     request_id: String,
     lora_name: Option<String>,
