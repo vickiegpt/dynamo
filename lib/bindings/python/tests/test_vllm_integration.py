@@ -2,12 +2,9 @@ import asyncio
 import hashlib
 import os
 import pickle
-from collections import defaultdict
-from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
-    List,
     NamedTuple,
     Optional,
     Protocol,
@@ -17,11 +14,9 @@ from typing import (
 
 import pytest
 import torch
-from vllm.v1.core.kv_cache_manager import KVCacheBlocks
-from vllm.v1.core.kv_cache_utils import KVCacheBlock
 
 from dynamo.llm import BlockManager
-from dynamo.llm.vllm.kvbm import KVCacheBlocksProtocol, KvbmCacheBlocks
+from dynamo.llm.vllm_integration.kv_cache_utils import KVCacheBlocksProtocol
 
 pytestmark = pytest.mark.pre_merge
 
@@ -551,7 +546,7 @@ class KvbmCacheManager:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
 async def test_kvbm_cache_manager_allocate_slots(block_manager: BlockManager):
-    kvbm = KvbmCacheManager(block_manager)
+    _kvbm = KvbmCacheManager(block_manager)
     # request = Request(
     #     request_id="test_request",
     #     all_token_ids=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
