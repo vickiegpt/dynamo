@@ -10,7 +10,7 @@ from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.metrics.stats import PrefixCacheStats
 from vllm.v1.request import Request, RequestStatus
 
-from dynamo._core import DynamoVllmKvBlockList
+from dynamo._core import DynamoKvBlockList
 
 logger = init_logger(__name__)
 
@@ -20,7 +20,7 @@ class KvbmCacheBlocks:
     Implements the KVCacheBlocksProtocol interface.
     """
 
-    def __init__(self, blocks: DynamoVllmKvBlockList):
+    def __init__(self, blocks: DynamoKvBlockList):
         self._owned_blocks = blocks
         self._blocks = [
             KVCacheBlock(
