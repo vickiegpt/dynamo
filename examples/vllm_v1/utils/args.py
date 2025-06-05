@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 # TODO: rename to avoid ambiguity with vllm package
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.utils import FlexibleArgumentParser
@@ -24,7 +23,6 @@ from dynamo.sdk.lib.config import ServiceConfig
 def parse_vllm_args(service_name, prefix) -> AsyncEngineArgs:
     config = ServiceConfig.get_instance()
     vllm_args = config.as_args(service_name, prefix=prefix)
-
     parser = FlexibleArgumentParser()
     parser.add_argument(
         "--enable-disagg", action="store_true", help="Enable disaggregation"
@@ -33,5 +31,4 @@ def parse_vllm_args(service_name, prefix) -> AsyncEngineArgs:
     args = parser.parse_args(vllm_args)
     engine_args = AsyncEngineArgs.from_cli_args(args)
     engine_args.enable_disagg = args.enable_disagg
-
     return engine_args

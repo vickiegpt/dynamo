@@ -17,7 +17,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from components.worker import VllmDecodeWorker
+from components.simple_load_balancer import SimpleLoadBalancer
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -42,8 +42,9 @@ def get_dynamo_run_binary():
 class FrontendConfig(BaseModel):
     """Configuration for the Frontend service including model and HTTP server settings."""
 
+    served_model_name: str
+    endpoint: str
     port: int = 8080
-    router_mode: str = "round-robin"
 
 
 # TODO: move these to common for all LLMs once we adopt dynamo-run
@@ -57,7 +58,7 @@ class FrontendConfig(BaseModel):
     app=FastAPI(title="LLM Example"),
 )
 class Frontend:
-    worker = depends(VllmDecodeWorker)
+    worker = depends(SimpleLoadBalancer)
 
     def __init__(self):
         """Initialize Frontend service with HTTP server and model configuration."""
@@ -73,20 +74,20 @@ class Frontend:
             f"Starting HTTP server and processor on port {self.frontend_config.port}"
         )
         dynamo_run_binary = get_dynamo_run_binary()
+        endpoint = f"dyn://{self.frontend_config.endpoint}"
 
         logger.info(
             f"Starting HTTP server and processor on port {self.frontend_config.port}"
         )
+        logger.info(f"Endpoint: {endpoint}")
 
         self.process = subprocess.Popen(
             [
                 dynamo_run_binary,
                 "in=http",
-                "out=dyn",
+                f"out={endpoint}",
                 "--http-port",
                 str(self.frontend_config.port),
-                "--router-mode",
-                self.frontend_config.router_mode,
             ],
             stdout=None,
             stderr=None,
