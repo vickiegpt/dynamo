@@ -420,6 +420,24 @@ class OverlapScores:
 
     ...
 
+class WorkerDp:
+    """
+    Worker data parallel information containing worker ID and optional DP rank.
+    """
+
+    worker_id: int
+    dp_rank: Optional[int]
+
+    def __init__(self, worker_id: int, dp_rank: Optional[int] = None) -> None:
+        """
+        Create a WorkerDp instance.
+
+        Args:
+            worker_id: The worker ID
+            dp_rank: Optional data parallel rank
+        """
+        ...
+
 class KvIndexer:
     """
     A KV Indexer that tracks KV Events emitted by workers. Events include add_block and remove_block.
