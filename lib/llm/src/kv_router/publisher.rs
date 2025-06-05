@@ -205,11 +205,11 @@ async fn start_event_processor<P: EventPublisher + Send + Sync + 'static>(
 
                 // Encapsulate in a router event and publish.
                 let event = data.kv_cache_event;
-                let dp_rank = data.dp_rank.unwrap_or(0);
+                let dp_rank = data.dp_rank;
 
                 let router_event = RouterEvent::new((worker_id, dp_rank), event);
                 if let Err(e) = publisher.publish(KV_EVENT_SUBJECT, &router_event).await {
-                    tracing::error!("Failed to publish event for worker_id: {}, dp_rank: {}, error: {}", worker_id, dp_rank, e);
+                    tracing::error!("Failed to publish event for worker_id: {}, dp_rank: {:?}, error: {}", worker_id, dp_rank, e);
                 }
             }
         }
