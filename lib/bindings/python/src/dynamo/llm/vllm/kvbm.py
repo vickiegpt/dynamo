@@ -1,14 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
-from typing import List, Optional, Protocol, runtime_checkable
+from typing import List
 
-from vllm.distributed.kv_events import KVCacheEvent
 from vllm.logger import init_logger
-from vllm.v1.core.kv_cache_utils import KVCacheBlock, hash_request_tokens, KVCacheBlocksProtocol
-from vllm.v1.kv_cache_interface import KVCacheConfig
-from vllm.v1.metrics.stats import PrefixCacheStats
-from vllm.v1.request import Request, RequestStatus
+from vllm.v1.core.kv_cache_utils import KVCacheBlock
 
 from dynamo._core import DynamoVllmKvBlockList
 
@@ -37,9 +32,7 @@ class KvbmCacheBlocks:
         return [[block.block_id for block in self.blocks]]
 
     def get_unhashed_block_ids(self) -> list[int]:
-        return [
-            block.block_id for block in self.blocks if block.block_hash is None
-        ]
+        return [block.block_id for block in self.blocks if block.block_hash is None]
 
     def __add__(self, other: "KvbmCacheBlocks") -> "KvbmCacheBlocks":
         """Adds two KVCacheBlocks instances."""
