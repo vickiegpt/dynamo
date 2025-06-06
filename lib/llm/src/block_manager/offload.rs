@@ -1366,4 +1366,45 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_offload_1_block() -> Result<()> {
+        let (offload_manager, device_pool, host_pool, disk_pool) =
+            build_pools(1, Some(1), Some(1), None)?;
+
+        let device_pool = device_pool.as_ref().unwrap();
+        let host_pool = host_pool.as_ref().unwrap();
+        let disk_pool = disk_pool.as_ref().unwrap();
+
+        let device_block = completed_block(device_pool, [0; 4]).await?;
+        populate_block(&device_block, 42)?;
+
+        let immutable_device_block = device_pool
+            .register_blocks(vec![device_block])
+            .await?
+            .into_iter()
+            .next()
+            .unwrap();
+
+        offload_manager.offload(&immutable_device_block, 0).await?;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let host_blocks = host_pool
+            .match_sequence_hashes(vec![immutable_device_block.sequence_hash()?].as_slice())
+            .await?;
+        assert_eq!(host_blocks.len(), 1);
+
+        offload_manager.offload(&host_blocks[0], 0).await?;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let disk_blocks = disk_pool
+            .match_sequence_hashes(vec![immutable_device_block.sequence_hash()?].as_slice())
+            .await?;
+        assert_eq!(disk_blocks.len(), 1);
+        check_block_contents(&host_blocks[0], &disk_blocks[0], 42)?;
+
+        Ok(())
+    }
 }

@@ -110,6 +110,7 @@ where
         .block_data(private::PrivateToken)
         .storage_type()
         .nixl_mem_type();
+
     let dst_mem_type = dst
         .first()
         .unwrap()
@@ -134,7 +135,13 @@ where
         None,
     )?;
 
+    let start = std::time::Instant::now();
     let still_pending = nixl_agent.post_xfer_req(&xfer_req, None)?;
+    println!("XFER REQ POSTED IN {:?}", start.elapsed());
+
+    let start = std::time::Instant::now();
+    let _ = nixl_agent.get_xfer_status(&xfer_req)?;
+    println!("XFER STATUS CHECKED IN {:?}", start.elapsed());
 
     if still_pending {
         Ok(Box::new(Box::pin(async move {
@@ -146,7 +153,7 @@ where
             loop {
                 match nixl_agent.get_xfer_status(&xfer_req) {
                     Ok(false) => break, // Transfer is complete.
-                    Ok(true) => tokio::time::sleep(std::time::Duration::from_millis(5)).await, // Transfer is still in progress.
+                    Ok(true) => tokio::time::sleep(std::time::Duration::from_millis(1)).await, // Transfer is still in progress.
                     Err(e) => {
                         tracing::error!("Error getting transfer status: {}", e);
                         break;

@@ -37,6 +37,8 @@ pub use crate::block_manager::storage::{CudaAccessible, Local, Remote};
 pub use async_trait::async_trait;
 pub use context::TransferContext;
 
+pub use nixl::write_blocks_to;
+
 /// A block that can be the target of a write
 pub trait Writable {}
 
