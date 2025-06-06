@@ -122,6 +122,6 @@ pred_decode_thpt_per_gpu = self.decode_interpolator.find_best_throughput_per_gpu
 next_num_d = math.ceil(next_num_req * next_osl / self.args.adjustment_interval / pred_decode_thpt_per_gpu / self.args.decode_engine_num_gpu)
 ```
 
-### 5. Scale
+### 5. Scaling
 
 Finally, SLA planner applies the change by scaling up/down the number of prefill and decode workers to the calculated number of replica in the next interval. 
