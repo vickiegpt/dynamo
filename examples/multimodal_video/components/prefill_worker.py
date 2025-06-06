@@ -15,10 +15,11 @@
 
 
 import asyncio
+import json
 import logging
 import os
 import signal
-import sys
+from typing import Optional
 
 import connect
 import torch
@@ -27,7 +28,7 @@ from pydantic import BaseModel
 from utils.logging import check_required_workers
 from utils.nixl import NixlMetadataStore
 from utils.prefill_queue import PrefillQueue
-from utils.protocol import EncodeRequest, EncodeResponse
+from utils.protocol import EncodeRequest
 from utils.vllm import parse_vllm_args
 from vllm.entrypoints.openai.api_server import (
     build_async_engine_client_from_engine_args,
@@ -39,10 +40,21 @@ from dynamo.sdk import async_on_start, depends, dynamo_context, endpoint, servic
 
 logger = logging.getLogger(__name__)
 
-# Constants for the shape and dtype of the embeddings tensor.
-EMBEDDINGS_SHAPE = (1, 577, 4096)
-EMBEDDINGS_DTYPE = torch.float16
-EMBEDDINGS_DEVICE = "cuda"
+# Constants for the shape and dtype of the INCOMING FRAMES tensor.
+# IMPORTANT ASSUMPTION: EncodeWorker must provide frames of this fixed shape and dtype.
+# Example: 8 frames, each 224x224 RGB.
+NUM_SAMPLED_FRAMES = 8  # Should match VllmEncodeWorker's num_frames_to_sample
+FRAME_HEIGHT = 336
+FRAME_WIDTH = 336
+FRAME_CHANNELS = 3
+INCOMING_FRAMES_SHAPE = (
+    NUM_SAMPLED_FRAMES,
+    FRAME_HEIGHT,
+    FRAME_WIDTH,
+    FRAME_CHANNELS,
+)
+INCOMING_FRAMES_DTYPE = torch.uint8
+INCOMING_FRAMES_DEVICE = "cuda"
 
 
 class RequestType(BaseModel):
@@ -62,9 +74,14 @@ class VllmPrefillWorker:
     def __init__(self):
         class_name = self.__class__.__name__
         self.engine_args = parse_vllm_args(class_name, "")
+        self.model_path = self.engine_args.model  # Store model path for AutoProcessor
         self._loaded_metadata = set()
         self.initialized = False
         self.min_workers = 1
+
+        # IMPORTANT: PrefillWorker MUST remove dummy tokens before passing to vLLM
+        # Only the actual video tokens (32000) should remain as placeholders for multimodal embeddings
+
         if self.engine_args.enable_chunked_prefill is not False:
             logger.info("Chunked prefill is not supported yet, setting to False")
             self.engine_args.enable_chunked_prefill = False
@@ -99,6 +116,13 @@ class VllmPrefillWorker:
             self.engine_client = await self._engine_context.__aenter__()
         else:
             raise RuntimeError("Failed to initialize engine client")
+
+        # NOTE: PrefillWorker no longer needs AutoProcessor since it uses the original
+        # tokenized prompt from DecodeWorker instead of creating its own.
+        logger.info(
+            "PrefillWorker: Skipping AutoProcessor initialization - using original tokens from DecodeWorker"
+        )
+
         runtime = dynamo_context["runtime"]
 
         enc_comp_ns, enc_comp_name = VllmEncodeWorker.dynamo_address()  # type: ignore
@@ -112,34 +136,49 @@ class VllmPrefillWorker:
         self._connector = connect.Connector(runtime=runtime, namespace=enc_comp_ns)
         await self._connector.initialize()
 
-        # Create a longer-lived buffer for receiving the image embeddings.
-        embeddings = torch.empty(
-            EMBEDDINGS_SHAPE,
-            dtype=EMBEDDINGS_DTYPE,
-            device=EMBEDDINGS_DEVICE,
+        frames_tensor = torch.empty(
+            INCOMING_FRAMES_SHAPE,
+            dtype=INCOMING_FRAMES_DTYPE,
+            device=INCOMING_FRAMES_DEVICE,
         )
-        descriptor = connect.Descriptor(embeddings)
-        # Register the descriptor w/ NIXL (this is optional, if not done here the connect subsytem will take care of this automatically).
+        descriptor = connect.Descriptor(frames_tensor)
         descriptor.register_memory(self._connector)
-        self._embeddings_descriptor = (embeddings, descriptor)
+        self._frames_descriptor = (frames_tensor, descriptor)
 
         await check_required_workers(self.encode_worker_client, self.min_workers)
 
         metadata = self.engine_client.nixl_metadata
         self._metadata_store = NixlMetadataStore("dynamo", runtime)
         await self._metadata_store.put(metadata.engine_id, metadata)
+
+        logger.info(
+            "PrefillWorker: Creating prefill_queue_handler task."
+        )  # Log before task creation
         task = asyncio.create_task(self.prefill_queue_handler())
 
         def prefill_queue_handler_cb(fut):
+            logger.info(
+                f"PrefillWorker: prefill_queue_handler_cb invoked for task: {fut}"
+            )
             try:
-                fut.result()
-                logger.info("prefill queue handler exited successfully")
+                fut.result()  # This will raise an exception if the task failed
+                logger.info(
+                    "PrefillWorker: prefill_queue_handler task exited successfully (completed normally)."
+                )
+            except asyncio.CancelledError:
+                logger.info("PrefillWorker: prefill_queue_handler task was cancelled.")
             except Exception as e:
-                logger.error(f"[ERROR] prefill queue handler failed: {e!r}")
-                sys.exit(1)
+                logger.error(
+                    f"PrefillWorker: prefill_queue_handler task failed with exception: {e!r}",
+                    exc_info=True,
+                )
+                # Consider a more robust error handling/restart mechanism if needed
+                # sys.exit(1) # Avoid exiting the whole worker process from a callback if possible
 
         task.add_done_callback(prefill_queue_handler_cb)
-        logger.info("Initialization complete.")
+        logger.info(
+            "PrefillWorker: async_init complete, prefill_queue_handler task created and callback added."
+        )
 
     def shutdown_vllm_engine(self, signum, frame):
         """Shutdown the background loop"""
@@ -154,7 +193,7 @@ class VllmPrefillWorker:
         logger.info("Shutdown complete.")
 
     async def prefill_queue_handler(self):
-        logger.info("Prefill queue handler entered")
+        logger.info("PrefillWorker: Prefill queue handler task started.")
         prefill_queue_nats_server = os.getenv("NATS_SERVER", "nats://localhost:4222")
         prefill_queue_stream_name = (
             self.engine_args.served_model_name
@@ -162,112 +201,345 @@ class VllmPrefillWorker:
             else "vllm"
         )
         logger.info(
-            f"Prefill queue: {prefill_queue_nats_server}:{prefill_queue_stream_name}"
+            f"PrefillWorker: Connecting to prefill queue: {prefill_queue_nats_server}, stream: '{prefill_queue_stream_name}'"
         )
         self.initialized = True
-        # TODO: integrate prefill_queue to a dynamo endpoint
-        async with PrefillQueue.get_instance(
-            nats_server=prefill_queue_nats_server,
-            stream_name=prefill_queue_stream_name,
-        ) as prefill_queue:
-            logger.info("prefill queue handler started")
-            while True:
-                # TODO: this might add a small overhead to pull prefill from nats
-                # need to test and check how much overhead it is
-                prefill_request = await prefill_queue.dequeue_prefill_request()
-                if prefill_request is not None:
-                    logger.info(
-                        f"Dequeued prefill request: {prefill_request.request_id}"
+        try:
+            async with PrefillQueue.get_instance(
+                nats_server=prefill_queue_nats_server,
+                stream_name=prefill_queue_stream_name,
+            ) as prefill_queue:
+                logger.info(
+                    f"PrefillWorker: PrefillQueue instance obtained for stream '{prefill_queue_stream_name}'. Entering dequeue loop."
+                )
+                while True:
+                    logger.debug(
+                        f"PrefillWorker: Attempting to dequeue prefill request from stream '{prefill_queue_stream_name}'..."
                     )
-                    async for _ in self.generate(prefill_request):
-                        pass
+                    prefill_request: Optional[RemotePrefillRequest] = None
+                    try:
+                        prefill_request = (
+                            await prefill_queue.dequeue_prefill_request()
+                        )  # This might block
+                    except Exception as e:
+                        logger.error(
+                            f"PrefillWorker: Exception during dequeue_prefill_request: {e}",
+                            exc_info=True,
+                        )
+                        await asyncio.sleep(5)  # Wait a bit before retrying loop
+                        continue
+
+                    if prefill_request is not None:
+                        logger.info(
+                            f"PrefillWorker: Dequeued prefill request: {prefill_request.request_id}, engine_id: {prefill_request.engine_id}, multimodal_data_source: {prefill_request.multimodal_data_source}"
+                        )
+                        try:
+                            async for _ in self.generate(prefill_request):
+                                pass  # The generate method now handles its own logging for yield
+                            logger.info(
+                                f"PrefillWorker: Successfully processed prefill request {prefill_request.request_id} through self.generate."
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"PrefillWorker: Error processing prefill request {prefill_request.request_id} in self.generate: {e}",
+                                exc_info=True,
+                            )
+                    else:
+                        # This path is taken if dequeue_prefill_request returns None (e.g., on timeout if implemented, or if stream is closed)
+                        logger.debug(
+                            "PrefillWorker: No prefill request dequeued (dequeue_prefill_request returned None). Waiting before next attempt."
+                        )
+                        await asyncio.sleep(
+                            0.1
+                        )  # Small delay before next dequeue attempt if it returns None quickly
+        except Exception as e:
+            logger.error(
+                f"PrefillWorker: Prefill queue handler CRASHED: {e}", exc_info=True
+            )
+            # Optionally, re-raise or handle shutdown if NATS connection is permanently lost
+            # For now, it will exit the handler, and the worker might become non-functional for prefills.
+            # Consider adding logic here to attempt reconnection or signal a critical failure.
+            # sys.exit(1) # Or a more graceful shutdown
 
     async def generate(self, request: RemotePrefillRequest):
-        if request.multimodal_data_source["image_url"] is None:
-            raise ValueError("No image url provided for prefill request")
+        # Assuming multimodal_data_source["image_url"] from DecodeWorker now contains the video_url.
+        # Or, if DecodeWorker changed multimodal_data_source to {"video_url": ...}, adapt here.
+        # For now, sticking to "image_url" as the key from RemotePrefillRequest based on previous context.
+        video_url = request.multimodal_data_source.get(
+            "video_url"
+        ) or request.multimodal_data_source.get("image_url")
+
+        if video_url is None:
+            raise ValueError(
+                "No video_url or image_url provided in multimodal_data_source for prefill request"
+            )
 
         request_id = request.request_id
         engine_id = request.engine_id
-        image_url = request.multimodal_data_source["image_url"]
 
         logger.info(
-            f"Received prefill request {{ id: {request_id}, engine_id: {engine_id} }}."
+            f"PrefillWorker {request_id}: Received prefill request {{ engine_id: {engine_id} }} for video_url: {video_url}."
         )
 
-        # Extract the pre-allocated, reusable image embeddings tensor and its descriptor.
-        # Doing this avoids unnessesary memory de/registration with NIXL.
-        embeddings, descriptor = self._embeddings_descriptor
+        raw_frames_tensor, descriptor = self._frames_descriptor
 
-        # Create a new writable operation from the descriptor.
+        logger.info(
+            f"PrefillWorker {request_id}: Requesting frames from EncodeWorker for {video_url}"
+        )
         with self._connector.create_writable(descriptor) as writable:
-            # Extract serialized metadata about the operation from the writable operation,
-            # and use it to create a new EncodeRequest.
             encode_generator = await self.encode_worker_client.round_robin(
                 EncodeRequest(
                     request_id=request_id,
-                    image_url=image_url,
+                    image_url=video_url,
                     serialized_request=writable.to_serialized(),
                 ).model_dump_json()
             )
-            async for encode_response in encode_generator:
-                encode_output = EncodeResponse.model_validate_json(
-                    encode_response.data(),
+            async for encode_response_json in encode_generator:
+                encode_response_data = json.loads(encode_response_json.data())
+                logger.info(  # Changed to info for visibility
+                    f"PrefillWorker {request_id}: Received confirmation from encode worker: {{ id: {encode_response_data.get('request_id')} }}."
                 )
-                logger.debug(
-                    f"Received response: {{ id: {encode_output.request_id} }}."
-                )
+        await writable.wait_for_completion()  # Ensure frames are written
+        logger.info(
+            f"PrefillWorker {request_id}: Frames received from EncodeWorker, shape: {raw_frames_tensor.shape}, dtype: {raw_frames_tensor.dtype}"
+        )
 
-            # Wait for the write operation to complete.
-            # This will block until the write operation is complete.
-            # This await should be a no-op since we've already received a response from the encode worker.
-            await writable.wait_for_completion()
-            # At this point, the `embeddings` tensor is filled with the image embeddings from the remote encode worker.
+        # ---- USE ORIGINAL TOKENIZED PROMPT FROM DECODE WORKER ----
+        # The DecodeWorker has already done the correct token expansion with dummy tokens.
+        # Use the original prompt_token_ids instead of creating a new prompt.
 
-            sampling_params = request.sampling_params
-            sampling_params.max_tokens = 1
-            sampling_params.min_tokens = 1
-
-            remote_prefill_params = RemotePrefillParams(
-                is_remote_decode=True,
-                decode_block_ids=request.block_ids,
-                decode_engine_id=engine_id,
-                decode_computed_block_ids=request.computed_block_ids,
+        if not request.prompt_token_ids:
+            logger.error(
+                f"PrefillWorker {request_id}: No prompt_token_ids provided in request!"
+            )
+            raise ValueError(
+                "PrefillWorker requires prompt_token_ids from DecodeWorker"
             )
 
-            # TODO check if metadata has changed
-            # and reload - currently only loading once
-            if engine_id not in self._loaded_metadata:
-                remote_metadata = await self._metadata_store.get(request.engine_id)
-                await self.engine_client.add_remote_nixl_metadata(remote_metadata)
+        logger.info(
+            f"PrefillWorker {request_id}: Using original prompt_token_ids from DecodeWorker (length: {len(request.prompt_token_ids)})"
+        )
+        logger.info(
+            f"PrefillWorker {request_id}: First 20 tokens: {request.prompt_token_ids[:20]}"
+        )
+        logger.info(
+            f"PrefillWorker {request_id}: Last 10 tokens: {request.prompt_token_ids[-10:]}"
+        )
+
+        # CRITICAL FIX: Remove dummy tokens that were added after each video token
+        # Based on the proven approach in examples/multimodal/components/prefill_worker.py
+        # but adapted for multiple video tokens instead of just one image token
+        DUMMY_TOKEN_ID = 0
+        VIDEO_TOKEN_ID = 32000
+        DUMMY_TOKENS_PER_FRAME = 144  # From DecodeWorker: embedding_size
+
+        # Count tokens before filtering
+        original_length = len(request.prompt_token_ids)
+        video_count_before = sum(
+            1 for token in request.prompt_token_ids if token == VIDEO_TOKEN_ID
+        )
+
+        logger.info(
+            f"PrefillWorker {request_id}: Removing dummy tokens after {video_count_before} video tokens"
+        )
+        logger.info(f"  Original length: {original_length}")
+
+        # ROBUST APPROACH: Find all video token positions first, then remove dummy tokens in reverse order
+        # This avoids position shifting issues and ensures all video tokens are preserved
+
+        # Step 1: Find all video token positions
+        video_token_positions = []
+        for i, token in enumerate(request.prompt_token_ids):
+            if token == VIDEO_TOKEN_ID:
+                video_token_positions.append(i)
+
+        logger.info(
+            f"PrefillWorker {request_id}: Found video tokens at positions: {video_token_positions}"
+        )
+
+        if len(video_token_positions) != video_count_before:
+            logger.error(
+                f"  Mismatch: expected {video_count_before} video tokens, found {len(video_token_positions)}"
+            )
+
+        # Step 2: Remove dummy tokens in REVERSE order to avoid position shifting
+        current_prompt_tokens = list(request.prompt_token_ids)  # Work with a copy
+
+        for i, video_pos in enumerate(reversed(video_token_positions)):
+            video_token_number = (
+                len(video_token_positions) - i
+            )  # For logging: count down from 8 to 1
+            dummy_start_index = video_pos + 1
+            dummy_end_index = dummy_start_index + DUMMY_TOKENS_PER_FRAME
+
+            logger.info(
+                f"  Processing video token {video_token_number}/{video_count_before} at position {video_pos}"
+            )
+            logger.info(
+                f"    Removing dummy tokens from index {dummy_start_index} to {dummy_end_index - 1}"
+            )
+
+            # Verify we're removing the right tokens (should be zeros)
+            if dummy_end_index <= len(current_prompt_tokens):
+                dummy_tokens_to_remove = current_prompt_tokens[
+                    dummy_start_index:dummy_end_index
+                ]
+                non_dummy_count = sum(
+                    1 for t in dummy_tokens_to_remove if t != DUMMY_TOKEN_ID
+                )
+                if non_dummy_count > 0:
+                    logger.warning(
+                        f"    Found {non_dummy_count} non-dummy tokens in removal range!"
+                    )
+                    logger.warning(
+                        f"    Tokens being removed: {dummy_tokens_to_remove[:10]}..."
+                    )  # Show first 10
+
+            # Remove the dummy tokens (keep everything before and after the dummy range)
+            if dummy_end_index <= len(current_prompt_tokens):
+                current_prompt_tokens = (
+                    current_prompt_tokens[:dummy_start_index]
+                    + current_prompt_tokens[dummy_end_index:]
+                )
                 logger.info(
-                    f"Loaded nixl metadata from engine {engine_id} into "
-                    f"engine {self.engine_client.nixl_metadata.engine_id}"
+                    f"    Token sequence length after removal: {len(current_prompt_tokens)}"
                 )
-                self._loaded_metadata.add(engine_id)
+            else:
+                logger.warning(
+                    f"    Dummy end index {dummy_end_index} exceeds sequence length {len(current_prompt_tokens)}, skipping removal"
+                )
 
-            # To make sure the decode worker can pre-allocate the memory with the correct size for the prefill worker to transfer the kv cache,
-            # some placeholder dummy tokens were inserted based on the embedding size in the worker.py.
-            # The structure of the prompt is "\nUSER: <image> <dummy_tokens>\n<user_prompt>\nASSISTANT:", need to remove the dummy tokens after the image token.
-            IMAGE_TOKEN_ID = 32000
-            embedding_size = embeddings.shape[1]
-            padding_size = embedding_size - 1
-            image_token_index = request.prompt_token_ids.index(IMAGE_TOKEN_ID)
-            dummy_token_index = image_token_index + 1
-            prompt_token_ids = (
-                request.prompt_token_ids[:dummy_token_index]
-                + request.prompt_token_ids[dummy_token_index + padding_size :]
+        filtered_prompt_token_ids = current_prompt_tokens
+
+        # Count tokens after filtering
+        filtered_length = len(filtered_prompt_token_ids)
+        video_count_after = sum(
+            1 for token in filtered_prompt_token_ids if token == VIDEO_TOKEN_ID
+        )
+
+        logger.info(f"PrefillWorker {request_id}: Token filtering results:")
+        logger.info(
+            f"  Filtered length: {filtered_length} (video: {video_count_after})"
+        )
+        logger.info(f"  Removed {original_length - filtered_length} dummy tokens")
+        logger.info(
+            f"  Expected removal: {video_count_before * DUMMY_TOKENS_PER_FRAME}"
+        )
+
+        # VERIFICATION: Check that we have the expected number of video tokens
+        if video_count_after != video_count_before:
+            logger.error(
+                f"  CRITICAL: Lost video tokens! Expected {video_count_before}, got {video_count_after}"
             )
 
-            async for _ in self.engine_client.generate(
-                request_id=request_id,
-                prompt=TokensPrompt(
-                    prompt_token_ids=prompt_token_ids,
-                    multi_modal_data={"image": embeddings},
-                ),
-                sampling_params=sampling_params,
-                remote_prefill_params=remote_prefill_params,
-            ):
-                yield
+        # DEBUG: Show the exact filtered token sequence
+        logger.info(
+            f"PrefillWorker {request_id}: Filtered token sequence (first 30): {filtered_prompt_token_ids[:30]}"
+        )
+        logger.info(
+            f"PrefillWorker {request_id}: Filtered token sequence (last 20): {filtered_prompt_token_ids[-20:]}"
+        )
+
+        # DEBUG: Show where the video tokens are positioned in the filtered sequence
+        video_positions = [
+            i for i, t in enumerate(filtered_prompt_token_ids) if t == VIDEO_TOKEN_ID
+        ]
+        logger.info(
+            f"PrefillWorker {request_id}: Video token positions in filtered sequence: {video_positions}"
+        )
+
+        # FINAL VERIFICATION: Ensure no dummy tokens remain
+        remaining_zeros = sum(1 for t in filtered_prompt_token_ids if t == 0)
+        if remaining_zeros > 0:
+            logger.warning(
+                f"PrefillWorker {request_id}: WARNING: {remaining_zeros} zero tokens remain in filtered sequence!"
+            )
+
+        # DEEP DEBUG: Check what tokens vLLM might consider as placeholders
+        # Based on vLLM source, let's check for various special token IDs
+        potential_placeholder_tokens = {}
+        for token_id in set(filtered_prompt_token_ids):
+            count = sum(1 for t in filtered_prompt_token_ids if t == token_id)
+            # Check for common special tokens that might be placeholders
+            if token_id in [0, 32000, 32001, 32002, 32003, 32004] or token_id >= 32000:
+                potential_placeholder_tokens[token_id] = count
+
+        logger.info(
+            f"PrefillWorker {request_id}: Potential placeholder tokens found: {potential_placeholder_tokens}"
+        )
+
+        # Calculate what vLLM might count as placeholders
+        total_potential_placeholders = sum(potential_placeholder_tokens.values())
+        logger.info(
+            f"PrefillWorker {request_id}: Total potential placeholders: {total_potential_placeholders}"
+        )
+
+        # Show exact token distribution
+        token_distribution = {}
+        for token in filtered_prompt_token_ids:
+            token_distribution[token] = token_distribution.get(token, 0) + 1
+        logger.info(
+            f"PrefillWorker {request_id}: Full token distribution: {dict(sorted(token_distribution.items()))}"
+        )
+
+        # Check if we have any tokens that might be misinterpreted
+        high_value_tokens = [
+            token for token in filtered_prompt_token_ids if token >= 30000
+        ]
+        logger.info(
+            f"PrefillWorker {request_id}: High-value tokens (>=30000): {set(high_value_tokens)} (count: {len(high_value_tokens)})"
+        )
+
+        # Use TokensPrompt with the filtered token IDs and video data
+        prefill_vllm_input = TokensPrompt(
+            prompt_token_ids=filtered_prompt_token_ids,
+            multi_modal_data={"video": raw_frames_tensor.cpu().numpy()},
+        )
+        logger.info(
+            f"PrefillWorker {request_id}: Constructed TokensPrompt input with {len(filtered_prompt_token_ids)} tokens and video shape: {raw_frames_tensor.shape}"
+        )
+        # ---- END ORIGINAL TOKENIZED PROMPT USAGE ----
+
+        sampling_params = (
+            request.sampling_params
+        )  # Use sampling_params from the original request
+        sampling_params.max_tokens = 1
+        sampling_params.min_tokens = 1
+
+        remote_prefill_params = RemotePrefillParams(
+            is_remote_decode=True,
+            decode_block_ids=request.block_ids,
+            decode_engine_id=engine_id,
+            decode_computed_block_ids=request.computed_block_ids,
+        )
+
+        if engine_id not in self._loaded_metadata:
+            remote_metadata = await self._metadata_store.get(request.engine_id)
+            await self.engine_client.add_remote_nixl_metadata(remote_metadata)
+            logger.info(
+                f"Loaded nixl metadata from engine {engine_id} into "
+                f"engine {self.engine_client.nixl_metadata.engine_id}"
+            )
+            self._loaded_metadata.add(engine_id)
+
+        logger.info(
+            f"PrefillWorker {request_id}: Calling its engine_client.generate for prefill with TokensPrompt."
+        )
+
+        async for prefill_output in self.engine_client.generate(
+            prefill_vllm_input,  # Use the TokensPrompt with original token IDs
+            sampling_params=sampling_params,
+            request_id=request_id,  # Still use original request_id for logging/tracing
+            remote_prefill_params=remote_prefill_params,  # This contains decode_block_ids etc.
+        ):
+            logger.info(
+                f"PrefillWorker {request_id}: engine_client.generate yielded an item: {prefill_output}"
+            )  # Log if anything is yielded
+            yield
+
+        logger.info(
+            f"PrefillWorker {request_id}: Finished processing prefill request and KV cache transfer should be initiated/completed."
+        )
 
     @endpoint()
     async def mock(self, req: RequestType):

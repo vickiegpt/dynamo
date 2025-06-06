@@ -29,7 +29,7 @@ import connect
 import httpx
 import numpy as np
 import torch
-from transformers import LlavaNextVideoForConditionalGeneration, LlavaNextVideoProcessor
+import torch.nn.functional as F
 from utils.protocol import EncodeRequest
 from utils.vllm import parse_vllm_args
 
@@ -51,18 +51,6 @@ class VllmEncodeWorker:
     def __init__(self) -> None:
         class_name = self.__class__.__name__
         self.engine_args = parse_vllm_args(class_name, "")
-        self.MODEL_ID = self.engine_args.model
-
-        self.video_processor = LlavaNextVideoProcessor.from_pretrained(self.MODEL_ID)
-        self.video_model = LlavaNextVideoForConditionalGeneration.from_pretrained(
-            self.MODEL_ID,
-            torch_dtype=torch.float16,
-            low_cpu_mem_usage=True,
-            device_map="auto",
-        ).eval()
-        logger.info(
-            f"Model {self.MODEL_ID} loaded on device: {self.video_model.device}"
-        )
 
         self._video_content_cache: dict[str, BytesIO] = {}
         self._cache_queue: Queue[str] = Queue(maxsize=CACHE_SIZE_MAXIMUM)
@@ -184,6 +172,7 @@ class VllmEncodeWorker:
                         f"Empty response content from video URL: {video_url}"
                     )
                 video_data = BytesIO(response.content)
+                video_data.seek(0)
                 logger.info(
                     f"Video downloaded from {video_url}, size: {len(response.content)} bytes."
                 )
@@ -219,7 +208,6 @@ class VllmEncodeWorker:
                 # Store the BytesIO object directly; it will be seek(0)'d when retrieved
                 self._video_content_cache[video_url_lower] = video_data
                 self._cache_queue.put(video_url_lower)
-                video_data.seek(0)  # Ensure it's ready for the first consumer (av.open)
 
             return video_data
 
@@ -251,8 +239,6 @@ class VllmEncodeWorker:
                 f"Request {request_id}: 'video_url' or 'image_url' not provided."
             )
             raise ValueError("'video_url' or 'image_url' is required for encoding.")
-
-        prompt_text = getattr(request, "prompt_text", "Describe this video in detail.")
 
         logger.info(
             f"Received encode request: {{ id: {request_id}, video_url: '{video_url[:100]}...' }}"
@@ -310,30 +296,34 @@ class VllmEncodeWorker:
             if total_frames > 0:
                 if total_frames < self.num_frames_to_sample:
                     logger.warning(
-                        f"Video frames ({total_frames}) < samples ({self.num_frames_to_sample}). Using all available."
+                        f"Video frames ({total_frames}) < samples ({self.num_frames_to_sample}). Using all {total_frames} available frames."
                     )
                     indices = np.arange(0, total_frames).astype(int)
                 else:
                     indices = np.linspace(
                         0, total_frames - 1, self.num_frames_to_sample, dtype=int
                     )
-                indices = np.unique(indices)
-                if (
-                    len(indices) == 0 and total_frames > 0
-                ):  # Safety for linspace oddities with few frames
-                    indices = (
-                        np.array([0])
-                        if total_frames == 1
-                        else np.arange(
-                            0, min(self.num_frames_to_sample, total_frames)
-                        ).astype(int)
-                    )
-
-            else:  # total_frames is 0 (likely a stream), sample by count
+            else:  # total_frames is 0 (likely a stream), sample by count.
                 logger.warning(
-                    f"Video {video_url} frame count is 0. Sampling {self.num_frames_to_sample} frames by index."
+                    f"Video {video_url} frame count is 0. Attempting to sample {self.num_frames_to_sample} frames by index. This might fail if stream is too short."
                 )
                 indices = np.arange(0, self.num_frames_to_sample).astype(int)
+
+            # Ensure indices are unique, especially after linspace for small numbers.
+            indices = np.unique(indices)
+
+            if (
+                len(indices) == 0 and total_frames > 0
+            ):  # Safety for linspace oddities with few frames
+                # If unique resulted in empty but there are frames, sample at least one or up to num_frames_to_sample
+                actual_samples = min(self.num_frames_to_sample, total_frames)
+                indices = np.arange(0, actual_samples).astype(int)
+            elif len(indices) == 0 and total_frames == 0:
+                # If indices is empty and total_frames is 0, this means num_frames_to_sample might be 0 or indices logic failed.
+                # This case implies we might not be able to sample any frames.
+                # _read_video_pyav handles empty indices with non-empty video by trying to read the first frame.
+                # If indices is empty here due to num_frames_to_sample=0, _read_video_pyav will return empty.
+                pass  # Let _read_video_pyav handle this.
 
             logger.info(f"Selected frame indices for {video_url}: {indices.tolist()}")
 
@@ -345,91 +335,45 @@ class VllmEncodeWorker:
                 )
 
             logger.info(
-                f"Successfully extracted {len(clip_np) if clip_np.ndim > 1 and clip_np.shape[0] > 0 else 0} frames for {video_url}."
+                f"Successfully extracted {len(clip_np) if clip_np.ndim > 1 and clip_np.shape[0] > 0 else 0} frames for {video_url} with original shape {clip_np.shape}."
             )
 
-            conversation = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt_text},
-                        {"type": "video"},
-                    ],
-                }
-            ]
-            logger.info(
-                f"Applying chat template for request {request_id} with prompt: '{prompt_text}'"
-            )
-            prompt_for_processor = self.video_processor.apply_chat_template(
-                conversation, add_generation_prompt=True
-            )
+            # Define target dimensions (should match VllmDecodeWorker's INCOMING_FRAMES_SHAPE)
+            TARGET_FRAME_HEIGHT = 336
+            TARGET_FRAME_WIDTH = 336
+            # self.num_frames_to_sample is already the target number of frames
 
-            processed_inputs = None
-            if clip_np.size > 0:  # We have video frames
-                logger.info(
-                    f"Req {request_id}: Processing text and {clip_np.shape[0]} video frames."
-                )
-                processed_inputs = self.video_processor(
-                    text=prompt_for_processor,
-                    videos=[clip_np],
-                    padding=True,
-                    return_tensors="pt",
-                )
-            else:
-                raise ValueError(
-                    f"Request {request_id}: Video clip is unexpectedly empty despite requesting {self.num_frames_to_sample} frames."
-                )
+            # Convert NumPy clip (T, H, W, C) to PyTorch tensor
+            frames_tensor_orig_res = torch.from_numpy(clip_np)  # Shape: (T, H, W, C)
 
-            for key, value in processed_inputs.items():
-                if isinstance(value, torch.Tensor):
-                    processed_inputs[key] = value.to(self.video_model.device)
-            logger.info(
-                f"Req {request_id}: Processor output tensor devices: {{ {', '.join([f'{k}: {v.device}' for k, v in processed_inputs.items() if isinstance(v, torch.Tensor)])} }}"
+            # Permute to (T, C, H, W) for interpolate
+            frames_tensor_chw = frames_tensor_orig_res.permute(
+                0, 3, 1, 2
+            ).float()  # Ensure float for interpolate
+
+            # Resize
+            resized_frames_tensor_chw = F.interpolate(
+                frames_tensor_chw,
+                size=(TARGET_FRAME_HEIGHT, TARGET_FRAME_WIDTH),
+                mode="bilinear",
+                align_corners=False,
             )
 
-            pixel_values_for_rdma = processed_inputs.pop(
-                "pixel_values_videos", None
-            )  # Changed key from 'pixel_values'
+            # Permute back to (T, H_new, W_new, C)
+            resized_frames_tensor_hwc = resized_frames_tensor_chw.permute(0, 2, 3, 1)
 
-            if pixel_values_for_rdma is None:
-                # This is unexpected if num_frames_to_sample=8 and clip_np was valid.
-                logger.error(
-                    f"Req {request_id}: 'pixel_values_videos' key not found in processor output or was None. This is unexpected when video frames are processed."
-                )
-                raise ValueError(
-                    f"Request {request_id}: Failed to obtain 'pixel_values_videos' from video processor output. Expected with {self.num_frames_to_sample} frames."
-                )
+            logger.info(f"Resized frames to shape: {resized_frames_tensor_hwc.shape}")
 
-            auxiliary_payload_dict = {}
-            for (
-                key,
-                value,
-            ) in (
-                processed_inputs.items()
-            ):  # Iterate over remaining items (input_ids, attention_mask)
-                if isinstance(value, torch.Tensor):
-                    # Convert tensors to lists for JSON serialization, move to CPU first.
-                    auxiliary_payload_dict[key] = value.cpu().tolist()
-                else:
-                    # For any other non-tensor data (shouldn't be much from processor normally)
-                    auxiliary_payload_dict[key] = value
-
-            serialized_auxiliary_payload = json.dumps(auxiliary_payload_dict)
-
-            # Since an error is raised if pixel_values_for_rdma is None,
-            # tensor_for_descriptor will always be the actual pixel_values.
-            # Ensure the tensor is contiguous and cast to the model's expected dtype.
-            tensor_for_descriptor: torch.Tensor = pixel_values_for_rdma.to(
-                dtype=self.video_model.dtype
+            # Ensure the tensor is contiguous, on CUDA and uint8 for the NIXL buffer.
+            # The values should be in the 0-255 range after interpolation if input was 0-255.
+            tensor_for_descriptor: torch.Tensor = resized_frames_tensor_hwc.to(
+                device="cuda", dtype=torch.uint8
             ).contiguous()
+
             logger.info(
-                f"Req {request_id}: Preparing pixel_values (shape: {tensor_for_descriptor.shape}, "
+                f"Req {request_id}: Preparing raw frames tensor (shape: {tensor_for_descriptor.shape}, "
                 f"dtype: {tensor_for_descriptor.dtype}, device: {tensor_for_descriptor.device}, "
                 f"contiguous: {tensor_for_descriptor.is_contiguous()}) for RDMA."
-            )
-
-            logger.info(
-                f"Req {request_id}: Auxiliary payload for next stage: {serialized_auxiliary_payload[:250]}..."
             )
 
             descriptor = connect.Descriptor(tensor_for_descriptor)
@@ -445,10 +389,9 @@ class VllmEncodeWorker:
             await write_op.wait_for_completion()
             logger.info(f"Req {request_id}: Connector write operation completed.")
 
-            # Yield a dict containing request_id and the auxiliary payload, as DecodeWorker expects this.
+            # Yield a simplified response, assuming EncodeResponse in protocol is adapted
             final_response_data = {
                 "request_id": request.request_id,
-                "serialized_auxiliary_payload": serialized_auxiliary_payload,
             }
             yield json.dumps(final_response_data)
             logger.info(f"Encode request {request_id} processed successfully.")
@@ -486,5 +429,5 @@ class VllmEncodeWorker:
         logger.info("Dynamo connector initialized.")
         await self._init_http_client()
         logger.info(
-            f"{self.__class__.__name__} async_init completed. Model: {self.MODEL_ID} on {self.video_model.device}."
+            f"{self.__class__.__name__} async_init completed. Ready to encode video frames."
         )

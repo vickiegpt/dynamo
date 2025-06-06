@@ -13,9 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 Common:
-  model: llava-hf/llava-1.5-7b-hf
+  model: llava-hf/LLaVA-NeXT-Video-7B-hf
   block-size: 64
-  max-model-len: 4096
+  max-model-len: 8192
   kv-transfer-config: '{"kv_connector":"DynamoNixlConnector"}'
 
 Processor:
@@ -24,8 +24,8 @@ Processor:
 
 VllmDecodeWorker:
   remote-prefill: true
-  conditional-disagg: true
-  max-local-prefill-length: 10
+  conditional-disagg: false
+  max-local-prefill-length: 50
   max-prefill-queue-size: 2
   ServiceArgs:
     workers: 1
