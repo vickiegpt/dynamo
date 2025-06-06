@@ -28,6 +28,7 @@ fn make_agent() -> anyhow::Result<Agent> {
 async fn main() -> anyhow::Result<()> {
     let agent = make_agent()?;
 
+    // 128MB blocks
     let config = LayoutConfig {
         num_blocks: 1,
         num_layers: 64,
@@ -84,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
 
         fut.await;
         println!("Transfer complete! Time: {:?}", start.elapsed());
+        println!();
     }
 
     Ok(())
