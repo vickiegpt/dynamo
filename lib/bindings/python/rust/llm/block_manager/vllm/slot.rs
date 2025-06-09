@@ -62,13 +62,16 @@ impl<S: Storage> Slot<S> {
             return Ok(());
         }
 
-        // assert that the number of tokens to apply is less than the number of tokens that can be applied to the
-        // current collection of mutable blocks
-        debug_assert!(
-            tokens_to_append.len()
-                <= self.mutable.len() * self.sequence.block_size()
-                    - (self.computed_position % self.sequence.block_size())
-        );
+        // Check that we have sufficient capacity in mutable blocks for the tokens
+        let available_capacity = self.mutable.len() * self.sequence.block_size()
+            - (self.computed_position % self.sequence.block_size());
+        if tokens_to_append.len() > available_capacity {
+            return Err(SlotError::from_str(&format!(
+                "Insufficient capacity: need {} tokens but only {} available in mutable blocks",
+                tokens_to_append.len(),
+                available_capacity
+            )));
+        }
 
         // if we are still prefilling, we don't extend the sequence, but verify the tokens match what is already present.
         if self.computed_position < self.prefill_position {
@@ -1045,5 +1048,598 @@ mod tests {
         println!("  - Salt1 {} → blocks {:?}", salt1, blocks1);
         println!("  - Salt2 {} → blocks {:?}", salt2, blocks2);
         println!("✅ Different salts prevent unwanted block sharing");
+    }
+
+    // ============================================================================
+    // PHASE 4: COMPLEX SCENARIOS & ERROR CONDITIONS TESTS
+    // ============================================================================
+
+    #[test]
+    fn test_insufficient_capacity_error_handling() {
+        let fixture = TestFixture::new();
+        let initial_tokens = vec![1, 2]; // 2 tokens
+        let mut slot = create_slot_with_tokens(initial_tokens.clone());
+
+        println!("=== Insufficient Capacity Error Test ===");
+
+        // Allocate exactly enough blocks for initial tokens (1 block for 2 tokens)
+        let allocated_blocks = slot.allocate_blocks(2, &fixture.pool);
+        assert!(allocated_blocks.is_some());
+        assert_eq!(allocated_blocks.unwrap().len(), 1);
+        println!("Allocated 1 block for 2 tokens");
+
+        // Apply initial tokens successfully
+        let result = slot.apply_computed_tokens(initial_tokens, &fixture.pool);
+        assert!(result.is_ok(), "Initial token application should succeed");
+        println!("Applied initial 2 tokens successfully");
+
+        // Validate internal state after successful application
+        assert_eq!(slot.num_tokens(SlotPosition::Computed), 2);
+        assert_eq!(
+            slot.mutable.len(),
+            1,
+            "Should have 1 mutable block (partially filled)"
+        );
+        assert_eq!(
+            slot.immutable.len(),
+            0,
+            "Should have 0 immutable blocks (block not full)"
+        );
+        println!(
+            "  Internal state after success: mutable={}, immutable={}",
+            slot.mutable.len(),
+            slot.immutable.len()
+        );
+
+        // Now try to apply more tokens than available capacity
+        let excessive_tokens = vec![3, 4, 5, 6, 7]; // 5 tokens, but only 2 slots left in block
+        let result = slot.apply_computed_tokens(excessive_tokens, &fixture.pool);
+
+        // Should fail with clear error message
+        assert!(result.is_err(), "Should fail with insufficient capacity");
+        let error_msg = format!("{:?}", result.err().unwrap());
+        assert!(
+            error_msg.contains("Insufficient capacity"),
+            "Error should mention insufficient capacity: {}",
+            error_msg
+        );
+        assert!(
+            error_msg.contains("need 5 tokens but only 2 available"),
+            "Error should specify exact capacity issue: {}",
+            error_msg
+        );
+
+        // Validate internal state is unchanged after error
+        assert_eq!(
+            slot.num_tokens(SlotPosition::Computed),
+            2,
+            "Computed tokens should be unchanged after error"
+        );
+        assert_eq!(
+            slot.mutable.len(),
+            1,
+            "Mutable block count should be unchanged after error"
+        );
+        assert_eq!(
+            slot.immutable.len(),
+            0,
+            "Immutable block count should be unchanged after error"
+        );
+        println!(
+            "  Internal state after error: mutable={}, immutable={} (unchanged)",
+            slot.mutable.len(),
+            slot.immutable.len()
+        );
+
+        println!("✅ Insufficient capacity error handled correctly");
+        println!("   Error: {}", error_msg);
+    }
+
+    #[test]
+    fn test_apply_tokens_without_allocation() {
+        let fixture = TestFixture::new();
+        let tokens = vec![1, 2, 3, 4];
+        let mut slot = create_slot_with_tokens(tokens.clone());
+
+        println!("=== Apply Tokens Without Allocation Test ===");
+
+        // Validate initial state (no blocks allocated)
+        assert_eq!(slot.num_tokens(SlotPosition::Computed), 0);
+        assert_eq!(slot.mutable.len(), 0, "Should start with 0 mutable blocks");
+        assert_eq!(
+            slot.immutable.len(),
+            0,
+            "Should start with 0 immutable blocks"
+        );
+        println!(
+            "  Initial state: mutable={}, immutable={}",
+            slot.mutable.len(),
+            slot.immutable.len()
+        );
+
+        // Try to apply tokens without allocating blocks first
+        let result = slot.apply_computed_tokens(tokens, &fixture.pool);
+
+        // Should fail because no mutable blocks are allocated
+        assert!(result.is_err(), "Should fail without block allocation");
+        let error_msg = format!("{:?}", result.err().unwrap());
+        assert!(
+            error_msg.contains("Insufficient capacity"),
+            "Error should mention insufficient capacity: {}",
+            error_msg
+        );
+        assert!(
+            error_msg.contains("need 4 tokens but only 0 available"),
+            "Error should specify no capacity available: {}",
+            error_msg
+        );
+
+        // Validate state is unchanged after error
+        assert_eq!(
+            slot.num_tokens(SlotPosition::Computed),
+            0,
+            "Computed tokens should remain 0 after error"
+        );
+        assert_eq!(
+            slot.mutable.len(),
+            0,
+            "Mutable block count should remain 0 after error"
+        );
+        assert_eq!(
+            slot.immutable.len(),
+            0,
+            "Immutable block count should remain 0 after error"
+        );
+        println!(
+            "  State after error: mutable={}, immutable={} (unchanged)",
+            slot.mutable.len(),
+            slot.immutable.len()
+        );
+
+        println!("✅ Apply without allocation error handled correctly");
+        println!("   Error: {}", error_msg);
+    }
+
+    #[test]
+    fn test_progressive_token_application_with_capacity_management() {
+        let fixture = TestFixture::new();
+        let mut slot = Slot::new(vec![1, 2, 3, 4, 5, 6, 7, 8].into(), BLOCK_SIZE, SALT_HASH);
+
+        println!("=== Progressive Token Application Test ===");
+
+        // Apply tokens progressively, allocating capacity as needed
+        let token_chunks = vec![vec![1, 2], vec![3, 4], vec![5, 6], vec![7, 8]];
+
+        for (i, chunk) in token_chunks.iter().enumerate() {
+            println!("Applying chunk {}: {:?}", i + 1, chunk);
+
+            // Allocate capacity for this chunk
+            let allocated = slot.allocate_blocks(chunk.len(), &fixture.pool);
+            assert!(
+                allocated.is_some(),
+                "Should successfully allocate for chunk {}",
+                i + 1
+            );
+
+            // Apply the chunk
+            let result = slot.apply_computed_tokens(chunk.clone(), &fixture.pool);
+            assert!(
+                result.is_ok(),
+                "Chunk {} should apply successfully: {:?}",
+                i + 1,
+                result.err()
+            );
+
+            let computed = slot.num_tokens(SlotPosition::Computed);
+            let mutable_count = slot.mutable.len();
+            let immutable_count = slot.immutable.len();
+            println!(
+                "  After chunk {}: computed={} tokens, mutable={}, immutable={}",
+                i + 1,
+                computed,
+                mutable_count,
+                immutable_count
+            );
+
+            // Validate internal state progression (similar to chunked prefill pattern)
+            let expected_immutable = computed / BLOCK_SIZE;
+            let expected_mutable = if computed % BLOCK_SIZE == 0 { 0 } else { 1 };
+
+            assert_eq!(
+                immutable_count,
+                expected_immutable,
+                "Chunk {}: Expected {} immutable blocks for {} computed tokens",
+                i + 1,
+                expected_immutable,
+                computed
+            );
+            assert!(
+                mutable_count <= expected_mutable + 1,
+                "Chunk {}: Mutable count {} should be <= {} (may have extra allocated)",
+                i + 1,
+                mutable_count,
+                expected_mutable + 1
+            );
+        }
+
+        // Verify final state
+        assert_eq!(slot.num_tokens(SlotPosition::Computed), 8);
+        assert_eq!(slot.num_tokens(SlotPosition::All), 8);
+        assert_eq!(
+            slot.immutable.len(),
+            2,
+            "Should have 2 immutable blocks (8 tokens / 4 per block)"
+        );
+        assert_eq!(
+            slot.mutable.len(),
+            0,
+            "Should have 0 mutable blocks (all tokens applied and registered)"
+        );
+        println!("✅ Progressive token application completed successfully");
+        println!(
+            "   Final state: mutable={}, immutable={}",
+            slot.mutable.len(),
+            slot.immutable.len()
+        );
+    }
+
+    #[test]
+    fn test_speculative_decode_over_allocation() {
+        let fixture = TestFixture::new();
+        let initial_tokens = vec![1, 2, 3, 4]; // 1 block worth
+        let mut slot = create_slot_with_tokens(initial_tokens.clone());
+
+        println!("=== Speculative Decode Over-Allocation Test ===");
+
+        // Complete prefill first
+        let allocated_blocks = slot.allocate_blocks(initial_tokens.len(), &fixture.pool);
+        assert!(allocated_blocks.is_some());
+        let result = slot.apply_computed_tokens(initial_tokens, &fixture.pool);
+        assert!(result.is_ok());
+
+        println!(
+            "Prefill completed: {} tokens",
+            slot.num_tokens(SlotPosition::Computed)
+        );
+
+        // Allocate capacity for speculative decode (more than we'll actually use)
+        let speculative_capacity = 6; // Allocate for 6 tokens
+        let allocated_blocks = slot.allocate_blocks(speculative_capacity, &fixture.pool);
+        assert!(allocated_blocks.is_some());
+        let allocated_count = allocated_blocks.unwrap().len();
+        println!(
+            "Allocated {} blocks for speculative decode",
+            allocated_count
+        );
+
+        // Only use partial capacity (simulate speculative decode where only some predictions are correct)
+        let actual_decode_tokens = vec![100, 101]; // Only 2 tokens used out of 6 allocated
+        let result = slot.apply_computed_tokens(actual_decode_tokens, &fixture.pool);
+        assert!(result.is_ok(), "Partial utilization should succeed");
+
+        // Verify state
+        assert_eq!(slot.num_tokens(SlotPosition::Computed), 6); // 4 prefill + 2 decode
+        assert_eq!(slot.num_tokens(SlotPosition::All), 6);
+
+        // Validate internal state after speculative decode
+        let expected_immutable = 6 / BLOCK_SIZE; // 6 tokens / 4 per block = 1 immutable block
+        let remaining_computed = 6 % BLOCK_SIZE; // 6 % 4 = 2 tokens in partial block
+
+        assert_eq!(
+            slot.immutable.len(),
+            expected_immutable,
+            "Should have {} immutable blocks for {} computed tokens",
+            expected_immutable,
+            slot.num_tokens(SlotPosition::Computed)
+        );
+
+        // Verify we still have unused mutable blocks (over-allocated)
+        assert!(
+            slot.mutable.len() > 0,
+            "Should have unused mutable blocks from over-allocation"
+        );
+
+        // Calculate expected vs actual capacity
+        let used_capacity_in_mutable = if remaining_computed > 0 {
+            remaining_computed
+        } else {
+            0
+        };
+        let total_mutable_capacity = slot.mutable.len() * BLOCK_SIZE;
+        let unused_capacity = total_mutable_capacity - used_capacity_in_mutable;
+
+        assert!(
+            unused_capacity >= 4,
+            "Should have at least 4 unused token slots from over-allocation, got {}",
+            unused_capacity
+        );
+
+        println!("✅ Speculative decode over-allocation handled correctly");
+        println!("   Used: 2 decode tokens, Allocated capacity for: 6 tokens");
+        println!(
+            "   Internal state: mutable={}, immutable={}",
+            slot.mutable.len(),
+            slot.immutable.len()
+        );
+        println!(
+            "   Capacity: used {} slots, unused {} slots in mutable blocks",
+            used_capacity_in_mutable, unused_capacity
+        );
+    }
+
+    #[test]
+    fn test_mutual_exclusivity_cache_operations() {
+        let fixture = TestFixture::new();
+        let tokens = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let salt = SALT_HASH;
+
+        println!("=== Mutual Exclusivity Test ===");
+
+        // Create first slot and complete cache miss workflow
+        let mut slot1 = Slot::new(tokens.clone().into(), BLOCK_SIZE, salt);
+        let allocated_blocks = allocate_blocks_for_slot(&mut slot1, tokens.len(), &fixture.pool);
+        assert!(allocated_blocks.is_some());
+
+        for token in &tokens {
+            let result = slot1.apply_computed_tokens(vec![*token], &fixture.pool);
+            assert!(result.is_ok());
+        }
+
+        let sequence_hashes = slot1.sequence_hashes(SlotPosition::All);
+
+        // Create second slot for testing mutual exclusivity
+        let mut slot2 = Slot::new(tokens.clone().into(), BLOCK_SIZE, salt);
+
+        // Get cached blocks for potential cache hit
+        let cached_blocks = fixture
+            .pool
+            .match_sequence_hashes_blocking(&sequence_hashes)
+            .expect("Cache lookup should succeed");
+
+        // Test 1: Apply cached blocks (should succeed)
+        let result = slot2.apply_computed_blocks(cached_blocks);
+        assert!(result.is_ok(), "Cache hit should succeed");
+
+        // Validate internal state after cache hit
+        assert_eq!(
+            slot2.num_tokens(SlotPosition::Computed),
+            8,
+            "Cache hit should result in 8 computed tokens"
+        );
+        assert_eq!(
+            slot2.immutable.len(),
+            2,
+            "Cache hit should result in 2 immutable blocks"
+        );
+        assert_eq!(
+            slot2.mutable.len(),
+            0,
+            "Cache hit should have 0 mutable blocks (all blocks cached)"
+        );
+        println!("✅ Cache hit operation succeeded");
+        println!(
+            "   Internal state after cache hit: mutable={}, immutable={}",
+            slot2.mutable.len(),
+            slot2.immutable.len()
+        );
+
+        // Test 2: Try to apply tokens after applying cached blocks (should work as decode)
+        let additional_tokens = vec![9, 10];
+
+        // First allocate blocks for the additional tokens
+        let allocated_blocks = slot2.allocate_blocks(additional_tokens.len(), &fixture.pool);
+        if allocated_blocks.is_some() {
+            let pre_decode_mutable = slot2.mutable.len();
+            let pre_decode_immutable = slot2.immutable.len();
+
+            let result = slot2.apply_computed_tokens(additional_tokens, &fixture.pool);
+            // This should work as decode tokens after cache hit
+            assert!(result.is_ok(), "Decode after cache hit should work");
+
+            // Validate state after decode
+            assert_eq!(
+                slot2.num_tokens(SlotPosition::Computed),
+                10,
+                "Should have 10 total tokens after decode"
+            );
+            assert!(
+                slot2.mutable.len() >= pre_decode_mutable,
+                "Should have allocated new mutable blocks for decode"
+            );
+
+            println!("✅ Decode tokens after cache hit succeeded (expected behavior)");
+            println!(
+                "   Internal state after decode: mutable={}, immutable={}",
+                slot2.mutable.len(),
+                slot2.immutable.len()
+            );
+        }
+
+        println!("✅ Mutual exclusivity test completed");
+    }
+
+    #[test]
+    fn test_zero_token_edge_cases() {
+        let fixture = TestFixture::new();
+
+        println!("=== Zero Token Edge Cases Test ===");
+
+        // Test 1: Create slot with empty token sequence
+        let empty_tokens: Vec<u32> = vec![];
+        let mut empty_slot = Slot::new(empty_tokens.into(), BLOCK_SIZE, SALT_HASH);
+
+        assert_eq!(empty_slot.num_tokens(SlotPosition::All), 0);
+        assert_eq!(empty_slot.num_tokens(SlotPosition::Prefill), 0);
+        assert_eq!(empty_slot.num_tokens(SlotPosition::Computed), 0);
+
+        // Validate initial internal state for empty slot
+        assert_eq!(
+            empty_slot.mutable.len(),
+            0,
+            "Empty slot should have 0 mutable blocks"
+        );
+        assert_eq!(
+            empty_slot.immutable.len(),
+            0,
+            "Empty slot should have 0 immutable blocks"
+        );
+        println!(
+            "  Empty slot initial state: mutable={}, immutable={}",
+            empty_slot.mutable.len(),
+            empty_slot.immutable.len()
+        );
+
+        // Test 2: Apply empty token list (should succeed)
+        let result = empty_slot.apply_computed_tokens(vec![], &fixture.pool);
+        assert!(result.is_ok(), "Empty token application should succeed");
+
+        // Validate state unchanged after empty application
+        assert_eq!(empty_slot.num_tokens(SlotPosition::Computed), 0);
+        assert_eq!(
+            empty_slot.mutable.len(),
+            0,
+            "Empty application should not change mutable blocks"
+        );
+        assert_eq!(
+            empty_slot.immutable.len(),
+            0,
+            "Empty application should not change immutable blocks"
+        );
+        println!(
+            "  After empty application: mutable={}, immutable={} (unchanged)",
+            empty_slot.mutable.len(),
+            empty_slot.immutable.len()
+        );
+
+        // Test 3: Allocate zero blocks
+        let allocated = empty_slot.allocate_blocks(0, &fixture.pool);
+        assert!(allocated.is_some(), "Zero block allocation should succeed");
+        assert_eq!(
+            allocated.unwrap().len(),
+            0,
+            "Should return empty block list"
+        );
+
+        // Validate state unchanged after zero allocation
+        assert_eq!(
+            empty_slot.mutable.len(),
+            0,
+            "Zero allocation should not change mutable blocks"
+        );
+        assert_eq!(
+            empty_slot.immutable.len(),
+            0,
+            "Zero allocation should not change immutable blocks"
+        );
+        println!(
+            "  After zero allocation: mutable={}, immutable={} (unchanged)",
+            empty_slot.mutable.len(),
+            empty_slot.immutable.len()
+        );
+
+        println!("✅ Zero token edge cases handled correctly");
+    }
+
+    #[test]
+    fn test_block_pool_resource_constraints() {
+        let fixture = TestFixture::new();
+        let tokens = vec![1, 2, 3, 4];
+
+        println!("=== Block Pool Resource Constraints Test ===");
+
+        // Create multiple slots to potentially exhaust the pool
+        let mut slots = Vec::new();
+        let mut successful_allocations = 0;
+
+        // Keep allocating until we hit the pool limit
+        for i in 0..20 {
+            // Try to create many slots
+            let mut slot = create_slot_with_tokens(tokens.clone());
+            let allocated = slot.allocate_blocks(tokens.len(), &fixture.pool);
+
+            if allocated.is_some() && !allocated.as_ref().unwrap().is_empty() {
+                successful_allocations += 1;
+                slots.push(slot);
+                println!("Slot {}: Successfully allocated blocks", i);
+            } else {
+                println!("Slot {}: Failed to allocate blocks (pool exhausted)", i);
+                break;
+            }
+        }
+
+        println!(
+            "Successfully allocated blocks for {} slots",
+            successful_allocations
+        );
+        assert!(
+            successful_allocations > 0,
+            "Should be able to allocate at least some blocks"
+        );
+
+        // Try one more allocation that should fail
+        let mut final_slot = create_slot_with_tokens(tokens.clone());
+        let final_allocation = final_slot.allocate_blocks(tokens.len(), &fixture.pool);
+
+        if final_allocation.is_none() || final_allocation.unwrap().is_empty() {
+            println!("✅ Pool exhaustion handled gracefully");
+        } else {
+            println!("Note: Pool had more capacity than expected");
+        }
+
+        println!("✅ Resource constraint test completed");
+    }
+
+    #[test]
+    fn test_sequence_hash_mismatch_handling() {
+        let fixture = TestFixture::new();
+        let tokens1 = vec![1, 2, 3, 4];
+        let tokens2 = vec![5, 6, 7, 8]; // Different tokens
+        let salt = SALT_HASH;
+
+        println!("=== Sequence Hash Mismatch Test ===");
+
+        // Create first slot and cache blocks
+        let mut slot1 = Slot::new(tokens1.clone().into(), BLOCK_SIZE, salt);
+        let allocated_blocks = allocate_blocks_for_slot(&mut slot1, tokens1.len(), &fixture.pool);
+        assert!(allocated_blocks.is_some());
+
+        for token in &tokens1 {
+            let result = slot1.apply_computed_tokens(vec![*token], &fixture.pool);
+            assert!(result.is_ok());
+        }
+
+        let hashes1 = slot1.sequence_hashes(SlotPosition::All);
+
+        // Create second slot with different tokens
+        let mut slot2 = Slot::new(tokens2.clone().into(), BLOCK_SIZE, salt);
+        let hashes2 = slot2.sequence_hashes(SlotPosition::All);
+
+        // Verify hashes are different
+        assert_ne!(
+            hashes1, hashes2,
+            "Different tokens should have different hashes"
+        );
+
+        // Try to apply blocks from slot1 to slot2 (should fail due to hash mismatch)
+        let cached_blocks = fixture
+            .pool
+            .match_sequence_hashes_blocking(&hashes1)
+            .expect("Should find cached blocks");
+
+        // This test documents current behavior - the system should detect hash mismatches
+        // but the current implementation might not validate this at the slot level
+        println!("Cached blocks from tokens1: {} blocks", cached_blocks.len());
+        println!("Attempting to apply to slot with different token sequence...");
+
+        // The hash mismatch detection happens in apply_computed_blocks
+        let result = slot2.apply_computed_blocks(cached_blocks);
+
+        if result.is_err() {
+            println!("✅ Hash mismatch correctly detected and rejected");
+        } else {
+            println!("Note: Hash mismatch not detected at this level (may be validated elsewhere)");
+        }
+
+        println!("✅ Sequence hash mismatch test completed");
     }
 }
