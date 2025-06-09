@@ -101,7 +101,7 @@ SLA planner forecasts these metric in the next interval using the load predictor
 - Input sequence length
 - Output sequence length
 
-### 4. Replica Calculation
+### 4. Calculating Number of Replicas
 
 **Prefill replicas**: SLA planner assumes the prefill correction factor has linear affect on the prefill throughput per GPU as prefill is single-batched.
 ```
@@ -125,3 +125,6 @@ next_num_d = math.ceil(next_num_req * next_osl / self.args.adjustment_interval /
 ### 5. Scaling
 
 Finally, SLA planner applies the change by scaling up/down the number of prefill and decode workers to the calculated number of replica in the next interval. 
+
+> [!NOTE]
+> SLA-planner scales up/down the P/D engines non-blockingly. If `adjustment-interval` is too short, the previous scaling operations may not finish before the new scaling operations are issued. Make sure to set a large enough `adjustment-interval`.

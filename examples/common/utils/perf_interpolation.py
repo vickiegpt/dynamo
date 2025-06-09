@@ -103,18 +103,12 @@ class DecodeInterpolator:
         return self.thpt_interpolator[ix, iy]
     
     def find_best_throughput_per_gpu(self, itl: float, context_length: float) -> float:
-        # binary search to find the max kv_load and its throughput/gpu that can achieve the target itl
+        # find the max kv_load that has itl <= target itl
+        # here we cannot use binary search as interpolated itl might not be monotonic
         iy = int(np.clip(np.round((context_length - self.yi[0]) / (self.yi[1] - self.yi[0])), 0, self.resolution - 1))
         iy = max(0, min(iy, self.resolution - 1))
 
-        left, right = 0, self.resolution - 1
-        result = 0
-        while left <= right:
-            mid = (left + right) // 2
-            if self.itl_interpolator[mid, iy] <= itl:
-                result = mid
-                left = mid + 1
-            else:
-                right = mid - 1
-        
-        return self.thpt_interpolator[result, iy]
+        for ix in range(self.resolution - 1, -1, -1):
+            if self.itl_interpolator[ix, iy] <= itl:
+                return self.thpt_interpolator[ix, iy]
+        return self.thpt_interpolator[0, iy]

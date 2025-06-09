@@ -405,11 +405,18 @@ async def start_planner(runtime: DistributedRuntime, args: argparse.Namespace):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    # Common planner arguments
     parser.add_argument(
         "--namespace",
         type=str,
         default=PlannerDefaults.namespace,
         help="Namespace planner will look at",
+    )
+    parser.add_argument(
+        "--environment",
+        type=str,
+        default=PlannerDefaults.environment,
+        help="Environment to run the planner in (local, kubernetes)",
     )
     parser.add_argument(
         "--no-operation",
@@ -430,12 +437,6 @@ if __name__ == "__main__":
         help="Interval in seconds between scaling adjustments",
     )
     parser.add_argument(
-        "--metric-pulling-interval",
-        type=int,
-        default=PlannerDefaults.metric_pulling_interval,
-        help="Interval in seconds between metric pulls",
-    )
-    parser.add_argument(
         "--max-gpu-budget",
         type=int,
         default=PlannerDefaults.max_gpu_budget,
@@ -447,6 +448,25 @@ if __name__ == "__main__":
         default=PlannerDefaults.min_endpoint,
         help="Minimum number of endpoints to keep for prefill/decode workers",
     )
+    parser.add_argument(
+        "--metric-pulling-interval",
+        type=int,
+        default=PlannerDefaults.metric_pulling_interval,
+        help="Interval in seconds between metric pulls",
+    )
+    parser.add_argument(
+        "--decode-engine-num-gpu",
+        type=int,
+        default=PlannerDefaults.decode_engine_num_gpu,
+        help="Number of GPUs per decode engine",
+    )
+    parser.add_argument(
+        "--prefill-engine-num-gpu",
+        type=int,
+        default=PlannerDefaults.prefill_engine_num_gpu,
+        help="Number of GPUs per prefill engine",
+    )
+    # Load-planner specific arguments
     parser.add_argument(
         "--decode-kv-scale-up-threshold",
         type=float,
@@ -470,24 +490,6 @@ if __name__ == "__main__":
         type=float,
         default=PlannerDefaults.prefill_queue_scale_down_threshold,
         help="Queue utilization threshold to scale down prefill workers, this threshold is per prefill worker",
-    )
-    parser.add_argument(
-        "--decode-engine-num-gpu",
-        type=int,
-        default=PlannerDefaults.decode_engine_num_gpu,
-        help="Number of GPUs per decode engine",
-    )
-    parser.add_argument(
-        "--prefill-engine-num-gpu",
-        type=int,
-        default=PlannerDefaults.prefill_engine_num_gpu,
-        help="Number of GPUs per prefill engine",
-    )
-    parser.add_argument(
-        "--environment",
-        type=str,
-        default=PlannerDefaults.environment,
-        help="Environment to run the planner in (local, kubernetes)",
     )
     args = parser.parse_args()
     asyncio.run(dynamo_worker()(start_planner)(args))

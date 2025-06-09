@@ -24,7 +24,8 @@ from utils.prometheus import PrometheusAPIClient
 from utils.perf_interpolation import PrefillInterpolator, DecodeInterpolator
 
 from dynamo.planner import KubernetesConnector, LocalConnector
-from dynamo.runtime import DistributedRuntime
+from dynamo.planner.defaults import PlannerDefaults
+from dynamo.runtime import DistributedRuntime, dynamo_worker
 from dynamo.runtime.logging import configure_dynamo_logging
 
 configure_dynamo_logging()
@@ -173,7 +174,7 @@ class Planner:
 
             if next_num_p * self.args.prefill_engine_num_gpu + next_num_d * self.args.decode_engine_num_gpu > self.args.max_gpu_budget:
                 scale = self.args.max_gpu_budget / (next_num_p * self.args.prefill_engine_num_gpu + next_num_d * self.args.decode_engine_num_gpu)
-                next_num_p = round(next_num_p * scale)
+                next_num_p = max(self.args.min_endpoint, round(next_num_p * scale))
                 next_num_d = (self.args.max_gpu_budget - next_num_p * self.args.prefill_engine_num_gpu) // self.args.decode_engine_num_gpu
                 logger.warning(f"Total number of GPUs required ({next_num_p * self.args.prefill_engine_num_gpu + next_num_d * self.args.decode_engine_num_gpu}) exceeds the max GPU budget ({self.args.max_gpu_budget}), scaling down to {next_num_p} prefill and {next_num_d} decode replicas")
 
@@ -182,8 +183,21 @@ class Planner:
             return
         
         if not self.args.no_operation:
-            # TODO: scale up/down the number of prefill/decode non-blockingly
-            pass
+            # scale up/down the number of prefill/decode non-blockingly
+            # TODO: add a check to avoid scaling before the previous scaling is completed
+            if next_num_p > len(self.p_endpoints):
+                for _ in range(next_num_p - len(self.p_endpoints)):
+                    self.connector.add_component("PrefillWorker", blocking=False)
+            elif next_num_p < len(self.p_endpoints):
+                for _ in range(len(self.p_endpoints) - next_num_p):
+                    self.connector.remove_component("PrefillWorker", blocking=False)
+
+            if next_num_d > len(self.d_endpoints):
+                for _ in range(next_num_d - len(self.d_endpoints)):
+                    self.connector.add_component("VllmWorker", blocking=False)
+            elif next_num_d < len(self.d_endpoints):
+                for _ in range(len(self.d_endpoints) - next_num_d):
+                    self.connector.remove_component("VllmWorker", blocking=False)
 
     async def run(self):
         """Main loop for the planner"""
@@ -202,3 +216,112 @@ class Planner:
 async def start_sla_planner(runtime: DistributedRuntime, args: argparse.Namespace):
     planner = Planner(runtime, args)
     await planner.run()
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    # Common planner arguments
+    parser.add_argument(
+        "--namespace",
+        type=str,
+        default=PlannerDefaults.namespace,
+        help="Namespace planner will look at",
+    )
+    parser.add_argument(
+        "--environment",
+        type=str,
+        default=PlannerDefaults.environment,
+        help="Environment to run the planner in (local, kubernetes)",
+    )
+    parser.add_argument(
+        "--no-operation",
+        action="store_true",
+        default=PlannerDefaults.no_operation,
+        help="Do not make any adjustments, just observe the metrics",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=str,
+        default=PlannerDefaults.log_dir,
+        help="Tensorboard logging directory",
+    )
+    parser.add_argument(
+        "--adjustment-interval",
+        type=int,
+        default=PlannerDefaults.adjustment_interval,
+        help="Interval in seconds between scaling adjustments",
+    )
+    parser.add_argument(
+        "--max-gpu-budget",
+        type=int,
+        default=PlannerDefaults.max_gpu_budget,
+        help="Maximum number of GPUs to use",
+    )
+    parser.add_argument(
+        "--min-endpoint",
+        type=int,
+        default=PlannerDefaults.min_endpoint,
+        help="Minimum number of endpoints to keep for prefill/decode workers",
+    )
+    parser.add_argument(
+        "--decode-engine-num-gpu",
+        type=int,
+        default=PlannerDefaults.decode_engine_num_gpu,
+        help="Number of GPUs per decode engine",
+    )
+    parser.add_argument(
+        "--prefill-engine-num-gpu",
+        type=int,
+        default=PlannerDefaults.prefill_engine_num_gpu,
+        help="Number of GPUs per prefill engine",
+    )
+    # SLA-planner specific arguments
+    parser.add_argument(
+        "--prometheus-endpoint",
+        type=str,
+        default=PlannerDefaults.prometheus_endpoint,
+        help="Prometheus endpoint url",
+    )
+    parser.add_argument(
+        "--profile-results-dir",
+        type=str,
+        default=PlannerDefaults.profile_dir,
+        help="Directory to pre-deployment profiling results",
+    )
+    parser.add_argument(
+        "--isl",
+        type=int,
+        default=PlannerDefaults.isl,
+        help="Input sequence length",
+    )
+    parser.add_argument(
+        "--osl",
+        type=int,
+        default=PlannerDefaults.osl,
+        help="Output sequence length",
+    )
+    parser.add_argument(
+        "--ttft",
+        type=float,
+        default=PlannerDefaults.ttft,
+        help="Time to first token (in seconds)",
+    )
+    parser.add_argument(
+        "--itl",
+        type=float,
+        default=PlannerDefaults.itl,
+        help="Inter-token latency (in seconds)",
+    )
+    parser.add_argument(
+        "--load-predictor",
+        type=str,
+        default=PlannerDefaults.load_predictor,
+        help="Load predictor to use",
+    )
+    parser.add_argument(
+        "--load-prediction-window-size",
+        type=int,
+        default=PlannerDefaults.load_prediction_window_size,
+        help="Window size for load prediction",
+    )
+    args = parser.parse_args()
+    asyncio.run(dynamo_worker()(start_sla_planner)(args))
