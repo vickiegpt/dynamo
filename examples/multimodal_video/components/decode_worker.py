@@ -361,7 +361,7 @@ class VllmDecodeWorker:
     @endpoint()
     async def generate(self, request: vLLMMultimodalRequest):
         request_id = request.request_id
-        image_url = request.image_url  # Video path for EncodeWorker
+        video_url = request.video_url  # Video path for EncodeWorker
         user_text_prompt = request.engine_prompt.get(
             "text_prompt", "Describe the video."
         )
@@ -448,7 +448,7 @@ class VllmDecodeWorker:
                 current_remote_prefill_params = RemotePrefillParams(
                     is_remote_prefill=True,
                     remote_prefill_request_callback=self.get_remote_prefill_request_callback(),
-                    multimodal_data_source={"video_url": image_url},
+                    multimodal_data_source={"video_url": video_url},
                 )
                 num_dummies = self.embedding_size - 1
                 # For remote prefill, expand the *single* video token from base_prompt_ids and add dummies
@@ -475,7 +475,7 @@ class VllmDecodeWorker:
                 with self._connector.create_writable(desc) as writable:
                     enc_req = EncodeRequest(
                         request_id=request_id,
-                        image_url=image_url,
+                        video_url=video_url,
                         serialized_request=writable.to_serialized(),
                     )
                     logger.info(
@@ -504,7 +504,7 @@ class VllmDecodeWorker:
             with self._connector.create_writable(desc) as writable:
                 enc_req = EncodeRequest(
                     request_id=request_id,
-                    image_url=image_url,
+                    video_url=video_url,
                     serialized_request=writable.to_serialized(),
                 )
                 logger.info(f"Aggregated - Encode request: {enc_req.model_dump_json()}")

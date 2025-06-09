@@ -233,12 +233,10 @@ class VllmEncodeWorker:
     @endpoint()
     async def encode(self, request: EncodeRequest) -> AsyncIterator[str]:
         request_id = request.request_id
-        video_url = getattr(request, "video_url", getattr(request, "image_url", None))
+        video_url = getattr(request, "video_url", None)
         if not video_url:
-            logger.error(
-                f"Request {request_id}: 'video_url' or 'image_url' not provided."
-            )
-            raise ValueError("'video_url' or 'image_url' is required for encoding.")
+            logger.error(f"Request {request_id}: 'video_url' not provided.")
+            raise ValueError("'video_url' is required for encoding.")
 
         logger.info(
             f"Received encode request: {{ id: {request_id}, video_url: '{video_url[:100]}...' }}"

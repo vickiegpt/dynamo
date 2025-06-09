@@ -102,8 +102,8 @@ class ImageURLDetail(BaseModel):
 
 
 class ImageContent(BaseModel):
-    type: Literal["image_url"]
-    image_url: ImageURLDetail
+    type: Literal["video_url"]
+    video_url: ImageURLDetail
 
 
 MessageContent = Union[TextContent, ImageContent]
@@ -124,7 +124,7 @@ class MultiModalRequest(BaseModel):
 
 class vLLMMultimodalRequest(vLLMGenerateRequest):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    image_url: str
+    video_url: str
 
 
 class EncodeRequest(BaseModel):
@@ -133,7 +133,7 @@ class EncodeRequest(BaseModel):
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    image_url: str
+    video_url: str
     num_frames: Optional[int] = None
     request_id: str
     serialized_request: Optional[connect.SerializedRequest] = None

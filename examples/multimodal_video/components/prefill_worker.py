@@ -262,16 +262,11 @@ class VllmPrefillWorker:
             # sys.exit(1) # Or a more graceful shutdown
 
     async def generate(self, request: RemotePrefillRequest):
-        # Assuming multimodal_data_source["image_url"] from DecodeWorker now contains the video_url.
-        # Or, if DecodeWorker changed multimodal_data_source to {"video_url": ...}, adapt here.
-        # For now, sticking to "image_url" as the key from RemotePrefillRequest based on previous context.
-        video_url = request.multimodal_data_source.get(
-            "video_url"
-        ) or request.multimodal_data_source.get("image_url")
+        video_url = request.multimodal_data_source.get("video_url")
 
         if video_url is None:
             raise ValueError(
-                "No video_url or image_url provided in multimodal_data_source for prefill request"
+                "No video_url provided in multimodal_data_source for prefill request"
             )
 
         request_id = request.request_id
@@ -290,7 +285,7 @@ class VllmPrefillWorker:
             encode_generator = await self.encode_worker_client.round_robin(
                 EncodeRequest(
                     request_id=request_id,
-                    image_url=video_url,
+                    video_url=video_url,
                     serialized_request=writable.to_serialized(),
                 ).model_dump_json()
             )

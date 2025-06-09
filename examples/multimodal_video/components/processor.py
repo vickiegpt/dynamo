@@ -120,7 +120,7 @@ class Processor(ProcessMixIn):
             engine_prompt=engine_prompt,
             sampling_params=sampling_params,
             request_id=request_id,
-            image_url=image,
+            video_url=image,
         )
         router_mode = (await self.etcd_kv_cache.get("router")).decode()
         if router_mode == "kv":
@@ -201,14 +201,14 @@ class Processor(ProcessMixIn):
             max_tokens=raw_request.max_tokens,
             request_id=str(uuid.uuid4()),
         )
-        image_url = None
+        video_url = None
 
         for message in raw_request.messages:
             for item in message.content:
-                if item.type == "image_url":
-                    image_url = item.image_url.url
-        if image_url is None:
-            raise ValueError("Image URL is required")
+                if item.type == "video_url":
+                    video_url = item.video_url.url
+        if video_url is None:
+            raise ValueError("Video URL is required")
 
-        async for response in self._generate(chat_request, image_url, RequestType.CHAT):
+        async for response in self._generate(chat_request, video_url, RequestType.CHAT):
             yield json.dumps(response)
