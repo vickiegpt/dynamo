@@ -88,8 +88,6 @@ class VllmEncodeWorker:
                 return self._image_cache[image_url_lower]
 
         try:
-            parsed_url = urlparse(image_url)
-
             if parsed_url.scheme == "data":
                 # Parse data URL format: data:[<media type>][;base64],<data>
                 if not parsed_url.path.startswith("image/"):
