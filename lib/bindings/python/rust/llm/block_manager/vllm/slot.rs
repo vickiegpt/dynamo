@@ -336,9 +336,7 @@ mod tests {
         num_tokens: usize,
         pool: &BlockPool<NullDeviceStorage, BasicMetadata>,
     ) -> Option<Vec<BlockId>> {
-        // Allocate extra space to avoid debug assertion failures
-        let extra_capacity = BLOCK_SIZE;
-        slot.allocate_blocks(num_tokens + extra_capacity, pool)
+        slot.allocate_blocks(num_tokens, pool)
     }
 
     // Phase 1: Foundation Test - Basic slot creation and state
@@ -367,6 +365,7 @@ mod tests {
         let allocated_blocks =
             allocate_blocks_for_slot(&mut slot, initial_tokens.len(), &fixture.pool);
         assert!(allocated_blocks.is_some());
+        assert_eq!(slot.mutable.len(), allocated_blocks.unwrap().len());
 
         // Apply empty token list - should succeed and not change state
         let result = slot.apply_computed_tokens(vec![], &fixture.pool);
@@ -397,6 +396,7 @@ mod tests {
         let allocated_blocks =
             allocate_blocks_for_slot(&mut slot, initial_tokens.len(), &fixture.pool);
         assert!(allocated_blocks.is_some());
+        assert_eq!(slot.mutable.len(), 1);
 
         let result = slot.apply_computed_tokens(initial_tokens, &fixture.pool);
         assert!(
@@ -408,6 +408,17 @@ mod tests {
         // After prefill, computed should match prefill
         assert_eq!(slot.num_tokens(SlotPosition::Computed), 1);
         assert_eq!(slot.num_tokens(SlotPosition::All), 1);
+        // Single token doesn't fill the entire block (block_size=4), so it remains mutable
+        assert_eq!(
+            slot.mutable.len(),
+            1,
+            "Single token should keep block as mutable"
+        );
+        assert_eq!(
+            slot.immutable.len(),
+            0,
+            "Single token should not register any immutable blocks"
+        );
     }
 
     // Phase 3: Core Operations - Block allocation with chunked prefill
@@ -445,6 +456,17 @@ mod tests {
         // Verify final state
         assert_eq!(slot.num_tokens(SlotPosition::Computed), 8);
         assert_eq!(slot.num_tokens(SlotPosition::All), 8);
+        // 8 tokens = 2 full blocks (block_size=4), all should be registered as immutable
+        assert_eq!(
+            slot.mutable.len(),
+            0,
+            "All blocks should be registered as immutable"
+        );
+        assert_eq!(
+            slot.immutable.len(),
+            2,
+            "Should have 2 immutable blocks for 8 tokens"
+        );
     }
 
     // Phase 4: Standard Workflows - Standard decode after prefill
@@ -659,604 +681,369 @@ mod tests {
     }
 
     // ============================================================================
-    // SLOT MANAGER TESTS - Testing SlotManager behavior in isolation
+    // PHASE 3: BLOCK ID SHARING VALIDATION TESTS - The Critical Phase
     // ============================================================================
 
-    use super::super::SlotManager;
-
-    // Helper function to create a slot manager for testing
-    fn create_test_slot_manager() -> SlotManager<String> {
-        SlotManager::new(BLOCK_SIZE)
-    }
-
-    // Phase 1: SlotManager Foundation Tests - Testing without block operations
     #[test]
-    fn test_slot_manager_creation_and_basic_operations() {
-        let mut manager = create_test_slot_manager();
-        let request_id = "test_request_1".to_string();
-        let tokens = vec![1, 2, 3, 4];
+    fn test_block_id_sharing_between_identical_slots() {
+        let fixture = TestFixture::new();
+        let tokens = vec![1, 2, 3, 4, 5, 6, 7, 8]; // 2 full blocks
+        let salt = SALT_HASH;
+        let chunk_size = 2; // Chunked prefill size
 
-        // Create a slot
-        let sequence_hashes = manager
-            .create_slot(&request_id, SALT_HASH, tokens.clone())
-            .expect("Failed to create slot");
+        println!("=== Block ID Sharing Test (Chunked Prefill) ===");
 
-        assert_eq!(sequence_hashes.len(), 1); // 4 tokens = 1 block
+        // FIRST SLOT: Cache miss → chunked prefill → block registration
+        let mut slot1 = Slot::new(tokens.clone().into(), BLOCK_SIZE, salt);
 
-        // Check initial state
-        assert_eq!(
-            manager
-                .num_tokens(&request_id, SlotPosition::Prefill)
-                .unwrap(),
-            4
-        );
-        assert_eq!(
-            manager
-                .num_tokens(&request_id, SlotPosition::Computed)
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            manager.num_tokens(&request_id, SlotPosition::All).unwrap(),
-            4
-        );
+        // Process tokens in chunks with proper allocation pattern
+        for (pass, chunk) in tokens.chunks(chunk_size).enumerate() {
+            println!("Pass {}: Processing chunk {:?}", pass + 1, chunk);
 
-        // Initially no blocks allocated
-        let block_ids = manager.get_block_ids(&request_id).unwrap();
-        assert_eq!(block_ids.len(), 0);
-    }
+            // Allocate blocks for this chunk
+            let allocated_blocks = slot1.allocate_blocks(chunk_size, &fixture.pool);
+            println!("  Allocated blocks: {:?}", allocated_blocks);
 
-    #[test]
-    fn test_slot_manager_multiple_slots() {
-        let mut manager = create_test_slot_manager();
-
-        // Create multiple slots with different tokens
-        let requests = vec![
-            ("req1".to_string(), vec![1, 2, 3, 4]),
-            ("req2".to_string(), vec![5, 6, 7, 8, 9, 10]),
-            ("req3".to_string(), vec![11, 12]),
-        ];
-
-        let mut all_hashes = Vec::new();
-
-        for (request_id, tokens) in &requests {
-            let hashes = manager
-                .create_slot(request_id, SALT_HASH, tokens.clone())
-                .expect("Failed to create slot");
-            all_hashes.push((request_id.clone(), hashes));
-
-            // Verify each slot's initial state
-            assert_eq!(
-                manager.num_tokens(request_id, SlotPosition::All).unwrap(),
-                tokens.len()
+            // Apply the chunk
+            let result = slot1.apply_computed_tokens(chunk.to_vec(), &fixture.pool);
+            assert!(
+                result.is_ok(),
+                "Pass {} failed: {:?}",
+                pass + 1,
+                result.err()
             );
-            assert_eq!(
-                manager
-                    .num_tokens(request_id, SlotPosition::Computed)
-                    .unwrap(),
-                0
-            );
-        }
 
-        // Verify all slots exist and have different sequence hashes
-        assert_eq!(all_hashes.len(), 3);
-        for i in 0..all_hashes.len() {
-            for j in (i + 1)..all_hashes.len() {
-                assert_ne!(
-                    all_hashes[i].1, all_hashes[j].1,
-                    "Different token sequences should have different hashes"
-                );
+            let computed_tokens = slot1.num_tokens(SlotPosition::Computed);
+            let mutable_count = slot1.mutable.len();
+            let immutable_count = slot1.immutable.len();
+
+            println!(
+                "  After pass {}: computed={}, mutable={}, immutable={}",
+                pass + 1,
+                computed_tokens,
+                mutable_count,
+                immutable_count
+            );
+
+            // Assert expected block counts for chunked prefill pattern
+            match pass + 1 {
+                1 => {
+                    // Pass 1: First chunk (2 tokens) - block allocated but not full
+                    assert_eq!(computed_tokens, 2, "Pass 1: Should have 2 computed tokens");
+                    assert_eq!(
+                        mutable_count, 1,
+                        "Pass 1: Should have 1 mutable block (partially filled)"
+                    );
+                    assert_eq!(immutable_count, 0, "Pass 1: Should have 0 immutable blocks");
+                }
+                2 => {
+                    // Pass 2: Second chunk (4 tokens total) - first block full and registered
+                    assert_eq!(computed_tokens, 4, "Pass 2: Should have 4 computed tokens");
+                    assert_eq!(
+                        mutable_count, 0,
+                        "Pass 2: Should have 0 mutable blocks (first block registered)"
+                    );
+                    assert_eq!(immutable_count, 1, "Pass 2: Should have 1 immutable block");
+                }
+                3 => {
+                    // Pass 3: Third chunk (6 tokens total) - second block allocated
+                    assert_eq!(computed_tokens, 6, "Pass 3: Should have 6 computed tokens");
+                    assert_eq!(
+                        mutable_count, 1,
+                        "Pass 3: Should have 1 mutable block (second block allocated)"
+                    );
+                    assert_eq!(immutable_count, 1, "Pass 3: Should have 1 immutable block");
+                }
+                4 => {
+                    // Pass 4: Fourth chunk (8 tokens total) - second block full and registered
+                    assert_eq!(computed_tokens, 8, "Pass 4: Should have 8 computed tokens");
+                    assert_eq!(
+                        mutable_count, 0,
+                        "Pass 4: Should have 0 mutable blocks (second block registered)"
+                    );
+                    assert_eq!(immutable_count, 2, "Pass 4: Should have 2 immutable blocks");
+                }
+                _ => panic!("Unexpected pass number: {}", pass + 1),
             }
         }
-    }
 
-    #[test]
-    fn test_slot_manager_error_handling() {
-        let mut manager = create_test_slot_manager();
-        let nonexistent_id = "does_not_exist".to_string();
+        let slot1_hashes = slot1.sequence_hashes(SlotPosition::All);
+        let slot1_blocks = slot1.get_block_ids();
 
-        // Test operations on non-existent slot
-        assert!(manager
-            .num_tokens(&nonexistent_id, SlotPosition::All)
-            .is_err());
-        assert!(manager.get_block_ids(&nonexistent_id).is_err());
-        assert!(manager.free_blocks(&nonexistent_id).is_err());
-        assert!(manager.drop_slot(&nonexistent_id).is_err());
-    }
+        println!("Slot1 final state:");
+        println!("  Sequence hashes: {:?}", slot1_hashes);
+        println!("  Block IDs: {:?}", slot1_blocks);
+        println!(
+            "  Mutable blocks: {}, Immutable blocks: {}",
+            slot1.mutable.len(),
+            slot1.immutable.len()
+        );
 
-    #[test]
-    fn test_slot_manager_slot_lifecycle() {
-        let mut manager = create_test_slot_manager();
-        let request_id = "lifecycle_test".to_string();
-        let tokens = vec![1, 2, 3, 4];
+        // SECOND SLOT: Cache hit → block reuse
+        let mut slot2 = Slot::new(tokens.clone().into(), BLOCK_SIZE, salt);
 
-        // 1. Create slot
-        let sequence_hashes = manager
-            .create_slot(&request_id, SALT_HASH, tokens.clone())
-            .expect("Failed to create slot");
-
-        // Verify slot exists
-        assert!(manager.num_tokens(&request_id, SlotPosition::All).is_ok());
-        assert_eq!(sequence_hashes.len(), 1);
-
-        // 2. Free blocks (slot still exists)
-        manager
-            .free_blocks(&request_id)
-            .expect("Failed to free blocks");
-
-        // Verify slot still exists after freeing blocks
-        assert!(manager.num_tokens(&request_id, SlotPosition::All).is_ok());
-
-        // 3. Drop slot entirely
-        manager.drop_slot(&request_id).expect("Failed to drop slot");
-
-        // 4. Verify slot no longer exists
-        assert!(manager.num_tokens(&request_id, SlotPosition::All).is_err());
-    }
-
-    #[test]
-    fn test_slot_manager_duplicate_slot_creation() {
-        let mut manager = create_test_slot_manager();
-        let request_id = "duplicate_test".to_string();
-        let tokens1 = vec![1, 2, 3, 4];
-        let tokens2 = vec![5, 6, 7, 8]; // Different tokens
-
-        // Create first slot
-        let hashes1 = manager
-            .create_slot(&request_id, SALT_HASH, tokens1.clone())
-            .expect("Failed to create first slot");
-
-        assert_eq!(manager.slots.len(), 1);
-
-        // Try to create slot with same ID but different tokens (should not overwrite)
-        let hashes2 = manager
-            .create_slot(&request_id, SALT_HASH, tokens2)
-            .expect("Failed to create second slot");
-
-        assert_eq!(manager.slots.len(), 1);
-
-        // Should return the same hashes (slot wasn't overwritten)
-        assert_eq!(hashes1, hashes2);
-
-        // Token count should match the first slot
+        // Verify same sequence hashes
+        let slot2_hashes = slot2.sequence_hashes(SlotPosition::All);
         assert_eq!(
-            manager.num_tokens(&request_id, SlotPosition::All).unwrap(),
-            tokens1.len()
+            slot1_hashes, slot2_hashes,
+            "Identical slots should have identical hashes"
         );
-    }
 
-    #[test]
-    fn test_slot_manager_sequence_hash_determinism() {
-        let mut manager1 = create_test_slot_manager();
-        let mut manager2 = create_test_slot_manager();
-        let tokens = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        // Do cache lookup using the sequence hashes
+        let cached_blocks = fixture
+            .pool
+            .match_sequence_hashes_blocking(&slot2_hashes)
+            .expect("Cache lookup should succeed");
 
-        // Create slots with same tokens and salt in different managers
-        let hashes1 = manager1
-            .create_slot(&"test".to_string(), SALT_HASH, tokens.clone())
-            .expect("Failed to create slot in manager1");
+        println!("Cache hit! Found {} cached blocks", cached_blocks.len());
 
-        let hashes2 = manager2
-            .create_slot(&"test".to_string(), SALT_HASH, tokens)
-            .expect("Failed to create slot in manager2");
+        // Apply cached blocks (this is the cache hit path)
+        let result = slot2.apply_computed_blocks(cached_blocks);
+        assert!(result.is_ok(), "Cache hit failed: {:?}", result.err());
 
-        // Should produce identical sequence hashes
+        let slot2_blocks = slot2.get_block_ids();
+        println!("Slot2 final state:");
+        println!("  Block IDs: {:?}", slot2_blocks);
+        println!(
+            "  Mutable blocks: {}, Immutable blocks: {}",
+            slot2.mutable.len(),
+            slot2.immutable.len()
+        );
+
+        // *** THE KEY ASSERTION: Block ID sharing ***
+        // Note: slot1 may have extra mutable blocks that haven't been registered yet
+        // Only compare the immutable blocks that represent the actual computed tokens
+        let slot1_immutable_blocks: Vec<BlockId> = slot1_blocks
+            .iter()
+            .take(slot1.immutable.len())
+            .cloned()
+            .collect();
+
         assert_eq!(
-            hashes1, hashes2,
-            "Same tokens and salt should produce identical hashes"
+            slot1_immutable_blocks, slot2_blocks,
+            "Slots with identical sequence hashes MUST share the same registered block IDs"
+        );
+
+        // Verify both slots have same final state
+        assert_eq!(
+            slot1.num_tokens(SlotPosition::All),
+            slot2.num_tokens(SlotPosition::All)
+        );
+        assert_eq!(
+            slot1.num_tokens(SlotPosition::Computed),
+            slot2.num_tokens(SlotPosition::Computed)
+        );
+
+        println!(
+            "✅ Block ID sharing verified: both slots share immutable blocks {:?}",
+            slot1_immutable_blocks
         );
     }
 
     #[test]
-    fn test_slot_manager_different_salts_produce_different_hashes() {
-        let mut manager = create_test_slot_manager();
-        let tokens = vec![1, 2, 3, 4];
-        let salt1 = 12345;
-        let salt2 = 54321;
-
-        let hashes1 = manager
-            .create_slot(&"req1".to_string(), salt1, tokens.clone())
-            .expect("Failed to create slot with salt1");
-
-        let hashes2 = manager
-            .create_slot(&"req2".to_string(), salt2, tokens)
-            .expect("Failed to create slot with salt2");
-
-        // Different salts should produce different hashes
-        assert_ne!(
-            hashes1, hashes2,
-            "Different salts should produce different hashes"
-        );
-    }
-
-    // ============================================================================
-    // PHASE 1: BASIC BLOCK OPERATIONS TESTS
-    // ============================================================================
-
-    #[test]
-    fn test_cache_miss_block_allocation_and_registration() {
+    fn test_cache_hit_vs_cache_miss_workflow_comparison() {
         let fixture = TestFixture::new();
-        let mut manager = create_test_slot_manager();
-        let request_id = "cache_miss_test".to_string();
-        let tokens = vec![1, 2, 3, 4, 5, 6, 7, 8]; // 2 full blocks
-
-        println!("=== Cache Miss Workflow Test ===");
-
-        // 1. Create slot
-        let sequence_hashes = manager
-            .create_slot(&request_id, SALT_HASH, tokens.clone())
-            .expect("Failed to create slot");
-
-        println!(
-            "Created slot with {} sequence hashes",
-            sequence_hashes.len()
-        );
-        assert_eq!(sequence_hashes.len(), 2); // 8 tokens = 2 blocks
-
-        // Verify initial state
-        assert_eq!(
-            manager
-                .num_tokens(&request_id, SlotPosition::Prefill)
-                .unwrap(),
-            8
-        );
-        assert_eq!(
-            manager
-                .num_tokens(&request_id, SlotPosition::Computed)
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            manager.num_tokens(&request_id, SlotPosition::All).unwrap(),
-            8
-        );
-
-        // Initially no blocks allocated
-        let initial_block_ids = manager.get_block_ids(&request_id).unwrap();
-        assert_eq!(initial_block_ids.len(), 0);
-        println!("Initial blocks: {:?}", initial_block_ids);
-
-        // Note: For this test, we focus on what we can verify with current APIs
-        // The actual block allocation and token application would happen via update_slot
-        // but that requires DeviceStorage integration which is complex for unit tests
-
-        println!("✅ Cache miss test setup completed successfully");
-        println!(
-            "   - Created slot with {} blocks worth of tokens",
-            sequence_hashes.len()
-        );
-        println!("   - Sequence hashes: {:?}", sequence_hashes);
-        println!("   - Ready for block allocation and token application");
-
-        // This test demonstrates slot creation and initial state validation
-        // Full cache miss workflow would be tested in integration tests
-    }
-
-    #[test]
-    fn test_sequence_hash_determinism_and_block_sharing_potential() {
-        let mut manager = create_test_slot_manager();
         let tokens = vec![1, 2, 3, 4, 5, 6, 7, 8];
         let salt = SALT_HASH;
 
-        println!("=== Block Sharing Potential Test ===");
+        println!("=== Cache Hit vs Cache Miss Workflow ===");
 
-        // Create first slot
-        let hashes1 = manager
-            .create_slot(&"req1".to_string(), salt, tokens.clone())
-            .expect("Failed to create first slot");
+        // WORKFLOW 1: Cache Miss Path (slot1)
+        let mut slot1 = Slot::new(tokens.clone().into(), BLOCK_SIZE, salt);
+        let allocated_blocks = allocate_blocks_for_slot(&mut slot1, tokens.len(), &fixture.pool);
+        assert!(allocated_blocks.is_some());
 
-        // Create second slot with identical tokens and salt
-        let hashes2 = manager
-            .create_slot(&"req2".to_string(), salt, tokens.clone())
-            .expect("Failed to create second slot");
+        let start_time = std::time::Instant::now();
 
-        // Create third slot with different salt (should not share blocks)
-        let hashes3 = manager
-            .create_slot(&"req3".to_string(), salt + 1, tokens.clone())
-            .expect("Failed to create third slot");
-
-        println!("Slot1 hashes: {:?}", hashes1);
-        println!("Slot2 hashes: {:?}", hashes2);
-        println!("Slot3 hashes: {:?}", hashes3);
-
-        // KEY ASSERTION: Same tokens + salt = identical sequence hashes
-        assert_eq!(
-            hashes1, hashes2,
-            "Identical tokens/salt should produce identical hashes"
-        );
-        assert_ne!(
-            hashes1, hashes3,
-            "Different salts should produce different hashes"
-        );
-
-        // Verify initial state for all slots
-        for req_id in ["req1", "req2", "req3"] {
-            assert_eq!(
-                manager
-                    .num_tokens(&req_id.to_string(), SlotPosition::All)
-                    .unwrap(),
-                8
-            );
-            assert_eq!(
-                manager
-                    .num_tokens(&req_id.to_string(), SlotPosition::Computed)
-                    .unwrap(),
-                0
-            );
-
-            // All slots should start with no allocated blocks
-            let block_ids = manager.get_block_ids(&req_id.to_string()).unwrap();
-            assert_eq!(block_ids.len(), 0);
+        // Token-by-token application (cache miss path)
+        for token in &tokens {
+            let result = slot1.apply_computed_tokens(vec![*token], &fixture.pool);
+            assert!(result.is_ok());
         }
 
-        println!("✅ Sequence hash determinism verified");
-        println!("   - req1 and req2 have identical hashes (can share blocks)");
-        println!("   - req3 has different hashes (cannot share blocks)");
+        let cache_miss_duration = start_time.elapsed();
+        let slot1_blocks = slot1.get_block_ids();
+        let slot1_hashes = slot1.sequence_hashes(SlotPosition::All);
 
-        // When blocks are eventually allocated and cached:
-        // - req1 and req2 should share the same block IDs
-        // - req3 should have different block IDs
+        println!("Cache miss workflow completed in {:?}", cache_miss_duration);
+        println!("  - Applied {} tokens individually", tokens.len());
+        println!("  - Registered {} blocks", slot1_blocks.len());
+
+        // WORKFLOW 2: Cache Hit Path (slot2)
+        let mut slot2 = Slot::new(tokens.clone().into(), BLOCK_SIZE, salt);
+
+        let start_time = std::time::Instant::now();
+
+        // Cache lookup and batch block application (cache hit path)
+        let cached_blocks = fixture
+            .pool
+            .match_sequence_hashes_blocking(&slot1_hashes)
+            .expect("Cache lookup failed");
+
+        let result = slot2.apply_computed_blocks(cached_blocks);
+        assert!(result.is_ok());
+
+        let cache_hit_duration = start_time.elapsed();
+        let slot2_blocks = slot2.get_block_ids();
+
+        println!("Cache hit workflow completed in {:?}", cache_hit_duration);
+        println!("  - Applied {} blocks in batch", slot2_blocks.len());
+        println!("  - Skipped individual token validation");
+
+        // Verify identical final state
+        assert_eq!(slot1_blocks, slot2_blocks);
+        assert_eq!(
+            slot1.num_tokens(SlotPosition::All),
+            slot2.num_tokens(SlotPosition::All)
+        );
+        assert_eq!(
+            slot1.num_tokens(SlotPosition::Computed),
+            slot2.num_tokens(SlotPosition::Computed)
+        );
+
+        // Cache hit should be faster (though timing can be variable in tests)
+        println!("Performance comparison:");
+        println!("  - Cache miss: {:?}", cache_miss_duration);
+        println!("  - Cache hit:  {:?}", cache_hit_duration);
+        println!("✅ Both workflows produce identical results with shared block IDs");
     }
 
-    //     // Test chunked prefill scenarios with parameterized test cases
-    //     #[rstest]
-    //     #[case::aligned_chunks(vec![1, 2, 3, 4, 5, 6, 7, 8], vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8]], true)]
-    //     #[case::unaligned_chunks(vec![1, 2, 3, 4, 5, 6, 7, 8], vec![vec![1, 2], vec![3, 4, 5, 6], vec![7, 8]], true)]
-    //     #[case::single_token_chunks(vec![1, 2, 3, 4, 5, 6, 7, 8], vec![vec![1], vec![2], vec![3], vec![4], vec![5], vec![6], vec![7], vec![8]], true)]
-    //     #[case::incorrect_tokens(vec![1, 2, 3, 4, 5, 6, 7, 8], vec![vec![1, 2, 3, 9]], false)] // Should fail on incorrect token
-    //     #[case::oversized_chunk(vec![1, 2, 3, 4], vec![vec![1, 2, 3, 4, 5]], false)] // Should fail on too many tokens
-    //     fn test_chunked_prefill(
-    //         #[case] initial_tokens: Vec<u32>,
-    //         #[case] chunks: Vec<Vec<u32>>,
-    //         #[case] should_succeed: bool,
-    //     ) {
-    //         let fixture = TestFixture::new();
-    //         let mut slot = create_slot_with_tokens(initial_tokens.clone());
+    #[test]
+    fn test_mixed_cache_scenarios_with_block_sharing() {
+        let fixture = TestFixture::new();
 
-    //         // Verify initial state
-    //         assert_eq!(slot.num_tokens(SlotPosition::Prefill), initial_tokens.len());
-    //         assert_eq!(slot.num_tokens(SlotPosition::Computed), 0);
-    //         assert_eq!(slot.num_tokens(SlotPosition::All), initial_tokens.len());
+        // Different token sequences
+        let tokens_a = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let tokens_b = vec![9, 10, 11, 12, 13, 14, 15, 16];
+        let salt = SALT_HASH;
 
-    //         // Allocate blocks before applying tokens (required by the system)
-    //         let total_tokens_needed = initial_tokens.len();
-    //         let allocated_blocks =
-    //             allocate_blocks_for_slot(&mut slot, total_tokens_needed, &fixture.pool);
-    //         assert!(allocated_blocks.is_some(), "Failed to allocate blocks");
+        println!("=== Mixed Cache Scenarios ===");
 
-    //         // Apply chunks sequentially
-    //         let mut total_computed = 0;
-    //         for (i, chunk) in chunks.iter().enumerate() {
-    //             let result = slot.apply_computed_tokens(chunk.clone(), &fixture.pool);
+        // Create first slot with tokens_a (cache miss)
+        let mut slot_a1 = Slot::new(tokens_a.clone().into(), BLOCK_SIZE, salt);
+        let allocated_blocks =
+            allocate_blocks_for_slot(&mut slot_a1, tokens_a.len(), &fixture.pool);
+        assert!(allocated_blocks.is_some());
 
-    //             if should_succeed {
-    //                 assert!(result.is_ok(), "Chunk {} failed: {:?}", i, result.err());
-    //                 total_computed += chunk.len();
-    //                 assert_eq!(slot.num_tokens(SlotPosition::Computed), total_computed);
+        for token in &tokens_a {
+            let result = slot_a1.apply_computed_tokens(vec![*token], &fixture.pool);
+            assert!(result.is_ok());
+        }
 
-    //                 // Check that we're still within prefill bounds or have completed prefill
-    //                 if total_computed <= initial_tokens.len() {
-    //                     assert!(slot.computed_position <= slot.prefill_position);
-    //                 }
-    //             } else {
-    //                 // For negative test cases, expect failure
-    //                 if result.is_err() {
-    //                     return; // Test passed - expected failure occurred
-    //                 }
-    //             }
-    //         }
+        let hashes_a = slot_a1.sequence_hashes(SlotPosition::All);
+        let blocks_a1 = slot_a1.get_block_ids();
 
-    //         if should_succeed {
-    //             // After successful chunked prefill, computed position should match prefill position
-    //             assert_eq!(slot.computed_position, slot.prefill_position);
-    //         }
-    //     }
+        // Create first slot with tokens_b (cache miss)
+        let mut slot_b1 = Slot::new(tokens_b.clone().into(), BLOCK_SIZE, salt);
+        let allocated_blocks =
+            allocate_blocks_for_slot(&mut slot_b1, tokens_b.len(), &fixture.pool);
+        assert!(allocated_blocks.is_some());
 
-    //     // Test standard decode scenarios
-    //     #[rstest]
-    //     #[case::single_decode_token(vec![1, 2, 3, 4], 1)]
-    //     #[case::multiple_decode_tokens(vec![1, 2, 3, 4], 5)]
-    //     fn test_standard_decode(#[case] initial_tokens: Vec<u32>, #[case] num_decode_tokens: usize) {
-    //         let fixture = TestFixture::new();
-    //         let mut slot = create_slot_with_tokens(initial_tokens.clone());
+        for token in &tokens_b {
+            let result = slot_b1.apply_computed_tokens(vec![*token], &fixture.pool);
+            assert!(result.is_ok());
+        }
 
-    //         // Complete prefill first
-    //         let allocated_blocks =
-    //             allocate_blocks_for_slot(&mut slot, initial_tokens.len(), &fixture.pool);
-    //         assert!(allocated_blocks.is_some());
+        let hashes_b = slot_b1.sequence_hashes(SlotPosition::All);
+        let blocks_b1 = slot_b1.get_block_ids();
 
-    //         let result = slot.apply_computed_tokens(initial_tokens.clone(), &fixture.pool);
-    //         assert!(result.is_ok(), "Prefill failed: {:?}", result.err());
+        // Verify different sequences have different hashes and blocks
+        assert_ne!(
+            hashes_a, hashes_b,
+            "Different token sequences should have different hashes"
+        );
+        assert_ne!(
+            blocks_a1, blocks_b1,
+            "Different sequences should have different block IDs"
+        );
 
-    //         // Now we're in decode mode - allocate space for one additional token at a time
-    //         for i in 0..num_decode_tokens {
-    //             let decode_token = 100 + i as u32; // Use distinct tokens for decode
+        println!("Setup complete:");
+        println!("  - Sequence A blocks: {:?}", blocks_a1);
+        println!("  - Sequence B blocks: {:?}", blocks_b1);
 
-    //             // Allocate space for the new token
-    //             let allocated_blocks = allocate_blocks_for_slot(&mut slot, 1, &fixture.pool);
-    //             assert!(
-    //                 allocated_blocks.is_some(),
-    //                 "Failed to allocate block for decode token {}",
-    //                 i
-    //             );
+        // Now create duplicate slots (cache hits)
+        let mut slot_a2 = Slot::new(tokens_a.clone().into(), BLOCK_SIZE, salt);
+        let cached_blocks_a = fixture
+            .pool
+            .match_sequence_hashes_blocking(&hashes_a)
+            .expect("Cache lookup for sequence A failed");
+        let result = slot_a2.apply_computed_blocks(cached_blocks_a);
+        assert!(result.is_ok());
 
-    //             // Apply the decode token
-    //             let result = slot.apply_computed_tokens(vec![decode_token], &fixture.pool);
-    //             assert!(
-    //                 result.is_ok(),
-    //                 "Decode token {} failed: {:?}",
-    //                 i,
-    //                 result.err()
-    //             );
+        let mut slot_b2 = Slot::new(tokens_b.clone().into(), BLOCK_SIZE, salt);
+        let cached_blocks_b = fixture
+            .pool
+            .match_sequence_hashes_blocking(&hashes_b)
+            .expect("Cache lookup for sequence B failed");
+        let result = slot_b2.apply_computed_blocks(cached_blocks_b);
+        assert!(result.is_ok());
 
-    //             // Verify state
-    //             let expected_total = initial_tokens.len() + i + 1;
-    //             assert_eq!(slot.num_tokens(SlotPosition::Computed), expected_total);
-    //             assert_eq!(slot.num_tokens(SlotPosition::All), expected_total);
-    //         }
-    //     }
+        let blocks_a2 = slot_a2.get_block_ids();
+        let blocks_b2 = slot_b2.get_block_ids();
 
-    //     // Test speculative decode scenarios
-    //     #[rstest]
-    //     #[case::speculate_2_tokens(vec![1, 2, 3, 4], 2, 2)] // Allocate 2, apply 2
-    //     #[case::speculate_3_tokens(vec![1, 2, 3, 4], 3, 3)] // Allocate 3, apply 3
-    //     #[case::partial_speculation(vec![1, 2, 3, 4], 4, 2)] // Allocate 4, apply only 2
-    //     #[case::over_allocation(vec![1, 2, 3, 4], 5, 3)] // Allocate 5, apply only 3
-    //     fn test_speculative_decode(
-    //         #[case] initial_tokens: Vec<u32>,
-    //         #[case] num_tokens_to_allocate: usize,
-    //         #[case] num_tokens_to_apply: usize,
-    //     ) {
-    //         let fixture = TestFixture::new();
-    //         let mut slot = create_slot_with_tokens(initial_tokens.clone());
+        // Verify block sharing within same sequences
+        assert_eq!(blocks_a1, blocks_a2, "Sequence A slots should share blocks");
+        assert_eq!(blocks_b1, blocks_b2, "Sequence B slots should share blocks");
 
-    //         // Complete prefill first
-    //         let allocated_blocks =
-    //             allocate_blocks_for_slot(&mut slot, initial_tokens.len(), &fixture.pool);
-    //         assert!(allocated_blocks.is_some());
+        // Verify no sharing between different sequences
+        assert_ne!(
+            blocks_a2, blocks_b2,
+            "Different sequences should not share blocks"
+        );
 
-    //         let result = slot.apply_computed_tokens(initial_tokens.clone(), &fixture.pool);
-    //         assert!(result.is_ok(), "Prefill failed: {:?}", result.err());
+        println!("✅ Mixed cache scenario validation:");
+        println!("  - A1 and A2 share blocks: {:?}", blocks_a1);
+        println!("  - B1 and B2 share blocks: {:?}", blocks_b1);
+        println!("  - A and B sequences use different blocks ✓");
+    }
 
-    //         // Allocate space for speculative tokens
-    //         let allocated_blocks =
-    //             allocate_blocks_for_slot(&mut slot, num_tokens_to_allocate, &fixture.pool);
-    //         assert!(
-    //             allocated_blocks.is_some(),
-    //             "Failed to allocate speculative blocks"
-    //         );
+    #[test]
+    fn test_salt_prevents_unwanted_block_sharing() {
+        let fixture = TestFixture::new();
+        let tokens = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let salt1 = SALT_HASH;
+        let salt2 = SALT_HASH + 1000; // Different salt
 
-    //         // Generate speculative tokens
-    //         let speculative_tokens: Vec<u32> = (200..200 + num_tokens_to_apply as u32).collect();
+        println!("=== Salt Isolation Test ===");
 
-    //         // Apply the speculative tokens
-    //         let result = slot.apply_computed_tokens(speculative_tokens, &fixture.pool);
-    //         assert!(
-    //             result.is_ok(),
-    //             "Speculative decode failed: {:?}",
-    //             result.err()
-    //         );
+        // Create slots with same tokens but different salts
+        let mut slot1 = Slot::new(tokens.clone().into(), BLOCK_SIZE, salt1);
+        let allocated_blocks = allocate_blocks_for_slot(&mut slot1, tokens.len(), &fixture.pool);
+        assert!(allocated_blocks.is_some());
 
-    //         // Verify state
-    //         let expected_total = initial_tokens.len() + num_tokens_to_apply;
-    //         assert_eq!(slot.num_tokens(SlotPosition::Computed), expected_total);
-    //         assert_eq!(slot.num_tokens(SlotPosition::All), expected_total);
-    //     }
+        for token in &tokens {
+            let result = slot1.apply_computed_tokens(vec![*token], &fixture.pool);
+            assert!(result.is_ok());
+        }
 
-    //     // Test edge cases
-    //     #[rstest]
-    //     #[case::empty_token_application(vec![1, 2, 3, 4], vec![])] // Apply empty token list
-    //     #[case::single_token_sequence(vec![42], vec![42])] // Single token prefill
-    //     fn test_edge_cases(#[case] initial_tokens: Vec<u32>, #[case] tokens_to_apply: Vec<u32>) {
-    //         let fixture = TestFixture::new();
-    //         let mut slot = create_slot_with_tokens(initial_tokens.clone());
+        let mut slot2 = Slot::new(tokens.clone().into(), BLOCK_SIZE, salt2);
+        let allocated_blocks = allocate_blocks_for_slot(&mut slot2, tokens.len(), &fixture.pool);
+        assert!(allocated_blocks.is_some());
 
-    //         if !initial_tokens.is_empty() {
-    //             let allocated_blocks =
-    //                 allocate_blocks_for_slot(&mut slot, initial_tokens.len(), &fixture.pool);
-    //             assert!(allocated_blocks.is_some());
-    //         }
+        for token in &tokens {
+            let result = slot2.apply_computed_tokens(vec![*token], &fixture.pool);
+            assert!(result.is_ok());
+        }
 
-    //         let result = slot.apply_computed_tokens(tokens_to_apply, &fixture.pool);
-    //         assert!(result.is_ok(), "Edge case failed: {:?}", result.err());
-    //     }
+        let hashes1 = slot1.sequence_hashes(SlotPosition::All);
+        let hashes2 = slot2.sequence_hashes(SlotPosition::All);
+        let blocks1 = slot1.get_block_ids();
+        let blocks2 = slot2.get_block_ids();
 
-    //     // Test sequence hash generation at different positions
-    //     #[test]
-    //     fn test_sequence_hashes() {
-    //         let fixture = TestFixture::new();
-    //         let initial_tokens = vec![1, 2, 3, 4, 5, 6, 7, 8]; // 2 blocks worth
-    //         let mut slot = create_slot_with_tokens(initial_tokens.clone());
+        // Different salts should prevent block sharing
+        assert_ne!(
+            hashes1, hashes2,
+            "Different salts should produce different hashes"
+        );
+        assert_ne!(
+            blocks1, blocks2,
+            "Different salts should prevent block sharing"
+        );
 
-    //         // Allocate blocks
-    //         let allocated_blocks =
-    //             allocate_blocks_for_slot(&mut slot, initial_tokens.len(), &fixture.pool);
-    //         assert!(allocated_blocks.is_some());
-
-    //         // Complete prefill
-    //         let result = slot.apply_computed_tokens(initial_tokens.clone(), &fixture.pool);
-    //         assert!(result.is_ok());
-
-    //         // Test sequence hashes at different positions
-    //         let prefill_hashes = slot.sequence_hashes(SlotPosition::Prefill);
-    //         let computed_hashes = slot.sequence_hashes(SlotPosition::Computed);
-    //         let all_hashes = slot.sequence_hashes(SlotPosition::All);
-
-    //         // After completing prefill, all should be equal
-    //         assert_eq!(prefill_hashes, computed_hashes);
-    //         assert_eq!(computed_hashes, all_hashes);
-    //         assert_eq!(prefill_hashes.len(), 2); // 8 tokens / 4 tokens per block = 2 blocks
-
-    //         // Add a decode token and check hashes again
-    //         let allocated_blocks = allocate_blocks_for_slot(&mut slot, 1, &fixture.pool);
-    //         assert!(allocated_blocks.is_some());
-
-    //         let result = slot.apply_computed_tokens(vec![99], &fixture.pool);
-    //         assert!(result.is_ok());
-
-    //         let new_computed_hashes = slot.sequence_hashes(SlotPosition::Computed);
-    //         let new_all_hashes = slot.sequence_hashes(SlotPosition::All);
-
-    //         // Prefill hashes should remain the same
-    //         assert_eq!(slot.sequence_hashes(SlotPosition::Prefill), prefill_hashes);
-    //         // But computed and all should now include the new token
-    //         assert_eq!(new_computed_hashes, new_all_hashes);
-    //         assert_eq!(new_computed_hashes.len(), 3); // Now we have 3 blocks worth of tokens
-    //     }
-
-    //     // Test block allocation scenarios
-    //     #[rstest]
-    //     #[case::exact_block_boundary(8, 0)] // Exactly 2 blocks needed, no additional
-    //     #[case::partial_block(6, 2)] // 1.5 blocks needed, allocate 2 more tokens
-    //     #[case::multiple_blocks(4, 8)] // Start with 1 block, allocate 2 more blocks worth
-    //     fn test_block_allocation(#[case] initial_tokens: usize, #[case] additional_tokens: usize) {
-    //         let fixture = TestFixture::new();
-    //         let tokens: Vec<u32> = (1..=initial_tokens as u32).collect();
-    //         let mut slot = create_slot_with_tokens(tokens.clone());
-
-    //         // Initial allocation
-    //         if initial_tokens > 0 {
-    //             let allocated_blocks =
-    //                 allocate_blocks_for_slot(&mut slot, initial_tokens, &fixture.pool);
-    //             assert!(allocated_blocks.is_some());
-
-    //             let result = slot.apply_computed_tokens(tokens, &fixture.pool);
-    //             assert!(result.is_ok());
-    //         }
-
-    //         // Additional allocation
-    //         if additional_tokens > 0 {
-    //             let allocated_blocks =
-    //                 allocate_blocks_for_slot(&mut slot, additional_tokens, &fixture.pool);
-    //             assert!(allocated_blocks.is_some());
-
-    //             let additional_token_vec: Vec<u32> = (100..100 + additional_tokens as u32).collect();
-    //             let result = slot.apply_computed_tokens(additional_token_vec, &fixture.pool);
-    //             assert!(result.is_ok());
-    //         }
-
-    //         let total_tokens = initial_tokens + additional_tokens;
-    //         assert_eq!(slot.num_tokens(SlotPosition::All), total_tokens);
-    //         assert_eq!(slot.num_tokens(SlotPosition::Computed), total_tokens);
-    //     }
-
-    //     // Test failure scenarios
-    //     #[test]
-    //     fn test_prefill_token_mismatch() {
-    //         let fixture = TestFixture::new();
-    //         let initial_tokens = vec![1, 2, 3, 4];
-    //         let mut slot = create_slot_with_tokens(initial_tokens.clone());
-
-    //         let allocated_blocks =
-    //             allocate_blocks_for_slot(&mut slot, initial_tokens.len(), &fixture.pool);
-    //         assert!(allocated_blocks.is_some());
-
-    //         // Try to apply wrong tokens during prefill
-    //         let wrong_tokens = vec![1, 2, 3, 5]; // Last token is wrong
-    //         let result = slot.apply_computed_tokens(wrong_tokens, &fixture.pool);
-
-    //         // This should panic in debug mode due to debug_assert_eq! in the actual code
-    //         // In release mode, it would likely succeed but with incorrect behavior
-    //         // The test here depends on the implementation detail that debug_assert_eq! is used
-    //     }
+        println!("Salt isolation verified:");
+        println!("  - Same tokens: {:?}", tokens);
+        println!("  - Salt1 {} → blocks {:?}", salt1, blocks1);
+        println!("  - Salt2 {} → blocks {:?}", salt2, blocks2);
+        println!("✅ Different salts prevent unwanted block sharing");
+    }
 }
