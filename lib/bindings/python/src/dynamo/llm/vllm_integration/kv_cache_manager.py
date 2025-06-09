@@ -43,6 +43,15 @@ class KvbmCacheManager:
         """
         Get the computed blocks for the request.
         """
+        sequence_hashes = self._create_slot(request)
+
+        owned_blocks = self.cache_manager.get_computed_blocks(sequence_hashes)
+        block_count = owned_blocks.block_count()
+
+        return KvbmCacheBlocks(owned_blocks), block_count
+
+    def _create_slot(self, request: Request) -> list[int]:
+        """Create a slot for the request."""
         if bool(request.mm_positions):
             raise ValueError("Unsupported request - requires mm extra keys")
 
@@ -55,14 +64,7 @@ class KvbmCacheManager:
             salt_hash=request.cache_salt,
         )
 
-        # todo(vllm): determine if this call should be idempotent or if it should fail
-        # if the slot already exists
-        sequence_hashes = self.cache_manager.create_slot(request, request.all_token_ids)
-
-        owned_blocks = self.cache_manager.get_computed_blocks(sequence_hashes)
-        block_count = owned_blocks.block_count()
-
-        return KvbmCacheBlocks(owned_blocks), block_count
+        return self.cache_manager.create_slot(request, request.all_token_ids)
 
     def allocate_slots(
         self,
@@ -110,6 +112,9 @@ class KvbmCacheManager:
         """
         if num_new_tokens == 0:
             raise ValueError("num_new_tokens must be greater than 0")
+
+        if not self.cache_manager.has_slot(request.request_id):
+            self._create_slot(request)
 
         num_computed_tokens = request.num_computed_tokens + num_new_computed_tokens
 
