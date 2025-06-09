@@ -7,6 +7,7 @@ Implementation of vLLM KV cache manager protocol.
 
 from typing import Optional
 
+from vllm.distributed.kv_events import KVCacheEvent
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks
 from vllm.v1.core.kv_cache_utils import KVCacheBlock
 from vllm.v1.request import Request
@@ -107,11 +108,17 @@ class KvbmCacheManager:
         Returns:
             A list of new allocated blocks.
         """
+        if num_new_tokens == 0:
+            raise ValueError("num_new_tokens must be greater than 0")
+
+        num_computed_tokens = request.num_computed_tokens + num_new_computed_tokens
 
         # we need to extract from the request the new tokens to append to to the block state
-        num_sequence_tokens = self.cache_manager.num_sequence_tokens(request.request_id)
+        prev_computed_tokens = self.cache_manager.num_computed_tokens(
+            request.request_id
+        )
         tokens_to_append = request.all_token_ids[
-            num_sequence_tokens : request.num_tokens
+            prev_computed_tokens:num_computed_tokens
         ]
 
         slot_update = SlotUpdate(
@@ -135,3 +142,86 @@ class KvbmCacheManager:
         ]
 
         return KVCacheBlocks(blocks=new_blocks)
+
+    def free(self, request: Request) -> None:
+        """Free the blocks allocated for the request.
+        We free the blocks in reverse order so that he tail blocks are evicted
+        first when caching is enabled.
+
+        Args:
+            request: The request to free the blocks.
+        """
+        self.cache_manager.free(request.request_id)
+
+    def reset_prefix_cache(self) -> bool:
+        """Reset prefix cache. This function may be used in RLHF
+        flows to invalidate prefix caching after the weights are updated,
+        or used for resetting prefix caching status for benchmarking.
+
+        Returns:
+            bool: True if the prefix cache is successfully reset,
+            False otherwise.
+        """
+        self.cache_manager.reset_prefix_cache()
+        return False
+
+    def get_num_common_prefix_blocks(
+        self,
+        request: Request,
+        num_running_requests: int,
+    ) -> list[int]:
+        """Calculate the number of common prefix blocks shared by all requests
+        in the RUNNING state for each kv cache group.
+
+        The function determines this by selecting any request and iterating
+        through its blocks.  A block is considered a common prefix block if its
+        `ref_cnt` equals the total number of requests in the RUNNING state.
+
+        NOTE(woosuk): The number of requests in the RUNNING state is **greater
+        than or equal to** the number of requests scheduled in the current step.
+        This is because the RUNNING state only indicates that:
+        1. The request has not yet finished, and
+        2. The request holds its blocks unfreed.
+
+        While all scheduled requests must be in the RUNNING state, the inverse
+        is not necessarily true. There may be RUNNING requests that are not
+        scheduled in the current step.
+
+        This can result in an edge case where the number of common prefix blocks
+        is 0, even though all scheduled requests share a common prefix. This
+        occurs because there may be unscheduled RUNNING requests that do not
+        share the common prefix. Currently, this case cannot be easily detected,
+        so the function returns 0 in such cases.
+
+        Args:
+            request: Any request in the RUNNING state, used to identify the
+                common prefix blocks.
+            num_running_requests: The total number of requests in the RUNNING
+                state. This can be different from the number of scheduled
+                requests in the current step.
+
+        Returns:
+            list[int]: The number of common prefix blocks for each kv cache
+            group.
+        """
+        raise NotImplementedError("get_num_common_prefix_blocks is not implemented")
+
+    def free_block_hashes(self, request: Request) -> None:
+        """Discard the block hashes for the request.
+
+        NOTE: Unlike `free`, this method should be called only when the request
+        is finished, not when it is preempted.
+        """
+        return self.cache_manager.free_block_hashes(request.request_id)
+
+    def take_events(self) -> list[KVCacheEvent]:
+        """Take the KV cache events from the block pool.
+
+        Returns:
+            A list of KV cache events.
+        """
+        return self.cache_manager.take_events()
+
+    def get_block_ids(self, request_id: str) -> list[list[int]]:
+        """Get the block ids of a request."""
+        return self.cache_manager.get_block_ids(request_id)

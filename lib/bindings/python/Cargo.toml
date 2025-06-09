@@ -77,3 +77,5 @@ pythonize = "0.23"
 
 dlpark = { version = "0.5", features = ["pyo3", "half"], optional = true }
 
+[dev-dependencies]
+rstest = "0.25"

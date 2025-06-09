@@ -34,6 +34,7 @@ pub use slot::{Slot, SlotPosition};
 fn _vllm_integration(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<KvbmCacheManager>()?;
     m.add_class::<KvbmRequest>()?;
+    m.add_class::<KvCacheEvent>()?;
     m.add_class::<KvbmBlockList>()?;
     m.add_class::<BlockState>()?;
     m.add_class::<BlockStates>()?;
@@ -52,6 +53,9 @@ pub struct KvbmCacheManager {
     block_manager: PyBlockManager,
     slot_manager: Mutex<SlotManager<String>>,
 }
+
+#[pyclass]
+pub struct KvCacheEvent {}
 
 impl KvbmCacheManager {
     #[inline(always)]
@@ -117,6 +121,47 @@ impl KvbmCacheManager {
             .update_slot(update.dissolve(), self.block_manager())
             .map_err(to_pyerr)
     }
+
+    pub fn free(&self, request_id: String) -> PyResult<()> {
+        self.slot_manager
+            .lock()
+            .map_err(to_pyerr)?
+            .free_blocks(&request_id)
+            .map_err(to_pyerr)
+    }
+
+    pub fn reset_prefix_cache(&self) -> PyResult<()> {
+        Err(to_pyerr("reset_prefix_cache is not implemented"))
+    }
+
+    pub fn get_num_common_prefix_blocks(
+        &self,
+        _request_id: String,
+        _num_running_requests: usize,
+    ) -> PyResult<usize> {
+        Err(to_pyerr("get_num_common_prefix_blocks is not implemented"))
+    }
+
+    /// Free the entire slot for the given request ID.
+    pub fn free_block_hashes(&self, request_id: String) -> PyResult<()> {
+        self.slot_manager
+            .lock()
+            .map_err(to_pyerr)?
+            .drop_slot(&request_id)
+            .map_err(to_pyerr)
+    }
+
+    pub fn take_events(&self) -> PyResult<Vec<KvCacheEvent>> {
+        Err(to_pyerr("take_events is not implemented"))
+    }
+
+    pub fn get_block_ids(&self, request_id: String) -> PyResult<Vec<BlockId>> {
+        self.slot_manager
+            .lock()
+            .map_err(to_pyerr)?
+            .get_block_ids(&request_id)
+            .map_err(to_pyerr)
+    }
 }
 
 #[derive(Debug, Clone, Dissolve)]
@@ -124,13 +169,17 @@ pub struct GenericSlotUpdate<R> {
     /// The request ID.
     pub request_id: R,
 
-    /// External state about the number of computed tokens in the request.
+    /// External state about the number of tokens in the request.
     /// This should match the slots expectation.
     pub request_num_tokens: usize,
 
+    /// External state about the number of computed tokens in the request.
+    /// This should match the slots expectation.
+    pub request_num_computed_tokens: usize,
+
     /// The tokens to append to the sequence.
     /// After the tokens are appendend, the internal sequence length should match `request_num_token`
-    pub tokens_to_append: Vec<usize>,
+    pub tokens_to_append: Vec<u32>,
 
     /// The number of new tokens which advances the sequence state.
     /// This is the number of tokens which will be computed in the near future.
@@ -143,7 +192,7 @@ pub struct GenericSlotUpdate<R> {
     pub num_new_computed_tokens: Option<usize>,
 
     /// The new computed blocks which advance the sequence state.
-    pub new_computed_blocks: Option<BlockStates>,
+    pub new_computed_blocks: Option<KvbmBlockList>,
 
     /// The number of lookahead blocks to cache.
     pub num_lookahead_blocks: Option<usize>,
@@ -159,21 +208,23 @@ pub struct SlotUpdate(pub GenericSlotUpdate<String>);
 #[pymethods]
 impl SlotUpdate {
     #[new]
-    #[pyo3(signature = (request_id, request_num_tokens, tokens_to_append, num_new_tokens, num_new_computed_tokens=None, new_computed_blocks=None, num_lookahead_blocks=None, delay_cache_blocks=None))]
+    #[pyo3(signature = (request_id, request_num_tokens, request_num_computed_tokens, tokens_to_append, num_new_tokens, num_new_computed_tokens=None, new_computed_blocks=None, num_lookahead_blocks=None, delay_cache_blocks=None))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         request_id: String,
         request_num_tokens: usize,
-        tokens_to_append: Vec<usize>,
+        request_num_computed_tokens: usize,
+        tokens_to_append: Vec<u32>,
         num_new_tokens: usize,
         num_new_computed_tokens: Option<usize>,
-        new_computed_blocks: Option<BlockStates>,
+        new_computed_blocks: Option<KvbmBlockList>,
         num_lookahead_blocks: Option<usize>,
         delay_cache_blocks: Option<bool>,
     ) -> Self {
         let update = GenericSlotUpdate {
             request_id,
             request_num_tokens,
+            request_num_computed_tokens,
             tokens_to_append,
             num_new_tokens,
             num_new_computed_tokens,
@@ -187,7 +238,15 @@ impl SlotUpdate {
 }
 
 pub trait RequestKey:
-    std::hash::Hash + std::cmp::Eq + Clone + std::fmt::Debug + Send + Sync + 'static
+    std::hash::Hash
+    + std::cmp::Eq
+    + std::fmt::Debug
+    + std::fmt::Display
+    + tracing::Value
+    + Clone
+    + Send
+    + Sync
+    + 'static
 {
 }
 
@@ -195,9 +254,6 @@ impl RequestKey for String {}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SlotError {
-    #[error("slot already exists")]
-    AlreadyExists,
-
     #[error("slot not found")]
     NotFound,
 
@@ -239,26 +295,17 @@ impl<R: RequestKey> SlotManager<R> {
         salt_hash: SaltHash,
         tokens: Vec<u32>,
     ) -> Result<Vec<SequenceHash>, SlotError> {
-        // let token_count = tokens.len();
+        tracing::debug!(request_id, "creating slot");
 
-        // if !self.slots.contains_key(request_id) {
-        //     self.slots.insert(
-        //         request_id.clone(),
-        //         Slot::new(tokens.into(), self.block_size, salt_hash),
-        //     );
-        // }
+        if !self.slots.contains_key(request_id) {
+            self.slots.insert(
+                request_id.clone(),
+                Slot::new(tokens.into(), self.block_size, salt_hash),
+            );
+        }
 
-        // let slot = self.slots.get(request_id).ok_or(SlotError::NotFound)?;
-
-        // let sequence_hashes = slot
-        //     .sequence
-        //     .blocks()
-        //     .iter()
-        //     .map(|b| b.sequence_hash())
-        //     .collect();
-
-        // Ok(sequence_hashes)
-        unimplemented!()
+        let slot = self.slots.get(request_id).ok_or(SlotError::NotFound)?;
+        Ok(slot.sequence_hashes(SlotPosition::All))
     }
 
     pub fn update_slot(
@@ -266,59 +313,91 @@ impl<R: RequestKey> SlotManager<R> {
         update: GenericSlotUpdate<R>,
         bm: &KvBlockManager<BasicMetadata>,
     ) -> Result<Option<BlockStates>, SlotError> {
-        // let (
-        //     request_id,
-        //     request_num_tokens,
-        //     tokens_to_append,
-        //     num_new_tokens,
-        //     num_new_computed_tokens,
-        //     new_computed_blocks,
-        //     num_lookahead_blocks,
-        //     delay_cache_blocks,
-        // ) = update.dissolve();
+        let (
+            request_id,
+            _request_num_tokens,
+            request_num_computed_tokens,
+            tokens_to_append,
+            num_new_tokens,
+            num_new_computed_tokens,
+            new_computed_blocks,
+            num_lookahead_blocks,
+            delay_cache_blocks,
+        ) = update.dissolve();
 
-        // // check conditions:
-        // // - if new_computed_blocks is provided, then tokens_to_append
+        // todo(ryan): add support for lookahead blocks
+        if num_lookahead_blocks.is_some() {
+            return Err(SlotError::Error(
+                "num_lookahead_blocks is not supported".to_string(),
+            ));
+        }
 
-        // let slot = self.slots.get_mut(&request_id).ok_or(SlotError::NotFound)?;
+        if delay_cache_blocks.unwrap_or(false) {
+            return Err(SlotError::Error(
+                "delay_cache_blocks is not supported".to_string(),
+            ));
+        }
 
-        // slot.update_sequence(tokens_to_append)?;
-        // debug_assert_eq!(slot.sequence.total_tokens(), request_num_tokens);
+        let slot = self.slots.get_mut(&request_id).ok_or(SlotError::NotFound)?;
 
-        // match new_computed_blocks {
-        //     // decode
-        //     None => {
-        //         slot.update_blocks(bm.device().unwrap())?;
-        //     }
-        //     Some(new_computed_blocks) => {
-        //         slot.update_blocks(bm.device().unwrap())?;
-        //     }
-        // }
+        // first apply any new computed blocks
+        // these are the blocks that were matched to the sequence hashes
+        // this will advance the computed position of the slot
+        if let Some(matched_blocks) = new_computed_blocks {
+            let blocks = matched_blocks.take_blocks();
+            match blocks {
+                Some(BlockListType::Immutable(blocks)) => {
+                    tracing::debug!(
+                        request_id,
+                        "applying {} cache-hit tokens",
+                        blocks.len() * self.block_size
+                    );
+                    slot.apply_computed_blocks(blocks)?;
+                }
+                Some(BlockListType::Mutable(_blocks)) => {
+                    panic!(
+                        "impossibility: mutable blocks were provided instead of immutable blocks"
+                    );
+                }
+                None => {
+                    panic!("impossibility: block list was none; possible taken previously");
+                }
+            }
+        } else {
+            tracing::debug!(request_id, "applying {} tokens", tokens_to_append.len());
+            slot.apply_computed_tokens(tokens_to_append, bm.device().unwrap())?;
+        }
 
-        // // 3. allocate new blocks if needed
-        // let required_tokens = slot.sequence.total_tokens() + num_new_tokens;
-        // let num_blocks = required_tokens.div_ceil(self.block_size);
-        // let num_new_blocks = num_blocks - (slot.immutable.len() + slot.mutable.len());
+        debug_assert_eq!(
+            slot.num_tokens(SlotPosition::Computed),
+            request_num_computed_tokens + num_new_computed_tokens.unwrap_or(0)
+        );
 
-        // let new_blocks = bm
-        //     .device()
-        //     .unwrap()
-        //     .allocate_blocks_blocking(num_new_blocks)
-        //     .ok();
+        // 3. allocate new blocks if needed
+        Ok(slot
+            .allocate_blocks(num_new_tokens, bm.device().unwrap())
+            .map(|new_block_ids| {
+                new_block_ids
+                    .into_iter()
+                    .map(|block_id| BlockState::new(block_id, None))
+                    .collect::<Vec<BlockState>>()
+                    .into()
+            }))
+    }
 
-        // let mut block_descriptors = BlockStates::new();
+    pub fn get_block_ids(&self, request_id: &R) -> Result<Vec<BlockId>, SlotError> {
+        let slot = self.slots.get(request_id).ok_or(SlotError::NotFound)?;
+        Ok(slot.get_block_ids())
+    }
 
-        // if let Some(new_blocks) = new_blocks {
-        //     new_blocks.into_iter().for_each(|block| {
-        //         block_descriptors.push_back(BlockState::new(block.block_id(), None));
-        //         slot.mutable.push_back(block);
-        //     });
-        // } else {
-        //     return Ok(None);
-        // }
+    pub fn free_blocks(&mut self, request_id: &R) -> Result<(), SlotError> {
+        let slot = self.slots.get_mut(request_id).ok_or(SlotError::NotFound)?;
+        slot.free_blocks();
+        Ok(())
+    }
 
-        // Ok(Some(block_descriptors))
-
-        unimplemented!()
+    pub fn drop_slot(&mut self, request_id: &R) -> Result<(), SlotError> {
+        self.slots.remove(request_id).ok_or(SlotError::NotFound)?;
+        Ok(())
     }
 }

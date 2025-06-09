@@ -49,7 +49,7 @@ impl KvbmBlockList {
         }
     }
 
-    fn take_blocks(&self) -> Option<BlockListType> {
+    pub fn take_blocks(&self) -> Option<BlockListType> {
         let mut blocks = self.blocks.lock().unwrap();
         blocks.take()
     }
@@ -148,5 +148,11 @@ impl BlockStates {
 
     pub fn len(&self) -> usize {
         self.states.len()
+    }
+}
+
+impl From<Vec<BlockState>> for BlockStates {
+    fn from(states: Vec<BlockState>) -> Self {
+        Self { states }
     }
 }
