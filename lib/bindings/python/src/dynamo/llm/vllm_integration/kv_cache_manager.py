@@ -224,4 +224,4 @@ class KvbmCacheManager:
 
     def get_block_ids(self, request_id: str) -> list[list[int]]:
         """Get the block ids of a request."""
-        return self.cache_manager.get_block_ids(request_id)
+        return [self.cache_manager.get_block_ids(request_id)]
