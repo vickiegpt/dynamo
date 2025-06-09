@@ -18,7 +18,6 @@ use crate::kv_router::{
     protocols::*,
     KV_EVENT_SUBJECT, KV_METRICS_ENDPOINT,
 };
-use async_nats::jetstream;
 use async_trait::async_trait;
 use dynamo_runtime::{
     component,
@@ -120,14 +119,6 @@ impl KvEventSink {
             KvEventSinkConfig::Echo => Ok(KvEventSink::Echo),
         }
     }
-
-    fn namespace(component: Component) -> component::Namespace {
-        return component.namespace().clone();
-    }
-
-    fn name(component: Component) -> String {
-        return component.name().clone();
-    }
 }
 
 /// A publisher of KV events.
@@ -139,7 +130,7 @@ pub struct KvEventPublisher {
     source: Option<KvEventSource>,
     /// The sink of KV events
     /// If None, we default to NATS publish
-    sink: Option<KvEventSink>,
+    sink: KvEventSink,
     /// The cancellation token.
     cancellation_token: CancellationToken,
     /// The channel to send events to.
@@ -229,7 +220,7 @@ impl KvEventPublisher {
             .runtime()
             .secondary()
             .spawn(start_event_processor(
-                sink,
+                sink.clone(),
                 worker_id,
                 cancellation_token.clone(),
                 rx,
@@ -238,7 +229,7 @@ impl KvEventPublisher {
         Ok(Self {
             kv_block_size,
             source,
-            sink: Some(sink.clone()),
+            sink,
             cancellation_token,
             tx,
         })
