@@ -19,10 +19,7 @@ use crate::kv_router::{
     KV_EVENT_SUBJECT, KV_METRICS_ENDPOINT,
 };
 use async_trait::async_trait;
-use dynamo_runtime::{
-    component,
-    traits::{events::EventPublisher, DistributedRuntimeProvider},
-};
+use dynamo_runtime::traits::{events::EventPublisher, DistributedRuntimeProvider};
 use dynamo_runtime::{
     component::Component,
     pipeline::{
@@ -69,7 +66,6 @@ pub enum KvEventSinkConfig {
 }
 
 /// The sink of KV events.
-#[derive(Clone)]
 enum KvEventSink {
     Nats { component: Component },
     Echo,
@@ -128,9 +124,6 @@ pub struct KvEventPublisher {
     /// The source of KV events.
     /// Can be `None` if all events provided through [`KvEventPublisher::publish`].
     source: Option<KvEventSource>,
-    /// The sink of KV events
-    /// If None, we default to NATS publish
-    sink: KvEventSink,
     /// The cancellation token.
     cancellation_token: CancellationToken,
     /// The channel to send events to.
@@ -179,7 +172,7 @@ impl EventPublisher for KvEventSink {
                 .client()
                 .publish(subject, bytes.into())
                 .await?),
-            KvEventSink::Echo => Ok(println!("yo!!")),
+            KvEventSink::Echo => Ok(println!("{:?}", subject)),
         }
     }
 }
@@ -220,7 +213,7 @@ impl KvEventPublisher {
             .runtime()
             .secondary()
             .spawn(start_event_processor(
-                sink.clone(),
+                sink,
                 worker_id,
                 cancellation_token.clone(),
                 rx,
@@ -229,7 +222,6 @@ impl KvEventPublisher {
         Ok(Self {
             kv_block_size,
             source,
-            sink,
             cancellation_token,
             tx,
         })
