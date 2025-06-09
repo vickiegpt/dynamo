@@ -182,9 +182,9 @@ class VllmEncodeWorker:
                 # Ensure path is absolute or resolve relative to a known base if necessary
                 # For simplicity, assuming it's an accessible path.
                 if not os.path.exists(file_path):
-                    raise FileNotFoundError(f"Local video file not found: {file_path}")
+                    raise FileNotFoundError(f"Error reading file: {file_path}")
 
-                logger.info(f"Reading local video file: {file_path}")
+                logger.info(f"Error reading file: {file_path}")
                 with open(file_path, "rb") as f:
                     video_bytes = f.read()
                 video_data = BytesIO(video_bytes)
@@ -341,7 +341,8 @@ class VllmEncodeWorker:
             TARGET_FRAME_WIDTH = 336
             # self.num_frames_to_sample is already the target number of frames
 
-            # Convert NumPy clip (T, H, W, C) to PyTorch tensor
+            # Convert the NumPy array from the video decoder into a PyTorch tensor.
+            # This is a required step to use PyTorch functions for GPU-accelerated image processing.
             frames_tensor_orig_res = torch.from_numpy(clip_np)  # Shape: (T, H, W, C)
 
             # Permute to (T, C, H, W) for interpolate
@@ -363,7 +364,6 @@ class VllmEncodeWorker:
             logger.info(f"Resized frames to shape: {resized_frames_tensor_hwc.shape}")
 
             # Ensure the tensor is contiguous, on CUDA and uint8 for the NIXL buffer.
-            # The values should be in the 0-255 range after interpolation if input was 0-255.
             tensor_for_descriptor: torch.Tensor = resized_frames_tensor_hwc.to(
                 device="cuda", dtype=torch.uint8
             ).contiguous()
@@ -374,16 +374,19 @@ class VllmEncodeWorker:
                 f"contiguous: {tensor_for_descriptor.is_contiguous()}) for RDMA."
             )
 
+            # Create a descriptor for the tensor to be sent via the connector.
             descriptor = connect.Descriptor(tensor_for_descriptor)
             logger.info(f"Req {request_id}: Beginning connector write operation.")
             if request.serialized_request is None:
                 logger.error(
                     f"Request serialized_request is None for request: {{ id: {request_id} }}."
                 )
-            # Pass the DecodeWorker's SerializedRequest (representing its WritableOperation) to begin_write.
+            # Pass the remote worker's SerializedRequest (representing its WritableOperation) to begin_write.
+            # This initiates the data transfer to the memory buffer on the other worker.
             write_op = await self._connector.begin_write(
                 descriptor, request.serialized_request
             )
+            # Wait for the RDMA/transfer operation to complete.
             await write_op.wait_for_completion()
             logger.info(f"Req {request_id}: Connector write operation completed.")
 
@@ -422,6 +425,7 @@ class VllmEncodeWorker:
     @async_on_start
     async def async_init(self):
         logger.info(f"{self.__class__.__name__} async_init started.")
+        # Initialize the connector for RDMA transfers.
         self._connector = connect.Connector()
         await self._connector.initialize()
         logger.info("Dynamo connector initialized.")

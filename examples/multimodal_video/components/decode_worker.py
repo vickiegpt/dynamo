@@ -14,8 +14,6 @@
 # limitations under the License.
 
 import asyncio
-import dataclasses
-import json
 import logging
 import os
 import signal
@@ -30,12 +28,7 @@ from transformers import AutoProcessor
 from utils.logging import check_required_workers
 from utils.nixl import NixlMetadataStore
 from utils.prefill_queue import PrefillQueue
-from utils.protocol import (
-    EncodeRequest,
-    EncodeResponse,
-    MyRequestOutput,
-    vLLMMultimodalRequest,
-)
+from utils.protocol import EncodeRequest, MyRequestOutput, vLLMMultimodalRequest
 from utils.vllm import parse_vllm_args
 from vllm.entrypoints.openai.api_server import (
     build_async_engine_client_from_engine_args,
@@ -63,27 +56,6 @@ INCOMING_FRAMES_SHAPE = (
 )
 INCOMING_FRAMES_DTYPE = torch.uint8
 INCOMING_FRAMES_DEVICE = "cuda"
-
-
-def _convert_logprobs_to_cpu_serializable(logprobs_data):
-    """Converts logprobs data, which might contain CUDA scalar tensors, to a CPU-based serializable format."""
-    if logprobs_data is None:
-        return None
-
-    # Handles List[Optional[Dict[int, float_or_scalar_tensor]]]
-    serializable_logprobs = []
-    for item in logprobs_data:
-        if item is None:
-            serializable_logprobs.append(None)
-        else:
-            cpu_item = {
-                token_id: (
-                    val.cpu().item() if isinstance(val, torch.Tensor) else float(val)
-                )
-                for token_id, val in item.items()
-            }
-            serializable_logprobs.append(cpu_item)
-    return serializable_logprobs
 
 
 @service(
@@ -114,42 +86,15 @@ class VllmDecodeWorker:
         """
         expanded_prompt_list = []
         token_expanded_successfully = False
-        for (
-            token_id_val
-        ) in original_tokens:  # Renamed token to token_id_val to avoid conflict
+        for token_id_val in original_tokens:
             if token_id_val == image_token_id and not token_expanded_successfully:
-                # Debug: log the expansion details
-                video_tokens_to_add = num_frames_to_expand_to
-                dummy_tokens_per_frame = (
-                    num_dummy_tokens_per_frame if add_dummy_tokens else 0
-                )
-                total_dummy_tokens = video_tokens_to_add * dummy_tokens_per_frame
-                total_expansion = video_tokens_to_add + total_dummy_tokens
-                logger.info(
-                    f"Token expansion debug: {video_tokens_to_add} video tokens + {total_dummy_tokens} dummy tokens = {total_expansion} total"
-                )
-
-                for frame_idx in range(num_frames_to_expand_to):
+                for _ in range(num_frames_to_expand_to):
                     expanded_prompt_list.append(image_token_id)
                     if add_dummy_tokens:
                         dummy_tokens_to_add = [
                             dummy_token_id
                         ] * num_dummy_tokens_per_frame
                         expanded_prompt_list.extend(dummy_tokens_to_add)
-                        logger.debug(
-                            f"Frame {frame_idx}: added 1 video token + {len(dummy_tokens_to_add)} dummy tokens"
-                        )
-
-                # Debug: count what we actually added
-                added_video_tokens = sum(
-                    1 for t in expanded_prompt_list if t == image_token_id
-                )
-                added_dummy_tokens = sum(
-                    1 for t in expanded_prompt_list if t == dummy_token_id
-                )
-                logger.info(
-                    f"Expansion result: {added_video_tokens} video tokens (ID {image_token_id}), {added_dummy_tokens} dummy tokens (ID {dummy_token_id})"
-                )
 
                 token_expanded_successfully = True
             else:
@@ -163,17 +108,6 @@ class VllmDecodeWorker:
                 f"Image token ID {image_token_id} for expansion not found in prompt tokenized by hf_processor. Prompt: {original_tokens}. This might be okay if no video was intended in this specific prompt structure."
             )
             return list(original_tokens)  # Return original if no video token to expand
-
-        # Final debug: count all placeholder tokens in the result
-        video_placeholders = sum(1 for t in expanded_prompt_list if t == image_token_id)
-        dummy_placeholders = sum(1 for t in expanded_prompt_list if t == dummy_token_id)
-        other_zeros = sum(
-            1 for t in expanded_prompt_list if t == 0 and t != dummy_token_id
-        )
-        total_placeholders = video_placeholders + dummy_placeholders + other_zeros
-        logger.info(
-            f"Final token analysis: {len(expanded_prompt_list)} total tokens, {total_placeholders} potential placeholders ({video_placeholders} video + {dummy_placeholders} dummy + {other_zeros} other zeros)"
-        )
 
         return expanded_prompt_list
 
@@ -268,6 +202,7 @@ class VllmDecodeWorker:
             .endpoint("encode")
             .client()
         )
+        # Initialize the connector for RDMA transfers within the specified namespace.
         self._connector = connect.Connector(runtime=runtime, namespace=enc_comp_ns)
         await self._connector.initialize()
 
@@ -278,7 +213,9 @@ class VllmDecodeWorker:
             dtype=INCOMING_FRAMES_DTYPE,
             device=INCOMING_FRAMES_DEVICE,
         )
+        # Create a descriptor for the tensor to make it available for remote access.
         descriptor = connect.Descriptor(raw_frames_tensor)
+        # Register the memory with the connector, making it discoverable.
         descriptor.register_memory(self._connector)
         self._frames_descriptor = (raw_frames_tensor, descriptor)
 
@@ -302,13 +239,14 @@ class VllmDecodeWorker:
                     None  # Always remote prefill if not conditional_disagg
                 )
 
-            # embedding_size is used for dummy token calculation in remote prefill case
-            # For LLaVA-NeXT-Video, the model expects exactly 144 tokens per frame
-            # This was fixed in vLLM PR #8496 for LLaVA-NeXT feature size calculation
-            # Each video frame needs 144 total tokens (143 dummy + 1 video token)
+            # embedding_size is used for dummy token calculation in remote prefill case.
+            # For LLaVA-NeXT-Video, the model architecture processes each frame into a 12x12 grid
+            # of visual tokens, resulting in 144 tokens per frame. This is a fixed architectural
+            # constant. For more details on the vision tower architecture, see the LLaVA-1.5 paper
+            # which LLaVA-NeXT is based on: https://arxiv.org/abs/2310.03744
             self.embedding_size = 144
             logger.info(
-                f"Disaggregated mode: Using correct LLaVA-NeXT-Video embedding size: {self.embedding_size}"
+                f"Disaggregated mode: Using LLaVA-NeXT-Video embedding size: {self.embedding_size}"
             )
 
         else:  # Aggregated mode specific setup
@@ -335,12 +273,6 @@ class VllmDecodeWorker:
 
     def get_remote_prefill_request_callback(self):
         async def callback(request: RemotePrefillRequest):
-            logger.info(
-                f"DecodeWorker {request.request_id}: Remote prefill callback triggered. Attempting to enqueue to stream '{self._prefill_queue_stream_name}'."
-            )
-            logger.info(
-                f"DecodeWorker {request.request_id}: Enqueueing request with multimodal_data_source: {request.multimodal_data_source}, prompt_token_ids length: {len(request.prompt_token_ids) if request.prompt_token_ids else 'None'}"
-            )
             try:
                 async with PrefillQueue.get_instance(
                     nats_server=self._prefill_queue_nats_server,
@@ -362,6 +294,7 @@ class VllmDecodeWorker:
     async def generate(self, request: vLLMMultimodalRequest):
         request_id = request.request_id
         video_url = request.video_url  # Video path for EncodeWorker
+        # TODO: Fix existing tokenizer <video> not found error and remove this.
         user_text_prompt = request.engine_prompt.get(
             "text_prompt", "Describe the video."
         )
@@ -392,9 +325,6 @@ class VllmDecodeWorker:
         text_prompt_string = self.hf_processor.apply_chat_template(
             conversation, tokenize=False, add_generation_prompt=True
         )
-        logger.info(
-            f"Formatted text_prompt_string (request {request_id}):\\n{text_prompt_string}"
-        )
 
         # Constants for token manipulation
         # For LLaVA-NeXT-Video models, the video token ID is 32000, not 32001
@@ -422,9 +352,6 @@ class VllmDecodeWorker:
                 and len(base_prompt_ids_for_router) == 1
             ):
                 base_prompt_ids_for_router = base_prompt_ids_for_router[0]
-            logger.info(
-                f"Base prompt_ids for router (request {request_id}, length {len(base_prompt_ids_for_router)}): {base_prompt_ids_for_router}"
-            )
 
             should_prefill_remotely_decision = True
             if self.disaggregated_router:
@@ -463,103 +390,59 @@ class VllmDecodeWorker:
                 prompt_argument_for_vllm = TokensPrompt(
                     prompt_token_ids=expanded_and_dummied_ids, multi_modal_data=None
                 )
-                logger.info(
-                    f"REMOTE prefill: using TokensPrompt with {NUM_SAMPLED_FRAMES} video tokens (ID {VIDEO_TOKEN_ID_FOR_EXPANSION}), {num_dummies} dummies each. Expanded length: {len(expanded_and_dummied_ids)}."
-                )
                 multi_modal_data_for_engine = None  # Handled by prefill worker
             else:  # Local prefill in disaggregated mode
                 logger.info(
                     f"Disaggregated: Prefilling LOCALLY for request {{ id: {request_id} }} (orig prompt len {len(base_prompt_ids_for_router)})"
                 )
                 raw_frames_tensor_from_nixl, desc = self._frames_descriptor
+                # Create a writable operation handle for the remote EncodeWorker.
+                # This allows the EncodeWorker to write directly into this worker's `raw_frames_tensor_from_nixl`.
                 with self._connector.create_writable(desc) as writable:
                     enc_req = EncodeRequest(
                         request_id=request_id,
                         video_url=video_url,
+                        # Serialize the writable handle to send it to the EncodeWorker.
                         serialized_request=writable.to_serialized(),
                     )
-                    logger.info(
-                        f"Local prefill (disagg) - Encode request: {enc_req.model_dump_json()}"
-                    )
-                    async for enc_resp in await self.encode_worker_client.round_robin(
+                    async for _ in await self.encode_worker_client.round_robin(
                         enc_req.model_dump_json()
                     ):
-                        logger.info(
-                            f"Local prefill (disagg) - Enc resp: {EncodeResponse.model_validate_json(enc_resp.data()).request_id}"
-                        )
+                        pass
+                    # Wait for the remote write from the EncodeWorker to complete.
                     await writable.wait_for_completion()
                 current_received_multimodal_data_tensor = raw_frames_tensor_from_nixl
                 video_numpy = current_received_multimodal_data_tensor.cpu().numpy()
                 multi_modal_data_for_engine = {"video": video_numpy}
                 prompt_argument_for_vllm = text_prompt_string  # Pass raw string to vLLM
-                logger.info(
-                    f"LOCAL prefill (disagg): using raw prompt string for vLLM and {video_numpy.shape[0]} frames."
-                )
                 current_remote_prefill_params = None
         else:  # AGGREGATED MODE
             logger.info(
                 f"Aggregated mode: request {{ id: {request_id} }}. Fetching frames directly."
             )
             raw_frames_tensor_from_nixl, desc = self._frames_descriptor
+            # Create a writable operation handle for the remote EncodeWorker.
+            # This allows the EncodeWorker to write directly into this worker's `raw_frames_tensor_from_nixl`.
             with self._connector.create_writable(desc) as writable:
                 enc_req = EncodeRequest(
                     request_id=request_id,
                     video_url=video_url,
+                    # Serialize the writable handle to send it to the EncodeWorker.
                     serialized_request=writable.to_serialized(),
                 )
-                logger.info(f"Aggregated - Encode request: {enc_req.model_dump_json()}")
-                async for enc_resp in await self.encode_worker_client.round_robin(
+                async for _ in await self.encode_worker_client.round_robin(
                     enc_req.model_dump_json()
                 ):
-                    logger.info(
-                        f"Aggregated - Enc resp: {EncodeResponse.model_validate_json(enc_resp.data()).request_id}"
-                    )
+                    pass
+                # Wait for the remote write from the EncodeWorker to complete.
                 await writable.wait_for_completion()
             current_received_multimodal_data_tensor = raw_frames_tensor_from_nixl
             video_numpy = current_received_multimodal_data_tensor.cpu().numpy()
             multi_modal_data_for_engine = {"video": video_numpy}
             prompt_argument_for_vllm = text_prompt_string  # Pass raw string to vLLM
-            logger.info(
-                f"AGGREGATED mode: using raw prompt string for vLLM and {video_numpy.shape[0]} frames."
-            )
             current_remote_prefill_params = None
 
         request.sampling_params.output_kind = RequestOutputKind.DELTA
-
-        logger.info(
-            f"Final prompt for vLLM engine (request {request_id}): Type: {type(prompt_argument_for_vllm)}"
-        )
-        if isinstance(prompt_argument_for_vllm, str):
-            logger.info(f"  Prompt string: {prompt_argument_for_vllm[:200]}...")
-        elif isinstance(
-            prompt_argument_for_vllm, dict
-        ):  # Handles TokensPrompt which is a TypedDict
-            if "prompt_token_ids" in prompt_argument_for_vllm:
-                logger.info(
-                    f"  Prompt token IDs (from dict): {str(prompt_argument_for_vllm.get('prompt_token_ids'))[:100]}..."
-                )
-            else:
-                logger.info(
-                    f"  Prompt is a dict (no prompt_token_ids key): {str(prompt_argument_for_vllm)[:200]}..."
-                )
-        else:
-            logger.warning(
-                f"  Prompt is of an unexpected type: {type(prompt_argument_for_vllm)}"
-            )
-
-        # Logging multi_modal_data_for_engine (populated for local/aggregated)
-        if multi_modal_data_for_engine and "video" in multi_modal_data_for_engine:
-            logger.info(
-                f"  Multi_modal_data_for_engine['video'] type: {type(multi_modal_data_for_engine['video'])}, shape: {multi_modal_data_for_engine['video'].shape}"
-            )
-        elif not self.do_remote_prefill or (
-            self.do_remote_prefill and not should_prefill_remotely_decision
-        ):  # only log if it was expected
-            logger.info(f"  Multi_modal_data_for_engine: {multi_modal_data_for_engine}")
-
-        logger.info(
-            f"  Remote_prefill_params active: {current_remote_prefill_params is not None}"
-        )
 
         # Prepare the first argument for vLLM engine's generate call
         final_vllm_input: Union[str, dict]
@@ -569,9 +452,6 @@ class VllmDecodeWorker:
                     "prompt": prompt_argument_for_vllm,
                     "multi_modal_data": multi_modal_data_for_engine,
                 }
-                logger.info(
-                    "Constructed dict input for vLLM: prompt string + multi_modal_data"
-                )
             else:
                 final_vllm_input = prompt_argument_for_vllm
                 logger.warning(
@@ -581,68 +461,11 @@ class VllmDecodeWorker:
             prompt_argument_for_vllm, dict
         ):  # This handles the TokensPrompt case
             final_vllm_input = prompt_argument_for_vllm
-            logger.info(
-                "Passing dict (originally TokensPrompt) directly to vLLM generate."
-            )
         else:
             logger.error(
                 f"Unexpected type for prompt_argument_for_vllm: {type(prompt_argument_for_vllm)}"
             )
             raise TypeError("Invalid type for vLLM prompt argument.")
-
-        sampling_params_dict = None
-        if request.sampling_params:
-            if hasattr(request.sampling_params, "model_dump"):
-                sampling_params_dict = request.sampling_params.model_dump()
-            elif hasattr(request.sampling_params, "dict"):
-                sampling_params_dict = request.sampling_params.dict()
-            else:
-                try:
-                    sampling_params_dict = vars(request.sampling_params)
-                except (
-                    TypeError
-                ):  # vars() doesn't work on all objects, e.g. if __slots__ is used extensively
-                    sampling_params_dict = str(
-                        request.sampling_params
-                    )  # Fallback to string representation
-
-        remote_prefill_params_str = "None"
-        if current_remote_prefill_params:
-            if hasattr(current_remote_prefill_params, "model_dump_json"):
-                remote_prefill_params_str = (
-                    current_remote_prefill_params.model_dump_json()
-                )
-            elif hasattr(current_remote_prefill_params, "model_dump"):
-                try:
-                    remote_prefill_params_str = json.dumps(
-                        current_remote_prefill_params.model_dump()
-                    )
-                except (
-                    Exception
-                ):  # Handle potential issues with json.dumps on complex objects
-                    remote_prefill_params_str = str(
-                        current_remote_prefill_params
-                    )  # Fallback
-            elif hasattr(current_remote_prefill_params, "dict"):
-                try:
-                    remote_prefill_params_str = json.dumps(
-                        current_remote_prefill_params.dict()
-                    )
-                except Exception:
-                    remote_prefill_params_str = str(
-                        current_remote_prefill_params
-                    )  # Fallback
-            else:
-                remote_prefill_params_str = str(
-                    current_remote_prefill_params
-                )  # Fallback to basic string representation
-
-        logger.info(
-            f"Calling VllmDecodeWorker.engine_client.generate for request {request_id} with:"
-            f"  final_vllm_input type: {type(final_vllm_input)},"
-            f"  sampling_params: {sampling_params_dict},"
-            f"  remote_prefill_params: {remote_prefill_params_str}"
-        )
 
         async for response in self.engine_client.generate(
             final_vllm_input,  # This is now the prompts argument (str, dict, or TokensPrompt)
@@ -651,33 +474,11 @@ class VllmDecodeWorker:
             remote_prefill_params=current_remote_prefill_params,
             # multi_modal_data kwarg is removed as it's part of final_vllm_input if needed
         ):
-            logger.info(
-                f"Yeilding response {{ id: {response.request_id}, prompt: '{response.prompt}' }}"
-            )
-
-            processed_prompt_logprobs = _convert_logprobs_to_cpu_serializable(
-                response.prompt_logprobs
-            )
-
-            serializable_outputs = []
-            for vllm_out_item in response.outputs:
-                new_item_logprobs = _convert_logprobs_to_cpu_serializable(
-                    vllm_out_item.logprobs
-                )
-
-                # vllm.outputs.CompletionOutput is a dataclass.
-                # Use dataclasses.replace to create a new instance with updated logprobs.
-                new_out_item = dataclasses.replace(
-                    vllm_out_item, logprobs=new_item_logprobs
-                )
-
-                serializable_outputs.append(new_out_item)
-
             yield MyRequestOutput(
                 request_id=response.request_id,
                 prompt=response.prompt,
                 prompt_token_ids=response.prompt_token_ids,
-                prompt_logprobs=processed_prompt_logprobs,
-                outputs=serializable_outputs,  # Use the processed list
+                prompt_logprobs=response.prompt_logprobs,
+                outputs=response.outputs,
                 finished=response.finished,
             ).model_dump_json()
