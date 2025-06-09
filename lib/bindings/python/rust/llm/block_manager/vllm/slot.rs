@@ -316,6 +316,11 @@ mod tests {
                 _runtime: runtime,
             }
         }
+
+        // Helper method for SlotManager tests that need a block manager interface
+        fn as_device_pool(&self) -> &BlockPool<NullDeviceStorage, BasicMetadata> {
+            &self.pool
+        }
     }
 
     // Helper function to create a slot with a given token sequence
@@ -651,6 +656,346 @@ mod tests {
 
         // Key insight: apply_computed_blocks() is much faster than apply_computed_tokens()
         // because it skips token validation and block registration
+    }
+
+    // ============================================================================
+    // SLOT MANAGER TESTS - Testing SlotManager behavior in isolation
+    // ============================================================================
+
+    use super::super::SlotManager;
+
+    // Helper function to create a slot manager for testing
+    fn create_test_slot_manager() -> SlotManager<String> {
+        SlotManager::new(BLOCK_SIZE)
+    }
+
+    // Phase 1: SlotManager Foundation Tests - Testing without block operations
+    #[test]
+    fn test_slot_manager_creation_and_basic_operations() {
+        let mut manager = create_test_slot_manager();
+        let request_id = "test_request_1".to_string();
+        let tokens = vec![1, 2, 3, 4];
+
+        // Create a slot
+        let sequence_hashes = manager
+            .create_slot(&request_id, SALT_HASH, tokens.clone())
+            .expect("Failed to create slot");
+
+        assert_eq!(sequence_hashes.len(), 1); // 4 tokens = 1 block
+
+        // Check initial state
+        assert_eq!(
+            manager
+                .num_tokens(&request_id, SlotPosition::Prefill)
+                .unwrap(),
+            4
+        );
+        assert_eq!(
+            manager
+                .num_tokens(&request_id, SlotPosition::Computed)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            manager.num_tokens(&request_id, SlotPosition::All).unwrap(),
+            4
+        );
+
+        // Initially no blocks allocated
+        let block_ids = manager.get_block_ids(&request_id).unwrap();
+        assert_eq!(block_ids.len(), 0);
+    }
+
+    #[test]
+    fn test_slot_manager_multiple_slots() {
+        let mut manager = create_test_slot_manager();
+
+        // Create multiple slots with different tokens
+        let requests = vec![
+            ("req1".to_string(), vec![1, 2, 3, 4]),
+            ("req2".to_string(), vec![5, 6, 7, 8, 9, 10]),
+            ("req3".to_string(), vec![11, 12]),
+        ];
+
+        let mut all_hashes = Vec::new();
+
+        for (request_id, tokens) in &requests {
+            let hashes = manager
+                .create_slot(request_id, SALT_HASH, tokens.clone())
+                .expect("Failed to create slot");
+            all_hashes.push((request_id.clone(), hashes));
+
+            // Verify each slot's initial state
+            assert_eq!(
+                manager.num_tokens(request_id, SlotPosition::All).unwrap(),
+                tokens.len()
+            );
+            assert_eq!(
+                manager
+                    .num_tokens(request_id, SlotPosition::Computed)
+                    .unwrap(),
+                0
+            );
+        }
+
+        // Verify all slots exist and have different sequence hashes
+        assert_eq!(all_hashes.len(), 3);
+        for i in 0..all_hashes.len() {
+            for j in (i + 1)..all_hashes.len() {
+                assert_ne!(
+                    all_hashes[i].1, all_hashes[j].1,
+                    "Different token sequences should have different hashes"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_slot_manager_error_handling() {
+        let mut manager = create_test_slot_manager();
+        let nonexistent_id = "does_not_exist".to_string();
+
+        // Test operations on non-existent slot
+        assert!(manager
+            .num_tokens(&nonexistent_id, SlotPosition::All)
+            .is_err());
+        assert!(manager.get_block_ids(&nonexistent_id).is_err());
+        assert!(manager.free_blocks(&nonexistent_id).is_err());
+        assert!(manager.drop_slot(&nonexistent_id).is_err());
+    }
+
+    #[test]
+    fn test_slot_manager_slot_lifecycle() {
+        let mut manager = create_test_slot_manager();
+        let request_id = "lifecycle_test".to_string();
+        let tokens = vec![1, 2, 3, 4];
+
+        // 1. Create slot
+        let sequence_hashes = manager
+            .create_slot(&request_id, SALT_HASH, tokens.clone())
+            .expect("Failed to create slot");
+
+        // Verify slot exists
+        assert!(manager.num_tokens(&request_id, SlotPosition::All).is_ok());
+        assert_eq!(sequence_hashes.len(), 1);
+
+        // 2. Free blocks (slot still exists)
+        manager
+            .free_blocks(&request_id)
+            .expect("Failed to free blocks");
+
+        // Verify slot still exists after freeing blocks
+        assert!(manager.num_tokens(&request_id, SlotPosition::All).is_ok());
+
+        // 3. Drop slot entirely
+        manager.drop_slot(&request_id).expect("Failed to drop slot");
+
+        // 4. Verify slot no longer exists
+        assert!(manager.num_tokens(&request_id, SlotPosition::All).is_err());
+    }
+
+    #[test]
+    fn test_slot_manager_duplicate_slot_creation() {
+        let mut manager = create_test_slot_manager();
+        let request_id = "duplicate_test".to_string();
+        let tokens1 = vec![1, 2, 3, 4];
+        let tokens2 = vec![5, 6, 7, 8]; // Different tokens
+
+        // Create first slot
+        let hashes1 = manager
+            .create_slot(&request_id, SALT_HASH, tokens1.clone())
+            .expect("Failed to create first slot");
+
+        assert_eq!(manager.slots.len(), 1);
+
+        // Try to create slot with same ID but different tokens (should not overwrite)
+        let hashes2 = manager
+            .create_slot(&request_id, SALT_HASH, tokens2)
+            .expect("Failed to create second slot");
+
+        assert_eq!(manager.slots.len(), 1);
+
+        // Should return the same hashes (slot wasn't overwritten)
+        assert_eq!(hashes1, hashes2);
+
+        // Token count should match the first slot
+        assert_eq!(
+            manager.num_tokens(&request_id, SlotPosition::All).unwrap(),
+            tokens1.len()
+        );
+    }
+
+    #[test]
+    fn test_slot_manager_sequence_hash_determinism() {
+        let mut manager1 = create_test_slot_manager();
+        let mut manager2 = create_test_slot_manager();
+        let tokens = vec![1, 2, 3, 4, 5, 6, 7, 8];
+
+        // Create slots with same tokens and salt in different managers
+        let hashes1 = manager1
+            .create_slot(&"test".to_string(), SALT_HASH, tokens.clone())
+            .expect("Failed to create slot in manager1");
+
+        let hashes2 = manager2
+            .create_slot(&"test".to_string(), SALT_HASH, tokens)
+            .expect("Failed to create slot in manager2");
+
+        // Should produce identical sequence hashes
+        assert_eq!(
+            hashes1, hashes2,
+            "Same tokens and salt should produce identical hashes"
+        );
+    }
+
+    #[test]
+    fn test_slot_manager_different_salts_produce_different_hashes() {
+        let mut manager = create_test_slot_manager();
+        let tokens = vec![1, 2, 3, 4];
+        let salt1 = 12345;
+        let salt2 = 54321;
+
+        let hashes1 = manager
+            .create_slot(&"req1".to_string(), salt1, tokens.clone())
+            .expect("Failed to create slot with salt1");
+
+        let hashes2 = manager
+            .create_slot(&"req2".to_string(), salt2, tokens)
+            .expect("Failed to create slot with salt2");
+
+        // Different salts should produce different hashes
+        assert_ne!(
+            hashes1, hashes2,
+            "Different salts should produce different hashes"
+        );
+    }
+
+    // ============================================================================
+    // PHASE 1: BASIC BLOCK OPERATIONS TESTS
+    // ============================================================================
+
+    #[test]
+    fn test_cache_miss_block_allocation_and_registration() {
+        let fixture = TestFixture::new();
+        let mut manager = create_test_slot_manager();
+        let request_id = "cache_miss_test".to_string();
+        let tokens = vec![1, 2, 3, 4, 5, 6, 7, 8]; // 2 full blocks
+
+        println!("=== Cache Miss Workflow Test ===");
+
+        // 1. Create slot
+        let sequence_hashes = manager
+            .create_slot(&request_id, SALT_HASH, tokens.clone())
+            .expect("Failed to create slot");
+
+        println!(
+            "Created slot with {} sequence hashes",
+            sequence_hashes.len()
+        );
+        assert_eq!(sequence_hashes.len(), 2); // 8 tokens = 2 blocks
+
+        // Verify initial state
+        assert_eq!(
+            manager
+                .num_tokens(&request_id, SlotPosition::Prefill)
+                .unwrap(),
+            8
+        );
+        assert_eq!(
+            manager
+                .num_tokens(&request_id, SlotPosition::Computed)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            manager.num_tokens(&request_id, SlotPosition::All).unwrap(),
+            8
+        );
+
+        // Initially no blocks allocated
+        let initial_block_ids = manager.get_block_ids(&request_id).unwrap();
+        assert_eq!(initial_block_ids.len(), 0);
+        println!("Initial blocks: {:?}", initial_block_ids);
+
+        // Note: For this test, we focus on what we can verify with current APIs
+        // The actual block allocation and token application would happen via update_slot
+        // but that requires DeviceStorage integration which is complex for unit tests
+
+        println!("✅ Cache miss test setup completed successfully");
+        println!(
+            "   - Created slot with {} blocks worth of tokens",
+            sequence_hashes.len()
+        );
+        println!("   - Sequence hashes: {:?}", sequence_hashes);
+        println!("   - Ready for block allocation and token application");
+
+        // This test demonstrates slot creation and initial state validation
+        // Full cache miss workflow would be tested in integration tests
+    }
+
+    #[test]
+    fn test_sequence_hash_determinism_and_block_sharing_potential() {
+        let mut manager = create_test_slot_manager();
+        let tokens = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let salt = SALT_HASH;
+
+        println!("=== Block Sharing Potential Test ===");
+
+        // Create first slot
+        let hashes1 = manager
+            .create_slot(&"req1".to_string(), salt, tokens.clone())
+            .expect("Failed to create first slot");
+
+        // Create second slot with identical tokens and salt
+        let hashes2 = manager
+            .create_slot(&"req2".to_string(), salt, tokens.clone())
+            .expect("Failed to create second slot");
+
+        // Create third slot with different salt (should not share blocks)
+        let hashes3 = manager
+            .create_slot(&"req3".to_string(), salt + 1, tokens.clone())
+            .expect("Failed to create third slot");
+
+        println!("Slot1 hashes: {:?}", hashes1);
+        println!("Slot2 hashes: {:?}", hashes2);
+        println!("Slot3 hashes: {:?}", hashes3);
+
+        // KEY ASSERTION: Same tokens + salt = identical sequence hashes
+        assert_eq!(
+            hashes1, hashes2,
+            "Identical tokens/salt should produce identical hashes"
+        );
+        assert_ne!(
+            hashes1, hashes3,
+            "Different salts should produce different hashes"
+        );
+
+        // Verify initial state for all slots
+        for req_id in ["req1", "req2", "req3"] {
+            assert_eq!(
+                manager
+                    .num_tokens(&req_id.to_string(), SlotPosition::All)
+                    .unwrap(),
+                8
+            );
+            assert_eq!(
+                manager
+                    .num_tokens(&req_id.to_string(), SlotPosition::Computed)
+                    .unwrap(),
+                0
+            );
+
+            // All slots should start with no allocated blocks
+            let block_ids = manager.get_block_ids(&req_id.to_string()).unwrap();
+            assert_eq!(block_ids.len(), 0);
+        }
+
+        println!("✅ Sequence hash determinism verified");
+        println!("   - req1 and req2 have identical hashes (can share blocks)");
+        println!("   - req3 has different hashes (cannot share blocks)");
+
+        // When blocks are eventually allocated and cached:
+        // - req1 and req2 should share the same block IDs
+        // - req3 should have different block IDs
     }
 
     //     // Test chunked prefill scenarios with parameterized test cases

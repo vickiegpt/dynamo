@@ -152,7 +152,8 @@ impl KvbmCacheManager {
     }
 
     pub fn take_events(&self) -> PyResult<Vec<KvCacheEvent>> {
-        Err(to_pyerr("take_events is not implemented"))
+        // we don't need events
+        Ok(vec![])
     }
 
     pub fn get_block_ids(&self, request_id: String) -> PyResult<Vec<BlockId>> {
@@ -189,6 +190,8 @@ pub struct GenericSlotUpdate<R> {
     /// The number of new computed tokens in the request.
     /// The `num_new_tokens / block_size` should be equal to the length of the `new_computed_blocks`,
     /// it may have a remainder for the partial block state.
+    /// Note: this field is solely tied to the `new_computed_blocks` field and not used when `tokens_to_append` is provided.
+    /// The name might be confusing, but the name matched the vLLM implementation.
     pub num_new_computed_tokens: Option<usize>,
 
     /// The new computed blocks which advance the sequence state.
@@ -335,6 +338,13 @@ impl<R: RequestKey> SlotManager<R> {
         if delay_cache_blocks.unwrap_or(false) {
             return Err(SlotError::Error(
                 "delay_cache_blocks is not supported".to_string(),
+            ));
+        }
+
+        // assert new_computed_blocks and tokens_to_append are mutually exclusive
+        if new_computed_blocks.is_some() && !tokens_to_append.is_empty() {
+            return Err(SlotError::Error(
+                "new_computed_blocks and tokens_to_append are mutually exclusive".to_string(),
             ));
         }
 
