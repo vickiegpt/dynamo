@@ -55,6 +55,8 @@ class KvbmCacheManager:
         if bool(request.mm_positions):
             raise ValueError("Unsupported request - requires mm extra keys")
 
+        all_token_ids = request.all_token_ids
+
         # extract the critial aspects of the request that effect how the tokens are hashed
         request = KvbmRequest(
             request_id=request.request_id,
@@ -64,7 +66,7 @@ class KvbmCacheManager:
             salt_hash=request.cache_salt,
         )
 
-        return self.cache_manager.create_slot(request, request.all_token_ids)
+        return self.cache_manager.create_slot(request, all_token_ids)
 
     def allocate_slots(
         self,
@@ -118,7 +120,7 @@ class KvbmCacheManager:
 
         num_computed_tokens = request.num_computed_tokens + num_new_computed_tokens
 
-        # we need to extract from the request the new tokens to append to to the block state
+        # we need to extract from the request the new tokens to append to the block state
         prev_computed_tokens = self.cache_manager.num_computed_tokens(
             request.request_id
         )
@@ -129,11 +131,14 @@ class KvbmCacheManager:
         slot_update = SlotUpdate(
             request_id=request.request_id,
             request_num_tokens=request.num_tokens,
+            request_num_computed_tokens=request.num_computed_tokens,
             tokens_to_append=tokens_to_append,
             num_new_tokens=num_new_tokens,
             num_new_computed_tokens=num_new_computed_tokens,
             new_computed_blocks=new_computed_blocks,
-            num_lookahead_blocks=num_lookahead_tokens,
+            # TODO(ryan): add support for lookahead blocks
+            # comment out for now, otherwise would error out
+            # num_lookahead_blocks=num_lookahead_tokens,
             delay_cache_blocks=delay_cache_blocks,
         )
 
@@ -143,7 +148,7 @@ class KvbmCacheManager:
             return None
 
         new_blocks = [
-            KVCacheBlock(block_id=block.block_id) for block in new_blocks.block_ids()
+            KVCacheBlock(block_id=block_id) for block_id in new_blocks.block_ids()
         ]
 
         return KVCacheBlocks(blocks=new_blocks)
