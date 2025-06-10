@@ -65,7 +65,7 @@ class PrometheusAPIClient:
             raw_res = self.prom.custom_query(
                 query=f"increase(nv_llm_http_service_requests_total[{interval}])"
             )
-            total_count = 0
+            total_count = 0.0
             for res in raw_res:
                 # count all success/failed and stream/non-stream requests
                 total_count += float(res["value"][1])
