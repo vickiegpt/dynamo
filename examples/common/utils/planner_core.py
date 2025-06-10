@@ -63,8 +63,8 @@ class Planner:
 
         self.prefill_client = None
         self.workers_client = None
-        self.p_endpoints = []
-        self.d_endpoints = []
+        self.p_endpoints = []  # type: ignore
+        self.d_endpoints = []  # type: ignore
 
         self.last_adjustment_time = time.time()
         self.last_ttft = None
@@ -91,11 +91,11 @@ class Planner:
                 # TODO: remove this sleep after rust client() is blocking until watching state
                 await asyncio.sleep(0.1)
             # TODO: use etcd events instead of pulling instance_ids
-            p_endpoints = self.prefill_client.instance_ids()
+            p_endpoints = self.prefill_client.instance_ids()  # type: ignore
         except Exception:
             p_endpoints = []
-            self._repeating_log_func(
-                "No prefill workers found, operating in aggregated mode"
+            logger.warning(
+                "No prefill workers found, aggregated mode is not supported yet"
             )
         try:
             if self.workers_client is None:
@@ -108,7 +108,7 @@ class Planner:
                 # TODO: remove this sleep after rust client() is blocking until watching state
                 await asyncio.sleep(0.1)
             # TODO: use etcd events instead of pulling instance_ids
-            d_endpoints = self.workers_client.instance_ids()
+            d_endpoints = self.workers_client.instance_ids()  # type: ignore
         except Exception as e:
             raise RuntimeError(f"Failed to get decode worker endpoints: {e}")
         return p_endpoints, d_endpoints
@@ -157,11 +157,11 @@ class Planner:
             self.p_correction_factor = self.last_ttft / expect_ttft
             # for ITL, we expect the correction factor to be close to 1
             expect_itl = self.decode_interpolator.interpolate_itl(
-                concurrency=self.last_num_req
+                concurrency=self.last_num_req  # type: ignore
                 / len(self.d_endpoints)
-                * self.last_request_duration
+                * self.last_request_duration  # type: ignore
                 / self.args.adjustment_interval,
-                context_length=self.last_isl + self.last_osl / 2,
+                context_length=self.last_isl + self.last_osl / 2,  # type: ignore
             )
             self.d_correction_factor = self.last_itl / expect_itl
             logger.info(
