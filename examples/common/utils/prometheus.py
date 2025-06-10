@@ -74,17 +74,6 @@ class PrometheusAPIClient:
             logger.error(f"Error getting avg request count: {e}")
             return 0
 
-    def get_avg_request_duration(self, interval: str):
-        try:
-            return float(
-                self.prom.custom_query(
-                    query=f"increase(nv_llm_http_service_request_duration_seconds_sum[{interval}])/increase(nv_llm_http_service_request_duration_seconds_count[{interval}])",
-                )[0]["value"][1]
-            )
-        except Exception as e:
-            logger.error(f"Error getting avg request duration: {e}")
-            return 0
-
     def get_avg_input_sequence_tokens(self, interval: str):
         try:
             return float(
