@@ -16,16 +16,15 @@
 import logging
 import subprocess
 import tempfile
+
 import yaml
 
-from components.worker import VllmWorker
-
-from dynamo import sdk
-from dynamo.sdk import depends, service
+from dynamo.sdk import service
 from dynamo.sdk.lib.config import ServiceConfig
 from dynamo.sdk.lib.image import DYNAMO_IMAGE
 
 logger = logging.getLogger(__name__)
+
 
 @service(
     dynamo={
@@ -35,7 +34,6 @@ logger = logging.getLogger(__name__)
     image=DYNAMO_IMAGE,
 )
 class Prometheus:
-
     def __init__(self):
         """Initialize Frontend service with HTTP server and model configuration."""
         self.config = ServiceConfig.get_parsed_config("Prometheus")
@@ -48,7 +46,7 @@ class Prometheus:
     def start_prometheus_server(self):
         logger.info("Starting prometheus server...")
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yml') as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml") as f:
             yaml.dump(self.config, f)
             config_path = f.name
 

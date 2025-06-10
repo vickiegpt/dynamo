@@ -54,26 +54,26 @@ The SLA planner requires Prometheus to collect real-time metrics. Ensure Prometh
 Planner:
   environment: local                    # or "kubernetes"
   no-operation: false                   # set to true for observation-only mode
-  
+
   # SLA targets
   ttft: 0.5                            # Time to First Token target (seconds)
   itl: 0.05                            # Inter-Token Latency target (seconds)
   isl: 3000                            # Expected Input Sequence Length (tokens)
   osl: 150                             # Expected Output Sequence Length (tokens)
-  
+
   # Infrastructure
   max-gpu-budget: 8                    # Maximum GPUs available
   min-endpoint: 1                      # Minimum replicas per worker type
   prefill-engine-num-gpu: 1            # GPUs per prefill engine
   decode-engine-num-gpu: 1             # GPUs per decode engine
-  
+
   # Timing
   adjustment-interval: 180             # Seconds between scaling decisions
-  
+
   # Data sources
   prometheus-endpoint: "http://localhost:9090"
   profile-results-dir: "profiling_results"
-  
+
   # Load prediction
   load-predictor: "arima"              # "constant", "arima", or "prophet"
   load-prediction-window-size: 50      # Number of samples for prediction
@@ -298,4 +298,4 @@ tail -f dynamo.log | grep -i planner
 - Dynamic ISL/OSL adaptation
 - Advanced prediction models (neural networks)
 - Integration with external monitoring systems
-- Automated profiling and model updates 
+- Automated profiling and model updates

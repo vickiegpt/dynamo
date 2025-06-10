@@ -16,47 +16,59 @@
 import numpy as np
 import scipy
 
+
 class PrefillInterpolator:
-    '''
+    """
     Takes input from results of pre-deployment performance profiling to interpolate
     throughput/gpu and TTFT for a given ISL.
-    '''
+    """
+
     def __init__(self, profile_results_dir: str):
-        prefill_npz_fn = f'{profile_results_dir}/selected_prefill_interpolation/raw_data.npz'
+        prefill_npz_fn = (
+            f"{profile_results_dir}/selected_prefill_interpolation/raw_data.npz"
+        )
 
         with np.load(prefill_npz_fn) as raw_data:
-            self.prefill_isl = raw_data['prefill_isl']
-            self.prefill_ttft = raw_data['prefill_ttft']
-            self.prefill_thpt_per_gpu = raw_data['prefill_thpt_per_gpu']
-        
+            self.prefill_isl = raw_data["prefill_isl"]
+            self.prefill_ttft = raw_data["prefill_ttft"]
+            self.prefill_thpt_per_gpu = raw_data["prefill_thpt_per_gpu"]
+
         self.min_isl = min(self.prefill_isl)
         self.max_isl = max(self.prefill_isl)
 
         # perform 1d interpolation
-        self.ttft_interpolator = scipy.interpolate.interp1d(self.prefill_isl, self.prefill_ttft, kind='cubic')
-        self.thpt_interpolator = scipy.interpolate.interp1d(self.prefill_isl, self.prefill_thpt_per_gpu, kind='cubic')
-    
+        self.ttft_interpolator = scipy.interpolate.interp1d(
+            self.prefill_isl, self.prefill_ttft, kind="cubic"
+        )
+        self.thpt_interpolator = scipy.interpolate.interp1d(
+            self.prefill_isl, self.prefill_thpt_per_gpu, kind="cubic"
+        )
+
     def interpolate_ttft(self, isl: float) -> float:
         isl = max(self.min_isl, min(isl, self.max_isl))
         return self.ttft_interpolator(isl)
-    
+
     def interpolate_thpt_per_gpu(self, isl: float) -> float:
         isl = max(self.min_isl, min(isl, self.max_isl))
         return self.thpt_interpolator(isl)
 
+
 class DecodeInterpolator:
-    '''
+    """
     Takes input from results of pre-deployment performance profiling to interpolate
     throughput/gpu and ITL for a given decode context length.
-    '''
+    """
+
     def __init__(self, profile_results_dir: str, resolution: int = 100):
-        decode_npz_fn = f'{profile_results_dir}/selected_decode_interpolation/raw_data.npz'
+        decode_npz_fn = (
+            f"{profile_results_dir}/selected_decode_interpolation/raw_data.npz"
+        )
 
         with np.load(decode_npz_fn) as raw_data:
-            self.x_kv_usage = raw_data['x_kv_usage']
-            self.y_context_length = raw_data['y_context_length']
-            self.z_itl = raw_data['z_itl']
-            self.z_thpt_per_gpu = raw_data['z_thpt_per_gpu']
+            self.x_kv_usage = raw_data["x_kv_usage"]
+            self.y_context_length = raw_data["y_context_length"]
+            self.z_itl = raw_data["z_itl"]
+            self.z_thpt_per_gpu = raw_data["z_thpt_per_gpu"]
             # self.max_kv_tokens = raw_data['max_kv_tokens'][0]
             self.max_kv_tokens = 1000000
 
@@ -68,44 +80,80 @@ class DecodeInterpolator:
 
         # perform 2d interpolation with fallback for NaN values
         self.itl_interpolator = scipy.interpolate.griddata(
-            (self.x_kv_usage, self.y_context_length), self.z_itl, (self.X, self.Y), method='cubic')
+            (self.x_kv_usage, self.y_context_length),
+            self.z_itl,
+            (self.X, self.Y),
+            method="cubic",
+        )
         # Fill NaN values using nearest neighbor interpolation
         nan_mask = np.isnan(self.itl_interpolator)
         if np.any(nan_mask):
             itl_nearest = scipy.interpolate.griddata(
-                (self.x_kv_usage, self.y_context_length), self.z_itl, (self.X, self.Y), method='nearest')
+                (self.x_kv_usage, self.y_context_length),
+                self.z_itl,
+                (self.X, self.Y),
+                method="nearest",
+            )
             self.itl_interpolator[nan_mask] = itl_nearest[nan_mask]
-        self.itl_interpolator /= 1000 # convert ms to s
-        
+        self.itl_interpolator /= 1000  # convert ms to s
+
         self.thpt_interpolator = scipy.interpolate.griddata(
-            (self.x_kv_usage, self.y_context_length), self.z_thpt_per_gpu, (self.X, self.Y), method='cubic')
+            (self.x_kv_usage, self.y_context_length),
+            self.z_thpt_per_gpu,
+            (self.X, self.Y),
+            method="cubic",
+        )
         # Fill NaN values using nearest neighbor interpolation
         nan_mask = np.isnan(self.thpt_interpolator)
         if np.any(nan_mask):
             thpt_nearest = scipy.interpolate.griddata(
-                (self.x_kv_usage, self.y_context_length), self.z_thpt_per_gpu, (self.X, self.Y), method='nearest')
+                (self.x_kv_usage, self.y_context_length),
+                self.z_thpt_per_gpu,
+                (self.X, self.Y),
+                method="nearest",
+            )
             self.thpt_interpolator[nan_mask] = thpt_nearest[nan_mask]
-    
+
     def compute_idx(self, concurrency: float, context_length: float) -> tuple[int, int]:
         kv_usage = concurrency * context_length / self.max_kv_tokens
-        ix = int(np.clip(np.round((kv_usage - self.xi[0]) / (self.xi[1] - self.xi[0])), 0, self.resolution - 1))
-        iy = int(np.clip(np.round((context_length - self.yi[0]) / (self.yi[1] - self.yi[0])), 0, self.resolution - 1))
+        ix = int(
+            np.clip(
+                np.round((kv_usage - self.xi[0]) / (self.xi[1] - self.xi[0])),
+                0,
+                self.resolution - 1,
+            )
+        )
+        iy = int(
+            np.clip(
+                np.round((context_length - self.yi[0]) / (self.yi[1] - self.yi[0])),
+                0,
+                self.resolution - 1,
+            )
+        )
         ix = max(0, min(ix, self.resolution - 1))
         iy = max(0, min(iy, self.resolution - 1))
         return ix, iy
-    
+
     def interpolate_itl(self, concurrency: float, context_length: float) -> float:
         ix, iy = self.compute_idx(concurrency, context_length)
-        return self.itl_interpolator[ix, iy] 
-    
-    def interpolate_thpt_per_gpu(self, concurrency: float, context_length: float) -> float:
+        return self.itl_interpolator[ix, iy]
+
+    def interpolate_thpt_per_gpu(
+        self, concurrency: float, context_length: float
+    ) -> float:
         ix, iy = self.compute_idx(concurrency, context_length)
         return self.thpt_interpolator[ix, iy]
-    
+
     def find_best_throughput_per_gpu(self, itl: float, context_length: float) -> float:
         # find the max kv_load that has itl <= target itl
         # here we cannot use binary search as interpolated itl might not be monotonic
-        iy = int(np.clip(np.round((context_length - self.yi[0]) / (self.yi[1] - self.yi[0])), 0, self.resolution - 1))
+        iy = int(
+            np.clip(
+                np.round((context_length - self.yi[0]) / (self.yi[1] - self.yi[0])),
+                0,
+                self.resolution - 1,
+            )
+        )
         iy = max(0, min(iy, self.resolution - 1))
 
         for ix in range(self.resolution - 1, -1, -1):

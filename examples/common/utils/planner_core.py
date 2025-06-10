@@ -14,14 +14,14 @@
 # limitations under the License.
 
 import argparse
-import math
 import asyncio
 import logging
+import math
 import time
 
 from utils.load_predictor import LOAD_PREDICTORS
+from utils.perf_interpolation import DecodeInterpolator, PrefillInterpolator
 from utils.prometheus import PrometheusAPIClient
-from utils.perf_interpolation import PrefillInterpolator, DecodeInterpolator
 
 from dynamo.planner import KubernetesConnector, LocalConnector
 from dynamo.planner.defaults import PlannerDefaults
@@ -30,6 +30,7 @@ from dynamo.runtime.logging import configure_dynamo_logging
 
 configure_dynamo_logging()
 logger = logging.getLogger(__name__)
+
 
 class Planner:
     def __init__(self, runtime: DistributedRuntime, args: argparse.Namespace):
@@ -44,7 +45,7 @@ class Planner:
                 self.connector = KubernetesConnector(args.namespace)
             else:
                 raise ValueError(f"Invalid environment: {args.environment}")
-        
+
         self.prometheus_api_client = PrometheusAPIClient(args.prometheus_endpoint)
 
         self.num_req_predictor = LOAD_PREDICTORS[args.load_predictor](
@@ -59,7 +60,7 @@ class Planner:
 
         self.prefill_interpolator = PrefillInterpolator(args.profile_results_dir)
         self.decode_interpolator = DecodeInterpolator(args.profile_results_dir)
-        
+
         self.prefill_client = None
         self.workers_client = None
         self.p_endpoints = []
@@ -113,14 +114,30 @@ class Planner:
         return p_endpoints, d_endpoints
 
     def observe_metrics(self):
-        self.last_ttft = self.prometheus_api_client.get_avg_time_to_first_token(f"{self.args.adjustment_interval}s")
-        self.last_itl = self.prometheus_api_client.get_avg_inter_token_latency(f"{self.args.adjustment_interval}s")
-        self.last_num_req = self.prometheus_api_client.get_avg_request_count(f"{self.args.adjustment_interval}s")
-        self.last_request_duration = self.prometheus_api_client.get_avg_request_duration(f"{self.args.adjustment_interval}s")
-        self.last_isl = self.prometheus_api_client.get_avg_input_sequence_tokens(f"{self.args.adjustment_interval}s")
-        self.last_osl = self.prometheus_api_client.get_avg_output_sequence_tokens(f"{self.args.adjustment_interval}s")
+        self.last_ttft = self.prometheus_api_client.get_avg_time_to_first_token(
+            f"{self.args.adjustment_interval}s"
+        )
+        self.last_itl = self.prometheus_api_client.get_avg_inter_token_latency(
+            f"{self.args.adjustment_interval}s"
+        )
+        self.last_num_req = self.prometheus_api_client.get_avg_request_count(
+            f"{self.args.adjustment_interval}s"
+        )
+        self.last_request_duration = (
+            self.prometheus_api_client.get_avg_request_duration(
+                f"{self.args.adjustment_interval}s"
+            )
+        )
+        self.last_isl = self.prometheus_api_client.get_avg_input_sequence_tokens(
+            f"{self.args.adjustment_interval}s"
+        )
+        self.last_osl = self.prometheus_api_client.get_avg_output_sequence_tokens(
+            f"{self.args.adjustment_interval}s"
+        )
 
-        logger.info(f"Observed num_req: {self.last_num_req:.2f} isl: {self.last_isl:.2f} osl: {self.last_osl:.2f}")
+        logger.info(
+            f"Observed num_req: {self.last_num_req:.2f} isl: {self.last_isl:.2f} osl: {self.last_osl:.2f}"
+        )
         logger.info(f"Observed ttft: {self.last_ttft:.3f}s itl: {self.last_itl:.3f}s")
 
         self.num_req_predictor.add_data_point(self.last_num_req)
@@ -133,18 +150,23 @@ class Planner:
             logger.info(
                 f"Number of prefill workers: {len(self.p_endpoints)}, number of decode workers: {len(self.d_endpoints)}"
             )
-            
+
             # first correct the prediction correction factor
             # for TTFT, we expect the correction factor to be << 1 due to queuing delay
             expect_ttft = self.prefill_interpolator.interpolate_ttft(self.last_isl)
             self.p_correction_factor = self.last_ttft / expect_ttft
             # for ITL, we expect the correction factor to be close to 1
             expect_itl = self.decode_interpolator.interpolate_itl(
-                concurrency=self.last_num_req / len(self.d_endpoints) * self.last_request_duration / self.args.adjustment_interval,
-                context_length=self.last_isl + self.last_osl / 2
+                concurrency=self.last_num_req
+                / len(self.d_endpoints)
+                * self.last_request_duration
+                / self.args.adjustment_interval,
+                context_length=self.last_isl + self.last_osl / 2,
             )
             self.d_correction_factor = self.last_itl / expect_itl
-            logger.info(f"Correction factors: TTFT: {self.p_correction_factor:.3f}, ITL: {self.d_correction_factor:.3f}")
+            logger.info(
+                f"Correction factors: TTFT: {self.p_correction_factor:.3f}, ITL: {self.d_correction_factor:.3f}"
+            )
         except Exception as e:
             logger.error(f"Failed to correct prediction factors: {e}")
             return
@@ -154,7 +176,9 @@ class Planner:
             next_num_req = self.num_req_predictor.predict_next()
             next_isl = self.isl_predictor.predict_next()
             next_osl = self.osl_predictor.predict_next()
-            logger.info(f"Predicted load: num_req={next_num_req:.2f}, isl={next_isl:.2f}, osl={next_osl:.2f}")
+            logger.info(
+                f"Predicted load: num_req={next_num_req:.2f}, isl={next_isl:.2f}, osl={next_osl:.2f}"
+            )
         except Exception as e:
             logger.error(f"Failed to predict load: {e}")
             return
@@ -163,31 +187,63 @@ class Planner:
             # compute how many replicas are needed for prefill
             # here we assume the prefill bias is purely due to request queueing
             # and we increase the number of prefill replicas linearly to account for the queueing delay
-            pred_prefill_load_per_gpu = next_num_req * next_isl / self.args.adjustment_interval * min(1, self.p_correction_factor)
-            next_num_p = math.ceil(pred_prefill_load_per_gpu / self.prefill_interpolator.interpolate_thpt_per_gpu(next_isl) / self.args.prefill_engine_num_gpu)
+            pred_prefill_load_per_gpu = (
+                next_num_req
+                * next_isl
+                / self.args.adjustment_interval
+                * min(1, self.p_correction_factor)
+            )
+            next_num_p = math.ceil(
+                pred_prefill_load_per_gpu
+                / self.prefill_interpolator.interpolate_thpt_per_gpu(next_isl)
+                / self.args.prefill_engine_num_gpu
+            )
 
             # compute how many replicas are needed for decode
             # 1. apply d_correction_factor to the ITL SLA
             corrected_itl = self.args.itl / self.d_correction_factor
             # 2. reversely find out what is best throughput/gpu that can achieve corrected_itl under the predicted context length
-            pred_decode_thpt_per_gpu = self.decode_interpolator.find_best_throughput_per_gpu(
-                itl=corrected_itl,
-                context_length=next_isl + next_osl / 2
+            pred_decode_thpt_per_gpu = (
+                self.decode_interpolator.find_best_throughput_per_gpu(
+                    itl=corrected_itl, context_length=next_isl + next_osl / 2
+                )
             )
             # 3. compute number of decode replicas needed
-            next_num_d = math.ceil(next_num_req * next_osl / self.args.adjustment_interval / pred_decode_thpt_per_gpu / self.args.decode_engine_num_gpu)
+            next_num_d = math.ceil(
+                next_num_req
+                * next_osl
+                / self.args.adjustment_interval
+                / pred_decode_thpt_per_gpu
+                / self.args.decode_engine_num_gpu
+            )
 
             # correct num_p and num_d based on the gpu budget
             next_num_p = max(next_num_p, self.args.min_endpoint)
             next_num_d = max(next_num_d, self.args.min_endpoint)
-            logger.info(f"Predicted number of engine replicas: prefill={next_num_p}, decode={next_num_d}")
+            logger.info(
+                f"Predicted number of engine replicas: prefill={next_num_p}, decode={next_num_d}"
+            )
 
-            total_gpu_required = next_num_p * self.args.prefill_engine_num_gpu + next_num_d * self.args.decode_engine_num_gpu
+            total_gpu_required = (
+                next_num_p * self.args.prefill_engine_num_gpu
+                + next_num_d * self.args.decode_engine_num_gpu
+            )
             if total_gpu_required > self.args.max_gpu_budget:
                 scale = self.args.max_gpu_budget / total_gpu_required
                 next_num_p = max(self.args.min_endpoint, round(next_num_p * scale))
-                next_num_d = max(self.args.min_endpoint, round((self.args.max_gpu_budget - next_num_p * self.args.prefill_engine_num_gpu) / self.args.decode_engine_num_gpu))
-                logger.warning(f"Total number of GPUs required ({total_gpu_required}) exceeds the max GPU budget ({self.args.max_gpu_budget}), scaling down to {next_num_p} prefill and {next_num_d} decode replicas")
+                next_num_d = max(
+                    self.args.min_endpoint,
+                    round(
+                        (
+                            self.args.max_gpu_budget
+                            - next_num_p * self.args.prefill_engine_num_gpu
+                        )
+                        / self.args.decode_engine_num_gpu
+                    ),
+                )
+                logger.warning(
+                    f"Total number of GPUs required ({total_gpu_required}) exceeds the max GPU budget ({self.args.max_gpu_budget}), scaling down to {next_num_p} prefill and {next_num_d} decode replicas"
+                )
         except Exception as e:
             logger.error(f"Failed to compute number of replicas: {e}")
             return
@@ -217,7 +273,10 @@ class Planner:
         while True:
             current_time = time.time()
 
-            if current_time - self.last_adjustment_time >= self.args.adjustment_interval:
+            if (
+                current_time - self.last_adjustment_time
+                >= self.args.adjustment_interval
+            ):
                 self.last_adjustment_time = time.time()
                 logger.info("New adjustment interval started!")
                 self.observe_metrics()
@@ -225,9 +284,11 @@ class Planner:
 
             await asyncio.sleep(self.args.adjustment_interval / 10)
 
+
 async def start_sla_planner(runtime: DistributedRuntime, args: argparse.Namespace):
     planner = Planner(runtime, args)
     await planner.run()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
