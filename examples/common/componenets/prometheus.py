@@ -35,7 +35,6 @@ logger = logging.getLogger(__name__)
     image=DYNAMO_IMAGE,
 )
 class Prometheus:
-    worker = depends(VllmWorker)
 
     def __init__(self):
         """Initialize Frontend service with HTTP server and model configuration."""

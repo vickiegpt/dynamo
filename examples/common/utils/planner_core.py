@@ -36,26 +36,25 @@ class Planner:
         self.runtime = runtime
         self.args = args
         self.namespace = args.namespace
-        if args.environment == "local":
-            self.connector = LocalConnector(args.namespace, runtime)
-        elif args.environment == "kubernetes":
-            self.connector = KubernetesConnector(args.namespace)
-        else:
-            raise ValueError(f"Invalid environment: {args.environment}")
+
+        if not args.no_operation:
+            if args.environment == "local":
+                self.connector = LocalConnector(args.namespace, runtime)
+            elif args.environment == "kubernetes":
+                self.connector = KubernetesConnector(args.namespace)
+            else:
+                raise ValueError(f"Invalid environment: {args.environment}")
         
         self.prometheus_api_client = PrometheusAPIClient(args.prometheus_endpoint)
 
         self.num_req_predictor = LOAD_PREDICTORS[args.load_predictor](
             window_size=args.load_prediction_window_size,
-            step_size=args.load_prediction_step_size,
         )
         self.isl_predictor = LOAD_PREDICTORS[args.load_predictor](
             window_size=args.load_prediction_window_size,
-            step_size=args.load_prediction_step_size,
         )
         self.osl_predictor = LOAD_PREDICTORS[args.load_predictor](
             window_size=args.load_prediction_window_size,
-            step_size=args.load_prediction_step_size,
         )
 
         self.prefill_interpolator = PrefillInterpolator(args.profile_results_dir)
@@ -121,6 +120,9 @@ class Planner:
         self.last_isl = self.prometheus_api_client.get_avg_input_sequence_tokens(f"{self.args.adjustment_interval}s")
         self.last_osl = self.prometheus_api_client.get_avg_output_sequence_tokens(f"{self.args.adjustment_interval}s")
 
+        logger.info(f"Observed num_req: {self.last_num_req:.2f} isl: {self.last_isl:.2f} osl: {self.last_osl:.2f}")
+        logger.info(f"Observed ttft: {self.last_ttft:.3f}s itl: {self.last_itl:.3f}s")
+
         self.num_req_predictor.add_data_point(self.last_num_req)
         self.isl_predictor.add_data_point(self.last_isl)
         self.osl_predictor.add_data_point(self.last_osl)
@@ -142,14 +144,22 @@ class Planner:
                 context_length=self.last_isl + self.last_osl / 2
             )
             self.d_correction_factor = self.last_itl / expect_itl
-            logger.info(f"Correction factors: TTFT: {self.p_correction_factor}, ITL: {self.d_correction_factor}")
+            logger.info(f"Correction factors: TTFT: {self.p_correction_factor:.3f}, ITL: {self.d_correction_factor:.3f}")
+        except Exception as e:
+            logger.error(f"Failed to correct prediction factors: {e}")
+            return
 
+        try:
             # predict the next load
             next_num_req = self.num_req_predictor.predict_next()
             next_isl = self.isl_predictor.predict_next()
             next_osl = self.osl_predictor.predict_next()
-            logger.info(f"Predicted load: num_req={next_num_req}, isl={next_isl}, osl={next_osl}")
+            logger.info(f"Predicted load: num_req={next_num_req:.2f}, isl={next_isl:.2f}, osl={next_osl:.2f}")
+        except Exception as e:
+            logger.error(f"Failed to predict load: {e}")
+            return
 
+        try:
             # compute how many replicas are needed for prefill
             # here we assume the prefill bias is purely due to request queueing
             # and we increase the number of prefill replicas linearly to account for the queueing delay
@@ -172,16 +182,16 @@ class Planner:
             next_num_d = max(next_num_d, self.args.min_endpoint)
             logger.info(f"Predicted number of engine replicas: prefill={next_num_p}, decode={next_num_d}")
 
-            if next_num_p * self.args.prefill_engine_num_gpu + next_num_d * self.args.decode_engine_num_gpu > self.args.max_gpu_budget:
-                scale = self.args.max_gpu_budget / (next_num_p * self.args.prefill_engine_num_gpu + next_num_d * self.args.decode_engine_num_gpu)
+            total_gpu_required = next_num_p * self.args.prefill_engine_num_gpu + next_num_d * self.args.decode_engine_num_gpu
+            if total_gpu_required > self.args.max_gpu_budget:
+                scale = self.args.max_gpu_budget / total_gpu_required
                 next_num_p = max(self.args.min_endpoint, round(next_num_p * scale))
-                next_num_d = (self.args.max_gpu_budget - next_num_p * self.args.prefill_engine_num_gpu) // self.args.decode_engine_num_gpu
-                logger.warning(f"Total number of GPUs required ({next_num_p * self.args.prefill_engine_num_gpu + next_num_d * self.args.decode_engine_num_gpu}) exceeds the max GPU budget ({self.args.max_gpu_budget}), scaling down to {next_num_p} prefill and {next_num_d} decode replicas")
-
+                next_num_d = max(self.args.min_endpoint, round((self.args.max_gpu_budget - next_num_p * self.args.prefill_engine_num_gpu) / self.args.decode_engine_num_gpu))
+                logger.warning(f"Total number of GPUs required ({total_gpu_required}) exceeds the max GPU budget ({self.args.max_gpu_budget}), scaling down to {next_num_p} prefill and {next_num_d} decode replicas")
         except Exception as e:
-            logger.error(f"Failed to make adjustments: {e}")
+            logger.error(f"Failed to compute number of replicas: {e}")
             return
-        
+
         if not self.args.no_operation:
             # scale up/down the number of prefill/decode non-blockingly
             # TODO: add a check to avoid scaling before the previous scaling is completed
@@ -208,10 +218,12 @@ class Planner:
             current_time = time.time()
 
             if current_time - self.last_adjustment_time >= self.args.adjustment_interval:
+                self.last_adjustment_time = time.time()
+                logger.info("New adjustment interval started!")
                 self.observe_metrics()
                 await self.make_adjustments()
 
-            await asyncio.sleep(self.args.metric_pulling_interval / 10)
+            await asyncio.sleep(self.args.adjustment_interval / 10)
 
 async def start_sla_planner(runtime: DistributedRuntime, args: argparse.Namespace):
     planner = Planner(runtime, args)

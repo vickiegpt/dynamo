@@ -4,6 +4,7 @@ from prophet import Prophet
 from datetime import datetime, timedelta
 import logging
 import warnings
+import math
 
 logger = logging.getLogger('cmdstanpy')
 logger.addHandler(logging.NullHandler())
@@ -14,12 +15,6 @@ logger.setLevel(logging.CRITICAL)
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
-LOAD_PREDICTORS = {
-    "constant": ConstantPredictor,
-    "arima": ARIMAPredictor,
-    "prophet": ProphetPredictor,
-}
-
 class ConstantPredictor:
     """
     Assume load is constant and predict the next load to be the same as most recent load
@@ -28,7 +23,8 @@ class ConstantPredictor:
         self.prev_load = None
 
     def add_data_point(self, value):
-        self.prev_load = value
+        if not math.isnan(value):
+            self.prev_load = value
     
     def predict_next(self):
         return self.prev_load
@@ -42,7 +38,10 @@ class ARIMAPredictor:
         
     def add_data_point(self, value):
         """Add new data point to the buffer"""
-        self.data_buffer.append(value)
+        if not math.isnan(value):
+            self.data_buffer.append(value)
+        else:
+            self.data_buffer.append(0)
         
         # Keep only the last window_size points
         if len(self.data_buffer) > self.window_size:
@@ -79,6 +78,7 @@ class ProphetPredictor:
         """Add new data point to the buffer"""
         # Use proper datetime for Prophet
         timestamp = self.start_date + timedelta(seconds=self.curr_step)
+        value = 0 if math.isnan(value) else value
         self.data_buffer.append({'ds': timestamp, 'y': value})
         self.curr_step += 1
         
@@ -109,3 +109,9 @@ class ProphetPredictor:
         forecast = model.predict(future_df)
         
         return forecast['yhat'].iloc[0]
+
+LOAD_PREDICTORS = {
+    "constant": ConstantPredictor,
+    "arima": ARIMAPredictor,
+    "prophet": ProphetPredictor,
+}
