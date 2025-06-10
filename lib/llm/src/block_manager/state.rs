@@ -472,7 +472,7 @@ pub(crate) fn create_layout<S: Storage + NixlRegisterableStorage>(
         if let Some(nixl_agent) = nixl_agent {
             layout.nixl_register(nixl_agent, None)?;
         }
-        return Ok(Arc::new(layout));
+        return Ok(layout.into());
     }
 
     if let Some(allocator) = config.allocator {
@@ -480,7 +480,7 @@ pub(crate) fn create_layout<S: Storage + NixlRegisterableStorage>(
         if let Some(nixl_agent) = nixl_agent {
             layout.nixl_register(nixl_agent, None)?;
         }
-        return Ok(Arc::new(layout));
+        return Ok(layout.into());
     }
 
     anyhow::bail!("failed to create layout");
