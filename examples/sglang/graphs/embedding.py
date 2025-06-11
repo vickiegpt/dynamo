@@ -1,4 +1,3 @@
-
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from components.frontend import Frontend
 from components.embedding_worker import SGLangEmbeddingWorker
+from components.frontend import Frontend
 
 Frontend.link(SGLangEmbeddingWorker)

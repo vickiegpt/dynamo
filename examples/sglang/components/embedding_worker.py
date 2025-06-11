@@ -17,18 +17,14 @@
 Using SGLang and Dynamo to serve embedding models!
 """
 
-import asyncio
 import logging
-import random
-import socket
-from typing import Any
 
 import sglang as sgl
 from utils.protocol import EmbeddingRequest
 from utils.sglang import parse_sglang_args
 
 from dynamo.llm import ModelType, register_llm
-from dynamo.sdk import async_on_start, depends, dynamo_context, endpoint, service
+from dynamo.sdk import async_on_start, dynamo_context, endpoint, service
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +37,6 @@ logger = logging.getLogger(__name__)
     workers=1,
 )
 class SGLangEmbeddingWorker:
-
     def __init__(self):
         class_name = self.__class__.__name__
         self.engine_args = parse_sglang_args(class_name, "")
@@ -70,11 +65,11 @@ class SGLangEmbeddingWorker:
             input = [i for i in request.input]
         else:
             raise ValueError(f"Invalid input type: {type(request.input)}")
-        
+
         g = await self.engine.async_encode(
             prompt=input,
         )
-        
+
         # Transform response to match OpenAI embedding format
         response = self._transform_response(g, request.model)
         yield response
@@ -83,16 +78,18 @@ class SGLangEmbeddingWorker:
         """Transform SGLang response to OpenAI embedding format"""
         if not isinstance(ret, list):
             ret = [ret]
-        
+
         embedding_objects = []
         prompt_tokens = 0
-        
+
         for idx, ret_item in enumerate(ret):
-            embedding_objects.append({
-                "object": "embedding",
-                "embedding": ret_item["embedding"],
-                "index": idx,
-            })
+            embedding_objects.append(
+                {
+                    "object": "embedding",
+                    "embedding": ret_item["embedding"],
+                    "index": idx,
+                }
+            )
             prompt_tokens += ret_item["meta_info"]["prompt_tokens"]
 
         return {

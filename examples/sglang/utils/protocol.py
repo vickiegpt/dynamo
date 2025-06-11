@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Optional, Union, Literal
+from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -61,18 +61,17 @@ class DisaggPreprocessedRequest(BaseModel):
     bootstrap_port: int
     bootstrap_room: int
 
-EmbeddingInput = Union[
-    str,
-    List[str], 
-    List[int],  
-    List[List[int]]  
-]
+
+EmbeddingInput = Union[str, List[str], List[int], List[List[int]]]
 
 EncodingFormat = Literal["float", "base64"]
+
 
 class EmbeddingRequest(BaseModel):
     model: str
     input: EmbeddingInput
     encoding_format: Optional[EncodingFormat] = None
     user: Optional[str] = None
-    dimensions: Optional[int] = None # only supported in text-embedding-3 and later models from OpenAI
+    dimensions: Optional[
+        int
+    ] = None  # only supported in text-embedding-3 and later models from OpenAI

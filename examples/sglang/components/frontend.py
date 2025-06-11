@@ -17,8 +17,8 @@ import logging
 import subprocess
 from pathlib import Path
 
-from components.worker import SGLangWorker
 from components.embedding_worker import SGLangEmbeddingWorker
+from components.worker import SGLangWorker
 from fastapi import FastAPI
 from pydantic import BaseModel
 

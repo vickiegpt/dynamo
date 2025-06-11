@@ -5,7 +5,6 @@ Frontend:
 SGLangEmbeddingWorker:
   model-path: intfloat/e5-base-v2
   served-model-name: e5
-  is-embedding: true
   tp: 1
   trust-remote-code: true
   is-embedding: true
