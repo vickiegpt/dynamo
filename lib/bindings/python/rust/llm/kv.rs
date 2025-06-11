@@ -156,7 +156,7 @@ impl ZmqKvEventPublisherConfig {
         worker_id,
         kv_block_size,
         zmq_endpoint = "tcp://127.0.0.1:5557".to_string(),
-        zmq_topic = "".to_string()
+        zmq_topic = "".to_string(),
         sink = KvEventSink::Event
     ))]
     pub fn new(
