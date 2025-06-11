@@ -60,6 +60,7 @@ class DisaggPreprocessedRequest(BaseModel):
     bootstrap_host: str
     bootstrap_port: int
     bootstrap_room: int
+    data_parallel_rank: Optional[int] = None
 
 
 EmbeddingInput = Union[str, List[str], List[int], List[List[int]]]
