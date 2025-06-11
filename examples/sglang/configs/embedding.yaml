@@ -1,0 +1,16 @@
+Frontend:
+  served_model_name: e5
+  endpoint: SGLangEmbeddingWorker.generate
+  port: 8000
+SGLangEmbeddingWorker:
+  model-path: intfloat/e5-base-v2
+  served-model-name: e5
+  is-embedding: true
+  tp: 1
+  trust-remote-code: true
+  is-embedding: true
+  json-model-override-args: '{"get_embedding": true, "chat_template": ""}'
+  ServiceArgs:
+    workers: 1
+    resources:
+      gpu: 1
