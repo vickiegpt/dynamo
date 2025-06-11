@@ -19,6 +19,7 @@ from dynamo._core import AggregatedMetrics as AggregatedMetrics
 
 try:
     from dynamo._core import BlockManager as BlockManager
+    from dynamo._core import BlockManagerConfig as BlockManagerConfig
 except ImportError:
     pass  # BlockManager is not enabled by default
 

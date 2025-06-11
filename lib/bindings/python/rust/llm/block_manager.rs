@@ -23,16 +23,186 @@ mod layer;
 
 pub mod vllm;
 
+use llm_rs::block_manager::{storage::{torch::{TorchDevice, TorchTensor}, DeviceStorage, DeviceAllocator}, LayoutType};
+
 /// Add bingings from this crate to the provided module
 pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<layer::Layer>()?;
     m.add_class::<block::Block>()?;
     m.add_class::<block_list::BlockList>()?;
     m.add_class::<BlockManager>()?;
+    m.add_class::<BlockManagerConfig>()?;
 
     vllm::add_to_module(m)?;
 
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct VllmTensor {
+    _py_tensor: Py<PyAny>,
+    device: TorchDevice,
+    data_ptr: u64,
+    size_bytes: usize,
+    shape: Vec<usize>,
+}
+
+impl VllmTensor {
+    fn new(py_tensor: Py<PyAny>) -> anyhow::Result<Self> {
+        Python::with_gil(|py| {
+            let device = py_tensor.getattr(py, "device")?;
+            let device_type = device.getattr(py, "type")?.extract::<String>(py)?;
+
+            let device = if device_type == "cuda" {
+                TorchDevice::Cuda(device.getattr(py, "index")?.extract::<usize>(py)?)
+            } else {
+                TorchDevice::Other(device_type)
+            };
+
+            let data_ptr = py_tensor.call_method0(py, "data_ptr")?.extract::<u64>(py)?;
+            let size_bytes = py_tensor.call_method0(py, "size_bytes")?.extract::<usize>(py)?;
+            let shape = py_tensor.getattr(py, "shape")?.extract::<Vec<usize>>(py)?;
+
+            Ok(Self {
+                _py_tensor: py_tensor,
+                device,
+                data_ptr,
+                size_bytes,
+                shape,
+            })
+        })
+    }
+}
+
+impl TorchTensor for VllmTensor {
+    fn device(&self) -> TorchDevice {
+        self.device.clone()
+    }
+
+    fn data_ptr(&self) -> u64 {
+        self.data_ptr
+    }
+    
+    fn size_bytes(&self) -> usize {
+        self.size_bytes
+    }
+
+    fn shape(&self) -> Vec<usize> {
+        self.shape.clone()
+    }
+}
+
+#[pyclass]
+#[derive(Clone)]
+struct BlockManagerConfig {
+    pub num_layers: usize,
+    pub num_blocks: usize,
+    pub outer_dim: usize,
+    pub page_size: usize,
+    pub inner_dim: usize,
+    pub tensors: Vec<VllmTensor>,
+    pub layout_type: LayoutType,
+    pub dtype: Option<String>,
+}
+
+#[pymethods]
+impl BlockManagerConfig {
+    #[new]
+    #[pyo3(signature = (num_layers, num_blocks, page_size, vllm_tensors, dtype="fp16".to_string()))]
+    fn new(num_layers: usize, num_blocks: usize, page_size: usize, vllm_tensors: Vec<Py<PyAny>>, dtype: Option<String>) -> PyResult<Self> {
+        if num_layers == 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Number of layers must be greater than 0"
+            ));
+        }
+        
+        if num_layers != vllm_tensors.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Number of layers ({}) does not match number of tensors ({})",
+                num_layers, vllm_tensors.len()
+            )));
+        }
+
+        let mut shape = None;
+        let mut tensors = Vec::with_capacity(vllm_tensors.len());
+        for tensor in vllm_tensors {
+            let tensor = VllmTensor::new(tensor).map_err(to_pyerr)?;
+
+            if let Some(shape) = shape.as_ref() {
+                if tensor.shape != *shape {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "Tensor shape ({:?}) does not match previous tensor shape ({:?})",
+                        tensor.shape, shape
+                    )));
+                }
+            } else {
+                shape = Some(tensor.shape.clone());
+            }
+
+            tensors.push(tensor);
+        }
+
+        let shape = shape.as_ref().unwrap();
+
+        let layout_type;
+        let inner_dim;
+        let outer_dim;
+
+        // We need to handle 4 different possible layouts here:
+        // 1. [2, num_blocks, block_size, num_kv_heads, head_size] (FlashAttn + variants)
+        // 2. [num_blocks, 2, block_size, num_kv_heads, head_size] (FlashInfer)
+        // 3. [2, num_blocks, block_size * num_kv_heads * head_size] (PagedAttention + variants)
+        // 4. [num_blocks, block_size, head_size] (MLA)
+        // TODO: This is cursed.
+        if shape[0] == num_blocks {
+            layout_type = LayoutType::LayerSeparate{ outer_contiguous: false };
+            if shape.len() == 3 {
+                outer_dim = 1;
+                inner_dim = shape[2];
+            } else if shape.len() == 5 {
+                if shape[1] != 2 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "Expected outer_dim to be 2, got {}", shape[1]
+                    )));
+                }
+                outer_dim = shape[1];
+                inner_dim = shape[3] * shape[4];
+            } else {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unrecognized kv layer shape: {:?}", shape
+                )));
+            }
+        } else if shape[0] == 2 {
+            outer_dim = 2;
+            layout_type = LayoutType::LayerSeparate{ outer_contiguous: true };
+            if shape.len() == 3 {
+                inner_dim = shape[2] / page_size;
+            } else if shape.len() == 5 {
+                inner_dim = shape[3] * shape[4];
+            } else {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unrecognized kv layer shape: {:?}", shape
+                )));
+            }
+        } else {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Unrecognized kv layer shape: {:?}", shape
+            )));
+        }
+
+        tracing::info!("Inferred layout type: {:?}, outer_dim: {}, inner_dim: {}", layout_type, outer_dim, inner_dim);
+
+        Ok(Self {
+            num_layers,
+            num_blocks,
+            outer_dim,
+            page_size,
+            inner_dim,
+            tensors,
+            layout_type,
+            dtype,
+        })
+    }
 }
 
 #[pyclass]
@@ -47,32 +217,28 @@ pub struct BlockManager {
 #[pymethods]
 impl BlockManager {
     #[new]
-    #[pyo3(signature = (worker_id, num_layer, outer_dim, page_size, inner_dim, dtype=None, host_num_blocks=None, device_num_blocks=None, device_id=0))]
+    #[pyo3(signature = (worker_id, config, host_num_blocks=None, device_id=0))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         worker_id: u64,
-        num_layer: usize,
-        outer_dim: usize,
-        page_size: usize,
-        inner_dim: usize,
-        dtype: Option<String>,
+        config: BlockManagerConfig,
         host_num_blocks: Option<usize>,
-        device_num_blocks: Option<usize>,
         device_id: usize,
     ) -> PyResult<Self> {
-        let mut config = dynamo_llm::block_manager::KvBlockManagerConfig::builder().runtime(
+        let mut kvbm_config = dynamo_llm::block_manager::KvBlockManagerConfig::builder().runtime(
             dynamo_llm::block_manager::KvManagerRuntimeConfig::builder()
                 .worker_id(worker_id)
                 .build()
                 .map_err(to_pyerr)?,
         );
         let mut model_config = dynamo_llm::block_manager::KvManagerModelConfig::builder()
-            .num_layers(num_layer)
-            .outer_dim(outer_dim)
-            .page_size(page_size)
-            .inner_dim(inner_dim);
+            .num_layers(config.num_layers)
+            .outer_dim(config.outer_dim)
+            .page_size(config.page_size)
+            .inner_dim(config.inner_dim);
+
         let mut dtype_ = dynamo_llm::common::dtype::DType::FP16; // Default in block_manager config
-        if let Some(dtype_str) = dtype {
+        if let Some(dtype_str) = config.dtype {
             dtype_ = match dtype_str.as_str() {
                 "fp8" | "FP8" => dynamo_llm::common::dtype::DType::FP8,
                 "fp16" | "FP16" => dynamo_llm::common::dtype::DType::FP16,
@@ -95,11 +261,12 @@ impl BlockManager {
             };
         }
         model_config = model_config.dtype(dtype_);
-        config = config.model(model_config.build().map_err(to_pyerr)?);
+        kvbm_config = kvbm_config.model(model_config.build().map_err(to_pyerr)?);
         if let Some(host_num_blocks) = host_num_blocks {
-            config = config.host_layout(
+            kvbm_config = kvbm_config.host_layout(
                 dynamo_llm::block_manager::KvManagerLayoutConfig::builder()
                     .num_blocks(host_num_blocks)
+                    .layout_type(config.layout_type)
                     .allocator(
                         dynamo_llm::block_manager::storage::PinnedAllocator::new()
                             .map_err(to_pyerr)?,
@@ -108,25 +275,31 @@ impl BlockManager {
                     .map_err(to_pyerr)?,
             );
         }
-        if let Some(device_num_blocks) = device_num_blocks {
-            config = config.device_layout(
-                dynamo_llm::block_manager::KvManagerLayoutConfig::builder()
-                    .num_blocks(device_num_blocks)
-                    .allocator(
-                        dynamo_llm::block_manager::storage::DeviceAllocator::new(device_id)
-                            .map_err(to_pyerr)?,
-                    )
-                    .build()
-                    .map_err(to_pyerr)?,
-            );
+
+        let device_allocator = DeviceAllocator::new(device_id).map_err(to_pyerr)?;
+
+        let mut device_tensors = Vec::with_capacity(config.tensors.len());
+
+        for tensor in config.tensors {
+            device_tensors.push(DeviceStorage::new_from_torch(device_allocator.ctx(), Box::new(tensor.clone())).map_err(to_pyerr)?);
         }
-        let config = config.build().map_err(to_pyerr)?;
+
+        kvbm_config = kvbm_config.device_layout(
+            dynamo_llm::block_manager::KvManagerLayoutConfig::builder()
+                .num_blocks(config.num_blocks)
+                .layout_type(config.layout_type)
+                .storage(Some(device_tensors))
+                .build()
+                .map_err(to_pyerr)?,
+        );
+        
+        let kvbm_config = kvbm_config.build().map_err(to_pyerr)?;
         let tokio_runtime = pyo3_async_runtimes::tokio::get_runtime();
         Ok(BlockManager {
             inner: Arc::from(
                 tokio_runtime
                     .block_on(async {
-                        dynamo_llm::block_manager::ReferenceBlockManager::new(config)
+                        dynamo_llm::block_manager::ReferenceBlockManager::new(kvbm_config)
                     })
                     .map_err(to_pyerr)?,
             ),
