@@ -351,13 +351,6 @@ impl<R: RequestKey> SlotManager<R> {
             ));
         }
 
-        // assert new_computed_blocks and tokens_to_append are mutually exclusive
-        if new_computed_blocks.is_some() && !tokens_to_append.is_empty() {
-            return Err(SlotError::Error(
-                "new_computed_blocks and tokens_to_append are mutually exclusive".to_string(),
-            ));
-        }
-
         let slot = self.slots.get_mut(&request_id).ok_or(SlotError::NotFound)?;
 
         // first apply any new computed blocks

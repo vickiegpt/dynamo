@@ -8,7 +8,7 @@ Implementation of vLLM KV cache manager protocol.
 from typing import Optional
 
 from vllm.distributed.kv_events import KVCacheEvent
-from vllm.v1.core.kv_cache_manager import KVCacheBlocks
+from vllm.v1.core.kv_cache_manager import KVCacheBlocks, PrefixCacheStats
 from vllm.v1.core.kv_cache_utils import KVCacheBlock
 from vllm.v1.request import Request
 
@@ -27,7 +27,11 @@ class KvbmCacheManager:
     that can be used in the vLLM KV cache manager protocol.
     """
 
-    def __init__(self, block_manager: BlockManager):
+    def __init__(
+        self,
+        block_manager: BlockManager,
+        log_stats: bool = False,
+    ) -> None:
         """
         Initializes the KvbmCacheManager.
 
@@ -38,6 +42,31 @@ class KvbmCacheManager:
         # the rust cache manager will take ownership of the kvbm
         self.cache_manager = RustKvbmCacheManager(block_manager)
         self.block_size = block_manager.block_size()
+        self.log_stats = log_stats
+        # FIXME: make prefix cache stats conditional on log_stats
+        self.prefix_cache_stats = PrefixCacheStats() if log_stats else None
+
+    @property
+    def usage(self) -> float:
+        """Get the KV cache usage.
+
+        Returns:
+            The KV cache usage (between 0.0 and 1.0).
+        """
+        # TODO(ziqif): implement this
+        return 0.5
+
+    def make_prefix_cache_stats(self) -> Optional[PrefixCacheStats]:
+        """Get (and reset) the prefix cache stats.
+
+        Returns:
+            The current prefix caching stats, or None if logging is disabled.
+        """
+        if not self.log_stats:
+            return None
+        stats = self.prefix_cache_stats
+        self.prefix_cache_stats = PrefixCacheStats()
+        return stats
 
     def get_computed_blocks(self, request: Request) -> tuple[KvbmCacheBlocks, int]:
         """
@@ -48,7 +77,9 @@ class KvbmCacheManager:
         owned_blocks = self.cache_manager.get_computed_blocks(sequence_hashes)
         block_count = owned_blocks.block_count()
 
-        return KvbmCacheBlocks(owned_blocks), block_count
+        print(f"owned_blocks_count: {block_count}")
+
+        return KvbmCacheBlocks(owned_blocks), block_count * self.block_size
 
     def _create_slot(self, request: Request) -> list[int]:
         """Create a slot for the request."""
@@ -74,6 +105,7 @@ class KvbmCacheManager:
         num_new_tokens: int,
         num_new_computed_tokens: int = 0,
         new_computed_blocks: Optional[KVCacheBlocks] = None,
+        num_draft_tokens: int = 0,
         num_lookahead_tokens: int = 0,
         delay_cache_blocks: bool = False,
     ) -> Optional[KVCacheBlocks]:
@@ -127,6 +159,10 @@ class KvbmCacheManager:
         tokens_to_append = request.all_token_ids[
             prev_computed_tokens:num_computed_tokens
         ]
+
+        print(
+            f"request_id: {request.request_id}, num_new_tokens: {num_new_tokens}, num_new_computed_tokens: {num_new_computed_tokens}, tokens_to_append: {len(tokens_to_append)}"
+        )
 
         # take ownership "owned_blocks" of the new computed blocks
         owned_blocks = getattr(new_computed_blocks, "_owned_blocks", None)
@@ -219,7 +255,7 @@ class KvbmCacheManager:
             list[int]: The number of common prefix blocks for each kv cache
             group.
         """
-        raise NotImplementedError("get_num_common_prefix_blocks is not implemented")
+        return [0]
 
     def free_block_hashes(self, request: Request) -> None:
         """Discard the block hashes for the request.
