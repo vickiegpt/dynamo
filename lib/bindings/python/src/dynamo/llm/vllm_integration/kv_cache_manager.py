@@ -8,7 +8,7 @@ Implementation of vLLM KV cache manager protocol.
 from typing import Optional
 
 from vllm.distributed.kv_events import KVCacheEvent
-from vllm.v1.core.kv_cache_manager import KVCacheBlocks
+from vllm.v1.core.kv_cache_manager import KVCacheBlocks, PrefixCacheStats
 from vllm.v1.core.kv_cache_utils import KVCacheBlock
 from vllm.v1.request import Request
 
@@ -27,7 +27,11 @@ class KvbmCacheManager:
     that can be used in the vLLM KV cache manager protocol.
     """
 
-    def __init__(self, block_manager: BlockManager):
+    def __init__(
+        self,
+        block_manager: BlockManager,
+        log_stats: bool = False,
+    ) -> None:
         """
         Initializes the KvbmCacheManager.
 
@@ -38,6 +42,30 @@ class KvbmCacheManager:
         # the rust cache manager will take ownership of the kvbm
         self.cache_manager = RustKvbmCacheManager(block_manager)
         self.block_size = block_manager.block_size()
+        self.log_stats = log_stats
+        # FIXME: make prefix cache stats conditional on log_stats
+        self.prefix_cache_stats = PrefixCacheStats() if log_stats else None
+
+    def usage(self) -> float:
+        """Get the KV cache usage.
+
+        Returns:
+            The KV cache usage (between 0.0 and 1.0).
+        """
+        # TODO(ziqif): implement this
+        return 0.5
+
+    def make_prefix_cache_stats(self) -> Optional[PrefixCacheStats]:
+        """Get (and reset) the prefix cache stats.
+
+        Returns:
+            The current prefix caching stats, or None if logging is disabled.
+        """
+        if not self.log_stats:
+            return None
+        stats = self.prefix_cache_stats
+        self.prefix_cache_stats = PrefixCacheStats()
+        return stats
 
     def get_computed_blocks(self, request: Request) -> tuple[KvbmCacheBlocks, int]:
         """
@@ -74,6 +102,7 @@ class KvbmCacheManager:
         num_new_tokens: int,
         num_new_computed_tokens: int = 0,
         new_computed_blocks: Optional[KVCacheBlocks] = None,
+        num_draft_tokens: int = 0,
         num_lookahead_tokens: int = 0,
         delay_cache_blocks: bool = False,
     ) -> Optional[KVCacheBlocks]:
@@ -135,7 +164,16 @@ class KvbmCacheManager:
             tokens_to_append=tokens_to_append,
             num_new_tokens=num_new_tokens,
             num_new_computed_tokens=num_new_computed_tokens,
-            new_computed_blocks=new_computed_blocks,
+            # TODO(oandreeva): need owned blocks here
+            # otherwise blocks = manager.allocate_slots(req0, 55,
+            #                            len(computed_blocks.blocks) * 16,
+            #                            computed_blocks)
+            # gives error:
+            # TypeError: argument 'new_computed_blocks': 'KvbmCacheBlocks' object cannot be converted to '
+            # KvbmBlockList'
+            new_computed_blocks=new_computed_blocks._owned_blocks
+            if new_computed_blocks is not None
+            else None,
             # TODO(ryan): add support for lookahead blocks
             # comment out for now, otherwise would error out
             # num_lookahead_blocks=num_lookahead_tokens,
@@ -214,7 +252,7 @@ class KvbmCacheManager:
             list[int]: The number of common prefix blocks for each kv cache
             group.
         """
-        raise NotImplementedError("get_num_common_prefix_blocks is not implemented")
+        return [0]
 
     def free_block_hashes(self, request: Request) -> None:
         """Discard the block hashes for the request.
