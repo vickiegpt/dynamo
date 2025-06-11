@@ -270,12 +270,17 @@ impl<S: Storage, M: BlockMetadata> ProgressEngine<S, M> {
         tracing::debug!(count = blocks.len(), "adding blocks to inactive pool");
         state.inactive.add_blocks(blocks);
 
+        let available_blocks_counter = state.inactive.available_blocks_counter();
+        let total_blocks = state.inactive.total_blocks();
+
         Self {
             priority_rx,
             ctrl_rx,
             cancel_token,
             state,
             return_rx,
+            available_blocks_counter,
+            total_blocks,
         }
     }
 

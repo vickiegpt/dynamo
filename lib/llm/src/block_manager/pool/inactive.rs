@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::atomic::AtomicU64;
+
 use crate::block_manager::block::BlockState;
 
 use super::*;
@@ -34,6 +36,9 @@ pub struct InactiveBlockPool<S: Storage, M: BlockMetadata> {
 
     // Total blocks
     total_blocks: u64,
+
+    // Inactive blocks
+    available_blocks: Arc<AtomicU64>,
 }
 
 impl<S: Storage, M: BlockMetadata> InactiveBlockPool<S, M> {
@@ -49,7 +54,17 @@ impl<S: Storage, M: BlockMetadata> InactiveBlockPool<S, M> {
             uninitialized_set: VecDeque::new(),
             return_tick: 0,
             total_blocks: 0,
+            available_blocks: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Returns a counter for the number of available blocks.
+    ///
+    /// # Returns
+    ///
+    /// A counter for the number of available blocks as an [`Arc<AtomicU64>`].
+    pub fn available_blocks_counter(&self) -> Arc<AtomicU64> {
+        self.available_blocks.clone()
     }
 
     /// Returns the total number of blocks managed by this pool (both available and acquired).
