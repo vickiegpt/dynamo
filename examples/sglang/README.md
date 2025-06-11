@@ -71,6 +71,13 @@ cd /workspace/examples/sglang
 dynamo serve graphs.agg:Frontend -f ./configs/agg.yaml
 ```
 
+##### Aggregated Embedding support
+
+```bash
+cd /workspace/examples/sglang
+dynamo serve graphs.embedding:Frontend -f ./configs/embedding.yaml
+```
+
 #### Disaggregated
 
 As of `sglang==0.4.6.post4`, SGLang uses a mini load balancer to route requests to handle disaggregated serving. The load balancer functions as follows
