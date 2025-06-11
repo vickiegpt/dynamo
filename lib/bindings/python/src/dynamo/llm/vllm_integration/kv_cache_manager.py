@@ -128,6 +128,11 @@ class KvbmCacheManager:
             prev_computed_tokens:num_computed_tokens
         ]
 
+        # take ownership "owned_blocks" of the new computed blocks
+        owned_blocks = getattr(new_computed_blocks, "_owned_blocks", None)
+        if owned_blocks:
+            new_computed_blocks._owned_blocks = None
+
         slot_update = SlotUpdate(
             request_id=request.request_id,
             request_num_tokens=request.num_tokens,
@@ -135,7 +140,7 @@ class KvbmCacheManager:
             tokens_to_append=tokens_to_append,
             num_new_tokens=num_new_tokens,
             num_new_computed_tokens=num_new_computed_tokens,
-            new_computed_blocks=new_computed_blocks,
+            new_computed_blocks=owned_blocks,
             # TODO(ryan): add support for lookahead blocks
             # comment out for now, otherwise would error out
             # num_lookahead_blocks=num_lookahead_tokens,
@@ -172,7 +177,7 @@ class KvbmCacheManager:
             bool: True if the prefix cache is successfully reset,
             False otherwise.
         """
-        self.cache_manager.reset_prefix_cache()
+        # self.cache_manager.reset_prefix_cache()
         return False
 
     def get_num_common_prefix_blocks(
@@ -222,7 +227,7 @@ class KvbmCacheManager:
         NOTE: Unlike `free`, this method should be called only when the request
         is finished, not when it is preempted.
         """
-        return self.cache_manager.free_block_hashes(request.request_id)
+        self.cache_manager.free_block_hashes(request.request_id)
 
     def take_events(self) -> list[KVCacheEvent]:
         """Take the KV cache events from the block pool.
@@ -230,7 +235,7 @@ class KvbmCacheManager:
         Returns:
             A list of KV cache events.
         """
-        return self.cache_manager.take_events()
+        return []
 
     def get_block_ids(self, request_id: str) -> list[list[int]]:
         """Get the block ids of a request."""
