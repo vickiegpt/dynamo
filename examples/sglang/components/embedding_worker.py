@@ -17,13 +17,10 @@
 Using SGLang and Dynamo to serve embedding models!
 """
 
-import base64
 import logging
-from typing import Optional
-import struct
 
 import sglang as sgl
-from utils.protocol import EmbeddingRequest, EncodingFormat
+from utils.protocol import EmbeddingRequest
 from utils.sglang import parse_sglang_args
 
 from dynamo.llm import ModelType, register_llm
