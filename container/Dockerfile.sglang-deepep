@@ -18,38 +18,9 @@ ARG ARCH_ALT=x86_64
 
 WORKDIR /sgl-workspace
 
-# Clone NIXL with commit hash for caching
-ARG NIXL_COMMIT
-RUN git clone https://github.com/ai-dynamo/nixl.git /opt/nixl
-RUN echo "NIXL commit: ${NIXL_COMMIT}" > /opt/nixl/commit.txt
-WORKDIR /opt/nixl
-RUN if [ -n "$NIXL_COMMIT" ]; then git checkout $NIXL_COMMIT; fi
-
-# Build NIXL using meson/ninja (more robust than pip install)
-RUN if [ "$ARCH" = "arm64" ]; then \
-        mkdir build && \
-        meson setup build/ --buildtype=release --prefix=/usr/local/nixl -Dgds_path=/usr/local/cuda/targets/sbsa-linux && \
-        cd build/ && \
-        ninja && \
-        ninja install; \
-    else \
-        mkdir build && \
-        meson setup build/ --buildtype=release --prefix=/usr/local/nixl && \
-        cd build/ && \
-        ninja && \
-        ninja install; \
-    fi
-
-# Build and install NIXL Python wheel
-RUN if [ "$ARCH" = "arm64" ]; then \
-        pip wheel . --no-build-isolation -w /tmp/wheels \
-        --config-settings=setup-args="-Dgds_path=/usr/local/cuda/targets/sbsa-linux"; \
-    else \
-        pip wheel . --no-build-isolation -w /tmp/wheels \
-        --config-settings=setup-args="-Ducx_path=/opt/hpcx/ucx"; \
-    fi
-
-RUN pip install --break-system-packages /tmp/wheels/nixl*.whl
+# Pinning to NIXL 0.2.1 right now
+ARG NIXL_COMMIT="5e4c179ee850d482a83cb2a211e0947e46281060"
+RUN git clone https://github.com/ai-dynamo/nixl.git && cd nixl && git checkout ${NIXL_COMMIT} &&pip install --break-system-packages . --config-settings=setup-args="-Ducx_path=/opt/hpcx/ucx"
 
 WORKDIR /sgl-workspace
 
