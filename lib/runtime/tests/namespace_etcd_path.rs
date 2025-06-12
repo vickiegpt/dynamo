@@ -1,6 +1,11 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // Test file for recursive namespace etcd_path functionality
+#[allow(unused_imports)]
 use dynamo_runtime::{DistributedRuntime, Runtime};
 
+#[cfg(feature = "integration")]
 #[test]
 fn test_namespace_etcd_path_format() {
     // Test that the etcd_path format is correct for the expected use case
@@ -27,6 +32,7 @@ fn test_namespace_etcd_path_format() {
     println!("   Component path: {}", component_path);
 }
 
+#[cfg(feature = "integration")]
 #[tokio::test]
 async fn test_recursive_namespace_implementation() {
     let runtime = Runtime::from_current().unwrap();
@@ -65,6 +71,7 @@ async fn test_recursive_namespace_implementation() {
     println!("   Component path: {}", component.etcd_path());
 }
 
+#[cfg(feature = "integration")]
 #[tokio::test]
 async fn test_multiple_branches_recursive_namespaces() {
     let runtime = Runtime::from_current().unwrap();
