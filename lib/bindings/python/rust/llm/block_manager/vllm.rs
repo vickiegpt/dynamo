@@ -168,6 +168,13 @@ impl KvbmCacheManager {
             .get_block_ids(&request_id)
             .map_err(to_pyerr)
     }
+
+    pub fn usage(&self) -> PyResult<f64> {
+        let pool = self.block_manager().device().unwrap();
+        let inuse = pool.total_blocks() - pool.available_blocks();
+        let usage: f64 = inuse as f64 / pool.total_blocks() as f64;
+        Ok(usage)
+    }
 }
 
 #[derive(Debug, Clone, Dissolve)]
@@ -387,7 +394,7 @@ impl<R: RequestKey> SlotManager<R> {
         );
 
         // 3. allocate new blocks if needed
-        Ok(slot
+        let new_blocks = slot
             .allocate_blocks(num_new_tokens, bm.device().unwrap())
             .map(|new_block_ids| {
                 new_block_ids
@@ -395,7 +402,19 @@ impl<R: RequestKey> SlotManager<R> {
                     .map(|block_id| BlockState::new(block_id, None))
                     .collect::<Vec<BlockState>>()
                     .into()
-            }))
+            });
+
+        match new_blocks {
+            Some(new_blocks) => Ok(Some(new_blocks)),
+            None => {
+                // could not allocate new blocks and we reset the slot
+                // note: we could free the blocks here; however, apply_computed_blocks always resets the
+                // immutable block list, avoiding the free_blocks() here allows us to hold the reference count on
+                // the blocks we intend to reuse
+                // slot.free_blocks();
+                Ok(None)
+            }
+        }
     }
 
     pub fn get_block_ids(&self, request_id: &R) -> Result<Vec<BlockId>, SlotError> {

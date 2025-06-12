@@ -77,7 +77,7 @@ use super::storage::Storage;
 
 use crate::tokens::{SequenceHash, TokenBlock};
 
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     collections::{BTreeSet, HashMap, VecDeque},
     sync::{Arc, Weak},
@@ -149,6 +149,7 @@ pub struct BlockPool<S: Storage, M: BlockMetadata> {
     priority_tx: tokio::sync::mpsc::UnboundedSender<PriorityRequest<S, M>>,
     ctrl_tx: tokio::sync::mpsc::UnboundedSender<ControlRequest<S, M>>,
     available_blocks_counter: Arc<AtomicU64>,
+    total_blocks_counter: Arc<AtomicU64>,
 }
 
 impl<S: Storage, M: BlockMetadata> Clone for BlockPool<S, M> {
@@ -157,6 +158,7 @@ impl<S: Storage, M: BlockMetadata> Clone for BlockPool<S, M> {
             priority_tx: self.priority_tx.clone(),
             ctrl_tx: self.ctrl_tx.clone(),
             available_blocks_counter: self.available_blocks_counter.clone(),
+            total_blocks_counter: self.total_blocks_counter.clone(),
         }
     }
 }
@@ -280,15 +282,25 @@ impl<S: Storage, M: BlockMetadata> BlockPool<S, M> {
         );
 
         let available_blocks_counter = progress_engine.available_blocks_counter.clone();
+        let total_blocks_counter = progress_engine.total_blocks_counter.clone();
 
         (
             Self {
                 priority_tx,
                 ctrl_tx,
                 available_blocks_counter,
+                total_blocks_counter,
             },
             progress_engine,
         )
+    }
+
+    pub fn total_blocks(&self) -> u64 {
+        self.total_blocks_counter.load(Ordering::Relaxed)
+    }
+
+    pub fn available_blocks(&self) -> u64 {
+        self.available_blocks_counter.load(Ordering::Relaxed)
     }
 
     /// Adds a vector of [`Block`]s to the [`InactiveBlockPool`].
@@ -489,7 +501,7 @@ struct ProgressEngine<S: Storage, M: BlockMetadata> {
     state: State<S, M>,
     return_rx: tokio::sync::mpsc::UnboundedReceiver<Block<S, M>>,
     available_blocks_counter: Arc<AtomicU64>,
-    total_blocks: u64,
+    total_blocks_counter: Arc<AtomicU64>,
 }
 
 #[cfg(test)]

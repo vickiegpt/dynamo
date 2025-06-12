@@ -34,8 +34,8 @@ pub struct InactiveBlockPool<S: Storage, M: BlockMetadata> {
     // Return Tick
     return_tick: u64,
 
-    // Total blocks
-    total_blocks: u64,
+    // Total blocks counter
+    total_blocks: Arc<AtomicU64>,
 
     // Inactive blocks
     available_blocks: Arc<AtomicU64>,
@@ -53,7 +53,7 @@ impl<S: Storage, M: BlockMetadata> InactiveBlockPool<S, M> {
             priority_set: BTreeSet::new(),
             uninitialized_set: VecDeque::new(),
             return_tick: 0,
-            total_blocks: 0,
+            total_blocks: Arc::new(AtomicU64::new(0)),
             available_blocks: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -67,13 +67,22 @@ impl<S: Storage, M: BlockMetadata> InactiveBlockPool<S, M> {
         self.available_blocks.clone()
     }
 
+    /// Returns a counter for the total number of blocks.
+    ///
+    /// # Returns
+    ///
+    /// A counter for the total number of blocks as an [`Arc<AtomicU64>`].
+    pub fn total_blocks_counter(&self) -> Arc<AtomicU64> {
+        self.total_blocks.clone()
+    }
+
     /// Returns the total number of blocks managed by this pool (both available and acquired).
     ///
     /// # Returns
     ///
     /// The total block count as a [`u64`].
     pub fn total_blocks(&self) -> u64 {
-        self.total_blocks
+        self.total_blocks.load(Ordering::Relaxed)
     }
 
     /// Returns the number of blocks currently available in the pool.
@@ -158,6 +167,8 @@ impl<S: Storage, M: BlockMetadata> InactiveBlockPool<S, M> {
                 self.insert_with_sequence_hash(block, sequence_hash);
             }
         }
+
+        self.available_blocks.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Adds multiple blocks to the pool.
@@ -178,7 +189,7 @@ impl<S: Storage, M: BlockMetadata> InactiveBlockPool<S, M> {
             self.insert(block);
         }
 
-        self.total_blocks += count as u64;
+        self.total_blocks.fetch_add(count as u64, Ordering::Relaxed);
     }
 
     /// Adds multiple blocks to the pool.
@@ -192,7 +203,7 @@ impl<S: Storage, M: BlockMetadata> InactiveBlockPool<S, M> {
     pub fn add_blocks_with_state(&mut self, blocks: Vec<Block<S, M>>) {
         let count = blocks.len();
         tracing::debug!(count, "Adding blocks to pool");
-        self.total_blocks += count as u64;
+        self.total_blocks.fetch_add(count as u64, Ordering::Relaxed);
         // self.available_blocks += count as u64;
         self.return_blocks(blocks);
     }
@@ -256,6 +267,7 @@ impl<S: Storage, M: BlockMetadata> InactiveBlockPool<S, M> {
                 // Remove from priority set
                 let priority_key = PriorityKey::new(block.metadata().clone(), sequence_hash);
                 self.priority_set.remove(&priority_key);
+                self.available_blocks.fetch_sub(1, Ordering::Relaxed);
                 Some(block)
             }
             None => None,
@@ -378,6 +390,7 @@ impl<S: Storage, M: BlockMetadata> InactiveBlockPool<S, M> {
             tracing::trace!("Acquired uninitialized block");
             self.return_tick += 1;
             block.metadata_on_acquired(self.return_tick);
+            self.available_blocks.fetch_sub(1, Ordering::Relaxed);
             return Some(block);
         }
 
@@ -390,6 +403,7 @@ impl<S: Storage, M: BlockMetadata> InactiveBlockPool<S, M> {
                     block.reset();
                     self.return_tick += 1;
                     block.metadata_on_acquired(self.return_tick);
+                    self.available_blocks.fetch_sub(1, Ordering::Relaxed);
                     Some(block)
                 }
                 None => {
@@ -733,6 +747,10 @@ pub(crate) mod tests {
 
         assert_eq!(pool.total_blocks(), 10);
         assert_eq!(pool.available_blocks(), 10);
+        assert_eq!(
+            pool.available_blocks_counter().load(Ordering::Relaxed),
+            pool.available_blocks()
+        );
 
         let tokens = create_token_sequence(&[1, 2, 3, 4]);
 
@@ -745,11 +763,19 @@ pub(crate) mod tests {
         assert_eq!(blocks.len(), 2);
         assert_eq!(matched_block_count, 0);
         assert_eq!(pool.available_blocks(), 8);
+        assert_eq!(
+            pool.available_blocks_counter().load(Ordering::Relaxed),
+            pool.available_blocks()
+        );
 
         pool.return_blocks(blocks);
 
         assert_eq!(pool.total_blocks(), 10);
         assert_eq!(pool.available_blocks(), 10);
+        assert_eq!(
+            pool.available_blocks_counter().load(Ordering::Relaxed),
+            pool.available_blocks()
+        );
 
         let (blocks, matched_block_count) = acquire_blocks(
             tokens.clone(),
@@ -760,11 +786,19 @@ pub(crate) mod tests {
         assert_eq!(blocks.len(), 2);
         assert_eq!(matched_block_count, 2);
         assert_eq!(pool.available_blocks(), 8);
+        assert_eq!(
+            pool.available_blocks_counter().load(Ordering::Relaxed),
+            pool.available_blocks()
+        );
 
         pool.return_blocks(blocks);
 
         assert_eq!(pool.total_blocks(), 10);
         assert_eq!(pool.available_blocks(), 10);
+        assert_eq!(
+            pool.available_blocks_counter().load(Ordering::Relaxed),
+            pool.available_blocks()
+        );
 
         let blocks = pool.acquire_free_blocks(10).unwrap();
         for block in &blocks {
@@ -797,6 +831,10 @@ pub(crate) mod tests {
 
         assert_eq!(pool.total_blocks(), 2);
         assert_eq!(pool.available_blocks(), 2);
+        assert_eq!(
+            pool.available_blocks_counter().load(Ordering::Relaxed),
+            pool.available_blocks()
+        );
 
         // Match the blocks in sequence
         let matched = pool.match_sequence_hashes(hashes.clone());
@@ -804,6 +842,10 @@ pub(crate) mod tests {
 
         assert_eq!(pool.total_blocks(), 2);
         assert_eq!(pool.available_blocks(), 0);
+        assert_eq!(
+            pool.available_blocks_counter().load(Ordering::Relaxed),
+            pool.available_blocks()
+        );
 
         // Validate the blocks are in the correct order and match the sequence hashes
         assert_eq!(matched[0].sequence_hash().unwrap(), hashes[0]);
@@ -814,5 +856,9 @@ pub(crate) mod tests {
 
         assert_eq!(pool.total_blocks(), 2);
         assert_eq!(pool.available_blocks(), 2);
+        assert_eq!(
+            pool.available_blocks_counter().load(Ordering::Relaxed),
+            pool.available_blocks()
+        );
     }
 }

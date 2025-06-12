@@ -267,11 +267,13 @@ impl<S: Storage, M: BlockMetadata> ProgressEngine<S, M> {
         let mut state =
             State::<S, M>::new(event_manager, return_tx, global_registry, async_runtime);
 
-        tracing::debug!(count = blocks.len(), "adding blocks to inactive pool");
+        let count = blocks.len();
+
+        tracing::debug!(count, "adding blocks to inactive pool");
         state.inactive.add_blocks(blocks);
 
         let available_blocks_counter = state.inactive.available_blocks_counter();
-        let total_blocks = state.inactive.total_blocks();
+        let total_blocks_counter = state.inactive.available_blocks_counter();
 
         Self {
             priority_rx,
@@ -280,7 +282,7 @@ impl<S: Storage, M: BlockMetadata> ProgressEngine<S, M> {
             state,
             return_rx,
             available_blocks_counter,
-            total_blocks,
+            total_blocks_counter,
         }
     }
 

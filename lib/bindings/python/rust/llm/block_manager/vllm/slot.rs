@@ -140,11 +140,18 @@ impl<S: Storage> Slot<S> {
     }
 
     /// Apply computed/cached blocks to the slot.
+    ///
+    /// Note: We should only every apply computed blocks once at the beginning.
+    /// Here we clear the list of immutable blocks before applying them because vLLM can try to apply
+    /// this multiple times if the slot was unable acquire blocks for the remainder of the sequence.
     pub fn apply_computed_blocks(
         &mut self,
         computed_blocks: Vec<ImmutableBlock<S, BasicMetadata>>,
     ) -> Result<(), SlotError> {
         assert!(self.mutable.is_empty());
+
+        // clear the immutable blocks
+        self.immutable.clear();
 
         // create an iterator over the mutable blocks zipped with the token blocks
         let zipped_blocks = self

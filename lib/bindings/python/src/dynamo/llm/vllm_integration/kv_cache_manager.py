@@ -53,8 +53,7 @@ class KvbmCacheManager:
         Returns:
             The KV cache usage (between 0.0 and 1.0).
         """
-        # TODO(ziqif): implement this
-        return 0.5
+        return self.cache_manager.usage()
 
     def make_prefix_cache_stats(self) -> Optional[PrefixCacheStats]:
         """Get (and reset) the prefix cache stats.
