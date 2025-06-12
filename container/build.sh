@@ -382,6 +382,8 @@ elif [[ $FRAMEWORK == "NONE" ]]; then
     DOCKERFILE=${SOURCE_DIR}/Dockerfile.none
 elif [[ $FRAMEWORK == "SGLANG" ]]; then
     DOCKERFILE=${SOURCE_DIR}/Dockerfile.sglang
+elif [[ $FRAMEWORK == "VLLM_V1" ]]; then
+    DOCKERFILE=${SOURCE_DIR}/Dockerfile.vllm_v1
 fi
 
 NIXL_DIR="/tmp/nixl/nixl_src"
