@@ -1,20 +1,20 @@
-FROM docker.io/lmsysorg/sglang:deepep
+FROM deepep:latest
 
 WORKDIR /sgl-workspace
 RUN git clone https://github.com/ai-dynamo/nixl.git
 WORKDIR /sgl-workspace/nixl
-RUN pip install . --config-settings=setup-args="-Ducx_path=/opt/hpcx/ucx"
+RUN pip install . --break-system-packages --config-settings=setup-args="-Ducx_path=/opt/hpcx/ucx"
 
-RUN pip3 install mooncake-transfer-engine
+RUN pip3 install --break-system-packages mooncake-transfer-engine
 
 WORKDIR /sgl-workspace
 
 # need our fixed nixl version
-RUN pip uninstall -y sglang
+RUN pip uninstall --break-system-packages -y sglang
 RUN rm -rf sglang 
 # On main as of 12:22 PM 6/9 - https://github.com/sgl-project/sglang/pull/6884
-ARG SGLANG_COMMIT="f1569876d54dd3b6601f5280f12652e9fbb1375c"
-RUN git clone https://github.com/sgl-project/sglang.git && cd sglang && git checkout ${SGLANG_COMMIT} && pip install -e "python[all]"
+ARG SGLANG_COMMIT="777688b8929c877e4e28c2eac208d776abe4c3af"
+RUN git clone https://github.com/sgl-project/sglang.git && cd sglang && git checkout ${SGLANG_COMMIT} && pip install --break-system-packages -e "python[all]"
 
 RUN git clone https://github.com/ai-dynamo/dynamo.git
 
@@ -62,8 +62,8 @@ RUN cp target/release/http deploy/sdk/src/dynamo/sdk/cli/bin
 RUN cp target/release/llmctl deploy/sdk/src/dynamo/sdk/cli/bin
 RUN cp target/release/dynamo-run deploy/sdk/src/dynamo/sdk/cli/bin
 
-RUN cd lib/bindings/python && pip install -e . && cd ../../..
-RUN pip install -e .
+RUN cd lib/bindings/python && pip install --break-system-packages -e . && cd ../../..
+RUN pip install --break-system-packages -e .
 
 ENV PYTHONPATH=/sgl-workspace/dynamo/components/planner/src
 
