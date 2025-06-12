@@ -411,7 +411,7 @@ impl<R: RequestKey> SlotManager<R> {
                 // note: we could free the blocks here; however, apply_computed_blocks always resets the
                 // immutable block list, avoiding the free_blocks() here allows us to hold the reference count on
                 // the blocks we intend to reuse
-                // slot.free_blocks();
+                slot.free_blocks();
                 Ok(None)
             }
         }
