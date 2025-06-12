@@ -33,3 +33,5 @@ dynamo serve graphs.disagg:Frontend -f configs/head.yaml --service-name SGLangDe
 # ensure you are swapping the dist-init-addr to the correct address 
 dynamo serve graphs.agg:Frontend -f configs/head.yaml --service-name SGLangDecodeWorker
 ```
+
+DeepGEMM requires a good bit of warmup before you can start benchmarking/serving requests. I recommend about 100-200 requests to warmup the model. Start with 200/10 and then move up until you get to about 2k/500. At some point you will stop seeing the DeepGEMM compilation steps.

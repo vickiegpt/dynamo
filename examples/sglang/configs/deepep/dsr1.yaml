@@ -12,7 +12,7 @@ SGLangWorker:
   disaggregation-bootstrap-port: 30001
   dist-init-addr: 10.52.53.73:29500
   nnodes: 2
-  node-rank: 1
+  node-rank: 0
   tp-size: 16
   dp-size: 16
   enable-dp-attention: true
@@ -27,12 +27,11 @@ SGLangWorker:
   enable-two-batch-overlap: true
   deepep-mode: normal
   mem-fraction-static: 0.85
-  # num_prefill_nodes * 131072 
-  chunked-prefill-size: 262144
+  chunked-prefill-size: 8192
   # num_prefill_nodes * 2048
-  max-running-requests: 4096 
-  max-total-tokens: 131072
-  context-length: 8192
+  #max-running-requests: 4096
+  #max-total-tokens: 131072
+  #context-length: 8192
   # sweep over these from the /configs dir
   #init-expert-location: /configs/prefill_in1000out1000.json
   ep-num-redundant-experts: 32
@@ -53,11 +52,11 @@ SGLangDecodeWorker:
   disaggregation-mode: decode
   disaggregation-transfer-backend: nixl
   disaggregation-bootstrap-port: 30001
-  dist-init-addr: 10.52.53.75:29500
-  nnodes: 2
-  node-rank: 1
-  tp-size: 16
-  dp-size: 16
+  dist-init-addr: 10.52.53.100:29500
+  nnodes: 4
+  node-rank: 0
+  tp-size: 32
+  dp-size: 32
   enable-dp-attention: true
   decode-log-interval: 1
   enable-deepep-moe: true
@@ -71,11 +70,11 @@ SGLangDecodeWorker:
   deepep-mode: low_latency
   mem-fraction-static: 0.835
   # num_decode_nodes * 1024
-  max-running-requests: 2048
-  context-length: 4500
-    #init-expert-location: /configs/decode_in1000out1000.json
+  #max-running-requests: 2048
+  #context-length: 4500
+  #init-expert-location: /configs/decode_in1000out1000.json
   ep-num-redundant-experts: 32
-  cuda-graph-bs: 256
+  cuda-graph-bs: 128
   ServiceArgs:
     workers: 1
     resources:
