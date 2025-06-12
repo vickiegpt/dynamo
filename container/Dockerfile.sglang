@@ -141,7 +141,26 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     git clone https://github.com/sgl-project/sglang.git && \
     cd sglang && \
     git checkout ${SGLANG_COMMIT} && \
-    uv pip install -e "python[all]"
+    # For ARM64 builds, sgl-kernel doesn't have pre-built wheels, so we need to handle it differently
+    if [ "$ARCH" = "arm64" ]; then \
+        # Remove sgl-kernel dependency from pyproject.toml for ARM64 builds
+        sed -i '/sgl-kernel/d' python/pyproject.toml && \
+        # Build and install sgl-kernel from source
+        cd sgl-kernel && \
+        python setup.py build_ext --inplace && \
+        pip install . && \
+        cd .. && \
+        # Install SGLang without sgl-kernel dependency (already installed from source)
+        uv pip install -e "python[all]" --no-deps && \
+        # Install the remaining dependencies manually
+        uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 && \
+        uv pip install transformers tokenizers accelerate datasets pillow requests numpy && \
+        uv pip install fastapi uvicorn pydantic-settings && \
+        uv pip install flashinfer-python triton; \
+    else \
+        # For x86_64, install normally with all dependencies including sgl-kernel
+        uv pip install -e "python[all]"; \
+    fi
 
 # Common dependencies
 RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requirements.txt \
