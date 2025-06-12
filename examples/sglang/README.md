@@ -71,13 +71,6 @@ cd /workspace/examples/sglang
 dynamo serve graphs.agg:Frontend -f ./configs/agg.yaml
 ```
 
-##### Aggregated Embedding support
-
-```bash
-cd /workspace/examples/sglang
-dynamo serve graphs.embedding:Frontend -f ./configs/embedding.yaml
-```
-
 #### Disaggregated
 
 As of `sglang==0.4.6.post4`, SGLang uses a mini load balancer to route requests to handle disaggregated serving. The load balancer functions as follows
@@ -105,4 +98,11 @@ SGLang also supports DP attention for MoE models. We provide an example config f
 # note this will require 4 GPUs
 cd /workspace/examples/sglang
 dynamo serve graphs.disagg:Frontend -f ./configs/disagg-dp-attention.yaml
+```
+#### Embedding Models 
+
+We support deploying embedding models via SGLang as well! Here's an example that uses the [intfloat/e5-base-v2](https://huggingface.co/intfloat/e5-base-v2) model.
+```bash
+cd /workspace/examples/sglang
+dynamo serve graphs.embedding:Frontend -f ./configs/embedding.yaml
 ```
