@@ -1,21 +1,65 @@
 FROM deepep:latest
 
+# Add NIXL build dependencies
+RUN apt-get update -y && \
+    apt-get install -y \
+    cmake \
+    meson \
+    ninja-build \
+    pybind11-dev \
+    patchelf
+
+# Install Python build dependencies
+RUN pip install --break-system-packages meson-python wheel build
+
+# Add architecture args for NIXL build
+ARG ARCH=amd64
+ARG ARCH_ALT=x86_64
+
 WORKDIR /sgl-workspace
-RUN git clone https://github.com/ai-dynamo/nixl.git
-WORKDIR /sgl-workspace/nixl
-RUN pip install . --break-system-packages --config-settings=setup-args="-Ducx_path=/opt/hpcx/ucx"
 
-RUN pip3 install --break-system-packages mooncake-transfer-engine
+# Clone NIXL with commit hash for caching
+ARG NIXL_COMMIT
+RUN git clone https://github.com/ai-dynamo/nixl.git /opt/nixl
+RUN echo "NIXL commit: ${NIXL_COMMIT}" > /opt/nixl/commit.txt
+WORKDIR /opt/nixl
+RUN if [ -n "$NIXL_COMMIT" ]; then git checkout $NIXL_COMMIT; fi
+
+# Build NIXL using meson/ninja (more robust than pip install)
+RUN if [ "$ARCH" = "arm64" ]; then \
+        mkdir build && \
+        meson setup build/ --buildtype=release --prefix=/usr/local/nixl -Dgds_path=/usr/local/cuda/targets/sbsa-linux && \
+        cd build/ && \
+        ninja && \
+        ninja install; \
+    else \
+        mkdir build && \
+        meson setup build/ --buildtype=release --prefix=/usr/local/nixl && \
+        cd build/ && \
+        ninja && \
+        ninja install; \
+    fi
+
+# Build and install NIXL Python wheel
+RUN if [ "$ARCH" = "arm64" ]; then \
+        pip wheel . --no-build-isolation -w /tmp/wheels \
+        --config-settings=setup-args="-Dgds_path=/usr/local/cuda/targets/sbsa-linux"; \
+    else \
+        pip wheel . --no-build-isolation -w /tmp/wheels \
+        --config-settings=setup-args="-Ducx_path=/opt/hpcx/ucx"; \
+    fi
+
+RUN pip install --break-system-packages /tmp/wheels/nixl*.whl
 
 WORKDIR /sgl-workspace
 
-# need our fixed nixl version
 RUN pip uninstall --break-system-packages -y sglang
 RUN rm -rf sglang 
 # On main as of 12:22 PM 6/9 - https://github.com/sgl-project/sglang/pull/6884
 ARG SGLANG_COMMIT="777688b8929c877e4e28c2eac208d776abe4c3af"
 RUN git clone https://github.com/sgl-project/sglang.git && cd sglang && git checkout ${SGLANG_COMMIT} && pip install --break-system-packages -e "python[all]"
 
+WORKDIR /sgl-workspace
 RUN git clone https://github.com/ai-dynamo/dynamo.git
 
 # install dynamo in editable mode
@@ -31,8 +75,6 @@ RUN apt update -y && \
     clang \
     libclang-dev \
     git
-
-ARG ARCH_ALT=x86_64
 
 # Define Rust target based on ARCH_ALT ARG
 ARG RUSTARCH=${ARCH_ALT}-unknown-linux-gnu
@@ -66,8 +108,6 @@ RUN cd lib/bindings/python && pip install --break-system-packages -e . && cd ../
 RUN pip install --break-system-packages -e .
 
 ENV PYTHONPATH=/sgl-workspace/dynamo/components/planner/src
-
-ARG ARCH=amd64
 
 RUN wget --tries=3 --waitretry=5 https://github.com/nats-io/nats-server/releases/download/v2.10.24/nats-server-v2.10.24-${ARCH}.deb && \
     dpkg -i nats-server-v2.10.24-${ARCH}.deb && rm nats-server-v2.10.24-${ARCH}.deb
