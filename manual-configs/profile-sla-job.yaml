@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: profile-sla
+  namespace: hannahz-dynamo
+spec:
+  template:
+    spec:
+      imagePullSecrets:
+        - name: docker-imagepullsecret
+      containers:
+      - name: profile-sla
+        image: nvcr.io/nvidian/nim-llm-dev/dynamo-base-docker-llm:dep-178.1
+        command: ["python", "/workspace/examples/common/utils/profile_sla.py"]
+        args:
+          - --config
+          - /workspace/examples/llm/configs/disagg.yaml
+          - --output-dir
+          - /workspace/profiling_results
+          - --isl
+          - "3000"
+          - --osl
+          - "500"
+          - --ttft
+          - "50"
+          - --itl
+          - "10"
+          - --url
+          - "http://llm-disagg-frontend:3000/v1/chat/completions"
+        volumeMounts:
+          - name: output-volume
+            mountPath: /workspace/profiling_results
+      restartPolicy: Never
+      volumes:
+        - name: output-volume
+          persistentVolumeClaim:
+            claimName: profiling-pvc
+  backoffLimit: 1

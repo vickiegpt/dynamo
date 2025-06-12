@@ -22,7 +22,7 @@ import random
 import signal
 import subprocess
 import time
-from typing import Literal
+from typing import Literal, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -292,9 +292,14 @@ def shutdown_deployment(dynamo_process):
     time.sleep(5)
 
 
-def wait_for_server_ready(model_name: str, port: int, timeout: int = 300):
+def wait_for_server_ready(
+    model_name: str, port: int, timeout: int = 300, url: Optional[str] = None
+):
     logger.info("Waiting for the server to be ready...")
-    endpoint_url = f"http://localhost:{port}/v1/chat/completions"
+    if url is not None:
+        endpoint_url = url
+    else:
+        endpoint_url = f"http://localhost:{port}/v1/chat/completions"
     start_time = time.time()
     server_ready = False
 
@@ -487,6 +492,12 @@ if __name__ == "__main__":
         default=6,
         help="how many samples to benchmark to interpolate ITL under different active kv cache size and decode context length",
     )
+    parser.add_argument(
+        "--url",
+        type=str,
+        default=None,
+        help="Override the endpoint URL for the LLM frontend (e.g. http://llm-disagg-frontend:3000/v1/chat/completions)",
+    )
     args = parser.parse_args()
 
     if args.example_dir is None:
@@ -547,7 +558,7 @@ if __name__ == "__main__":
                 preexec_fn=os.setsid,  # Use process group for clean termination
             )
 
-        if not wait_for_server_ready(model_name, port):
+        if not wait_for_server_ready(model_name, port, url=args.url):
             logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
             break
 
@@ -627,7 +638,7 @@ if __name__ == "__main__":
                 preexec_fn=os.setsid,  # Use process group for clean termination
             )
 
-        if not wait_for_server_ready(model_name, port):
+        if not wait_for_server_ready(model_name, port, url=args.url):
             logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
             break
 
@@ -772,7 +783,7 @@ if __name__ == "__main__":
             preexec_fn=os.setsid,  # Use process group for clean termination
         )
 
-    if not wait_for_server_ready(model_name, port):
+    if not wait_for_server_ready(model_name, port, url=args.url):
         logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
     else:
         for isl in range(
@@ -904,7 +915,7 @@ if __name__ == "__main__":
             preexec_fn=os.setsid,  # Use process group for clean termination
         )
 
-    if not wait_for_server_ready(model_name, port):
+    if not wait_for_server_ready(model_name, port, url=args.url):
         logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
     else:
         max_kv_tokens = get_kv_cache_size_from_dynamo_log(dynamo_log_fn)
