@@ -59,18 +59,24 @@ class SGLangEmbeddingWorker:
 
     @endpoint()
     async def generate(self, request: EmbeddingRequest):
+        # SGL has an open bug in which it cannot take list that contains a single string
+        # https://github.com/sgl-project/sglang/issues/6568
+        # We internally convert this to a single string
+
         if isinstance(request.input, str):
-            input = request.input
+            prompt = request.input
         elif isinstance(request.input, list):
-            input = [i for i in request.input]
+            if len(request.input) == 1:
+                prompt = request.input[0]
+            else:
+                prompt = [i for i in request.input]
         else:
             raise ValueError(f"Invalid input type: {type(request.input)}")
 
         g = await self.engine.async_encode(
-            prompt=input,
+            prompt=prompt,
         )
 
-        # Transform response to match OpenAI embedding format
         response = self._transform_response(g, request.model)
         yield response
 
