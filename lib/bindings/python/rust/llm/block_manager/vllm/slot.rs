@@ -205,6 +205,7 @@ impl<S: Storage> Slot<S> {
         self.mutable.clear();
         let mut immutable_blocks = std::mem::take(&mut self.immutable);
         immutable_blocks.reverse();
+        self.computed_position = 0;
     }
 
     /// Returns the block ids for the slot.
