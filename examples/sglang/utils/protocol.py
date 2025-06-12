@@ -65,13 +65,10 @@ class DisaggPreprocessedRequest(BaseModel):
 
 EmbeddingInput = Union[str, List[str], List[int], List[List[int]]]
 
-EncodingFormat = Literal["float", "base64"]
-
 
 class EmbeddingRequest(BaseModel):
     model: str
     input: EmbeddingInput
-    encoding_format: Optional[EncodingFormat] = None
     user: Optional[str] = None
     dimensions: Optional[
         int
