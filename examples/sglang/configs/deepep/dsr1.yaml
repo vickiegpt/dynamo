@@ -32,6 +32,7 @@ SGLangWorker:
   dp-size: 16
   enable-dp-attention: true
   decode-log-interval: 1
+  # when MoE is enabled ep-size == tp-size
   enable-deepep-moe: true
   page-size: 1
   trust-remote-code: true
@@ -76,6 +77,7 @@ SGLangDecodeWorker:
   enable-deepep-moe: true
   page-size: 1
   trust-remote-code: true
+  # when MoE is enabled ep-size == tp-size
   moe-dense-tp-size: 1
   enable-dp-lm-head: true
   disable-radix-cache: true
