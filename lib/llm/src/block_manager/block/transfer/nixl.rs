@@ -20,7 +20,7 @@ use nixl_sys::{MemoryRegion, NixlDescriptor, XferDescList};
 use std::future::Future;
 
 fn append_xfer_request<Source, Destination>(
-    src: &Arc<Source>,
+    src: &Source,
     dst: &mut Destination,
     src_dl: &mut XferDescList,
     dst_dl: &mut XferDescList,
@@ -84,8 +84,8 @@ where
 
 /// Copy a block from a source to a destination using CUDA memcpy
 pub fn write_blocks_to<Source, Destination>(
-    src: &[Arc<Source>],
-    dst: &mut [Destination],
+    src: &Vec<&Source>,
+    dst: &mut Vec<&mut Destination>,
     ctx: &Arc<TransferContext>,
     transfer_type: NixlTransfer,
 ) -> Result<Box<dyn Future<Output = ()> + Send + Sync + Unpin>>
@@ -121,7 +121,7 @@ where
     let mut dst_dl = XferDescList::new(dst_mem_type)?;
 
     for (src, dst) in src.iter().zip(dst.iter_mut()) {
-        append_xfer_request(src, dst, &mut src_dl, &mut dst_dl)?;
+        append_xfer_request(*src, *dst, &mut src_dl, &mut dst_dl)?;
     }
 
     debug_assert!(!src_dl.has_overlaps()? && !dst_dl.has_overlaps()?);

@@ -228,8 +228,11 @@ where
     ) -> Result<()> {
         let notify = pending_transfer
             .sources
+            .iter()
+            .map(|s| s.as_ref())
+            .collect::<Vec<_>>()
             .write_to(
-                &mut pending_transfer.targets,
+                &mut pending_transfer.targets.iter_mut().collect(),
                 true,
                 self.transfer_ctx.clone(),
             )?
@@ -322,8 +325,11 @@ where
     ) -> Result<()> {
         let notify = pending_transfer
             .sources
+            .iter()
+            .map(|s| s.as_ref())
+            .collect::<Vec<_>>()
             .write_to(
-                &mut pending_transfer.targets,
+                &mut pending_transfer.targets.iter_mut().collect(),
                 true,
                 self.transfer_ctx.clone(),
             )?
