@@ -24,13 +24,13 @@ matplotlib
 msgspec
 mypy
 numpy
+nvidia-ml-py==12.575.51
 opentelemetry-api
 opentelemetry-sdk
 pip==25.0.1
 pre-commit
 protobuf==5.27.3
 pydantic==2.7.1
-pynvml
 pyright
 PyYAML
 scikit-learn
