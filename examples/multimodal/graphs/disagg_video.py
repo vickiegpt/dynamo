@@ -12,33 +12,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-Common:
-  model: llava-hf/llava-1.5-7b-hf
-  block-size: 64
-  max-model-len: 4096
 
-Processor:
-  router: round-robin
-  prompt-template: "USER: <image>\n<prompt> ASSISTANT:"
-  common-configs: [model, block-size, max-model-len]
+from components.video_decode_worker import VllmDecodeWorker
+from components.video_encode_worker import VllmEncodeWorker
+from components.video_frontend import Frontend
+from components.video_prefill_worker import VllmPrefillWorker
+from components.video_processor import Processor
 
-VllmDecodeWorker:
-  enforce-eager: true
-  max-num-batched-tokens: 16384
-  enable-prefix-caching: true
-  router: random
-  tensor-parallel-size: 1
-  ServiceArgs:
-    workers: 1
-    resources:
-      gpu: '1'
-  common-configs: [model, block-size, max-model-len]
-
-VllmEncodeWorker:
-  tensor-parallel-size: 1
-  router: random
-  ServiceArgs:
-    workers: 1
-    resources:
-      gpu: '1'
-  common-configs: [model]
+Frontend.link(Processor).link(VllmDecodeWorker).link(VllmPrefillWorker).link(
+    VllmEncodeWorker
+)
