@@ -28,11 +28,10 @@ SGLangWorker:
   deepep-mode: normal
   mem-fraction-static: 0.85
   chunked-prefill-size: 8192
-  # num_prefill_nodes * 2048
+  # SGLang's instructions for benchmarking include these flags
   #max-running-requests: 4096
   #max-total-tokens: 131072
   #context-length: 8192
-  # sweep over these from the /configs dir
   #init-expert-location: /configs/prefill_in1000out1000.json
   ep-num-redundant-experts: 32
   ep-dispatch-algorithm: dynamic
@@ -69,7 +68,7 @@ SGLangDecodeWorker:
   enable-two-batch-overlap: true
   deepep-mode: low_latency
   mem-fraction-static: 0.835
-  # num_decode_nodes * 1024
+  # SGLang's instructions for benchmarking include these flags
   #max-running-requests: 2048
   #context-length: 4500
   #init-expert-location: /configs/decode_in1000out1000.json
@@ -80,6 +79,5 @@ SGLangDecodeWorker:
     resources:
       gpu: 8
     envs:
-      # missing the SGLANG_HACK_PD_DECODE_NUM_RESERVED_DECODE_TOKENS for now
       MC_TE_METRIC: true
       SGLANG_TBO_DEBUG: 1

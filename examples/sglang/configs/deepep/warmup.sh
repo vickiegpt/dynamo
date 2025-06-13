@@ -62,7 +62,7 @@ for i in {1..5}; do
       }
       ],
       "stream":true,
-      "max_tokens": 500
+      "max_tokens": 1000
     }' &
 done
 

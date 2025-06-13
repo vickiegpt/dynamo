@@ -122,8 +122,23 @@ docker build -f container/Dockerfile.sglang-deepep . -t dynamo-deepep --no-cache
 ```
 3. You can run this container on each 8xH100 node using the following command. 
 
+> [!IMPORTANT]
+> We recommend downloading DeepSeek-R1 and then mounting it to the container. You can find the model [here](https://huggingface.co/deepseek-ai/DeepSeek-R1)
+
 ```bash
-docker run --gpus all -it --rm --network host --shm-size=10G --ulimit memlock=-1 --ulimit stack=67108864 --ulimit nofile=65536:65536 --cap-add CAP_SYS_PTRACE --ipc host dynamo-deepep:latest
+docker run \
+    --gpus all \
+    -it \
+    --rm \
+    --network host \
+    --volume /PATH_TO_DSR1_MODEL/:/model/ \
+    --shm-size=10G \
+    --ulimit memlock=-1 \
+    --ulimit stack=67108864 \
+    --ulimit nofile=65536:65536 \
+    --cap-add CAP_SYS_PTRACE \
+    --ipc host \
+    dynamo-deepep:latest
 ```
 
 In each container, you should be in the `/sgl-workspace/dynamo/examples/sglang` directory.
