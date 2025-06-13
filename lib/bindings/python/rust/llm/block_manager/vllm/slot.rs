@@ -51,6 +51,10 @@ impl<S: Storage> Slot<S> {
         }
     }
 
+    pub fn first_allocation(&self) -> bool {
+        self.immutable.is_empty() && self.mutable.is_empty()
+    }
+
     /// Updates the sequence with the given tokens.
     /// These tokens will advance the computed sequence position.
     pub fn apply_computed_tokens(
