@@ -27,13 +27,16 @@ use super::{
     service_v2, RouteDoc,
 };
 
+use crate::preprocessor::LLMMetricAnnotation;
 use crate::protocols::openai::embeddings::{NvCreateEmbeddingRequest, NvCreateEmbeddingResponse};
 use crate::protocols::openai::{
     chat_completions::NvCreateChatCompletionResponse, completions::CompletionResponse,
 };
 use crate::request_template::RequestTemplate;
 use crate::types::{
-    openai::{chat_completions::NvCreateChatCompletionRequest, completions::CompletionRequest},
+    openai::{
+        chat_completions::NvCreateChatCompletionRequest, completions::NvCreateCompletionRequest,
+    },
     Annotated,
 };
 
@@ -120,7 +123,7 @@ impl From<HttpError> for ErrorResponse {
 #[tracing::instrument(skip_all)]
 async fn completions(
     State(state): State<Arc<service_v2::State>>,
-    Json(request): Json<CompletionRequest>,
+    Json(request): Json<NvCreateCompletionRequest>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
     // return a 503 if the service is not ready
     check_ready(&state)?;
@@ -137,7 +140,7 @@ async fn completions(
         ..request.inner
     };
 
-    let request = CompletionRequest {
+    let request = NvCreateCompletionRequest {
         inner,
         nvext: request.nvext,
     };
@@ -496,7 +499,20 @@ fn process_event_converter<T: Serialize>(
     annotated: EventConverter<T>,
     response_collector: &mut ResponseMetricCollector,
 ) -> Result<Event, axum::Error> {
-    let annotated = annotated.0;
+    let mut annotated = annotated.0;
+
+    // update metrics
+    if let Ok(Some(metrics)) = LLMMetricAnnotation::from_annotation(&annotated) {
+        response_collector.observe_current_osl(metrics.output_tokens);
+        response_collector.observe_response(metrics.input_tokens, metrics.chunk_tokens);
+
+        // Chomp the LLMMetricAnnotation so it's not returned in the response stream
+        // TODO: add a flag to control what is returned in the SSE stream
+        if annotated.event.as_deref() == Some(crate::preprocessor::ANNOTATION_LLM_METRICS) {
+            annotated.event = None;
+            annotated.comment = None;
+        }
+    }
 
     let mut event = Event::default();
 
@@ -512,16 +528,6 @@ fn process_event_converter<T: Serialize>(
             return Err(axum::Error::new(msgs.join(" -- ")));
         }
         event = event.event(msg);
-    }
-
-    if let Some(osl) = annotated.output_tokens {
-        response_collector.observe_current_osl(osl);
-    }
-
-    if let Some(isl) = annotated.input_tokens {
-        if let Some(chunk_tokens) = annotated.chunk_tokens {
-            response_collector.observe_response(isl, chunk_tokens);
-        }
     }
 
     if let Some(comments) = annotated.comment {
