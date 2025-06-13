@@ -205,9 +205,9 @@ RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
     # Handle x86_64: Download wheel, unpack, setup for later steps
     else \
         # [gluo FIXME] currently on forked branch
-        git clone https://github.com/ptarasiewiczNV/vllm.git && \
+        git clone https://github.com/GuanLuo/vllm.git && \
         cd vllm && \
-        git checkout nixl-handshake-single-socket && \
+        git checkout c57d577+nixl-port && \
         VLLM_USE_PRECOMPILED=1 uv pip install --editable . ; \
         # uv pip install vllm --torch-backend=auto --extra-index-url https://wheels.vllm.ai/${VLLM_COMMIT} ; \
     fi
