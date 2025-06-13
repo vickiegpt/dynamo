@@ -25,7 +25,7 @@ RUN git clone https://github.com/ai-dynamo/nixl.git && cd nixl && git checkout $
 WORKDIR /sgl-workspace
 
 RUN pip uninstall --break-system-packages -y sglang
-RUN rm -rf sglang 
+RUN rm -rf sglang
 # https://github.com/sgl-project/sglang/pull/6884
 ARG SGLANG_COMMIT="777688b8929c877e4e28c2eac208d776abe4c3af"
 RUN git clone https://github.com/sgl-project/sglang.git && cd sglang && git checkout ${SGLANG_COMMIT} && pip install --break-system-packages -e "python[all]"

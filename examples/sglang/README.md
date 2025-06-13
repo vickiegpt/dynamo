@@ -115,12 +115,12 @@ docker build . -t Dockerfile.deepep
 
 You will now have a `deepep:latest` image
 
-2. Build the Dynamo container 
+2. Build the Dynamo container
 ```bash
 cd $DYNAMO_ROOT
 docker build -f container/Dockerfile.sglang-deepep . -t dynamo-deepep --no-cache
 ```
-3. You can run this container on each 8xH100 node using the following command. 
+3. You can run this container on each 8xH100 node using the following command.
 
 > [!IMPORTANT]
 > We recommend downloading DeepSeek-R1 and then mounting it to the container. You can find the model [here](https://huggingface.co/deepseek-ai/DeepSeek-R1)
@@ -172,7 +172,7 @@ On the prefill head node, `vim` into the configs and change the following sectio
 ```yaml
 SGlangWorker:
     ...
-    dist-init-addr: HEAD_PREFILL_NODE_I 
+    dist-init-addr: HEAD_PREFILL_NODE_I
     nnodes: 2
     node-rank: 0
     ...

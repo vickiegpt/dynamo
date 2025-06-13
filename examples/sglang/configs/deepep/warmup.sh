@@ -54,7 +54,7 @@ for i in {1..5}; do
   curl ${IP}:${PORT}/v1/chat/completions \
     -H "Content-Type: application/json" \
     -d '{
-      "model": "deepseek-ai/DeepSeek-R1", 
+      "model": "deepseek-ai/DeepSeek-R1",
       "messages": [
       {
           "role": "user",
