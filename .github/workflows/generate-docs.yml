@@ -79,7 +79,7 @@ jobs:
         run: |
           rm -f ./dynamo-docs/CNAME
           rm -f ./dynamo-docs/_config.yml
-          rm -f ./dynamo-docs/index.html || true
+          # Don't remove index.html - it's needed for navigation
 
       - name: Deploy to internal GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
