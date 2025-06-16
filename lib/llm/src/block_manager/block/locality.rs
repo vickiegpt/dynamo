@@ -14,7 +14,7 @@ pub trait BlockDataStorage: BlockDataLocality {
     type StorageType: Storage;
 }
 
-pub trait LocalityProvider: Send + Sync {
+pub trait LocalityProvider: Send + Sync + 'static + std::fmt::Debug {
     type Disk: BlockDataStorage;
     type Host: BlockDataStorage;
     type Device: BlockDataStorage;
@@ -22,6 +22,7 @@ pub trait LocalityProvider: Send + Sync {
     type BlockData<S: Storage>: BlockDataStorage;
 }
 
+#[derive(Debug)]
 pub struct Local;
 
 impl LocalityProvider for Local {
@@ -32,10 +33,11 @@ impl LocalityProvider for Local {
     type BlockData<S: Storage> = LocalBlockData<S>;
 }
 
-pub trait Parallelism: Send + Sync {
+pub trait Parallelism: Send + Sync + 'static + std::fmt::Debug {
     type Output<S: Storage>: BlockDataStorage;
 }
 
+#[derive(Debug)]
 pub struct Logical<P: Parallelism> {
     _parallelism: std::marker::PhantomData<P>,
 }
@@ -152,6 +154,7 @@ pub mod nixl {
     #[derive(Debug)]
     pub struct ActiveMessageClient {}
 
+    #[derive(Debug)]
     pub struct WorkerReplicated;
 
     #[derive(Debug)]

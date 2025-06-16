@@ -32,6 +32,7 @@ pub use state::{BlockState, BlockStateInvalid};
 pub use transfer::TransferContext;
 
 use crate::block_manager::{
+    layout::BlockLayoutConfig,
     state::KvBlockManagerState as BlockManager,
     storage::{Local, Remote, Storage},
 };
@@ -111,14 +112,21 @@ pub trait BlockMetadata: Default + std::fmt::Debug + Clone + Ord + Send + Sync +
     fn offload_priority(&self) -> Option<u64>;
 }
 
-/// Marker trait for types that are mutable blocks
-pub trait WritableBlock {
-    fn storage_type(&self) -> StorageType;
+pub trait WritableBlock: BlockDataProviderMut {
+    type StorageType: Storage + NixlDescriptor;
+
+    fn storage_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<<Self as WritableBlock>::StorageType>()
+    }
 }
 
 /// Marker trait for types that are immutable blocks
-pub trait ReadableBlock {
-    fn storage_type(&self) -> StorageType;
+pub trait ReadableBlock: BlockDataProvider {
+    type StorageType: Storage + NixlDescriptor;
+
+    fn storage_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<<Self as ReadableBlock>::StorageType>()
+    }
 }
 
 pub trait ReadableBlocks {}
@@ -656,11 +664,11 @@ impl<L: BlockLayout + 'static, M: BlockMetadata> Blocks<L, M> {
     }
 }
 
-pub(crate) fn layout_to_blocks<S: Storage, L: LocalityProvider, M: BlockMetadata>(
+pub(crate) fn layout_to_blocks<S: Storage, M: BlockMetadata>(
     layout: Arc<dyn BlockLayout<StorageType = S>>,
     block_set_idx: usize,
     worker_id: WorkerID,
-) -> BlockResult<Vec<Block<S, L, M>>> {
+) -> BlockResult<Vec<Block<S, locality::Local, M>>> {
     (0..layout.num_blocks())
         .map(|idx| {
             let data = BlockData::new(layout.clone(), idx, block_set_idx, worker_id);
@@ -694,23 +702,17 @@ impl<S: Storage, M: BlockMetadata> BlockIdentifier for MutableBlock<S, locality:
     }
 }
 
-impl<S: Storage, L: LocalityProvider, M: BlockMetadata> WritableBlock for MutableBlock<S, L, M> {
-    fn storage_type(&self) -> StorageType {
-        self.block
-            .as_ref()
-            .expect("block was dropped")
-            .data
-            .storage_type()
-    }
+impl<S: Storage, L: LocalityProvider, M: BlockMetadata> WritableBlock for MutableBlock<S, L, M>
+where
+    S: Storage + NixlDescriptor,
+{
+    type StorageType = S;
 }
-impl<S: Storage, L: LocalityProvider, M: BlockMetadata> ReadableBlock for MutableBlock<S, L, M> {
-    fn storage_type(&self) -> StorageType {
-        self.block
-            .as_ref()
-            .expect("block was dropped")
-            .data
-            .storage_type()
-    }
+impl<S: Storage, L: LocalityProvider, M: BlockMetadata> ReadableBlock for MutableBlock<S, L, M>
+where
+    S: Storage + NixlDescriptor,
+{
+    type StorageType = S;
 }
 
 impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Writable for MutableBlock<S, L, M> {}
@@ -765,8 +767,8 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> DerefMut for MutableBloc
     }
 }
 
-impl<S: Storage + NixlDescriptor, L: LocalityProvider, M: BlockMetadata> BlockDataExt<S>
-    for MutableBlock<S, L, M>
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataExt<S>
+    for MutableBlock<S, locality::Local, M>
 {
     fn is_fully_contiguous(&self) -> bool {
         self.data.is_fully_contiguous()
@@ -801,8 +803,8 @@ impl<S: Storage + NixlDescriptor, L: LocalityProvider, M: BlockMetadata> BlockDa
     }
 }
 
-impl<S: Storage + NixlDescriptor, L: LocalityProvider, M: BlockMetadata> BlockDataProvider
-    for MutableBlock<S, L, M>
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProvider
+    for MutableBlock<S, locality::Local, M>
 {
     type StorageType = S;
 
@@ -811,8 +813,8 @@ impl<S: Storage + NixlDescriptor, L: LocalityProvider, M: BlockMetadata> BlockDa
     }
 }
 
-impl<S: Storage + NixlDescriptor, L: LocalityProvider, M: BlockMetadata> BlockDataProviderMut
-    for MutableBlock<S, L, M>
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProviderMut
+    for MutableBlock<S, locality::Local, M>
 {
     fn block_data_mut(&mut self, _: private::PrivateToken) -> &mut BlockData<S> {
         &mut self.block.as_mut().expect("block was dropped").data
@@ -848,7 +850,7 @@ impl<'a, S: Storage + 'a, L: LocalityProvider + 'a, M: BlockMetadata>
     }
 }
 
-impl<S: Storage, L: LocalityProvider, M: BlockMetadata> IntoWritableBlocks<L, M>
+impl<S: Storage + NixlDescriptor, L: LocalityProvider, M: BlockMetadata> IntoWritableBlocks<L, M>
     for MutableBlock<S, L, M>
 {
     type Output = Vec<MutableBlock<S, L, M>>;
@@ -857,7 +859,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> IntoWritableBlocks<L, M>
     }
 }
 
-impl<S: Storage, L: LocalityProvider, M: BlockMetadata> IntoReadableBlocks<L, M>
+impl<S: Storage + NixlDescriptor, L: LocalityProvider, M: BlockMetadata> IntoReadableBlocks<L, M>
     for MutableBlock<S, L, M>
 {
     type Output = Vec<MutableBlock<S, L, M>>;
@@ -913,16 +915,10 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> ImmutableBlock<S, L, M> 
     }
 }
 
-impl<S: Storage, L: LocalityProvider, M: BlockMetadata> ReadableBlock for ImmutableBlock<S, L, M> {
-    fn storage_type(&self) -> StorageType {
-        self.block
-            .as_ref()
-            .block
-            .as_ref()
-            .expect("block was dropped")
-            .data
-            .storage_type()
-    }
+impl<S: Storage + NixlDescriptor, L: LocalityProvider, M: BlockMetadata> ReadableBlock
+    for ImmutableBlock<S, L, M>
+{
+    type StorageType = S;
 }
 
 impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Readable for ImmutableBlock<S, L, M> {}
@@ -996,7 +992,7 @@ impl<S: Storage + NixlDescriptor, L: LocalityProvider, M: BlockMetadata> BlockDa
     }
 }
 
-impl<S: Storage, L: LocalityProvider, M: BlockMetadata> IntoReadableBlocks<L, M>
+impl<S: Storage + NixlDescriptor, L: LocalityProvider, M: BlockMetadata> IntoReadableBlocks<L, M>
     for ImmutableBlock<S, L, M>
 {
     type Output = Vec<ImmutableBlock<S, L, M>>;
@@ -1368,15 +1364,11 @@ pub mod nixl {
     impl<M: MutabilityKind> Remote for RemoteBlock<M> {}
 
     impl<M: MutabilityKind> ReadableBlock for RemoteBlock<M> {
-        fn storage_type(&self) -> StorageType {
-            self.data.storage_type()
-        }
+        type StorageType = NixlStorage;
     }
 
     impl WritableBlock for RemoteBlock<IsMutable> {
-        fn storage_type(&self) -> StorageType {
-            self.data.storage_type()
-        }
+        type StorageType = NixlStorage;
     }
 
     impl<M: MutabilityKind> RemoteBlock<M> {

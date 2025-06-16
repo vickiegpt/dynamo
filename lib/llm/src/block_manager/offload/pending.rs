@@ -177,8 +177,12 @@ pub struct CudaTransferManager<
     transfer_ctx: Arc<TransferContext>,
 }
 
-impl<Source: Storage, Target: Storage, Locality: LocalityProvider, Metadata: BlockMetadata>
-    CudaTransferManager<Source, Target, Locality, Metadata>
+impl<
+        Source: Storage,
+        Target: Storage,
+        Locality: LocalityProvider + 'static,
+        Metadata: BlockMetadata,
+    > CudaTransferManager<Source, Target, Locality, Metadata>
 {
     pub fn new(
         transfer_ctx: Arc<TransferContext>,
@@ -229,8 +233,12 @@ impl<Source: Storage, Target: Storage, Locality: LocalityProvider, Metadata: Blo
 }
 
 #[async_trait]
-impl<Source: Storage, Target: Storage, Locality: LocalityProvider, Metadata: BlockMetadata>
-    TransferManager<Source, Target, Locality, Metadata>
+impl<
+        Source: Storage,
+        Target: Storage,
+        Locality: LocalityProvider + 'static,
+        Metadata: BlockMetadata,
+    > TransferManager<Source, Target, Locality, Metadata>
     for CudaTransferManager<Source, Target, Locality, Metadata>
 where
     MutableBlock<Source, Locality, Metadata>:
@@ -324,7 +332,7 @@ impl<Source, Target, Locality, Metadata> TransferManager<Source, Target, Localit
 where
     Source: Storage,
     Target: Storage,
-    Locality: LocalityProvider,
+    Locality: LocalityProvider + 'static,
     Metadata: BlockMetadata,
     // Check that the source block is readable, local, and writable to the target block.
     MutableBlock<Source, Locality, Metadata>:

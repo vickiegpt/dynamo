@@ -137,7 +137,7 @@ impl<Locality: LocalityProvider + 'static, Metadata: BlockMetadata>
                 let layout =
                     create_layout(layout_builder.clone(), config, nixl_agent.as_ref().as_ref())?;
                 local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
-                let (pool, blocks) = create_block_pool::<_, Metadata>(
+                let (pool, blocks) = create_block_pool::<_, Locality, Metadata>(
                     layout,
                     next_block_set_idx,
                     cancellation_token.clone(),
@@ -161,7 +161,7 @@ impl<Locality: LocalityProvider + 'static, Metadata: BlockMetadata>
             let layout =
                 create_layout(layout_builder.clone(), config, nixl_agent.as_ref().as_ref())?;
             local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
-            let (pool, blocks) = create_block_pool::<_, Metadata>(
+            let (pool, blocks) = create_block_pool::<_, Locality, Metadata>(
                 layout,
                 next_block_set_idx,
                 cancellation_token.clone(),
@@ -184,7 +184,7 @@ impl<Locality: LocalityProvider + 'static, Metadata: BlockMetadata>
             let layout =
                 create_layout(layout_builder.clone(), config, nixl_agent.as_ref().as_ref())?;
             local_block_set.add_block_set(next_block_set_idx, layout.serialize()?);
-            let (pool, blocks) = create_block_pool::<_, Metadata>(
+            let (pool, blocks) = create_block_pool::<_, Locality, Metadata>(
                 layout,
                 next_block_set_idx,
                 cancellation_token.clone(),
@@ -505,9 +505,9 @@ pub(crate) fn create_block_pool<
     pool_metrics: Arc<PoolMetrics>,
     event_manager: Option<Arc<dyn EventManager>>,
 ) -> Result<(BlockPool<S, Locality, M>, Vec<Block<S, Locality, M>>)> {
-    let blocks = block::layout_to_blocks::<_, M>(layout, block_set_idx, worker_id)?;
+    let blocks = block::layout_to_blocks::<_, Locality, M>(layout, block_set_idx, worker_id)?;
     let event_manager = event_manager.unwrap_or_else(|| NullEventManager::new());
-    let pool = BlockPool::<S, M>::builder()
+    let pool = BlockPool::<S, Locality, M>::builder()
         .cancel_token(cancellation_token)
         .global_registry(global_registry)
         .async_runtime(async_runtime)
