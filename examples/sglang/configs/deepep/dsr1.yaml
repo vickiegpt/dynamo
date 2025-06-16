@@ -25,7 +25,7 @@ SGLangWorker:
   disaggregation-mode: prefill
   disaggregation-transfer-backend: nixl
   disaggregation-bootstrap-port: 30001
-  dist-init-addr: 10.52.53.73:29500
+  dist-init-addr: HEAD_PREFILL_NODE_IP:29500
   nnodes: 2
   node-rank: 0
   tp-size: 16
@@ -48,7 +48,7 @@ SGLangWorker:
   #max-running-requests: 4096
   #max-total-tokens: 131072
   #context-length: 8192
-  #init-expert-location: /configs/prefill_in1000out1000.json
+  #init-expert-location: /configs/prefill_in4096.json
   ep-num-redundant-experts: 32
   ep-dispatch-algorithm: dynamic
   eplb-algorithm: deepseek
@@ -67,7 +67,7 @@ SGLangDecodeWorker:
   disaggregation-mode: decode
   disaggregation-transfer-backend: nixl
   disaggregation-bootstrap-port: 30001
-  dist-init-addr: 10.52.53.100:29500
+  dist-init-addr: HEAD_DECODE_NODE_IP:29500
   nnodes: 4
   node-rank: 0
   tp-size: 32

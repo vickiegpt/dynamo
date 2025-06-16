@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Note this container is built from a local dockerfile
+# Please see instructions in examples/sglang/README.md
 FROM deepep:latest
 
 # Add NIXL build dependencies

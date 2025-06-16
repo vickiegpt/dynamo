@@ -110,7 +110,7 @@ Steps to run:
 ```bash
 git clone https://github.com/sgl-project/sglang.git
 cd sglang/docker
-docker build . -t Dockerfile.deepep
+docker build -f Dockerfile.deepep -t deepep .
 ```
 
 You will now have a `deepep:latest` image
@@ -172,7 +172,7 @@ On the prefill head node, `vim` into the configs and change the following sectio
 ```yaml
 SGlangWorker:
     ...
-    dist-init-addr: HEAD_PREFILL_NODE_I
+    dist-init-addr: HEAD_PREFILL_NODE_IP
     nnodes: 2
     node-rank: 0
     ...
@@ -198,10 +198,10 @@ SGlangDecodeWorker:
     ...
 ```
 
-On the other decode nodes (this example has 4 decode nodes), chnage the following section of the `SGLangDecodeWorker`:
+On the other decode nodes (this example has 4 decode nodes), change the following section of the `SGLangDecodeWorker`:
 
 ```yaml
-SGlangDecodeWorker:
+SGLangDecodeWorker:
     ...
     dist-init-addr: HEAD_DECODE_NODE_IP
     nnodes: 4
