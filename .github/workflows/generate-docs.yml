@@ -57,36 +57,55 @@ jobs:
           name: dynamo-docs-${{ github.run_id }}
           path: dynamo-docs
           retention-days: 15
-  
+
   deploy:
     name: Deploy to private documentation repository
     needs: build-docs
     runs-on: ubuntu-latest
 
-    if: startsWith(github.ref, 'refs/heads/release')
+    # Deploy on:
+    # 1. PRs targeting release branches
+    # 2. Pushes to release branches
+    if: |
+      (github.event_name == 'pull_request' && startsWith(github.base_ref, 'release')) ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release'))
 
     steps:
-      - name: Checkout source repo
-        uses: actions/checkout@v4
+    - name: Checkout source repo
+      uses: actions/checkout@v4
 
-      - name: Download documentation artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: dynamo-docs-${{ github.run_id }}
-          path: dynamo-docs
+    - name: Download documentation artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: dynamo-docs-${{ github.run_id }}
+        path: dynamo-docs
 
-      - name: Clean potentially stale metadata files
-        run: |
-          rm -f ./dynamo-docs/CNAME
-          rm -f ./dynamo-docs/_config.yml
-          rm -f ./dynamo-docs/index.html || true
-      - name: Deploy to internal GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          personal_token: ${{ secrets.DOCS_TOKEN }}
-          external_repository: ai-dynamo/dynamo-docs
-          publish_branch: main
-          publish_dir: ./dynamo-docs
-          destination_dir: ${{ github.ref_name }}
-          commit_message: 'Deploy documentation from ${{ github.repository }}@${{ github.sha }} (branch: ${{ github.ref_name }})'
-          keep_files: true
+    - name: Clean potentially stale metadata files (but preserve index)
+      run: |
+        rm -f ./dynamo-docs/CNAME
+        rm -f ./dynamo-docs/_config.yml
+        # Don't remove index.html - it's needed for navigation
+
+    - name: Determine deployment directory
+      id: deploy_dir
+      run: |
+        if [ "${{ github.event_name }}" == "pull_request" ]; then
+          # For PRs, use the target branch name
+          echo "dir_name=${{ github.base_ref }}" >> $GITHUB_OUTPUT
+          echo "commit_ref=PR-${{ github.event.number }}" >> $GITHUB_OUTPUT
+        else
+          # For pushes, use the current branch name
+          echo "dir_name=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          echo "commit_ref=${{ github.sha }}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Deploy to internal GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        personal_token: ${{ secrets.DOCS_TOKEN }}
+        external_repository: ai-dynamo/dynamo-docs
+        publish_branch: main
+        publish_dir: ./dynamo-docs
+        destination_dir: ${{ steps.deploy_dir.outputs.dir_name }}
+        commit_message: 'Deploy documentation from ${{ github.repository }}@${{ steps.deploy_dir.outputs.commit_ref }} (branch: ${{ steps.deploy_dir.outputs.dir_name }})'
+        keep_files: true
