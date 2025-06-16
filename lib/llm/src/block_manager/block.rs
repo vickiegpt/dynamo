@@ -16,6 +16,8 @@
 pub mod factory;
 pub mod locality;
 
+pub use locality::{BlockDataLocality, LocalBlockData, Locality};
+
 pub mod registry;
 pub mod state;
 pub mod transfer;
@@ -176,16 +178,16 @@ impl<T: ReadableBlocks, M: BlockMetadata> IntoReadableBlocks<M> for T {
 
 /// A block with storage and associated metadata/state
 #[derive(Debug)]
-pub struct Block<S: Storage, M: BlockMetadata> {
-    data: BlockData<S>,
+pub struct Block<D: BlockDataLocality, M: BlockMetadata> {
+    data: D,
     metadata: M,
     state: BlockState,
     manager: Option<Arc<BlockManager<M>>>,
 }
 
-impl<S: Storage, M: BlockMetadata> Block<S, M> {
+impl<D: BlockDataLocality, M: BlockMetadata> Block<D, M> {
     /// Create a new block with default metadata/state
-    pub fn new(data: BlockData<S>, metadata: M) -> BlockResult<Self> {
+    pub fn new(data: D, metadata: M) -> BlockResult<Self> {
         Ok(Self {
             data,
             metadata,
@@ -260,17 +262,17 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
 
     /// Get the number of layers in the block
     pub fn num_layers(&self) -> usize {
-        self.data.layout.num_layers()
+        self.data.num_layers()
     }
 
     /// Get the size of each block in the block
     pub fn page_size(&self) -> usize {
-        self.data.layout.page_size()
+        self.data.page_size()
     }
 
     /// Get the inner dimension of the block
     pub fn inner_dim(&self) -> usize {
-        self.data.layout.inner_dim()
+        self.data.inner_dim()
     }
 
     pub(crate) fn metadata_on_acquired(&mut self, tick: u64) {
@@ -282,7 +284,7 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> BlockIdentifier for Block<S, M> {
+impl<S: Storage, M: BlockMetadata> BlockIdentifier for Block<LocalBlockData<S>, M> {
     fn block_id(&self) -> BlockId {
         self.data.block_idx
     }
@@ -303,7 +305,7 @@ pub(crate) trait PrivateBlockExt {
     ) -> Result<Option<PublishHandle>, registry::BlockRegistationError>;
 }
 
-impl<S: Storage, M: BlockMetadata> PrivateBlockExt for Block<S, M> {
+impl<S: Storage, M: BlockMetadata> PrivateBlockExt for Block<LocalBlockData<S>, M> {
     fn register(
         &mut self,
         registry: &mut registry::BlockRegistry,
@@ -371,7 +373,7 @@ pub trait BlockExt {
     fn tokens(&self) -> Option<&Tokens>;
 }
 
-impl<S: Storage, M: BlockMetadata> BlockExt for Block<S, M> {
+impl<D: BlockDataLocality, M: BlockMetadata> BlockExt for Block<D, M> {
     fn reset(&mut self) {
         Block::reset(self);
     }
@@ -643,7 +645,7 @@ impl<L: BlockLayout + 'static, M: BlockMetadata> Blocks<L, M> {
     }
 
     /// Convert collection into Vec<Block> with default metadata/state
-    pub fn into_blocks(self) -> BlockResult<Vec<Block<L::StorageType, M>>> {
+    pub fn into_blocks(self) -> BlockResult<Vec<Block<LocalBlockData<L::StorageType>, M>>> {
         // convert box to arc
         let layout: Arc<dyn BlockLayout<StorageType = L::StorageType>> = Arc::new(*self.layout);
         layout_to_blocks(layout, self.block_set_idx, self.worker_id)
@@ -654,24 +656,24 @@ pub(crate) fn layout_to_blocks<S: Storage, M: BlockMetadata>(
     layout: Arc<dyn BlockLayout<StorageType = S>>,
     block_set_idx: usize,
     worker_id: WorkerID,
-) -> BlockResult<Vec<Block<S, M>>> {
+) -> BlockResult<Vec<Block<LocalBlockData<S>, M>>> {
     (0..layout.num_blocks())
         .map(|idx| {
             let data = BlockData::new(layout.clone(), idx, block_set_idx, worker_id);
-            Block::new(data, M::default())
+            Block::new(data.into(), M::default())
         })
         .collect()
 }
 
-pub struct MutableBlock<S: Storage, M: BlockMetadata> {
-    block: Option<Block<S, M>>,
-    return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
+pub struct MutableBlock<D: BlockDataLocality, M: BlockMetadata> {
+    block: Option<Block<D, M>>,
+    return_tx: tokio::sync::mpsc::UnboundedSender<Block<D, M>>,
     // Use to track parent relationship, as well as ensure that parents of registered blocks stay
     // alive as long as the child is alive.
-    parent: Option<Arc<MutableBlock<S, M>>>,
+    parent: Option<Arc<MutableBlock<D, M>>>,
 }
 
-impl<S: Storage, M: BlockMetadata> BlockIdentifier for MutableBlock<S, M> {
+impl<S: Storage, M: BlockMetadata> BlockIdentifier for MutableBlock<LocalBlockData<S>, M> {
     fn block_id(&self) -> BlockId {
         self.block.as_ref().expect("block was dropped").block_id()
     }
@@ -688,21 +690,26 @@ impl<S: Storage, M: BlockMetadata> BlockIdentifier for MutableBlock<S, M> {
     }
 }
 
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> WritableBlock for MutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> WritableBlock
+    for MutableBlock<LocalBlockData<S>, M>
+{
     type StorageType = S;
 }
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> ReadableBlock for MutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> ReadableBlock
+    for MutableBlock<LocalBlockData<S>, M>
+{
     type StorageType = S;
 }
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> Writable for MutableBlock<S, M> {}
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> Readable for MutableBlock<S, M> {}
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> Mutable for MutableBlock<S, M> {}
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> Local for MutableBlock<S, M> {}
 
-impl<S: Storage, M: BlockMetadata> MutableBlock<S, M> {
+impl<D: BlockDataLocality, M: BlockMetadata> Writable for MutableBlock<D, M> {}
+impl<D: BlockDataLocality, M: BlockMetadata> Readable for MutableBlock<D, M> {}
+impl<D: BlockDataLocality, M: BlockMetadata> Mutable for MutableBlock<D, M> {}
+impl<D: BlockDataLocality, M: BlockMetadata> Local for MutableBlock<D, M> {}
+
+impl<D: BlockDataLocality, M: BlockMetadata> MutableBlock<D, M> {
     pub(crate) fn new(
-        block: Block<S, M>,
-        return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
+        block: Block<D, M>,
+        return_tx: tokio::sync::mpsc::UnboundedSender<Block<D, M>>,
     ) -> Self {
         Self {
             block: Some(block),
@@ -711,18 +718,18 @@ impl<S: Storage, M: BlockMetadata> MutableBlock<S, M> {
         }
     }
 
-    pub fn set_parent(&mut self, parent: Arc<MutableBlock<S, M>>) {
+    pub fn set_parent(&mut self, parent: Arc<MutableBlock<D, M>>) {
         self.parent = Some(parent);
     }
 }
 
-impl<S: Storage, M: BlockMetadata> std::fmt::Debug for MutableBlock<S, M> {
+impl<D: BlockDataLocality, M: BlockMetadata> std::fmt::Debug for MutableBlock<D, M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "MutableBlock {{ block: {:?} }}", self.block)
     }
 }
 
-impl<S: Storage, M: BlockMetadata> Drop for MutableBlock<S, M> {
+impl<D: BlockDataLocality, M: BlockMetadata> Drop for MutableBlock<D, M> {
     fn drop(&mut self) {
         if let Some(block) = self.block.take() {
             if self.return_tx.send(block).is_err() {
@@ -732,21 +739,23 @@ impl<S: Storage, M: BlockMetadata> Drop for MutableBlock<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> Deref for MutableBlock<S, M> {
-    type Target = Block<S, M>;
+impl<D: BlockDataLocality, M: BlockMetadata> Deref for MutableBlock<D, M> {
+    type Target = Block<D, M>;
 
     fn deref(&self) -> &Self::Target {
         self.block.as_ref().expect("block was dropped")
     }
 }
 
-impl<S: Storage, M: BlockMetadata> DerefMut for MutableBlock<S, M> {
+impl<D: BlockDataLocality, M: BlockMetadata> DerefMut for MutableBlock<D, M> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.block.as_mut().expect("block was dropped")
     }
 }
 
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataExt<S> for MutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataExt<S>
+    for MutableBlock<LocalBlockData<S>, M>
+{
     fn is_fully_contiguous(&self) -> bool {
         self.data.is_fully_contiguous()
     }
@@ -780,7 +789,9 @@ impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataExt<S> for MutableB
     }
 }
 
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProvider for MutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProvider
+    for MutableBlock<LocalBlockData<S>, M>
+{
     type StorageType = S;
 
     fn block_data(&self, _: private::PrivateToken) -> &BlockData<S> {
@@ -788,62 +799,64 @@ impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProvider for Mutabl
     }
 }
 
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProviderMut for MutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProviderMut
+    for MutableBlock<LocalBlockData<S>, M>
+{
     fn block_data_mut(&mut self, _: private::PrivateToken) -> &mut BlockData<S> {
         &mut self.block.as_mut().expect("block was dropped").data
     }
 }
 
-impl<'a, S: Storage + NixlDescriptor, M: BlockMetadata> AsBlockSlice<'a, MutableBlock<S, M>>
-    for [MutableBlock<S, M>]
+impl<'a, D: BlockDataLocality + 'a, M: BlockMetadata> AsBlockSlice<'a, MutableBlock<D, M>>
+    for [MutableBlock<D, M>]
 {
-    fn as_block_slice(&'a self) -> &'a [MutableBlock<S, M>] {
+    fn as_block_slice(&'a self) -> &'a [MutableBlock<D, M>] {
         self
     }
 }
-impl<'a, S: Storage + NixlDescriptor, M: BlockMetadata> AsBlockSlice<'a, MutableBlock<S, M>>
-    for Vec<MutableBlock<S, M>>
+impl<'a, D: BlockDataLocality + 'a, M: BlockMetadata> AsBlockSlice<'a, MutableBlock<D, M>>
+    for Vec<MutableBlock<D, M>>
 {
-    fn as_block_slice(&'a self) -> &'a [MutableBlock<S, M>] {
+    fn as_block_slice(&'a self) -> &'a [MutableBlock<D, M>] {
         self.as_slice()
     }
 }
-impl<'a, S: Storage + NixlDescriptor, M: BlockMetadata> AsBlockMutSlice<'a, MutableBlock<S, M>>
-    for [MutableBlock<S, M>]
+impl<'a, D: BlockDataLocality + 'a, M: BlockMetadata> AsBlockMutSlice<'a, MutableBlock<D, M>>
+    for [MutableBlock<D, M>]
 {
-    fn as_block_mut_slice(&'a mut self) -> &'a mut [MutableBlock<S, M>] {
+    fn as_block_mut_slice(&'a mut self) -> &'a mut [MutableBlock<D, M>] {
         self
     }
 }
-impl<'a, S: Storage + NixlDescriptor, M: BlockMetadata> AsBlockMutSlice<'a, MutableBlock<S, M>>
-    for Vec<MutableBlock<S, M>>
+impl<'a, D: BlockDataLocality + 'a, M: BlockMetadata> AsBlockMutSlice<'a, MutableBlock<D, M>>
+    for Vec<MutableBlock<D, M>>
 {
-    fn as_block_mut_slice(&'a mut self) -> &'a mut [MutableBlock<S, M>] {
+    fn as_block_mut_slice(&'a mut self) -> &'a mut [MutableBlock<D, M>] {
         self.as_mut_slice()
     }
 }
 
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> IntoWritableBlocks<M> for MutableBlock<S, M> {
-    type Output = Vec<MutableBlock<S, M>>;
+impl<D: BlockDataLocality, M: BlockMetadata> IntoWritableBlocks<M> for MutableBlock<D, M> {
+    type Output = Vec<MutableBlock<D, M>>;
     fn into_writable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
         Ok(vec![self])
     }
 }
 
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> IntoReadableBlocks<M> for MutableBlock<S, M> {
-    type Output = Vec<MutableBlock<S, M>>;
+impl<D: BlockDataLocality, M: BlockMetadata> IntoReadableBlocks<M> for MutableBlock<D, M> {
+    type Output = Vec<MutableBlock<D, M>>;
     fn into_readable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
         Ok(vec![self])
     }
 }
 
 #[derive(Debug)]
-pub struct ImmutableBlock<S: Storage, M: BlockMetadata> {
-    block: Arc<MutableBlock<S, M>>,
+pub struct ImmutableBlock<D: BlockDataLocality, M: BlockMetadata> {
+    block: Arc<MutableBlock<D, M>>,
     sequence_hash: SequenceHash,
 }
 
-impl<S: Storage, M: BlockMetadata> BlockIdentifier for ImmutableBlock<S, M> {
+impl<S: Storage, M: BlockMetadata> BlockIdentifier for ImmutableBlock<LocalBlockData<S>, M> {
     fn block_id(&self) -> BlockId {
         self.block.block_id()
     }
@@ -857,7 +870,7 @@ impl<S: Storage, M: BlockMetadata> BlockIdentifier for ImmutableBlock<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> Clone for ImmutableBlock<S, M> {
+impl<D: BlockDataLocality, M: BlockMetadata> Clone for ImmutableBlock<D, M> {
     fn clone(&self) -> Self {
         Self {
             block: self.block.clone(),
@@ -866,8 +879,8 @@ impl<S: Storage, M: BlockMetadata> Clone for ImmutableBlock<S, M> {
     }
 }
 
-impl<S: Storage, M: BlockMetadata> ImmutableBlock<S, M> {
-    pub(crate) fn new(block: Arc<MutableBlock<S, M>>) -> Self {
+impl<D: BlockDataLocality, M: BlockMetadata> ImmutableBlock<D, M> {
+    pub(crate) fn new(block: Arc<MutableBlock<D, M>>) -> Self {
         let sequence_hash = block.sequence_hash().expect("block is in the wrong state");
         Self {
             block,
@@ -884,15 +897,17 @@ impl<S: Storage, M: BlockMetadata> ImmutableBlock<S, M> {
     }
 }
 
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> ReadableBlock for ImmutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> ReadableBlock
+    for ImmutableBlock<LocalBlockData<S>, M>
+{
     type StorageType = S;
 }
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> Readable for ImmutableBlock<S, M> {}
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> Immutable for ImmutableBlock<S, M> {}
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> Local for ImmutableBlock<S, M> {}
+impl<D: BlockDataLocality, M: BlockMetadata> Readable for ImmutableBlock<D, M> {}
+impl<D: BlockDataLocality, M: BlockMetadata> Immutable for ImmutableBlock<D, M> {}
+impl<D: BlockDataLocality, M: BlockMetadata> Local for ImmutableBlock<D, M> {}
 
-impl<S: Storage, M: BlockMetadata> Deref for ImmutableBlock<S, M> {
-    type Target = Block<S, M>;
+impl<D: BlockDataLocality, M: BlockMetadata> Deref for ImmutableBlock<D, M> {
+    type Target = Block<D, M>;
     fn deref(&self) -> &Self::Target {
         self.block
             .as_ref()
@@ -902,7 +917,9 @@ impl<S: Storage, M: BlockMetadata> Deref for ImmutableBlock<S, M> {
     }
 }
 
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataExt<S> for ImmutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataExt<S>
+    for ImmutableBlock<LocalBlockData<S>, M>
+{
     fn is_fully_contiguous(&self) -> bool {
         self.block.is_fully_contiguous()
     }
@@ -940,7 +957,9 @@ impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataExt<S> for Immutabl
     }
 }
 
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProvider for ImmutableBlock<S, M> {
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProvider
+    for ImmutableBlock<LocalBlockData<S>, M>
+{
     type StorageType = S;
 
     fn block_data(&self, _: private::PrivateToken) -> &BlockData<S> {
@@ -954,29 +973,29 @@ impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProvider for Immuta
     }
 }
 
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> IntoReadableBlocks<M> for ImmutableBlock<S, M> {
-    type Output = Vec<ImmutableBlock<S, M>>;
+impl<D: BlockDataLocality, M: BlockMetadata> IntoReadableBlocks<M> for ImmutableBlock<D, M> {
+    type Output = Vec<ImmutableBlock<D, M>>;
     fn into_readable_blocks(self, _manager: &BlockManager<M>) -> BlockResult<Self::Output> {
         Ok(vec![self])
     }
 }
 
-impl<'a, S: Storage + NixlDescriptor, M: BlockMetadata> AsBlockSlice<'a, ImmutableBlock<S, M>>
-    for [ImmutableBlock<S, M>]
+impl<'a, D: BlockDataLocality + 'a, M: BlockMetadata> AsBlockSlice<'a, ImmutableBlock<D, M>>
+    for [ImmutableBlock<D, M>]
 {
-    fn as_block_slice(&'a self) -> &'a [ImmutableBlock<S, M>] {
+    fn as_block_slice(&'a self) -> &'a [ImmutableBlock<D, M>] {
         self
     }
 }
-impl<'a, S: Storage, M: BlockMetadata> AsBlockSlice<'a, ImmutableBlock<S, M>>
-    for Vec<ImmutableBlock<S, M>>
+impl<'a, D: BlockDataLocality + 'a, M: BlockMetadata> AsBlockSlice<'a, ImmutableBlock<D, M>>
+    for Vec<ImmutableBlock<D, M>>
 {
-    fn as_block_slice(&'a self) -> &'a [ImmutableBlock<S, M>] {
+    fn as_block_slice(&'a self) -> &'a [ImmutableBlock<D, M>] {
         self.as_slice()
     }
 }
 
-impl<S: Storage, M: BlockMetadata> ImmutableBlock<S, M> {
+impl<D: BlockDataLocality, M: BlockMetadata> ImmutableBlock<D, M> {
     pub async fn enqueue_offload(&self, priority: u64) -> Result<()> {
         if let Some(manager) = self.manager() {
             manager.enqueue_offload_block(self, priority).await?;
@@ -1514,7 +1533,7 @@ pub mod nixl {
         /// Creates a new validated BlockDescriptorList from a slice of block handles.
         /// Ensures all handles belong to the same worker and block set.
         fn new<S: Storage>(
-            blocks: &[&BlockData<S>], // Use the generic trait bound
+            blocks: &[&LocalBlockData<S>], // Use the generic trait bound
             mutability: BlockMutability,
         ) -> Result<Self, BlockDescriptorSetError> {
             if blocks.is_empty() {
@@ -1548,32 +1567,32 @@ pub mod nixl {
 
         /// Creates a BlockDescriptorList representing immutable blocks.
         pub fn from_immutable_blocks<S: Storage, M: BlockMetadata>(
-            blocks: &[ImmutableBlock<S, M>],
+            blocks: &[ImmutableBlock<LocalBlockData<S>, M>],
         ) -> Result<Self, BlockDescriptorSetError> {
             // Map each block handle to Option<&BlockData>,
             // then convert Option to Result (treating None as an error),
             // finally collect into Result<Vec<&BlockData>, Error>.
-            let data: Vec<&BlockData<S>> = blocks
+            let data: Vec<&LocalBlockData<S>> = blocks
                 .iter()
                 .map(|b| b.block.block.as_ref().map(|inner_b| &inner_b.data))
                 .map(|opt| opt.ok_or(BlockDescriptorSetError::InvalidBlockHandle))
-                .collect::<Result<Vec<&BlockData<S>>, _>>()?;
+                .collect::<Result<Vec<&LocalBlockData<S>>, _>>()?;
 
             Self::new(&data, BlockMutability::Immutable)
         }
 
         /// Creates a BlockDescriptorList representing mutable blocks.
         pub fn from_mutable_blocks<S: Storage, M: BlockMetadata>(
-            blocks: &[MutableBlock<S, M>],
+            blocks: &[MutableBlock<LocalBlockData<S>, M>],
         ) -> Result<Self, BlockDescriptorSetError> {
             // Map each block handle to Option<&BlockData>,
             // then convert Option to Result (treating None as an error),
             // finally collect into Result<Vec<&BlockData>, Error>.
-            let data: Vec<&BlockData<S>> = blocks
+            let data: Vec<&LocalBlockData<S>> = blocks
                 .iter()
                 .map(|b| b.block.as_ref().map(|inner_b| &inner_b.data))
                 .map(|opt| opt.ok_or(BlockDescriptorSetError::InvalidBlockHandle))
-                .collect::<Result<Vec<&BlockData<S>>, _>>()?;
+                .collect::<Result<Vec<&LocalBlockData<S>>, _>>()?;
 
             Self::new(&data, BlockMutability::Mutable)
         }
@@ -1594,23 +1613,23 @@ pub mod nixl {
         fn as_block_descriptor_set(&self) -> Result<BlockDescriptorList, BlockDescriptorSetError>;
     }
 
-    impl<S, M> AsBlockDescriptorSet for [ImmutableBlock<S, M>]
+    impl<S, M> AsBlockDescriptorSet for [ImmutableBlock<LocalBlockData<S>, M>]
     where
         S: Storage,
         M: BlockMetadata,
     {
-        type Block = ImmutableBlock<S, M>;
+        type Block = ImmutableBlock<LocalBlockData<S>, M>;
         fn as_block_descriptor_set(&self) -> Result<BlockDescriptorList, BlockDescriptorSetError> {
             BlockDescriptorList::from_immutable_blocks(self)
         }
     }
 
-    impl<S, M> AsBlockDescriptorSet for [MutableBlock<S, M>]
+    impl<S, M> AsBlockDescriptorSet for [MutableBlock<LocalBlockData<S>, M>]
     where
         S: Storage,
         M: BlockMetadata,
     {
-        type Block = MutableBlock<S, M>;
+        type Block = MutableBlock<LocalBlockData<S>, M>;
         fn as_block_descriptor_set(&self) -> Result<BlockDescriptorList, BlockDescriptorSetError> {
             BlockDescriptorList::from_mutable_blocks(self)
         }
@@ -1667,9 +1686,10 @@ mod tests {
     const SALT_HASH: SaltHash = 12345;
 
     // Helper to create a default reset block
-    fn create_reset_block() -> Block<impl Storage, BasicMetadata> {
+    fn create_reset_block() -> Block<impl BlockDataLocality, BasicMetadata> {
         let layout = setup_layout(None).unwrap();
         let data = BlockData::new(Arc::new(layout), 0, 42, 0);
+        let data: LocalBlockData<_> = data.into();
         Block::new(data, BasicMetadata::default()).unwrap()
     }
 
@@ -1939,7 +1959,7 @@ mod tests {
 
         // Create a block and wrap it in a MutableBlock
         let block_data = BlockData::new(layout.clone(), 0, 42, 0);
-        let block = Block::new(block_data, BasicMetadata::default()).unwrap();
+        let block = Block::new(block_data.into(), BasicMetadata::default()).unwrap();
         let mut mutable_block = MutableBlock::new(block, return_tx.clone());
 
         // Test is_fully_contiguous()
@@ -1993,7 +2013,7 @@ mod tests {
 
         // Create a block and wrap it in a MutableBlock
         let block_data = BlockData::new(layout.clone(), 0, 42, 0);
-        let block = Block::new(block_data, BasicMetadata::default()).unwrap();
+        let block = Block::new(block_data.into(), BasicMetadata::default()).unwrap();
         let mutable_block = MutableBlock::new(block, return_tx.clone());
 
         // Wrap the mutable block in an Arc and create an ImmutableBlock from it

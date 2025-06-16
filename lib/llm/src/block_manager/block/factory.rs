@@ -109,15 +109,15 @@ pub mod nixl {
 //     Ok(data)
 // }
 
-pub(crate) fn layout_to_data<S: Storage, M: BlockMetadata>(
-    layout: Arc<dyn BlockLayout<StorageType = S>>,
-    block_set_idx: usize,
-    worker_id: WorkerID,
-) -> BlockResult<Vec<Block<S, M>>> {
-    (0..layout.num_blocks())
-        .map(|idx| {
-            let data = BlockData::new(layout.clone(), idx, block_set_idx, worker_id);
-            Block::new(data, M::default())
-        })
-        .collect()
-}
+// pub(crate) fn layout_to_data<S: Storage, M: BlockMetadata>(
+//     layout: Arc<dyn BlockLayout<StorageType = S>>,
+//     block_set_idx: usize,
+//     worker_id: WorkerID,
+// ) -> BlockResult<Vec<Block<S, M>>> {
+//     (0..layout.num_blocks())
+//         .map(|idx| {
+//             let data = BlockData::new(layout.clone(), idx, block_set_idx, worker_id);
+//             Block::new(data, M::default())
+//         })
+//         .collect()
+// }
