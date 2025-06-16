@@ -63,7 +63,12 @@ jobs:
     needs: build-docs
     runs-on: ubuntu-latest
 
-    if: startsWith(github.ref, 'refs/heads/release')
+    # Deploy on:
+    # 1. PRs targeting release branches
+    # 2. Pushes to release branches
+    if: |
+      (github.event_name == 'pull_request' && startsWith(github.base_ref, 'release')) ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release'))
 
     steps:
       - name: Checkout source repo
