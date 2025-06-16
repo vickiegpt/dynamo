@@ -57,3 +57,37 @@ jobs:
           name: dynamo-docs-${{ github.run_id }}
           path: dynamo-docs
           retention-days: 15
+
+  deploy:
+    name: Deploy to private documentation repository
+    needs: build-docs
+    runs-on: ubuntu-latest
+
+    if: startsWith(github.ref, 'refs/heads/release')
+
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+
+      - name: Download documentation artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dynamo-docs-${{ github.run_id }}
+          path: dynamo-docs
+
+      - name: Clean potentially stale metadata files
+        run: |
+          rm -f ./dynamo-docs/CNAME
+          rm -f ./dynamo-docs/_config.yml
+          rm -f ./dynamo-docs/index.html || true
+
+      - name: Deploy to internal GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          personal_token: ${{ secrets.DOCS_TOKEN }}
+          external_repository: ai-dynamo/dynamo-docs
+          publish_branch: main
+          publish_dir: ./dynamo-docs
+          destination_dir: ${{ github.ref_name }}
+          commit_message: 'Deploy documentation from ${{ github.repository }}@${{ github.sha }} (branch: ${{ github.ref_name }})'
+          keep_files: true
