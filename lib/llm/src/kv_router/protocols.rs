@@ -54,6 +54,13 @@ pub struct ForwardPassMetrics {
     pub gpu_cache_usage_perc: f32,
     // percentage represented as a float from 0 to 1
     pub gpu_prefix_cache_hit_rate: f32,
+    // spec dec metrics (if enabled)
+    pub spec_decode_draft_acceptance_rate: Option<f32>,
+    pub spec_decode_system_efficiency: Option<f32>,
+    pub spec_decode_draft_tokens: Option<u64>,
+    pub spec_decode_emitted_tokens: Option<u64>,
+    pub spec_decode_accepted_tokens: Option<u64>,
+    pub spec_decode_num_spec_tokens: Option<u32>,
 }
 
 /// A [`LocalBlockHash`] is a hash computed from the tokens_ids, extra_token_ids and the optional
