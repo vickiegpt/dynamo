@@ -2018,17 +2018,17 @@ mod tests {
     //     // Create a channel for returning blocks
     //     let (return_tx, _return_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        // Create a block and wrap it in a MutableBlock
-        let block_data = BlockData::new(layout.clone(), 0, 42, 0);
-        let block = Block::new(block_data, BasicMetadata::default()).unwrap();
-        let mut mutable_block = MutableBlock::new(block, return_tx.clone());
+    // // Create a block and wrap it in a MutableBlock
+    // let block_data = BlockData::new(layout.clone(), 0, 42, 0);
+    // let block = Block::new(block_data, BasicMetadata::default()).unwrap();
+    // let mut mutable_block = MutableBlock::new(block, return_tx.clone());
 
-        let tbs = TokenBlockSequence::new(Tokens::from(vec![0, 0, 0, 0]), 4, None);
-        let token_block = tbs.blocks().iter().next().unwrap();
+    // let tbs = TokenBlockSequence::new(Tokens::from(vec![0, 0, 0, 0]), 4, None);
+    // let token_block = tbs.blocks().iter().next().unwrap();
 
-        mutable_block
-            .apply_token_block(token_block.clone())
-            .unwrap();
+    // mutable_block
+    //     .apply_token_block(token_block.clone())
+    //     .unwrap();
 
     //     // Wrap the mutable block in an Arc and create an ImmutableBlock from it
     //     let arc_mutable_block = Arc::new(mutable_block);
