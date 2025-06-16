@@ -2,96 +2,50 @@ use super::{
     transfer::{TransferStrategy, WriteToStrategy},
     *,
 };
-use crate::block_manager::layout::{
-    nixl::SerializedNixlBlockLayout, BlockLayoutConfig, LayoutConfig, LayoutType,
+use crate::block_manager::{
+    layout::{nixl::SerializedNixlBlockLayout, BlockLayoutConfig, LayoutConfig, LayoutType},
+    DeviceStorage, DiskStorage, PinnedStorage,
 };
 
-pub trait BlockDataLocality: BlockLayoutConfig + Send + Sync {}
-
-pub trait Locality: Send + Sync + std::fmt::Debug + PartialEq + Eq + std::hash::Hash {
-    fn is_compatible_storage(storage_type: &StorageType) -> Result<(), BlockError>;
-    fn storage_type(&self) -> &StorageType;
+pub trait BlockDataLocality: BlockLayoutConfig + Send + Sync {
+    fn storage_type(&self) -> StorageType;
+}
+pub trait BlockDataStorage: BlockDataLocality {
+    type StorageType: Storage;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Host {
-    storage_type: StorageType,
+pub trait LocalityProvider: Send + Sync {
+    type Disk: BlockDataStorage;
+    type Host: BlockDataStorage;
+    type Device: BlockDataStorage;
+
+    type BlockData<S: Storage>: BlockDataStorage;
 }
 
-impl Host {
-    pub fn new(storage_type: StorageType) -> Result<Self, BlockError> {
-        Self::is_compatible_storage(&storage_type)?;
-        Ok(Self { storage_type })
-    }
+pub struct Local;
+
+impl LocalityProvider for Local {
+    type Disk = LocalBlockData<DiskStorage>;
+    type Host = LocalBlockData<PinnedStorage>;
+    type Device = LocalBlockData<DeviceStorage>;
+
+    type BlockData<S: Storage> = LocalBlockData<S>;
 }
 
-impl Locality for Host {
-    fn is_compatible_storage(storage_type: &StorageType) -> Result<(), BlockError> {
-        match storage_type {
-            StorageType::System => Ok(()),
-            StorageType::Pinned => Ok(()),
-            _ => Err(BlockError::IncompatibleStorageType(
-                "Host is not compatible with this storage type; only system and pinned are allowed"
-                    .to_string(),
-            )),
-        }
-    }
-
-    fn storage_type(&self) -> &StorageType {
-        &self.storage_type
-    }
+pub trait Parallelism: Send + Sync {
+    type Output<S: Storage>: BlockDataStorage;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Device {
-    storage_type: StorageType,
+pub struct Logical<P: Parallelism> {
+    _parallelism: std::marker::PhantomData<P>,
 }
 
-impl Device {
-    pub fn new(storage_type: StorageType) -> Result<Self, BlockError> {
-        Self::is_compatible_storage(&storage_type)?;
-        Ok(Self { storage_type })
-    }
-}
+impl<P: Parallelism> LocalityProvider for Logical<P> {
+    type Disk = P::Output<DiskStorage>;
+    type Host = P::Output<PinnedStorage>;
+    type Device = P::Output<DeviceStorage>;
 
-impl Locality for Device {
-    fn storage_type(&self) -> &StorageType {
-        &self.storage_type
-    }
-    fn is_compatible_storage(storage_type: &StorageType) -> Result<(), BlockError> {
-        match storage_type {
-            StorageType::Device(_device) => Ok(()),
-            _ => Err(BlockError::IncompatibleStorageType(
-                "Device is not compatible with this storage type; only device are allowed"
-                    .to_string(),
-            )),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Disk;
-
-impl Disk {
-    pub fn new(storage_type: StorageType) -> Result<Self, BlockError> {
-        Self::is_compatible_storage(&storage_type)?;
-        Ok(Self)
-    }
-}
-
-impl Locality for Disk {
-    fn storage_type(&self) -> &StorageType {
-        &StorageType::Disk
-    }
-
-    fn is_compatible_storage(storage_type: &StorageType) -> Result<(), BlockError> {
-        match storage_type {
-            StorageType::Disk => Ok(()),
-            _ => Err(BlockError::IncompatibleStorageType(
-                "Disk is not compatible with this storage type; only disk are allowed".to_string(),
-            )),
-        }
-    }
+    type BlockData<S: Storage> = P::Output<S>;
 }
 
 #[derive(Debug)]
@@ -118,7 +72,15 @@ impl<S: Storage> From<BlockData<S>> for LocalBlockData<S> {
     }
 }
 
-impl<S: Storage> BlockDataLocality for LocalBlockData<S> {}
+impl<S: Storage> BlockDataStorage for LocalBlockData<S> {
+    type StorageType = S;
+}
+
+impl<S: Storage> BlockDataLocality for LocalBlockData<S> {
+    fn storage_type(&self) -> StorageType {
+        self.block_data.storage_type()
+    }
+}
 
 impl<S: Storage> BlockLayoutConfig for LocalBlockData<S> {
     fn layout_type(&self) -> LayoutType {
@@ -149,14 +111,17 @@ impl<S: Storage> BlockLayoutConfig for LocalBlockData<S> {
 pub mod nixl {
     use super::*;
     use crate::block_manager::storage::{nixl::NixlStorage, StorageType};
-    use std::collections::HashSet;
 
     #[derive(Debug)]
     pub struct RemoteBlockData {
         block_data: BlockData<NixlStorage>,
     }
 
-    impl BlockDataLocality for RemoteBlockData {}
+    impl BlockDataLocality for RemoteBlockData {
+        fn storage_type(&self) -> StorageType {
+            self.block_data.storage_type().clone()
+        }
+    }
 
     impl BlockLayoutConfig for RemoteBlockData {
         fn layout_type(&self) -> LayoutType {
@@ -187,11 +152,13 @@ pub mod nixl {
     #[derive(Debug)]
     pub struct ActiveMessageClient {}
 
+    pub struct WorkerReplicated;
+
     #[derive(Debug)]
-    pub struct ReplicatedBlockDataParallel<L: Locality> {
+    pub struct ReplicatedBlockDataParallel<S: Storage> {
         layouts: Vec<Arc<dyn BlockLayout<StorageType = NixlStorage>>>,
         am_client: Vec<ActiveMessageClient>,
-        locality: std::marker::PhantomData<L>,
+        storage: std::marker::PhantomData<S>,
 
         // extracted from the first layout and validated for continuity
         layout_config: LayoutConfig,
@@ -199,7 +166,11 @@ pub mod nixl {
         storage_type: StorageType,
     }
 
-    impl<L: Locality> ReplicatedBlockDataParallel<L> {
+    impl Parallelism for WorkerReplicated {
+        type Output<S: Storage> = ReplicatedBlockDataParallel<S>;
+    }
+
+    impl<S: Storage> ReplicatedBlockDataParallel<S> {
         pub fn new(
             layouts: Vec<SerializedNixlBlockLayout>,
             am_client: Vec<ActiveMessageClient>,
@@ -223,14 +194,12 @@ pub mod nixl {
                 .collect::<Result<Vec<_>, _>>()?;
 
             // extract and validate for continuity
-            let storage_type = layouts[0].storage_type();
+            let storage_type = layouts[0].storage_type().clone();
             let layout_config = layouts[0].config().clone();
             let layout_type = layouts[0].layout_type();
 
-            L::is_compatible_storage(&storage_type)?;
-
             for layout in layouts.iter().skip(1) {
-                if layout.storage_type() != storage_type {
+                if layout.storage_type() != &storage_type {
                     return Err(BlockError::MisconfiguredBlockDataParallelism(
                         "All layouts must have the same storage type".to_string(),
                     ));
@@ -253,16 +222,24 @@ pub mod nixl {
                 layouts,
                 layout_config,
                 layout_type,
-                storage_type,
+                storage_type: storage_type.clone(),
                 am_client,
-                locality: std::marker::PhantomData,
+                storage: std::marker::PhantomData,
             })
         }
     }
 
-    impl<L: Locality> BlockDataLocality for ReplicatedBlockDataParallel<L> {}
+    impl<S: Storage> BlockDataStorage for ReplicatedBlockDataParallel<S> {
+        type StorageType = NixlStorage;
+    }
 
-    impl<L: Locality> BlockLayoutConfig for ReplicatedBlockDataParallel<L> {
+    impl<S: Storage> BlockDataLocality for ReplicatedBlockDataParallel<S> {
+        fn storage_type(&self) -> StorageType {
+            self.storage_type.clone()
+        }
+    }
+
+    impl<S: Storage> BlockLayoutConfig for ReplicatedBlockDataParallel<S> {
         fn layout_type(&self) -> LayoutType {
             self.layout_type
         }
@@ -286,16 +263,5 @@ pub mod nixl {
         fn inner_dim(&self) -> usize {
             self.layout_config.inner_dim
         }
-    }
-}
-
-pub mod v2 {
-
-    use super::{BlockDataLocality, BlockMetadata, BlockState};
-
-    pub struct Block<L: BlockDataLocality, M: BlockMetadata> {
-        locality: L,
-        metadata: M,
-        state: BlockState,
     }
 }

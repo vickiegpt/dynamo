@@ -125,7 +125,7 @@ pub trait ReadFromStrategy<Source> {
 
 impl<RB: ReadableBlock, WB: WritableBlock> WriteToStrategy<WB> for RB
 where
-    <RB as ReadableBlock>::StorageType: Local + WriteToStrategy<<WB as WritableBlock>::StorageType>,
+    <RB as ReadableBlock>: WriteToStrategy<<WB as WritableBlock>,
 {
     #[inline(always)]
     fn write_to_strategy() -> TransferStrategy {

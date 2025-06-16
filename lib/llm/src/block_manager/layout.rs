@@ -198,7 +198,7 @@ pub trait BlockLayout: GenericBlockLayout {
 /// Generic trait for block layouts - type-erased on the [Storage] object.
 pub trait GenericBlockLayout: BlockLayoutConfig + Send + Sync {
     /// Storage type for the layout
-    fn storage_type(&self) -> StorageType;
+    fn storage_type(&self) -> &StorageType;
 
     /// Full configuration for the layout
     fn config(&self) -> &LayoutConfig;
@@ -561,8 +561,8 @@ impl<S: Storage> BlockLayout for FullyContiguous<S> {
 }
 
 impl<S: Storage> GenericBlockLayout for FullyContiguous<S> {
-    fn storage_type(&self) -> StorageType {
-        self.storage_type.clone()
+    fn storage_type(&self) -> &StorageType {
+        &self.storage_type
     }
 
     fn config(&self) -> &LayoutConfig {

@@ -17,7 +17,10 @@ use super::*;
 
 use super::offload::OffloadManager;
 use super::{
-    block::{Block, GlobalRegistry, ImmutableBlock},
+    block::{
+        locality::{BlockDataLocality, LocalityProvider},
+        Block, BlockDataStorage, GlobalRegistry, ImmutableBlock, LocalBlockData,
+    },
     config::NixlOptions,
     events::{EventManager, NullEventManager},
     metrics::{BlockManagerMetrics, PoolMetrics},
@@ -26,24 +29,26 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 
 #[allow(dead_code)]
-pub struct KvBlockManagerState<Metadata: BlockMetadata> {
+pub struct KvBlockManagerState<Locality: LocalityProvider, Metadata: BlockMetadata> {
     worker_id: WorkerID,
     cancellation_token: CancellationToken,
 
     nixl_agent: Arc<Option<NixlAgent>>,
     nixl_backends: HashMap<String, Arc<nixl_sys::Backend>>,
 
-    disk_pool: Option<Arc<BlockPool<DiskStorage, Metadata>>>,
-    host_pool: Option<Arc<BlockPool<PinnedStorage, Metadata>>>,
-    device_pool: Option<Arc<BlockPool<DeviceStorage, Metadata>>>,
+    disk_pool: Option<Arc<BlockPool<DiskStorage, Locality, Metadata>>>,
+    host_pool: Option<Arc<BlockPool<PinnedStorage, Locality, Metadata>>>,
+    device_pool: Option<Arc<BlockPool<DeviceStorage, Locality, Metadata>>>,
 
     local_block_set: NixlBlockSet,
     remote_block_sets: RwLock<HashMap<WorkerID, HashMap<usize, RemoteBlocks>>>,
 
-    offload_manager: Arc<OffloadManager<Metadata>>,
+    offload_manager: Arc<OffloadManager<Locality, Metadata>>,
 }
 
-impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
+impl<Locality: LocalityProvider + 'static, Metadata: BlockMetadata>
+    KvBlockManagerState<Locality, Metadata>
+{
     pub fn new(config: KvBlockManagerConfig) -> Result<Arc<Self>> {
         config
             .runtime
@@ -418,15 +423,15 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
         Ok(blocks)
     }
 
-    pub fn disk(&self) -> Option<&BlockPool<DiskStorage, Metadata>> {
+    pub fn disk(&self) -> Option<&BlockPool<DiskStorage, Locality, Metadata>> {
         self.disk_pool.as_ref().map(|pool| pool.as_ref())
     }
 
-    pub fn host(&self) -> Option<&BlockPool<PinnedStorage, Metadata>> {
+    pub fn host(&self) -> Option<&BlockPool<PinnedStorage, Locality, Metadata>> {
         self.host_pool.as_ref().map(|pool| pool.as_ref())
     }
 
-    pub fn device(&self) -> Option<&BlockPool<DeviceStorage, Metadata>> {
+    pub fn device(&self) -> Option<&BlockPool<DeviceStorage, Locality, Metadata>> {
         self.device_pool.as_ref().map(|pool| pool.as_ref())
     }
 
@@ -436,7 +441,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
 
     pub(crate) async fn enqueue_offload_block<S: Storage + 'static>(
         &self,
-        block: &ImmutableBlock<S, Metadata>,
+        block: &ImmutableBlock<S, Locality, Metadata>,
         priority: u64,
     ) -> Result<()> {
         self.offload_manager.offload(block, priority).await?;
@@ -444,15 +449,17 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
         Ok(())
     }
 
-    pub async fn onboard_blocks<S: Storage>(
+    pub async fn onboard_blocks<S: Storage + 'static>(
         &self,
-        blocks: Vec<ImmutableBlock<S, Metadata>>,
-    ) -> BlockResult<DeviceStorage, Metadata> {
+        blocks: Vec<ImmutableBlock<S, Locality, Metadata>>,
+    ) -> BlockResult<DeviceStorage, Locality, Metadata> {
         self.offload_manager.onboard(blocks).await
     }
 }
 
-impl<Metadata: BlockMetadata> std::fmt::Debug for KvBlockManagerState<Metadata> {
+impl<Locality: LocalityProvider, Metadata: BlockMetadata> std::fmt::Debug
+    for KvBlockManagerState<Locality, Metadata>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "KvBlockManagerState")
     }
@@ -484,7 +491,11 @@ pub(crate) fn create_layout<S: Storage + NixlRegisterableStorage>(
 }
 
 #[expect(clippy::type_complexity, clippy::too_many_arguments)]
-pub(crate) fn create_block_pool<S: Storage + NixlRegisterableStorage, M: BlockMetadata>(
+pub(crate) fn create_block_pool<
+    S: Storage + NixlRegisterableStorage,
+    Locality: LocalityProvider,
+    M: BlockMetadata,
+>(
     layout: Arc<dyn NixlLayout<StorageType = S>>,
     block_set_idx: usize,
     cancellation_token: CancellationToken,
@@ -493,7 +504,7 @@ pub(crate) fn create_block_pool<S: Storage + NixlRegisterableStorage, M: BlockMe
     async_runtime: Handle,
     pool_metrics: Arc<PoolMetrics>,
     event_manager: Option<Arc<dyn EventManager>>,
-) -> Result<(BlockPool<S, M>, Vec<Block<S, M>>)> {
+) -> Result<(BlockPool<S, Locality, M>, Vec<Block<S, Locality, M>>)> {
     let blocks = block::layout_to_blocks::<_, M>(layout, block_set_idx, worker_id)?;
     let event_manager = event_manager.unwrap_or_else(|| NullEventManager::new());
     let pool = BlockPool::<S, M>::builder()

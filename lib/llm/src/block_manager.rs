@@ -34,6 +34,7 @@ pub mod storage;
 
 pub use crate::common::dtype::DType;
 pub use block::{
+    locality::{self, LocalityProvider},
     nixl::{
         AsBlockDescriptorSet, BlockDescriptorList, IsImmutable, IsMutable, MutabilityKind,
         RemoteBlock,
@@ -64,7 +65,7 @@ use validator::Validate;
 
 pub type WorkerID = u64;
 
-pub type ReferenceBlockManager = KvBlockManager<BasicMetadata>;
+pub type ReferenceBlockManager = KvBlockManager<locality::Local, BasicMetadata>;
 
 /// Represents the different cache levels for KV blocks
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
@@ -100,13 +101,17 @@ impl Drop for CancelOnLastDrop {
 //    for each layout type.
 // 5. initialize the pools for each set of blocks
 #[derive(Clone)]
-pub struct KvBlockManager<Metadata: BlockMetadata> {
-    state: Arc<state::KvBlockManagerState<Metadata>>,
+pub struct KvBlockManager<Locality: LocalityProvider, Metadata: BlockMetadata> {
+    state: Arc<state::KvBlockManagerState<Locality, Metadata>>,
     _cancellation_token: Arc<CancelOnLastDrop>,
     block_size: usize,
 }
 
-impl<Metadata: BlockMetadata> KvBlockManager<Metadata> {
+impl<Locality: LocalityProvider + 'static, Metadata: BlockMetadata>
+    KvBlockManager<Locality, Metadata>
+where
+    Locality::BlockData<DeviceStorage>: locality::BlockDataLocality,
+{
     /// Create a new [KvBlockManager]
     ///
     /// The returned object is a frontend to the [KvBlockManager] which owns the cancellation
@@ -170,17 +175,17 @@ impl<Metadata: BlockMetadata> KvBlockManager<Metadata> {
     }
 
     /// Get a reference to the disk block pool
-    pub fn disk(&self) -> Option<&BlockPool<DiskStorage, Metadata>> {
+    pub fn disk(&self) -> Option<&BlockPool<DiskStorage, Locality, Metadata>> {
         self.state.disk()
     }
 
     /// Get a reference to the host block pool
-    pub fn host(&self) -> Option<&BlockPool<PinnedStorage, Metadata>> {
+    pub fn host(&self) -> Option<&BlockPool<PinnedStorage, Locality, Metadata>> {
         self.state.host()
     }
 
     /// Get a reference to the device block pool
-    pub fn device(&self) -> Option<&BlockPool<DeviceStorage, Metadata>> {
+    pub fn device(&self) -> Option<&BlockPool<DeviceStorage, Locality, Metadata>> {
         self.state.device()
     }
 
@@ -191,8 +196,8 @@ impl<Metadata: BlockMetadata> KvBlockManager<Metadata> {
 
     pub async fn onboard_blocks<S: Storage>(
         &self,
-        blocks: Vec<ImmutableBlock<S, Metadata>>,
-    ) -> BlockResult<DeviceStorage, Metadata> {
+        blocks: Vec<ImmutableBlock<S, Locality, Metadata>>,
+    ) -> BlockResult<DeviceStorage, Locality, Metadata> {
         self.state.onboard_blocks(blocks).await
     }
 }
