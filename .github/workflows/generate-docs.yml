@@ -109,4 +109,4 @@ jobs:
           const comment = `## 📚 Documentation Preview
           The documentation for this PR has been automatically generated and deployed!
           **📖 View Documentation:** [${docsUrl}](${docsUrl})
-          > **Note:** It may take a few minutes for GitHub Pages to update. If the link doesn't work immediately, please wait a moment and try again.    
+          > **Note:** It may take a few minutes for GitHub Pages to update. If the link doesn't work immediately, please wait a moment and try again.
