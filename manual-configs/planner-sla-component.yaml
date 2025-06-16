@@ -7,7 +7,7 @@ spec:
   graph: llm-disagg
   component:
     name: Planner
-    image: nvcr.io/nvidian/nim-llm-dev/dynamo-base-docker-llm:dep-178.1
+    image: nvcr.io/nvidian/nim-llm-dev/dynamo-base-docker-llm:dep-178.2
     command: ["python", "/workspace/examples/common/components/planner_sla.py"]
     env:
       - name: DYN_DEPLOYMENT_CONFIG
