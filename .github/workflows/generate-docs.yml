@@ -108,4 +108,4 @@ jobs:
         publish_dir: ./dynamo-docs
         destination_dir: ${{ steps.deploy_dir.outputs.dir_name }}
         commit_message: 'Deploy documentation from ${{ github.repository }}@${{ steps.deploy_dir.outputs.commit_ref }} (branch: ${{ steps.deploy_dir.outputs.dir_name }})'
-        keep_files: true 
+        keep_files: true
