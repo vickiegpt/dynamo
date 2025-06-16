@@ -100,7 +100,7 @@ use thiserror::Error;
 pub type StorageResult<T> = std::result::Result<T, StorageError>;
 
 /// Represents the type of storage used for a block
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum StorageType {
     /// System memory
     System,
