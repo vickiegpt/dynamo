@@ -73,7 +73,7 @@ pub fn token_completions_router(
     state: Arc<service_v2::State>,
     path: Option<String>,
 ) -> (Vec<RouteDoc>, Router) {
-    let path = path.unwrap_or("/v1/dynamo/completion".to_string());
+    let path = path.unwrap_or("/v1/dynamo/completions".to_string());
     let doc = RouteDoc::new(axum::http::Method::POST, &path);
     let router = Router::new()
         .route(&path, post(token_completions))
