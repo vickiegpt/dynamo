@@ -17,7 +17,7 @@ import logging
 
 from pydantic import BaseModel
 
-from dynamo.sdk import async_on_start, endpoint, serve, service
+from dynamo.sdk import DynamoContext, async_on_start, endpoint, serve, service
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +47,7 @@ class Server:
     }
 )
 class Client:
-    # If dynamo_context is the first argument, it is injected into the constructor before args and kwargs are passed
-    def __init__(self, dynamo_context, name: str) -> None:
+    def __init__(self, dynamo_context: DynamoContext, name: str) -> None:
         logger.info("Starting client")
         self.runtime = dynamo_context.runtime
         self.name = name

@@ -16,7 +16,7 @@
 import asyncio
 import inspect
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, get_type_hints
 
 from pydantic import BaseModel, ConfigDict
 
@@ -32,7 +32,7 @@ configure_target_environment(TargetEnum.DYNAMO)
 
 
 class DynamoContext(BaseModel):
-    """Context object for the service"""
+    """Context object for the service that is injected into components that declare it as a typed parameter."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -76,9 +76,11 @@ async def serve(service, *args, **kwargs):
         )
 
         # 4. Init the inner class injecting the context and other args and kwargs passed by the user
-        if _should_inject_dynamo_context(service):
+        should_inject = _check_dynamo_context_type(service)
+        if should_inject:
             inner_instance = service.inner(dynamo_context, *args, **kwargs)
         else:
+            logger.info(f"Not injecting dynamo_context into {service.inner.__name__}")
             inner_instance = service.inner(*args, **kwargs)
 
         # 5. Get and run async init if it exists
@@ -117,15 +119,31 @@ def get_endpoint_handlers(endpoints, inner_instance):
     return ep_handlers
 
 
-def _should_inject_dynamo_context(service):
-    """Helper function to determine if dynamo_context should be injected. It is only injected if the inner class has a constructor that takes dynamo_context as the first argument.
+def _check_dynamo_context_type(service) -> bool:
+    """Check if the service's constructor accepts a properly typed dynamo_context parameter.
 
     Args:
-        service: The service instance
+        service: The service class to check
 
     Returns:
-        bool: True if dynamo_context should be injected as first arg, False otherwise
+        bool: True if dynamo_context should be injected
+
+    Raises:
+        TypeError: If dynamo_context parameter is present but not properly typed
     """
     sig = inspect.signature(service.inner.__init__)
     params = list(sig.parameters.keys())
-    return len(params) > 1 and params[1] == "dynamo_context"
+
+    # Check if dynamo_context is the first argument after self
+    should_inject = len(params) > 1 and params[1] == "dynamo_context"
+
+    if should_inject:
+        # Get type hints for the constructor
+        type_hints = get_type_hints(service.inner.__init__)
+        # Check if dynamo_context has the correct type hint
+        if type_hints.get("dynamo_context") != DynamoContext:
+            raise TypeError(
+                f"The dynamo_context parameter in {service.inner.__name__}.__init__ must be explicitly typed as DynamoContext"
+            )
+
+    return should_inject

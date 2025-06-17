@@ -18,7 +18,7 @@ from typing import Any
 
 warnings.filterwarnings("ignore", category=UserWarning, message=".*pkg_resources.*")
 
-from dynamo.sdk.cli.serve_standalone import serve
+from dynamo.sdk.cli.serve_standalone import DynamoContext, serve
 
 # flake8: noqa: E402
 from dynamo.sdk.core.decorators.endpoint import abstract_endpoint, api, endpoint
@@ -42,4 +42,5 @@ __all__ = [
     "liveness",
     "readiness",
     "serve",
+    "DynamoContext",
 ]
