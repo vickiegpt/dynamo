@@ -30,9 +30,7 @@ async def serve(service, *args, **kwargs):
     # 2. Init the context
     # 3. Init the inner class injecting the context
     # 4. Run async init to do any async setup
-    # 5. Use default entrypoint or user passed entrypoint if one is decorated
-    # 6. Serve the component
-    # 7. Return the component
+    # 5. Serve the decorated endpoints of the component
 
     @dynamo_worker()
     async def worker(runtime: DistributedRuntime):

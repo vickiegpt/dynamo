@@ -40,4 +40,5 @@ __all__ = [
     "abstract_endpoint",
     "liveness",
     "readiness",
+    "serve",
 ]
