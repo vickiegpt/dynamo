@@ -18,15 +18,14 @@ import inspect
 import logging
 from typing import Any, Dict
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from dynamo.runtime import Component, DistributedRuntime, dynamo_endpoint, dynamo_worker
-
-logger = logging.getLogger(__name__)
-
 from dynamo.sdk.cli.utils import configure_target_environment
 from dynamo.sdk.core.protocol.interface import DynamoTransport
 from dynamo.sdk.core.runner import TargetEnum
+
+logger = logging.getLogger(__name__)
 
 # Use Dynamo target (this is the only supported one)
 configure_target_environment(TargetEnum.DYNAMO)
@@ -35,8 +34,7 @@ configure_target_environment(TargetEnum.DYNAMO)
 class DynamoContext(BaseModel):
     """Context object for the service"""
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     runtime: DistributedRuntime
     component: Component
