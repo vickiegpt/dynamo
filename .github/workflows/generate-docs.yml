@@ -96,7 +96,7 @@ jobs:
       - name: Determine deployment directory
         id: deploy_dir
         run: |
-          use consistent directory (latest commit overwrites previous)
+          # For PRs, use consistent directory (latest commit overwrites previous)
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
           echo "dir_name=${{ github.base_ref }}/pr-${{ github.event.number }}" >> $GITHUB_OUTPUT
           echo "commit_ref=${{ github.sha }}" >> $GITHUB_OUTPUT
