@@ -126,7 +126,7 @@ jobs:
             > - **Commit:** [\`${{ steps.deploy_dir.outputs.short_sha }}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) *(latest push)*
             > - **Target:** \`${{ github.base_ref }}\`
             > - **Updated:** ${new Date().toLocaleString('en-US', { timeZone: 'UTC', timeStyle: 'short', dateStyle: 'short' })} UTC
-            > 
+            >
             > **Note:** This link always shows the documentation for the latest commit. It may take a few minutes for GitHub Pages to update after each push.
             ---
 
