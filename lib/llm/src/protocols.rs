@@ -25,6 +25,7 @@ use std::pin::Pin;
 
 pub mod codec;
 pub mod common;
+pub mod dynamo;
 pub mod openai;
 
 /// The token ID type
