@@ -169,8 +169,9 @@ export ETCD_ENDPOINTS=http://HEAD_PREFILL_NODE_IP:2379
 Each container contains the configuration file in `configs/dsr1.yaml`. For our example, we will make the following changes:
 
 On the prefill head node, `vim` into the configs and change the following section of the `SGLangWorker`:
+
 ```yaml
-SGlangWorker:
+SGLangWorker:
     ...
     dist-init-addr: HEAD_PREFILL_NODE_IP
     nnodes: 2
@@ -179,8 +180,9 @@ SGlangWorker:
 ```
 
 On the other prefill node (since this example has 2 prefill nodes), change the following section of the `SGLangWorker`:
+
 ```yaml
-SGlangWorker:
+SGLangWorker:
     ...
     dist-init-addr: HEAD_PREFILL_NODE_IP
     nnodes: 2
@@ -189,8 +191,9 @@ SGlangWorker:
 ```
 
 On the decode head node, `vim` into the configs and change the following section of the `SGLangDecodeWorker`:
+
 ```yaml
-SGlangDecodeWorker:
+SGLangDecodeWorker:
     ...
     dist-init-addr: HEAD_DECODE_NODE_IP
     nnodes: 4
