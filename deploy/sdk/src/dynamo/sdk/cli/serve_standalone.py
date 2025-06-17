@@ -13,18 +13,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dynamo.runtime import DistributedRuntime, dynamo_worker, dynamo_endpoint, Component
-from pydantic import BaseModel
-from typing import List, Any, Dict
 import asyncio
-import logging
 import inspect
+import logging
+from typing import Any, Dict
+
+from pydantic import BaseModel
+
+from dynamo.runtime import Component, DistributedRuntime, dynamo_endpoint, dynamo_worker
+
 logger = logging.getLogger(__name__)
 
-from dynamo.runtime.logging import configure_dynamo_logging
 from dynamo.sdk.cli.utils import configure_target_environment
-from dynamo.sdk.core.runner import TargetEnum
 from dynamo.sdk.core.protocol.interface import DynamoTransport
+from dynamo.sdk.core.runner import TargetEnum
 
 # Use Dynamo target (this is the only supported one)
 configure_target_environment(TargetEnum.DYNAMO)
@@ -32,13 +34,16 @@ configure_target_environment(TargetEnum.DYNAMO)
 
 class DynamoContext(BaseModel):
     """Context object for the service"""
+
     class Config:
         arbitrary_types_allowed = True
+
     runtime: DistributedRuntime
     component: Component
     endpoints: Dict[str, Any]
     name: str
     namespace: str
+
 
 async def serve(service, *args, **kwargs):
     # 1. Create a runtime/dyn worker if one is not passed
@@ -56,7 +61,11 @@ async def serve(service, *args, **kwargs):
         await component.create_service()
 
         # 2. Declare the endpoints on the component that use DynamoTransport.DEFAULT (NATS based)
-        drt_endpoints = [ep for ep in service.get_dynamo_endpoints().values() if DynamoTransport.DEFAULT in ep.transports]
+        drt_endpoints = [
+            ep
+            for ep in service.get_dynamo_endpoints().values()
+            if DynamoTransport.DEFAULT in ep.transports
+        ]
         endpoints = {ep.name: component.endpoint(ep.name) for ep in drt_endpoints}
 
         # 3. init a pydantic model with the runtime, component, endpoints, name, namespace
@@ -79,13 +88,14 @@ async def serve(service, *args, **kwargs):
         if async_init:
             logger.info(f"Running async init for {inner_instance.__class__.__name__}")
             await async_init()
-    
+
         # 6. Finally serve each endpoint
-        handlers = get_ep_handlers(drt_endpoints, inner_instance)
+        handlers = get_endpoint_handlers(drt_endpoints, inner_instance)
         ep_2_handler = {endpoints[ep_name]: handlers[ep_name] for ep_name in endpoints}
+        logger.debug(f"Serving endpoints: {[ep_name for ep_name in endpoints]}")
         tasks = [ep.serve_endpoint(handler) for ep, handler in ep_2_handler.items()]
         await asyncio.gather(*tasks)
-    
+
     await worker()
 
 
@@ -96,21 +106,25 @@ def get_async_init(instance):
             return getattr(instance, name)
     return None
 
-def get_ep_handlers(endpoints, inner_instance):
+
+def get_endpoint_handlers(endpoints, inner_instance):
     """Get the endpoint handlers for the service"""
     ep_handlers = {}
     for endpoint in endpoints:
         # Binding the instance to the methods of the class
         bound_method = endpoint.func.__get__(inner_instance)
-        ep_handlers[endpoint.name] = dynamo_endpoint(endpoint.request_type, Any)(bound_method)
+        ep_handlers[endpoint.name] = dynamo_endpoint(endpoint.request_type, Any)(
+            bound_method
+        )
     return ep_handlers
+
 
 def _should_inject_dynamo_context(service):
     """Helper function to determine if dynamo_context should be injected. It is only injected if the inner class has a constructor that takes dynamo_context as the first argument.
-    
+
     Args:
         service: The service instance
-        
+
     Returns:
         bool: True if dynamo_context should be injected as first arg, False otherwise
     """

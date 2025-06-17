@@ -13,12 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dynamo.sdk import service, endpoint, async_on_start, api, dynamo_context, serve
-from fastapi.responses import StreamingResponse
+import logging
+
 from pydantic import BaseModel
 
-import logging
+from dynamo.sdk import async_on_start, endpoint, serve, service
+
 logger = logging.getLogger(__name__)
+
 
 class RequestType(BaseModel):
     text: str
@@ -53,33 +55,44 @@ class Client:
 
     @async_on_start
     async def async_init(self):
-        self.server = await self.runtime.namespace("dynamo").component("Server").endpoint("generate").client()
+        self.server = (
+            await self.runtime.namespace("dynamo")
+            .component("Server")
+            .endpoint("generate")
+            .client()
+        )
         await self.server.wait_for_instances()
 
-        stream = await self.server.generate(RequestType(text=self.name).model_dump_json())
+        stream = await self.server.generate(
+            RequestType(text=self.name).model_dump_json()
+        )
         async for word in stream:
             print(word.data())
 
 
 if __name__ == "__main__":
-    """"
+    """
     Example of running Dynamo components with python command
     $ python hello_world_standalone.py server --greeting "Hello, World!"
     $ python hello_world_standalone.py client --name "Bob"
-    """"
-    import asyncio
-    import uvloop
+    """
     import argparse
+    import asyncio
 
-    parser = argparse.ArgumentParser(description='Run Hello World server or client')
-    parser.add_argument('component', choices=['server', 'client'], help='Which component to run')
-    parser.add_argument('--greeting', default='Hello, World!', help='Greeting message (for server)')
-    parser.add_argument('--name', default='User', help='Name to use (for client)')
+    import uvloop
+
+    parser = argparse.ArgumentParser(description="Run Hello World server or client")
+    parser.add_argument(
+        "component", choices=["server", "client"], help="Which component to run"
+    )
+    parser.add_argument(
+        "--greeting", default="Hello, World!", help="Greeting message (for server)"
+    )
+    parser.add_argument("--name", default="User", help="Name to use (for client)")
     args = parser.parse_args()
 
     uvloop.install()
-    if args.component == 'server':
+    if args.component == "server":
         asyncio.run(serve(Server, greeting=args.greeting))
     else:
         asyncio.run(serve(Client, name=args.name))
-    
