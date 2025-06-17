@@ -10,7 +10,13 @@ spec:
         - name: docker-imagepullsecret
       containers:
       - name: profile-sla
-        image: nvcr.io/nvidian/nim-llm-dev/dynamo-base-docker-llm:dep-178.2
+        image: nvcr.io/nvidian/nim-llm-dev/dynamo-base-docker-llm:dep-178.5
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: dynamo-env-secrets
+                key: huggingface.token
         command: ["python", "/workspace/benchmarks/profiler/profile_sla.py"]
         args:
           - --config
@@ -18,18 +24,22 @@ spec:
           - --output-dir
           - /workspace/profiling_results
           - --isl
-          - "3000"
+          - "512"
           - --osl
-          - "500"
+          - "32"
           - --ttft
-          - "50"
+          - "500"
           - --itl
-          - "10"
-          - --url
-          - "http://llm-disagg-frontend:3000/v1/chat/completions"
+          - "50"
         volumeMounts:
           - name: output-volume
             mountPath: /workspace/profiling_results
+      - name: socat
+        image: alpine/socat
+        command: ["socat"]
+        args:
+          - "TCP-LISTEN:8000,fork,reuseaddr"
+          - "TCP:llm-disagg-frontend:3000"
       restartPolicy: Never
       volumes:
         - name: output-volume
