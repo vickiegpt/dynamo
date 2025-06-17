@@ -94,7 +94,7 @@ pub struct HttpServiceConfig {
     #[builder(default = "true")]
     enable_embeddings_endpoints: bool,
 
-    #[builder(default = "false")]
+    #[builder(default = "true")]
     enable_dynamo_endpoints: bool,
 
     #[builder(default = "None")]
@@ -194,7 +194,10 @@ impl HttpServiceConfigBuilder {
         }
 
         if config.enable_dynamo_endpoints {
-            routes.push(super::dynamo::token_completions_router(state.clone(), None));
+            routes.push(super::token_completions::token_completions_router(
+                state.clone(),
+                None,
+            ));
         }
 
         // for (route_docs, route) in routes.into_iter().chain(self.routes.into_iter()) {

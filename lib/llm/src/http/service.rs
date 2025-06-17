@@ -18,8 +18,8 @@
 //!
 //! The [`service_v2::HttpService`] can be further extended to host any [`axum::Router`] using the [`service_v2::HttpServiceConfigBuilder`].
 
-mod dynamo;
 mod openai;
+mod token_completions;
 
 pub mod clear_kv_blocks;
 pub mod error;
