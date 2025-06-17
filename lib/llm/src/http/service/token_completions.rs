@@ -4,49 +4,71 @@
 use axum::{
     extract::State,
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{
+        sse::{KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     routing::post,
     Json, Router,
 };
+use futures::StreamExt;
 use std::sync::Arc;
 
-use super::{openai::ErrorResponse, service_v2, RouteDoc};
+use super::{
+    openai::{process_event_converter, ErrorResponse},
+    service_v2, RouteDoc,
+};
 use crate::protocols::{
     openai::completions::CompletionResponse, token_completions::DynamoTokenCompletionRequest,
 };
 use dynamo_runtime::pipeline::Context;
 
-/// Token completion endpoint - goes directly to backend, bypassing OpenAI preprocessing
+/// Token completion endpoint - goes directly to backend, bypassing OpenAI style preprocessing
 #[tracing::instrument(skip_all)]
 async fn token_completions(
     State(state): State<Arc<service_v2::State>>,
     Json(request): Json<DynamoTokenCompletionRequest>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
-    let model = &request.model;
+    let model = request.model.clone();
     let request_id = uuid::Uuid::new_v4().to_string();
 
-    // Get token completion engine (same pattern as OpenAI!)
+    let streaming = request.stream.unwrap_or(false);
+
     let engine = state
         .manager()
-        .get_token_completion_engine(model)
+        .get_token_completion_engine(&model)
         .map_err(|_| ErrorResponse::model_not_found())?;
 
-    // Execute request (same pattern as OpenAI!)
     let request_context = Context::with_id(request, request_id);
     let stream = engine
         .generate(request_context)
         .await
         .map_err(|e| ErrorResponse::from_anyhow(e, "Generation failed"))?;
 
-    // Aggregate response (same as OpenAI!)
-    let response = CompletionResponse::from_annotated_stream(stream.into())
-        .await
-        .map_err(|e| ErrorResponse::from_anyhow(e, "Failed to process response"))?;
+    if streaming {
+        let mut response_collector = state.metrics_clone().create_response_collector(&model);
+        let stream = stream.map(move |response| {
+            process_event_converter(
+                super::openai::EventConverter::from(response),
+                &mut response_collector,
+            )
+        });
 
-    Ok(Json(response).into_response())
+        let mut sse_stream = Sse::new(stream);
+        if let Some(keep_alive) = state.sse_keep_alive() {
+            sse_stream = sse_stream.keep_alive(KeepAlive::default().interval(keep_alive));
+        }
+
+        Ok(sse_stream.into_response())
+    } else {
+        let response = CompletionResponse::from_annotated_stream(stream.into())
+            .await
+            .map_err(|e| ErrorResponse::from_anyhow(e, "Failed to process response"))?;
+
+        Ok(Json(response).into_response())
+    }
 }
 
-/// Router for token completion endpoint
 pub fn token_completions_router(
     state: Arc<service_v2::State>,
     path: Option<String>,

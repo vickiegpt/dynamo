@@ -281,7 +281,6 @@ impl ModelWatcher {
                 self.manager
                     .add_completions_model(&model_entry.name, completions_engine)?;
 
-                // Create TOKEN completion engine (NO preprocessing - direct token passthrough)
                 let frontend = SegmentSource::<
                     SingleIn<DynamoTokenCompletionRequest>,
                     ManyOut<Annotated<CompletionResponse>>,
