@@ -332,7 +332,7 @@ class Processor(ProcessMixIn):
         async for response in self._generate(raw_request, RequestType.CHAT):
             yield response
 
-    # @endpoint()
-    # async def completions(self, raw_request: CompletionRequest):
-    #     async for response in self._generate(raw_request, RequestType.COMPLETION):
-    #         yield response
+    @endpoint(name="completions")
+    async def completions(self, raw_request: CompletionRequest):
+         async for response in self._generate(raw_request, RequestType.COMPLETION):
+             yield response
