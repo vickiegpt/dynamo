@@ -124,12 +124,10 @@ jobs:
             The documentation for this PR has been automatically generated and deployed!
 
             **📖 View Documentation:** [${docsUrl}](${docsUrl})
-
             > **Deployment Details:**
             > - **PR:** #${{ github.event.number }} targeting \`${{ github.base_ref }}\`
             > - **Commit:** [\`${{ steps.deploy_dir.outputs.short_sha }}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
-            > - **Directory:** \`${{ steps.deploy_dir.outputs.dir_name }}\`
-            > 
+            > - **Directory:** \`${{ steps.deploy_dir.outputs.dir_name }}\` 
             > **Note:** It may take a few minutes for GitHub Pages to update. If the link doesn't work immediately, please wait a moment and try again.
 
             ---
