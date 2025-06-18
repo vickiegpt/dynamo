@@ -459,52 +459,118 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Block<S, L, M> {
     }
 }
 
-// ===== Local Block Implementations =====
+pub(crate) trait PrivateBlockExt {
+    fn register(
+        &mut self,
+        registry: &mut registry::BlockRegistry,
+    ) -> Result<Option<PublishHandle>, registry::BlockRegistationError>;
+}
 
-// Local-specific identification and worker scope
-impl<S: Storage, M: BlockMetadata> Block<S, locality::Local, M> {
-    /// Get block identifier for local blocks
-    pub fn block_id(&self) -> BlockId {
-        self.data.block_data().block_idx
-    }
-
-    /// Get block set identifier for local blocks
-    pub fn block_set_id(&self) -> BlockSetId {
-        self.data.block_data().block_set_idx
-    }
-
-    /// Get worker scope for local blocks (always single worker)
-    pub fn worker_scope(&self) -> WorkerScope {
-        WorkerScope::Single(self.data.block_data().worker_id)
-    }
-
-    /// Convenience method: get the single worker ID for local blocks
-    pub fn worker_id(&self) -> WorkerID {
-        self.data.block_data().worker_id
+impl<S: Storage, M: BlockMetadata> PrivateBlockExt for Block<S, M> {
+    fn register(
+        &mut self,
+        registry: &mut registry::BlockRegistry,
+    ) -> Result<Option<PublishHandle>, registry::BlockRegistationError> {
+        registry.register_block(&mut self.state)
     }
 }
 
-// Local-specific memory access methods
-impl<S: Storage + NixlDescriptor, M: BlockMetadata> Block<S, locality::Local, M>
-where
-    locality::LocalBlockData<S>: BlockDataExt<S>,
-{
-    /// Get a layer view for reading (Local blocks only)
-    pub fn layer_view(
-        &self,
-        layer_idx: usize,
-        outer_idx: usize,
-    ) -> BlockResult<view::LayerView<S>> {
-        self.data.layer_view(layer_idx, outer_idx)
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> ReadableBlock for Block<S, M> {
+    type StorageType = S;
+}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> WritableBlock for Block<S, M> {
+    type StorageType = S;
+}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> Readable for Block<S, M> {}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> Writable for Block<S, M> {}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> Local for Block<S, M> {}
+
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProvider for Block<S, M> {
+    type StorageType = S;
+
+    fn block_data(&self, _: private::PrivateToken) -> &BlockData<S> {
+        &self.data
+    }
+}
+
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProviderMut for Block<S, M> {
+    fn block_data_mut(&mut self, _: private::PrivateToken) -> &mut BlockData<S> {
+        &mut self.data
+    }
+}
+
+pub trait BlockExt {
+    /// Reset the state of the block
+    fn reset(&mut self);
+
+    /// Initialize a sequence on the block using a [SaltHash]
+    ///
+    /// The block must be in the [BlockState::Reset] state.
+    ///
+    /// After initialization, the block will be in the [BlockState::Partial] state.
+    fn init_sequence(&mut self, salt_hash: SaltHash) -> Result<()>;
+
+    /// Appends a single token to the block if it is in the Partial state and not full.
+    /// Returns `Err` if the block is not Partial or already full.
+    fn add_token(&mut self, token: Token) -> Result<()>;
+
+    /// Appends multiple tokens to the block if it is in the Partial state
+    /// and has enough remaining capacity for *all* provided tokens.
+    /// The block must be in the [BlockState::Partial] state.
+    /// Returns `Err` if the block is not Partial or if there isn't enough space.
+    fn add_tokens(&mut self, tokens: Tokens) -> Result<Tokens>;
+
+    /// Removes the last token from the block.
+    /// Requires the block to be in the Partial state and not empty.
+    /// Returns `Err` otherwise.
+    fn pop_token(&mut self) -> Result<()>;
+
+    /// Removes the last `count` tokens from the block.
+    /// Requires the block to be in the Partial state and have at least `count` tokens.
+    /// Returns `Err` otherwise.
+    fn pop_tokens(&mut self, count: usize) -> Result<()>;
+
+    /// Commit the block
+    /// Requires the block to be in the [BlockState::Partial] state and completely full.
+    /// Transitions the state to [BlockState::Complete]. Returns `Err` otherwise.
+    fn commit(&mut self) -> Result<()>;
+
+    /// Apply a [TokenBlock] to the block
+    /// Requires the block to be in the [BlockState::Reset] state.
+    ///
+    /// Additionally, the [TokenBlock] must match the [BlockLayout::page_size()]
+    /// Transitions the state to [BlockState::Complete]. Returns `Err` otherwise.
+    fn apply_token_block(&mut self, token_block: TokenBlock) -> Result<()>;
+
+    /// Returns the number of tokens currently in the block.
+    fn len(&self) -> usize;
+
+    /// Returns the number of additional tokens that can be added (only valid for Partial state).
+    fn remaining(&self) -> usize;
+
+    /// Returns true if the block contains no tokens (only true for Reset or empty Partial state).
+    fn is_empty(&self) -> bool;
+
+    /// Returns true if the block is full.
+    fn is_full(&self) -> bool;
+
+    /// Returns a list of tokens in the block.
+    fn tokens(&self) -> Option<&Tokens>;
+}
+
+impl<S: Storage, M: BlockMetadata> BlockExt for Block<S, M> {
+    fn reset(&mut self) {
+        Block::reset(self);
     }
 
-    /// Get a layer view for writing (Local blocks only)
-    pub fn layer_view_mut(
-        &mut self,
-        layer_idx: usize,
-        outer_idx: usize,
-    ) -> BlockResult<view::LayerViewMut<S>> {
-        self.data.layer_view_mut(layer_idx, outer_idx)
+    fn init_sequence(&mut self, salt_hash: SaltHash) -> Result<()> {
+        Ok(self
+            .state
+            .initialize_sequence(self.page_size(), salt_hash)?)
+    }
+
+    fn add_token(&mut self, token: Token) -> Result<()> {
+        self.state.add_token(token)
     }
 
     /// Get a block view for reading (Local blocks only)

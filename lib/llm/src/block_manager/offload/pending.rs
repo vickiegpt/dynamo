@@ -48,7 +48,7 @@ use tokio_util::sync::CancellationToken;
 use crate::block_manager::block::{
     locality::{self, BlockDataLocality, LocalityProvider},
     transfer::{WriteTo, WriteToStrategy},
-    BlockError, BlockExt, BlockMetadata, BlockState, LocalBlockData, MutableBlock, ReadableBlock,
+    BlockError, BlockExt, BlockMetadata, BlockState, ImmutableBlock, MutableBlock, ReadableBlock,
     TransferContext, WritableBlock,
 };
 use crate::block_manager::pool::BlockPoolError;
@@ -71,7 +71,7 @@ pub struct PendingTransfer<
     Metadata: BlockMetadata,
 > {
     /// The block being copied from.
-    sources: Vec<Arc<MutableBlock<Source, Locality, Metadata>>>,
+    sources: Vec<ImmutableBlock<Source, Metadata>>,
     /// The block being copied to.
     targets: Vec<MutableBlock<Target, Locality, Metadata>>,
     /// The oneshot sender that optionally returns the registered blocks once the transfer is complete.
@@ -84,10 +84,10 @@ impl<Source: Storage, Target: Storage, Locality: LocalityProvider, Metadata: Blo
     PendingTransfer<Source, Target, Locality, Metadata>
 {
     pub fn new(
-        sources: Vec<Arc<MutableBlock<Source, Locality, Metadata>>>,
-        targets: Vec<MutableBlock<Target, Locality, Metadata>>,
-        completion_indicator: Option<oneshot::Sender<BlockResult<Target, Locality, Metadata>>>,
-        target_pool: Arc<BlockPool<Target, Locality, Metadata>>,
+        sources: Vec<ImmutableBlock<Source, Metadata>>,
+        targets: Vec<MutableBlock<Target, Metadata>>,
+        completion_indicator: Option<oneshot::Sender<BlockResult<Target, Metadata>>>,
+        target_pool: Arc<BlockPool<Target, Metadata>>,
     ) -> Self {
         assert_eq!(sources.len(), targets.len());
         Self {
@@ -123,14 +123,9 @@ impl<Source: Storage, Target: Storage, Locality: LocalityProvider, Metadata: Blo
     }
 }
 
-fn transfer_metadata<
-    Source: Storage,
-    Target: Storage,
-    Locality: LocalityProvider,
-    Metadata: BlockMetadata,
->(
-    source: &Arc<MutableBlock<Source, Locality, Metadata>>,
-    target: &mut MutableBlock<Target, Locality, Metadata>,
+fn transfer_metadata<Source: Storage, Target: Storage, Metadata: BlockMetadata>(
+    source: &ImmutableBlock<Source, Metadata>,
+    target: &mut MutableBlock<Target, Metadata>,
 ) -> Result<()> {
     // Only registered blocks can be transferred. There are upstream checks for this, so this shouldn't ever fail.
     if let BlockState::Registered(reg_handle, _) = source.state() {
@@ -233,17 +228,18 @@ impl<
 }
 
 #[async_trait]
-impl<
-        Source: Storage,
-        Target: Storage,
-        Locality: LocalityProvider + 'static,
-        Metadata: BlockMetadata,
-    > TransferManager<Source, Target, Locality, Metadata>
-    for CudaTransferManager<Source, Target, Locality, Metadata>
+impl<Source, Target, Metadata> TransferManager<Source, Target, Metadata>
+    for CudaTransferManager<Source, Target, Metadata>
 where
-    MutableBlock<Source, Locality, Metadata>:
-        ReadableBlock + Local + WriteToStrategy<MutableBlock<Target, Locality, Metadata>>,
-    MutableBlock<Target, Locality, Metadata>: WritableBlock,
+    Source: Storage,
+    Target: Storage,
+    Metadata: BlockMetadata,
+    // Check that the source block is readable, local, and writable to the target block.
+    ImmutableBlock<Source, Metadata>: ReadableBlock<StorageType = Source>
+        + Local
+        + WriteToStrategy<MutableBlock<Target, Metadata>>,
+    // Check that the target block is writable.
+    MutableBlock<Target, Metadata>: WritableBlock<StorageType = Target>,
 {
     async fn enqueue_transfer(
         &self,
@@ -335,8 +331,9 @@ where
     Locality: LocalityProvider + 'static,
     Metadata: BlockMetadata,
     // Check that the source block is readable, local, and writable to the target block.
-    MutableBlock<Source, Locality, Metadata>:
-        ReadableBlock + Local + WriteToStrategy<MutableBlock<Target, Locality, Metadata>>,
+    ImmutableBlock<Source, Metadata>: ReadableBlock<StorageType = Source>
+        + Local
+        + WriteToStrategy<MutableBlock<Target, Metadata>>,
     // Check that the target block is writable.
     MutableBlock<Target, Locality, Metadata>: WritableBlock,
 {

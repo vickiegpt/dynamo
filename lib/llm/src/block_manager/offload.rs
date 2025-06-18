@@ -296,13 +296,12 @@ impl<Locality: LocalityProvider + 'static, Metadata: BlockMetadata>
                 pool_metrics.gauge("offload_queue_size").dec();
                 // Try to upgrade the block to a strong reference.
                 let block = match request.block.upgrade() {
-                    Some(block) => Some(block),
+                    Some(block) => Some(ImmutableBlock::new(block)),
                     // If unable to upgrade, the block may have been moved to the inactive pool.
                     None => source_pool
                         .match_sequence_hashes(vec![request.sequence_hash].as_slice())
                         .await?
-                        .pop()
-                        .map(|block| block.mutable_block().clone()),
+                        .pop(),
                 };
 
                 // If we've found the block, offload it.
@@ -387,15 +386,9 @@ impl<Locality: LocalityProvider + 'static, Metadata: BlockMetadata>
                         .counter("onboard_processed")
                         .inc_by(request.blocks.len() as u64);
 
-                    let sources = request
-                        .blocks
-                        .iter()
-                        .map(|b| b.mutable_block().clone())
-                        .collect();
-
                     transfer_manager
                         .enqueue_transfer(PendingTransfer::new(
-                            sources,
+                            request.blocks,
                             target_blocks,
                             Some(request.response_tx),
                             target_pool.clone(),
