@@ -44,7 +44,10 @@
 //! The kind of offloads/onboards they perform is dictated by the source and target arguments
 //! of the [`OffloadManager::offload_worker`] and [`OffloadManager::onboard_worker`] methods.
 
-use super::block::{BlockError, BlockMetadata, BlockState, ImmutableBlock, TransferContext};
+use super::block::{
+    locality::{self, LocalityProvider},
+    BlockError, BlockMetadata, BlockState, ImmutableBlock, LocalBlockData, TransferContext,
+};
 use super::metrics::{BlockManagerMetrics, PoolMetrics};
 use super::pool::BlockPoolError;
 use super::storage::{Cuda, Storage};
@@ -77,29 +80,33 @@ const MAX_CONCURRENT_TRANSFERS: usize = 4;
 const MAX_TRANSFER_BATCH_SIZE: usize = 16;
 
 /// The offload manager handles all block transfers between different cache levels.
-pub struct OffloadManager<Metadata: BlockMetadata> {
+pub struct OffloadManager<Locality: LocalityProvider, Metadata: BlockMetadata> {
     // Handles to the device, host, and disk pools.
-    disk: Option<Arc<BlockPool<DiskStorage, Metadata>>>,
-    host: Option<Arc<BlockPool<PinnedStorage, Metadata>>>,
-    device: Option<Arc<BlockPool<DeviceStorage, Metadata>>>,
+    disk: Option<Arc<BlockPool<DiskStorage, Locality, Metadata>>>,
+    host: Option<Arc<BlockPool<PinnedStorage, Locality, Metadata>>>,
+    device: Option<Arc<BlockPool<DeviceStorage, Locality, Metadata>>>,
 
     /// Queue of offloading requests.
-    device_offload_tx: mpsc::UnboundedSender<OffloadRequest<DeviceStorage, Metadata>>,
-    host_offload_tx: mpsc::UnboundedSender<OffloadRequest<PinnedStorage, Metadata>>,
+    device_offload_tx: mpsc::UnboundedSender<OffloadRequest<DeviceStorage, Locality, Metadata>>,
+    host_offload_tx: mpsc::UnboundedSender<OffloadRequest<PinnedStorage, Locality, Metadata>>,
 
     /// Queue of pending onboarding requests.
-    host_onboard_tx: mpsc::UnboundedSender<OnboardRequest<PinnedStorage, DeviceStorage, Metadata>>,
-    disk_onboard_tx: mpsc::UnboundedSender<OnboardRequest<DiskStorage, DeviceStorage, Metadata>>,
+    host_onboard_tx:
+        mpsc::UnboundedSender<OnboardRequest<PinnedStorage, DeviceStorage, Locality, Metadata>>,
+    disk_onboard_tx:
+        mpsc::UnboundedSender<OnboardRequest<DiskStorage, DeviceStorage, Locality, Metadata>>,
 
     /// An incrementing counter for offloaded blocks. Within the same priority, blocks with lower tick values are processed first.
     tick: Arc<Mutex<u64>>,
 }
 
-impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
+impl<Locality: LocalityProvider + 'static, Metadata: BlockMetadata>
+    OffloadManager<Locality, Metadata>
+{
     pub fn new(
-        disk: Option<Arc<BlockPool<DiskStorage, Metadata>>>,
-        host: Option<Arc<BlockPool<PinnedStorage, Metadata>>>,
-        device: Option<Arc<BlockPool<DeviceStorage, Metadata>>>,
+        disk: Option<Arc<BlockPool<DiskStorage, Locality, Metadata>>>,
+        host: Option<Arc<BlockPool<PinnedStorage, Locality, Metadata>>>,
+        device: Option<Arc<BlockPool<DeviceStorage, Locality, Metadata>>>,
         nixl_agent: Arc<Option<NixlAgent>>,
         async_rt_handle: Handle,
         metrics: Arc<BlockManagerMetrics>,
@@ -249,10 +256,10 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
     }
 
     async fn offload_worker<Source: Storage, Target: Storage>(
-        source_pool: Option<Arc<BlockPool<Source, Metadata>>>,
-        target_pool: Option<Arc<BlockPool<Target, Metadata>>>,
-        mut offload_rx: mpsc::UnboundedReceiver<OffloadRequest<Source, Metadata>>,
-        transfer_manager: Arc<dyn TransferManager<Source, Target, Metadata>>,
+        source_pool: Option<Arc<BlockPool<Source, Locality, Metadata>>>,
+        target_pool: Option<Arc<BlockPool<Target, Locality, Metadata>>>,
+        mut offload_rx: mpsc::UnboundedReceiver<OffloadRequest<Source, Locality, Metadata>>,
+        transfer_manager: Arc<dyn TransferManager<Source, Target, Locality, Metadata>>,
         pool_metrics: Arc<PoolMetrics>,
         cancellation_token: CancellationToken,
     ) -> Result<()> {
@@ -346,10 +353,10 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
     }
 
     async fn onboard_worker<Source: Storage, Target: Storage>(
-        source_pool: Option<Arc<BlockPool<Source, Metadata>>>,
-        target_pool: Option<Arc<BlockPool<Target, Metadata>>>,
-        mut onboard_rx: mpsc::UnboundedReceiver<OnboardRequest<Source, Target, Metadata>>,
-        transfer_manager: Arc<dyn TransferManager<Source, Target, Metadata>>,
+        source_pool: Option<Arc<BlockPool<Source, Locality, Metadata>>>,
+        target_pool: Option<Arc<BlockPool<Target, Locality, Metadata>>>,
+        mut onboard_rx: mpsc::UnboundedReceiver<OnboardRequest<Source, Target, Locality, Metadata>>,
+        transfer_manager: Arc<dyn TransferManager<Source, Target, Locality, Metadata>>,
         pool_metrics: Arc<PoolMetrics>,
         cancellation_token: CancellationToken,
     ) -> Result<()> {
@@ -403,7 +410,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
 
     pub async fn offload<S: Storage>(
         &self,
-        block: &ImmutableBlock<S, Metadata>,
+        block: &ImmutableBlock<S, Locality, Metadata>,
         priority: u64,
     ) -> core::result::Result<(), BlockPoolError> {
         match block.state() {
@@ -430,7 +437,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
 
         // TODO: What's the performance penalty of this runtime type-checking?
         if let Some(device_block) =
-            any_block.downcast_ref::<ImmutableBlock<DeviceStorage, Metadata>>()
+            any_block.downcast_ref::<ImmutableBlock<DeviceStorage, Locality, Metadata>>()
         {
             // The host pool doesn't exist, so we can't offload to it.
             if self.device_offload_tx.is_closed() {
@@ -445,7 +452,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
 
             self.device_offload_tx.send(request).unwrap();
         } else if let Some(host_block) =
-            any_block.downcast_ref::<ImmutableBlock<PinnedStorage, Metadata>>()
+            any_block.downcast_ref::<ImmutableBlock<PinnedStorage, Locality, Metadata>>()
         {
             // The disk pool doesn't exist, so we can't offload to it.
             if self.host_offload_tx.is_closed() {
@@ -466,8 +473,8 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
 
     pub async fn onboard<S: Storage>(
         &self,
-        blocks: Vec<ImmutableBlock<S, Metadata>>,
-    ) -> BlockResult<DeviceStorage, Metadata> {
+        blocks: Vec<ImmutableBlock<S, Locality, Metadata>>,
+    ) -> BlockResult<DeviceStorage, Locality, Metadata> {
         for block in &blocks {
             match block.state() {
                 BlockState::Registered(_, _) => {}
@@ -489,14 +496,14 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
 
         // TODO: This is really ugly.
         if any_block
-            .downcast_ref::<ImmutableBlock<PinnedStorage, Metadata>>()
+            .downcast_ref::<ImmutableBlock<PinnedStorage, Locality, Metadata>>()
             .is_some()
         {
             let host_blocks = blocks
                 .iter()
                 .map(|b| {
                     (b as &dyn Any)
-                        .downcast_ref::<ImmutableBlock<PinnedStorage, Metadata>>()
+                        .downcast_ref::<ImmutableBlock<PinnedStorage, Locality, Metadata>>()
                         .unwrap()
                         .clone()
                 })
@@ -506,14 +513,14 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                 .send(OnboardRequest::new(host_blocks, tx))
                 .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
         } else if any_block
-            .downcast_ref::<ImmutableBlock<DiskStorage, Metadata>>()
+            .downcast_ref::<ImmutableBlock<DiskStorage, Locality, Metadata>>()
             .is_some()
         {
             let disk_blocks = blocks
                 .iter()
                 .map(|b| {
                     (b as &dyn Any)
-                        .downcast_ref::<ImmutableBlock<DiskStorage, Metadata>>()
+                        .downcast_ref::<ImmutableBlock<DiskStorage, Locality, Metadata>>()
                         .unwrap()
                         .clone()
                 })
@@ -542,6 +549,7 @@ pub mod tests {
 
     use crate::block_manager::{
         block::{
+            locality::{Local, LocalityProvider},
             BasicMetadata, BlockDataExt, BlockDataProvider, BlockExt, BlockIdentifier, Blocks,
             MutableBlock,
         },
@@ -568,9 +576,9 @@ pub mod tests {
     const BLOCK_SIZE: usize = 4;
     const NUM_LAYERS: usize = 8;
 
-    type DevicePool = Option<Arc<BlockPool<DeviceStorage, BasicMetadata>>>;
-    type HostPool = Option<Arc<BlockPool<PinnedStorage, BasicMetadata>>>;
-    type DiskPool = Option<Arc<BlockPool<DiskStorage, BasicMetadata>>>;
+    type DevicePool = Option<Arc<BlockPool<DeviceStorage, Local, BasicMetadata>>>;
+    type HostPool = Option<Arc<BlockPool<PinnedStorage, Local, BasicMetadata>>>;
+    type DiskPool = Option<Arc<BlockPool<DiskStorage, Local, BasicMetadata>>>;
 
     lazy_static::lazy_static! {
         static ref NIXL_AGENT: Arc<Option<NixlAgent>> = {
@@ -694,6 +702,11 @@ pub mod tests {
         Ok((manager, device_pool, host_pool, disk_pool))
     }
 
+    /// Create a block in the 'RESET' state.
+    async fn get_block<S: Storage, Metadata: BlockMetadata>(
+        pool: &Arc<BlockPool<S, Local, Metadata>>,
+    ) -> Result<MutableBlock<S, Local, Metadata>> {
+        pool.allocate_blocks(1)
     /// Create a block in the 'COMPLETED' state.
     async fn completed_block<S: Storage, Metadata: BlockMetadata>(
         pool: &Arc<BlockPool<S, Metadata>>,

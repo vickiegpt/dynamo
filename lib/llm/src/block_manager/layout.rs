@@ -203,7 +203,10 @@ pub trait BlockLayout: GenericBlockLayout {
 /// Generic trait for block layouts - type-erased on the [Storage] object.
 pub trait GenericBlockLayout: BlockLayoutConfig + Send + Sync {
     /// Storage type for the layout
-    fn storage_type(&self) -> StorageType;
+    fn storage_type(&self) -> &StorageType;
+
+    /// Full configuration for the layout
+    fn config(&self) -> &LayoutConfig;
 
     /// Get the memory region for a specific page [page_size, inner_dim]
     ///
@@ -259,7 +262,7 @@ pub trait BlockLayoutConfig: std::fmt::Debug {
 }
 
 /// Configuration for block layouts
-#[derive(Debug, Clone, Builder, Validate, Serialize, Deserialize)]
+#[derive(Debug, Clone, Builder, Validate, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LayoutConfig {
     /// Number of blocks
     #[validate(range(min = 1))]
@@ -515,8 +518,12 @@ impl<S: Storage> BlockLayout for FullyContiguous<S> {
 }
 
 impl<S: Storage> GenericBlockLayout for FullyContiguous<S> {
-    fn storage_type(&self) -> StorageType {
-        self.storage_type.clone()
+    fn storage_type(&self) -> &StorageType {
+        &self.storage_type
+    }
+
+    fn config(&self) -> &LayoutConfig {
+        &self.config.inner
     }
 
     fn memory_region(
