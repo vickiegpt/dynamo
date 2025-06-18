@@ -10,7 +10,12 @@ spec:
         - name: docker-imagepullsecret
       containers:
       - name: profile-sla
-        image: nvcr.io/nvidian/nim-llm-dev/dynamo-base-docker-llm:dep-178.8
+        image: nvcr.io/nvidian/nim-llm-dev/dynamo-base-docker-llm:dep-178.9
+        resources:
+          requests:
+            nvidia.com/gpu: 8
+          limits:
+            nvidia.com/gpu: 8
         env:
           - name: HF_TOKEN
             valueFrom:

@@ -548,7 +548,16 @@ if __name__ == "__main__":
     # Get the number of available GPUs
     available_gpus = get_available_gpu_count()
 
-    profile_tp_size = [2**i for i in range(int(math.log2(available_gpus)) + 1)]
+    if available_gpus == 0:
+        logger.error("No GPUs detected. This could be due to:")
+        logger.error("1. NVML library not available in the container")
+        logger.error("2. No GPUs actually available")
+        logger.error("3. GPU access not properly configured")
+        logger.error("Using default TP sizes: [1, 2, 4]")
+        profile_tp_size = [1, 2, 4]
+    else:
+        profile_tp_size = [2**i for i in range(int(math.log2(available_gpus)) + 1)]
+
     logger.info(f"Profiling TP sizes: {profile_tp_size}")
 
     os.makedirs(args.output_dir, exist_ok=True)
