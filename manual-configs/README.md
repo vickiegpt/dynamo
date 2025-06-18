@@ -1,5 +1,9 @@
 Steps I followed:
 
+Pre-requisite:
+
+Deploy an LLM example (agg first). [LLM deployment guide](../../examples/llm/README.md#kubernetes-deployment) has detailed instructions.
+
 1. Deploy Prometheus:
 
 ```bash
