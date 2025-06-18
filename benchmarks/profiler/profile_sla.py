@@ -283,6 +283,8 @@ def get_model_name(config: dict) -> str:
 
 
 def get_port(config: dict) -> int:
+    if "DYNAMO_PORT" in os.environ:
+        return int(os.environ["DYNAMO_PORT"])
     if "Common" in config and "port" in config["Common"]:
         return config["Common"]["port"]
     else:

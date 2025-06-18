@@ -10,13 +10,15 @@ spec:
         - name: docker-imagepullsecret
       containers:
       - name: profile-sla
-        image: nvcr.io/nvidian/nim-llm-dev/dynamo-base-docker-llm:dep-178.5
+        image: nvcr.io/nvidian/nim-llm-dev/dynamo-base-docker-llm:dep-178.8
         env:
           - name: HF_TOKEN
             valueFrom:
               secretKeyRef:
                 name: dynamo-env-secrets
                 key: huggingface.token
+          - name: DYNAMO_PORT
+            value: "3000"
           - name: NATS_SERVER
             value: nats://hannahz-dynamo-nats:4222
           - name: ETCD_ENDPOINTS
@@ -42,7 +44,7 @@ spec:
         image: alpine/socat
         command: ["socat"]
         args:
-          - "TCP-LISTEN:8000,fork,reuseaddr"
+          - "TCP-LISTEN:3000,fork,reuseaddr"
           - "TCP:llm-agg-frontend:3000"
       restartPolicy: Never
       volumes:
