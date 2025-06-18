@@ -35,7 +35,7 @@ testing-cuda  = ["dep:cudarc"]
 testing-nixl  = ["dep:nixl-sys"]
 block-manager = ["dep:nixl-sys", "dep:cudarc", "dep:ndarray", "dep:nix"]
 sentencepiece = ["dep:sentencepiece"]
-block-manager-bench = ["block-manager", "testing-cuda", "dep:clap", "dep:indicatif", "dep:plotters", "dep:ordered-float"]
+block-manager-bench = ["block-manager", "testing-cuda", "dep:clap", "dep:indicatif", "dep:plotters", "dep:ordered-float", "dep:json"]
 
 [dependencies]
 # repo
@@ -126,6 +126,7 @@ clap = { version = "4.5.37", features = ["derive"], optional = true }
 indicatif = { version = "0.17.11", optional = true }
 plotters = { version = "0.3.7", optional = true }
 ordered-float = { version = "5.0.0", optional = true }
+json = { version = "0.12.4", optional = true}
 
 [dev-dependencies]
 assert_matches = "1.5"

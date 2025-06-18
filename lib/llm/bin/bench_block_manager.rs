@@ -14,7 +14,7 @@
 // limitations under the License.
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use dynamo_llm::{
     block_manager::{
         block::{BlockExt, ImmutableBlock},
@@ -25,10 +25,13 @@ use dynamo_llm::{
     tokens::{TokenBlockSequence, Tokens},
 };
 use indicatif::ProgressIterator;
+use json::parse;
 use ordered_float::NotNan;
 use plotters::prelude::*;
-use rand::{rngs::ThreadRng, Rng};
+use std::collections::HashSet;
+use std::fs::File;
 use std::future::Future;
+use std::io::{BufRead, BufReader};
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -36,16 +39,19 @@ use tokio::time::{interval, Duration, Instant};
 
 #[derive(Parser)]
 struct Args {
+    /// Path to the Mooncake trace.
+    mooncake_trace_path: String,
+
     /// Amount of device blocks
-    #[clap(short = 'd', long, default_value_t = 2048)]
+    #[clap(short = 'd', long, default_value_t = 1536)]
     num_device_blocks: usize,
 
     /// Amount of host blocks
-    #[clap(short = 'n', long, default_value_t = 2048)]
+    #[clap(short = 'n', long, default_value_t = 4096)]
     num_host_blocks: usize,
 
     /// Amount of disk blocks
-    #[clap(short = 'D', long, default_value_t = 2048)]
+    #[clap(short = 'D', long, default_value_t = 0)]
     num_disk_blocks: usize,
 
     /// Amount of layers
@@ -53,124 +59,24 @@ struct Args {
     num_layers: usize,
 
     /// Inner dimension
-    #[clap(long, default_value_t = 4096)]
+    #[clap(long, default_value_t = 512)]
     inner_dim: usize,
 
-    /// Block size
-    #[clap(long, default_value_t = 32)]
+    /// Block size. This should match the mooncake trace. This should always be 512.
+    #[clap(long, default_value_t = 512)]
     block_size: usize,
 
     /// Duration of the benchmark in seconds.
-    #[clap(short = 't', long, default_value_t = 60)]
+    #[clap(short = 't', long, default_value_t = 0)]
     duration_s: usize,
 
-    /// Amount of simulated inference requests per second.
-    #[clap(short = 'r', long, default_value_t = 10)]
-    requests_per_second: usize,
-
-    /// Simulated OSL.
-    #[clap(short = 'o', long, default_value_t = 128)]
-    osl: usize,
+    /// Time scaling factor for the Mooncake trace.
+    #[clap(short = 's', long, default_value_t = 1.0)]
+    trace_scale_factor: f64,
 
     /// Simulated ITL (in milliseconds)
-    #[clap(short = 'i', long, default_value_t = 16)]
+    #[clap(short = 'i', long, default_value_t = 32)]
     itl_ms: usize,
-
-    /// Token generator to use.
-    #[command(subcommand)]
-    command: Commands,
-}
-
-/// A trait for objects which generate simulated inference requests following some pattern.
-trait TokenGenerator: Send + Sync {
-    fn next(&self, rng: &mut ThreadRng) -> Result<Vec<u32>>;
-}
-
-#[derive(Parser, Clone)]
-struct RandomTokenGeneratorArgs {
-    /// Number of tokens to generate
-    #[clap(short, long, default_value_t = 1536)]
-    num_tokens: usize,
-}
-
-/// A token generator which generates random tokens.
-/// Useful as a sanity test and for testing offloading and allocations.
-struct RandomTokenGenerator {
-    num_tokens: usize,
-}
-
-impl From<RandomTokenGeneratorArgs> for RandomTokenGenerator {
-    fn from(args: RandomTokenGeneratorArgs) -> Self {
-        RandomTokenGenerator {
-            num_tokens: args.num_tokens,
-        }
-    }
-}
-
-impl TokenGenerator for RandomTokenGenerator {
-    fn next(&self, rng: &mut ThreadRng) -> Result<Vec<u32>> {
-        // Just generate a random vector of specific length.
-        Ok((0..self.num_tokens)
-            .map(|_| rng.random_range(0..1024))
-            .collect())
-    }
-}
-
-#[derive(Parser, Clone)]
-struct HierarchicalTokenGeneratorArgs {
-    /// Amount of groups
-    #[clap(short, long, default_value_t = 3)]
-    num_groups: usize,
-
-    /// Group size
-    #[clap(short, long, default_value_t = 512)]
-    group_size: usize,
-
-    /// Amount of different sequences per group
-    #[clap(short, long, default_value_t = 24)]
-    variations_per_group: usize,
-}
-
-/// A token generator which generates simulated requests conducive to a lot of reuse.
-/// We split the tokens into 'num_groups' groups of 'group_size' tokens each.
-/// Each group can take on 'variations_per_group' different token sequences.
-/// The variations of the first group will likely stay on device (and be reused),
-/// while the later groups may move back and forth between device and host, or even be evicted.
-struct HierarchicalTokenGenerator {
-    num_groups: usize,
-    group_size: usize,
-    variations_per_group: usize,
-}
-
-impl From<HierarchicalTokenGeneratorArgs> for HierarchicalTokenGenerator {
-    fn from(args: HierarchicalTokenGeneratorArgs) -> Self {
-        HierarchicalTokenGenerator {
-            num_groups: args.num_groups,
-            group_size: args.group_size,
-            variations_per_group: args.variations_per_group,
-        }
-    }
-}
-
-impl TokenGenerator for HierarchicalTokenGenerator {
-    fn next(&self, rng: &mut ThreadRng) -> Result<Vec<u32>> {
-        let mut tokens = Vec::new();
-        // Generate each group.
-        for _ in 0..self.num_groups {
-            let variant = rng.random_range(0..self.variations_per_group as u32);
-            // Generate each token in the group. For now, just use a fixed token id for all tokens.
-            for _ in 0..self.group_size {
-                tokens.push(variant);
-            }
-        }
-        Ok(tokens)
-    }
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    Random(RandomTokenGeneratorArgs),
-    Hierarchical(HierarchicalTokenGeneratorArgs),
 }
 
 fn build_manager(args: &Args) -> Result<KvBlockManager<BasicMetadata>> {
@@ -222,14 +128,8 @@ pub async fn main() -> Result<()> {
 
     let manager = build_manager(&args)?;
 
-    let token_generator: Arc<dyn TokenGenerator> = match &args.command {
-        Commands::Random(token_gen) => Arc::new(RandomTokenGenerator::from(token_gen.clone())),
-        Commands::Hierarchical(token_gen) => {
-            Arc::new(HierarchicalTokenGenerator::from(token_gen.clone()))
-        }
-    };
     println!("Starting benchmark...");
-    benchmark(manager, token_generator, args).await?;
+    benchmark(manager, args).await?;
 
     Ok(())
 }
@@ -391,49 +291,86 @@ async fn match_and_onboard<S: Storage, M: BlockMetadata>(
     }
 }
 
-async fn benchmark(
-    manager: KvBlockManager<BasicMetadata>,
-    token_generator: Arc<dyn TokenGenerator>,
-    args: Args,
-) -> Result<()> {
+struct Request {
+    timestamp: u64,
+    seq: TokenBlockSequence,
+    osl: u64,
+}
+
+fn load_trace(args: &Args) -> Result<Vec<Request>> {
+    let file = File::open(&args.mooncake_trace_path)?;
+    let reader = BufReader::new(file);
+
+    let mut requests = Vec::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        let data = parse(&line)?;
+
+        let timestamp = data["timestamp"].as_f64().unwrap() / args.trace_scale_factor;
+
+        if args.duration_s > 0 && timestamp > args.duration_s as f64 * 1000.0 {
+            break;
+        }
+
+        let osl = data["output_length"].as_u64().unwrap();
+
+        let hash_ids = data["hash_ids"]
+            .members()
+            .map(|h| h.as_u32().unwrap())
+            .collect::<Vec<_>>();
+
+        let tokens = hash_ids
+            .iter()
+            .flat_map(|h| vec![*h; args.block_size])
+            .collect::<Vec<_>>();
+
+        let seq = TokenBlockSequence::new(Tokens::from(tokens), args.block_size, None);
+        assert_eq!(seq.blocks().len(), hash_ids.len());
+
+        requests.push(Request {
+            timestamp: timestamp as u64,
+            seq,
+            osl,
+        });
+    }
+
+    let mut cache_hit = 0;
+    let mut seen_hashes = HashSet::new();
+
+    for request in &requests {
+        for block in request.seq.blocks() {
+            if seen_hashes.contains(&block.sequence_hash()) {
+                cache_hit += 1;
+            }
+            seen_hashes.insert(block.sequence_hash());
+        }
+    }
+
+    println!("Max theoretical cache hits: {}", cache_hit);
+
+    Ok(requests)
+}
+
+async fn benchmark(manager: KvBlockManager<BasicMetadata>, args: Args) -> Result<()> {
     let (req_tx, mut req_rx) = mpsc::unbounded_channel();
     let manager = Arc::new(manager);
 
-    let mut rng = rand::rng();
+    println!("Loading trace...");
 
-    println!("Generating inputs...");
-
-    // Generating our inputs can be quite slow, so we do this ahead of time.
-    let block_size = args.block_size;
-    let inputs: Vec<TokenBlockSequence> = (0..args.requests_per_second * args.duration_s)
-        .progress()
-        .map(|_| {
-            let input_tokens = token_generator.next(&mut rng).unwrap();
-            let tokens = Tokens::from(input_tokens);
-
-            // Break up the sequence into blocks and get the sequence hashes.
-
-            tokens.into_sequence(block_size, Some(0))
-        })
-        .collect();
+    // Loading the trace can be quite slow, so we do this ahead of time.
+    let inputs = load_trace(&args)?;
 
     println!("Beginning benchmark...");
     // Enqueue worker.
     let enqueue_worker = tokio::spawn(async move {
-        // Send a request every 1 / requests_per_second seconds.
-        let mut interval = interval(Duration::from_micros(
-            1000000 / args.requests_per_second as u64,
-        ));
+        let start = Instant::now();
+        for request in inputs.into_iter().progress() {
+            let deadline = start + Duration::from_millis(request.timestamp);
+            tokio::time::sleep_until(deadline).await;
 
-        for sequence_hashes in inputs.into_iter().progress() {
-            req_tx.send(sequence_hashes).unwrap();
-
-            tokio::select! {
-                _ = interval.tick() => {}
-                // Wait for signal to stop.
-                _ = tokio::signal::ctrl_c() => {
-                    break;
-                },
+            if req_tx.send(request).is_err() {
+                break;
             }
         }
     });
@@ -446,7 +383,7 @@ async fn benchmark(
     let block_manager_worker = tokio::spawn(async move {
         let mut handles = Vec::new();
 
-        while let Some(mut sequence) = req_rx.recv().await {
+        while let Some(mut request) = req_rx.recv().await {
             let manager = manager.clone();
             let stats = stats_clone.clone();
 
@@ -460,10 +397,11 @@ async fn benchmark(
 
                 let mut sequence_blocks = Vec::new();
 
-                let sequence_hashes = sequence
+                let sequence_hashes = request
+                    .seq
                     .blocks()
                     .iter()
-                    .map(|block| block.sequence_hash())
+                    .map(|b| b.sequence_hash())
                     .collect::<Vec<_>>();
 
                 // First, check for matching blocks on the device, and log the lookup latency.
@@ -520,7 +458,7 @@ async fn benchmark(
                         .await
                         .push(EventStats::new(allocate_latency, allocated_blocks.len()));
 
-                    for (block, allocated_block) in sequence.blocks()[sequence_blocks.len()..]
+                    for (block, allocated_block) in request.seq.blocks()[sequence_blocks.len()..]
                         .iter()
                         .zip(allocated_blocks.iter_mut())
                     {
@@ -545,10 +483,10 @@ async fn benchmark(
 
                 // Simulate the decode phase.
                 let mut itl_interval = interval(Duration::from_millis(args.itl_ms as u64));
-                for _ in 0..args.osl {
+                for _ in 0..request.osl {
                     itl_interval.tick().await;
-                    if let Ok(Some(_)) = sequence.append(0) {
-                        let block = sequence.blocks().last().unwrap();
+                    if let Ok(Some(_)) = request.seq.append(0) {
+                        let block = request.seq.blocks().last().unwrap();
 
                         let (device_block, allocate_latency) =
                             time(device.allocate_blocks(1)).await;
