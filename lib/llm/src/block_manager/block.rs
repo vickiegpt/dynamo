@@ -312,6 +312,30 @@ impl<S: Storage, M: BlockMetadata> PrivateBlockExt for Block<S, M> {
     }
 }
 
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> ReadableBlock for Block<S, M> {
+    type StorageType = S;
+}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> WritableBlock for Block<S, M> {
+    type StorageType = S;
+}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> Readable for Block<S, M> {}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> Writable for Block<S, M> {}
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> Local for Block<S, M> {}
+
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProvider for Block<S, M> {
+    type StorageType = S;
+
+    fn block_data(&self, _: private::PrivateToken) -> &BlockData<S> {
+        &self.data
+    }
+}
+
+impl<S: Storage + NixlDescriptor, M: BlockMetadata> BlockDataProviderMut for Block<S, M> {
+    fn block_data_mut(&mut self, _: private::PrivateToken) -> &mut BlockData<S> {
+        &mut self.data
+    }
+}
+
 pub trait BlockExt {
     /// Reset the state of the block
     fn reset(&mut self);
@@ -532,7 +556,7 @@ where
         let mr = self
             .layout
             .memory_region(self.block_idx, layer_idx, outer_idx)?;
-        unsafe { view::LayerView::new(self, mr.addr(), mr.size()) }
+        unsafe { view::LayerView::new(self, mr.addr(), mr.size(), mr.storage_idx()) }
     }
 
     fn layer_view_mut(
@@ -543,7 +567,7 @@ where
         let mr = self
             .layout
             .memory_region(self.block_idx, layer_idx, outer_idx)?;
-        unsafe { view::LayerViewMut::new(self, mr.addr(), mr.size()) }
+        unsafe { view::LayerViewMut::new(self, mr.addr(), mr.size(), mr.storage_idx()) }
     }
 
     fn block_view(&self) -> BlockResult<view::BlockView<S>> {
@@ -551,7 +575,7 @@ where
             let mr = self.layout.memory_region(self.block_idx, 0, 0)?;
             let offset = mr.addr();
             let size = mr.size() * self.num_layers();
-            unsafe { view::BlockView::new(self, offset, size) }
+            unsafe { view::BlockView::new(self, offset, size, mr.storage_idx()) }
         } else {
             Err(BlockError::InvalidState(
                 "Block is not fully contiguous".to_string(),
@@ -564,7 +588,7 @@ where
             let mr = self.layout.memory_region(self.block_idx, 0, 0)?;
             let offset = mr.addr();
             let size = mr.size() * self.num_layers();
-            unsafe { view::BlockViewMut::new(self, offset, size) }
+            unsafe { view::BlockViewMut::new(self, offset, size, mr.storage_idx()) }
         } else {
             Err(BlockError::InvalidState(
                 "Block is not fully contiguous".to_string(),
@@ -1658,7 +1682,7 @@ mod tests {
         FullyContiguous, LayoutConfig,
     };
     use crate::block_manager::storage::SystemAllocator;
-    use crate::tokens::TokenBlockSequence;
+    use crate::tokens::{TokenBlockSequence, Tokens};
 
     use dynamo_runtime::logging::init as init_logging;
     use nixl_sys::Agent as NixlAgent;
@@ -1994,7 +2018,14 @@ mod tests {
         // Create a block and wrap it in a MutableBlock
         let block_data = BlockData::new(layout.clone(), 0, 42, 0);
         let block = Block::new(block_data, BasicMetadata::default()).unwrap();
-        let mutable_block = MutableBlock::new(block, return_tx.clone());
+        let mut mutable_block = MutableBlock::new(block, return_tx.clone());
+
+        let tbs = TokenBlockSequence::new(Tokens::from(vec![0, 0, 0, 0]), 4, None);
+        let token_block = tbs.blocks().iter().next().unwrap();
+
+        mutable_block
+            .apply_token_block(token_block.clone())
+            .unwrap();
 
         // Wrap the mutable block in an Arc and create an ImmutableBlock from it
         let arc_mutable_block = Arc::new(mutable_block);
