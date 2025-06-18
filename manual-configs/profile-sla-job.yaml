@@ -17,10 +17,14 @@ spec:
               secretKeyRef:
                 name: dynamo-env-secrets
                 key: huggingface.token
+          - name: NATS_SERVER
+            value: nats://hannahz-dynamo-nats:4222
+          - name: ETCD_ENDPOINTS
+            value: hannahz-dynamo-etcd:2379
         command: ["python", "/workspace/benchmarks/profiler/profile_sla.py"]
         args:
           - --config
-          - /workspace/examples/llm/configs/disagg.yaml
+          - /workspace/examples/llm/configs/agg.yaml
           - --output-dir
           - /workspace/profiling_results
           - --isl
@@ -39,7 +43,7 @@ spec:
         command: ["socat"]
         args:
           - "TCP-LISTEN:8000,fork,reuseaddr"
-          - "TCP:llm-disagg-frontend:3000"
+          - "TCP:llm-agg-frontend:3000"
       restartPolicy: Never
       volumes:
         - name: output-volume

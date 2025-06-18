@@ -59,12 +59,32 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 
-def get_dynamo_serve_cmd(config_file_path):
+def get_dynamo_env():
+    """Get environment variables with Dynamo runtime configuration"""
+    env = os.environ.copy()
+
+    # Ensure ETCD and NATS are configured for Dynamo runtime
+    if "ETCD_ENDPOINTS" not in env:
+        logger.warning("ETCD_ENDPOINTS not set, using default localhost:2379")
+        env["ETCD_ENDPOINTS"] = "localhost:2379"
+
+    if "NATS_SERVER" not in env:
+        logger.warning("NATS_SERVER not set, using default nats://localhost:4222")
+        env["NATS_SERVER"] = "nats://localhost:4222"
+
+    logger.info(f"Using ETCD_ENDPOINTS: {env['ETCD_ENDPOINTS']}")
+    logger.info(f"Using NATS_SERVER: {env['NATS_SERVER']}")
+
+    return env
+
+
+def get_dynamo_serve_cmd(config_file_path, disaggregated=False):
     config_file_path = os.path.abspath(config_file_path)
+    graph_target = "graphs.disagg:Frontend" if disaggregated else "graphs.agg:Frontend"
     return [
         "dynamo",
         "serve",
-        "graphs.agg:Frontend",
+        graph_target,
         "-f",
         config_file_path,
     ]
@@ -347,6 +367,7 @@ def get_kv_cache_size_from_dynamo_log(dynamo_log_fn: str) -> int:
                     return int(token_count * concurrency)
     except Exception as e:
         logger.warning(f"Failed to parse KV cache size from line: {line}. Error: {e}")
+    logger.warning("Failed to parse KV cache size from dynamo log, returning 0")
     return 0
 
 
@@ -496,7 +517,13 @@ if __name__ == "__main__":
         "--url",
         type=str,
         default=None,
-        help="Override the endpoint URL for the LLM frontend (e.g. http://llm-disagg-frontend:3000/v1/chat/completions)",
+        help="Override the endpoint URL for the LLM frontend (e.g. http://llm-agg-frontend:3000/v1/chat/completions)",
+    )
+    parser.add_argument(
+        "--disaggregated",
+        action="store_true",
+        default=False,
+        help="Use disaggregated mode (graphs.disagg:Frontend) instead of aggregated mode (graphs.agg:Frontend). Default is aggregated mode.",
     )
     args = parser.parse_args()
 
@@ -511,6 +538,7 @@ if __name__ == "__main__":
                 "Failed to infer example directory, please provide explicitly using --example-dir <path-to-example-dir>"
             )
             exit(1)
+    logger.info(f"Example directory: {args.example_dir}")
 
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
@@ -547,7 +575,7 @@ if __name__ == "__main__":
 
         # Start the dynamo serve process
         logger.info(f"Starting dynamo serve with TP size {tp_size}...")
-        dynamo_serve_cmd = get_dynamo_serve_cmd(prefill_config_fn)
+        dynamo_serve_cmd = get_dynamo_serve_cmd(prefill_config_fn, args.disaggregated)
         with open(dynamo_log_fn, "w") as dynamo_log_f:
             dynamo_process = subprocess.Popen(
                 dynamo_serve_cmd,
@@ -555,6 +583,7 @@ if __name__ == "__main__":
                 stderr=subprocess.STDOUT,
                 text=True,
                 cwd=args.example_dir,
+                env=get_dynamo_env(),
                 preexec_fn=os.setsid,  # Use process group for clean termination
             )
 
@@ -627,7 +656,8 @@ if __name__ == "__main__":
 
         # Start the dynamo serve process
         logger.info(f"Starting dynamo serve with TP size {tp_size}...")
-        dynamo_serve_cmd = get_dynamo_serve_cmd(decode_config_fn)
+        dynamo_serve_cmd = get_dynamo_serve_cmd(decode_config_fn, args.disaggregated)
+        logger.info(f"Dynamo serve command: {dynamo_serve_cmd}")
         with open(dynamo_log_fn, "w") as dynamo_log_f:
             dynamo_process = subprocess.Popen(
                 dynamo_serve_cmd,
@@ -635,12 +665,17 @@ if __name__ == "__main__":
                 stderr=subprocess.STDOUT,
                 text=True,
                 cwd=args.example_dir,
+                env=get_dynamo_env(),
                 preexec_fn=os.setsid,  # Use process group for clean termination
             )
 
         if not wait_for_server_ready(model_name, port, url=args.url):
             logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
             break
+
+        # Print out contents of dynamo_log_fn
+        with open(dynamo_log_fn, "r") as f:
+            logger.info(f"Dynamo log contents: {f.read()}")
 
         max_kv_tokens = get_kv_cache_size_from_dynamo_log(dynamo_log_fn)
         max_concurrency = max_kv_tokens // (args.isl + args.osl)
@@ -650,6 +685,9 @@ if __name__ == "__main__":
         logger.info(
             f"Sweeping num_request range based on maximum number of kv tokens: {sweep_num_request}"
         )
+        if len(sweep_num_request) == 0:
+            logger.error("No num_request to sweep")  # TODO: add a potential fix
+            break
 
         engine_decode_itl = []
         engine_decode_thpt_per_gpu = []
@@ -772,7 +810,7 @@ if __name__ == "__main__":
 
     # Start the dynamo serve process
     logger.info(f"Starting dynamo serve with TP size {tp_size}...")
-    dynamo_serve_cmd = get_dynamo_serve_cmd(prefill_config_fn)
+    dynamo_serve_cmd = get_dynamo_serve_cmd(prefill_config_fn, args.disaggregated)
     with open(dynamo_log_fn, "w") as dynamo_log_f:
         dynamo_process = subprocess.Popen(
             dynamo_serve_cmd,
@@ -780,6 +818,7 @@ if __name__ == "__main__":
             stderr=subprocess.STDOUT,
             text=True,
             cwd=args.example_dir,
+            env=get_dynamo_env(),
             preexec_fn=os.setsid,  # Use process group for clean termination
         )
 
@@ -904,7 +943,7 @@ if __name__ == "__main__":
 
     # Start the dynamo serve process
     logger.info(f"Starting dynamo serve with TP size {tp_size}...")
-    dynamo_serve_cmd = get_dynamo_serve_cmd(decode_config_fn)
+    dynamo_serve_cmd = get_dynamo_serve_cmd(decode_config_fn, args.disaggregated)
     with open(dynamo_log_fn, "w") as dynamo_log_f:
         dynamo_process = subprocess.Popen(
             dynamo_serve_cmd,
@@ -912,6 +951,7 @@ if __name__ == "__main__":
             stderr=subprocess.STDOUT,
             text=True,
             cwd=args.example_dir,
+            env=get_dynamo_env(),
             preexec_fn=os.setsid,  # Use process group for clean termination
         )
 
