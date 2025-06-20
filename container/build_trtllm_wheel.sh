@@ -44,10 +44,11 @@ if [ ! -d "TensorRT-LLM" ]; then
 fi
 
 cd TensorRT-LLM
+git fetch
 
 # Checkout the specified commit.
 git checkout rihuo/fix_prompt_tokens
-git pull
+git fetch
 git checkout $TRTLLM_COMMIT
 
 # Update the submodules.
