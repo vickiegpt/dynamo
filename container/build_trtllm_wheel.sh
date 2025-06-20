@@ -48,8 +48,6 @@ git fetch
 
 # Checkout the specified commit.
 git checkout rihuo/fix_prompt_tokens
-git fetch
-git checkout $TRTLLM_COMMIT
 
 # Update the submodules.
 git submodule update --init --recursive
