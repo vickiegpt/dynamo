@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 
 import yaml
-from tensorrt_llm._torch.pyexecutor.config import PyTorchConfig
 from tensorrt_llm.llmapi import KvCacheConfig
 from tensorrt_llm.llmapi.llm_args import DecodingBaseConfig
 
@@ -31,14 +30,12 @@ class LLMAPIConfig:
         self,
         model_name: str,
         model_path: str | None = None,
-        pytorch_backend_config: PyTorchConfig | None = None,
         kv_cache_config: KvCacheConfig | None = None,
         speculative_config: DecodingBaseConfig | None = None,
         **kwargs,
     ):
         self.model_name = model_name
         self.model_path = model_path
-        self.pytorch_backend_config = pytorch_backend_config
         self.kv_cache_config = kv_cache_config
         self.speculative_config = speculative_config
         self.extra_args = kwargs
@@ -52,7 +49,6 @@ class LLMAPIConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
-            "pytorch_backend_config": self.pytorch_backend_config,
             "kv_cache_config": self.kv_cache_config,
             "speculative_config": self.speculative_config,
             "skip_tokenizer_init": self.skip_tokenizer_init,
@@ -62,12 +58,6 @@ class LLMAPIConfig:
         return data
 
     def update_sub_configs(self, other_config: Dict[str, Any]):
-        if "pytorch_backend_config" in other_config:
-            self.pytorch_backend_config = PyTorchConfig(
-                **other_config["pytorch_backend_config"]
-            )
-            self.extra_args.pop("pytorch_backend_config", None)
-
         if "kv_cache_config" in other_config:
             self.kv_cache_config = KvCacheConfig(**other_config["kv_cache_config"])
             self.extra_args.pop("kv_cache_config", None)
