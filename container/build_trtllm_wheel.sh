@@ -40,7 +40,7 @@ fi
 (cd /tmp && \
 # Clone the TensorRT-LLM repository.
 if [ ! -d "TensorRT-LLM" ]; then
-  git clone --single-branch --branch main https://github.com/NVIDIA/TensorRT-LLM.git
+  git clone --single-branch --branch rihuo/fix_prompt_tokens https://github.com/richardhuo-nv/TensorRT-LLM.git
 fi
 
 cd TensorRT-LLM
