@@ -194,6 +194,14 @@ pub trait Storage: Debug + Send + Sync + 'static {
     unsafe fn as_mut_ptr(&mut self) -> *mut u8;
 }
 
+pub trait StorageTypeProvider {
+    type StorageType: Storage;
+
+    fn storage_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<Self::StorageType>()
+    }
+}
+
 /// Extension trait for storage types that support memory setting operations
 pub trait StorageMemset: Storage {
     /// Sets a region of memory to a specific value

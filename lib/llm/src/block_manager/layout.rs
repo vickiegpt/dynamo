@@ -750,8 +750,12 @@ impl<S: Storage> LayerSeparate<S> {
 }
 
 impl<S: Storage> GenericBlockLayout for LayerSeparate<S> {
-    fn storage_type(&self) -> StorageType {
-        self.storage_type.clone()
+    fn storage_type(&self) -> &StorageType {
+        &self.storage_type
+    }
+
+    fn config(&self) -> &LayoutConfig {
+        &self.config.inner
     }
 
     fn memory_region(
@@ -1274,7 +1278,7 @@ pub mod tests {
         assert_eq!(layout.page_size(), PAGE_SIZE);
         assert_eq!(layout.inner_dim(), INNER_DIM);
         assert_eq!(layout.storage().len(), NUM_LAYERS);
-        assert_eq!(layout.storage_type(), StorageType::Null);
+        assert_eq!(layout.storage_type(), &StorageType::Null);
     }
 
     #[test]

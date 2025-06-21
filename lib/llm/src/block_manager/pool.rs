@@ -76,7 +76,7 @@ use super::events::{EventManager, NullEventManager};
 use super::metrics::{BlockManagerMetrics, PoolMetrics};
 use super::storage::Storage;
 
-use crate::block_manager::block::{locality::LocalityProvider, BlockDataStorage};
+use crate::block_manager::block::locality::LocalityProvider;
 use crate::tokens::{SequenceHash, TokenBlock};
 
 use prometheus::Registry;
@@ -531,11 +531,10 @@ struct ProgressEngine<S: Storage, L: LocalityProvider, M: BlockMetadata> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::block::{BasicMetadata, Blocks, LocalBlockData};
+    use super::super::block::{BasicMetadata, Blocks};
     use super::super::layout::{tests::setup_layout, FullyContiguous, LayoutConfig};
     use super::*;
 
-    use crate::block_manager::block::BlockDataStorage;
     use crate::block_manager::DType;
     use crate::tokens::{TokenBlockSequence, Tokens};
 

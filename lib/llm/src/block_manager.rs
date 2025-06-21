@@ -27,7 +27,7 @@ pub mod distributed;
 pub mod events;
 pub mod layout;
 pub mod metrics;
-// pub mod offload;
+pub mod offload;
 pub mod pool;
 pub mod storage;
 
@@ -222,7 +222,7 @@ mod tests {
             Some(Arc::new(tokio::runtime::Runtime::new().unwrap()))
         };
 
-        let config = KvBlockManagerConfig::builder()
+        KvBlockManagerConfig::builder()
             .runtime(
                 KvManagerRuntimeConfig::builder()
                     .worker_id(worker_id)
@@ -262,9 +262,7 @@ mod tests {
                     .unwrap(),
             )
             .build()
-            .unwrap();
-
-        config
+            .unwrap()
     }
 
     pub fn create_reference_block_manager() -> ReferenceBlockManager {
@@ -311,7 +309,7 @@ mod tests {
 
         // Worker 0
         // Allocate 4 mutable blocks on the host
-        let blocks_0 = kvbm_0.host().unwrap().allocate_blocks(4).await.unwrap();
+        let _blocks_0 = kvbm_0.host().unwrap().allocate_blocks(4).await.unwrap();
 
         // // Create a BlockDescriptorList for the mutable blocks
         // // let blockset_0 = BlockDescriptorList::from_mutable_blocks(&blocks_0).unwrap();

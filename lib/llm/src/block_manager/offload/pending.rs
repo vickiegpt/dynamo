@@ -38,6 +38,7 @@
 //! 3. A worker thread (consuming this bounded channel and enforcing rate limiting) awaits the incoming transfers.
 //! 4. After a transfer is complete, the worker thread registers the blocks with the target pool, and returns the registered blocks to the caller.
 
+use nixl_sys::NixlDescriptor;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -46,10 +47,10 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::block_manager::block::{
-    locality::{self, BlockDataLocality, LocalityProvider},
-    transfer::{WriteTo, WriteToStrategy},
-    BlockError, BlockExt, BlockMetadata, BlockState, ImmutableBlock, MutableBlock, ReadableBlock,
-    TransferContext, WritableBlock,
+    locality::LocalityProvider,
+    transfer::{TransferContext, WriteTo, WriteToStrategy},
+    BlockError, BlockMetadata, BlockState, ImmutableBlock, MutableBlock, ReadableBlock,
+    WritableBlock,
 };
 use crate::block_manager::pool::BlockPoolError;
 use crate::block_manager::storage::{Local, Storage};
@@ -71,7 +72,7 @@ pub struct PendingTransfer<
     Metadata: BlockMetadata,
 > {
     /// The block being copied from.
-    sources: Vec<ImmutableBlock<Source, Metadata>>,
+    sources: Vec<ImmutableBlock<Source, Locality, Metadata>>,
     /// The block being copied to.
     targets: Vec<MutableBlock<Target, Locality, Metadata>>,
     /// The oneshot sender that optionally returns the registered blocks once the transfer is complete.
@@ -84,10 +85,10 @@ impl<Source: Storage, Target: Storage, Locality: LocalityProvider, Metadata: Blo
     PendingTransfer<Source, Target, Locality, Metadata>
 {
     pub fn new(
-        sources: Vec<ImmutableBlock<Source, Metadata>>,
-        targets: Vec<MutableBlock<Target, Metadata>>,
-        completion_indicator: Option<oneshot::Sender<BlockResult<Target, Metadata>>>,
-        target_pool: Arc<BlockPool<Target, Metadata>>,
+        sources: Vec<ImmutableBlock<Source, Locality, Metadata>>,
+        targets: Vec<MutableBlock<Target, Locality, Metadata>>,
+        completion_indicator: Option<oneshot::Sender<BlockResult<Target, Locality, Metadata>>>,
+        target_pool: Arc<BlockPool<Target, Locality, Metadata>>,
     ) -> Self {
         assert_eq!(sources.len(), targets.len());
         Self {
@@ -123,9 +124,14 @@ impl<Source: Storage, Target: Storage, Locality: LocalityProvider, Metadata: Blo
     }
 }
 
-fn transfer_metadata<Source: Storage, Target: Storage, Metadata: BlockMetadata>(
-    source: &ImmutableBlock<Source, Metadata>,
-    target: &mut MutableBlock<Target, Metadata>,
+fn transfer_metadata<
+    Source: Storage,
+    Target: Storage,
+    Locality: LocalityProvider,
+    Metadata: BlockMetadata,
+>(
+    source: &ImmutableBlock<Source, Locality, Metadata>,
+    target: &mut MutableBlock<Target, Locality, Metadata>,
 ) -> Result<()> {
     // Only registered blocks can be transferred. There are upstream checks for this, so this shouldn't ever fail.
     if let BlockState::Registered(reg_handle, _) = source.state() {
@@ -228,18 +234,19 @@ impl<
 }
 
 #[async_trait]
-impl<Source, Target, Metadata> TransferManager<Source, Target, Metadata>
-    for CudaTransferManager<Source, Target, Metadata>
+impl<Source, Target, Locality, Metadata> TransferManager<Source, Target, Locality, Metadata>
+    for CudaTransferManager<Source, Target, Locality, Metadata>
 where
-    Source: Storage,
-    Target: Storage,
+    Source: Storage + NixlDescriptor,
+    Target: Storage + NixlDescriptor,
+    Locality: LocalityProvider,
     Metadata: BlockMetadata,
     // Check that the source block is readable, local, and writable to the target block.
-    ImmutableBlock<Source, Metadata>: ReadableBlock<StorageType = Source>
+    ImmutableBlock<Source, Locality, Metadata>: ReadableBlock<StorageType = Source>
         + Local
-        + WriteToStrategy<MutableBlock<Target, Metadata>>,
+        + WriteToStrategy<MutableBlock<Target, Locality, Metadata>>,
     // Check that the target block is writable.
-    MutableBlock<Target, Metadata>: WritableBlock<StorageType = Target>,
+    MutableBlock<Target, Locality, Metadata>: WritableBlock<StorageType = Target>,
 {
     async fn enqueue_transfer(
         &self,
@@ -326,16 +333,16 @@ impl DiskTransferManager {
 impl<Source, Target, Locality, Metadata> TransferManager<Source, Target, Locality, Metadata>
     for DiskTransferManager
 where
-    Source: Storage,
-    Target: Storage,
-    Locality: LocalityProvider + 'static,
+    Source: Storage + NixlDescriptor,
+    Target: Storage + NixlDescriptor,
+    Locality: LocalityProvider,
     Metadata: BlockMetadata,
     // Check that the source block is readable, local, and writable to the target block.
-    ImmutableBlock<Source, Metadata>: ReadableBlock<StorageType = Source>
+    ImmutableBlock<Source, Locality, Metadata>: ReadableBlock<StorageType = Source>
         + Local
-        + WriteToStrategy<MutableBlock<Target, Metadata>>,
+        + WriteToStrategy<MutableBlock<Target, Locality, Metadata>>,
     // Check that the target block is writable.
-    MutableBlock<Target, Locality, Metadata>: WritableBlock,
+    MutableBlock<Target, Locality, Metadata>: WritableBlock<StorageType = Target>,
 {
     async fn enqueue_transfer(
         &self,

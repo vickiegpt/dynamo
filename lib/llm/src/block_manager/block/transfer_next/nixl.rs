@@ -27,9 +27,7 @@ fn append_xfer_request<Source, Destination>(
 ) -> Result<()>
 where
     Source: BlockDataProvider,
-    Source::StorageType: NixlDescriptor,
     Destination: BlockDataProviderMut,
-    Destination::StorageType: NixlDescriptor,
 {
     let src_data = src.block_data(private::PrivateToken);
     let dst_data = dst.block_data_mut(private::PrivateToken);
@@ -93,9 +91,7 @@ pub fn write_blocks_to<Source, Destination>(
 ) -> Result<Box<dyn Future<Output = ()> + Send + Sync + Unpin>>
 where
     Source: BlockDataProvider,
-    Source::StorageType: NixlDescriptor,
     Destination: BlockDataProviderMut,
-    Destination::StorageType: NixlDescriptor,
 {
     if src.is_empty() || dst.is_empty() {
         return Ok(Box::new(std::future::ready(())));

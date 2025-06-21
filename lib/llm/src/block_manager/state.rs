@@ -15,20 +15,18 @@
 
 mod local;
 
-use crate::block_manager::layout::BlockLayout;
-
 use super::*;
 
 // use super::offload::OffloadManager;
 use super::{
     block::{
-        factory::LocalBlockDataFactory,
-        locality::{BlockDataLocality, LocalityProvider},
-        Block, BlockDataStorage, GlobalRegistry, ImmutableBlock, LocalBlockData,
+        factory::LocalBlockDataFactory, locality::LocalityProvider, Block, GlobalRegistry,
+        ImmutableBlock,
     },
     config::NixlOptions,
     events::{EventManager, NullEventManager},
-    metrics::{BlockManagerMetrics, PoolMetrics},
+    metrics::BlockManagerMetrics,
+    offload::OffloadManager,
 };
 use derive_getters::Dissolve;
 use std::sync::Arc;
@@ -41,7 +39,7 @@ pub struct Resources {
 
     // nixl agent/backends for the block manager
     nixl_agent: Arc<Option<NixlAgent>>,
-    nixl_backends: HashMap<String, Arc<nixl_sys::Backend>>,
+    _nixl_backends: HashMap<String, Arc<nixl_sys::Backend>>,
 
     // registry for blocks across all storage types
     global_registry: GlobalRegistry,
@@ -66,7 +64,7 @@ pub struct KvBlockManagerState<Locality: LocalityProvider, Metadata: BlockMetada
 
     local_block_set: NixlBlockSet,
     remote_block_sets: RwLock<HashMap<WorkerID, HashMap<usize, RemoteBlocks>>>,
-    // offload_manager: Arc<OffloadManager<Locality, Metadata>>,
+    offload_manager: Arc<OffloadManager<Locality, Metadata>>,
 }
 
 impl Resources {
@@ -138,7 +136,7 @@ impl Resources {
             cancellation_token,
             async_rt_handle,
             nixl_agent,
-            nixl_backends,
+            _nixl_backends: nixl_backends,
             global_registry,
             event_manager,
             metrics,
@@ -146,15 +144,19 @@ impl Resources {
         })
     }
 
-    /// Get a reference to the NIXL agent
-    pub fn nixl_agent(&self) -> Option<&NixlAgent> {
-        self.nixl_agent.as_ref().as_ref()
-    }
+    // /// Get a reference to the NIXL agent
+    // pub fn nixl_agent(&self) -> Option<&NixlAgent> {
+    //     self.nixl_agent.as_ref().as_ref()
+    // }
 
-    /// Get a reference to the block manager configuration
-    pub fn config(&self) -> &KvBlockManagerConfig {
-        &self.config
-    }
+    // /// Get a reference to the block manager configuration
+    // pub fn config(&self) -> &KvBlockManagerConfig {
+    //     &self.config
+    // }
+
+    // pub fn active_nixl_backends(&self) -> Vec<String> {
+    //     self.nixl_backends.keys().cloned().collect()
+    // }
 
     /// Create a new [`LayoutConfigBuilder`] with the model configuration
     pub fn layout_builder(&self) -> LayoutConfigBuilder {
@@ -195,11 +197,9 @@ impl<Locality: LocalityProvider, Metadata: BlockMetadata> KvBlockManagerState<Lo
         block: &ImmutableBlock<S, Locality, Metadata>,
         priority: u64,
     ) -> Result<()> {
-        // self.offload_manager.offload(block, priority).await?;
+        self.offload_manager.offload(block, priority).await?;
 
-        // Ok(())
-
-        unimplemented!()
+        Ok(())
     }
 
     // pub async fn onboard_blocks<S: Storage + 'static>(
@@ -258,15 +258,15 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<locality::Local, Metadata> {
             local_block_set.set_nixl_metadata(nixl_agent.get_local_md()?);
         }
 
-        // let offload_manager = OffloadManager::new(
-        //     disk_pool.clone(),
-        //     host_pool.clone(),
-        //     device_pool.clone(),
-        //     nixl_agent.clone(),
-        //     async_rt_handle,
-        //     metrics.clone(),
-        //     cancellation_token.clone(),
-        // )?;
+        let offload_manager = OffloadManager::new(
+            disk_pool.clone(),
+            host_pool.clone(),
+            device_pool.clone(),
+            resources.nixl_agent.clone(),
+            resources.async_rt_handle.clone(),
+            resources.metrics.clone(),
+            resources.cancellation_token.clone(),
+        )?;
 
         let state = Arc::new(Self {
             resources: Arc::new(resources),
@@ -275,7 +275,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<locality::Local, Metadata> {
             device_pool,
             local_block_set,
             remote_block_sets: RwLock::new(HashMap::new()),
-            // offload_manager,
+            offload_manager,
         });
 
         if let Some(mut blocks) = disk_blocks {
@@ -479,36 +479,36 @@ impl<Locality: LocalityProvider, Metadata: BlockMetadata> std::fmt::Debug
     }
 }
 
-pub(crate) fn create_layout<S: Storage + NixlRegisterableStorage>(
-    mut builder: LayoutConfigBuilder,
-    config: KvManagerLayoutConfig<S>,
-    nixl_agent: Option<&NixlAgent>,
-) -> Result<Arc<dyn NixlLayout<StorageType = S>>> {
-    let layout = builder.num_blocks(config.num_blocks).build()?;
-    if let Some(_logical) = config.logical {
-        return Err(anyhow::anyhow!(
-            "Logical layouts are not supported by the local builder"
-        ));
-    }
+// pub(crate) fn create_layout<S: Storage + NixlRegisterableStorage>(
+//     mut builder: LayoutConfigBuilder,
+//     config: KvManagerLayoutConfig<S>,
+//     nixl_agent: Option<&NixlAgent>,
+// ) -> Result<Arc<dyn NixlLayout<StorageType = S>>> {
+//     let layout = builder.num_blocks(config.num_blocks).build()?;
+//     if let Some(_logical) = config.logical {
+//         return Err(anyhow::anyhow!(
+//             "Logical layouts are not supported by the local builder"
+//         ));
+//     }
 
-    if let Some(storage) = config.storage {
-        let mut layout = layout.create_layout(config.layout_type, storage, false)?;
-        if let Some(nixl_agent) = nixl_agent {
-            layout.nixl_register(nixl_agent, None)?;
-        }
-        return Ok(layout.into());
-    }
+//     if let Some(storage) = config.storage {
+//         let mut layout = layout.create_layout(config.layout_type, storage, false)?;
+//         if let Some(nixl_agent) = nixl_agent {
+//             layout.nixl_register(nixl_agent, None)?;
+//         }
+//         return Ok(layout.into());
+//     }
 
-    if let Some(allocator) = config.allocator {
-        let mut layout = layout.allocate_layout(config.layout_type, allocator)?;
-        if let Some(nixl_agent) = nixl_agent {
-            layout.nixl_register(nixl_agent, None)?;
-        }
-        return Ok(layout.into());
-    }
+//     if let Some(allocator) = config.allocator {
+//         let mut layout = layout.allocate_layout(config.layout_type, allocator)?;
+//         if let Some(nixl_agent) = nixl_agent {
+//             layout.nixl_register(nixl_agent, None)?;
+//         }
+//         return Ok(layout.into());
+//     }
 
-    anyhow::bail!("failed to create layout");
-}
+//     anyhow::bail!("failed to create layout");
+// }
 
 #[expect(clippy::type_complexity)]
 pub(crate) fn create_block_pool<S: Storage, M: BlockMetadata>(

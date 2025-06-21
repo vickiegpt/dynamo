@@ -17,8 +17,7 @@ use std::cmp::Ordering;
 use std::sync::Weak;
 
 use crate::block_manager::block::{
-    locality::{BlockDataLocality, LocalityProvider},
-    BlockMetadata, ImmutableBlock, MutableBlock,
+    locality::LocalityProvider, BlockMetadata, ImmutableBlock, MutableBlock,
 };
 use crate::block_manager::pool::BlockPoolError;
 use crate::block_manager::storage::Storage;

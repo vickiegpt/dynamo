@@ -45,8 +45,8 @@
 //! of the [`OffloadManager::offload_worker`] and [`OffloadManager::onboard_worker`] methods.
 
 use super::block::{
-    locality::{self, LocalityProvider},
-    BlockError, BlockMetadata, BlockState, ImmutableBlock, LocalBlockData, TransferContext,
+    locality::LocalityProvider, transfer::TransferContext, BlockError, BlockMetadata, BlockState,
+    ImmutableBlock,
 };
 use super::metrics::{BlockManagerMetrics, PoolMetrics};
 use super::pool::BlockPoolError;
@@ -543,8 +543,7 @@ pub mod tests {
     use crate::block_manager::{
         block::{
             locality::{Local, LocalityProvider},
-            BasicMetadata, BlockDataExt, BlockDataProvider, BlockExt, BlockIdentifier, Blocks,
-            MutableBlock,
+            BasicMetadata, BlockDataExt, BlockDataProvider, BlockExt, Blocks, MutableBlock,
         },
         layout::{nixl::NixlLayout, FullyContiguous, LayerSeparate, LayoutType},
         pool::BlockPool,
@@ -591,7 +590,7 @@ pub mod tests {
         layout_type: LayoutType,
         agent: &NixlAgent,
         allocator: &dyn StorageAllocator<S>,
-    ) -> Result<Arc<BlockPool<S, BasicMetadata>>> {
+    ) -> Result<Arc<BlockPool<S, Local, BasicMetadata>>> {
         match layout_type {
             LayoutType::FullyContiguous => {
                 let mut pool_layout = FullyContiguous::allocate(config.clone(), allocator)?;
@@ -615,7 +614,7 @@ pub mod tests {
         disk_blocks: Option<usize>,
         inner_dim: Option<usize>,
     ) -> Result<(
-        Arc<OffloadManager<BasicMetadata>>,
+        Arc<OffloadManager<Local, BasicMetadata>>,
         DevicePool,
         HostPool,
         DiskPool,
@@ -636,7 +635,7 @@ pub mod tests {
         inner_dim: Option<usize>,
         layout_type: LayoutType,
     ) -> Result<(
-        Arc<OffloadManager<BasicMetadata>>,
+        Arc<OffloadManager<Local, BasicMetadata>>,
         DevicePool,
         HostPool,
         DiskPool,
@@ -699,12 +698,15 @@ pub mod tests {
     async fn get_block<S: Storage, Metadata: BlockMetadata>(
         pool: &Arc<BlockPool<S, Local, Metadata>>,
     ) -> Result<MutableBlock<S, Local, Metadata>> {
-        pool.allocate_blocks(1)
+        let mut blocks = pool.allocate_blocks(1).await?;
+        Ok(blocks.pop().unwrap())
+    }
+
     /// Create a block in the 'COMPLETED' state.
     async fn completed_block<S: Storage, Metadata: BlockMetadata>(
-        pool: &Arc<BlockPool<S, Metadata>>,
+        pool: &Arc<BlockPool<S, Local, Metadata>>,
         tokens: [u32; BLOCK_SIZE],
-    ) -> Result<MutableBlock<S, Metadata>> {
+    ) -> Result<MutableBlock<S, Local, Metadata>> {
         let mut block = pool
             .allocate_blocks(1)
             .await?

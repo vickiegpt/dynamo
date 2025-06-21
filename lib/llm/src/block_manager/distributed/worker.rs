@@ -10,7 +10,7 @@ use utils::*;
 use zmq::*;
 
 use crate::block_manager::{
-    block::{layout_to_blocks, transfer::TransferContext, Block},
+    block::{layout_to_blocks, locality, transfer::TransferContext, Block},
     layout::LayoutType,
     storage::{
         torch::TorchTensor, DeviceAllocator, DeviceStorage, DiskAllocator, DiskStorage,
@@ -83,7 +83,7 @@ impl KvbmWorker {
         agent: &Option<NixlAgent>,
         block_set_idx: usize,
         worker_id: usize,
-    ) -> anyhow::Result<Vec<Block<S, M>>> {
+    ) -> anyhow::Result<Vec<Block<S, locality::Local, M>>> {
         // Register with NIXL, if applicable.
         if let Some(agent) = agent {
             layout.nixl_register(agent, None)?;

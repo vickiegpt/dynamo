@@ -1,7 +1,8 @@
+use crate::block_manager::LayoutConfig;
+
 use super::*;
 
 use derive_getters::Dissolve;
-use std::marker::PhantomData;
 
 /// Core trait for block factories that can create blocks with specific locality and storage
 ///
@@ -37,7 +38,7 @@ pub trait BlockFactory<S: Storage, L: LocalityProvider> {
     fn num_blocks(&self) -> usize;
 
     /// Get the layout configuration information
-    fn layout_config(&self) -> &dyn crate::block_manager::layout::BlockLayoutConfig;
+    fn layout_config(&self) -> &LayoutConfig;
 }
 
 /// Extension trait for factories that can produce all blocks at once
@@ -72,8 +73,10 @@ impl<S: Storage> LocalBlockDataFactory<S> {
             worker_id,
         }
     }
+}
 
-    pub fn create_block_data(&self, block_idx: BlockId) -> BlockResult<BlockData<S>> {
+impl<S: Storage> BlockFactory<S, locality::Local> for LocalBlockDataFactory<S> {
+    fn create_block_data(&self, block_idx: BlockId) -> BlockResult<BlockData<S>> {
         if block_idx >= self.layout.num_blocks() {
             return Err(BlockError::InvalidBlockID(block_idx));
         }
@@ -85,5 +88,13 @@ impl<S: Storage> LocalBlockDataFactory<S> {
             self.worker_id,
         );
         Ok(data)
+    }
+
+    fn num_blocks(&self) -> usize {
+        self.layout.num_blocks()
+    }
+
+    fn layout_config(&self) -> &LayoutConfig {
+        self.layout.config()
     }
 }

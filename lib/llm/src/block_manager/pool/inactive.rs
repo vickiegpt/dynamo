@@ -15,10 +15,7 @@
 
 use std::sync::atomic::AtomicU64;
 
-use crate::block_manager::block::{
-    locality::{BlockDataLocality, LocalityProvider},
-    BlockState,
-};
+use crate::block_manager::block::{locality::LocalityProvider, BlockState};
 
 use super::*;
 use std::collections::HashSet;
@@ -569,7 +566,7 @@ pub(crate) mod tests {
         block_manager::{
             block::{
                 locality::Local, registry::BlockRegistry, state::CompleteState, Blocks,
-                LocalBlockData, PrivateBlockExt,
+                PrivateBlockExt,
             },
             events::NullEventManager,
             layout::{BlockLayout, FullyContiguous, LayoutConfigBuilder},
