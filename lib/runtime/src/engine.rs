@@ -202,8 +202,13 @@ pub trait AsyncEngineUnary<Resp: Data>:
 /// This trait combines `Stream` semantics with context provider capabilities,
 /// representing a continuous async operation that produces multiple results over time.
 pub trait AsyncEngineStream<Resp: Data>:
-    Stream<Item = Resp> + AsyncEngineContextProvider + Send + Sync
+    Stream<Item = Resp> + AsyncEngineContextProvider + AsyncEngineInflightGuards + Send + Sync
 {
+    /// Provides access to the underlying stream as `&dyn Any` for downcasting.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Provides mutable access to the underlying stream as `&mut dyn Any` for downcasting.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 /// Engine is a trait that defines the interface for a streaming engine.
@@ -239,6 +244,19 @@ impl<T: Data> AsyncEngineContextProvider for Pin<Box<dyn AsyncEngineUnary<T>>> {
 impl<T: Data> AsyncEngineContextProvider for Pin<Box<dyn AsyncEngineStream<T>>> {
     fn context(&self) -> Arc<dyn AsyncEngineContext> {
         AsyncEngineContextProvider::context(&**self)
+    }
+}
+
+impl<T: Data> AsyncEngineInflightGuards for Pin<Box<dyn AsyncEngineStream<T>>> {
+    fn try_add_inflight_guard(&mut self, guard: Box<dyn Any + Send + Sync>) -> bool {
+        // Directly call the trait method instead of downcasting
+        // SAFETY: We're using get_mut which is safe for boxed trait objects
+        unsafe { Pin::get_unchecked_mut(self.as_mut()) }.try_add_inflight_guard(guard)
+    }
+
+    fn supports_inflight_guards(&self) -> bool {
+        // Directly call the trait method instead of downcasting
+        (**self).supports_inflight_guards()
     }
 }
 
@@ -483,5 +501,90 @@ mod tests {
             final_response.unwrap(),
             Resp1("response to world".to_string())
         );
+    }
+}
+
+/// Common test utilities shared across engine module tests
+#[cfg(test)]
+pub mod test_utils {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+    use tokio::time::sleep;
+
+    /// Mock request type for testing
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct TestRequest {
+        pub id: u64,
+        pub data: String,
+    }
+
+    /// Mock error type for testing
+    #[derive(Debug, Clone, PartialEq, thiserror::Error)]
+    pub enum TestError {
+        #[error("Processing failed: {message}")]
+        ProcessingFailed { message: String },
+        #[error("Network error: {code}")]
+        NetworkError { code: u32 },
+        #[error("Timeout occurred")]
+        Timeout,
+    }
+
+    /// Mock AsyncEngineContext for testing
+    #[derive(Debug)]
+    pub struct MockAsyncEngineContext {
+        pub id: String,
+        pub stopped: AtomicBool,
+        pub killed: AtomicBool,
+    }
+
+    impl MockAsyncEngineContext {
+        pub fn new(id: String) -> Self {
+            Self {
+                id,
+                stopped: AtomicBool::new(false),
+                killed: AtomicBool::new(false),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AsyncEngineContext for MockAsyncEngineContext {
+        fn id(&self) -> &str {
+            &self.id
+        }
+
+        fn is_stopped(&self) -> bool {
+            self.stopped.load(Ordering::Relaxed)
+        }
+
+        fn is_killed(&self) -> bool {
+            self.killed.load(Ordering::Relaxed)
+        }
+
+        async fn stopped(&self) {
+            while !self.is_stopped() {
+                sleep(Duration::from_millis(1)).await;
+            }
+        }
+
+        async fn killed(&self) {
+            while !self.is_killed() {
+                sleep(Duration::from_millis(1)).await;
+            }
+        }
+
+        fn stop_generating(&self) {
+            self.stopped.store(true, Ordering::Relaxed);
+        }
+
+        fn stop(&self) {
+            self.stop_generating();
+        }
+
+        fn kill(&self) {
+            self.stopped.store(true, Ordering::Relaxed);
+            self.killed.store(true, Ordering::Relaxed);
+        }
     }
 }

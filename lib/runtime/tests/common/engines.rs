@@ -130,7 +130,15 @@ impl<Resp: DataType> std::fmt::Debug for ReceiverStream<Resp> {
     }
 }
 
-impl<Resp: DataType> AsyncEngineStream<Resp> for ReceiverStream<Resp> {}
+impl<Resp: DataType> AsyncEngineStream<Resp> for ReceiverStream<Resp> {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
 
 impl<Resp: DataType> AsyncEngineContextProvider for ReceiverStream<Resp> {
     fn context(&self) -> Arc<dyn AsyncEngineContext> {

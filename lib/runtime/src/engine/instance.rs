@@ -117,7 +117,7 @@ pub struct InflightGuard {
 }
 
 impl InflightGuard {
-    fn with_value(gauge: IntGauge, value: i64) -> Self {
+    pub fn with_value(gauge: IntGauge, value: i64) -> Self {
         gauge.add(value);
         Self { gauge, value }
     }
@@ -133,7 +133,7 @@ impl Drop for InflightGuard {
 mod tests {
     use super::*;
     use crate::engine::{
-        AsyncEngineContext, AsyncEngineContextProvider, AsyncEngineInflightGuards,
+        test_utils::*, AsyncEngineContext, AsyncEngineContextProvider, AsyncEngineInflightGuards,
         InflightGuardNotSupported,
     };
     use std::{
@@ -154,7 +154,8 @@ mod tests {
         data: String,
     }
 
-    /// Mock response type that implements required traits
+    /// Mock response type that implements required traits for EngineInstance testing
+    /// This is specialized for instance tests and different from the common test utilities
     #[derive(Debug, Clone)]
     struct TestResponse {
         id: u64,
@@ -497,14 +498,6 @@ mod tests {
     /// - Verifies proper cleanup when successful responses are dropped
     ///
     /// This test validates behavior under realistic mixed-result scenarios.
-    /// Uses barrier synchronization to test concurrent mixed requests:
-    /// - Sets up predefined errors for specific request IDs (2 and 4)
-    /// - Spawns 6 concurrent requests with barrier coordination
-    /// - Validates that successes and errors are properly categorized
-    /// - Ensures only successful responses have inflight guards
-    /// - Verifies proper cleanup when successful responses are dropped
-    ///
-    /// This test validates behavior under realistic mixed-result scenarios.
     #[tokio::test]
     async fn test_mixed_success_and_error_requests() {
         use tokio::sync::Barrier;
@@ -744,17 +737,6 @@ mod tests {
     /// - Confirms that inflight gauge remains at 0 when guards can't be added
     ///
     /// This test ensures robustness when working with responses that don't support guards.
-    /// Tests graceful handling of inflight guard addition failures.
-    ///
-    /// Creates a custom response type that doesn't support inflight guards:
-    /// - Implements AsyncEngineInflightGuards to return errors
-    /// - Creates a mock engine that returns the failing response type
-    /// - Validates that EngineInstance handles guard failures gracefully
-    /// - Ensures that requests still succeed even when guards can't be added
-    /// - Verifies that metrics are updated correctly despite guard failures
-    /// - Confirms that inflight gauge remains at 0 when guards can't be added
-    ///
-    /// This test ensures robustness when working with responses that don't support guards.
     #[tokio::test]
     async fn test_guard_addition_failure() {
         // Test what happens when guard addition fails
@@ -831,18 +813,6 @@ mod tests {
     ///
     /// This test validates that the InflightGuard RAII mechanism works correctly
     /// under high concurrency without race conditions or resource leaks.
-    /// Tests concurrent creation and cleanup of many inflight guards.
-    ///
-    /// Uses barrier synchronization to test high-concurrency guard operations:
-    /// - Creates 50 guards concurrently across separate tasks
-    /// - Uses a barrier to ensure all guards are created before validation
-    /// - Validates that all guards are active simultaneously (gauge = 50)
-    /// - Collects all guards to trigger their Drop implementations
-    /// - Adds explicit timing to ensure Drop implementations complete
-    /// - Verifies that all guards are properly cleaned up (gauge = 0)
-    ///
-    /// This test validates that the InflightGuard RAII mechanism works correctly
-    /// under high concurrency without race conditions or resource leaks.
     #[tokio::test]
     async fn test_concurrent_guard_operations() {
         use tokio::sync::Barrier;
@@ -904,20 +874,6 @@ mod tests {
     /// - Success metrics remain at 0
     ///
     /// This test ensures comprehensive error coverage and proper resource management.
-    /// Tests comprehensive error handling across all error types.
-    ///
-    /// Validates error handling for each defined error variant:
-    /// - ProcessingFailed: Tests error with custom message
-    /// - NetworkError: Tests error with status code
-    /// - Timeout: Tests simple timeout error
-    ///
-    /// For each error type, validates that:
-    /// - The correct error is returned from the engine
-    /// - Error metrics are incremented appropriately
-    /// - No inflight guards are created for failed requests
-    /// - Success metrics remain at 0
-    ///
-    /// This test ensures comprehensive error coverage and proper resource management.
     #[tokio::test]
     async fn test_error_types_comprehensive() {
         let mock_engine = MockAsyncEngine::new("comprehensive-error-engine");
@@ -962,21 +918,6 @@ mod tests {
         assert_eq!(instance.inflight_gauge.get(), 0);
     }
 
-    /// Tests high-concurrency request processing with proper synchronization.
-    ///
-    /// Uses a two-barrier approach for deterministic concurrent testing:
-    /// 1. First barrier: Ensures all tasks have captured their responses
-    /// 2. Validates inflight counter while all responses are alive
-    /// 3. Second barrier: Allows all tasks to complete and drop responses
-    /// 4. Validates cleanup after all responses are dropped
-    ///
-    /// Spawns 10 concurrent requests and validates:
-    /// - All requests succeed with correct response data
-    /// - Metrics are properly updated (10 successes, 0 errors)
-    /// - Inflight gauge correctly tracks active responses (10 while alive)
-    /// - Proper cleanup when responses are dropped (gauge returns to 0)
-    ///
-    /// This test validates the system's behavior under realistic concurrent load.
     /// Tests high-concurrency request processing with proper synchronization.
     ///
     /// Uses a two-barrier approach for deterministic concurrent testing:
@@ -1076,14 +1017,6 @@ mod tests {
     /// - Format follows the pattern: "EngineInstance<name: {name}>"
     ///
     /// This is a simple but important test ensuring debugging output is useful.
-    /// Tests the Debug trait implementation for EngineInstance.
-    ///
-    /// Validates that:
-    /// - Debug formatting produces the expected string format
-    /// - The engine name is correctly included in the debug output
-    /// - Format follows the pattern: "EngineInstance<name: {name}>"
-    ///
-    /// This is a simple but important test ensuring debugging output is useful.
     #[tokio::test]
     async fn test_engine_instance_debug_format() {
         let instance = create_test_engine_instance("debug-test-engine");
@@ -1091,15 +1024,6 @@ mod tests {
         assert_eq!(debug_str, "EngineInstance<name: debug-test-engine>");
     }
 
-    /// Tests InflightGuard behavior with custom increment values.
-    ///
-    /// Validates that:
-    /// - Guards can be created with custom values (not just 1)
-    /// - The gauge is incremented by the custom value when guard is created
-    /// - The gauge is decremented by the same value when guard is dropped
-    /// - Proper cleanup occurs with non-standard values
-    ///
-    /// This test ensures the RAII mechanism works correctly with arbitrary values.
     /// Tests InflightGuard behavior with custom increment values.
     ///
     /// Validates that:
@@ -1136,19 +1060,6 @@ mod tests {
     /// - Dropping guards individually decrements correctly (6→3→1→0)
     ///
     /// This test validates that multiple guards work correctly together.
-    /// Tests multiple InflightGuards with different values on the same gauge.
-    ///
-    /// Validates that:
-    /// - Multiple guards can be active simultaneously on the same gauge
-    /// - Each guard contributes its individual value to the total
-    /// - Guards can be dropped individually with correct value decrements
-    /// - Final cleanup brings the gauge back to 0
-    ///
-    /// Tests with values 3, 2, and 1 to ensure:
-    /// - Total gauge value is 6 when all are active
-    /// - Dropping guards individually decrements correctly (6→3→1→0)
-    ///
-    /// This test validates that multiple guards work correctly together.
     #[tokio::test]
     async fn test_inflight_guard_multiple_guards() {
         let gauge = IntGauge::new("multi_test_gauge", "Multi test gauge").unwrap();
@@ -1172,16 +1083,6 @@ mod tests {
         assert_eq!(gauge.get(), 0);
     }
 
-    /// Tests the AsyncEngineInflightGuards trait implementation on TestResponse.
-    ///
-    /// Validates that:
-    /// - TestResponse correctly reports that it supports inflight guards
-    /// - Guards can be successfully added to the response
-    /// - Added guards are stored in the response's guard collection
-    /// - Guards can be downcasted back to their original types
-    ///
-    /// This test ensures the mock response type properly implements the guard
-    /// interface needed for testing the EngineInstance behavior.
     /// Tests the AsyncEngineInflightGuards trait implementation on TestResponse.
     ///
     /// Validates that:
