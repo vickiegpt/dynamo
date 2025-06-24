@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
@@ -21,6 +22,8 @@ use crate::block_manager::{
 use crate::common::dtype::DType;
 
 use nixl_sys::Agent as NixlAgent;
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -256,10 +259,62 @@ impl KvbmWorker {
                     .build()?
                     .allocate_layout(layout_type, host_allocator)?,
             )
+            return Err(anyhow::anyhow!(format!(
+                "Unsupported kv cache layout. Got shape: {:?}",
+                shape
+            )));
+        };
+
+        let inner_dim = shape[2..].iter().product::<usize>() / page_size;
+
+        tracing::info!(
+            "Inferred layout: num_layers={}, outer_dim={}, page_size={}, inner_dim={}",
+            device_tensors.len(),
+            outer_dim,
+            page_size,
+            inner_dim
+        );
+
+        let mut layout_builder_instance = LayoutConfigBuilder::default();
+        let layout_builder = layout_builder_instance
+            .num_layers(device_tensors.len())
+            .outer_dim(outer_dim)
+            .page_size(page_size)
+            .inner_dim(inner_dim)
+            .dtype(dtype);
+
+        let layout_type = LayoutType::LayerSeparate { outer_contiguous };
+
+        let device_layout = layout_builder
+            .num_blocks(num_device_blocks)
+            .build()?
+            .create_layout(layout_type, device_tensors, true)?;
+
+        let host_layout = if num_host_blocks > 0 {
+            let host_allocator = Arc::new(PinnedAllocator::default());
+            Some(
+                layout_builder
+                    .num_blocks(num_host_blocks)
+                    .build()?
+                    .allocate_layout(layout_type, host_allocator)?,
+            )
         } else {
             None
         };
 
+        let disk_layout = if num_disk_blocks > 0 {
+            if num_host_blocks == 0 {
+                return Err(anyhow::anyhow!(
+                    "num_host_blocks must be greater than 0 if num_disk_blocks is greater than 0"
+                ));
+            }
+            let disk_allocator = Arc::new(DiskAllocator);
+            Some(
+                layout_builder
+                    .num_blocks(num_disk_blocks)
+                    .build()?
+                    .allocate_layout(layout_type, disk_allocator)?,
+            )
         let disk_layout = if num_disk_blocks > 0 {
             if num_host_blocks == 0 {
                 return Err(anyhow::anyhow!(
@@ -311,11 +366,56 @@ impl KvbmWorker {
                 .await
             })
         });
+        let cancel_token = CancellationToken::new();
+
+        let cancel_token_clone = cancel_token.clone();
+        let task = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+
+            let agent = NixlAgent::new(&format!("kvbm-worker-{}", worker_id)).unwrap();
+
+            let transfer_context = Arc::new(TransferContext::new(
+                Arc::new(Some(agent)),
+                DeviceAllocator::new(device_id)
+                    .unwrap()
+                    .ctx()
+                    .new_stream()
+                    .unwrap(),
+                runtime.handle().clone(),
+            ));
+
+            runtime.block_on(async move {
+                KvbmWorker::worker_task(
+                    device_layout,
+                    host_layout,
+                    disk_layout,
+                    barrier_id,
+                    worker_id,
+                    transfer_context,
+                    cancel_token_clone,
+                )
+                .await
+            })
+        });
 
         Ok(Self {
             cancel_token,
             task: Some(task),
+            cancel_token,
+            task: Some(task),
         })
+    }
+}
+
+impl Drop for KvbmWorker {
+    fn drop(&mut self) {
+        self.cancel_token.cancel();
+        if let Some(task) = self.task.take() {
+            task.join().unwrap().unwrap();
+        }
     }
 }
 

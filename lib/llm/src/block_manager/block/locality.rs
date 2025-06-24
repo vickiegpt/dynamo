@@ -2,9 +2,7 @@ use super::{
     // transfer::{TransferStrategy, WriteToStrategy},
     *,
 };
-use crate::block_manager::{
-    DeviceStorage, DiskStorage, PinnedStorage,
-};
+use crate::block_manager::{DeviceStorage, DiskStorage, PinnedStorage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalityType {

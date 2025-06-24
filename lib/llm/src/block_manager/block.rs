@@ -13,6 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod factory;
+pub mod locality;
+
 pub mod data;
 pub mod registry;
 pub mod state;
@@ -88,6 +91,15 @@ pub enum BlockError {
 
     #[error("Views are not available on logical blocks")]
     ViewsNotAvailableOnLogicalBlocks,
+
+    #[error("Invalid block ID: {0}")]
+    InvalidBlockID(BlockId),
+
+    #[error("Misconfigured block data parallelism: {0}")]
+    MisconfiguredBlockDataParallelism(String),
+
+    #[error("Incompatible storage type: {0}")]
+    IncompatibleStorageType(String),
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
