@@ -148,13 +148,13 @@ impl KvbmWorker {
         tracing::info!("Worker {} waiting on barrier {}", worker_id, barrier_id);
 
         let worker_barrier =
-            WorkerBarrier::<KvbmLeaderData>::new(barrier_id, worker_id.to_string());
+            WorkerBarrier::<KvbmLeaderData, ()>::new(barrier_id, worker_id.to_string());
 
         let leader_data = tokio::select! {
             _ = cancel_token.cancelled() => {
                 return Ok(())
             }
-            leader_data = worker_barrier.sync(&drt) => {
+            leader_data = worker_barrier.sync(&drt, &()) => {
                 leader_data
             }
         }

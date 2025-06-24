@@ -52,7 +52,7 @@ impl KvbmLeader {
         });
 
         // Build our leader barrier and publish the data.
-        let leader_barrier =
+        let leader_barrier: LeaderBarrier<KvbmLeaderData, ()> =
             LeaderBarrier::new(barrier_id, world_size, Some(Duration::from_secs(30)));
 
         let drt_clone = drt.clone();
