@@ -138,3 +138,6 @@ insta = { version = "1.41", features = [
 ] }
 aligned-vec = "0.6.4"
 lazy_static = "1.4"
+
+# block-manager
+tokio-retry = "0.3"
