@@ -22,8 +22,6 @@ pub mod state;
 pub mod transfer;
 
 pub mod collections;
-pub mod factory;
-pub mod locality;
 
 pub use data::{view, BlockData, BlockDataExt, BlockDataProvider, BlockDataProviderMut};
 pub use locality::LocalityProvider;
@@ -91,15 +89,6 @@ pub enum BlockError {
 
     #[error("Views are not available on logical blocks")]
     ViewsNotAvailableOnLogicalBlocks,
-
-    #[error("Invalid block ID: {0}")]
-    InvalidBlockID(BlockId),
-
-    #[error("Misconfigured block data parallelism: {0}")]
-    MisconfiguredBlockDataParallelism(String),
-
-    #[error("Incompatible storage type: {0}")]
-    IncompatibleStorageType(String),
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
