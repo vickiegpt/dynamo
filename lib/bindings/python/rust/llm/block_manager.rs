@@ -128,7 +128,7 @@ impl BlockManager {
             inner: Arc::from(
                 tokio_runtime
                     .block_on(async {
-                        dynamo_llm::block_manager::ReferenceBlockManager::new(config)
+                        dynamo_llm::block_manager::ReferenceBlockManager::new(config).await
                     })
                     .map_err(to_pyerr)?,
             ),
