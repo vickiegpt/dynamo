@@ -18,6 +18,7 @@ import os
 import signal
 import subprocess
 import time
+from typing import Optional
 
 import pynvml
 import requests
@@ -33,12 +34,32 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 
-def get_dynamo_serve_cmd(config_file_path):
+def get_dynamo_env():
+    """Get environment variables with Dynamo runtime configuration"""
+    env = os.environ.copy()
+
+    # Ensure ETCD and NATS are configured for Dynamo runtime
+    if "ETCD_ENDPOINTS" not in env:
+        logger.warning("ETCD_ENDPOINTS not set, using default localhost:2379")
+        env["ETCD_ENDPOINTS"] = "localhost:2379"
+
+    if "NATS_SERVER" not in env:
+        logger.warning("NATS_SERVER not set, using default nats://localhost:4222")
+        env["NATS_SERVER"] = "nats://localhost:4222"
+
+    logger.info(f"Using ETCD_ENDPOINTS: {env['ETCD_ENDPOINTS']}")
+    logger.info(f"Using NATS_SERVER: {env['NATS_SERVER']}")
+
+    return env
+
+
+def get_dynamo_serve_cmd(config_file_path, disaggregated=False):
     config_file_path = os.path.abspath(config_file_path)
+    graph_target = "graphs.disagg:Frontend" if disaggregated else "graphs.agg:Frontend"
     return [
         "dynamo",
         "serve",
-        "graphs.agg:Frontend",
+        graph_target,
         "-f",
         config_file_path,
     ]
@@ -101,9 +122,17 @@ def shutdown_deployment(dynamo_process):
     time.sleep(5)
 
 
-def wait_for_server_ready(model_name: str, port: int, timeout: int = 300):
+def wait_for_server_ready(
+    model_name: str,
+    port: int,
+    timeout: int = 300,
+    url: Optional[str] = None,
+):
     logger.info("Waiting for the server to be ready...")
-    endpoint_url = f"http://localhost:{port}/v1/chat/completions"
+    if url is not None:
+        endpoint_url = url
+    else:
+        endpoint_url = f"http://localhost:{port}/v1/chat/completions"
     start_time = time.time()
     server_ready = False
 

@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import logging
+import os
 from typing import Literal
 
 from dynamo.planner.defaults import WORKER_COMPONENT_NAMES
@@ -108,7 +109,9 @@ class VllmV0ConfigModifier:
 
     @classmethod
     def get_port(cls, config: dict) -> int:
-        if "Common" in config and "port" in config["Common"]:
+        if "DYNAMO_PORT" in os.environ:
+            return int(os.environ["DYNAMO_PORT"])
+        elif "Common" in config and "port" in config["Common"]:
             return config["Common"]["port"]
         else:
             return config["Frontend"]["port"]
@@ -208,7 +211,9 @@ class VllmV1ConfigModifier:
 
     @classmethod
     def get_port(cls, config: dict) -> int:
-        if "Common" in config and "port" in config["Common"]:
+        if "DYNAMO_PORT" in os.environ:
+            return int(os.environ["DYNAMO_PORT"])
+        elif "Common" in config and "port" in config["Common"]:
             return config["Common"]["port"]
         else:
             return config["Frontend"]["port"]
