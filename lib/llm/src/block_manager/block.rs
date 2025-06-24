@@ -391,14 +391,14 @@ pub(crate) trait PrivateBlockExt {
     fn register(
         &mut self,
         registry: &mut registry::BlockRegistry,
-    ) -> Result<Option<PublishHandle>, registry::BlockRegistationError>;
+    ) -> Result<Option<PublishHandle>, registry::BlockRegistrationError>;
 }
 
 impl<S: Storage, L: LocalityProvider, M: BlockMetadata> PrivateBlockExt for Block<S, L, M> {
     fn register(
         &mut self,
         registry: &mut registry::BlockRegistry,
-    ) -> Result<Option<PublishHandle>, registry::BlockRegistationError> {
+    ) -> Result<Option<PublishHandle>, registry::BlockRegistrationError> {
         registry.register_block(&mut self.state)
     }
 }
