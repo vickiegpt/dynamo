@@ -278,14 +278,11 @@ impl WorkerSelector for DefaultWorkerSelector {
         for (worker_id, ep) in workers.endpoints.iter() {
             let worker_id = *worker_id;
 
-            // Get score or default to 0.0
             let score = worker_scores.get(&worker_id).copied().unwrap_or(0.0);
 
-            // Get raw metrics without normalization
             let gpu_cache_usage = ep.data.gpu_cache_usage_perc as f64;
             let num_requests_waiting = ep.data.num_requests_waiting as f64;
 
-            // Calculate logit using same formula as Python
             let logit = self.kv_router_config.overlap_score_weight * score
                 - self.kv_router_config.gpu_cache_usage_weight * gpu_cache_usage
                 - self.kv_router_config.waiting_requests_weight * num_requests_waiting;
