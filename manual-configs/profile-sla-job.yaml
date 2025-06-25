@@ -10,7 +10,7 @@ spec:
         - name: docker-imagepullsecret
       containers:
       - name: profile-sla
-        image: nvcr.io/nvidian/nim-llm-dev/dynamo-base-docker-llm:dep-178.13
+        image: nvcr.io/nvidian/nim-llm-dev/dynamo-base-docker-llm:dep-178.14
         resources:
           requests:
             nvidia.com/gpu: 2
@@ -43,12 +43,6 @@ spec:
         volumeMounts:
           - name: output-volume
             mountPath: /workspace/profiling_results
-      # - name: socat
-      #   image: alpine/socat
-      #   command: ["socat"]
-      #   args:
-      #     - "TCP-LISTEN:3000,fork,reuseaddr"
-      #     - "TCP:llm-agg-frontend:3000"
       restartPolicy: Never
       volumes:
         - name: output-volume

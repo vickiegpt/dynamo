@@ -18,7 +18,6 @@ import os
 import signal
 import subprocess
 import time
-from typing import Optional
 
 import pynvml
 import requests
@@ -47,8 +46,8 @@ def get_dynamo_env():
         logger.warning("NATS_SERVER not set, using default nats://localhost:4222")
         env["NATS_SERVER"] = "nats://localhost:4222"
 
-    logger.info(f"Using ETCD_ENDPOINTS: {env['ETCD_ENDPOINTS']}")
-    logger.info(f"Using NATS_SERVER: {env['NATS_SERVER']}")
+    logger.debug(f"Using ETCD_ENDPOINTS: {env['ETCD_ENDPOINTS']}")
+    logger.debug(f"Using NATS_SERVER: {env['NATS_SERVER']}")
 
     return env
 
@@ -126,13 +125,9 @@ def wait_for_server_ready(
     model_name: str,
     port: int,
     timeout: int = 300,
-    url: Optional[str] = None,
 ):
     logger.info("Waiting for the server to be ready...")
-    if url is not None:
-        endpoint_url = url
-    else:
-        endpoint_url = f"http://localhost:{port}/v1/chat/completions"
+    endpoint_url = f"http://localhost:{port}/v1/chat/completions"
     start_time = time.time()
     server_ready = False
 
@@ -148,7 +143,7 @@ def wait_for_server_ready(
                 },
                 timeout=5,
             )
-            logger.info(f"Response: {response.text}")
+            logger.debug(f"Response: {response.text}")
             if response.status_code != 200:
                 logger.info(
                     f"Server returned status code {response.status_code}, waiting..."

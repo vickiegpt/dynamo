@@ -14,7 +14,6 @@
 # limitations under the License.
 
 import logging
-import os
 from typing import Literal
 
 from dynamo.planner.defaults import WORKER_COMPONENT_NAMES
@@ -109,9 +108,7 @@ class VllmV0ConfigModifier:
 
     @classmethod
     def get_port(cls, config: dict) -> int:
-        if "DYNAMO_PORT" in os.environ:
-            return int(os.environ["DYNAMO_PORT"])
-        elif "Common" in config and "port" in config["Common"]:
+        if "Common" in config and "port" in config["Common"]:
             return config["Common"]["port"]
         else:
             return config["Frontend"]["port"]
@@ -119,11 +116,9 @@ class VllmV0ConfigModifier:
     @classmethod
     def get_kv_cache_size_from_dynamo_log(cls, dynamo_log_fn: str) -> int:
         try:
-            logger.info(f"Parsing KV cache size from dynamo log: {dynamo_log_fn}")
-            last_line = ""
+            logger.debug(f"Parsing KV cache size from dynamo log: {dynamo_log_fn}")
             with open(dynamo_log_fn, "r") as f:
                 for line in f:
-                    last_line = line
                     if "Maximum concurrency for" in line:
                         line = line.strip().split("Maximum concurrency for ")[1]
                         token_count = int(line.split(" tokens per request: ")[0])
@@ -140,7 +135,6 @@ class VllmV0ConfigModifier:
         logger.error(
             "Failed to parse KV cache size from dynamo log -- no matching line found"
         )
-        logger.error(f"Last line: {last_line}")
         return 0
 
 
@@ -218,9 +212,7 @@ class VllmV1ConfigModifier:
 
     @classmethod
     def get_port(cls, config: dict) -> int:
-        if "DYNAMO_PORT" in os.environ:
-            return int(os.environ["DYNAMO_PORT"])
-        elif "Common" in config and "port" in config["Common"]:
+        if "Common" in config and "port" in config["Common"]:
             return config["Common"]["port"]
         else:
             return config["Frontend"]["port"]

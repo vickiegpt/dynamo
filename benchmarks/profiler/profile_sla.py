@@ -105,12 +105,6 @@ if __name__ == "__main__":
         help="how many samples to benchmark to interpolate ITL under different active kv cache size and decode context length",
     )
     parser.add_argument(
-        "--url",
-        type=str,
-        default=None,
-        help="Override the endpoint URL for the LLM frontend (e.g. http://llm-agg-frontend:3000/v1/chat/completions)",
-    )
-    parser.add_argument(
         "--disaggregated",
         action="store_true",
         default=False,
@@ -131,7 +125,7 @@ if __name__ == "__main__":
                 "Failed to infer example directory, please provide explicitly using --example-dir <path-to-example-dir>"
             )
             exit(1)
-    logger.info(f"Example directory: {args.example_dir}")
+    logger.debug(f"Example directory: {args.example_dir}")
 
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
@@ -188,7 +182,7 @@ if __name__ == "__main__":
                 preexec_fn=os.setsid,  # Use process group for clean termination
             )
 
-        if not wait_for_server_ready(model_name, port, url=args.url):
+        if not wait_for_server_ready(model_name, port):
             logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
             break
 
@@ -246,7 +240,7 @@ if __name__ == "__main__":
         # Start the dynamo serve process
         logger.info(f"Starting dynamo serve with TP size {tp_size}...")
         dynamo_serve_cmd = get_dynamo_serve_cmd(decode_config_fn, args.disaggregated)
-        logger.info(f"Dynamo serve command: {dynamo_serve_cmd}")
+        logger.debug(f"Dynamo serve command: {dynamo_serve_cmd}")
         with open(dynamo_log_fn, "w") as dynamo_log_f:
             dynamo_process = subprocess.Popen(
                 dynamo_serve_cmd,
@@ -258,7 +252,7 @@ if __name__ == "__main__":
                 preexec_fn=os.setsid,  # Use process group for clean termination
             )
 
-        if not wait_for_server_ready(model_name, port, url=args.url):
+        if not wait_for_server_ready(model_name, port):
             logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
             break
 
@@ -403,7 +397,7 @@ if __name__ == "__main__":
             preexec_fn=os.setsid,  # Use process group for clean termination
         )
 
-    if not wait_for_server_ready(model_name, port, url=args.url):
+    if not wait_for_server_ready(model_name, port):
         logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
     else:
         # Additional wait for vLLM to fully initialize after server reports ready
@@ -488,7 +482,7 @@ if __name__ == "__main__":
             preexec_fn=os.setsid,  # Use process group for clean termination
         )
 
-    if not wait_for_server_ready(model_name, port, url=args.url):
+    if not wait_for_server_ready(model_name, port):
         logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
     else:
         # Additional wait for vLLM to fully initialize after server reports ready
