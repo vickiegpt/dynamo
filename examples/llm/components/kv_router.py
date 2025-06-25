@@ -117,7 +117,28 @@ class Router:
         if self.router_type == RouterType.KV:
             self.indexer = KvIndexer(kv_listener, self.args.block_size)
         self.metrics_aggregator = KvMetricsAggregator(kv_listener)
+
+        # Initialize the predictive waiting requests dictionary
+        # [old_value, predictive_value]
+        self.num_requests_waiting_dict = {}
+        worker_ids = self.workers_client.instance_ids()
+        for worker_id in worker_ids:
+            self.num_requests_waiting_dict[worker_id] = [0.0, 0.0]
+
         logger.info("KV Router initialized")
+
+    def _update_and_get_waiting_value(
+        self, worker_id: str, polled_value: float
+    ) -> float:
+        """Helper routine to update waiting dict and return the desired waiting value."""
+        old_value, predictive_value = self.num_requests_waiting_dict[worker_id]
+
+        # Check if polled value is different from old value
+        if polled_value != old_value:
+            self.num_requests_waiting_dict[worker_id] = [polled_value, polled_value]
+            return polled_value
+        else:
+            return predictive_value
 
     def _cost_function(
         self,
@@ -162,9 +183,17 @@ class Router:
                     key: getattr(endpoint, key, self.default_metrics[key])
                     for key in self.default_metrics.keys()
                 }
-                max_waiting = max(
-                    max_waiting, worker_metrics[worker_id]["num_requests_waiting"]
+
+                # Update waiting value using helper routine
+                polled_waiting = worker_metrics[worker_id]["num_requests_waiting"]
+                waiting_value = self._update_and_get_waiting_value(
+                    worker_id, polled_waiting
                 )
+                worker_metrics[worker_id][
+                    "num_requests_waiting"
+                ] = self._update_and_get_waiting_value(worker_id, polled_waiting)
+
+                max_waiting = max(max_waiting, waiting_value)
         else:
             logger.warning("Cannot get metrics")
 
@@ -219,6 +248,10 @@ class Router:
             # Log to vllm_logger
             for message in log_messages:
                 logger.info(message)
+
+            # Increment predictive waiting for the selected worker before returning
+            predictive_value = self.num_requests_waiting_dict[best_worker_id][1]
+            self.num_requests_waiting_dict[best_worker_id][1] = predictive_value + 1
 
         return best_worker_id, worker_scores.get(best_worker_id, 0.0)
 
