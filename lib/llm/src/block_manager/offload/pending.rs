@@ -165,16 +165,18 @@ pub trait TransferManager<
     ) -> Result<()>;
 }
 
+pub type TransferRequestSender<Source, Target, Locality, Metadata> = mpsc::Sender<(
+    PendingTransfer<Source, Target, Locality, Metadata>,
+    tokio::sync::oneshot::Receiver<()>,
+)>;
+
 pub struct CudaTransferManager<
     Source: Storage,
     Target: Storage,
     Locality: LocalityProvider,
     Metadata: BlockMetadata,
 > {
-    pending_transfer_q: mpsc::Sender<(
-        PendingTransfer<Source, Target, Locality, Metadata>,
-        tokio::sync::oneshot::Receiver<()>,
-    )>,
+    pending_transfer_q: TransferRequestSender<Source, Target, Locality, Metadata>,
     transfer_ctx: Arc<TransferContext>,
 }
 

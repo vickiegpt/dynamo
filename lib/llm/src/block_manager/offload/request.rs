@@ -79,6 +79,9 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Eq for OffloadRequest<S,
 pub type BlockResult<Target, Locality, Metadata> =
     Result<Vec<ImmutableBlock<Target, Locality, Metadata>>, BlockPoolError>;
 
+pub type ResponseSender<Target, Locality, Metadata> =
+    oneshot::Sender<Result<Vec<ImmutableBlock<Target, Locality, Metadata>>, BlockPoolError>>;
+
 /// Data needed for onboarding.
 /// Unlike offloading, we need a means to return the resulting blocks to the caller.
 pub struct OnboardRequest<
@@ -88,8 +91,7 @@ pub struct OnboardRequest<
     M: BlockMetadata,
 > {
     pub blocks: Vec<ImmutableBlock<Source, Locality, M>>,
-    pub response_tx:
-        oneshot::Sender<Result<Vec<ImmutableBlock<Target, Locality, M>>, BlockPoolError>>,
+    pub response_tx: ResponseSender<Target, Locality, M>,
 }
 
 impl<Source: Storage, Target: Storage, Locality: LocalityProvider, M: BlockMetadata>
@@ -97,9 +99,7 @@ impl<Source: Storage, Target: Storage, Locality: LocalityProvider, M: BlockMetad
 {
     pub fn new(
         blocks: Vec<ImmutableBlock<Source, Locality, M>>,
-        response_tx: oneshot::Sender<
-            Result<Vec<ImmutableBlock<Target, Locality, M>>, BlockPoolError>,
-        >,
+        response_tx: ResponseSender<Target, Locality, M>,
     ) -> Self {
         Self {
             blocks,

@@ -543,8 +543,7 @@ pub mod tests {
 
     use crate::block_manager::{
         block::{
-            locality::Local,
-            BasicMetadata, BlockDataExt, BlockDataProvider, BlockExt, Blocks, MutableBlock,
+            locality::Local, BasicMetadata, BlockDataExt, BlockDataProvider, Blocks, MutableBlock,
         },
         layout::{nixl::NixlLayout, FullyContiguous, LayerSeparate, LayoutType},
         pool::BlockPool,
@@ -609,6 +608,7 @@ pub mod tests {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn build_pools(
         device_blocks: usize,
         host_blocks: Option<usize>,
@@ -629,6 +629,7 @@ pub mod tests {
         )
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn build_pools_with_layout(
         device_blocks: usize,
         host_blocks: Option<usize>,
@@ -696,6 +697,7 @@ pub mod tests {
     }
 
     /// Create a block in the 'RESET' state.
+    #[expect(dead_code)]
     async fn get_block<S: Storage, Metadata: BlockMetadata>(
         pool: &Arc<BlockPool<S, Local, Metadata>>,
     ) -> Result<MutableBlock<S, Local, Metadata>> {
