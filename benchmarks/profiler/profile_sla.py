@@ -18,6 +18,7 @@ import logging
 import math
 import os
 import subprocess
+import time
 
 import numpy as np
 import yaml
@@ -191,6 +192,12 @@ if __name__ == "__main__":
             logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
             break
 
+        # Additional wait for vLLM to fully initialize after server reports ready
+        logger.info(
+            "Server reported ready, waiting additional time for vLLM to fully initialize..."
+        )
+        time.sleep(30)
+
         # run genai-perf
         genai_perf_artifact_dir = f"{work_dir}/gap_isl{args.isl}"
         gap_result = benchmark_prefill(
@@ -254,6 +261,12 @@ if __name__ == "__main__":
         if not wait_for_server_ready(model_name, port, url=args.url):
             logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
             break
+
+        # Additional wait for vLLM to fully initialize after server reports ready
+        logger.info(
+            "Server reported ready, waiting additional time for vLLM to fully initialize..."
+        )
+        time.sleep(30)
 
         max_kv_tokens = config_modifier.get_kv_cache_size_from_dynamo_log(dynamo_log_fn)
         max_concurrency = max_kv_tokens // (args.isl + args.osl)
@@ -393,6 +406,12 @@ if __name__ == "__main__":
     if not wait_for_server_ready(model_name, port, url=args.url):
         logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
     else:
+        # Additional wait for vLLM to fully initialize after server reports ready
+        logger.info(
+            "Server reported ready, waiting additional time for vLLM to fully initialize..."
+        )
+        time.sleep(30)
+
         for isl in range(
             100,
             args.max_context_length,
@@ -472,6 +491,12 @@ if __name__ == "__main__":
     if not wait_for_server_ready(model_name, port, url=args.url):
         logger.error(f"Server did not become ready, skip profiling tp={tp_size}")
     else:
+        # Additional wait for vLLM to fully initialize after server reports ready
+        logger.info(
+            "Server reported ready, waiting additional time for vLLM to fully initialize..."
+        )
+        time.sleep(30)
+
         max_kv_tokens = config_modifier.get_kv_cache_size_from_dynamo_log(dynamo_log_fn)
 
         osl = 500  # not too large to reduce ITL variance, not too small to have stable measurement

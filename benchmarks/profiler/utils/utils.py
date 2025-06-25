@@ -148,6 +148,7 @@ def wait_for_server_ready(
                 },
                 timeout=5,
             )
+            logger.info(f"Response: {response.text}")
             if response.status_code != 200:
                 logger.info(
                     f"Server returned status code {response.status_code}, waiting..."
