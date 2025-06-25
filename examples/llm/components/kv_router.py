@@ -175,7 +175,6 @@ class Router:
             logger.warning("Cannot get KV scores")
 
         worker_metrics = {}
-        max_waiting = 0.0
         if metrics:
             for endpoint in metrics.endpoints:
                 worker_id = endpoint.worker_id
@@ -186,14 +185,9 @@ class Router:
 
                 # Update waiting value using helper routine
                 polled_waiting = worker_metrics[worker_id]["num_requests_waiting"]
-                waiting_value = self._update_and_get_waiting_value(
-                    worker_id, polled_waiting
-                )
                 worker_metrics[worker_id][
                     "num_requests_waiting"
                 ] = self._update_and_get_waiting_value(worker_id, polled_waiting)
-
-                max_waiting = max(max_waiting, waiting_value)
         else:
             logger.warning("Cannot get metrics")
 
@@ -208,17 +202,16 @@ class Router:
             metrics_dict = worker_metrics.get(worker_id, self.default_metrics)
             gpu_cache_usage = metrics_dict["gpu_cache_usage_perc"]
 
-            normalized_waiting = (
-                metrics_dict["num_requests_waiting"] / max_waiting
-                if max_waiting > 0
-                else 0.0
-            )
+            # Use raw waiting value without normalization
+            num_requests_waiting = metrics_dict["num_requests_waiting"]
 
             # Have 1 metric that weights towards cache hit
             # 2 metrics that penalize overloaded worker and queuing
-            worker_logits[worker_id] = 2 * score - gpu_cache_usage - normalized_waiting
+            worker_logits[worker_id] = (
+                2 * score - gpu_cache_usage - num_requests_waiting
+            )
             logger.info(
-                f"Formula for {worker_id}: {worker_logits[worker_id]:.3f} = 2.0 * {score:.3f} - {gpu_cache_usage:.3f} - {normalized_waiting:.3f}"
+                f"Formula for {worker_id}: {worker_logits[worker_id]:.3f} = 2.0 * {score:.3f} - {gpu_cache_usage:.3f} - {num_requests_waiting:.3f}"
             )
 
         if not worker_logits or not any(worker_logits.values()):

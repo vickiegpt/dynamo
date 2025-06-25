@@ -258,23 +258,18 @@ impl WorkerSelector for DefaultWorkerSelector {
         }
 
         let mut worker_scores = HashMap::new();
-        let mut max_waiting = 0.0;
 
-        // Calculate worker scores and find max waiting requests
+        // Calculate worker scores
         for (worker_id, ep) in workers.endpoints.iter() {
             // Calculate score similar to Python version
             if let Some(score) = request.overlap.scores.get(worker_id) {
                 let score = *score as f64 * block_size as f64 / request.isl_tokens as f64;
                 worker_scores.insert(worker_id, score);
             }
-
-            // Track max waiting requests
-            max_waiting = f64::max(max_waiting, ep.data.num_requests_waiting as f64);
         }
 
         // make immutable
         let worker_scores = worker_scores;
-        let max_waiting = max_waiting;
 
         // Calculate logits for each worker
         let mut best_logit = f64::NEG_INFINITY;
@@ -286,21 +281,17 @@ impl WorkerSelector for DefaultWorkerSelector {
             // Get score or default to 0.0
             let score = worker_scores.get(&worker_id).copied().unwrap_or(0.0);
 
-            // Calculate normalized metrics
+            // Get raw metrics without normalization
             let gpu_cache_usage = ep.data.gpu_cache_usage_perc as f64;
-            let normalized_waiting = if max_waiting > 0.0 {
-                ep.data.num_requests_waiting as f64 / max_waiting
-            } else {
-                0.0
-            };
+            let num_requests_waiting = ep.data.num_requests_waiting as f64;
 
             // Calculate logit using same formula as Python
             let logit = self.kv_router_config.overlap_score_weight * score
                 - self.kv_router_config.gpu_cache_usage_weight * gpu_cache_usage
-                - self.kv_router_config.waiting_requests_weight * normalized_waiting;
+                - self.kv_router_config.waiting_requests_weight * num_requests_waiting;
 
             tracing::trace!(
-                "Formula for {worker_id}: {logit:.3} = {:.1} * {score:.3} - {:.1} * {gpu_cache_usage:.3} - {:.1} * {normalized_waiting:.3}",
+                "Formula for {worker_id}: {logit:.3} = {:.1} * {score:.3} - {:.1} * {gpu_cache_usage:.3} - {:.1} * {num_requests_waiting:.3}",
                 self.kv_router_config.overlap_score_weight,
                 self.kv_router_config.gpu_cache_usage_weight,
                 self.kv_router_config.waiting_requests_weight,
