@@ -1,3 +1,19 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// todo: move this up one level to be on par with state and block
+// locality is primarily focused on the locality of the block data; however,
+// the choice of locality permeates the entire block manager.
+//
+// by moving up a level, it will make more sense use a kvbm level config object
+// and kvbm state resources object to construct a locality aware block factory
+//
+// note: a block factory is also a block data factory
+//
+// factories can be turned into pools to implement the block pool and kvbm top-level
+// interface; however, it can also be used to directly construct block data objects
+// which can be used by leader-driven workers which do not have full block pools.
+
 use super::{
     // transfer::{TransferStrategy, WriteToStrategy},
     *,

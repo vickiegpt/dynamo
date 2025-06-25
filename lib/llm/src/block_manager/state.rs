@@ -14,6 +14,7 @@
 // limitations under the License.
 
 mod local;
+mod resources;
 
 use super::*;
 
@@ -32,26 +33,27 @@ use derive_getters::Dissolve;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 
-pub struct Resources {
-    worker_id: WorkerID,
-    cancellation_token: CancellationToken,
-    async_rt_handle: Handle,
+pub(crate) struct Resources {
+    pub worker_id: WorkerID,
+    pub cancellation_token: CancellationToken,
+    pub async_rt_handle: Handle,
 
     // nixl agent/backends for the block manager
-    nixl_agent: Arc<Option<NixlAgent>>,
-    _nixl_backends: HashMap<String, Arc<nixl_sys::Backend>>,
+    pub nixl_agent: Arc<Option<NixlAgent>>,
+    #[expect(dead_code)]
+    pub nixl_backends: HashMap<String, Arc<nixl_sys::Backend>>,
 
     // registry for blocks across all storage types
-    global_registry: GlobalRegistry,
+    pub global_registry: GlobalRegistry,
 
     // event manager for block manager events
-    event_manager: Arc<dyn EventManager>,
+    pub event_manager: Arc<dyn EventManager>,
 
     // metrics for the block manager
-    metrics: Arc<BlockManagerMetrics>,
+    pub metrics: Arc<BlockManagerMetrics>,
 
     // config for the block manager
-    config: KvBlockManagerConfig,
+    pub config: KvBlockManagerConfig,
 }
 
 #[allow(dead_code)]
@@ -65,114 +67,6 @@ pub struct KvBlockManagerState<Locality: LocalityProvider, Metadata: BlockMetada
     local_block_set: NixlBlockSet,
     remote_block_sets: RwLock<HashMap<WorkerID, HashMap<usize, RemoteBlocks>>>,
     offload_manager: Arc<OffloadManager<Locality, Metadata>>,
-}
-
-impl Resources {
-    /// Create a new [`Resources`] instance
-    pub fn new(config: KvBlockManagerConfig) -> Result<Self> {
-        config
-            .runtime
-            .validate()
-            .context("Validating runtime config")?;
-
-        config.model.validate().context("Validating model config")?;
-
-        let worker_id = config.runtime.worker_id;
-        let cancellation_token = config.runtime.cancellation_token.clone();
-
-        let global_registry = GlobalRegistry::default();
-
-        let metrics = BlockManagerMetrics::new(&config.runtime.metrics_registry)?;
-
-        let event_manager = config
-            .event_manager
-            .clone()
-            .unwrap_or_else(|| NullEventManager::new());
-
-        // Create a NIXL agent if NIXL is enabled and instantiate requested backends
-        // TODO: Build a map of NIXL backends to block pools/sets
-
-        let mut nixl_backends: HashMap<String, Arc<nixl_sys::Backend>> = HashMap::new();
-
-        let nixl_agent = Arc::new(match &config.runtime.nixl {
-            NixlOptions::Enabled => {
-                tracing::debug!("Creating NIXL agent");
-                let agent = NixlAgent::new(&worker_id.to_string())?;
-
-                tracing::debug!("Creating NIXL backends");
-
-                if let Ok((_, ucx_params)) = agent.get_plugin_params("UCX") {
-                    let backend = agent.create_backend("UCX", &ucx_params)?;
-                    nixl_backends.insert("UCX".to_string(), Arc::new(backend));
-                } else {
-                    tracing::warn!("No UCX plugin found; will not create UCX backend");
-                }
-
-                if config.disk_layout.is_some() {
-                    if let Ok((_, gds_params)) = agent.get_plugin_params("GDS") {
-                        let backend = agent.create_backend("GDS", &gds_params)?;
-                        nixl_backends.insert("GDS".to_string(), Arc::new(backend));
-                    } else {
-                        tracing::warn!("No GDS plugin found; will not create GDS backend");
-                    }
-                }
-
-                Some(agent)
-            }
-            NixlOptions::EnabledWithAgent(agent) => Some(agent.clone()),
-            NixlOptions::Disabled => None,
-        });
-
-        let async_rt_handle = match &config.runtime.async_runtime {
-            Some(rt) => rt.handle().clone(),
-            None => match Handle::try_current() {
-                Ok(handle) => handle,
-                Err(e) => anyhow::bail!(e),
-            },
-        };
-
-        Ok(Self {
-            worker_id,
-            cancellation_token,
-            async_rt_handle,
-            nixl_agent,
-            _nixl_backends: nixl_backends,
-            global_registry,
-            event_manager,
-            metrics,
-            config,
-        })
-    }
-
-    // /// Get a reference to the NIXL agent
-    // pub fn nixl_agent(&self) -> Option<&NixlAgent> {
-    //     self.nixl_agent.as_ref().as_ref()
-    // }
-
-    // /// Get a reference to the block manager configuration
-    // pub fn config(&self) -> &KvBlockManagerConfig {
-    //     &self.config
-    // }
-
-    // pub fn active_nixl_backends(&self) -> Vec<String> {
-    //     self.nixl_backends.keys().cloned().collect()
-    // }
-
-    /// Create a new [`LayoutConfigBuilder`] with the model configuration
-    pub fn layout_builder(&self) -> LayoutConfigBuilder {
-        let mut layout_builder = LayoutConfig::builder();
-
-        let model = &self.config.model;
-
-        layout_builder
-            .num_layers(model.num_layers)
-            .outer_dim(model.outer_dim)
-            .page_size(model.page_size)
-            .inner_dim(model.inner_dim)
-            .dtype(model.dtype);
-
-        layout_builder
-    }
 }
 
 impl<Locality: LocalityProvider, Metadata: BlockMetadata> KvBlockManagerState<Locality, Metadata> {
@@ -211,6 +105,10 @@ impl<Locality: LocalityProvider, Metadata: BlockMetadata> KvBlockManagerState<Lo
     // }
 }
 
+// move into mod local
+// move local block data factory into mod super::block
+// create a method on locality to construct a block data factory from a layout builder and resources
+// - this will allow us to use the locality abstraction to build our factories and block pools
 impl<Metadata: BlockMetadata> KvBlockManagerState<locality::Local, Metadata> {
     pub async fn new(config: KvBlockManagerConfig) -> Result<Arc<Self>> {
         let mut resources = Resources::new(config)?;
@@ -510,11 +408,6 @@ pub(crate) fn create_block_pool<S: Storage, M: BlockMetadata>(
     factory: LocalBlockDataFactory<S>,
     resources: &Resources,
     pool_name: &str,
-    // cancellation_token: CancellationToken,
-    // global_registry: GlobalRegistry,
-    // async_runtime: Handle,
-    // pool_metrics: Arc<PoolMetrics>,
-    // event_manager: Option<Arc<dyn EventManager>>,
 ) -> Result<(
     BlockPool<S, locality::Local, M>,
     Vec<Block<S, locality::Local, M>>,

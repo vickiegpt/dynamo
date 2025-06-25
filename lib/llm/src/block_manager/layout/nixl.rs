@@ -147,6 +147,7 @@ where
     }
 }
 
+// todo: move this to so that it's allocated with locality::Local
 impl LayoutConfig {
     /// Create a new NIXL-aware layout from existing NIXL-registerable storage.
     pub fn create_layout<S: Storage + NixlRegisterableStorage>(
