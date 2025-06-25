@@ -103,7 +103,7 @@ fn create_layout<S: Storage + NixlRegisterableStorage>(
     }
 
     if let Some(storage) = config.storage {
-        let mut layout = layout.create_layout(config.layout_type, storage, true)?;
+        let mut layout = layout.create_layout(config.layout_type, storage)?;
         if let Some(nixl_agent) = nixl_agent {
             layout.nixl_register(nixl_agent, None)?;
         }

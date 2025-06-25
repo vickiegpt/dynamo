@@ -3,7 +3,7 @@
 
 use super::*;
 
-use llm_rs::block_manager::distributed::KvbmWorker as KvbmWorkerImpl;
+use llm_rs::block_manager::distributed::{KvbmWorker as KvbmWorkerImpl, KvbmWorkerConfig};
 use llm_rs::block_manager::storage::torch::{TorchDevice, TorchTensor};
 
 /// A wrapper around a Torch tensor.
@@ -79,11 +79,9 @@ pub struct KvbmWorker {
 #[pymethods]
 impl KvbmWorker {
     #[new]
-    #[pyo3(signature = (num_device_blocks, num_host_blocks, num_disk_blocks, page_size, tensors, device_id=0, worker_id=0, dtype=None, barrier_id="kvbm".to_string()))]
+    #[pyo3(signature = (num_device_blocks, page_size, tensors, device_id=0, worker_id=0, dtype=None, barrier_id="kvbm".to_string()))]
     fn new(
         num_device_blocks: usize,
-        num_host_blocks: usize,
-        num_disk_blocks: usize,
         page_size: usize,
         tensors: Vec<Py<PyAny>>,
         device_id: usize,
@@ -100,17 +98,18 @@ impl KvbmWorker {
             vllm_tensors.push(Box::new(vllm_tensor));
         }
 
-        let worker = KvbmWorkerImpl::new(
-            num_device_blocks,
-            num_host_blocks,
-            num_disk_blocks,
-            page_size,
-            vllm_tensors,
-            device_id,
-            worker_id,
-            dtype,
-            barrier_id,
-        ).map_err(to_pyerr)?;
+        let config = KvbmWorkerConfig::builder()
+            .num_device_blocks(num_device_blocks)
+            .page_size(page_size)
+            .tensors(vllm_tensors)
+            .device_id(device_id)
+            .worker_id(worker_id)
+            .dtype(dtype)
+            .barrier_id(barrier_id)
+            .build()
+            .map_err(to_pyerr)?;
+
+        let worker = KvbmWorkerImpl::new(config).map_err(to_pyerr)?;
 
         Ok(Self {
             _impl: Arc::new(worker),
