@@ -474,18 +474,6 @@ impl<Locality: LocalityProvider, Metadata: BlockMetadata> std::fmt::Debug
     }
 }
 
-// pub(crate) fn create_layout<S: Storage + NixlRegisterableStorage>(
-//     mut builder: LayoutConfigBuilder,
-//     config: KvManagerLayoutConfig<S>,
-//     nixl_agent: Option<&NixlAgent>,
-// ) -> Result<Arc<dyn NixlLayout<StorageType = S>>> {
-//     let layout = builder.num_blocks(config.num_blocks).build()?;
-//     if let Some(_logical) = config.logical {
-//         return Err(anyhow::anyhow!(
-//             "Logical layouts are not supported by the local builder"
-//         ));
-//     }
-
 //     if let Some(storage) = config.storage {
 //         let mut layout = layout.create_layout(config.layout_type, storage, false)?;
 //         if let Some(nixl_agent) = nixl_agent {
