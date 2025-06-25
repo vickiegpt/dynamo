@@ -260,7 +260,7 @@ impl WorkerSelector for DefaultWorkerSelector {
         let mut worker_scores = HashMap::new();
 
         // Calculate worker scores
-        for (worker_id, ep) in workers.endpoints.iter() {
+        for (worker_id, _) in workers.endpoints.iter() {
             // Calculate score similar to Python version
             if let Some(score) = request.overlap.scores.get(worker_id) {
                 let score = *score as f64 * block_size as f64 / request.isl_tokens as f64;
