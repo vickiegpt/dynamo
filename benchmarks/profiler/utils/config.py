@@ -119,8 +119,11 @@ class VllmV0ConfigModifier:
     @classmethod
     def get_kv_cache_size_from_dynamo_log(cls, dynamo_log_fn: str) -> int:
         try:
+            logger.info(f"Parsing KV cache size from dynamo log: {dynamo_log_fn}")
+            last_line = ""
             with open(dynamo_log_fn, "r") as f:
                 for line in f:
+                    last_line = line
                     if "Maximum concurrency for" in line:
                         line = line.strip().split("Maximum concurrency for ")[1]
                         token_count = int(line.split(" tokens per request: ")[0])
@@ -134,6 +137,10 @@ class VllmV0ConfigModifier:
             logger.warning(
                 f"Failed to parse KV cache size from line: {line}. Error: {e}"
             )
+        logger.error(
+            "Failed to parse KV cache size from dynamo log -- no matching line found"
+        )
+        logger.error(f"Last line: {last_line}")
         return 0
 
 
@@ -238,6 +245,9 @@ class VllmV1ConfigModifier:
             logger.warning(
                 f"Failed to parse KV cache size from line: {line}. Error: {e}"
             )
+        logger.error(
+            "Failed to parse KV cache size from dynamo log -- no matching line found"
+        )
         return 0
 
 

@@ -143,8 +143,7 @@ if __name__ == "__main__":
         logger.error("1. NVML library not available in the container")
         logger.error("2. No GPUs actually available")
         logger.error("3. GPU access not properly configured")
-        logger.error("Using default TP sizes: [1, 2, 4]")
-        profile_tp_size = [1, 2, 4]
+        exit(1)
     else:
         profile_tp_size = [2**i for i in range(int(math.log2(available_gpus)) + 1)]
 
@@ -266,7 +265,7 @@ if __name__ == "__main__":
         )
         if len(sweep_num_request) == 0:
             logger.error("No num_request to sweep")  # TODO: add a potential fix
-            break
+            exit(1)
 
         engine_decode_itl = []
         engine_decode_thpt_per_gpu = []
