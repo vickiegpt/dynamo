@@ -78,6 +78,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> InactiveBlockPool<S, L, 
     /// # Returns
     ///
     /// A counter for the total number of blocks as an [`Arc<AtomicU64>`].
+    #[expect(dead_code)]
     pub fn total_blocks_counter(&self) -> Arc<AtomicU64> {
         self.total_blocks.clone()
     }
