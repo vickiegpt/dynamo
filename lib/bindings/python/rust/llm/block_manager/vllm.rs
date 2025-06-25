@@ -11,14 +11,15 @@ use pyo3::{prelude::*, wrap_pymodule};
 
 use dynamo_llm::{
     block_manager::{
+        block::locality::{Local, LocalityProvider},
         block::{BlockId, ImmutableBlock, MutableBlock},
-        block::locality::{LocalityProvider, Local},
         pool::BlockPool,
         BasicMetadata, DeviceStorage, KvBlockManager, Storage,
     },
     tokens::{SaltHash, SequenceHash, TokenBlockSequence, Tokens},
 };
 
+// use crate::llm::block_manager::BlockManager as PyBlockManager;
 use crate::llm::block_manager::BlockManager as PyBlockManager;
 
 use crate::to_pyerr;
