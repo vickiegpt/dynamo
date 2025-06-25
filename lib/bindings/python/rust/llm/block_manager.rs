@@ -16,12 +16,19 @@
 use super::*;
 use pyo3::PyResult;
 
+//mod block;
+//mod block_list;
 mod distributed;
+//mod dlpack;
+//mod layer;
 
 pub mod vllm;
 
 /// Add bingings from this crate to the provided module
 pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    //m.add_class::<layer::Layer>()?;
+    //m.add_class::<block::Block>()?;
+    //m.add_class::<block_list::BlockList>()?;
     m.add_class::<BlockManager>()?;
     m.add_class::<distributed::KvbmWorker>()?;
     m.add_class::<distributed::KvbmLeader>()?;
@@ -53,6 +60,9 @@ pub fn map_dtype(dtype: &str) -> anyhow::Result<dynamo_llm::common::dtype::DType
 #[derive(Clone)]
 pub struct BlockManager {
     inner: Arc<dynamo_llm::block_manager::ReferenceBlockManager>,
+    // TODO: Metadata should be stored in the block manager?
+    //dtype: dynamo_llm::common::dtype::DType,
+    //device_id: usize,
 }
 
 #[pymethods]
@@ -122,8 +132,96 @@ impl BlockManager {
                     })
                     .map_err(to_pyerr)?,
             ),
+            //dtype: dtype_,
+            //device_id,
         })
     }
+
+    /*
+    fn allocate_host_blocks_blocking(&self, count: usize) -> PyResult<block::Block> {
+        let blocks = self
+            .inner
+            .host()
+            .ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("Host allocator not available")
+            })?
+            .allocate_blocks_blocking(count)
+            .map_err(to_pyerr)?;
+        // Wrap each block in an enum accounting for Pinned & Device block
+        let blocks = blocks.into_iter().map(block::BlockType::Pinned).collect();
+        Ok(block_list::BlockList::from_rust(
+            blocks,
+            self.dtype,
+            self.device_id,
+        ))
+    }
+
+    #[pyo3(signature = (count))]
+    fn allocate_host_blocks<'py>(
+        &self,
+        py: Python<'py>,
+        count: usize,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        let dtype = self.dtype;
+        let device_id = self.device_id;
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let blocks = inner
+                .host()
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyRuntimeError::new_err("Host allocator not available")
+                })?
+                .allocate_blocks(count)
+                .await
+                .map_err(to_pyerr)?;
+            // Wrap each block in an enum accounting for Pinned & Device block
+            let blocks = blocks.into_iter().map(block::BlockType::Pinned).collect();
+            Ok(block_list::BlockList::from_rust(blocks, dtype, device_id))
+        })
+    }
+
+    fn allocate_device_blocks_blocking(&self, count: usize) -> PyResult<block_list::BlockList> {
+        let blocks = self
+            .inner
+            .device()
+            .ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("Device allocator not available")
+            })?
+            .allocate_blocks_blocking(count)
+            .map_err(to_pyerr)?;
+        // Wrap each block in an enum accounting for Pinned & Device block
+        let blocks = blocks.into_iter().map(block::BlockType::Device).collect();
+        Ok(block_list::BlockList::from_rust(
+            blocks,
+            self.dtype,
+            self.device_id,
+        ))
+    }
+
+    #[pyo3(signature = (count))]
+    fn allocate_device_blocks<'py>(
+        &self,
+        py: Python<'py>,
+        count: usize,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        let dtype = self.dtype;
+        let device_id = self.device_id;
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let blocks = inner
+                .device()
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyRuntimeError::new_err("Device allocator not available")
+                })?
+                .allocate_blocks(count)
+                .await
+                .map_err(to_pyerr)?;
+            // Wrap each block in an enum accounting for Pinned & Device block
+            let blocks = blocks.into_iter().map(block::BlockType::Device).collect();
+            Ok(block_list::BlockList::from_rust(blocks, dtype, device_id))
+        })
+    }
+    */
 
     fn block_size(&self) -> usize {
         self.inner.block_size()
