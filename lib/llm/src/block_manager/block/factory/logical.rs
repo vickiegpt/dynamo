@@ -64,15 +64,15 @@ impl<S: Storage, R: LogicalResources> IntoBlocks<S, Logical<R>> for LogicalBlock
 #[cfg(test)]
 mod tests {
     use crate::block_manager::block::data::logical::null::NullResources;
-    use crate::block_manager::{DType, PinnedStorage};
+    use crate::block_manager::{BlockPool, DType, PinnedStorage};
 
     use super::*;
 
     const TEST_BLOCK_SET_ID: usize = 42;
     const TEST_WORKER_ID: WorkerID = 1337;
 
-    #[test]
-    fn test_logical_block_factory() {
+    #[tokio::test]
+    async fn test_logical_block_factory() {
         let layout_config = LayoutConfig::builder()
             .num_blocks(10)
             .page_size(16)
@@ -98,5 +98,11 @@ mod tests {
         assert_eq!(block_data.storage_type(), &StorageType::Pinned);
 
         let _resources = block_data.resources();
+
+        let blocks = factory
+            .into_blocks_with_metadata(BasicMetadata::default())
+            .unwrap();
+
+        let pool = BlockPool::builder().blocks(blocks).build().unwrap();
     }
 }

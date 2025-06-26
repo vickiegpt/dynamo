@@ -128,7 +128,7 @@ impl<Metadata: BlockMetadata> KvBlockManager<Metadata> {
         let block_size = config.model.page_size;
 
         // Create the internal state
-        let state = state::KvBlockManagerState::new(config).await?;
+        let state = state::KvBlockManagerState::<locality::Local, Metadata>::new(config).await?;
 
         let _cancellation_token = Arc::new(CancelOnLastDrop { cancellation_token });
 
