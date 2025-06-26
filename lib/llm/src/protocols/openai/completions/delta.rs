@@ -15,7 +15,6 @@
 
 use super::{CompletionChoice, CompletionResponse, NvCreateCompletionRequest};
 use crate::protocols::common;
-use crate::protocols::openai::CompletionUsage;
 
 impl NvCreateCompletionRequest {
     // put this method on the request
@@ -43,8 +42,7 @@ pub struct DeltaGenerator {
     created: u64,
     model: String,
     system_fingerprint: Option<String>,
-    usage: CompletionUsage,
-
+    usage: async_openai::types::CompletionUsage,
     options: DeltaGeneratorOptions,
 }
 
@@ -55,18 +53,28 @@ impl DeltaGenerator {
             .unwrap()
             .as_secs();
 
+        // Previously, our home-rolled CompletionUsage impl'd Default
+        // PR !387 - https://github.com/64bit/async-openai/pull/387
+        let usage = async_openai::types::CompletionUsage {
+            completion_tokens: 0,
+            prompt_tokens: 0,
+            total_tokens: 0,
+            completion_tokens_details: None,
+            prompt_tokens_details: None,
+        };
+
         Self {
             id: format!("cmpl-{}", uuid::Uuid::new_v4()),
             object: "text_completion".to_string(),
             created: now,
             model,
             system_fingerprint: None,
-            usage: CompletionUsage::default(),
+            usage,
             options,
         }
     }
 
-    pub fn update_isl(&mut self, isl: i32) {
+    pub fn update_isl(&mut self, isl: u32) {
         self.usage.prompt_tokens = isl;
     }
 
@@ -77,6 +85,11 @@ impl DeltaGenerator {
         finish_reason: Option<String>,
     ) -> CompletionResponse {
         // todo - update for tool calling
+
+        let mut usage = self.usage.clone();
+        if self.options.enable_usage {
+            usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+        }
 
         CompletionResponse {
             id: self.id.clone(),
@@ -91,7 +104,7 @@ impl DeltaGenerator {
                 logprobs: None,
             }],
             usage: if self.options.enable_usage {
-                Some(self.usage.clone())
+                Some(usage)
             } else {
                 None
             },
@@ -106,7 +119,7 @@ impl crate::protocols::openai::DeltaGeneratorExt<CompletionResponse> for DeltaGe
     ) -> anyhow::Result<CompletionResponse> {
         // aggregate usage
         if self.options.enable_usage {
-            self.usage.completion_tokens += delta.token_ids.len() as i32;
+            self.usage.completion_tokens += delta.token_ids.len() as u32;
         }
 
         // todo logprobs
@@ -123,12 +136,12 @@ impl crate::protocols::openai::DeltaGeneratorExt<CompletionResponse> for DeltaGe
         };
 
         // create choice
-        let index = 0;
-        Ok(self.create_choice(index, delta.text, finish_reason))
+        let index = delta.index.unwrap_or(0).into();
+        let response = self.create_choice(index, delta.text.clone(), finish_reason);
+        Ok(response)
     }
 
-    // TODO: This is a hack. Change `prompt_tokens` to u32
     fn get_isl(&self) -> Option<u32> {
-        Some(self.usage.prompt_tokens as u32)
+        Some(self.usage.prompt_tokens)
     }
 }
