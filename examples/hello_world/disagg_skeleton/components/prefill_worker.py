@@ -62,7 +62,7 @@ class PrefillWorker:
                 fut.result()
                 logger.info("prefill queue handler exited successfully")
             except Exception as e:
-                logger.info(f"[ERROR] prefill queue handler failed: {e!r}")
+                logger.error("prefill queue handler failed: %r", e)
                 sys.exit(1)
 
         task.add_done_callback(prefill_queue_handler_cb)

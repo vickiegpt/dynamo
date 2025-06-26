@@ -54,11 +54,15 @@ class DummyWorker:
         logger.info(
             f"Prefill queue: {self._prefill_queue_nats_server}:{self._prefill_queue_stream_name}"
         )
-        self.component = dynamo_context["component"]
-        self.metrics_publisher = KvMetricsPublisher()
-        # Register an endpoint for consumers of the KV Metrics
-        # (KvMetricsAggregator in kv_router) to listen/gather on.
-        self.metrics_publisher.create_endpoint(self.component)
+        try:
+            self.component = dynamo_context["component"]
+            self.metrics_publisher = KvMetricsPublisher()
+            # Register an endpoint for consumers of the KV Metrics
+            # (KvMetricsAggregator in kv_router) to listen/gather on.
+            self.metrics_publisher.create_endpoint(self.component)
+        except Exception as e:
+            logger.error(f"Failed to initialize KvMetricsPublisher: {e}")
+            self.metrics_publisher = None
         # Initialize some metrics for the worker/class to track
         self.request_active_slots = 0
         self.request_total_slots = 1024
@@ -117,21 +121,24 @@ class DummyWorker:
         # Populate the frequently changing metrics with random data for
         # demonstration. These values should be tracked by the implementation,
         # or queried from the underlying inference framework.
-        self.kv_active_blocks = random.randint(0, 1024)
-        self.num_requests_waiting = random.randint(0, 100)
-        self.gpu_cache_usage_perc = random.uniform(0, 1.0)
-        self.gpu_prefix_cache_hit_rate = random.uniform(0, 1.0)
+        try:
+            self.kv_active_blocks = random.randint(0, 1024)
+            self.num_requests_waiting = random.randint(0, 100)
+            self.gpu_cache_usage_perc = random.uniform(0, 1.0)
+            self.gpu_prefix_cache_hit_rate = random.uniform(0, 1.0)
 
-        # Publish the metrics with the current state
-        self.metrics_publisher.publish(
-            self.request_active_slots,
-            self.request_total_slots,
-            self.kv_active_blocks,
-            self.kv_total_blocks,
-            self.num_requests_waiting,
-            self.gpu_cache_usage_perc,
-            self.gpu_prefix_cache_hit_rate,
-        )
+            # Publish the metrics with the current state
+            self.metrics_publisher.publish(
+                self.request_active_slots,
+                self.request_total_slots,
+                self.kv_active_blocks,
+                self.kv_total_blocks,
+                self.num_requests_waiting,
+                self.gpu_cache_usage_perc,
+                self.gpu_prefix_cache_hit_rate,
+            )
+        except Exception as e:
+            logger.error("Failed to publish KV metrics: %s", e)
 
     @endpoint()
     async def worker_generate(self, request: GeneralRequest):
@@ -157,7 +164,8 @@ class DummyWorker:
             await callback(prefill_request)
 
         logger.info(f"{self.hostname}: Worker invoked")
-        self.publish_kv_metrics()
+        if self.metrics_publisher is not None:
+            self.publish_kv_metrics()
         yield GeneralResponse(
             request_id=request.request_id,
             worker_output=request.prompt + "_GeneratedBy_" + self.hostname,
