@@ -160,6 +160,7 @@ impl ZmqActiveMessageLeader {
         Ok(completion_receiver)
     }
 
+    /// Pull worker is responsible for receiving ACKs from workers.
     async fn pull_worker(
         mut pull_socket: Pull,
         pending_messages: Arc<Mutex<HashMap<usize, PendingMessage>>>,

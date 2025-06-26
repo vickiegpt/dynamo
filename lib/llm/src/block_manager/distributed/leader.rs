@@ -10,6 +10,7 @@ use dynamo_runtime::{utils::leader_worker_barrier::LeaderBarrier, DistributedRun
 
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -63,6 +64,7 @@ pub struct KvbmLeader {
     // The DistributedRuntime only stores a handle, so we need to keep the runtime around.
     _runtime: tokio::runtime::Runtime,
     _zmq_leader: ZmqActiveMessageLeader,
+    worker_data: HashMap<String, ()>, // TODO: Replace with KvbmLeaderData
 }
 
 impl KvbmLeader {
@@ -98,14 +100,16 @@ impl KvbmLeader {
         let zmq_data_clone = zmq_data.clone();
 
         // Block leader initialization (and vLLM) until all workers have come online.
-        drt.runtime()
-            .primary()
-            .block_on(async move {
-                leader_barrier
-                    .sync(&drt_clone, zmq_data_clone.as_ref())
-                    .await
-            })
-            .map_err(|e| anyhow::anyhow!("Failed to sync leader barrier: {:?}", e))?;
+        let worker_data = drt.runtime().primary().block_on(async move {
+            let worker_data = leader_barrier
+                .sync(&drt_clone, zmq_data_clone.as_ref())
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to sync leader barrier: {:?}", e))?;
+
+            tracing::info!("Leader barrier synced with {} workers", config.world_size);
+
+            anyhow::Ok(worker_data)
+        })?;
 
         tracing::info!("Leader barrier synced with {} workers", config.world_size);
 
@@ -128,6 +132,7 @@ impl KvbmLeader {
             _drt: drt,
             _runtime: runtime,
             _zmq_leader: zmq_leader,
+            worker_data,
         })
     }
 }

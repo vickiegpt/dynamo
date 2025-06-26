@@ -4,42 +4,50 @@
 use super::*;
 
 pub mod lw_sharded;
+pub mod null;
 
-pub trait Parallelism: Send + Sync + 'static + std::fmt::Debug {
-    type Output<S: Storage>: BlockDataExt<S> + std::fmt::Debug;
+pub enum LogicalKinds {
+    Simple,
+    Sharded,
 }
+
+pub trait LogicalResources: Send + Sync + 'static + std::fmt::Debug {}
 
 /// Individual block storage - cannot be cloned to ensure uniqueness
 #[derive(Debug)]
-pub struct LogicalBlockData<S: Storage, P: Parallelism> {
+pub struct LogicalBlockData<S: Storage, R: LogicalResources> {
     block_id: BlockId,
     block_set_id: usize,
     worker_id: WorkerID,
-    parallelism: P,
+    resources: R,
     storage_type: StorageType,
     storage: std::marker::PhantomData<S>,
 }
 
-impl<S: Storage, P: Parallelism> LogicalBlockData<S, P> {
+impl<S: Storage, R: LogicalResources> LogicalBlockData<S, R> {
     pub fn new(
         block_id: BlockId,
         block_set_id: usize,
         worker_id: WorkerID,
-        parallelism: P,
+        resources: R,
         storage_type: StorageType,
     ) -> Self {
         Self {
             block_id,
             block_set_id,
             worker_id,
-            parallelism,
+            resources,
             storage_type,
             storage: std::marker::PhantomData,
         }
     }
+
+    pub fn resources(&self) -> &R {
+        &self.resources
+    }
 }
 
-impl<S: Storage, P: Parallelism> BlockDataExt<S> for LogicalBlockData<S, P> {
+impl<S: Storage, R: LogicalResources> BlockDataExt<S> for LogicalBlockData<S, R> {
     fn block_id(&self) -> BlockId {
         self.block_id
     }
