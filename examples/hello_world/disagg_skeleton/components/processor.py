@@ -14,14 +14,13 @@
 # limitations under the License.
 
 import logging
-from typing import Protocol
 
 from components.kv_router import Router
 from components.utils import GeneralRequest, GeneralResponse, check_required_workers
 from components.worker import DummyWorker
 
 from dynamo._core import Client
-from dynamo.sdk import async_on_start, depends, dynamo_context, dynamo_endpoint, service
+from dynamo.sdk import async_on_start, depends, dynamo_context, endpoint, service
 from dynamo.sdk.lib.dependency import DynamoClient
 
 logger = logging.getLogger(__name__)
@@ -34,7 +33,7 @@ logger = logging.getLogger(__name__)
     },
     workers=1,
 )
-class Processor(Protocol):
+class Processor:
     """
     vLLM pre and post processing
     """
@@ -96,7 +95,8 @@ class Processor(Protocol):
         async for resp in engine_generator:
             yield GeneralResponse.model_validate_json(resp.data())
 
-    @dynamo_endpoint()
+    @endpoint()
     async def processor_generate(self, raw_request: GeneralRequest):
+        logger.info(f"processor_generate: {raw_request}")
         async for response in self._generate(raw_request):
             yield response.model_dump_json()
