@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: profile-sla
+  name: profile-sla-disagg
   namespace: hannahz-dynamo
 spec:
   template:
@@ -9,7 +9,7 @@ spec:
       imagePullSecrets:
         - name: docker-imagepullsecret
       containers:
-      - name: profile-sla
+      - name: profile-sla-disagg
         image: nvcr.io/nvidian/nim-llm-dev/dynamo-base-docker-llm:dep-178.14
         resources:
           requests:
@@ -29,7 +29,7 @@ spec:
         command: ["python", "/workspace/benchmarks/profiler/profile_sla.py"]
         args:
           - --config
-          - /workspace/examples/llm/configs/agg.yaml
+          - /workspace/examples/llm/configs/disagg.yaml
           - --output-dir
           - /workspace/profiling_results
           - --isl
@@ -40,6 +40,7 @@ spec:
           - "500"
           - --itl
           - "50"
+          - --disaggregated
         volumeMounts:
           - name: output-volume
             mountPath: /workspace/profiling_results
