@@ -14,12 +14,13 @@
 # limitations under the License.
 
 import argparse
+import asyncio
 import logging
 
 from pydantic import BaseModel
 
-from components.planner import start_planner  # type: ignore[attr-defined]
-from dynamo.planner.defaults import LoadPlannerDefaults
+from dynamo.planner.defaults import SLAPlannerDefaults
+from dynamo.planner.utils.planner_core import start_sla_planner
 from dynamo.runtime.logging import configure_dynamo_logging
 from dynamo.sdk import async_on_start, dynamo_context, endpoint, service
 from dynamo.sdk.core.protocol.interface import ComponentType
@@ -27,6 +28,10 @@ from dynamo.sdk.lib.config import ServiceConfig
 from dynamo.sdk.lib.image import DYNAMO_IMAGE
 
 logger = logging.getLogger(__name__)
+
+# start planner 30 seconds after the other components to make sure planner can see them
+# TODO: remove this delay
+INIT_PLANNER_START_DELAY = 30
 
 
 class RequestType(BaseModel):
@@ -57,55 +62,51 @@ class Planner:
         self.args = argparse.Namespace(
             namespace=self.namespace,
             environment=config_instance.get(
-                "environment", LoadPlannerDefaults.environment
+                "environment", SLAPlannerDefaults.environment
             ),
             no_operation=config_instance.get(
-                "no-operation", LoadPlannerDefaults.no_operation
+                "no-operation", SLAPlannerDefaults.no_operation
             ),
-            log_dir=config_instance.get("log-dir", LoadPlannerDefaults.log_dir),
+            log_dir=config_instance.get("log-dir", SLAPlannerDefaults.log_dir),
             adjustment_interval=config_instance.get(
-                "adjustment-interval", LoadPlannerDefaults.adjustment_interval
-            ),
-            metric_pulling_interval=config_instance.get(
-                "metric-pulling-interval", LoadPlannerDefaults.metric_pulling_interval
+                "adjustment-interval", SLAPlannerDefaults.adjustment_interval
             ),
             max_gpu_budget=config_instance.get(
-                "max-gpu-budget", LoadPlannerDefaults.max_gpu_budget
+                "max-gpu-budget", SLAPlannerDefaults.max_gpu_budget
             ),
             min_endpoint=config_instance.get(
-                "min-endpoint", LoadPlannerDefaults.min_endpoint
-            ),
-            decode_kv_scale_up_threshold=config_instance.get(
-                "decode-kv-scale-up-threshold",
-                LoadPlannerDefaults.decode_kv_scale_up_threshold,
-            ),
-            decode_kv_scale_down_threshold=config_instance.get(
-                "decode-kv-scale-down-threshold",
-                LoadPlannerDefaults.decode_kv_scale_down_threshold,
-            ),
-            prefill_queue_scale_up_threshold=config_instance.get(
-                "prefill-queue-scale-up-threshold",
-                LoadPlannerDefaults.prefill_queue_scale_up_threshold,
-            ),
-            prefill_queue_scale_down_threshold=config_instance.get(
-                "prefill-queue-scale-down-threshold",
-                LoadPlannerDefaults.prefill_queue_scale_down_threshold,
+                "min-endpoint", SLAPlannerDefaults.min_endpoint
             ),
             decode_engine_num_gpu=config_instance.get(
-                "decode-engine-num-gpu", LoadPlannerDefaults.decode_engine_num_gpu
+                "decode-engine-num-gpu", SLAPlannerDefaults.decode_engine_num_gpu
             ),
             prefill_engine_num_gpu=config_instance.get(
-                "prefill-engine-num-gpu", LoadPlannerDefaults.prefill_engine_num_gpu
+                "prefill-engine-num-gpu", SLAPlannerDefaults.prefill_engine_num_gpu
+            ),
+            prometheus_endpoint=config_instance.get(
+                "prometheus-endpoint", SLAPlannerDefaults.prometheus_endpoint
+            ),
+            profile_results_dir=config_instance.get(
+                "profile-results-dir", SLAPlannerDefaults.profile_results_dir
+            ),
+            isl=config_instance.get("isl", SLAPlannerDefaults.isl),
+            osl=config_instance.get("osl", SLAPlannerDefaults.osl),
+            ttft=config_instance.get("ttft", SLAPlannerDefaults.ttft),
+            itl=config_instance.get("itl", SLAPlannerDefaults.itl),
+            load_predictor=config_instance.get(
+                "load-predictor", SLAPlannerDefaults.load_predictor
+            ),
+            load_prediction_window_size=config_instance.get(
+                "load-prediction-window-size",
+                SLAPlannerDefaults.load_prediction_window_size,
             ),
         )
 
     @async_on_start
     async def async_init(self):
-        import asyncio
-
-        await asyncio.sleep(30)
+        await asyncio.sleep(INIT_PLANNER_START_DELAY)
         logger.info("Calling start_planner")
-        await start_planner(self.runtime, self.args)
+        await start_sla_planner(self.runtime, self.args)
         logger.info("Planner started")
 
     @endpoint()
