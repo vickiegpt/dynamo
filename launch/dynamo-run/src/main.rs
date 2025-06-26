@@ -19,7 +19,8 @@ use clap::Parser;
 
 use dynamo_run::{Input, Output};
 use dynamo_runtime::logging;
-
+use textwrap::fill;
+use clap::CommandFactory;
 const HELP: &str = r#"
 dynamo-run is a single binary that wires together the various inputs (http, text, network) and workers (network, engine), that runs the services. It is the simplest way to use dynamo locally.
 
@@ -79,7 +80,14 @@ async fn wrapper(runtime: dynamo_runtime::Runtime) -> anyhow::Result<()> {
     {
         let engine_list = Output::available_engines().join("|");
         let usage = USAGE.replace("ENGINE_LIST", &engine_list);
+        let tzuling = dynamo_run::Flags::command().render_help();
+        let tzuling_wrap = fill(&tzuling.to_string(), 80);
         println!("{usage}");
+        println!("--------------------------------");
+        println!("{tzuling_wrap}");
+        println!("--------------------------------");
+        println!("{tzuling}");
+        println!("--------------------------------");
         println!("{HELP}");
         return Ok(());
     } else if args[0] == "--version" {
