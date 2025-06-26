@@ -13,9 +13,9 @@ spec:
         image: nvcr.io/nvidian/nim-llm-dev/dynamo-base-docker-llm:dep-178.14
         resources:
           requests:
-            nvidia.com/gpu: 2
+            nvidia.com/gpu: 3
           limits:
-            nvidia.com/gpu: 2
+            nvidia.com/gpu: 3
         env:
           - name: HF_TOKEN
             valueFrom:
