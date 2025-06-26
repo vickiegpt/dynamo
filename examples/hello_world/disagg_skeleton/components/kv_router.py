@@ -27,6 +27,7 @@ from dynamo.sdk import async_on_start, depends, dynamo_context, endpoint, servic
 WorkerId = str
 logger = logging.getLogger(__name__)
 
+
 @service(
     dynamo={
         "namespace": "dynamo-demo",
