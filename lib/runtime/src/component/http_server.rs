@@ -66,13 +66,16 @@ async fn metrics_handler() -> impl IntoResponse {
     let mut buffer = Vec::new();
 
     match encoder.encode(&prometheus::gather(), &mut buffer) {
-        Ok(()) => {
-            let response = String::from_utf8(buffer).unwrap_or_else(|_| {
-                tracing::error!("Failed to encode metrics as UTF-8");
-                String::new()
-            });
-            (StatusCode::OK, response)
-        }
+        Ok(()) => match String::from_utf8(buffer) {
+            Ok(response) => (StatusCode::OK, response),
+            Err(e) => {
+                tracing::error!("Failed to encode metrics as UTF-8: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to encode metrics as UTF-8".to_string(),
+                )
+            }
+        },
         Err(e) => {
             tracing::error!("Failed to encode metrics: {}", e);
             (

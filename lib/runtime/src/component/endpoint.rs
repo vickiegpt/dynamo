@@ -113,12 +113,17 @@ impl EndpointConfigBuilder {
                 #[allow(clippy::async_yields_async)]
                 async move {
                     tokio::spawn(async move {
-                        let _ = super::http_server::start_http_server(
+                        if let Err(e) = super::http_server::start_http_server(
                             host,
                             port,
                             component_cancel_token,
                         )
-                        .await;
+                        .await
+                        {
+                            tracing::error!("HTTP server startup failed: {}", e);
+                        } else {
+                            tracing::debug!("HTTP server started successfully");
+                        }
                     })
                 },
             )
