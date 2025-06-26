@@ -25,6 +25,7 @@ from dynamo.sdk import DYNAMO_IMAGE, api, depends, service
 
 logger = logging.getLogger(__name__)
 
+
 @service(
     dynamo={"namespace": "dynamo-demo"},
     image=DYNAMO_IMAGE,

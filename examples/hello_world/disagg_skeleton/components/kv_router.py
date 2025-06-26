@@ -97,9 +97,9 @@ class Router:
     @endpoint()
     async def check_hit_rate(self, request_prompt: str) -> AsyncIterator[WorkerId]:
         metrics = await self.metrics_aggregator.get_metrics()
-        for endpoint in metrics.endpoints:
+        for metrics_endpoint in metrics.endpoints:
             logger.info(
-                f"KV metrics:{endpoint.worker_id}, {endpoint.num_requests_waiting}"
+                f"KV metrics:{metrics_endpoint.worker_id}, {metrics_endpoint.num_requests_waiting}"
             )
         max_id, max_hit_rate = self._cost_function(request_prompt, metrics)
         yield f"{max_id}_{max_hit_rate}"

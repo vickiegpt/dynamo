@@ -32,6 +32,7 @@ from dynamo.sdk import async_on_start, dynamo_context, endpoint, service
 
 logger = logging.getLogger(__name__)
 
+
 @service(
     dynamo={
         "enabled": True,
