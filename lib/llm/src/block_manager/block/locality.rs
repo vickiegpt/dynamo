@@ -90,22 +90,20 @@ impl LocalityProvider for Local {
 //     }
 // }
 
-pub trait Parallelism: Send + Sync + 'static + std::fmt::Debug {
-    type Output<S: Storage>: BlockDataExt<S> + std::fmt::Debug;
-}
+pub use crate::block_manager::block::data::logical::{LogicalBlockData, LogicalResources};
 
 /// General logical locality for future RPC-based transfers
 #[derive(Debug)]
-pub struct Logical<P: Parallelism> {
-    _parallelism: std::marker::PhantomData<P>,
+pub struct Logical<R: LogicalResources> {
+    _resources: std::marker::PhantomData<R>,
 }
 
-impl<P: Parallelism> LocalityProvider for Logical<P> {
-    type Disk = P::Output<DiskStorage>;
-    type Host = P::Output<PinnedStorage>;
-    type Device = P::Output<DeviceStorage>;
+impl<R: LogicalResources> LocalityProvider for Logical<R> {
+    type Disk = LogicalBlockData<DiskStorage, R>;
+    type Host = LogicalBlockData<PinnedStorage, R>;
+    type Device = LogicalBlockData<DeviceStorage, R>;
 
-    type BlockData<S: Storage> = P::Output<S>;
+    type BlockData<S: Storage> = LogicalBlockData<S, R>;
 }
 
 // pub mod nixl {

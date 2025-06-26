@@ -11,7 +11,7 @@ pub enum LogicalKinds {
     Sharded,
 }
 
-pub trait LogicalResources: Send + Sync + 'static + std::fmt::Debug {}
+pub trait LogicalResources: Clone + Send + Sync + 'static + std::fmt::Debug {}
 
 /// Individual block storage - cannot be cloned to ensure uniqueness
 #[derive(Debug)]
