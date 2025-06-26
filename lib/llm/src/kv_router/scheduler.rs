@@ -20,13 +20,13 @@ use serde::{Deserialize, Serialize};
 use std::borrow::BorrowMut;
 use std::collections::HashMap;
 
+use super::protocols::WorkerSelectionResult;
+use super::WorkerSelector;
 use crate::kv_router::indexer::OverlapScores;
 pub use crate::kv_router::protocols::ForwardPassMetrics;
 use crate::kv_router::scoring::ProcessedEndpoints;
+use crate::kv_router::KvRouterConfig;
 use crate::kv_router::KV_HIT_RATE_SUBJECT;
-
-use super::protocols::WorkerSelectionResult;
-use super::WorkerSelector;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KVHitRateEvent {
@@ -96,7 +96,7 @@ impl KvScheduler {
         endpoints_rx: tokio::sync::watch::Receiver<ProcessedEndpoints>,
         selector: Option<Box<dyn WorkerSelector + Send + Sync>>,
     ) -> Result<Self, KvSchedulerError> {
-        let selector = selector.unwrap_or(Box::new(DefaultWorkerSelector));
+        let selector = selector.unwrap_or(Box::new(DefaultWorkerSelector::default()));
         let mut endpoints_rx = endpoints_rx;
         let mut endpoints: ProcessedEndpoints = endpoints_rx.borrow_and_update().clone();
 
@@ -112,12 +112,11 @@ impl KvScheduler {
 
         // Channel to accept new scheduling requests
         let (request_tx, request_rx) = tokio::sync::mpsc::channel::<SchedulingRequest>(1024);
-        tracing::debug!("scheduler starting");
         // Background task to handle scheduling requests
         tokio::spawn(async move {
             let mut request: SchedulingRequest;
             let mut request_rx = request_rx;
-            tracing::debug!("scheduler background task started");
+            tracing::trace!("scheduler background task started");
 
             'outer: loop {
                 request = tokio::select! {
@@ -141,7 +140,6 @@ impl KvScheduler {
                         continue 'outer;
                     }
                 };
-                tracing::debug!("selected");
                 loop {
                     match selector.select_worker(&endpoints, &request, block_size) {
                         Ok(selection) => {
@@ -189,17 +187,13 @@ impl KvScheduler {
             overlap,
             resp_tx,
         };
-        tracing::debug!("before sending request");
         self.request_tx
             .send(request)
             .await
             .map_err(|_| KvSchedulerError::SubscriberShutdown)?;
-        tracing::debug!("after sending request");
-
         let res = resp_rx
             .await
             .map_err(|_| KvSchedulerError::SubscriberShutdown)?;
-        tracing::debug!("after receiving response");
         Ok(res)
     }
 }
@@ -215,9 +209,14 @@ pub fn process_worker_selection(
         .get_mut(&selection.worker_id)
         .expect("worker not found");
 
-    // Update worker state
-    worker.data.request_active_slots += 1;
-    worker.data.kv_active_blocks += selection.required_blocks - selection.overlap_blocks as u64;
+    // Update worker state predictively
+    // Will be overwritten on next polling of metrics
+    worker.data.num_requests_waiting += 1;
+    // Assumes radix attention so KV load is only incremented by uncached blocks
+    // overlap_blocks can be bigger than required_blocks. I don't know if that's a bug or not.
+    worker.data.kv_active_blocks += selection
+        .required_blocks
+        .saturating_sub(selection.overlap_blocks as u64);
 
     // Emit event
     if let Err(e) = event_tx.send(KVHitRateEvent {
@@ -232,8 +231,18 @@ pub fn process_worker_selection(
 }
 
 // Default implementation matching the Python _cost_function
-#[derive(Default)]
-pub struct DefaultWorkerSelector;
+#[derive(Debug, Clone, Default)]
+pub struct DefaultWorkerSelector {
+    pub kv_router_config: KvRouterConfig,
+}
+
+impl DefaultWorkerSelector {
+    pub fn new(kv_router_config: Option<KvRouterConfig>) -> Self {
+        Self {
+            kv_router_config: kv_router_config.unwrap_or_default(),
+        }
+    }
+}
 
 impl WorkerSelector for DefaultWorkerSelector {
     fn select_worker(
@@ -244,8 +253,12 @@ impl WorkerSelector for DefaultWorkerSelector {
     ) -> Result<WorkerSelectionResult, KvSchedulerError> {
         assert!(request.isl_tokens > 0);
 
+        if workers.endpoints.is_empty() {
+            return Err(KvSchedulerError::NoEndpoints);
+        }
+
         let mut worker_scores = HashMap::new();
-        let mut max_active = 0.0;
+        let mut max_waiting = 0.0;
 
         // Calculate worker scores and find max waiting requests
         for (worker_id, ep) in workers.endpoints.iter() {
@@ -256,16 +269,12 @@ impl WorkerSelector for DefaultWorkerSelector {
             }
 
             // Track max waiting requests
-            max_active = f64::max(max_active, ep.data.request_active_slots as f64);
-        }
-
-        if max_active == 0.0 {
-            return Err(KvSchedulerError::NoEndpoints);
+            max_waiting = f64::max(max_waiting, ep.data.num_requests_waiting as f64);
         }
 
         // make immutable
         let worker_scores = worker_scores;
-        let max_active = max_active;
+        let max_waiting = max_waiting;
 
         // Calculate logits for each worker
         let mut best_logit = f64::NEG_INFINITY;
@@ -278,24 +287,23 @@ impl WorkerSelector for DefaultWorkerSelector {
             let score = worker_scores.get(&worker_id).copied().unwrap_or(0.0);
 
             // Calculate normalized metrics
-            assert!(ep.data.kv_total_blocks > 0);
-            let gpu_cache_usage = ep.data.kv_active_blocks as f64 / ep.data.kv_total_blocks as f64;
-            let normalized_active = if max_active > 0.0 {
-                ep.data.request_active_slots as f64 / max_active
+            let gpu_cache_usage = ep.data.gpu_cache_usage_perc as f64;
+            let normalized_waiting = if max_waiting > 0.0 {
+                ep.data.num_requests_waiting as f64 / max_waiting
             } else {
                 0.0
             };
 
             // Calculate logit using same formula as Python
-            let logit = 2.0 * score - gpu_cache_usage - normalized_active;
+            let logit = self.kv_router_config.overlap_score_weight * score
+                - self.kv_router_config.gpu_cache_usage_weight * gpu_cache_usage
+                - self.kv_router_config.waiting_requests_weight * normalized_waiting;
 
-            tracing::info!(
-                "Formula for {}: {:.3} = 2.0 * {:.3} - {:.3} - {:.3}",
-                worker_id,
-                logit,
-                score,
-                gpu_cache_usage,
-                normalized_active
+            tracing::trace!(
+                "Formula for {worker_id}: {logit:.3} = {:.1} * {score:.3} - {:.1} * {gpu_cache_usage:.3} - {:.1} * {normalized_waiting:.3}",
+                self.kv_router_config.overlap_score_weight,
+                self.kv_router_config.gpu_cache_usage_weight,
+                self.kv_router_config.waiting_requests_weight,
             );
 
             // Track best workers
@@ -313,8 +321,10 @@ impl WorkerSelector for DefaultWorkerSelector {
         }
 
         // Return early if no valid workers found
-        if best_workers.is_empty() || best_logit == 0.0 {
+        if best_workers.is_empty() {
             return Err(KvSchedulerError::NoEndpoints);
+        } else if best_logit == 0.0 {
+            tracing::debug!("best worker logit is 0");
         }
 
         let worker_id = if best_workers.len() == 1 {
@@ -325,10 +335,11 @@ impl WorkerSelector for DefaultWorkerSelector {
             best_workers[rng.random_range(0..best_workers.len())]
         };
 
-        // Log selection metrics
-        tracing::info!("Selected worker: {}, logit: {:.3}", worker_id, best_logit);
+        // Lower to trace level eventually. Nice to see KV routing working for now.
+        tracing::debug!("Selected worker: {worker_id}, logit: {best_logit:.3}");
 
-        let total_blocks = std::cmp::min(request.isl_tokens / block_size, 1) as u64;
+        // Log selection metrics
+        let total_blocks = std::cmp::max(request.isl_tokens / block_size, 1) as u64;
         let overlap_blocks = request.overlap.scores.get(&worker_id).copied().unwrap_or(0) as usize;
 
         Ok(WorkerSelectionResult {
@@ -336,5 +347,192 @@ impl WorkerSelector for DefaultWorkerSelector {
             required_blocks: total_blocks,
             overlap_blocks,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper to create a worker endpoint
+    fn create_endpoint(
+        worker_id: i64,
+        gpu_cache_usage_perc: f32,
+        num_requests_waiting: u64,
+    ) -> Endpoint {
+        Endpoint {
+            name: format!("worker-{}", worker_id),
+            subject: format!("worker-subject-{:x}", worker_id),
+            data: ForwardPassMetrics {
+                gpu_cache_usage_perc,
+                num_requests_waiting,
+                // Other fields can be default initialized for this test
+                ..Default::default()
+            },
+        }
+    }
+
+    // Helper to create ProcessedEndpoints
+    struct WorkerInfo {
+        id: i64,
+        usage: f32,
+        waiting: u64,
+    }
+    fn create_workers(workers: Vec<WorkerInfo>) -> ProcessedEndpoints {
+        let mut endpoints = HashMap::new();
+        for worker in workers {
+            endpoints.insert(
+                worker.id,
+                create_endpoint(worker.id, worker.usage, worker.waiting),
+            );
+        }
+        ProcessedEndpoints {
+            endpoints,
+            load_avg: 0.0,
+            load_std: 0.0,
+        }
+    }
+
+    // Helper to create a scheduling request
+    struct WorkerOverlap {
+        worker_id: i64,
+        overlap_blocks: u32,
+    }
+    fn create_request(overlaps: Vec<WorkerOverlap>, isl_tokens: usize) -> SchedulingRequest {
+        SchedulingRequest {
+            isl_tokens,
+            overlap: OverlapScores {
+                scores: overlaps
+                    .into_iter()
+                    .map(|wo| (wo.worker_id, wo.overlap_blocks))
+                    .collect(),
+                frequencies: vec![],
+            },
+            resp_tx: tokio::sync::oneshot::channel().0,
+        }
+    }
+
+    #[test]
+    fn test_select_worker_basic() {
+        // Setup workers
+        let workers = create_workers(vec![
+            WorkerInfo {
+                id: 1,
+                usage: 0.50,
+                waiting: 1,
+            },
+            WorkerInfo {
+                id: 2,
+                usage: 0.80,
+                waiting: 0,
+            },
+        ]);
+
+        // Setup request: 100 tokens, block_size=20 (5 blocks)
+        let request = create_request(
+            vec![
+                WorkerOverlap {
+                    worker_id: 1,
+                    overlap_blocks: 3,
+                },
+                WorkerOverlap {
+                    worker_id: 2,
+                    overlap_blocks: 4,
+                },
+            ],
+            100,
+        );
+        let selector = DefaultWorkerSelector::new(None);
+        let block_size = 20;
+
+        // Execute selection
+        let result = selector
+            .select_worker(&workers, &request, block_size)
+            .expect("Should select a worker");
+        // Worker 2 should win because:
+        // Worker1: 2.0 * 0.600 - 1.0 * 0.500 - 1.0 * 1.000 = -0.3
+        // Worker2: 2.0 * 0.800 - 1.0 * 0.800 - 1.0 * 0.000 = 0.8
+        assert_eq!(result.worker_id, 2);
+        assert_eq!(result.required_blocks, 5); // 100 tokens / 20 block_size
+        assert_eq!(result.overlap_blocks, 4);
+    }
+
+    #[test]
+    fn test_no_endpoints() {
+        let workers = create_workers(vec![]);
+        let request = create_request(vec![], 100);
+        let selector = DefaultWorkerSelector::new(None);
+        let block_size = 20;
+
+        match selector.select_worker(&workers, &request, block_size) {
+            Err(KvSchedulerError::NoEndpoints) => {} // Expected
+            _ => panic!("Should return NoEndpoints error"),
+        }
+    }
+
+    #[test]
+    fn test_no_overlap_scores() {
+        // Workers exist but request has no overlap scores
+        let workers = create_workers(vec![WorkerInfo {
+            id: 1,
+            usage: 0.50,
+            waiting: 1,
+        }]);
+        let request = create_request(vec![], 100); // No overlaps
+        let selector = DefaultWorkerSelector::new(None);
+        let block_size = 20;
+
+        let result = selector
+            .select_worker(&workers, &request, block_size)
+            .expect("Should fallback to selecting worker");
+
+        // Worker1 should be selected with 0 overlap
+        assert_eq!(result.worker_id, 1);
+        assert_eq!(result.overlap_blocks, 0);
+    }
+
+    #[test]
+    fn test_custom_weights() {
+        // Setup workers
+        let workers = create_workers(vec![
+            WorkerInfo {
+                id: 1,
+                usage: 0.50,
+                waiting: 1,
+            },
+            WorkerInfo {
+                id: 2,
+                usage: 0.80,
+                waiting: 0,
+            },
+        ]);
+
+        // Custom config with high priority on GPU usage
+        let config = KvRouterConfig {
+            gpu_cache_usage_weight: 10.0, // Very high weight
+            overlap_score_weight: 2.0,    // just current defaults
+            waiting_requests_weight: 1.0,
+        };
+        let selector = DefaultWorkerSelector::new(Some(config));
+        let request = create_request(
+            vec![
+                WorkerOverlap {
+                    worker_id: 1,
+                    overlap_blocks: 3,
+                },
+                WorkerOverlap {
+                    worker_id: 2,
+                    overlap_blocks: 4,
+                },
+            ],
+            100,
+        );
+        let block_size = 20;
+
+        let result = selector
+            .select_worker(&workers, &request, block_size)
+            .expect("Should select worker");
+
+        assert_eq!(result.worker_id, 1);
     }
 }

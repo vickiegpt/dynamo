@@ -24,14 +24,17 @@ pub mod openai {
     pub mod completions {
         use super::*;
 
-        pub use protocols::openai::completions::{CompletionRequest, CompletionResponse};
+        pub use protocols::openai::completions::{
+            NvCreateCompletionRequest, NvCreateCompletionResponse,
+        };
 
         /// A [`UnaryEngine`] implementation for the OpenAI Completions API
-        pub type OpenAICompletionsUnaryEngine = UnaryEngine<CompletionRequest, CompletionResponse>;
+        pub type OpenAICompletionsUnaryEngine =
+            UnaryEngine<NvCreateCompletionRequest, NvCreateCompletionResponse>;
 
         /// A [`ServerStreamingEngine`] implementation for the OpenAI Completions API
         pub type OpenAICompletionsStreamingEngine =
-            ServerStreamingEngine<CompletionRequest, Annotated<CompletionResponse>>;
+            ServerStreamingEngine<NvCreateCompletionRequest, Annotated<NvCreateCompletionResponse>>;
     }
 
     pub mod chat_completions {
@@ -51,5 +54,21 @@ pub mod openai {
             NvCreateChatCompletionRequest,
             Annotated<NvCreateChatCompletionStreamResponse>,
         >;
+    }
+
+    pub mod embeddings {
+        use super::*;
+
+        pub use protocols::openai::embeddings::{
+            NvCreateEmbeddingRequest, NvCreateEmbeddingResponse,
+        };
+
+        /// A [`UnaryEngine`] implementation for the OpenAI Embeddings API
+        pub type OpenAIEmbeddingsUnaryEngine =
+            UnaryEngine<NvCreateEmbeddingRequest, NvCreateEmbeddingResponse>;
+
+        /// A [`ServerStreamingEngine`] implementation for the OpenAI Embeddings API
+        pub type OpenAIEmbeddingsStreamingEngine =
+            ServerStreamingEngine<NvCreateEmbeddingRequest, Annotated<NvCreateEmbeddingResponse>>;
     }
 }

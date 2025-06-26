@@ -14,6 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+    echo "Error: Bash version 4.0 or higher is required. Current version: ${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"
+    exit 1
+fi
+
 set -e
 
 TAG=
@@ -44,7 +49,7 @@ PYTHON_PACKAGE_VERSION=${current_tag:-$latest_tag.dev+$commit_id}
 # dependencies are specified in the /container/deps folder and
 # installed within framework specific sections of the Dockerfile.
 
-declare -A FRAMEWORKS=(["VLLM"]=1 ["TENSORRTLLM"]=2 ["NONE"]=3)
+declare -A FRAMEWORKS=(["VLLM"]=1 ["TENSORRTLLM"]=2 ["NONE"]=3 ["SGLANG"]=4 ["VLLM_V1"]=5)
 DEFAULT_FRAMEWORK=VLLM
 
 SOURCE_DIR=$(dirname "$(readlink -f "$0")")
@@ -52,18 +57,69 @@ DOCKERFILE=${SOURCE_DIR}/Dockerfile
 BUILD_CONTEXT=$(dirname "$(readlink -f "$SOURCE_DIR")")
 
 # Base Images
-TENSORRTLLM_BASE_IMAGE=tensorrt_llm/release
-TENSORRTLLM_BASE_IMAGE_TAG=latest
-TENSORRTLLM_PIP_WHEEL_PATH=""
+TENSORRTLLM_BASE_IMAGE=nvcr.io/nvidia/pytorch
+TENSORRTLLM_BASE_IMAGE_TAG=25.05-py3
+
+# Important Note: Because of ABI compatibility issues between TensorRT-LLM and NGC PyTorch,
+# we need to build the TensorRT-LLM wheel from source.
+#
+# There are two ways to build the dynamo image with TensorRT-LLM.
+# 1. Use the local TensorRT-LLM wheel directory.
+# 2. Use the TensorRT-LLM wheel on artifactory.
+#
+# If using option 1, the TENSORRTLLM_PIP_WHEEL_DIR must be a path to a directory
+# containing TensorRT-LLM wheel file along with commit.txt file with the
+# <arch>_<commit ID> as contents. If no valid trtllm wheel is found, the script
+# will attempt to build the wheel from source and store the built wheel in the
+# specified directory. TRTLLM_COMMIT from the TensorRT-LLM main branch will be
+# used to build the wheel.
+#
+# If using option 2, the TENSORRTLLM_PIP_WHEEL must be the TensorRT-LLM wheel
+# package that will be installed from the specified TensorRT-LLM PyPI Index URL.
+# This option will ignore the TRTLLM_COMMIT option. As the TensorRT-LLM wheel from PyPI
+# is not ABI compatible with NGC PyTorch, you can use TENSORRTLLM_INDEX_URL to specify
+# a private PyPI index URL which has your pre-built TensorRT-LLM wheel.
+#
+# By default, we will use option 1. If you want to use option 2, you can set
+# TENSORRTLLM_PIP_WHEEL to the TensorRT-LLM wheel on artifactory.
+#
+# Path to the local TensorRT-LLM wheel directory or the wheel on artifactory.
+TENSORRTLLM_PIP_WHEEL_DIR="/tmp/trtllm_wheel/"
+# TensorRT-LLM commit to use for building the trtllm wheel if not provided.
+# Important Note: This commit is not used in our CI pipeline. See the CI
+# variables to learn how to run a pipeline with a specific commit.
+DEFAULT_EXPERIMENTAL_TRTLLM_COMMIT="137fe35539ea182f1495f5021bfda97c729e50c3"
+TRTLLM_COMMIT=""
+TRTLLM_USE_NIXL_KVCACHE_EXPERIMENTAL="0"
+
+# TensorRT-LLM PyPI index URL
+TENSORRTLLM_INDEX_URL="https://pypi.python.org/simple"
+DEFAULT_TENSORRTLLM_PIP_WHEEL="tensorrt-llm==1.0.0rc0"
+TENSORRTLLM_PIP_WHEEL=""
+
 
 VLLM_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
+# FIXME: NCCL will hang with 25.03, so use 25.01 for now
+# Please check https://github.com/ai-dynamo/dynamo/pull/1065
+# for details and reproducer to manually test if the image
+# can be updated to later versions.
 VLLM_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
 
 NONE_BASE_IMAGE="ubuntu"
 NONE_BASE_IMAGE_TAG="24.04"
 
-NIXL_COMMIT=3aa8133369566e9ce61301f7eb56ad79b7f4fd92
+SGLANG_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
+SGLANG_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
+
+VLLM_V1_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
+VLLM_V1_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
+
+NIXL_COMMIT=16348080f5bdeb9fe6058a23be140cec020ef3f3
 NIXL_REPO=ai-dynamo/nixl.git
+
+NIXL_UCX_EFA_REF=7ec95b95e524a87e81cac92f5ca8523e3966b16b
+
+NO_CACHE=""
 
 get_options() {
     while :; do
@@ -88,9 +144,47 @@ get_options() {
                 missing_requirement "$1"
             fi
             ;;
-        --tensorrtllm-pip-wheel-path)
+        --tensorrtllm-pip-wheel-dir)
             if [ "$2" ]; then
-                TENSORRTLLM_PIP_WHEEL_PATH=$2
+                TENSORRTLLM_PIP_WHEEL_DIR=$2
+                shift
+            else
+                missing_requirement "$1"
+            fi
+            ;;
+        --tensorrtllm-commit)
+            if [ "$2" ]; then
+                TRTLLM_COMMIT=$2
+                shift
+            else
+                missing_requirement "$1"
+            fi
+            ;;
+        --use-default-experimental-tensorrtllm-commit)
+            if [ -n "$2" ] && [[ "$2" != --* ]]; then
+                echo "ERROR: --use-default-experimental-tensorrtllm-commit does not take any argument"
+                exit 1
+            fi
+            USE_DEFAULT_EXPERIMENTAL_TRTLLM_COMMIT=true
+            ;;
+        --trtllm-use-nixl-kvcache-experimental)
+            if [ -n "$2" ] && [[ "$2" != --* ]]; then
+                echo "ERROR: --trtllm-use-nixl-kvcache-experimental does not take any argument"
+                exit 1
+            fi
+            TRTLLM_USE_NIXL_KVCACHE_EXPERIMENTAL="1"
+            ;;
+        --tensorrtllm-pip-wheel)
+            if [ "$2" ]; then
+                TENSORRTLLM_PIP_WHEEL=$2
+                shift
+            else
+                missing_requirement "$1"
+            fi
+            ;;
+        --tensorrtllm-index-url)
+            if [ "$2" ]; then
+                TENSORRTLLM_INDEX_URL=$2
                 shift
             else
                 missing_requirement "$1"
@@ -174,6 +268,9 @@ get_options() {
         --release-build)
             RELEASE_BUILD=true
             ;;
+        --make-efa)
+            NIXL_UCX_REF=$NIXL_UCX_EFA_REF
+            ;;
         --)
             shift
             break
@@ -247,7 +344,7 @@ show_image_options() {
     echo "   Base: '${BASE_IMAGE}'"
     echo "   Base_Image_Tag: '${BASE_IMAGE_TAG}'"
     if [[ $FRAMEWORK == "TENSORRTLLM" ]]; then
-        echo "   Tensorrtllm_Pip_Wheel_Path: '${TENSORRTLLM_PIP_WHEEL_PATH}'"
+        echo "   Tensorrtllm_Pip_Wheel: '${TENSORRTLLM_PIP_WHEEL}'"
     fi
     echo "   Build Context: '${BUILD_CONTEXT}'"
     echo "   Build Arguments: '${BUILD_ARGS}'"
@@ -261,7 +358,11 @@ show_help() {
     echo "  [--base-image-tag base image tag]"
     echo "  [--platform platform for docker build"
     echo "  [--framework framework one of ${!FRAMEWORKS[*]}]"
-    echo "  [--tensorrtllm-pip-wheel-path path to tensorrtllm pip wheel]"
+    echo "  [--tensorrtllm-pip-wheel-dir path to tensorrtllm pip wheel directory]"
+    echo "  [--tensorrtllm-commit tensorrtllm commit to use for building the trtllm wheel if the wheel is not provided]"
+    echo "  [--use-default-experimental-tensorrtllm-commit] Use the default experimental commit (${DEFAULT_EXPERIMENTAL_TRTLLM_COMMIT}) to build TensorRT-LLM. This is a flag (no argument). Do not combine with --tensorrtllm-commit or --tensorrtllm-pip-wheel."
+    echo "  [--tensorrtllm-pip-wheel tensorrtllm pip wheel on artifactory]"
+    echo "  [--tensorrtllm-index-url tensorrtllm PyPI index URL if providing the wheel from artifactory]"
     echo "  [--build-arg additional build args to pass to docker build]"
     echo "  [--cache-from cache location to start from]"
     echo "  [--cache-to location where to cache the build output]"
@@ -269,6 +370,9 @@ show_help() {
     echo "  [--no-cache disable docker build cache]"
     echo "  [--dry-run print docker commands without running]"
     echo "  [--build-context name=path to add build context]"
+    echo "  [--release-build perform a release build]"
+    echo "  [--make-efa Enables EFA support for NIXL]"
+    echo "  [--trtllm-use-nixl-kvcache-experimental Enables NIXL KVCACHE experimental support for TensorRT-LLM]"
     exit 0
 }
 
@@ -283,6 +387,13 @@ error() {
 
 get_options "$@"
 
+# Automatically set ARCH and ARCH_ALT if PLATFORM is linux/arm64
+ARCH="amd64"
+if [[ "$PLATFORM" == *"linux/arm64"* ]]; then
+    ARCH="arm64"
+    BUILD_ARGS+=" --build-arg ARCH=arm64 --build-arg ARCH_ALT=aarch64 "
+fi
+
 # Update DOCKERFILE if framework is VLLM
 if [[ $FRAMEWORK == "VLLM" ]]; then
     DOCKERFILE=${SOURCE_DIR}/Dockerfile.vllm
@@ -290,38 +401,40 @@ elif [[ $FRAMEWORK == "TENSORRTLLM" ]]; then
     DOCKERFILE=${SOURCE_DIR}/Dockerfile.tensorrt_llm
 elif [[ $FRAMEWORK == "NONE" ]]; then
     DOCKERFILE=${SOURCE_DIR}/Dockerfile.none
+elif [[ $FRAMEWORK == "SGLANG" ]]; then
+    DOCKERFILE=${SOURCE_DIR}/Dockerfile.sglang
+elif [[ $FRAMEWORK == "VLLM_V1" ]]; then
+    DOCKERFILE=${SOURCE_DIR}/Dockerfile.vllm_v1
 fi
 
-if [[ $FRAMEWORK == "VLLM" ]]; then
-    NIXL_DIR="/tmp/nixl/nixl_src"
+NIXL_DIR="/tmp/nixl/nixl_src"
 
-    # Clone original NIXL to temp directory
-    if [ -d "$NIXL_DIR" ]; then
-        echo "Warning: $NIXL_DIR already exists, skipping clone"
+# Clone original NIXL to temp directory
+if [ -d "$NIXL_DIR" ]; then
+    echo "Warning: $NIXL_DIR already exists, skipping clone"
+else
+    if [ -n "${GITHUB_TOKEN}" ]; then
+        git clone "https://oauth2:${GITHUB_TOKEN}@github.com/${NIXL_REPO}" "$NIXL_DIR"
     else
-        if [ -n "${GITHUB_TOKEN}" ]; then
-            git clone "https://oauth2:${GITHUB_TOKEN}@github.com/${NIXL_REPO}" "$NIXL_DIR"
-        else
-            # Try HTTPS first with credential prompting disabled, fall back to SSH if it fails
-            if ! GIT_TERMINAL_PROMPT=0 git clone https://github.com/${NIXL_REPO} "$NIXL_DIR"; then
-                echo "HTTPS clone failed, falling back to SSH..."
-                git clone git@github.com:${NIXL_REPO} "$NIXL_DIR"
-            fi
+        # Try HTTPS first with credential prompting disabled, fall back to SSH if it fails
+        if ! GIT_TERMINAL_PROMPT=0 git clone https://github.com/${NIXL_REPO} "$NIXL_DIR"; then
+            echo "HTTPS clone failed, falling back to SSH..."
+            git clone git@github.com:${NIXL_REPO} "$NIXL_DIR"
         fi
     fi
-
-    cd "$NIXL_DIR" || exit
-    if ! git checkout ${NIXL_COMMIT}; then
-        echo "ERROR: Failed to checkout NIXL commit ${NIXL_COMMIT}. The cached directory may be out of date."
-        echo "Please delete $NIXL_DIR and re-run the build script."
-        exit 1
-    fi
-
-    BUILD_CONTEXT_ARG+=" --build-context nixl=$NIXL_DIR"
-
-    # Add NIXL_COMMIT as a build argument to enable caching
-    BUILD_ARGS+=" --build-arg NIXL_COMMIT=${NIXL_COMMIT} "
 fi
+
+cd "$NIXL_DIR" || exit
+if ! git checkout ${NIXL_COMMIT}; then
+    echo "ERROR: Failed to checkout NIXL commit ${NIXL_COMMIT}. The cached directory may be out of date."
+    echo "Please delete $NIXL_DIR and re-run the build script."
+    exit 1
+fi
+
+BUILD_CONTEXT_ARG+=" --build-context nixl=$NIXL_DIR"
+
+# Add NIXL_COMMIT as a build argument to enable caching
+BUILD_ARGS+=" --build-arg NIXL_COMMIT=${NIXL_COMMIT} "
 
 if [[ $TARGET == "local-dev" ]]; then
     BUILD_ARGS+=" --build-arg USER_UID=$(id -u) --build-arg USER_GID=$(id -g) "
@@ -339,9 +452,90 @@ if [ -n "${GITLAB_TOKEN}" ]; then
     BUILD_ARGS+=" --build-arg GITLAB_TOKEN=${GITLAB_TOKEN} "
 fi
 
+
+check_wheel_file() {
+    local wheel_dir="$1"
+    # Check if directory exists
+    if [ ! -d "$wheel_dir" ]; then
+        echo "Error: Directory '$wheel_dir' does not exist"
+        return 1
+    fi
+
+    # Look for .whl files
+    wheel_count=$(find "$wheel_dir" -name "*.whl" | wc -l)
+
+    if [ "$wheel_count" -eq 0 ]; then
+        echo "WARN: No .whl files found in '$wheel_dir'"
+        return 1
+    elif [ "$wheel_count" -gt 1 ]; then
+        echo "Warning: Multiple wheel files found in '$wheel_dir'. Will use first one found."
+        find "$wheel_dir" -name "*.whl" | head -n 1
+        return 0
+    else
+        echo "Found $wheel_count wheel files in '$wheel_dir'"
+        # Check if commit file exists
+        commit_file="$wheel_dir/commit.txt"
+        if [ ! -f "$commit_file" ]; then
+            echo "Error: Commit file '$commit_file' does not exist"
+            return 1
+        fi
+
+        # Check if commit ID matches, otherwise re-build the wheel
+        # Commit ID is of the form <arch>_<commit_id>
+        commit_id=$(cat "$commit_file")
+        if [ "$commit_id" != "$2" ]; then
+            echo "Error: Commit ID mismatch. Expected '$2', got '$commit_id'"
+            rm -rf $wheel_dir/*.whl
+            return 1
+        fi
+        return 0
+    fi
+}
+
 if [[ $FRAMEWORK == "TENSORRTLLM" ]]; then
-    if [ -n "${TENSORRTLLM_PIP_WHEEL_PATH}" ]; then
-        BUILD_ARGS+=" --build-arg TENSORRTLLM_PIP_WHEEL_PATH=${TENSORRTLLM_PIP_WHEEL_PATH} "
+    if [ "$USE_DEFAULT_EXPERIMENTAL_TRTLLM_COMMIT" = true ]; then
+        if [ -n "$TRTLLM_COMMIT" ] || [ -n "$TENSORRTLLM_PIP_WHEEL" ]; then
+            echo "ERROR: When using --use-default-experimental-trtllm-commit, do not set --tensorrtllm-commit or --tensorrtllm-pip-wheel."
+            exit 1
+        fi
+        TRTLLM_COMMIT="$DEFAULT_EXPERIMENTAL_TRTLLM_COMMIT"
+    fi
+
+    if [ -n "${TRTLLM_USE_NIXL_KVCACHE_EXPERIMENTAL}" ]; then
+        BUILD_ARGS+=" --build-arg TRTLLM_USE_NIXL_KVCACHE_EXPERIMENTAL=${TRTLLM_USE_NIXL_KVCACHE_EXPERIMENTAL} "
+    fi
+
+    # If user didn't set both wheel and commit, use default tensorrt_llm pip wheel
+    if [ -z "$TENSORRTLLM_PIP_WHEEL" ] && [ -z "$TRTLLM_COMMIT" ]; then
+        TENSORRTLLM_PIP_WHEEL="$DEFAULT_TENSORRTLLM_PIP_WHEEL"
+    fi
+
+    if [ -z "${TENSORRTLLM_PIP_WHEEL}" ]; then
+        # Use option 1
+        if [ ! -d "${TENSORRTLLM_PIP_WHEEL_DIR}" ]; then
+            # Create the directory if it doesn't exist
+            mkdir -p ${TENSORRTLLM_PIP_WHEEL_DIR}
+        fi
+        BUILD_ARGS+=" --build-arg HAS_TRTLLM_CONTEXT=1"
+        echo "Checking for TensorRT-LLM wheel in ${TENSORRTLLM_PIP_WHEEL_DIR}"
+        if ! check_wheel_file "${TENSORRTLLM_PIP_WHEEL_DIR}" "${ARCH}_${TRTLLM_COMMIT}"; then
+            echo "WARN: Valid trtllm wheel file not found in ${TENSORRTLLM_PIP_WHEEL_DIR}, attempting to build from source"
+            if ! env -i ${SOURCE_DIR}/build_trtllm_wheel.sh -o ${TENSORRTLLM_PIP_WHEEL_DIR} -c ${TRTLLM_COMMIT} -a ${ARCH} -n ${NIXL_COMMIT}; then
+                error "ERROR: Failed to build TensorRT-LLM wheel"
+            fi
+        fi
+        echo "Installing TensorRT-LLM from local wheel directory"
+        BUILD_CONTEXT_ARG+=" --build-context trtllm_wheel=${TENSORRTLLM_PIP_WHEEL_DIR}"
+
+    else
+        BUILD_ARGS+=" --build-arg HAS_TRTLLM_CONTEXT=0"
+        BUILD_ARGS+=" --build-arg TENSORRTLLM_PIP_WHEEL=${TENSORRTLLM_PIP_WHEEL}"
+        BUILD_ARGS+=" --build-arg TENSORRTLLM_INDEX_URL=${TENSORRTLLM_INDEX_URL}"
+
+        # Create a dummy directory to satisfy the build context requirement
+        # There is no way to conditionally copy the build context in dockerfile.
+        mkdir -p /tmp/dummy_dir
+        BUILD_CONTEXT_ARG+=" --build-context trtllm_wheel=/tmp/dummy_dir"
     fi
 fi
 
@@ -351,6 +545,10 @@ fi
 if [  ! -z ${RELEASE_BUILD} ]; then
     echo "Performing a release build!"
     BUILD_ARGS+=" --build-arg RELEASE_BUILD=${RELEASE_BUILD} "
+fi
+
+if [ -n "${NIXL_UCX_REF}" ]; then
+    BUILD_ARGS+=" --build-arg NIXL_UCX_REF=${NIXL_UCX_REF} "
 fi
 
 LATEST_TAG="--tag dynamo:latest-${FRAMEWORK,,}"
@@ -364,25 +562,6 @@ if [ -z "$RUN_PREFIX" ]; then
     set -x
 fi
 
-# Check if the TensorRT-LLM base image exists
-if [[ $FRAMEWORK == "TENSORRTLLM" ]]; then
-    if docker inspect --type=image "$BASE_IMAGE:$BASE_IMAGE_TAG" > /dev/null 2>&1; then
-        echo "Image '$BASE_IMAGE:$BASE_IMAGE_TAG' is found."
-    else
-        echo "Image '$BASE_IMAGE:$BASE_IMAGE_TAG' is not found." >&2
-        echo "Please build the TensorRT-LLM base image first. Run ./build_trtllm_base_image.sh" >&2
-        echo "or use --base-image and --base-image-tag to an existing TensorRT-LLM base image." >&2
-        echo "See https://nvidia.github.io/TensorRT-LLM/installation/build-from-source-linux.html for more information." >&2
-        exit 1
-    fi
-fi
-
 $RUN_PREFIX docker build -f $DOCKERFILE $TARGET_STR $PLATFORM $BUILD_ARGS $CACHE_FROM $CACHE_TO $TAG $LATEST_TAG $BUILD_CONTEXT_ARG $BUILD_CONTEXT $NO_CACHE
-
-{ set +x; } 2>/dev/null
-
-if [ -z "$RUN_PREFIX" ]; then
-    set -x
-fi
 
 { set +x; } 2>/dev/null

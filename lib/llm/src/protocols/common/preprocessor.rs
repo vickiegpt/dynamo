@@ -26,6 +26,10 @@ pub struct PreprocessedRequest {
     /// Type of prompt
     pub token_ids: Vec<TokenIdType>,
 
+    /// Batch Token Ids = for batch completion requests (i.e using ArrayOfIntegerArray type from OpenAI /completions)
+    #[builder(default)]
+    pub batch_token_ids: Option<Vec<Vec<TokenIdType>>>,
+
     /// StopConditions are conditions that the inference engine will use to stop generation.
     pub stop_conditions: StopConditions,
 
@@ -47,6 +51,10 @@ pub struct PreprocessedRequest {
     /// User requested annotations for the request
     #[builder(default)]
     pub annotations: Vec<String>,
+
+    /// Estimated number of prefix hit tokens (only used in kv aware routing)
+    #[builder(default)]
+    pub estimated_prefix_hit_num_blocks: Option<u32>,
 }
 
 impl PreprocessedRequest {

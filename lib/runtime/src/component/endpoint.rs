@@ -61,7 +61,7 @@ impl EndpointConfigBuilder {
 
         tracing::debug!(
             "Starting endpoint: {}",
-            endpoint.etcd_path_with_id(lease_id)
+            endpoint.etcd_path_with_lease_id(lease_id)
         );
 
         let service_name = endpoint.component.service_name();
@@ -115,11 +115,11 @@ impl EndpointConfigBuilder {
         // make the components service endpoint discovery in etcd
 
         // client.register_service()
-        let info = ComponentEndpointInfo {
+        let info = Instance {
             component: endpoint.component.name.clone(),
             endpoint: endpoint.name.clone(),
             namespace: endpoint.component.namespace.name.clone(),
-            lease_id,
+            instance_id: lease_id,
             transport: TransportType::NatsTcp(endpoint.subject_to(lease_id)),
         };
 
@@ -127,7 +127,11 @@ impl EndpointConfigBuilder {
 
         if let Some(etcd_client) = &endpoint.component.drt.etcd_client {
             if let Err(e) = etcd_client
-                .kv_create(endpoint.etcd_path_with_id(lease_id), info, Some(lease_id))
+                .kv_create(
+                    endpoint.etcd_path_with_lease_id(lease_id),
+                    info,
+                    Some(lease_id),
+                )
                 .await
             {
                 tracing::error!("Failed to register discoverable service: {:?}", e);

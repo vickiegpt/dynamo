@@ -22,6 +22,7 @@ from typing import Any, Dict, Tuple
 import yaml
 from tensorrt_llm._torch.pyexecutor.config import PyTorchConfig
 from tensorrt_llm.llmapi import KvCacheConfig
+from tensorrt_llm.llmapi.llm_args import DecodingBaseConfig
 
 
 @dataclass
@@ -32,12 +33,14 @@ class LLMAPIConfig:
         model_path: str | None = None,
         pytorch_backend_config: PyTorchConfig | None = None,
         kv_cache_config: KvCacheConfig | None = None,
+        speculative_config: DecodingBaseConfig | None = None,
         **kwargs,
     ):
         self.model_name = model_name
         self.model_path = model_path
         self.pytorch_backend_config = pytorch_backend_config
         self.kv_cache_config = kv_cache_config
+        self.speculative_config = speculative_config
         self.extra_args = kwargs
 
         # Hardcoded to skip tokenizer init for now.
@@ -49,14 +52,17 @@ class LLMAPIConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
-            "pytorch_backend_config": self.pytorch_backend_config,
             "kv_cache_config": self.kv_cache_config,
+            "speculative_config": self.speculative_config,
+            "skip_tokenizer_init": self.skip_tokenizer_init,
         }
         if self.extra_args:
             data.update(self.extra_args)
         return data
 
     def update_sub_configs(self, other_config: Dict[str, Any]):
+        # TODO: Consider removing pytorch_backend_config parsing as this section
+        # was collapsed to top level config fields in recent TRTLLM versions.
         if "pytorch_backend_config" in other_config:
             self.pytorch_backend_config = PyTorchConfig(
                 **other_config["pytorch_backend_config"]
@@ -66,6 +72,12 @@ class LLMAPIConfig:
         if "kv_cache_config" in other_config:
             self.kv_cache_config = KvCacheConfig(**other_config["kv_cache_config"])
             self.extra_args.pop("kv_cache_config", None)
+
+        if "speculative_config" in other_config:
+            self.speculative_config = DecodingBaseConfig.from_dict(
+                other_config["speculative_config"]
+            )
+            self.extra_args.pop("speculative_config", None)
 
 
 def _get_llm_args(engine_config):
@@ -119,6 +131,12 @@ def parse_tensorrt_llm_args(
     parser = argparse.ArgumentParser(description="A TensorRT-LLM Worker parser")
     parser.add_argument(
         "--engine_args", type=str, required=True, help="Path to the engine args file"
+    )
+    parser.add_argument(
+        "--served_model_name",
+        type=str,
+        help="Name of the model to serve",
+        default=None,
     )
     parser.add_argument(
         "--llmapi-disaggregated-config",
