@@ -75,9 +75,10 @@ def parse_args(service_name, prefix) -> Namespace:
         help="The router type",
     )
     parser.add_argument(
-        "--softmax-sample",
-        action="store_true",
-        help="Whether to do softmax sampling based on worker logits (default is to pick smallest)",
+        "--temperature",
+        type=float,
+        default=1.0,
+        help="Temperature to use for worker routing selection, set to 0 to pick smallest logit always.",
     )
     config = ServiceConfig.get_instance()
     config_args = config.as_args(service_name, prefix=prefix)
@@ -102,6 +103,9 @@ class Router:
     def __init__(self):
         logger.info("Initializing Custom Router")
         self.args = parse_args(self.__class__.__name__, "")
+        assert self.args.block_size > 0
+        assert self.args.min_workers > 0
+        assert self.args.temperature >= 0
 
         self.default_metrics = {
             "kv_active_blocks": 0,
@@ -248,7 +252,7 @@ class Router:
             return "", 0.0
 
         # Select the worker with the highest logit
-        if self.args.softmax_sample:
+        if self.args.temperature > 0:
             best_worker_id = int(softmax_sample(worker_logits))
         else:
             min_logit = min(worker_logits.values())
