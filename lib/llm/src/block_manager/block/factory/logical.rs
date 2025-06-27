@@ -10,7 +10,7 @@ pub struct LogicalBlockFactory<S: Storage, R: LogicalResources> {
     layout_config: Arc<LayoutConfig>,
     block_set_idx: usize,
     worker_id: WorkerID,
-    resources: R,
+    resources: Arc<R>,
     storage_type: StorageType,
     storage: std::marker::PhantomData<S>,
 }
@@ -20,7 +20,7 @@ impl<S: Storage, R: LogicalResources> LogicalBlockFactory<S, R> {
         layout_config: Arc<LayoutConfig>,
         block_set_idx: usize,
         worker_id: WorkerID,
-        resources: R,
+        resources: Arc<R>,
         storage_type: StorageType,
     ) -> Self {
         Self {
@@ -46,6 +46,7 @@ impl<S: Storage, R: LogicalResources> BlockFactory<S, Logical<R>> for LogicalBlo
             self.worker_id,
             self.resources.clone(),
             self.storage_type,
+            self.layout_config.page_size,
         );
         Ok(data)
     }
@@ -87,7 +88,7 @@ mod tests {
             Arc::new(layout_config),
             TEST_BLOCK_SET_ID,
             TEST_WORKER_ID,
-            NullResources,
+            Arc::new(NullResources),
             StorageType::Pinned,
         );
 
@@ -103,6 +104,6 @@ mod tests {
             .into_blocks_with_metadata(BasicMetadata::default())
             .unwrap();
 
-        let pool = BlockPool::builder().blocks(blocks).build().unwrap();
+        BlockPool::builder().blocks(blocks).build().unwrap();
     }
 }

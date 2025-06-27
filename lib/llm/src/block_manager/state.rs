@@ -17,8 +17,9 @@ mod local;
 mod logical;
 mod resources;
 
-use crate::block_manager::block::factory::{BlockFactory, IntoBlocks};
+use crate::block_manager::block::factory::IntoBlocks;
 use crate::block_manager::locality::LogicalResources;
+use crate::block_manager::offload::request::BlockResult;
 
 use super::*;
 
@@ -100,13 +101,12 @@ impl<Locality: LocalityProvider, Metadata: BlockMetadata> KvBlockManagerState<Lo
         Ok(())
     }
 
-    // pub async fn onboard_blocks<S: Storage + 'static>(
-    //     &self,
-    //     blocks: Vec<ImmutableBlock<S, Locality, Metadata>>,
-    // ) -> BlockResult<DeviceStorage, Locality, Metadata> {
-    //     // self.offload_manager.onboard(blocks).await
-    //     unimplemented!()
-    // }
+    pub async fn onboard_blocks<S: Storage + 'static>(
+        &self,
+        blocks: Vec<ImmutableBlock<S, Locality, Metadata>>,
+    ) -> BlockResult<DeviceStorage, Locality, Metadata> {
+        self.offload_manager.onboard(blocks).await
+    }
 }
 
 impl<R: LogicalResources, Metadata: BlockMetadata>
@@ -501,7 +501,7 @@ impl<Locality: LocalityProvider, Metadata: BlockMetadata> std::fmt::Debug
 
 #[expect(clippy::type_complexity)]
 pub(crate) fn create_block_pool<S: Storage, L: LocalityProvider, M: BlockMetadata>(
-    factory: impl BlockFactory<S, L> + IntoBlocks<S, L>,
+    factory: impl IntoBlocks<S, L>,
     resources: &Resources,
     pool_name: &str,
 ) -> Result<(BlockPool<S, L, M>, Vec<Block<S, L, M>>)> {

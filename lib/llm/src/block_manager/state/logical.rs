@@ -1,12 +1,6 @@
 use super::*;
 
-use crate::block_manager::{
-    block::{
-        data::logical::null::NullResources, factory::logical::LogicalBlockFactory,
-        locality::Logical,
-    },
-    storage::StorageType,
-};
+use crate::block_manager::{block::factory::logical::LogicalBlockFactory, storage::StorageType};
 
 /// The local block factories for the block manager
 ///
@@ -27,6 +21,8 @@ impl<R: LogicalResources> LogicalBlockFactories<R> {
         let mut next_block_set_idx = 0;
         let layout_builder = resources.layout_builder();
 
+        let logical_resources = Arc::new(logical_resources);
+
         let device_factory = if let Some(config) = resources.config.device_layout.take() {
             next_block_set_idx += 1;
             let mut builder = layout_builder.clone();
@@ -37,7 +33,7 @@ impl<R: LogicalResources> LogicalBlockFactories<R> {
                 next_block_set_idx,
                 resources.worker_id,
                 logical_resources.clone(),
-                StorageType::Null,
+                StorageType::Device(0),
             );
 
             Some(factory)
@@ -54,7 +50,7 @@ impl<R: LogicalResources> LogicalBlockFactories<R> {
                 next_block_set_idx,
                 resources.worker_id,
                 logical_resources.clone(),
-                StorageType::Null,
+                StorageType::Pinned,
             );
 
             Some(factory)
@@ -71,7 +67,7 @@ impl<R: LogicalResources> LogicalBlockFactories<R> {
                 next_block_set_idx,
                 resources.worker_id,
                 logical_resources.clone(),
-                StorageType::Null,
+                StorageType::Disk(0),
             );
 
             Some(factory)

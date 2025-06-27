@@ -56,8 +56,7 @@ impl KvbmLeaderConfig {
 /// - Syncing the leader barrier with workers.
 /// - Sending messages to workers.
 pub struct KvbmLeader {
-    _drt: DistributedRuntime,
-    _worker_data: HashMap<String, ()>, // TODO: Replace with KvbmLeaderData
+    _worker_data: Arc<HashMap<String, ()>>, // TODO: Replace with KvbmLeaderData
     zmq_leader: ZmqActiveMessageLeader,
 }
 
@@ -89,20 +88,10 @@ impl KvbmLeader {
             Some(Duration::from_secs(30)),
         );
 
-        let drt_clone = drt.clone();
-        let zmq_data_clone = zmq_data.clone();
-
-        // Block leader initialization (and vLLM) until all workers have come online.
-        let worker_data = drt.runtime().primary().block_on(async move {
-            let worker_data = leader_barrier
-                .sync(&drt_clone, zmq_data_clone.as_ref())
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to sync leader barrier: {:?}", e))?;
-
-            tracing::info!("Leader barrier synced with {} workers", config.world_size);
-
-            anyhow::Ok(worker_data)
-        })?;
+        let worker_data = leader_barrier
+            .sync(&drt, zmq_data.as_ref())
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to sync leader barrier: {:?}", e))?;
 
         tracing::info!("Leader barrier synced with {} workers", config.world_size);
         tracing::debug!("Worker data: {:?}", worker_data);
@@ -119,8 +108,7 @@ impl KvbmLeader {
         .await?;
 
         Ok(Self {
-            _drt: drt,
-            _worker_data: worker_data,
+            _worker_data: Arc::new(worker_data),
             zmq_leader,
         })
     }
