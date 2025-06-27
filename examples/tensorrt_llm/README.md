@@ -318,7 +318,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
     "messages": [
       {
         "role": "user",
-        "content": "Explain quantum computing in detail, covering fundamental concepts like quantum bits (qubits), superposition, entanglement, quantum gates, and quantum algorithms. Describe how quantum computers differ from classical computers, the principles of quantum mechanics that enable quantum computing, and discuss major quantum algorithms such as Shor's algorithm for factoring and Grover's algorithm for search. Include information about quantum error correction, the current state of quantum computing technology, and potential applications in cryptography, drug discovery, optimization problems, and artificial intelligence. Also explain the challenges facing quantum computing development, including decoherence, scalability issues, and the race for quantum supremacy."
+        "content": "Explain quantum computing in detail, covering fundamental concepts like quantum bits (qubits), superposition, entanglement, quantum gates, and quantum algorithms. Describe how quantum computers differ from classical computers, the principles of quantum mechanics that enable quantum computing, and discuss major quantum algorithms such as Shors algorithm for factoring and Grovers algorithm for search. Include information about quantum error correction, the current state of quantum computing technology, and potential applications in cryptography, drug discovery, optimization problems, and artificial intelligence. Also explain the challenges facing quantum computing development, including decoherence, scalability issues, and the race for quantum supremacy."
       }
     ],
     "max_tokens": 500,
