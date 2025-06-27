@@ -26,3 +26,4 @@ use_cuda_graph: false
 
 kv_cache_config:
   free_gpu_memory_fraction: 0.95
+  host_cache_size: 4000000000
