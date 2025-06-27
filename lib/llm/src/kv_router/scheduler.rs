@@ -358,7 +358,7 @@ impl WorkerSelector for DefaultWorkerSelector {
         }
 
         // Use softmax sampling to select worker
-        let temperature = 1.0; // You can make this configurable if needed
+        let temperature = 0.5; // TODO: make this configurable if needed
         let best_worker_id = softmax_sample(&worker_logits, temperature);
 
         let overlap_blocks = request
