@@ -20,13 +20,18 @@ import random
 from argparse import Namespace
 from typing import AsyncIterator, Tuple
 
-import numpy as np  # Add numpy import
 from components.worker import VllmWorker
 from utils.check_worker import check_required_workers
 from utils.protocol import LocalBlockHashes
 from utils.vllm import RouterType
 
-from dynamo.llm import AggregatedMetrics, KvIndexer, KvMetricsAggregator, OverlapScores
+from dynamo.llm import (
+    AggregatedMetrics,
+    KvIndexer,
+    KvMetricsAggregator,
+    OverlapScores,
+    softmax_sample,
+)
 from dynamo.sdk import async_on_start, depends, dynamo_context, endpoint, service
 from dynamo.sdk.lib.config import ServiceConfig
 
@@ -34,35 +39,6 @@ WorkerId = str
 fallback_msg = "Will fallback to random routing."
 
 logger = logging.getLogger(__name__)
-
-
-def softmax_sample_from_logits(
-    logits: dict[str, float], temperature: float = 1.0, lower_is_better: bool = True
-) -> str:
-    if not logits:
-        raise ValueError("Empty logits dictionary")
-
-    keys = list(logits.keys())
-    values = np.array(list(logits.values()))
-
-    min_val = np.min(values)
-    max_val = np.max(values)
-
-    if min_val == max_val:
-        # All values are the same, uniform probability
-        probabilities = np.ones(len(keys)) / len(keys)
-    else:
-        normalized = values / (max_val - min_val)
-        if lower_is_better:
-            normalized = -1 * normalized
-
-        scaled = normalized / temperature
-
-        exp_values = np.exp(scaled - np.max(scaled))
-        probabilities = exp_values / np.sum(exp_values)
-
-    # Sample from the probability distribution
-    return np.random.choice(keys, p=probabilities)
 
 
 def parse_args(service_name, prefix) -> Namespace:
@@ -273,7 +249,7 @@ class Router:
 
         # Select the worker with the highest logit
         if self.args.softmax_sample:
-            best_worker_id = int(softmax_sample_from_logits(worker_logits))
+            best_worker_id = int(softmax_sample(worker_logits))
         else:
             min_logit = min(worker_logits.values())
             best_workers = [
