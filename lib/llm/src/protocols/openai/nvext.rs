@@ -22,6 +22,50 @@ pub trait NvExtProvider {
     fn raw_prompt(&self) -> Option<String>;
 }
 
+// Add this new struct for KV cache retention configuration
+#[derive(Serialize, Deserialize, Debug, Clone, Builder, Validate)]
+pub struct KvCacheRetentionConfig {
+    /// Token range retention configurations
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[builder(default, setter(strip_option))]
+    pub token_range_retention_configs: Option<Vec<TokenRangeRetentionConfig>>,
+
+    /// Decode retention priority (0-100)
+    #[builder(default, setter(strip_option))]
+    #[validate(range(min = 0, max = 100))]
+    pub decode_retention_priority: Option<u32>,
+
+    /// Decode duration in milliseconds
+    #[builder(default, setter(strip_option))]
+    pub decode_duration_ms: Option<u64>,
+
+    /// Transfer mode: "DRAM", "GDS", or "POSIX_DEBUG_FALLBACK"
+    #[builder(default, setter(strip_option))]
+    pub transfer_mode: Option<String>,
+
+    /// Directory for KV cache storage
+    #[builder(default, setter(strip_option))]
+    pub directory: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Builder, Validate)]
+pub struct TokenRangeRetentionConfig {
+    /// Start token index (inclusive)
+    pub token_start: u32,
+
+    /// End token index (exclusive), None means to end of sequence
+    #[builder(default, setter(strip_option))]
+    pub token_end: Option<u32>,
+
+    /// Retention priority (0-100)
+    #[validate(range(min = 0, max = 100))]
+    pub priority: u32,
+
+    /// Duration in milliseconds
+    #[builder(default, setter(strip_option))]
+    pub duration_ms: Option<u64>,
+}
+
 /// NVIDIA LLM extensions to the OpenAI API
 #[derive(Serialize, Deserialize, Builder, Validate, Debug, Clone)]
 #[validate(schema(function = "validate_nv_ext"))]
@@ -61,6 +105,12 @@ pub struct NvExt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[builder(default, setter(strip_option))]
     pub annotations: Option<Vec<String>>,
+
+    /// KV Cache retention configuration
+    /// This is only supported by the TensorRT-LLM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[builder(default, setter(strip_option))]
+    pub kv_cache_retention_config: Option<KvCacheRetentionConfig>,
 }
 
 impl Default for NvExt {
