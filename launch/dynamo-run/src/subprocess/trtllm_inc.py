@@ -69,12 +69,6 @@ def parse_endpoint(endpoint: str) -> tuple[str, str, str]:
 
 
 def log_kv_cache_retention_config_details(kv_cache_retention_config):
-    """
-    Log detailed information about KV cache retention config only when debug mode is enabled.
-
-    Args:
-        kv_cache_retention_config: The TensorRT-LLM KvCacheRetentionConfig object
-    """
     if kv_cache_retention_config and logging.getLogger().isEnabledFor(logging.DEBUG):
         config_details = {
             "token_range_configs_count": len(
@@ -114,15 +108,6 @@ def log_kv_cache_retention_config_details(kv_cache_retention_config):
 
 
 def convert_dynamo_kv_cache_retention_config(dynamo_config):
-    """
-    Convert Dynamo KV cache retention config to TensorRT-LLM format.
-
-    Args:
-        dynamo_config: The KV cache retention config from Dynamo request
-
-    Returns:
-        TensorRT-LLM KvCacheRetentionConfig object or None if no config provided
-    """
     if not dynamo_config:
         return None
 
