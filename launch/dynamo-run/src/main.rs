@@ -16,6 +16,7 @@
 use std::env;
 
 use clap::Parser;
+use clap::CommandFactory;
 
 use dynamo_llm::entrypoint::input::Input;
 use dynamo_run::Output;
@@ -36,7 +37,6 @@ Example:
 - OR: ./dynamo-run /data/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 "#;
 
-const USAGE: &str = "USAGE: dynamo-run in=[http|text|dyn://<path>|batch:<folder>] out=ENGINE_LIST|dyn [--http-port 8080] [--model-path <path>] [--model-name <served-model-name>] [--model-config <hf-repo>] [--tensor-parallel-size=1] [--context-length=N] [--kv-cache-block-size=16] [--num-nodes=1] [--node-rank=0] [--leader-addr=127.0.0.1:9876] [--base-gpu-id=0] [--extra-engine-args=args.json] [--router-mode random|round-robin|kv] [--kv-overlap-score-weight=2.0] [--kv-gpu-cache-usage-weight=1.0] [--kv-waiting-requests-weight=1.0] [--verbosity (-v|-vv)]";
 
 fn main() -> anyhow::Result<()> {
     // Set log level based on verbosity flag
@@ -79,7 +79,8 @@ async fn wrapper(runtime: dynamo_runtime::Runtime) -> anyhow::Result<()> {
         || (args.iter().all(|arg| arg == "-v" || arg == "-vv"))
     {
         let engine_list = Output::available_engines().join("|");
-        let usage = USAGE.replace("ENGINE_LIST", &engine_list);
+        let help_message = dynamo_run::Flags::command().render_help().to_string();
+        let usage = help_message.replace("ENGINE_LIST", &engine_list);
         println!("{usage}");
         println!("{HELP}");
         return Ok(());
@@ -104,7 +105,8 @@ async fn wrapper(runtime: dynamo_runtime::Runtime) -> anyhow::Result<()> {
                 out_opt = Some(val.try_into()?);
             }
             _ => {
-                anyhow::bail!("Invalid argument, must start with 'in' or 'out. {USAGE}");
+                let help_message = dynamo_run::Flags::command().render_help();
+                anyhow::bail!("Invalid argument, must start with 'in' or 'out. {help_message}");
             }
         }
     }
@@ -118,7 +120,11 @@ async fn wrapper(runtime: dynamo_runtime::Runtime) -> anyhow::Result<()> {
     };
     if out_opt.is_some() {
         non_flag_params += 1;
+        println!("out_opt is some");
     }
+    println!("in: {in_opt}");
+    //println!("{out_opt}");
+    println!("non_flags_params: {non_flag_params}");
 
     // Clap skips the first argument expecting it to be the binary name, so add it back
     // Note `--model-path` has index=1 (in lib.rs) so that doesn't need a flag.
@@ -127,6 +133,8 @@ async fn wrapper(runtime: dynamo_runtime::Runtime) -> anyhow::Result<()> {
             .into_iter()
             .chain(env::args().skip(non_flag_params)),
     )?;
+    let chain_flags = env::args().skip(non_flag_params).collect::<Vec<_>>().join(" ");;
+    println!("chain flags: {chain_flags}");
 
     if is_in_dynamic(&in_opt) && is_out_dynamic(&out_opt) {
         anyhow::bail!("Cannot use endpoint for both in and out");
