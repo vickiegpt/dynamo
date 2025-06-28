@@ -141,14 +141,19 @@ fn validate_top_k(top_k: i64) -> Result<(), ValidationError> {
     Err(error)
 }
 
-fn validate_token_range_retention_config(config: &TokenRangeRetentionConfig) -> Result<(), ValidationError> {
+fn validate_token_range_retention_config(
+    config: &TokenRangeRetentionConfig,
+) -> Result<(), ValidationError> {
     if let Some(token_end) = config.token_end {
         if config.token_start >= token_end {
             let mut error = ValidationError::new("token_range");
-            error.message = Some(format!(
-                "token_start ({}) must be less than token_end ({}) when both are set",
-                config.token_start, token_end
-            ).into());
+            error.message = Some(
+                format!(
+                    "token_start ({}) must be less than token_end ({}) when both are set",
+                    config.token_start, token_end
+                )
+                .into(),
+            );
             return Err(error);
         }
     }
@@ -160,10 +165,13 @@ fn validate_transfer_mode(transfer_mode: &str) -> Result<(), ValidationError> {
         "DRAM" | "GDS" | "POSIX_DEBUG_FALLBACK" => Ok(()),
         _ => {
             let mut error = ValidationError::new("transfer_mode");
-            error.message = Some(format!(
-                "transfer_mode must be one of: DRAM, GDS, or POSIX_DEBUG_FALLBACK, got: {}",
-                transfer_mode
-            ).into());
+            error.message = Some(
+                format!(
+                    "transfer_mode must be one of: DRAM, GDS, or POSIX_DEBUG_FALLBACK, got: {}",
+                    transfer_mode
+                )
+                .into(),
+            );
             Err(error)
         }
     }
