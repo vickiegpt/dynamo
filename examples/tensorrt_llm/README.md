@@ -296,15 +296,17 @@ TensorRT-LLM supports KV cache retention configuration to control how key-value 
 
 The KV cache retention configuration supports the following parameters:
 
-- **token_range_retention_configs**: List of configurations for specific token ranges
-  - `token_start`: Starting token index for the range
-  - `token_end`: Ending token index for the range
+- **token_range_retention_configs**: List of configurations for specific token ranges in the input sequence.
+  - `token_start`: Starting token index for a range in input sequence.
+  - `token_end`: Ending token index for a range range in input sequence. If not provided, the range covers for all the remaining sequence tokens.
   - `priority`: Retention priority (higher values = higher priority)
   - `duration_ms`: How long to retain the cache in milliseconds
 - **decode_retention_priority**: Priority for decode phase cache retention
 - **decode_duration_ms**: Duration to retain decode cache in milliseconds
 - **transfer_mode**: Cache transfer mode between nodes
 - **directory**: Directory for persistent cache storage
+
+[Priority-Based KV Cache Eviction](https://developer.nvidia.com/blog/introducing-new-kv-cache-reuse-optimizations-in-nvidia-tensorrt-llm/#priority-based_kv_cache_eviction) describes the feature in further detail.
 
 #### Example Usage
 

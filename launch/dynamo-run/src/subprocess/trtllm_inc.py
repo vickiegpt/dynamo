@@ -149,6 +149,11 @@ def convert_dynamo_kv_cache_retention_config(dynamo_config):
                 transfer_mode = trtllm.KvCacheTransferMode.GDS
             elif transfer_mode_str == "POSIX_DEBUG_FALLBACK":
                 transfer_mode = trtllm.KvCacheTransferMode.POSIX_DEBUG_FALLBACK
+            else:
+                raise ValueError(
+                    f"Invalid transfer mode: {transfer_mode_str}. "
+                    "Expected 'DRAM', 'GDS', or 'POSIX_DEBUG_FALLBACK'."
+                )
 
         return KvCacheRetentionConfig(
             token_range_retention_configs=token_range_configs,

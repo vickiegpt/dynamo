@@ -41,14 +41,17 @@ pub struct KvCacheRetentionConfig {
 
     /// Transfer mode: "DRAM", "GDS", or "POSIX_DEBUG_FALLBACK"
     #[builder(default, setter(strip_option))]
+    #[validate(custom(function = "validate_transfer_mode"))]
     pub transfer_mode: Option<String>,
 
     /// Directory for KV cache storage
     #[builder(default, setter(strip_option))]
+    #[validate(custom(function = "validate_directory"))]
     pub directory: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Builder, Validate)]
+#[validate(schema(function = "validate_token_range_retention_config"))]
 pub struct TokenRangeRetentionConfig {
     /// Start token index (inclusive)
     pub token_start: u32,
@@ -136,6 +139,43 @@ fn validate_top_k(top_k: i64) -> Result<(), ValidationError> {
     let mut error = ValidationError::new("top_k");
     error.message = Some("top_k must be -1 or greater than or equal to 1".into());
     Err(error)
+}
+
+fn validate_token_range_retention_config(config: &TokenRangeRetentionConfig) -> Result<(), ValidationError> {
+    if let Some(token_end) = config.token_end {
+        if config.token_start >= token_end {
+            let mut error = ValidationError::new("token_range");
+            error.message = Some(format!(
+                "token_start ({}) must be less than token_end ({}) when both are set",
+                config.token_start, token_end
+            ).into());
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+fn validate_transfer_mode(transfer_mode: &str) -> Result<(), ValidationError> {
+    match transfer_mode {
+        "DRAM" | "GDS" | "POSIX_DEBUG_FALLBACK" => Ok(()),
+        _ => {
+            let mut error = ValidationError::new("transfer_mode");
+            error.message = Some(format!(
+                "transfer_mode must be one of: DRAM, GDS, or POSIX_DEBUG_FALLBACK, got: {}",
+                transfer_mode
+            ).into());
+            Err(error)
+        }
+    }
+}
+
+fn validate_directory(directory: &str) -> Result<(), ValidationError> {
+    if directory.trim().is_empty() {
+        let mut error = ValidationError::new("directory");
+        error.message = Some("directory cannot be empty or contain only whitespace".into());
+        return Err(error);
+    }
+    Ok(())
 }
 
 impl NvExtBuilder {
