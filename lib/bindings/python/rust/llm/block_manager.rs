@@ -94,7 +94,7 @@ impl BlockManager {
 
         tracing::info!("Using {} device blocks", device_num_blocks);
 
-        let mut model_config = dynamo_llm::block_manager::KvManagerModelConfig::builder()
+        let model_config = dynamo_llm::block_manager::KvManagerModelConfig::builder()
             .num_layers(1)
             .outer_dim(1)
             .page_size(page_size)

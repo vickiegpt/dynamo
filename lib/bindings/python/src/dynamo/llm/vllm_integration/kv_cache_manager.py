@@ -87,9 +87,40 @@ class KvbmCacheManager:
             self.prefix_cache_stats.queries += request.num_tokens
             self.prefix_cache_stats.hits += num_computed_tokens
 
-        # print(f"owned_blocks_count: {block_count}")
-
         return KvbmCacheBlocks(owned_blocks), num_computed_tokens
+    
+    def get_offloaded_computed_blocks(self, request: Request) -> tuple[KvbmCacheBlocks, int, KvbmCacheBlocks, int]:
+        """
+        Get the offloaded computed blocks for the request.
+        
+        Returns:
+            tuple[KvbmCacheBlocks, int, KvbmCacheBlocks, int]:
+                - The offloaded computed blocks for the request in G2.
+                - The number of offloaded computed tokens in G2.
+                - The offloaded computed blocks for the request in G3.
+                - The number of offloaded computed tokens in G3.
+        """
+        # TODO: add stats for offloaded computed tokens
+        # if self.log_stats:
+        #     assert self.prefix_cache_stats is not None
+        #     self.prefix_cache_stats.requests += 1
+
+        sequence_hashes = self._create_slot(request)
+
+        host_owned_blocks, disk_owned_blocks = self.cache_manager.get_offloaded_computed_blocks(sequence_hashes)
+        host_block_count = host_owned_blocks.block_count()
+        disk_block_count = disk_owned_blocks.block_count()
+
+        num_host_computed_tokens = host_block_count * self.block_size
+        num_disk_computed_tokens = disk_block_count * self.block_size
+
+        # TODO: add stats for offloaded computed tokens
+        # if self.log_stats:
+        #     assert self.prefix_cache_stats is not None
+        #     self.prefix_cache_stats.queries += request.num_tokens
+        #     self.prefix_cache_stats.hits += num_computed_tokens
+
+        return KvbmCacheBlocks(host_owned_blocks), num_host_computed_tokens, KvbmCacheBlocks(disk_owned_blocks), num_disk_computed_tokens
 
     def _create_slot(self, request: Request) -> list[int]:
         """Create a slot for the request."""

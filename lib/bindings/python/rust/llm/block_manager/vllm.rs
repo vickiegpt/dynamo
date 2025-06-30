@@ -119,7 +119,33 @@ impl KvbmCacheManager {
             .match_sequence_hashes_blocking(&sequence_hashes)
             .map_err(to_pyerr)?;
 
-        Ok(KvbmBlockList::new(BlockListType::Immutable(blocks)))
+        Ok(KvbmBlockList::new(BlockListType::ImmutableDevice(blocks)))
+    }
+
+    /// Get the offloaded computed blocks for the given sequence hashes.
+    /// This is used to get the blocks for the request.
+    pub fn get_offloaded_computed_blocks(
+        &self,
+        sequence_hashes: Vec<SequenceHash>,
+    ) -> PyResult<(KvbmBlockList, KvbmBlockList)> {
+        let host_blocks = self
+            .block_manager()
+            .host()
+            .unwrap()
+            .match_sequence_hashes_blocking(&sequence_hashes)
+            .map_err(to_pyerr)?;
+
+        let disk_blocks = self
+            .block_manager()
+            .disk()
+            .unwrap()
+            .match_sequence_hashes_blocking(&sequence_hashes)
+            .map_err(to_pyerr)?;
+
+        Ok((
+            KvbmBlockList::new(BlockListType::ImmutableHost(host_blocks)),
+            KvbmBlockList::new(BlockListType::ImmutableDisk(disk_blocks)),
+        ))
     }
 
     /// Updates the slot manager with the current request state and allocates new blocks if needed.
@@ -378,7 +404,7 @@ impl<R: RequestKey> SlotManager<R> {
         if let Some(matched_blocks) = new_computed_blocks {
             let blocks = matched_blocks.take_blocks();
             match blocks {
-                Some(BlockListType::Immutable(blocks)) => {
+                Some(BlockListType::ImmutableDevice(blocks)) => {
                     tracing::debug!(
                         request_id,
                         "applying {} cache-hit tokens",
@@ -386,9 +412,29 @@ impl<R: RequestKey> SlotManager<R> {
                     );
                     slot.apply_computed_blocks(blocks)?;
                 }
-                Some(BlockListType::Mutable(_blocks)) => {
+                Some(BlockListType::MutableDevice(_blocks)) => {
                     panic!(
                         "impossibility: mutable blocks were provided instead of immutable blocks"
+                    );
+                }
+                Some(BlockListType::ImmutableHost(_blocks)) => {
+                    panic!(
+                        "ImmutableHost should not be provided"
+                    );
+                }
+                Some(BlockListType::MutableHost(_blocks)) => {
+                    panic!(
+                        "MutableHost should not be provided"
+                    );
+                }
+                Some(BlockListType::ImmutableDisk(_blocks)) => {
+                    panic!(
+                        "ImmutableDisk should not be provided"
+                    );
+                }
+                Some(BlockListType::MutableDisk(_blocks)) => {
+                    panic!(
+                        "MutableDisk should not be provided"
                     );
                 }
                 None => {
