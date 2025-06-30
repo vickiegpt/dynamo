@@ -15,7 +15,7 @@ use dynamo_llm::{
         openai::chat_completions::{
             NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse,
         },
-        openai::completions::{CompletionRequest, CompletionResponse},
+        openai::completions::{NvCreateCompletionRequest, NvCreateCompletionResponse},
     },
 };
 use dynamo_runtime::pipeline::RouterMode;
@@ -33,6 +33,7 @@ pub async fn run(
         .port(flags.http_port)
         .enable_chat_endpoints(true)
         .enable_cmpl_endpoints(true)
+        .enable_embeddings_endpoints(true)
         .with_request_template(template)
         .build()?;
     match engine_config {
@@ -81,10 +82,10 @@ pub async fn run(
                 }
             }
 
-            let cmpl_pipeline = common::build_pipeline::<CompletionRequest, CompletionResponse>(
-                model.card(),
-                inner_engine,
-            )
+            let cmpl_pipeline = common::build_pipeline::<
+                NvCreateCompletionRequest,
+                NvCreateCompletionResponse,
+            >(model.card(), inner_engine)
             .await?;
             manager.add_completions_model(model.service_name(), cmpl_pipeline)?;
         }

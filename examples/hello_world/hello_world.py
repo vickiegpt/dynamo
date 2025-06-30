@@ -25,6 +25,7 @@ from dynamo.sdk import (
     depends,
     endpoint,
     liveness,
+    on_shutdown,
     readiness,
     service,
 )
@@ -87,6 +88,10 @@ class Backend:
         for token in text.split():
             yield f"Backend: {token}"
 
+    @on_shutdown
+    def shutdown(self):
+        logger.info("Shutting down backend")
+
 
 @service(
     dynamo={"namespace": "inference"},
@@ -112,10 +117,19 @@ class Middle:
             logger.info(f"Middle received response: {response}")
             yield f"Middle: {response}"
 
+    @on_shutdown
+    def shutdown(self):
+        logger.info("Shutting down middle")
+
 
 @service(
     dynamo={"namespace": "inference"},
     image=DYNAMO_IMAGE,
+    # Example of kubernetes overrides if needed.
+    # kubernetes_overrides={
+    #     "entrypoint": ["sh -c"],
+    #     "cmd": ["echo hello from FrontEnd!"],
+    # },
 )
 class Frontend:
     """A simple frontend HTTP API that forwards requests to the dynamo graph."""
@@ -152,3 +166,7 @@ class Frontend:
     @readiness
     def is_ready(self):
         return True
+
+    @on_shutdown
+    def shutdown(self):
+        logger.info("Shutting down frontend")
