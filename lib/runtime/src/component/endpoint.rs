@@ -19,6 +19,21 @@ use super::*;
 
 pub use async_nats::service::endpoint::Stats as EndpointStats;
 
+#[derive(Debug, Clone)]
+pub struct HttpServerConfig {
+    pub host: String,
+    pub port: u16,
+}
+
+impl Default for HttpServerConfig {
+    fn default() -> Self {
+        Self {
+            host: "0.0.0.0".to_string(),
+            port: 0,
+        }
+    }
+}
+
 #[derive(Educe, Builder, Dissolve)]
 #[educe(Debug)]
 #[builder(pattern = "owned", build_fn(private, name = "build_internal"))]
@@ -40,6 +55,9 @@ pub struct EndpointConfig {
     #[educe(Debug(ignore))]
     #[builder(default, private)]
     _stats_handler: Option<EndpointStatsHandler>,
+
+    #[builder(default = "HttpServerConfig::default()")]
+    http_server_config: HttpServerConfig,
 }
 
 impl EndpointConfigBuilder {
@@ -55,7 +73,8 @@ impl EndpointConfigBuilder {
     }
 
     pub async fn start(self) -> Result<()> {
-        let (endpoint, lease, handler, stats_handler) = self.build_internal()?.dissolve();
+        let (endpoint, lease, handler, stats_handler, http_server_config) =
+            self.build_internal()?.dissolve();
         let lease = lease.or(endpoint.drt().primary_lease());
         let lease_id = lease.as_ref().map(|l| l.id()).unwrap_or(0);
 
@@ -105,8 +124,8 @@ impl EndpointConfigBuilder {
 
         // start HTTP server (only once for each component)
         let http_server_once = endpoint.component.http_server_once.clone();
-        let host = "0.0.0.0"; // todo: make it configurable
-        let port = 0; // todo: make it configurable
+        let host = http_server_config.host.clone();
+        let port = http_server_config.port;
         let component_cancel_token = endpoint.component.drt().child_token();
         http_server_once
             .get_or_init(
@@ -114,7 +133,7 @@ impl EndpointConfigBuilder {
                 async move {
                     tokio::spawn(async move {
                         if let Err(e) = super::http_server::start_http_server(
-                            host,
+                            &host,
                             port,
                             component_cancel_token,
                         )
