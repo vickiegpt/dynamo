@@ -14,7 +14,7 @@ use dynamo_llm::{
         block::locality::{Local, LocalityProvider},
         block::{BlockId, ImmutableBlock, MutableBlock},
         pool::BlockPool,
-        BasicMetadata, DeviceStorage, KvBlockManager, Storage,
+        BasicMetadata, DeviceStorage, ReferenceBlockManager, Storage,
     },
     tokens::{SaltHash, SequenceHash, TokenBlockSequence, Tokens},
 };
@@ -61,7 +61,7 @@ pub struct KvCacheEvent {}
 
 impl KvbmCacheManager {
     #[inline(always)]
-    pub fn block_manager(&self) -> &KvBlockManager<BasicMetadata> {
+    pub fn block_manager(&self) -> &ReferenceBlockManager {
         self.block_manager.get_block_manager()
     }
 }
@@ -334,7 +334,7 @@ impl<R: RequestKey> SlotManager<R> {
     pub fn update_slot(
         &mut self,
         update: GenericSlotUpdate<R>,
-        bm: &KvBlockManager<BasicMetadata>,
+        bm: &ReferenceBlockManager,
     ) -> Result<Option<BlockStates>, SlotError> {
         let (
             request_id,

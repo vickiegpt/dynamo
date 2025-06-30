@@ -140,9 +140,7 @@ impl BlockManager {
 
 impl BlockManager {
     #[inline(always)]
-    pub fn get_block_manager(
-        &self,
-    ) -> &dynamo_llm::block_manager::KvBlockManager<dynamo_llm::block_manager::BasicMetadata> {
+    pub fn get_block_manager(&self) -> &dynamo_llm::block_manager::ReferenceBlockManager {
         self.inner.as_ref()
     }
 }
