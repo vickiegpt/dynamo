@@ -20,7 +20,7 @@ impl std::fmt::Debug for DistributedLeaderWorkerResources {
 }
 
 impl DistributedLeaderWorkerResources {
-    pub fn new(leader: KvbmLeader, cancel_token: CancellationToken) -> anyhow::Result<Self> {
+    pub fn new(leader: Arc<KvbmLeader>, cancel_token: CancellationToken) -> anyhow::Result<Self> {
         let (transfer_tx, transfer_rx) = mpsc::unbounded_channel();
 
         CriticalTaskExecutionHandle::new(
@@ -45,7 +45,7 @@ impl DistributedLeaderWorkerResources {
     }
 
     async fn worker(
-        leader: KvbmLeader,
+        leader: Arc<KvbmLeader>,
         mut transfer_rx: mpsc::UnboundedReceiver<TransferRequest>,
         cancel_token: CancellationToken,
     ) -> anyhow::Result<()> {

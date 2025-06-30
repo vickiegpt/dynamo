@@ -58,6 +58,7 @@ impl KvbmLeaderConfig {
 pub struct KvbmLeader {
     _worker_data: Arc<HashMap<String, ()>>, // TODO: Replace with KvbmLeaderData
     zmq_leader: ZmqActiveMessageLeader,
+    config: KvbmLeaderConfig,
 }
 
 impl KvbmLeader {
@@ -83,7 +84,7 @@ impl KvbmLeader {
 
         // Build our leader barrier and publish the data.
         let leader_barrier: LeaderBarrier<KvbmLeaderData, ()> = LeaderBarrier::new(
-            config.barrier_id,
+            config.barrier_id.clone(),
             config.world_size,
             Some(Duration::from_secs(30)),
         );
@@ -110,6 +111,7 @@ impl KvbmLeader {
         Ok(Self {
             _worker_data: Arc::new(worker_data),
             zmq_leader,
+            config,
         })
     }
 
@@ -121,5 +123,13 @@ impl KvbmLeader {
         self.zmq_leader
             .broadcast(ZMQ_TRANSFER_BLOCKS_MESSAGE, data)
             .await
+    }
+
+    pub fn num_host_blocks(&self) -> usize {
+        self.config.num_host_blocks
+    }
+
+    pub fn num_disk_blocks(&self) -> usize {
+        self.config.num_disk_blocks
     }
 }

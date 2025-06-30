@@ -138,7 +138,7 @@ impl<R: LogicalResources, Metadata: BlockMetadata>
                 (Some(Arc::new(pool)), Some(blocks))
             }
             None => {
-                tracing::debug!("No disk layout provided; will not allocate disk blocks.");
+                tracing::debug!("No host layout provided; will not allocate host blocks.");
                 (None, None)
             }
         };
@@ -146,11 +146,11 @@ impl<R: LogicalResources, Metadata: BlockMetadata>
         let (device_pool, device_blocks) = match device_factory {
             Some(factory) => {
                 let (pool, blocks) =
-                    create_block_pool::<_, _, Metadata>(factory, &resources, "disk")?;
+                    create_block_pool::<_, _, Metadata>(factory, &resources, "device")?;
                 (Some(Arc::new(pool)), Some(blocks))
             }
             None => {
-                tracing::debug!("No disk layout provided; will not allocate disk blocks.");
+                tracing::debug!("No device layout provided; will not allocate device blocks.");
                 (None, None)
             }
         };

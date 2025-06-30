@@ -158,11 +158,7 @@ impl<S: Storage, L: LocalityProvider> Slot<S, L> {
         self.immutable.clear();
 
         // create an iterator over the mutable blocks zipped with the token blocks
-        let zipped_blocks = self
-            .sequence
-            .blocks()
-            .iter()
-            .zip(computed_blocks);
+        let zipped_blocks = self.sequence.blocks().iter().zip(computed_blocks);
 
         // validate the sequence hashes of the incoming immutable computed blocks
         // against the sequence hashes of blocks in the sequence.
@@ -273,8 +269,8 @@ impl<S: Storage, L: LocalityProvider> Drop for Slot<S, L> {
 mod tests {
     use super::*;
     use dynamo_llm::block_manager::{
-        block::{BasicMetadata, Blocks},
         block::locality::Local,
+        block::{BasicMetadata, Blocks},
         pool::BlockPool,
         storage::tests::{NullDeviceAllocator, NullDeviceStorage},
     };
@@ -1427,7 +1423,7 @@ mod tests {
         let allocated_blocks = slot2.allocate_blocks(additional_tokens.len(), &fixture.pool);
         if allocated_blocks.is_some() {
             let pre_decode_mutable = slot2.mutable.len();
-            let pre_decode_immutable = slot2.immutable.len();
+            let _ = slot2.immutable.len();
 
             let result = slot2.apply_computed_tokens(additional_tokens, &fixture.pool);
             // This should work as decode tokens after cache hit

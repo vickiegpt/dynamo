@@ -28,7 +28,11 @@ mod tests {
 
     use anyhow::Result;
     use rstest::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
     use tokio_util::sync::CancellationToken;
 
     use dynamo_runtime::logging::init as init_logging;
@@ -202,7 +206,8 @@ mod tests {
             )
             .build()?;
 
-        let resources = DistributedLeaderWorkerResources::new(leader, cancel_token.child_token())?;
+        let resources =
+            DistributedLeaderWorkerResources::new(Arc::new(leader), cancel_token.child_token())?;
 
         let block_manager = KvBlockManager::<
             Logical<DistributedLeaderWorkerResources>,

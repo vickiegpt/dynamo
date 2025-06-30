@@ -11,16 +11,18 @@ use pyo3::{prelude::*, wrap_pymodule};
 
 use dynamo_llm::{
     block_manager::{
-        block::locality::{Local, LocalityProvider},
+        block::data::logical::distributed_leader_worker::DistributedLeaderWorkerResources,
+        block::locality::{LocalityProvider, Logical},
         block::{BlockId, ImmutableBlock, MutableBlock},
         pool::BlockPool,
-        BasicMetadata, DeviceStorage, ReferenceBlockManager, Storage,
+        BasicMetadata, DeviceStorage, Storage,
     },
     tokens::{SaltHash, SequenceHash, TokenBlockSequence, Tokens},
 };
 
 // use crate::llm::block_manager::BlockManager as PyBlockManager;
 use crate::llm::block_manager::BlockManager as PyBlockManager;
+use crate::llm::block_manager::VllmBlockManager;
 
 use crate::to_pyerr;
 
@@ -61,7 +63,7 @@ pub struct KvCacheEvent {}
 
 impl KvbmCacheManager {
     #[inline(always)]
-    pub fn block_manager(&self) -> &ReferenceBlockManager {
+    pub fn block_manager(&self) -> &VllmBlockManager {
         self.block_manager.get_block_manager()
     }
 }
@@ -286,7 +288,7 @@ impl SlotError {
 }
 
 pub struct SlotManager<R: RequestKey> {
-    slots: HashMap<R, Slot<DeviceStorage, Local>>,
+    slots: HashMap<R, Slot<DeviceStorage, Logical<DistributedLeaderWorkerResources>>>,
     block_size: usize,
 }
 
@@ -334,7 +336,7 @@ impl<R: RequestKey> SlotManager<R> {
     pub fn update_slot(
         &mut self,
         update: GenericSlotUpdate<R>,
-        bm: &ReferenceBlockManager,
+        bm: &VllmBlockManager,
     ) -> Result<Option<BlockStates>, SlotError> {
         let (
             request_id,

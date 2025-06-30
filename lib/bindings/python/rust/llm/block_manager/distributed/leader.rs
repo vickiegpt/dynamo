@@ -14,9 +14,16 @@ fn compute_num_blocks(env_var: &str, bytes_per_block: usize) -> usize {
 }
 
 #[pyclass]
+#[derive(Clone)]
 pub struct KvbmLeader {
-    _impl: Arc<KvbmLeaderImpl>,
-    _rt: tokio::runtime::Runtime,
+    leader: Arc<KvbmLeaderImpl>,
+    _rt: Arc<tokio::runtime::Runtime>,
+}
+
+impl KvbmLeader {
+    pub fn inner(&self) -> Arc<KvbmLeaderImpl> {
+        self.leader.clone()
+    }
 }
 
 #[pymethods]
@@ -44,8 +51,8 @@ impl KvbmLeader {
             rt.block_on(async move { KvbmLeaderImpl::new(config).await.map_err(to_pyerr) })?;
 
         Ok(Self {
-            _impl: Arc::new(leader),
-            _rt: rt,
+            leader: Arc::new(leader),
+            _rt: Arc::new(rt),
         })
     }
 }
