@@ -13,15 +13,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import asyncio
 import inspect
+import json
 import logging
-from typing import Any, Dict, get_type_hints
+import os
+from pathlib import Path
+from typing import Any, Dict, Optional, get_type_hints
 
+import typer
 from pydantic import BaseModel, ConfigDict
 
 from dynamo.runtime import Component, DistributedRuntime, dynamo_endpoint, dynamo_worker
-from dynamo.sdk.cli.utils import configure_target_environment
+from dynamo.sdk.cli.utils import configure_target_environment, resolve_service_config
 from dynamo.sdk.core.protocol.interface import DynamoTransport
 from dynamo.sdk.core.runner import TargetEnum
 
@@ -29,6 +35,18 @@ logger = logging.getLogger(__name__)
 
 # Use Dynamo target (this is the only supported one)
 configure_target_environment(TargetEnum.DYNAMO)
+
+
+def setup_service_config(ctx: typer.Context, config_file: Optional[Path] = None) -> None:
+    """Parse and set up service configuration from config file and CLI args.
+    
+    Args:
+        ctx: Typer context containing additional args
+        config_file: Optional path to YAML config file
+    """
+    service_configs = resolve_service_config(config_file, ctx.args)
+    if service_configs:
+        os.environ["DYNAMO_SERVICE_CONFIG"] = json.dumps(service_configs)
 
 
 class DynamoContext(BaseModel):
