@@ -27,6 +27,7 @@ from utils.vllm import RouterType
 
 from dynamo.llm import (
     AggregatedMetrics,
+    ApproxKvIndexer,
     KvIndexer,
     KvMetricsAggregator,
     OverlapScores,
@@ -121,6 +122,10 @@ class Router:
         await kv_listener.create_service()
         if self.router_type == RouterType.KV:
             self.indexer = KvIndexer(kv_listener, self.args.block_size)
+        elif self.router_type == RouterType.APPROX_KV:
+            # For now, hardcode the TTL to 2 minutes.
+            self.indexer = ApproxKvIndexer(kv_listener, self.args.block_size, 120.0)
+
         self.metrics_aggregator = KvMetricsAggregator(kv_listener)
 
         self.active_blocks_dict = {}
@@ -320,7 +325,10 @@ class Router:
 
         # Existing KV routing logic
         try:
-            scores = await self.indexer.find_matches(request.hashes)
+            if self.router_type == RouterType.APPROX_KV:
+                scores = await self.indexer.find_matches_for_request(request.tokens)
+            else:
+                scores = await self.indexer.find_matches(request.hashes)
         except Exception as e:
             scores = {}
             logger.exception(f"Error finding matches: {e}. {fallback_msg}")
@@ -331,9 +339,30 @@ class Router:
             scores, metrics, request.num_tokens
         )
 
+        if self.router_type == RouterType.APPROX_KV:
+            # For the approx kv router, we need to know what worker we route to.
+            # We can't defer to the engine client to select a random worker.
+            # Because of this, we need to select a worker here.
+            if not worker_id:
+                all_workers = self.workers_client.instance_ids()
+                worker_id = random.choice(all_workers)
+
+            await self.log_router_decision(request.tokens, worker_id)
+
         if worker_id:
             logger.info(
                 f"Scheduling to worker_id: {worker_id} with estimated prefix hit rate: {prefix_hit_rate}"
             )
 
         yield worker_id, prefix_hit_rate
+
+    async def log_router_decision(self, tokens: list[int], worker_id: str):
+        if self.router_type == RouterType.APPROX_KV:
+            try:
+                await self.indexer.process_routing_decision_for_request(
+                    tokens, worker_id
+                )
+            except Exception as e:
+                logger.exception(
+                    f"Error processing routing decision: {e}. {fallback_msg}"
+                )

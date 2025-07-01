@@ -41,10 +41,13 @@ impl KvRouter {
 
         let runtime = pyo3_async_runtimes::tokio::get_runtime();
         runtime.block_on(async {
-            let inner =
-                llm_rs::kv_router::KvRouter::new(component.inner.clone(), kv_block_size, None)
-                    .await
-                    .map_err(to_pyerr)?;
+            let inner = llm_rs::kv_router::KvRouter::new(
+                component.inner.clone(),
+                kv_block_size as u32,
+                None,
+            )
+            .await
+            .map_err(to_pyerr)?;
             Ok(Self {
                 inner: Arc::new(inner),
             })
@@ -74,7 +77,7 @@ pub fn compute_block_hash_for_seq_py(tokens: Vec<u32>, kv_block_size: usize) -> 
         return Err(to_pyerr(anyhow::anyhow!("kv_block_size cannot be 0")));
     }
 
-    let hashes = compute_block_hash_for_seq(&tokens, kv_block_size);
+    let hashes = compute_block_hash_for_seq(&tokens, kv_block_size as u32);
     Ok(hashes.into_iter().map(|h| h.0).collect())
 }
 
@@ -192,7 +195,7 @@ impl ZmqKvEventPublisher {
         let inner = llm_rs::kv_router::publisher::KvEventPublisher::new(
             component.inner,
             config.worker_id,
-            config.kv_block_size,
+            config.kv_block_size as u32,
             Some(KvEventSourceConfig::Zmq {
                 endpoint: config.zmq_endpoint,
                 topic: config.zmq_topic,
@@ -233,7 +236,7 @@ impl ZmqKvEventListener {
                 zmq_topic,
                 tx,
                 shutdown_token.clone(),
-                kv_block_size,
+                kv_block_size as u32,
             ));
 
             Ok(Self {
@@ -294,7 +297,7 @@ impl KvEventPublisher {
         let inner = llm_rs::kv_router::publisher::KvEventPublisher::new(
             component.inner,
             worker_id,
-            kv_block_size,
+            kv_block_size as u32,
             None,
         )
         .map_err(to_pyerr)?;
@@ -323,7 +326,7 @@ impl KvEventPublisher {
             data: KvCacheEventData::Stored(KvCacheStoreData {
                 parent_hash: parent_hash.map(ExternalSequenceBlockHash::from),
                 blocks: create_stored_blocks(
-                    self.kv_block_size,
+                    self.kv_block_size as u32,
                     &token_ids,
                     &num_block_tokens,
                     &block_hashes,
@@ -447,7 +450,7 @@ impl KvIndexer {
             let inner: Arc<llm_rs::kv_router::indexer::KvIndexer> =
                 llm_rs::kv_router::indexer::KvIndexer::new(
                     component.inner.drt().runtime().child_token(),
-                    kv_block_size,
+                    kv_block_size as u32,
                 )
                 .into();
             // [gluo TODO] try subscribe_with_type::<RouterEvent>,
@@ -479,7 +482,7 @@ impl KvIndexer {
     }
 
     fn block_size(&self) -> usize {
-        self.inner.block_size()
+        self.inner.block_size() as usize
     }
 
     fn find_matches<'p>(&self, py: Python<'p>, sequence: Vec<u64>) -> PyResult<Bound<'p, PyAny>> {
@@ -515,6 +518,64 @@ impl KvIndexer {
             Ok(OverlapScores {
                 inner: rs_overlap_scores,
             })
+        })
+    }
+}
+
+/// Bindings for the approximate KV indexer. We need to exactly match the regular KV Indexer
+/// interface, so that the router can switch between the two.
+#[pyclass]
+pub(crate) struct ApproxKvIndexer {
+    inner: Arc<llm_rs::kv_router::approx::ApproxKvIndexer>,
+}
+
+#[pymethods]
+impl ApproxKvIndexer {
+    #[new]
+    fn new(component: Component, kv_block_size: usize, ttl_secs: f64) -> PyResult<Self> {
+        let ttl = tokio::time::Duration::from_secs_f64(ttl_secs);
+        let inner = Arc::new(llm_rs::kv_router::approx::ApproxKvIndexer::new(
+            component.inner.drt().runtime().child_token(),
+            kv_block_size as u32,
+            ttl,
+        ));
+        Ok(Self { inner })
+    }
+
+    fn block_size(&self) -> u32 {
+        self.inner.block_size()
+    }
+
+    fn find_matches_for_request<'p>(
+        &self,
+        py: Python<'p>,
+        token_ids: Vec<u32>,
+    ) -> PyResult<Bound<'p, PyAny>> {
+        let indexer = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let rs_overlap_scores = indexer
+                .find_matches_for_request(token_ids.as_slice())
+                .await
+                .map_err(to_pyerr)?;
+            Ok(OverlapScores {
+                inner: rs_overlap_scores,
+            })
+        })
+    }
+
+    fn process_routing_decision_for_request<'p>(
+        &self,
+        py: Python<'p>,
+        tokens: Vec<u32>,
+        worker_id: i64,
+    ) -> PyResult<Bound<'p, PyAny>> {
+        let indexer = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            indexer
+                .process_routing_decision_for_request(tokens.as_slice(), worker_id)
+                .await
+                .map_err(to_pyerr)?;
+            Ok(())
         })
     }
 }
