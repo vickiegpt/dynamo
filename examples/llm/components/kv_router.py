@@ -129,33 +129,45 @@ class Router:
         self.metrics_aggregator = KvMetricsAggregator(kv_listener)
 
         self.active_blocks_dict = {}
+        self.last_num_waitings_dict = {}
         worker_ids = self.workers_client.instance_ids()
         for worker_id in worker_ids:
             # [old_value, predictive_value]
             self.active_blocks_dict[worker_id] = [0, 0]
+            self.last_num_waitings_dict[worker_id] = 0
 
         logger.info("KV Router initialized")
 
-    def _update_and_get_active_blocks(self, worker_id: str, polled_value: int) -> int:
-        """Helper routine to update waiting dict and return the desired waiting value.
+    def _update_and_get_active_blocks(
+        self, worker_id: str, worker_metrics: dict
+    ) -> dict:
+        """Update predictive active blocks tracking and modify worker metrics.
 
-        This method implements a predictive mechanism for tracking waiting requests:
-        - If a new polled value is detected (different from the stored old value),
-          it updates both the old and predictive values to this new measurement and returns it
-        - If no change is detected (polled value equals old value), it returns the
-          predictive value which has been incremented based on previous routing decisions
+        If either active_blocks or num_waitings has changed from stored values:
+        - Reset both old and predictive active_blocks to the new value
+        - Update stored num_waitings
 
-        This allows the router to account for requests that have been dispatched but
-        not yet reflected in the polled metrics.
+        If no changes detected:
+        - Replace worker_metrics' active_blocks with the predictive value
+
+        Returns the modified worker_metrics dict.
         """
-        old_value, predictive_value = self.active_blocks_dict[worker_id]
+        last_num_waitings = self.last_num_waitings_dict[worker_id]
+        old_active_blocks, predictive_active_blocks = self.active_blocks_dict[worker_id]
+        active_blocks = worker_metrics[worker_id]["kv_active_blocks"]
+        num_waitings = worker_metrics[worker_id]["num_requests_waiting"]
 
         # Check if polled value is different from old value
-        if polled_value != old_value:
-            self.active_blocks_dict[worker_id] = [polled_value, polled_value]
-            return polled_value
+        if active_blocks != old_active_blocks or num_waitings != last_num_waitings:
+            self.active_blocks_dict[worker_id] = [
+                active_blocks,
+                active_blocks,
+            ]
+            self.last_num_waitings_dict[worker_id] = num_waitings
         else:
-            return predictive_value
+            worker_metrics[worker_id]["kv_active_blocks"] = predictive_active_blocks
+
+        return worker_metrics
 
     def _cost_function(
         self,
@@ -209,12 +221,9 @@ class Router:
                 }
 
                 # Update waiting value using helper routine
-                polled_active_blocks = int(
-                    worker_metrics[worker_id]["kv_active_blocks"]
+                worker_metrics = self._update_and_get_active_blocks(
+                    worker_id, worker_metrics
                 )
-                worker_metrics[worker_id][
-                    "kv_active_blocks"
-                ] = self._update_and_get_active_blocks(worker_id, polled_active_blocks)
         else:
             logger.warning("Cannot get metrics")
 
