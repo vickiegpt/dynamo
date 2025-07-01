@@ -128,19 +128,19 @@ impl KvbmCacheManager {
         &self,
         sequence_hashes: Vec<SequenceHash>,
     ) -> PyResult<(KvbmBlockList, KvbmBlockList)> {
-        let host_blocks = self
-            .block_manager()
-            .host()
-            .unwrap()
-            .match_sequence_hashes_blocking(&sequence_hashes)
-            .map_err(to_pyerr)?;
+        let host_blocks = if let Some(host) = self.block_manager().host() {
+            host.match_sequence_hashes_blocking(&sequence_hashes)
+                .map_err(to_pyerr)?
+        } else {
+            vec![]
+        };
 
-        let disk_blocks = self
-            .block_manager()
-            .disk()
-            .unwrap()
-            .match_sequence_hashes_blocking(&sequence_hashes)
-            .map_err(to_pyerr)?;
+        let disk_blocks = if let Some(disk) = self.block_manager().disk() {
+            disk.match_sequence_hashes_blocking(&sequence_hashes)
+                .map_err(to_pyerr)?
+        } else {
+            vec![]
+        };
 
         Ok((
             KvbmBlockList::new(BlockListType::ImmutableHost(host_blocks)),
