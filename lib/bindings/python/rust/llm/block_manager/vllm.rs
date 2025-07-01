@@ -136,7 +136,7 @@ impl KvbmCacheManager {
         };
 
         let disk_blocks = if let Some(disk) = self.block_manager().disk() {
-            disk.match_sequence_hashes_blocking(&sequence_hashes)
+            disk.match_sequence_hashes_blocking(&sequence_hashes[host_blocks.len()..])
                 .map_err(to_pyerr)?
         } else {
             vec![]
