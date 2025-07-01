@@ -71,6 +71,17 @@ pub struct RuntimeConfig {
     #[builder(default = "512")]
     #[builder_field_attr(serde(skip_serializing_if = "Option::is_none"))]
     pub max_blocking_threads: usize,
+
+    /// HTTP server host for health and metrics endpoints
+    #[builder(default = "\"0.0.0.0\".to_string()")]
+    #[builder_field_attr(serde(skip_serializing_if = "Option::is_none"))]
+    pub http_server_host: String,
+
+    /// HTTP server port for health and metrics endpoints
+    /// If set to 0, the system will assign a random available port
+    #[builder(default = "9090")]
+    #[builder_field_attr(serde(skip_serializing_if = "Option::is_none"))]
+    pub http_server_port: u16,
 }
 
 impl RuntimeConfig {
@@ -111,6 +122,8 @@ impl RuntimeConfig {
         RuntimeConfig {
             num_worker_threads: 1,
             max_blocking_threads: 1,
+            http_server_host: "0.0.0.0".to_string(),
+            http_server_port: 9090,
         }
     }
 
@@ -129,6 +142,8 @@ impl Default for RuntimeConfig {
         Self {
             num_worker_threads: 16,
             max_blocking_threads: 16,
+            http_server_host: "0.0.0.0".to_string(),
+            http_server_port: 9090,
         }
     }
 }
@@ -235,6 +250,22 @@ mod tests {
                         .to_string()
                         .contains("max_blocking_threads: Validation error"));
                 }
+                Ok(())
+            },
+        )
+    }
+
+    #[test]
+    fn test_runtime_config_http_server_env_vars() -> Result<()> {
+        temp_env::with_vars(
+            vec![
+                ("DYN_RUNTIME_HTTP_SERVER_HOST", Some("127.0.0.1")),
+                ("DYN_RUNTIME_HTTP_SERVER_PORT", Some("9090")),
+            ],
+            || {
+                let config = RuntimeConfig::from_settings()?;
+                assert_eq!(config.http_server_host, "127.0.0.1");
+                assert_eq!(config.http_server_port, 9090);
                 Ok(())
             },
         )

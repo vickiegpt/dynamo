@@ -59,7 +59,6 @@ mod client;
 #[allow(clippy::module_inception)]
 mod component;
 mod endpoint;
-mod http_server;
 mod namespace;
 mod registry;
 pub mod service;
@@ -132,9 +131,6 @@ pub struct Component {
     // A static component's endpoints cannot be discovered via etcd, they are
     // fixed at startup time.
     is_static: bool,
-
-    #[builder(private, default = "Arc::new(OnceCell::new())")]
-    http_server_once: Arc<OnceCell<tokio::task::JoinHandle<()>>>,
 }
 
 impl Hash for Component {
