@@ -117,13 +117,20 @@ impl ModelDeploymentCard {
         // If neither of those are present let the engine default it
         .unwrap_or(0);
 
+
+        let prompt_formatter = PromptFormatterArtifact::from_repo(repo_id).await?;
+        if prompt_formatter.is_none() {
+            tracing::error!("====>>>>>>>>>>Failed to extract prompt formatter from repo {}", repo_id);
+            //return Err(anyhow::anyhow!("Failed to extract prompt formatter from repo {}", repo_id));
+        }
+
         Ok(Self {
             display_name: model_name.to_string(),
             service_name: model_name.to_string(),
             model_info: Some(ModelInfoType::from_repo(repo_id).await?),
             tokenizer: Some(TokenizerKind::from_repo(repo_id).await?),
             gen_config: GenerationConfig::from_repo(repo_id).await.ok(), // optional
-            prompt_formatter: PromptFormatterArtifact::from_repo(repo_id).await?,
+            prompt_formatter,
             prompt_context: None, // TODO - auto-detect prompt context
             revision: 0,
             last_published: None,

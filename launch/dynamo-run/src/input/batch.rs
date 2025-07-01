@@ -67,6 +67,10 @@ pub async fn run(
             input_jsonl.display()
         );
     }
+    if card.prompt_formatter.is_none() {
+        tracing::error!("Deployed model does not have a chat template. Please, use a different model for batch inference.");
+        return Err(anyhow::anyhow!("Deployed model does not have a chat template. Please, use a different model for batch inference."));
+    }
 
     let prepared_engine = common::prepare_engine(runtime, engine_config).await?;
     let service_name_ref = Arc::new(prepared_engine.service_name);

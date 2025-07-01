@@ -50,6 +50,7 @@ impl TryFrom<&str> for Input {
             }
             batch_patch if batch_patch.starts_with(BATCH_PREFIX) => {
                 let path = batch_patch.strip_prefix(BATCH_PREFIX).unwrap();
+                tracing::info!("batch path: {:?}", path);
                 Ok(Input::Batch(PathBuf::from(path)))
             }
             e => Err(anyhow::anyhow!("Invalid in= option '{e}'")),

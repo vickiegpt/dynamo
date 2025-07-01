@@ -68,7 +68,6 @@ pub async fn run(
             model,
         } => {
             let manager = http_service.model_manager();
-            tracing::info!("model: {:?}", model.card().prompt_formatter);
             match &model.card().prompt_formatter {
                 Some(_prompt_formatter) => {
                     let chat_pipeline = common::build_pipeline::<

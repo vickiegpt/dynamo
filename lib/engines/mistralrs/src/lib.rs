@@ -71,6 +71,7 @@ struct MistralRsEngine {
 
 impl MistralRsEngine {
     async fn new(model: &LocalModel) -> pipeline_error::Result<Self> {
+        tracing::info!("=========>>>>>>>>>>Creating MistralRsEngine");
         let model_path = model.path();
         // Name some None's for clarity
         let chat_template = None;
@@ -214,6 +215,11 @@ impl MistralRsEngine {
         // Perform warmup request
         let (tx, mut rx) = channel(1);
         let request_id = engine.mistralrs.next_request_id();
+        tracing::info!("=========>>>>>>>>>>prompt_formatter: {:?}", model.card().prompt_formatter);
+        if model.card().prompt_formatter.is_none(){
+            tracing::error!("Failed to extract prompt formatter from repo, skipping warmup request");
+            return Ok(engine);
+        }
         let warmup_request = Request::Normal(NormalRequest {
             id: request_id,
             messages: RequestMessage::Chat {
