@@ -36,6 +36,7 @@ pub use config::RuntimeConfig;
 pub mod component;
 pub mod discovery;
 pub mod engine;
+pub mod http_server;
 pub mod logging;
 pub mod pipeline;
 pub mod prelude;

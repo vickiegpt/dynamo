@@ -60,6 +60,7 @@ pub const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_RELEASE: u64 = 30;
 #[derive(Debug, Clone)]
 pub struct Worker {
     runtime: Runtime,
+    config: RuntimeConfig,
 }
 
 impl Worker {
@@ -84,7 +85,7 @@ impl Worker {
         })?;
 
         let runtime = Runtime::from_handle(rt.handle().clone())?;
-        Ok(Worker { runtime })
+        Ok(Worker { runtime, config })
     }
 
     pub fn tokio_runtime(&self) -> Result<&'static tokio::runtime::Runtime> {
@@ -144,6 +145,24 @@ impl Worker {
             // start signal handler
             tokio::spawn(signal_handler(runtime.cancellation_token.clone()));
 
+            // start HTTP server for health and metrics
+            let _http = tokio::spawn({
+                let cancel_token = runtime.child_token();
+                async move {
+                    if let Err(e) = crate::http_server::start_http_server(
+                        &self.config.http_server_host,
+                        self.config.http_server_port,
+                        cancel_token,
+                    )
+                    .await
+                    {
+                        tracing::error!("HTTP server startup failed: {}", e);
+                    } else {
+                        tracing::debug!("HTTP server started successfully");
+                    }
+                }
+            });
+
             let cancel_token = runtime.child_token();
             let (mut app_tx, app_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -202,7 +221,8 @@ impl Worker {
             return Err(error!("Worker already initialized"));
         }
         let runtime = Runtime::from_current()?;
-        Ok(Worker { runtime })
+        let config = RuntimeConfig::from_settings()?;
+        Ok(Worker { runtime, config })
     }
 }
 
