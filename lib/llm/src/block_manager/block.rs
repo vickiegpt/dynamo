@@ -21,8 +21,6 @@ pub mod registry;
 pub mod state;
 pub mod transfer;
 
-pub mod collections;
-
 pub use data::{view, BlockData, BlockDataExt, BlockDataProvider, BlockDataProviderMut};
 pub use locality::LocalityProvider;
 

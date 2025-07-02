@@ -4,7 +4,6 @@
 use super::*;
 
 pub mod distributed_leader_worker;
-pub mod lw_sharded;
 pub mod null;
 
 use crate::block_manager::block::{
