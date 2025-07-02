@@ -183,7 +183,7 @@ curl localhost:8000/v1/completions \
 
 ## Speculative Decoding
 
-To use speculative decoding with ```dynamo-run```, include vLLM's ```speculative_config``` argument in the ```extra_engine_args``` JSON file.
+To use speculative decoding with ```dynamo run```, include vLLM's ```speculative_config``` argument in the ```extra_engine_args``` JSON file.
 
 #### Example Command
 
@@ -192,7 +192,7 @@ cd examples/vllm_v1
 dynamo run out=vllm deepseek-ai/DeepSeek-R1-Distill-Llama-8B --extra-engine-args spec_dec/spec_dec.json
 ```
 
-To use speculative decoding with ```dynamo-serve```, include the ```speculative_config``` field in the ```config``` file.
+To use speculative decoding with ```dynamo serve```, include the ```speculative_config``` field in the ```config``` file.
 
 #### Example Command (Agg)
 
