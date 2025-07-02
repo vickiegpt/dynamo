@@ -43,6 +43,7 @@ pub use block::{
     BlockMetadata,
     Blocks,
     ImmutableBlock,
+    MutableBlock,
 };
 pub use config::*;
 pub use layout::{nixl::NixlLayout, LayoutConfig, LayoutConfigBuilder, LayoutError, LayoutType};
@@ -63,6 +64,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 use storage::nixl::MemType;
+use tokio::sync::oneshot;
 use validator::Validate;
 
 pub type WorkerID = u64;
@@ -136,11 +138,12 @@ impl<Locality: LocalityProvider, Metadata: BlockMetadata> KvBlockManager<Localit
     }
 
     /// Onboard a set of blocks to the device pool
-    pub async fn onboard_blocks<S: Storage>(
+    pub fn onboard_blocks<S: Storage>(
         &self,
         blocks: Vec<ImmutableBlock<S, Locality, Metadata>>,
-    ) -> BlockResult<DeviceStorage, Locality, Metadata> {
-        self.state.onboard_blocks(blocks).await
+        targets: Option<Vec<MutableBlock<DeviceStorage, Locality, Metadata>>>,
+    ) -> oneshot::Receiver<BlockResult<DeviceStorage, Locality, Metadata>> {
+        self.state.onboard_blocks(blocks, targets)
     }
 }
 

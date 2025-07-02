@@ -44,24 +44,6 @@ pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-pub fn map_dtype(dtype: &str) -> anyhow::Result<dynamo_llm::common::dtype::DType> {
-    Ok(match dtype {
-        "fp8" | "FP8" => dynamo_llm::common::dtype::DType::FP8,
-        "fp16" | "FP16" => dynamo_llm::common::dtype::DType::FP16,
-        "bf16" | "BF16" => dynamo_llm::common::dtype::DType::BF16,
-        "fp32" | "FP32" => dynamo_llm::common::dtype::DType::FP32,
-        "u8" | "U8" => dynamo_llm::common::dtype::DType::U8,
-        "u16" | "U16" => dynamo_llm::common::dtype::DType::U16,
-        "u32" | "U32" => dynamo_llm::common::dtype::DType::U32,
-        "u64" | "U64" => dynamo_llm::common::dtype::DType::U64,
-        "i8" | "I8" => dynamo_llm::common::dtype::DType::I8,
-        "i16" | "I16" => dynamo_llm::common::dtype::DType::I16,
-        "i32" | "I32" => dynamo_llm::common::dtype::DType::I32,
-        "i64" | "I64" => dynamo_llm::common::dtype::DType::I64,
-        _ => return Err(anyhow::anyhow!("Unsupported dtype: {}", dtype)),
-    })
-}
-
 type VllmBlockManager = dynamo_llm::block_manager::KvBlockManager<
     Logical<DistributedLeaderWorkerResources>,
     BasicMetadata,
@@ -71,6 +53,7 @@ type VllmBlockManager = dynamo_llm::block_manager::KvBlockManager<
 #[derive(Clone)]
 pub struct BlockManager {
     inner: Arc<VllmBlockManager>,
+    _rt: Arc<tokio::runtime::Runtime>,
 }
 
 #[pymethods]
@@ -94,7 +77,7 @@ impl BlockManager {
 
         tracing::info!("Using {} device blocks", device_num_blocks);
 
-        let mut model_config = dynamo_llm::block_manager::KvManagerModelConfig::builder()
+        let model_config = dynamo_llm::block_manager::KvManagerModelConfig::builder()
             .num_layers(1)
             .outer_dim(1)
             .page_size(page_size)
@@ -110,22 +93,24 @@ impl BlockManager {
                 .map_err(to_pyerr)?,
         );
 
-        if leader.inner().num_host_blocks() > 0 {
-            tracing::info!("Using {} host blocks", leader.inner().num_host_blocks());
+        let (leader, rt) = leader.dissolve();
+
+        if leader.num_host_blocks() > 0 {
+            tracing::info!("Using {} host blocks", leader.num_host_blocks());
             config = config.host_layout(
                 dynamo_llm::block_manager::KvManagerLayoutConfig::builder()
-                    .num_blocks(leader.inner().num_host_blocks())
+                    .num_blocks(leader.num_host_blocks())
                     .logical(Some(BlockParallelismStrategy::LeaderWorkerSharded))
                     .build()
                     .map_err(to_pyerr)?,
             );
         }
 
-        if leader.inner().num_disk_blocks() > 0 {
-            tracing::info!("Using {} disk blocks", leader.inner().num_disk_blocks());
+        if leader.num_disk_blocks() > 0 {
+            tracing::info!("Using {} disk blocks", leader.num_disk_blocks());
             config = config.disk_layout(
                 dynamo_llm::block_manager::KvManagerLayoutConfig::builder()
-                    .num_blocks(leader.inner().num_disk_blocks())
+                    .num_blocks(leader.num_disk_blocks())
                     .logical(Some(BlockParallelismStrategy::LeaderWorkerSharded))
                     .build()
                     .map_err(to_pyerr)?,
@@ -133,24 +118,21 @@ impl BlockManager {
         }
 
         let config = config.build().map_err(to_pyerr)?;
-        let tokio_runtime = pyo3_async_runtimes::tokio::get_runtime();
         Ok(BlockManager {
             inner: Arc::from(
-                tokio_runtime
-                    .block_on(async {
-                        let resources = DistributedLeaderWorkerResources::new(
-                            leader.inner(),
-                            cancel_token.child_token(),
-                        )?;
+                rt.block_on(async {
+                    let resources =
+                        DistributedLeaderWorkerResources::new(leader, cancel_token.child_token())?;
 
-                        dynamo_llm::block_manager::KvBlockManager::<
-                            Logical<DistributedLeaderWorkerResources>,
-                            BasicMetadata,
-                        >::new(config, resources)
-                        .await
-                    })
-                    .map_err(to_pyerr)?,
+                    dynamo_llm::block_manager::KvBlockManager::<
+                        Logical<DistributedLeaderWorkerResources>,
+                        BasicMetadata,
+                    >::new(config, resources)
+                    .await
+                })
+                .map_err(to_pyerr)?,
             ),
+            _rt: rt,
         })
     }
 
