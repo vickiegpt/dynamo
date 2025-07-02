@@ -33,7 +33,6 @@ from dynamo.sdk.core.protocol.deployment import (
     DeploymentManager,
     DeploymentResponse,
 )
-from dynamo.sdk.core.runner import TargetEnum
 
 DEFAULT_DOCKER_IMAGE = "default_docker_image"
 
@@ -173,14 +172,6 @@ def _handle_deploy_create(
         config: DeploymentConfig object
     """
 
-    from dynamo.sdk.cli.utils import configure_target_environment
-    from dynamo.sdk.lib.loader import load_entry_service
-
-    # TODO: hardcoding this is a hack to get the services for the deployment
-    # we should find a better way to do this once build is finished/generic
-    configure_target_environment(TargetEnum.DYNAMO)
-    entry_service = load_entry_service(config.graph)
-
     deployment_manager = get_deployment_manager(config.target, config.endpoint)
     env_dicts = _build_env_dicts(
         config_file=config.config_file,
@@ -194,7 +185,6 @@ def _handle_deploy_create(
         name=config.name or (config.graph if config.graph else "unnamed-deployment"),
         namespace="default",
         graph=config.graph,
-        entry_service=entry_service,
         envs=env_dicts,
         docker=docker_dict,
     )

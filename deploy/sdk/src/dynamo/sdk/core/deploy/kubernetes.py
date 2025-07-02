@@ -49,7 +49,6 @@ class KubernetesDeploymentManager(DeploymentManager):
         upload_graph(
             endpoint=self.endpoint,
             graph=deployment.graph,
-            entry_service=deployment.entry_service,
             session=self.session,
             **kwargs,
         )
@@ -61,6 +60,7 @@ class KubernetesDeploymentManager(DeploymentManager):
             "component": deployment.graph or deployment.namespace,
             "dev": dev,
             "envs": deployment.envs,
+            "docker": deployment.docker,
         }
         payload = {k: v for k, v in payload.items() if v is not None}
         url = f"{self.endpoint}/api/v2/deployments"

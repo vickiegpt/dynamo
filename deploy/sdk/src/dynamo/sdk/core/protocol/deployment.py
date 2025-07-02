@@ -138,7 +138,6 @@ class Deployment:
     name: str
     namespace: str
     graph: t.Optional[str] = None
-    entry_service: t.Optional[Service] = None
     envs: t.Optional[t.List[t.Dict[str, t.Any]]] = None
     docker: t.Optional[t.Dict[str, str]] = None
 

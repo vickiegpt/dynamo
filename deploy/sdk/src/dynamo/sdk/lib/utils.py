@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import io
+import logging
 import os
 import tarfile
 from datetime import datetime
@@ -22,7 +23,9 @@ from typing import Optional
 import requests
 
 from dynamo.sdk.core.protocol.deployment import Service
+from dynamo.sdk.core.runner import TargetEnum
 
+logger = logging.getLogger(__name__)
 REQUEST_TIMEOUT = 20
 
 
@@ -40,10 +43,22 @@ def get_system_app_host_port():
     return host, port
 
 
+def _get_entry_service(graph: str) -> Service:
+    """Get the entry service for a graph."""
+    from dynamo.sdk.cli.utils import configure_target_environment
+    from dynamo.sdk.lib.loader import load_entry_service
+
+    # TODO: hardcoding this is a hack to get the services for the deployment
+    # we should find a better way to do this once build is finished/generic
+    configure_target_environment(TargetEnum.DYNAMO)
+    entry_service = load_entry_service(graph)
+
+    return entry_service
+
+
 def upload_graph(
     endpoint: str,
     graph: str,
-    entry_service: Service,
     session: Optional[requests.Session] = None,
     **kwargs,
 ) -> None:
@@ -84,35 +99,39 @@ def upload_graph(
     ver_get_url = (
         f"{endpoint}/api/v1/dynamo_components/{graph_name}/versions/{graph_version}"
     )
-    ver_exists = False
     ver_resp = session.get(ver_get_url, timeout=REQUEST_TIMEOUT)
     if ver_resp.status_code == 200:
-        ver_exists = True
-    if not ver_exists:
-        build_at = kwargs.get("build_at")
-        if not build_at:
+        logger.info(
+            f"Version {graph_version} already exists in the API store, skipping upload"
+        )
+        return
+
+    build_at = kwargs.get("build_at")
+    if not build_at:
+        build_at = datetime.utcnow()
+    if isinstance(build_at, str):
+        try:
+            build_at = datetime.fromisoformat(build_at)
+        except Exception:
             build_at = datetime.utcnow()
-        if isinstance(build_at, str):
-            try:
-                build_at = datetime.fromisoformat(build_at)
-            except Exception:
-                build_at = datetime.utcnow()
-        manifest = {
-            "service": entry_service.service_name,
-            "apis": entry_service.apis,
-            "size_bytes": entry_service.size_bytes,
-        }
-        ver_payload = {
-            "name": entry_service.name,
-            "description": f"Auto-registered version for {graph}",
-            "resource_type": "dynamo_component_version",
-            "version": graph_version,
-            "manifest": manifest,
-            "build_at": build_at.isoformat(),
-        }
-        resp = session.post(ver_url, json=ver_payload, timeout=REQUEST_TIMEOUT)
-        if resp.status_code not in (200, 201, 409):
-            raise RuntimeError(f"Failed to create component version: {resp.text}")
+
+    entry_service = _get_entry_service(graph)
+    manifest = {
+        "service": entry_service.service_name,
+        "apis": entry_service.apis,
+        "size_bytes": entry_service.size_bytes,
+    }
+    ver_payload = {
+        "name": entry_service.name,
+        "description": f"Auto-registered version for {graph}",
+        "resource_type": "dynamo_component_version",
+        "version": graph_version,
+        "manifest": manifest,
+        "build_at": build_at.isoformat(),
+    }
+    resp = session.post(ver_url, json=ver_payload, timeout=REQUEST_TIMEOUT)
+    if resp.status_code not in (200, 201, 409):
+        raise RuntimeError(f"Failed to create component version: {resp.text}")
 
     # Upload the graph
     build_dir = entry_service.path
