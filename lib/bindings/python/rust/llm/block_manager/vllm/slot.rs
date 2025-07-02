@@ -39,7 +39,7 @@ pub struct Slot<S: Storage, L: LocalityProvider> {
 impl<S: Storage, L: LocalityProvider> Slot<S, L> {
     /// Creates a new slot.
     pub fn new(tokens: Tokens, block_size: usize, salt_hash: SaltHash) -> Self {
-        let sequence = TokenBlockSequence::new(tokens, block_size, Some(salt_hash));
+        let sequence = TokenBlockSequence::new(tokens, block_size as u32, Some(salt_hash));
         let prefill_position = sequence.total_tokens();
 
         Self {

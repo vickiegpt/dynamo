@@ -1546,7 +1546,7 @@ mod tests {
 
     use crate::tokens::{TokenBlockSequence, Tokens};
 
-    const BLOCK_SIZE: usize = 4;
+    const BLOCK_SIZE: u32 = 4;
     const SALT_HASH: SaltHash = 12345;
 
     // Helper to create a default reset block
@@ -1607,7 +1607,7 @@ mod tests {
 
         // Extend to fill capacity
         assert!(block.add_tokens(Tokens::from(vec![4])).is_ok()); // 1, 2, 3, 4
-        assert_eq!(block.len(), BLOCK_SIZE);
+        assert_eq!(block.len(), BLOCK_SIZE as usize);
 
         // Append when full (should fail)
         assert!(block.add_token(5).is_err(), "Append on full Partial block");
@@ -1631,7 +1631,7 @@ mod tests {
 
         // Fill block again for commit
         assert!(block.add_tokens(Tokens::from(vec![1, 2, 3, 4])).is_ok());
-        assert_eq!(block.len(), BLOCK_SIZE);
+        assert_eq!(block.len(), BLOCK_SIZE as usize);
 
         // --- Partial -> Complete (via commit) --- //
         assert!(block.commit().is_ok());

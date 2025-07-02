@@ -43,6 +43,7 @@ dynamo-runtime = { workspace = true }
 
 # workspace
 anyhow = { workspace = true }
+async-openai = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
 async-nats = { workspace = true }
@@ -55,6 +56,7 @@ etcd-client = { workspace = true }
 futures =  { workspace = true }
 futures-util = "0.3.31"
 hf-hub = { workspace = true }
+humantime = { workspace = true } # input/batch
 rand = { workspace = true }
 oneshot = { workspace = true }
 prometheus = { workspace = true }
@@ -74,7 +76,6 @@ uuid = { workspace = true }
 xxhash-rust = { workspace = true }
 
 akin = "0.4.0"
-async-openai = "0.27.2"
 blake3 = "1"
 bytemuck = "1.22"
 candle-core = { version = "0.8.0" }
@@ -82,6 +83,9 @@ derive-getters = "0.5"
 offset-allocator = "0.2"
 regex = "1"
 rayon = "1"
+
+# input/text
+dialoguer = { version = "0.11", default-features = false, features = ["editor", "history"] }
 
 # block_manager
 nixl-sys = {git="https://github.com/ai-dynamo/nixl", rev = "fa800bcfe3814b08df9cda9c30443de8c19665e5", optional = true }
