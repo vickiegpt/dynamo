@@ -97,14 +97,34 @@ where
 
         let context = stream.context();
 
+        let mut complete_final = true;
         while let Some(resp) = stream.next().await {
             tracing::trace!("Sending response: {:?}", resp);
-            let resp_bytes = serde_json::to_vec(&resp)
+            let resp_wrapper = StreamItemWrapper {
+                data: Some(resp),
+                complete_final: false,
+            };
+            let resp_bytes = serde_json::to_vec(&resp_wrapper)
                 .expect("fatal error: invalid response object - this should never happen");
             if (publisher.send(resp_bytes.into()).await).is_err() {
                 tracing::error!("Failed to publish response for stream {}", context.id());
                 context.stop_generating();
+                complete_final = false;
                 break;
+            }
+        }
+        if complete_final {
+            let resp_wrapper = StreamItemWrapper::<U> {
+                data: None,
+                complete_final: true,
+            };
+            let resp_bytes = serde_json::to_vec(&resp_wrapper)
+                .expect("fatal error: invalid response object - this should never happen");
+            if (publisher.send(resp_bytes.into()).await).is_err() {
+                tracing::error!(
+                    "Failed to publish complete final for stream {}",
+                    context.id()
+                );
             }
         }
 

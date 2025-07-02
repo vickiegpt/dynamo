@@ -76,13 +76,16 @@ impl AddressedPushRouter {
     }
 }
 
-#[async_trait]
-impl<T, U> AsyncEngine<SingleIn<AddressedRequest<T>>, ManyOut<U>, Error> for AddressedPushRouter
-where
-    T: Data + Serialize,
-    U: Data + for<'de> Deserialize<'de>,
-{
-    async fn generate(&self, request: SingleIn<AddressedRequest<T>>) -> Result<ManyOut<U>, Error> {
+// TODO: Add a trait generalizing the method?
+impl AddressedPushRouter {
+    pub async fn generate_with_error_detection<T, U>(
+        &self,
+        request: SingleIn<AddressedRequest<T>>,
+    ) -> Result<ManyOut<Result<U, Error>>, Error>
+    where
+        T: Data + Serialize,
+        U: Data + for<'de> Deserialize<'de>,
+    {
         let request_id = request.context().id().to_string();
         let (addressed_request, context) = request.transfer(());
         let (request, address) = addressed_request.into_parts();
@@ -160,19 +163,67 @@ where
             .map_err(|_| PipelineError::DetatchedStreamReceiver)?
             .map_err(PipelineError::ConnectionFailed)?;
 
-        let stream = tokio_stream::wrappers::ReceiverStream::new(response_stream.rx);
+        let mut is_complete_final = false;
+        let stream = tokio_stream::StreamExt::filter_map(
+            tokio_stream::StreamNotifyClose::new(tokio_stream::wrappers::ReceiverStream::new(
+                response_stream.rx,
+            )),
+            move |res| {
+                if let Some(res_bytes) = res {
+                    if is_complete_final {
+                        return Some(Err(Error::msg(
+                            "Response received after generation ended - this should never happen",
+                        )));
+                    }
+                    match serde_json::from_slice::<StreamItemWrapper<U>>(&res_bytes) {
+                        Ok(item) => {
+                            is_complete_final = item.complete_final;
+                            if let Some(data) = item.data {
+                                Some(Ok(data))
+                            } else if is_complete_final {
+                                None
+                            } else {
+                                Some(Err(Error::msg(
+                                    "Empty response received - this should never happen",
+                                )))
+                            }
+                        }
+                        Err(err) => {
+                            // legacy log print
+                            let json_str = String::from_utf8_lossy(&res_bytes);
+                            log::warn!(%err, %json_str, "Failed deserializing JSON to response");
 
-        let stream = stream.filter_map(|msg| async move {
-            match serde_json::from_slice::<U>(&msg) {
-                Ok(r) => Some(r),
-                Err(err) => {
-                    let json_str = String::from_utf8_lossy(&msg);
-                    log::warn!(%err, %json_str, "Failed deserializing JSON to response");
+                            Some(Err(Error::new(err)))
+                        }
+                    }
+                } else if is_complete_final {
                     None
+                } else {
+                    Some(Err(Error::msg("Stream ended before generation completed")))
                 }
+            },
+        );
+
+        Ok(ResponseStream::new(Box::pin(stream), engine_ctx))
+    }
+}
+
+#[async_trait]
+impl<T, U> AsyncEngine<SingleIn<AddressedRequest<T>>, ManyOut<U>, Error> for AddressedPushRouter
+where
+    T: Data + Serialize,
+    U: Data + for<'de> Deserialize<'de>,
+{
+    async fn generate(&self, request: SingleIn<AddressedRequest<T>>) -> Result<ManyOut<U>, Error> {
+        let res_stream = self.generate_with_error_detection(request).await?;
+        let engine_ctx = res_stream.context();
+        let stream = tokio_stream::StreamExt::filter_map(res_stream, |res| match res {
+            Ok(data) => Some(data),
+            Err(err) => {
+                log::warn!(%err);
+                None
             }
         });
-
         Ok(ResponseStream::new(Box::pin(stream), engine_ctx))
     }
 }
