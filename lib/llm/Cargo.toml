@@ -27,8 +27,8 @@ description = "Dynamo LLM Library"
 [features]
 # default = []
 
-# todo: enable this as default
-default = ["block-manager", "testing-full"]
+# todo: get this working in CI as a default.
+# default = ["block-manager"]
 
 testing-full  = ["testing-cuda", "testing-nixl"]
 testing-cuda  = ["dep:cudarc"]
