@@ -17,14 +17,13 @@
 
 from __future__ import annotations
 
-import json
 import typing as t
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from dynamo.sdk.cli.utils import resolve_service_config
+from dynamo.sdk.cli.utils import build_docker_dict, build_env_dicts
 from dynamo.sdk.core.deploy.consts import DeploymentTargetType
 from dynamo.sdk.core.deploy.kubernetes import KubernetesDeploymentManager
 from dynamo.sdk.core.protocol.deployment import (
@@ -86,81 +85,6 @@ def display_deployment_info(
     console.print(Panel(summary, title="Deployment", style="cyan"))
 
 
-def _build_env_dicts(
-    config_file: t.Optional[t.TextIO] = None,
-    args: t.Optional[t.List[str]] = None,
-    envs: t.Optional[t.List[str]] = None,
-    envs_from_secret: t.Optional[t.List[str]] = None,
-    env_secrets_name: t.Optional[str] = "dynamo-env-secrets",
-) -> t.List[t.Dict[str, t.Any]]:
-    """
-    Build a list of environment variable dicts.
-    """
-    env_dicts: t.List[t.Dict[str, t.Any]] = []
-    if config_file or args:
-        service_configs = resolve_service_config(config_file=config_file, args=args)
-        config_json = json.dumps(service_configs)
-        env_dicts.append({"name": "DYN_DEPLOYMENT_CONFIG", "value": config_json})
-    if envs:
-        for env in envs:
-            if "=" in env:
-                key, value = env.split("=", 1)
-                env_dicts.append({"name": key, "value": value})
-            else:
-                raise RuntimeError(f"Invalid env format: {env}. Use KEY=VALUE.")
-    if envs_from_secret:
-        for env in envs_from_secret:
-            if "=" in env:
-                key, secret_key = env.split("=", 1)
-                env_dicts.append(
-                    {
-                        "name": key,
-                        "valueFrom": {
-                            "secretKeyRef": {
-                                "name": env_secrets_name,
-                                "key": secret_key,
-                            }
-                        },
-                    }
-                )
-            else:
-                raise RuntimeError(
-                    f"Invalid env-from-secret format: {env}. Use KEY=SECRET_KEY."
-                )
-    return env_dicts
-
-
-def _build_docker_dict(
-    docker: t.Optional[t.List[str]] = None,
-) -> t.Optional[t.Dict[str, str]]:
-    """
-    Build a docker configuration dict from CLI arguments.
-
-    Args:
-        docker: List of docker arguments. Arguments without '=' become the default image,
-               arguments with '=' provide component-specific overrides.
-               Examples: ["frontend:latest", "Frontend=nvcr.io/myrepo/frontend:latest"]
-
-    Returns:
-        Dictionary with default_docker_image and component-specific overrides, or None if no docker args
-    """
-    if not docker:
-        return None
-
-    docker_dict: t.Dict[str, str] = {}
-
-    for docker_arg in docker:
-        if "=" in docker_arg:
-            # Component-specific override: Frontend=nvcr.io/myrepo/frontend:latest
-            component, tag = docker_arg.split("=", 1)
-            docker_dict[component] = tag
-        else:
-            # Default docker image
-            docker_dict[DEFAULT_DOCKER_IMAGE] = docker_arg
-
-    return docker_dict
-
-
 def _handle_deploy_create(
     ctx: typer.Context,
     config: DeploymentConfig,
@@ -173,14 +97,16 @@ def _handle_deploy_create(
     """
 
     deployment_manager = get_deployment_manager(config.target, config.endpoint)
-    env_dicts = _build_env_dicts(
+    env_dicts = build_env_dicts(
         config_file=config.config_file,
         args=ctx.args,
         envs=config.envs,
         envs_from_secret=config.envs_from_secret,
         env_secrets_name=config.env_secrets_name,
     )
-    docker_dict = _build_docker_dict(docker=config.docker)
+    docker_dict = build_docker_dict(
+        docker=config.docker, default_docker_image_key=DEFAULT_DOCKER_IMAGE
+    )
     deployment = Deployment(
         name=config.name or (config.graph if config.graph else "unnamed-deployment"),
         namespace="default",
@@ -450,14 +376,16 @@ def update(
     deployment_manager = get_deployment_manager(target, endpoint)
     try:
         with console.status(f"[bold green]Updating deployment '{name}'..."):
-            env_dicts = _build_env_dicts(
+            env_dicts = build_env_dicts(
                 config_file=config_file,
                 args=ctx.args,
                 envs=envs,
                 envs_from_secret=envs_from_secret,
                 env_secrets_name=env_secrets_name,
             )
-            docker_dict = _build_docker_dict(docker=docker)
+            docker_dict = build_docker_dict(
+                docker=docker, default_docker_image_key=DEFAULT_DOCKER_IMAGE
+            )
             deployment = Deployment(
                 name=name,
                 namespace="default",
@@ -581,6 +509,11 @@ def deploy(
         help="Environment secrets name",
         envvar="DYNAMO_ENV_SECRETS",
     ),
+    docker: t.Optional[t.List[str]] = typer.Option(
+        None,
+        "--docker",
+        help="Docker image tag. Use without '=' for default image, or 'ComponentName=image:tag' for component-specific overrides.",
+    ),
 ) -> DeploymentResponse:
     """Deploy a Dynamo graph (same as deployment create)."""
     config = DeploymentConfig(
@@ -595,5 +528,6 @@ def deploy(
         target=target,
         dev=dev,
         env_secrets_name=env_secrets_name,
+        docker=docker,
     )
     return _handle_deploy_create(ctx, config)

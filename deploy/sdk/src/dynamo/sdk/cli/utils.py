@@ -24,7 +24,17 @@ import logging
 import os
 import pathlib
 import socket
-from typing import Any, DefaultDict, Dict, Iterator, Protocol, TextIO, Union
+from typing import (
+    Any,
+    DefaultDict,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Protocol,
+    TextIO,
+    Union,
+)
 
 import typer
 import yaml
@@ -373,3 +383,95 @@ def raise_local_planner_warning(svc: Any, service_configs: dict) -> None:
             "Local planner is enabled, but workers for prefill or decode is > 1. Local planner must be started with prefill and decode workers set to 1."
         )
         raise typer.Exit(code=1)
+
+
+def build_env_dicts(
+    config_file: Optional[TextIO] = None,
+    args: Optional[List[str]] = None,
+    envs: Optional[List[str]] = None,
+    envs_from_secret: Optional[List[str]] = None,
+    env_secrets_name: Optional[str] = "dynamo-env-secrets",
+) -> List[Dict[str, Any]]:
+    """
+    Build a list of environment variable dicts.
+    """
+    env_dicts: List[Dict[str, Any]] = []
+    if config_file or args:
+        service_configs = resolve_service_config(config_file=config_file, args=args)
+        config_json = json.dumps(service_configs)
+        env_dicts.append({"name": "DYN_DEPLOYMENT_CONFIG", "value": config_json})
+    if envs:
+        for env in envs:
+            if "=" in env:
+                key, value = env.split("=", 1)
+                env_dicts.append({"name": key, "value": value})
+            else:
+                raise RuntimeError(f"Invalid env format: {env}. Use KEY=VALUE.")
+    if envs_from_secret:
+        for env in envs_from_secret:
+            if "=" in env:
+                key, secret_key = env.split("=", 1)
+                env_dicts.append(
+                    {
+                        "name": key,
+                        "valueFrom": {
+                            "secretKeyRef": {
+                                "name": env_secrets_name,
+                                "key": secret_key,
+                            }
+                        },
+                    }
+                )
+            else:
+                raise RuntimeError(
+                    f"Invalid env-from-secret format: {env}. Use KEY=SECRET_KEY."
+                )
+    return env_dicts
+
+
+def build_docker_dict(
+    docker: Optional[List[str]] = None,
+    default_docker_image_key: str = "default_docker_image",
+) -> Optional[Dict[str, str]]:
+    """
+    Build a docker configuration dict from CLI arguments.
+
+    Args:
+        docker: List of docker arguments. Arguments without '=' become the default image,
+               arguments with '=' provide component-specific overrides.
+               Examples: ["frontend:latest", "Frontend=nvcr.io/myrepo/frontend:latest"]
+        default_docker_image_key: Key to use for the default docker image
+
+    Returns:
+        Dictionary with default_docker_image and component-specific overrides, or None if no docker args
+
+    Raises:
+        ValueError: If component-specific overrides are provided without a default docker image
+    """
+    if not docker:
+        return None
+
+    docker_dict: Dict[str, str] = {}
+    has_default = False
+    has_overrides = False
+
+    for docker_arg in docker:
+        if "=" in docker_arg:
+            # Component-specific override: Frontend=nvcr.io/myrepo/frontend:latest
+            component, tag = docker_arg.split("=", 1)
+            docker_dict[component] = tag
+            has_overrides = True
+        else:
+            # Default docker image
+            docker_dict[default_docker_image_key] = docker_arg
+            has_default = True
+
+    # Error if component-specific overrides are provided without a default image
+    if has_overrides and not has_default:
+        raise ValueError(
+            "Component-specific docker overrides require a default docker image. "
+            "Please provide a default image without '=' (e.g., --docker myimage:tag) "
+            "along with your component-specific overrides."
+        )
+
+    return docker_dict
