@@ -113,6 +113,7 @@ impl ZmqActiveMessageLeader {
         // Ping our workers.
         let start = Instant::now();
         loop {
+            tracing::info!("timeout is {} seconds !", timeout.as_secs_f64());
             if start.elapsed() > timeout {
                 return Err(anyhow::anyhow!("Timed out waiting for workers."));
             }

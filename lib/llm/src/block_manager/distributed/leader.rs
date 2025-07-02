@@ -103,7 +103,7 @@ impl KvbmLeader {
         let zmq_leader = ZmqActiveMessageLeader::new(
             leader_sockets,
             config.world_size,
-            Duration::from_secs(30),
+            Duration::from_secs(120),
             cancel_token.clone(),
         )
         .await?;
