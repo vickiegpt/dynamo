@@ -3,7 +3,7 @@
 
 use super::*;
 
-/// Individual block storage - cannot be cloned to ensure uniqueness
+/// Individual block storage
 #[derive(Debug)]
 pub struct LocalBlockData<S: Storage> {
     layout: Arc<dyn BlockLayout<StorageType = S>>,
@@ -40,14 +40,6 @@ where
             block_set_idx,
             worker_id,
         }
-    }
-
-    pub fn storage_type(&self) -> StorageType {
-        *self.layout.storage_type()
-    }
-
-    fn is_fully_contiguous(&self) -> bool {
-        self.layout.layout_type() == LayoutType::FullyContiguous
     }
 }
 

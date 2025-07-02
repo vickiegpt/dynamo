@@ -36,9 +36,6 @@ use crate::block_manager::{
 };
 use crate::tokens::{SaltHash, SequenceHash, Token, TokenBlock, Tokens};
 
-// TODO: Define these traits in transfer_v2 if needed
-// use transfer::{Immutable, Mutable, Readable, Writable};
-
 use super::{
     events::PublishHandle,
     layout::{BlockLayout, LayoutError, LayoutType},
@@ -481,52 +478,6 @@ pub trait BlockExt {
     /// Returns a list of tokens in the block.
     fn tokens(&self) -> Option<&Tokens>;
 }
-
-// impl<S: Storage, M: BlockMetadata> BlockExt for Block<S, M> {
-//     fn reset(&mut self) {
-//         Block::reset(self);
-//     }
-
-//     fn init_sequence(&mut self, salt_hash: SaltHash) -> Result<()> {
-//         Ok(self
-//             .state
-//             .initialize_sequence(self.page_size(), salt_hash)?)
-//     }
-
-//     fn add_token(&mut self, token: Token) -> Result<()> {
-//         self.state.add_token(token)
-//     }
-
-//     /// Get a block view for reading (Local blocks only)
-//     pub fn block_view(&self) -> BlockResult<view::BlockView<S>> {
-//         self.data.block_view()
-//     }
-
-//     /// Get a block view for writing (Local blocks only)
-//     pub fn block_view_mut(&mut self) -> BlockResult<view::BlockViewMut<S>> {
-//         self.data.block_view_mut()
-//     }
-// }
-
-// BlockIdentifier trait removed - use Block methods directly
-
-// pub(crate) trait PrivateBlockExt {
-//     fn register(
-//         &mut self,
-//         registry: &mut registry::BlockRegistry,
-//     ) -> Result<Option<PublishHandle>, registry::BlockRegistationError>;
-// }
-
-// impl<S: Storage, L: LocalityProvider, M: BlockMetadata> PrivateBlockExt for Block<S, L, M> {
-//     fn register(
-//         &mut self,
-//         registry: &mut registry::BlockRegistry,
-//     ) -> Result<Option<PublishHandle>, registry::BlockRegistationError> {
-//         registry.register_block(&mut self.state)
-//     }
-// }
-
-// BlockExt trait removed - methods now implemented directly on Block for better organization
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Getters)]
 pub struct BasicMetadata {
@@ -997,22 +948,6 @@ pub mod nixl {
         ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsImmutable>>;
     }
 
-    pub trait NixlBlockDataMutable<S: Storage + NixlDescriptor>:
-        BlockDataExt<S> + NixlBlockDataImmutable<S>
-    {
-        /// Get the NIXL memory descriptor for the entire block
-        fn as_block_descriptor_mut(
-            &mut self,
-        ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsMutable>>;
-
-        /// Get the NIXL memory descriptor for a specific layer
-        fn as_layer_descriptor_mut(
-            &mut self,
-            layer_idx: usize,
-            outer_idx: usize,
-        ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsMutable>>;
-    }
-
     impl<S: Storage + NixlDescriptor> NixlBlockDataImmutable<S> for BlockData<S> {
         fn as_block_descriptor(
             &self,
@@ -1028,25 +963,6 @@ pub mod nixl {
             Ok(self.layer_view(layer_idx, outer_idx)?.as_nixl_descriptor())
         }
     }
-
-    impl<S: Storage + NixlDescriptor> NixlBlockDataMutable<S> for BlockData<S> {
-        fn as_block_descriptor_mut(
-            &mut self,
-        ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsMutable>> {
-            Ok(self.block_view_mut()?.as_nixl_descriptor_mut())
-        }
-
-        fn as_layer_descriptor_mut(
-            &mut self,
-            layer_idx: usize,
-            outer_idx: usize,
-        ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsMutable>> {
-            Ok(self
-                .layer_view_mut(layer_idx, outer_idx)?
-                .as_nixl_descriptor_mut())
-        }
-    }
-    // ... existing code ...
 
     /// Error type for NixlBlockSet serialization/deserialization failures.
     #[derive(Debug, Error)]
@@ -1233,44 +1149,6 @@ pub mod nixl {
         }
     }
 
-    // impl<M: MutabilityKind> BlockDataExt<NixlStorage> for RemoteBlock<M> {
-    //     // fn is_fully_contiguous(&self) -> bool {
-    //     //     self.data.is_fully_contiguous()
-    //     // }
-
-    //     fn num_layers(&self) -> usize {
-    //         self.data.num_layers()
-    //     }
-
-    //     fn num_outer_dims(&self) -> usize {
-    //         self.data.num_outer_dims()
-    //     }
-
-    //     fn layer_view(
-    //         &self,
-    //         layer_idx: usize,
-    //         outer_idx: usize,
-    //     ) -> BlockResult<view::LayerView<NixlStorage>> {
-    //         self.data.layer_view(layer_idx, outer_idx)
-    //     }
-
-    //     fn layer_view_mut(
-    //         &mut self,
-    //         layer_idx: usize,
-    //         outer_idx: usize,
-    //     ) -> BlockResult<view::LayerViewMut<NixlStorage>> {
-    //         self.data.layer_view_mut(layer_idx, outer_idx)
-    //     }
-
-    //     fn block_view(&self) -> BlockResult<view::BlockView<NixlStorage>> {
-    //         self.data.block_view()
-    //     }
-
-    //     fn block_view_mut(&mut self) -> BlockResult<view::BlockViewMut<NixlStorage>> {
-    //         self.data.block_view_mut()
-    //     }
-    // }
-
     impl<M: MutabilityKind> StorageTypeProvider for RemoteBlock<M> {
         type StorageType = NixlStorage;
     }
@@ -1283,22 +1161,6 @@ pub mod nixl {
         }
     }
 
-    // impl<M: MutabilityKind> NixlBlockDataImmutable<NixlStorage> for RemoteBlock<M> {
-    //     fn as_block_descriptor(
-    //         &self,
-    //     ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsImmutable>> {
-    //         self.data.as_block_descriptor()
-    //     }
-
-    //     fn as_layer_descriptor(
-    //         &self,
-    //         layer_idx: usize,
-    //         outer_idx: usize,
-    //     ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsImmutable>> {
-    //         self.data.as_layer_descriptor(layer_idx, outer_idx)
-    //     }
-    // }
-
     impl BlockDataProviderMut for RemoteBlock<IsMutable> {
         type Locality = locality::Local;
 
@@ -1306,21 +1168,6 @@ pub mod nixl {
             &mut self.data
         }
     }
-    // impl NixlBlockDataMutable<NixlStorage> for RemoteBlock<IsMutable> {
-    //     fn as_block_descriptor_mut(
-    //         &mut self,
-    //     ) -> BlockResult<NixlMemoryDescriptor<'_, BlockKind, IsMutable>> {
-    //         self.data.as_block_descriptor_mut()
-    //     }
-
-    //     fn as_layer_descriptor_mut(
-    //         &mut self,
-    //         layer_idx: usize,
-    //         outer_idx: usize,
-    //     ) -> BlockResult<NixlMemoryDescriptor<'_, LayerKind, IsMutable>> {
-    //         self.data.as_layer_descriptor_mut(layer_idx, outer_idx)
-    //     }
-    // }
 
     impl<'a, M: MutabilityKind> AsBlockSlice<'a, RemoteBlock<M>> for [RemoteBlock<M>] {
         fn as_block_slice(&'a self) -> &'a [RemoteBlock<M>] {
@@ -1380,13 +1227,6 @@ pub mod nixl {
         // derived from block_set_idx via the NixlBlockSet on the receiving side.
     }
 
-    // impl<L: LocalityProvider, M: BlockMetadata> IntoWritableBlocks<L, M> for BlockDescriptorList {
-    //     type Output = Vec<RemoteBlock<IsMutable>>;
-    //     fn into_writable_blocks(self, manager: &BlockManager<L, M>) -> BlockResult<Self::Output> {
-    //         Ok(manager.get_remote_blocks_mutable(&self)?)
-    //     }
-    // }
-
     #[derive(Debug, Error)]
     pub enum BlockDescriptorSetError {
         #[error("Input block list cannot be empty")]
@@ -1404,136 +1244,6 @@ pub mod nixl {
         )]
         InvalidBlockHandle,
     }
-
-    // impl BlockDescriptorList {
-    //     /// Creates a new validated BlockDescriptorList from a slice of block handles.
-    //     /// Ensures all handles belong to the same worker and block set.
-    //     fn new<S: Storage>(
-    //         blocks: &[&BlockData<S>], // Use the generic trait bound
-    //         mutability: BlockMutability,
-    //     ) -> Result<Self, BlockDescriptorSetError> {
-    //         if blocks.is_empty() {
-    //             return Err(BlockDescriptorSetError::EmptyInput);
-    //         }
-
-    //         let first = blocks[0];
-    //         let worker_id = first.worker_id();
-    //         let block_set_idx = first.block_set_id();
-
-    //         let mut block_indices = Vec::with_capacity(blocks.len());
-    //         block_indices.push(first.block_id());
-
-    //         for block in blocks.iter().skip(1) {
-    //             // Validate homogeneity
-    //             if block.worker_id() != worker_id || block.block_set_id() != block_set_idx {
-    //                 return Err(BlockDescriptorSetError::NotHomogeneous);
-    //             }
-    //             block_indices.push(block.block_id());
-    //         }
-
-    //         // TODO: Potentially validate MemType derived from block_set_idx here if possible
-
-    //         Ok(Self {
-    //             worker_id,
-    //             block_set_idx,
-    //             mutability,
-    //             block_indices,
-    //         })
-    //     }
-
-    // /// Creates a BlockDescriptorList representing immutable blocks.
-    // pub fn from_immutable_blocks<S: Storage, L: LocalityProvider, M: BlockMetadata>(
-    //     blocks: &[ImmutableBlock<S, L, M>],
-    // ) -> Result<Self, BlockDescriptorSetError> {
-    //     // Map each block handle to Option<&BlockData>,
-    //     // then convert Option to Result (treating None as an error),
-    //     // finally collect into Result<Vec<&BlockData>, Error>.
-    //     let data: Vec<&BlockData<S>> = blocks
-    //         .iter()
-    //         .map(|b| {
-    //             b.block
-    //                 .block
-    //                 .as_ref()
-    //                 .map(|inner_b| &inner_b.data.block_data())
-    //         })
-    //         .map(|opt| opt.ok_or(BlockDescriptorSetError::InvalidBlockHandle))
-    //         .collect::<Result<Vec<&BlockData<S>>, _>>()?;
-    //     Self::new(&data, BlockMutability::Immutable)
-    // }
-
-    // /// Creates a BlockDescriptorList representing mutable blocks.
-    // pub fn from_mutable_blocks<S: Storage, L: LocalityProvider, M: BlockMetadata>(
-    //     blocks: &[MutableBlock<S, L, M>],
-    // ) -> Result<Self, BlockDescriptorSetError> {
-    //     // Map each block handle to Option<&BlockData>,
-    //     // then convert Option to Result (treating None as an error),
-    //     // finally collect into Result<Vec<&BlockData>, Error>.
-    //     let data: Vec<&LocalBlockData<S>> = blocks
-    //         .iter()
-    //         .map(|b| b.block.as_ref().map(|inner_b| &inner_b.data))
-    //         .map(|opt| opt.ok_or(BlockDescriptorSetError::InvalidBlockHandle))
-    //         .collect::<Result<Vec<&LocalBlockData<S>>, _>>()?;
-
-    //     Self::new(&data, BlockMutability::Mutable)
-    // }
-
-    // /// Serializes the BlockDescriptorList into a byte vector.
-    // pub fn serialize(&self) -> Result<Vec<u8>, BlockDescriptorSetError> {
-    //     Ok(serde_json::to_vec(self)?)
-    // }
-
-    // /// Deserializes a BlockDescriptorList from a byte slice.
-    // pub fn deserialize(data: &[u8]) -> Result<Self, BlockDescriptorSetError> {
-    //     Ok(serde_json::from_slice(data)?)
-    // }
-
-    pub trait AsBlockDescriptorSet {
-        type Block;
-        fn as_block_descriptor_set(&self) -> Result<BlockDescriptorList, BlockDescriptorSetError>;
-    }
-
-    // impl<S, L, M> AsBlockDescriptorSet for [ImmutableBlock<S, L, M>]
-    // where
-    //     S: Storage,
-    //     L: LocalityProvider,
-    //     M: BlockMetadata,
-    // {
-    //     type Block = ImmutableBlock<S, locality::Local, M>;
-    //     fn as_block_descriptor_set(&self) -> Result<BlockDescriptorList, BlockDescriptorSetError> {
-    //         BlockDescriptorList::from_immutable_blocks(self)
-    //     }
-    // }
-
-    // impl<S, M> AsBlockDescriptorSet for [MutableBlock<S, locality::Local, M>]
-    // where
-    //     S: Storage,
-    //     M: BlockMetadata,
-    // {
-    //     type Block = MutableBlock<S, locality::Local, M>;
-    //     fn as_block_descriptor_set(&self) -> Result<BlockDescriptorList, BlockDescriptorSetError> {
-    //         BlockDescriptorList::from_mutable_blocks(self)
-    //     }
-    // }
-
-    // impl<T> AsBlockDescriptorSet for Vec<T>
-    // where
-    //     [T]: AsBlockDescriptorSet<Block = T>,
-    // {
-    //     type Block = T;
-    //     fn as_block_descriptor_set(&self) -> Result<BlockDescriptorList, BlockDescriptorSetError> {
-    //         self.as_slice().as_block_descriptor_set()
-    //     }
-    // }
-
-    // impl<T, const N: usize> AsBlockDescriptorSet for [T; N]
-    // where
-    //     [T]: AsBlockDescriptorSet<Block = T>,
-    // {
-    //     type Block = T;
-    //     fn as_block_descriptor_set(&self) -> Result<BlockDescriptorList, BlockDescriptorSetError> {
-    //         self.as_slice().as_block_descriptor_set()
-    //     }
-    // }
 }
 
 #[cfg(test)]

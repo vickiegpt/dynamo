@@ -3,7 +3,6 @@
 
 use super::*;
 
-/// Factory for creating LocalBlockData (DEPRECATED - use LocalBlockFactory instead)
 #[derive(Debug, Clone, Dissolve)]
 pub struct LocalBlockDataFactory<S: Storage> {
     layout: Arc<dyn BlockLayout<StorageType = S>>,

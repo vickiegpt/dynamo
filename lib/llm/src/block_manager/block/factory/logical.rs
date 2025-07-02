@@ -4,7 +4,6 @@
 use super::*;
 use crate::block_manager::locality::{Logical, LogicalBlockData, LogicalResources};
 
-/// Factory for creating LocalBlockData (DEPRECATED - use LocalBlockFactory instead)
 #[derive(Debug)]
 pub struct LogicalBlockFactory<S: Storage, R: LogicalResources> {
     layout_config: Arc<LayoutConfig>,

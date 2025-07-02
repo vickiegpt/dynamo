@@ -34,16 +34,8 @@ pub mod storage;
 pub use crate::common::dtype::DType;
 pub use block::{
     locality::{self, LocalityProvider, LogicalResources},
-    nixl::{
-        AsBlockDescriptorSet, BlockDescriptorList, IsImmutable, IsMutable, MutabilityKind,
-        RemoteBlock,
-    },
-    // transfer::{BlockTransferEngineV1, TransferRequestPut},
-    BasicMetadata,
-    BlockMetadata,
-    Blocks,
-    ImmutableBlock,
-    MutableBlock,
+    nixl::{BlockDescriptorList, IsImmutable, IsMutable, MutabilityKind, RemoteBlock},
+    BasicMetadata, BlockMetadata, Blocks, ImmutableBlock, MutableBlock,
 };
 pub use config::*;
 pub use layout::{nixl::NixlLayout, LayoutConfig, LayoutConfigBuilder, LayoutError, LayoutType};
@@ -233,14 +225,13 @@ impl<R: LogicalResources, Metadata: BlockMetadata> KvBlockManager<locality::Logi
 mod tests {
     use super::*;
 
-    // use crate::block_manager::block::BlockExt;
     use crate::tokens::Tokens;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     // Atomic Counter for Worker ID
     static WORKER_ID: AtomicU64 = AtomicU64::new(1337);
 
-    pub fn create_reference_block_manager_config() -> KvBlockManagerConfig {
+    fn create_reference_block_manager_config() -> KvBlockManagerConfig {
         let worker_id = WORKER_ID.fetch_add(1, Ordering::SeqCst);
 
         // Check if we're already in a Tokio runtime context
@@ -294,7 +285,7 @@ mod tests {
             .unwrap()
     }
 
-    pub async fn create_reference_block_manager() -> ReferenceBlockManager {
+    async fn create_reference_block_manager() -> ReferenceBlockManager {
         ReferenceBlockManager::new(create_reference_block_manager_config())
             .await
             .unwrap()
