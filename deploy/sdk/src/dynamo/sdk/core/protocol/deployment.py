@@ -140,6 +140,7 @@ class Deployment:
     graph: t.Optional[str] = None
     entry_service: t.Optional[Service] = None
     envs: t.Optional[t.List[t.Dict[str, t.Any]]] = None
+    docker: t.Optional[t.Dict[str, str]] = None
 
 
 # Type alias for deployment responses (e.g., from backend APIs)
@@ -170,6 +171,9 @@ class DeploymentConfig:
     envs: t.Optional[t.List[str]] = None
     envs_from_secret: t.Optional[t.List[str]] = None
     env_secrets_name: t.Optional[str] = "dynamo-env-secrets"
+
+    # Docker configuration
+    docker: t.Optional[t.List[str]] = None
 
 
 class DeploymentManager(ABC):

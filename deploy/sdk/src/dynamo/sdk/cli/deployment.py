@@ -35,6 +35,8 @@ from dynamo.sdk.core.protocol.deployment import (
 )
 from dynamo.sdk.core.runner import TargetEnum
 
+DEFAULT_DOCKER_IMAGE = "default_docker_image"
+
 app = typer.Typer(
     help="Deploy Dynamo applications to Dynamo Cloud Platform",
     add_completion=True,
@@ -129,6 +131,37 @@ def _build_env_dicts(
     return env_dicts
 
 
+def _build_docker_dict(
+    docker: t.Optional[t.List[str]] = None,
+) -> t.Optional[t.Dict[str, str]]:
+    """
+    Build a docker configuration dict from CLI arguments.
+
+    Args:
+        docker: List of docker arguments. Arguments without '=' become the default image,
+               arguments with '=' provide component-specific overrides.
+               Examples: ["frontend:latest", "Frontend=nvcr.io/myrepo/frontend:latest"]
+
+    Returns:
+        Dictionary with default_docker_image and component-specific overrides, or None if no docker args
+    """
+    if not docker:
+        return None
+
+    docker_dict: t.Dict[str, str] = {}
+
+    for docker_arg in docker:
+        if "=" in docker_arg:
+            # Component-specific override: Frontend=nvcr.io/myrepo/frontend:latest
+            component, tag = docker_arg.split("=", 1)
+            docker_dict[component] = tag
+        else:
+            # Default docker image
+            docker_dict[DEFAULT_DOCKER_IMAGE] = docker_arg
+
+    return docker_dict
+
+
 def _handle_deploy_create(
     ctx: typer.Context,
     config: DeploymentConfig,
@@ -156,12 +189,14 @@ def _handle_deploy_create(
         envs_from_secret=config.envs_from_secret,
         env_secrets_name=config.env_secrets_name,
     )
+    docker_dict = _build_docker_dict(docker=config.docker)
     deployment = Deployment(
         name=config.name or (config.graph if config.graph else "unnamed-deployment"),
         namespace="default",
         graph=config.graph,
         entry_service=entry_service,
         envs=env_dicts,
+        docker=docker_dict,
     )
     try:
         console.print("[bold green]Creating deployment...")
@@ -267,6 +302,11 @@ def create(
         help="Environment secrets name",
         envvar="DYNAMO_ENV_SECRETS",
     ),
+    docker: t.Optional[t.List[str]] = typer.Option(
+        None,
+        "--docker",
+        help="Docker image tag. Use without '=' for default image, or 'ComponentName=image:tag' for component-specific overrides.",
+    ),
 ) -> DeploymentResponse:
     """Create a deployment on Dynamo Cloud."""
     config = DeploymentConfig(
@@ -281,6 +321,7 @@ def create(
         target=target,
         dev=dev,
         env_secrets_name=env_secrets_name,
+        docker=docker,
     )
     return _handle_deploy_create(ctx, config)
 
@@ -406,6 +447,11 @@ def update(
         help="Environment secrets name",
         envvar="DYNAMO_ENV_SECRETS",
     ),
+    docker: t.Optional[t.List[str]] = typer.Option(
+        None,
+        "--docker",
+        help="Docker image tag. Use without '=' for default image, or 'ComponentName=image:tag' for component-specific overrides.",
+    ),
 ) -> None:
     """Update an existing deployment on Dynamo Cloud.
 
@@ -421,10 +467,12 @@ def update(
                 envs_from_secret=envs_from_secret,
                 env_secrets_name=env_secrets_name,
             )
+            docker_dict = _build_docker_dict(docker=docker)
             deployment = Deployment(
                 name=name,
                 namespace="default",
                 envs=env_dicts,
+                docker=docker_dict,
             )
             deployment_manager.update_deployment(
                 deployment_id=name, deployment=deployment
