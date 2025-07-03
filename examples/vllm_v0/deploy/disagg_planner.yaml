@@ -3,140 +3,150 @@ kind: DynamoGraphDeployment
 metadata:
   name: disagg-planner
 spec:
-  Frontend:
-    dynamoNamespace: inference
-    componentType: main
-    replicas: 1
-    resources:
-      requests:
-        cpu: "1"
-        memory: "2Gi"
-      limits:
-        cpu: "1"
-        memory: "2Gi"
-    extraPodSpec:
-      mainContainer:
-        image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
-        workingDir: /workspace/examples/vllm_v0
-        args:
-          - dynamo
-          - serve
-          - graphs.disagg_planner:Frontend
-          - --system-app-port
-          - "5000"
-          - --enable-system-app
-          - --use-default-health-checks
-          - --service-name
-          - Frontend
-          - -f
-          - ./configs/disagg_planner.yaml
+  envs:
+    - name: DYN_DEPLOYMENT_CONFIG
+      value: '{"Common":{"model":"deepseek-ai/DeepSeek-R1-Distill-Llama-8B","block-size":64,"max-model-len":16384,"kv-transfer-config":"{\"kv_connector\":\"DynamoNixlConnector\"}"},"Frontend":{"served_model_name":"deepseek-ai/DeepSeek-R1-Distill-Llama-8B","endpoint":"dynamo.VllmWorker.generate","port":8000,"router":"round-robin","common-configs":["block-size"]},"VllmWorker":{"remote-prefill":true,"conditional-disagg":true,"max-local-prefill-length":10,"max-prefill-queue-size":2,"enable-prefix-caching":true,"common-configs":["model","block-size","max-model-len","kv-transfer-config"]},"PrefillWorker":{"max-num-batched-tokens":16384,"common-configs":["model","block-size","max-model-len","kv-transfer-config"]},"Prometheus":{"global":{"scrape_interval":"5s"},"scrape_configs":[{"job_name":"prometheus","static_configs":[{"targets":["localhost:9090"]}]},{"job_name":"frontend","static_configs":[{"targets":["localhost:8000"]}]}]},"Planner":{"adjustment-interval":180,"profile-results-dir":"/workspace/examples/profiling_results","isl":3000,"osl":150,"ttft":0.5,"itl":0.05,"load-predictor":"arima"}}'
+  services:
+    Frontend:
+      dynamoNamespace: dynamo
+      componentType: main
+      replicas: 1
+      resources:
+        requests:
+          cpu: "2"
+          memory: "4Gi"
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          args:
+            - cd
+            - /workspace/examples/vllm_v0
+            - "&&"
+            - dynamo
+            - serve
+            - graphs.disagg_planner:Frontend
+            - --system-app-port
+            - "5000"
+            - --enable-system-app
+            - --use-default-health-checks
+            - --service-name
+            - Frontend
 
-  VllmWorker:
-    replicas: 1
-    resources:
-      requests:
-        cpu: "10"
-        memory: "20Gi"
-        gpu: "1"
-      limits:
-        cpu: "10"
-        memory: "20Gi"
-        gpu: "1"
-    extraPodSpec:
-      mainContainer:
-        image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
-        workingDir: /workspace/examples/vllm_v0
-        args:
-          - dynamo
-          - serve
-          - graphs.disagg_planner:Frontend
-          - --system-app-port
-          - "5000"
-          - --enable-system-app
-          - --use-default-health-checks
-          - --service-name
-          - VllmWorker
-          - -f
-          - ./configs/disagg_planner.yaml
+    VllmWorker:
+      dynamoNamespace: dynamo
+      envFromSecret: hf-token-secret
+      replicas: 1
+      resources:
+        requests:
+          cpu: "20"
+          memory: "40Gi"
+          gpu: "2"
+        limits:
+          cpu: "20"
+          memory: "40Gi"
+          gpu: "2"
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          args:
+            - cd
+            - /workspace/examples/vllm_v0
+            - "&&"
+            - dynamo
+            - serve
+            - graphs.disagg_planner:Frontend
+            - --system-app-port
+            - "5000"
+            - --enable-system-app
+            - --use-default-health-checks
+            - --service-name
+            - VllmWorker
 
-  PrefillWorker:
-    replicas: 1
-    resources:
-      requests:
-        cpu: "10"
-        memory: "20Gi"
-        gpu: "1"
-      limits:
-        cpu: "10"
-        memory: "20Gi"
-        gpu: "1"
-    extraPodSpec:
-      mainContainer:
-        image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
-        workingDir: /workspace/examples/vllm_v0
-        args:
-          - dynamo
-          - serve
-          - graphs.disagg_planner:Frontend
-          - --system-app-port
-          - "5000"
-          - --enable-system-app
-          - --use-default-health-checks
-          - --service-name
-          - PrefillWorker
-          - -f
-          - ./configs/disagg_planner.yaml
+    PrefillWorker:
+      dynamoNamespace: dynamo
+      envFromSecret: hf-token-secret
+      replicas: 1
+      resources:
+        requests:
+          cpu: "20"
+          memory: "40Gi"
+          gpu: "2"
+        limits:
+          cpu: "20"
+          memory: "40Gi"
+          gpu: "2"
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          args:
+            - cd
+            - /workspace/examples/vllm_v0
+            - "&&"
+            - dynamo
+            - serve
+            - graphs.disagg_planner:Frontend
+            - --system-app-port
+            - "5000"
+            - --enable-system-app
+            - --use-default-health-checks
+            - --service-name
+            - PrefillWorker
 
-  Planner:
-    replicas: 1
-    componentType: planner
-    resources:
-      requests:
-        cpu: "1"
-        memory: "1Gi"
-      limits:
-        cpu: "1"
-        memory: "1Gi"
-    extraPodSpec:
-      mainContainer:
-        image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
-        workingDir: /workspace/examples/vllm_v0
-        args:
-          - dynamo
-          - serve
-          - graphs.disagg_planner:Frontend
-          - --system-app-port
-          - "5000"
-          - --enable-system-app
-          - --use-default-health-checks
-          - --service-name
-          - Planner
-          - -f
-          - ./configs/disagg_planner.yaml
-          - --Planner.environment=kubernetes
+    Planner:
+      dynamoNamespace: dynamo
+      replicas: 1
+      componentType: planner
+      resources:
+        requests:
+          cpu: "2"
+          memory: "2Gi"
+        limits:
+          cpu: "2"
+          memory: "2Gi"
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          args:
+            - cd
+            - /workspace/examples/vllm_v0
+            - "&&"
+            - dynamo
+            - serve
+            - graphs.disagg_planner:Planner
+            - --system-app-port
+            - "5000"
+            - --enable-system-app
+            - --use-default-health-checks
+            - --service-name
+            - Planner
+            - --Planner.environment=kubernetes
 
-  Prometheus:
-    replicas: 1
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "500Mi"
-      limits:
-        cpu: "500m"
-        memory: "500Mi"
-    extraPodSpec:
-      mainContainer:
-        image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
-        workingDir: /workspace/examples/vllm_v0
-        args:
-          - dynamo
-          - serve
-          - graphs.disagg_planner:Frontend
-          - --system-app-port
-          - "5000"
-          - --enable-system-app
-          - --use-default-health-checks
-          - --service-name
-          - Prometheus
-          - -f
-          - ./configs/disagg_planner.yaml
+    Prometheus:
+      dynamoNamespace: dynamo
+      replicas: 1
+      resources:
+        requests:
+          cpu: "1000m"
+          memory: "1000Mi"
+        limits:
+          cpu: "1000m"
+          memory: "1000Mi"
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          args:
+            - cd
+            - /workspace/examples/vllm_v0
+            - "&&"
+            - dynamo
+            - serve
+            - graphs.disagg_planner:Frontend
+            - --system-app-port
+            - "5000"
+            - --enable-system-app
+            - --use-default-health-checks
+            - --service-name
+            - Prometheus
