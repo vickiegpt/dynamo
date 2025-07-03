@@ -8,7 +8,7 @@ spec:
       value: '{"Common":{"model":"deepseek-ai/DeepSeek-R1-Distill-Llama-8B","block-size":64,"max-model-len":16384},"Frontend":{"served_model_name":"deepseek-ai/DeepSeek-R1-Distill-Llama-8B","endpoint":"dynamo.VllmWorker.generate","port":8000,"router":"round-robin","common-configs":["block-size"]},"VllmWorker":{"enforce-eager":true,"max-num-batched-tokens":16384,"enable-prefix-caching":true,"common-configs":["model","block-size","max-model-len"]}}'
   services:
     Frontend:
-      dynamoNamespace: dynamo
+      dynamoNamespace: vllm-v0-agg
       componentType: main
       replicas: 1
       resources:
@@ -36,7 +36,7 @@ spec:
             - Frontend
     VllmWorker:
       envFromSecret: hf-token-secret
-      dynamoNamespace: dynamo 
+      dynamoNamespace: vllm-v0-agg
       replicas: 1
       resources:
         requests:
