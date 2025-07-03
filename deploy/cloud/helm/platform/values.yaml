@@ -106,18 +106,6 @@ minio:
       api: 9000
       console: 9001
 
-postgresql:
-  enabled: true
-  auth:
-    existingSecret: ""
-    postgresPassword: ""
-    username: "admin"
-    password: "password"
-    database: "dynamo"
-  primary:
-    persistence:
-      enabled: false
-
 etcd:
   enabled: true
   persistence:
