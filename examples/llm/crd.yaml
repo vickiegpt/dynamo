@@ -1,0 +1,81 @@
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+ name: agg
+spec:
+ envs:
+ services:
+   Frontend:
+     dynamoNamespace: inference
+     componentType: main
+     replicas: 1
+     resources:
+      requests:
+        cpu: 100m
+        memory: 100Mi
+      limits:
+        cpu: 1000m
+        memory: 1000Mi
+     extraPodSpec:
+       mainContainer:
+         image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+         command: 
+         - dynamo
+         - serve
+         - graphs.agg:Frontend
+         - -f
+         - ./configs/agg.yaml
+   Middle:
+     dynamoNamespace: inference
+     replicas: 1
+     extraPodSpec:
+       mainContainer:
+         image: gitlab-master.nvidia.com:5005/aire/microservices/compoundai/dynamo-pipelines:dynamo.existing.444f19b8
+         command: 
+         - sh
+         - -c
+         args:
+         - cd src && uv run dynamo serve --system-app-port 5000 --enable-system-app --use-default-health-checks --service-name Middle hello_world:Frontend --Backend.ServiceArgs.dynamo.namespace=inference
+   Backend:
+     dynamoNamespace: inference
+     envs: 
+     - name: SOME_ENV
+       value: ‘somevalue’  
+     replicas: 1
+     resources:
+      requests:
+        cpu: 100m
+        memory: 100Mi
+      limits:
+        cpu: 1000m
+        memory: 1000Mi
+     extraPodSpec:
+       mainContainer:
+         image: gitlab-master.nvidia.com:5005/aire/microservices/compoundai/dynamo-pipelines:dynamo.existing.444f19b8
+         command: 
+         - sh
+         - -c
+         args:
+         - cd src && uv run dynamo serve --system-app-port 5000 --enable-system-app --use-default-health-checks --service-name Middle hello_world:Frontend --Backend.ServiceArgs.dynamo.namespace=inference
+    Planner:
+     dynamoNamespace: inference
+     envs: 
+     - name: SOME_ENV
+       value: ‘somevalue’  
+     replicas: 1
+     componentType: planner
+     resources:
+      requests:
+        cpu: 100m
+        memory: 100Mi
+      limits:
+        cpu: 1000m
+        memory: 1000Mi
+     extraPodSpec:
+       mainContainer:
+         image: gitlab-master.nvidia.com:5005/aire/microservices/compoundai/dynamo-pipelines:planner
+         command: 
+         - sh
+         - -c
+         args:
+         - cd src && uv run dynamo serve --system-app-port 5000 --enable-system-app --service-name Planner graphs.disagg_router:Frontend --Planner.ServiceArgs.dynamo.namespace=inference --Planner.environment=kubernetes
