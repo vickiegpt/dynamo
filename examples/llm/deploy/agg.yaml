@@ -90,3 +90,32 @@ spec:
             - --use-default-health-checks
             - --service-name
             - VllmWorker
+
+    Planner:
+      dynamoNamespace: llm-agg
+      replicas: 1
+      componentType: planner
+      resources:
+        requests:
+          cpu: "2"
+          memory: "2Gi"
+        limits:
+          cpu: "2"
+          memory: "2Gi"
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          args:
+            - cd
+            - /workspace/examples/llm
+            - "&&"
+            - dynamo
+            - serve
+            - graphs.agg:Planner
+            - --system-app-port
+            - "5000"
+            - --enable-system-app
+            - --use-default-health-checks
+            - --service-name
+            - Planner
+            - --Planner.environment=kubernetes
