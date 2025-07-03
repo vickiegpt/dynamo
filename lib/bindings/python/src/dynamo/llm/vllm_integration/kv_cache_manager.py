@@ -363,10 +363,10 @@ class KvbmCacheManager(KVConnectorBase_V1):
             need_to_allocate -= 1
 
             # since need_to_allocate is block aligned, we need avoid onboarding the last block in this case
-            if host_computed_blocks is not None:
-                host_computed_blocks = host_computed_blocks[:-1]
-            if disk_computed_blocks is not None:
-                disk_computed_blocks = disk_computed_blocks[:-1]
+            if host_computed_blocks is not None and num_host_computed_blocks > 0:
+                host_computed_blocks.remove_last_block()
+            if disk_computed_blocks is not None and num_disk_computed_blocks > 0:
+                disk_computed_blocks.remove_last_block()
 
         if need_to_allocate > 0:
             self.pending_onboard_blocks[request.request_id] = (

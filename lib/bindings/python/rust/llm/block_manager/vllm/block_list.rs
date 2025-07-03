@@ -185,6 +185,30 @@ impl KvbmBlockList {
     pub fn block_count(&self) -> usize {
         self.count
     }
+
+    pub fn remove_last_block(&mut self) -> PyResult<()> {
+        let mut blocks = self.blocks.lock().unwrap();
+
+        if let Some(blocks) = blocks.as_mut() {
+            let removed = match blocks {
+                BlockListType::ImmutableDevice(vec) => vec.pop().is_some(),
+                BlockListType::MutableDevice(vec) => vec.pop().is_some(),
+                BlockListType::ImmutableHost(vec) => vec.pop().is_some(),
+                BlockListType::MutableHost(vec) => vec.pop().is_some(),
+                BlockListType::ImmutableDisk(vec) => vec.pop().is_some(),
+                BlockListType::MutableDisk(vec) => vec.pop().is_some(),
+            };
+
+            if removed {
+                self.count -= 1;
+                Ok(())
+            } else {
+                Err(to_pyerr("Block list is already empty"))
+            }
+        } else {
+            Err(to_pyerr("Blocks have been taken or dropped"))
+        }
+    }
 }
 
 /// vLLM has a KVCacheBlock object which holds the block ID and sequence hash information.
