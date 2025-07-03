@@ -155,15 +155,13 @@ func GenerateDynamoComponentsDeployments(ctx context.Context, parentDynamoGraphD
 		labels[commonconsts.KubeLabelDynamoComponent] = componentName
 		labels[commonconsts.KubeLabelDynamoNamespace] = dynamoNamespace
 		if component.ComponentType == commonconsts.ComponentTypePlanner {
-			deployment.Spec.ExtraPodSpec = &common.ExtraPodSpec{
-				ServiceAccountName: commonconsts.PlannerServiceAccountName,
+			if deployment.Spec.ExtraPodSpec == nil {
+				deployment.Spec.ExtraPodSpec = &common.ExtraPodSpec{}
 			}
+			deployment.Spec.ExtraPodSpec.ServiceAccountName = commonconsts.PlannerServiceAccountName
 		}
 		if deployment.IsMainComponent() && ingressSpec != nil {
 			deployment.Spec.Ingress = *ingressSpec
-		}
-		deployment.Spec.Autoscaling = &v1alpha1.Autoscaling{
-			Enabled: false,
 		}
 		// merge the envs from the parent deployment with the envs from the service
 		if len(parentDynamoGraphDeployment.Spec.Envs) > 0 {
