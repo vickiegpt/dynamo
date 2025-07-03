@@ -8,6 +8,7 @@ require (
 	emperror.dev/errors v0.8.1
 	github.com/bsm/gomega v1.27.10
 	github.com/google/go-cmp v0.7.0
+	github.com/imdario/mergo v0.3.6
 	github.com/onsi/ginkgo/v2 v2.23.4
 	github.com/onsi/gomega v1.37.0
 	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.71.2

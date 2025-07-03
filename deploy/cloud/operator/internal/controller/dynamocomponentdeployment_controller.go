@@ -23,11 +23,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/imdario/mergo"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -1375,33 +1375,6 @@ func (r *DynamoComponentDeploymentReconciler) generatePodTemplateSpec(ctx contex
 	args = append(args, "--enable-system-app")
 	args = append(args, "--use-default-health-checks")
 
-	// todo : remove this line when https://github.com/ai-dynamo/dynamo/issues/345 is fixed
-	enableDependsOption := false
-	if len(opt.dynamoComponentDeployment.Spec.ExternalServices) > 0 && enableDependsOption {
-		serviceSuffix := fmt.Sprintf("%s.svc.cluster.local:%d", opt.dynamoComponentDeployment.Namespace, containerPort)
-		keys := make([]string, 0, len(opt.dynamoComponentDeployment.Spec.ExternalServices))
-
-		for key := range opt.dynamoComponentDeployment.Spec.ExternalServices {
-			keys = append(keys, key)
-		}
-
-		sort.Strings(keys)
-		for _, key := range keys {
-			service := opt.dynamoComponentDeployment.Spec.ExternalServices[key]
-
-			// Check if DeploymentSelectorKey is not "name"
-			if service.DeploymentSelectorKey == "name" {
-				dependsFlag := fmt.Sprintf("--depends \"%s=http://%s.%s\"", key, service.DeploymentSelectorValue, serviceSuffix)
-				args = append(args, dependsFlag)
-			} else if service.DeploymentSelectorKey == "dynamo" {
-				dependsFlag := fmt.Sprintf("--depends \"%s=dynamo://%s\"", key, service.DeploymentSelectorValue)
-				args = append(args, dependsFlag)
-			} else {
-				return nil, errors.Errorf("DeploymentSelectorKey '%s' not supported. Only 'name' and 'dynamo' are supported", service.DeploymentSelectorKey)
-			}
-		}
-	}
-
 	if opt.dynamoComponentDeployment.Spec.ServiceName != "" {
 		args = append(args, []string{"--service-name", opt.dynamoComponentDeployment.Spec.ServiceName}...)
 		args = append(args, opt.dynamoComponentDeployment.Spec.DynamoTag)
@@ -1589,7 +1562,7 @@ func (r *DynamoComponentDeploymentReconciler) generatePodTemplateSpec(ctx contex
 		container.SecurityContext.RunAsUser = &[]int64{0}[0]
 	}
 
-	// For now only overwrite the command and args.
+	// Merge extraPodSpecMainContainer into container, only overriding empty fields
 	if opt.dynamoComponentDeployment.Spec.ExtraPodSpec != nil {
 		extraPodSpecMainContainer := opt.dynamoComponentDeployment.Spec.ExtraPodSpec.MainContainer
 		if extraPodSpecMainContainer != nil {
@@ -1607,6 +1580,12 @@ func (r *DynamoComponentDeploymentReconciler) generatePodTemplateSpec(ctx contex
 					logs.Info("Overriding container '" + container.Name + "' Args with: " + strings.Join(extraPodSpecMainContainer.Args, " "))
 					container.Args = extraPodSpecMainContainer.Args
 				}
+			}
+			// finally, Merge non empty fields from extraPodSpecMainContainer into container, only overriding empty fields
+			err := mergo.Merge(&container, extraPodSpecMainContainer)
+			if err != nil {
+				err = errors.Wrapf(err, "failed to merge extraPodSpecMainContainer into container")
+				return nil, err
 			}
 		}
 	}
