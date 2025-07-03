@@ -212,7 +212,7 @@ impl AddressedPushRouter {
 impl<T, U> AsyncEngine<SingleIn<AddressedRequest<T>>, ManyOut<U>, Error> for AddressedPushRouter
 where
     T: Data + Serialize,
-    U: Data + for<'de> Deserialize<'de>,
+    U: Data + for<'de> Deserialize<'de> + crate::protocols::annotated::IsError,
 {
     async fn generate(&self, request: SingleIn<AddressedRequest<T>>) -> Result<ManyOut<U>, Error> {
         let res_stream = self.generate_with_error_detection(request).await?;
@@ -221,7 +221,8 @@ where
             Ok(data) => Some(data),
             Err(err) => {
                 log::warn!(%err);
-                None
+                let annotated: U = U::from_error(err.to_string());
+                Some(annotated)
             }
         });
         Ok(ResponseStream::new(Box::pin(stream), engine_ctx))

@@ -25,10 +25,16 @@ pub trait AnnotationsProvider {
     }
 }
 
+pub trait IsError {
+    fn from_error(error: String) -> Self;
+    fn is_ok(&self) -> bool;
+    fn is_err(&self) -> bool;
+}
+
 /// Our services have the option of returning an "annotated" stream, which allows use
 /// to include additional information with each delta. This is useful for debugging,
 /// performance benchmarking, and improved observability.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Annotated<R> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<R>,
@@ -143,6 +149,23 @@ impl<R> Annotated<R> {
                 _ => Ok(None),
             },
         }
+    }
+}
+
+impl<R> IsError for Annotated<R>
+where
+    R: for<'de> Deserialize<'de> + Serialize,
+{
+    fn from_error(error: String) -> Self {
+        Annotated::from_error(error)
+    }
+
+    fn is_ok(&self) -> bool {
+        Annotated::is_ok(self)
+    }
+
+    fn is_err(&self) -> bool {
+        Annotated::is_err(self)
     }
 }
 

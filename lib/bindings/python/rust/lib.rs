@@ -185,7 +185,7 @@ struct Endpoint {
 #[pyclass]
 #[derive(Clone)]
 struct Client {
-    router: rs::pipeline::PushRouter<serde_json::Value, serde_json::Value>,
+    router: rs::pipeline::PushRouter<serde_json::Value, RsAnnotated<serde_json::Value>>,
 }
 
 #[pyclass(eq, eq_int)]
@@ -457,7 +457,7 @@ impl Endpoint {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let client = inner.client().await.map_err(to_pyerr)?;
             let push_router =
-                rs::pipeline::PushRouter::<serde_json::Value, serde_json::Value>::from_client(
+                rs::pipeline::PushRouter::<serde_json::Value, RsAnnotated<serde_json::Value>>::from_client(
                     client,
                     Default::default(),
                 )
@@ -728,14 +728,14 @@ impl Client {
 }
 
 async fn process_stream(
-    stream: EngineStream<serde_json::Value>,
+    stream: EngineStream<RsAnnotated<serde_json::Value>>,
     tx: tokio::sync::mpsc::Sender<RsAnnotated<PyObject>>,
 ) {
     let mut stream = stream;
     while let Some(response) = stream.next().await {
         // Convert the response to a PyObject using Python's GIL
         // TODO: Remove the clone, but still log the full JSON string on error. But how?
-        let annotated: RsAnnotated<serde_json::Value> = match serde_json::from_value(
+        /*let annotated: RsAnnotated<serde_json::Value> = match serde_json::from_value(
             response.clone(),
         ) {
             Ok(a) => a,
@@ -743,7 +743,8 @@ async fn process_stream(
                 tracing::error!(%err, %response, "process_stream: Failed de-serializing JSON into RsAnnotated");
                 break;
             }
-        };
+        };*/
+        let annotated: RsAnnotated<serde_json::Value> = response.clone();
 
         let annotated: RsAnnotated<PyObject> = annotated.map_data(|data| {
             let result = Python::with_gil(|py| match pythonize::pythonize(py, &data) {
