@@ -5,6 +5,8 @@
 Implementation of vLLM KV cache manager protocol.
 """
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING, Optional
 
 import torch
@@ -24,8 +26,8 @@ if TYPE_CHECKING:
     from vllm.v1.core.kv_cache_manager import KVCacheBlocks
     from vllm.v1.request import Request
 
-from dynamo.llm import BlockManager
 from dynamo.llm.vllm_integration.kv_cache_utils import KvbmCacheBlocks
+from dynamo.llm.vllm_integration.rust import BlockManager
 from dynamo.llm.vllm_integration.rust import KvbmCacheManager as RustKvbmCacheManager
 from dynamo.llm.vllm_integration.rust import KvbmRequest, SlotUpdate
 

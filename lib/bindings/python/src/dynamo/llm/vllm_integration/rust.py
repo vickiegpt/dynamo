@@ -5,31 +5,9 @@
 Loader for the Rust-based vLLM integration objects.
 """
 
-from typing import TYPE_CHECKING
+try:
+    from dynamo._core import _vllm_integration
 
-from dynamo._core import _vllm_integration
-
-if TYPE_CHECKING:
-    # Type stubs for static analysis - these are treated as proper types
-    class KvbmCacheManager:
-        ...
-
-    class KvbmRequest:
-        ...
-
-    class KvbmBlockList:
-        ...
-
-    class BlockState:
-        ...
-
-    class BlockStates:
-        ...
-
-    class SlotUpdate:
-        ...
-
-else:
     # Runtime - dynamically loaded classes from Rust extension
     KvbmCacheManager = getattr(_vllm_integration, "KvbmCacheManager")
     KvbmRequest = getattr(_vllm_integration, "KvbmRequest")
@@ -38,6 +16,17 @@ else:
     BlockStates = getattr(_vllm_integration, "BlockStates")
     SlotUpdate = getattr(_vllm_integration, "SlotUpdate")
 
+    from dynamo.llm import BlockManager
+
+except ImportError:
+    print("Failed to import Dynamo KVBM. vLLM integration will not be available.")
+    KvbmCacheManager = None
+    KvbmRequest = None
+    KvbmBlockList = None
+    BlockState = None
+    BlockStates = None
+    SlotUpdate = None
+    BlockManager = None
 
 __all__ = [
     "KvbmCacheManager",
@@ -46,4 +35,5 @@ __all__ = [
     "BlockState",
     "BlockStates",
     "SlotUpdate",
+    "BlockManager",
 ]

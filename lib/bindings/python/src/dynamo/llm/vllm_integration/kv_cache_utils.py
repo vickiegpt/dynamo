@@ -5,6 +5,8 @@
 Implementation of vLLM protocols for KV cache utility objects.
 """
 
+from __future__ import annotations
+
 from typing import List
 
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks
