@@ -1,0 +1,88 @@
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: disagg
+spec:
+  Frontend:
+    dynamoNamespace: inference
+    componentType: main
+    replicas: 1
+    resources:
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+    extraPodSpec:
+      mainContainer:
+        image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+        workingDir: /workspace/examples/vllm_v0
+        args:
+          - dynamo
+          - serve
+          - graphs.disagg:Frontend
+          - --system-app-port
+          - "5000"
+          - --enable-system-app
+          - --use-default-health-checks
+          - --service-name
+          - Frontend
+          - -f
+          - ./configs/disagg.yaml
+
+  VllmWorker:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "10"
+        memory: "20Gi"
+        gpu: "1"
+      limits:
+        cpu: "10"
+        memory: "20Gi"
+        gpu: "1"
+    extraPodSpec:
+      mainContainer:
+        image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+        workingDir: /workspace/examples/vllm_v0
+        args:
+          - dynamo
+          - serve
+          - graphs.disagg:VllmWorker
+          - --system-app-port
+          - "5000"
+          - --enable-system-app
+          - --use-default-health-checks
+          - --service-name
+          - VllmWorker
+          - -f
+          - ./configs/disagg.yaml
+
+  PrefillWorker:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "10"
+        memory: "20Gi"
+        gpu: "1"
+      limits:
+        cpu: "10"
+        memory: "20Gi"
+        gpu: "1"
+    extraPodSpec:
+      mainContainer:
+        image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+        workingDir: /workspace/examples/vllm_v0
+        args:
+          - dynamo
+          - serve
+          - graphs.disagg:PrefillWorker
+          - --system-app-port
+          - "5000"
+          - --enable-system-app
+          - --use-default-health-checks
+          - --service-name
+          - PrefillWorker
+          - -f
+          - ./configs/disagg.yaml 
