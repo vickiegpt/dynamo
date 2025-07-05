@@ -298,7 +298,7 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> ProgressEngine
         state.inactive.add_blocks(blocks);
 
         let available_blocks_counter = state.inactive.available_blocks_counter();
-        let total_blocks_counter = state.inactive.available_blocks_counter();
+        let total_blocks_counter = state.inactive.total_blocks_counter();
 
         Self {
             priority_rx,
