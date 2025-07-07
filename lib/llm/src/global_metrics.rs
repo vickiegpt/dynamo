@@ -14,7 +14,7 @@
 // limitations under the License.
 
 use once_cell::sync::OnceCell;
-use prometheus::{IntCounterVec, Opts, Registry};
+use prometheus::{IntCounterVec, Opts, Registry, register_int_counter_vec};
 use std::sync::Arc;
 
 static GLOBAL_METRICS: OnceCell<Arc<GlobalMetrics>> = OnceCell::new();
@@ -26,12 +26,10 @@ pub struct GlobalMetrics {
 
 impl GlobalMetrics {
     pub fn new() -> Self {
-        let operation_timing_counter = IntCounterVec::new(
-            Opts::new(
-                "dynamo_operation_timing_microseconds",
-                "Cumulative time spent in operations in microseconds",
-            ),
-            &["operation", "component"],
+        let operation_timing_counter = register_int_counter_vec!(
+            "dynamo_operation_timing_microseconds",
+            "Cumulative time spent in operations in microseconds",
+            &["operation", "component"]
         )
         .unwrap();
 
@@ -46,10 +44,7 @@ impl GlobalMetrics {
             .inc_by(duration_micros);
     }
 
-    pub fn register(&self, registry: &Registry) -> Result<(), prometheus::Error> {
-        registry.register(Box::new(self.operation_timing_counter.clone()))?;
-        Ok(())
-    }
+
 }
 
 /// Initialize global metrics
@@ -58,6 +53,7 @@ pub fn init_global_metrics() -> Arc<GlobalMetrics> {
     GLOBAL_METRICS
         .set(metrics.clone())
         .expect("Global metrics already initialized");
+    tracing::info!("Global timing metrics initialized and registered with default Prometheus registry");
     metrics
 }
 
@@ -93,17 +89,13 @@ mod tests {
         // Initialize metrics
         let metrics = init_global_metrics();
         
-        // Register with a registry
-        let registry = Registry::new();
-        metrics.register(&registry).unwrap();
-        
         // Test timing an operation
         time_global_operation!("test_op", "test_component", {
             std::thread::sleep(std::time::Duration::from_millis(10));
         });
         
-        // Verify the metric was recorded
-        let metric_families = registry.gather();
+        // Verify the metric was recorded by checking the default registry
+        let metric_families = prometheus::gather();
         assert!(!metric_families.is_empty());
     }
 } 
