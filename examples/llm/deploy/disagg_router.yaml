@@ -21,10 +21,8 @@ spec:
       extraPodSpec:
         mainContainer:
           image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          workingDir: /workspace/examples/llm
           args:
-            - cd
-            - /workspace/examples/llm
-            - "&&"
             - dynamo
             - serve
             - graphs.disagg_router:Frontend
@@ -48,10 +46,8 @@ spec:
       extraPodSpec:
         mainContainer:
           image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          workingDir: /workspace/examples/llm
           args:
-            - cd
-            - /workspace/examples/llm
-            - "&&"
             - dynamo
             - serve
             - graphs.disagg_router:Processor
@@ -75,10 +71,8 @@ spec:
       extraPodSpec:
         mainContainer:
           image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          workingDir: /workspace/examples/llm
           args:
-            - cd
-            - /workspace/examples/llm
-            - "&&"
             - dynamo
             - serve
             - graphs.disagg_router:Router
@@ -104,10 +98,8 @@ spec:
       extraPodSpec:
         mainContainer:
           image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          workingDir: /workspace/examples/llm
           args:
-            - cd
-            - /workspace/examples/llm
-            - "&&"
             - dynamo
             - serve
             - graphs.disagg_router:VllmWorker
@@ -133,10 +125,8 @@ spec:
       extraPodSpec:
         mainContainer:
           image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          workingDir: /workspace/examples/llm
           args:
-            - cd
-            - /workspace/examples/llm
-            - "&&"
             - dynamo
             - serve
             - graphs.disagg_router:PrefillWorker

@@ -21,10 +21,8 @@ spec:
       extraPodSpec:
         mainContainer:
           image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          workingDir: /workspace/examples/llm
           args:
-            - cd
-            - /workspace/examples/llm
-            - "&&"
             - dynamo
             - serve
             - graphs.disagg:Frontend
@@ -48,10 +46,8 @@ spec:
       extraPodSpec:
         mainContainer:
           image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          workingDir: /workspace/examples/llm
           args:
-            - cd
-            - /workspace/examples/llm
-            - "&&"
             - dynamo
             - serve
             - graphs.disagg:Processor
@@ -77,10 +73,8 @@ spec:
       extraPodSpec:
         mainContainer:
           image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          workingDir: /workspace/examples/llm
           args:
-            - cd
-            - /workspace/examples/llm
-            - "&&"
             - dynamo
             - serve
             - graphs.disagg:VllmWorker
@@ -106,10 +100,8 @@ spec:
       extraPodSpec:
         mainContainer:
           image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
+          workingDir: /workspace/examples/llm
           args:
-            - cd
-            - /workspace/examples/llm
-            - "&&"
             - dynamo
             - serve
             - graphs.disagg:PrefillWorker
