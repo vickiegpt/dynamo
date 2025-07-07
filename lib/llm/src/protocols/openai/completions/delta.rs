@@ -13,8 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{NvCreateCompletionRequest, NvCreateCompletionResponse};
+use super::{CompletionChoice, CompletionResponse, NvCreateCompletionRequest};
 use crate::protocols::common;
+use crate::protocols::openai::CompletionUsage;
 
 impl NvCreateCompletionRequest {
     // put this method on the request
@@ -39,10 +40,11 @@ pub struct DeltaGeneratorOptions {
 pub struct DeltaGenerator {
     id: String,
     object: String,
-    created: u32,
+    created: u64,
     model: String,
     system_fingerprint: Option<String>,
-    usage: async_openai::types::CompletionUsage,
+    usage: CompletionUsage,
+
     options: DeltaGeneratorOptions,
 }
 
@@ -53,100 +55,80 @@ impl DeltaGenerator {
             .unwrap()
             .as_secs();
 
-        // SAFETY: Casting from `u64` to `u32` could lead to precision loss after `u32::MAX`,
-        // but this will not be an issue until 2106.
-        let now: u32 = now.try_into().expect("timestamp exceeds u32::MAX");
-
-        // Previously, our home-rolled CompletionUsage impl'd Default
-        // PR !387 - https://github.com/64bit/async-openai/pull/387
-        let usage = async_openai::types::CompletionUsage {
-            completion_tokens: 0,
-            prompt_tokens: 0,
-            total_tokens: 0,
-            completion_tokens_details: None,
-            prompt_tokens_details: None,
-        };
-
         Self {
             id: format!("cmpl-{}", uuid::Uuid::new_v4()),
             object: "text_completion".to_string(),
             created: now,
             model,
             system_fingerprint: None,
-            usage,
+            usage: CompletionUsage::default(),
             options,
         }
     }
 
-    pub fn update_isl(&mut self, isl: u32) {
+    pub fn update_isl(&mut self, isl: i32) {
         self.usage.prompt_tokens = isl;
     }
 
     pub fn create_choice(
         &self,
-        index: u32,
+        index: u64,
         text: Option<String>,
-        finish_reason: Option<async_openai::types::CompletionFinishReason>,
-    ) -> NvCreateCompletionResponse {
+        finish_reason: Option<String>,
+    ) -> CompletionResponse {
         // todo - update for tool calling
 
-        let mut usage = self.usage.clone();
-        if self.options.enable_usage {
-            usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
-        }
-
-        let inner = async_openai::types::CreateCompletionResponse {
+        CompletionResponse {
             id: self.id.clone(),
             object: self.object.clone(),
             created: self.created,
             model: self.model.clone(),
             system_fingerprint: self.system_fingerprint.clone(),
-            choices: vec![async_openai::types::Choice {
+            choices: vec![CompletionChoice {
                 text: text.unwrap_or_default(),
                 index,
                 finish_reason,
                 logprobs: None,
             }],
             usage: if self.options.enable_usage {
-                Some(usage)
+                Some(self.usage.clone())
             } else {
                 None
             },
-        };
-
-        NvCreateCompletionResponse { inner }
+        }
     }
 }
 
-impl crate::protocols::openai::DeltaGeneratorExt<NvCreateCompletionResponse> for DeltaGenerator {
+impl crate::protocols::openai::DeltaGeneratorExt<CompletionResponse> for DeltaGenerator {
     fn choice_from_postprocessor(
         &mut self,
         delta: common::llm_backend::BackendOutput,
-    ) -> anyhow::Result<NvCreateCompletionResponse> {
+    ) -> anyhow::Result<CompletionResponse> {
         // aggregate usage
         if self.options.enable_usage {
-            // SAFETY: Casting from `usize` to `u32` could lead to precision loss after `u32::MAX`,
-            // but this will not be an issue until context lengths exceed 4_294_967_295.
-            let token_length: u32 = delta
-                .token_ids
-                .len()
-                .try_into()
-                .expect("token_ids length exceeds u32::MAX");
-
-            self.usage.completion_tokens += token_length;
+            self.usage.completion_tokens += delta.token_ids.len() as i32;
         }
 
-        // TODO logprobs
+        // todo logprobs
 
-        let finish_reason = delta.finish_reason.map(Into::into);
+        let finish_reason = match delta.finish_reason {
+            Some(common::FinishReason::EoS) => Some("stop".to_string()),
+            Some(common::FinishReason::Stop) => Some("stop".to_string()),
+            Some(common::FinishReason::Length) => Some("length".to_string()),
+            Some(common::FinishReason::Cancelled) => Some("cancelled".to_string()),
+            Some(common::FinishReason::Error(err_msg)) => {
+                return Err(anyhow::anyhow!(err_msg));
+            }
+            None => None,
+        };
 
         // create choice
-        let index = delta.index.unwrap_or(0);
-        let response = self.create_choice(index, delta.text.clone(), finish_reason);
-        Ok(response)
+        let index = 0;
+        Ok(self.create_choice(index, delta.text, finish_reason))
     }
 
+    // TODO: This is a hack. Change `prompt_tokens` to u32
     fn get_isl(&self) -> Option<u32> {
-        Some(self.usage.prompt_tokens)
+        Some(self.usage.prompt_tokens as u32)
     }
 }

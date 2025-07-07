@@ -126,8 +126,7 @@ curl -X 'POST' \
   "request_id":"id_number"
 }'
 ```
-
-- `Response: {"worker_output":"Tell me a fact_GeneratedBy_NODE1HOSTNAME","request_id":"id_number"}`
+-`Response: {"worker_output":"Tell me a fact_GeneratedBy_NODE1HOSTNAME","request_id":"id_number"}`
 
 ## The Disaggregated Deployment
 

@@ -78,9 +78,6 @@ pub struct HttpServiceConfig {
     #[builder(default = "true")]
     enable_embeddings_endpoints: bool,
 
-    #[builder(default = "true")]
-    enable_responses_endpoints: bool,
-
     #[builder(default = "None")]
     request_template: Option<RequestTemplate>,
 }
@@ -156,7 +153,7 @@ impl HttpServiceConfigBuilder {
         if config.enable_chat_endpoints {
             routes.push(super::openai::chat_completions_router(
                 state.clone(),
-                config.request_template.clone(), // TODO clone()? reference?
+                config.request_template,
                 None,
             ));
         }
@@ -167,14 +164,6 @@ impl HttpServiceConfigBuilder {
 
         if config.enable_embeddings_endpoints {
             routes.push(super::openai::embeddings_router(state.clone(), None));
-        }
-
-        if config.enable_responses_endpoints {
-            routes.push(super::openai::responses_router(
-                state.clone(),
-                config.request_template,
-                None,
-            ));
         }
 
         // for (route_docs, route) in routes.into_iter().chain(self.routes.into_iter()) {

@@ -69,7 +69,4 @@ const (
 	KubeAnnotationDynamoComponentStorageNS       = "nvidia.com/dynamo-storage-namespace"
 
 	DynamoDeploymentConfigEnvVar = "DYN_DEPLOYMENT_CONFIG"
-
-	DockerConfigVolumeName      = "docker-config"
-	DockerConfigVolumeMountPath = "/docker-config/.docker"
 )

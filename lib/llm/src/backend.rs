@@ -224,7 +224,6 @@ impl
                     log_probs: data.log_probs,
                     finish_reason: data.finish_reason,
                     //mdcsum: mdcsum.clone(),
-                    index: data.index,
                 })
             })
         });

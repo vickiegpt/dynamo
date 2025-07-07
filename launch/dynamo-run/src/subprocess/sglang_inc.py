@@ -17,13 +17,12 @@ from sglang.srt.server_args import ServerArgs
 
 from dynamo.llm import ModelType, register_llm
 from dynamo.runtime import DistributedRuntime, dynamo_worker
-from dynamo.runtime.logging import configure_dynamo_logging
 
 # Only used if you run it manually from the command line
 DEFAULT_ENDPOINT = "dyn://dynamo.backend.generate"
 DEFAULT_MODEL = "Qwen/Qwen3-0.6B"
 
-configure_dynamo_logging()
+logging.basicConfig(level=logging.DEBUG)
 
 
 class Config:
@@ -60,71 +59,22 @@ class RequestHandler:
             # sglang defaults this to 128
             "max_new_tokens": request["stop_conditions"]["max_tokens"],
         }
-
-        # Check if this is a batch request
-        is_batch = "batch_token_ids" in request and request["batch_token_ids"]
-
-        if is_batch:
-            # Track tokens separately for each batch item
-            num_output_tokens_so_far = {}
-            logging.debug("received batch token ids")
-            gen = await self.engine_client.async_generate(
-                input_ids=request["batch_token_ids"],
-                sampling_params=sampling_params,
-                stream=True,
-            )
-        else:
-            num_output_tokens_so_far = 0
-            logging.debug("received token ids")
-            gen = await self.engine_client.async_generate(
-                input_ids=request["token_ids"],
-                sampling_params=sampling_params,
-                stream=True,
-            )
-
+        num_output_tokens_so_far = 0
+        gen = await self.engine_client.async_generate(
+            input_ids=request["token_ids"], sampling_params=sampling_params, stream=True
+        )
         async for res in gen:
             # res is a dict
-            logging.debug(f"res: {res}")
+
             finish_reason = res["meta_info"]["finish_reason"]
-
-            if is_batch:
-                # Handle batch response - get index from SGLang response
-                index = res.get("index", 0)
-                if index not in num_output_tokens_so_far:
-                    num_output_tokens_so_far[index] = 0
-
-                if finish_reason:
-                    logging.warning(f"finish_reason: {finish_reason}")
-                    # Final response for this batch item
-                    out = {
-                        "token_ids": [],
-                        "finish_reason": finish_reason["type"],
-                        "index": index,
-                    }
-                else:
-                    # Streaming response for this batch item
-                    next_total_toks = len(res["output_ids"])
-                    new_tokens = res["output_ids"][num_output_tokens_so_far[index] :]
-                    out = {
-                        "token_ids": new_tokens,
-                        "index": index,
-                    }
-                    num_output_tokens_so_far[index] = next_total_toks
+            if finish_reason:
+                # Don't forward the stop token
+                out = {"token_ids": [], "finish_reason": finish_reason["type"]}
             else:
-                if finish_reason:
-                    out = {
-                        "token_ids": [],
-                        "finish_reason": finish_reason["type"],
-                    }
-                else:
-                    next_total_toks = len(res["output_ids"])
-                    new_tokens = res["output_ids"][num_output_tokens_so_far:]
-                    out = {
-                        "token_ids": new_tokens,
-                    }
-                    num_output_tokens_so_far = next_total_toks
-
+                next_total_toks = len(res["output_ids"])
+                out = {"token_ids": res["output_ids"][num_output_tokens_so_far:]}
             yield out
+            num_output_tokens_so_far = next_total_toks
 
 
 class EmbeddingRequestHandler(RequestHandler):

@@ -42,11 +42,11 @@
 //! The [`OffloadManager::onboard_worker`] is responsible for onboarding blocks.
 //!
 //! The kind of offloads/onboards they perform is dictated by the source and target arguments
-//! of the [`OffloadManager::offload_worker`] and [`OffloadManager::onboard_worker`] methods.
+//! of the [`OffloadManager::offload`] and [`OffloadManager::onboard`] methods.
 
-use super::block::{BlockError, BlockMetadata, BlockState, ImmutableBlock, TransferContext};
-use super::metrics::{BlockManagerMetrics, PoolMetrics};
+use super::block::{BlockError, BlockMetadata, BlockState, ImmutableBlock};
 use super::pool::BlockPoolError;
+use super::state::TransferContext;
 use super::storage::{Cuda, Storage};
 use super::{BlockPool, DeviceStorage, DiskStorage, PinnedStorage};
 use nixl_sys::Agent as NixlAgent;
@@ -102,7 +102,6 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         device: Option<Arc<BlockPool<DeviceStorage, Metadata>>>,
         nixl_agent: Arc<Option<NixlAgent>>,
         async_rt_handle: Handle,
-        metrics: Arc<BlockManagerMetrics>,
         cancellation_token: CancellationToken,
     ) -> Result<Arc<Self>> {
         let (device_offload_tx, device_offload_rx) = mpsc::unbounded_channel();
@@ -122,13 +121,14 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
             tick: Arc::new(Mutex::new(0)),
         });
 
+        let this_clone = this.clone();
+
         let cuda_ctx = Cuda::device_or_create(0)?;
 
         // We want cuda offloads to happen in parallel with host onboards, so we need to use a different stream.
         let device_offload_transfer_ctx = Arc::new(TransferContext::new(
             nixl_agent.clone(),
             cuda_ctx.new_stream()?,
-            async_rt_handle.clone(),
         ));
 
         // Device -> Host offload
@@ -140,14 +140,12 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                 CudaTransferManager::new(
                     device_offload_transfer_ctx,
                     MAX_CONCURRENT_TRANSFERS,
-                    &async_rt_handle,
                     cancellation_token.clone(),
-                )?,
+                ),
                 MAX_TRANSFER_BATCH_SIZE,
                 &async_rt_handle,
                 cancellation_token.clone(),
             )),
-            metrics.pool("device"),
             cancellation_token.clone(),
         );
         CriticalTaskExecutionHandle::new_with_runtime(
@@ -161,7 +159,6 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         let transfer_ctx = Arc::new(TransferContext::new(
             nixl_agent.clone(),
             cuda_ctx.new_stream()?,
-            async_rt_handle.clone(),
         ));
 
         // Host -> Disk offload
@@ -175,12 +172,11 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                     MAX_CONCURRENT_TRANSFERS,
                     &async_rt_handle,
                     cancellation_token.clone(),
-                )?,
+                ),
                 MAX_TRANSFER_BATCH_SIZE,
                 &async_rt_handle,
                 cancellation_token.clone(),
             )),
-            metrics.pool("host"),
             cancellation_token.clone(),
         );
         CriticalTaskExecutionHandle::new_with_runtime(
@@ -200,14 +196,12 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                 CudaTransferManager::new(
                     transfer_ctx.clone(),
                     MAX_CONCURRENT_TRANSFERS,
-                    &async_rt_handle,
                     cancellation_token.clone(),
-                )?,
+                ),
                 MAX_TRANSFER_BATCH_SIZE,
                 &async_rt_handle,
                 cancellation_token.clone(),
             )),
-            metrics.pool("host"),
             cancellation_token.clone(),
         );
         CriticalTaskExecutionHandle::new_with_runtime(
@@ -229,12 +223,11 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                     MAX_CONCURRENT_TRANSFERS,
                     &async_rt_handle,
                     cancellation_token.clone(),
-                )?,
+                ),
                 MAX_TRANSFER_BATCH_SIZE,
                 &async_rt_handle,
                 cancellation_token.clone(),
             )),
-            metrics.pool("disk"),
             cancellation_token.clone(),
         );
         CriticalTaskExecutionHandle::new_with_runtime(
@@ -245,7 +238,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         )?
         .detach();
 
-        Ok(this)
+        Ok(this_clone)
     }
 
     async fn offload_worker<Source: Storage, Target: Storage>(
@@ -253,7 +246,6 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         target_pool: Option<Arc<BlockPool<Target, Metadata>>>,
         mut offload_rx: mpsc::UnboundedReceiver<OffloadRequest<Source, Metadata>>,
         transfer_manager: Arc<dyn TransferManager<Source, Target, Metadata>>,
-        pool_metrics: Arc<PoolMetrics>,
         cancellation_token: CancellationToken,
     ) -> Result<()> {
         if source_pool.is_none() || target_pool.is_none() {
@@ -275,7 +267,6 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                 match offload_rx.try_recv() {
                     Ok(request) => {
                         queue.insert(request);
-                        pool_metrics.gauge("offload_queue_size").inc();
                     }
                     Err(TryRecvError::Empty) => {
                         break;
@@ -286,7 +277,6 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
 
             // If there is a request, process it.
             if let Some(request) = queue.pop_first() {
-                pool_metrics.gauge("offload_queue_size").dec();
                 // Try to upgrade the block to a strong reference.
                 let block = match request.block.upgrade() {
                     Some(block) => Some(block),
@@ -309,19 +299,15 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                         }
                     }
 
-                    let target_block = 'target_block: {
-                        if let Ok(blocks) = target_pool.allocate_blocks(1).await {
-                            if let Some(block) = blocks.into_iter().next() {
-                                break 'target_block Some(block);
-                            }
+                    let target_blocks = match target_pool.allocate_blocks(1).await {
+                        Ok(blocks) => blocks,
+                        Err(_) => {
+                            tracing::warn!("Target pool full. Skipping offload. This should only ever happen with very small pool sizes.");
+                            continue;
                         }
-
-                        tracing::warn!("Target pool full. Skipping offload. This should only ever happen with very small pool sizes.");
-                        None
                     };
 
-                    if let Some(target_block) = target_block {
-                        pool_metrics.counter("offload_processed").inc();
+                    if let Some(target_block) = target_blocks.into_iter().next() {
                         transfer_manager
                             .enqueue_transfer(PendingTransfer::new(
                                 vec![block],
@@ -338,7 +324,6 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                     _ = cancellation_token.cancelled() => return Ok(()),
                     Some(request) = offload_rx.recv() => {
                         queue.insert(request);
-                        pool_metrics.gauge("offload_queue_size").inc();
                     }
                 }
             }
@@ -350,7 +335,6 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
         target_pool: Option<Arc<BlockPool<Target, Metadata>>>,
         mut onboard_rx: mpsc::UnboundedReceiver<OnboardRequest<Source, Target, Metadata>>,
         transfer_manager: Arc<dyn TransferManager<Source, Target, Metadata>>,
-        pool_metrics: Arc<PoolMetrics>,
         cancellation_token: CancellationToken,
     ) -> Result<()> {
         if source_pool.is_none() || target_pool.is_none() {
@@ -362,11 +346,6 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
             tokio::select! {
                 _ = cancellation_token.cancelled() => return Ok::<(), anyhow::Error>(()),
                 Some(request) = onboard_rx.recv() => {
-
-                    pool_metrics
-                        .gauge("onboard_queue_size")
-                        .set(onboard_rx.len() as i64);
-
                     // Try to allocate blocks on the device.
                     let target_blocks = match target_pool.allocate_blocks(request.blocks.len()).await {
                         Ok(blocks) => blocks,
@@ -375,10 +354,6 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
                             continue;
                         }
                     };
-
-                    pool_metrics
-                        .counter("onboard_processed")
-                        .inc_by(request.blocks.len() as u64);
 
                     let sources = request
                         .blocks
@@ -536,7 +511,7 @@ impl<Metadata: BlockMetadata> OffloadManager<Metadata> {
 }
 
 #[cfg(all(test, feature = "testing-cuda"))]
-pub mod tests {
+mod tests {
     use super::*;
     use crate::block_manager::block::test_utils::get_private_token;
 
@@ -553,12 +528,10 @@ pub mod tests {
         },
         DType, LayoutConfig,
     };
-    use crate::tokens::{TokenBlockSequence, Tokens};
     use nixl_sys::{MemoryRegion, NixlDescriptor};
 
     use aligned_vec::avec;
     use cudarc::runtime::sys::{cudaMemcpy, cudaMemcpyKind, cudaMemset};
-    use prometheus::Registry;
     use std::fs::File;
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::mem::ManuallyDrop;
@@ -576,15 +549,13 @@ pub mod tests {
             let agent = NixlAgent::new("offload-manager").unwrap();
             let (_, ucx_params) = agent.get_plugin_params("UCX").unwrap();
             let (_, gds_params) = agent.get_plugin_params("GDS").unwrap();
-            let (_, posix_params) = agent.get_plugin_params("POSIX").unwrap();
             agent.create_backend("UCX", &ucx_params).unwrap();
             agent.create_backend("GDS", &gds_params).unwrap();
-            agent.create_backend("POSIX", &posix_params).unwrap();
             Arc::new(Some(agent))
         };
     }
 
-    pub fn build_pools(
+    fn build_pools(
         device_blocks: usize,
         host_blocks: Option<usize>,
         disk_blocks: Option<usize>,
@@ -645,7 +616,6 @@ pub mod tests {
             device_pool.clone(),
             agent_arc,
             async_rt_handle,
-            BlockManagerMetrics::new(&Arc::new(Registry::new()))?,
             CancellationToken::new(),
         )?;
 
@@ -1388,124 +1358,6 @@ pub mod tests {
         let device_blocks = offload_manager.onboard(disk_blocks.clone()).await?;
         assert_eq!(device_blocks.len(), 1);
         check_block_contents(&disk_blocks[0], &device_blocks[0], 42)?;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_offload_evict_order() -> Result<()> {
-        let (offload_manager, device_pool, host_pool, _) = build_pools(4, Some(4), None, None)?;
-
-        let device_pool = device_pool.as_ref().unwrap();
-        let host_pool = host_pool.as_ref().unwrap();
-
-        let tokens = vec![0_u32; BLOCK_SIZE * 4];
-        let token_blocks = TokenBlockSequence::new(Tokens::from(tokens), 4, None);
-        assert_eq!(token_blocks.blocks().len(), 4);
-
-        let mut mutable_blocks = Vec::new();
-        let mut sequence_hashes = Vec::new();
-        for token_block in token_blocks.blocks() {
-            let mut mutable_block = device_pool
-                .allocate_blocks(1)
-                .await?
-                .into_iter()
-                .next()
-                .unwrap();
-            mutable_block.apply_token_block(token_block.clone())?;
-            sequence_hashes.push(mutable_block.sequence_hash()?);
-            mutable_blocks.push(mutable_block);
-        }
-
-        let immutable_blocks = device_pool.register_blocks(mutable_blocks).await?;
-
-        for block in &immutable_blocks {
-            offload_manager.offload(block, 0).await?;
-        }
-        // Wait for offloads.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        // Allocate 2 blocks on the host.
-        let _host_blocks = host_pool.allocate_blocks(2).await?;
-
-        // Check the existing blocks.
-        assert_eq!(
-            host_pool
-                .match_sequence_hashes(sequence_hashes.as_slice())
-                .await?
-                .len(),
-            2
-        );
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let _host_blocks2 = host_pool.allocate_blocks(1).await?;
-
-        // Now there should only be the first block on host.
-        assert_eq!(
-            host_pool
-                .match_sequence_hashes(sequence_hashes.as_slice())
-                .await?
-                .len(),
-            1
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_onboard_evict_order() -> Result<()> {
-        let (offload_manager, device_pool, host_pool, _) = build_pools(4, Some(4), None, None)?;
-
-        let device_pool = device_pool.as_ref().unwrap();
-        let host_pool = host_pool.as_ref().unwrap();
-
-        let tokens = vec![0_u32; BLOCK_SIZE * 4];
-        let token_blocks = TokenBlockSequence::new(Tokens::from(tokens), 4, None);
-        assert_eq!(token_blocks.blocks().len(), 4);
-
-        let mut mutable_blocks = Vec::new();
-        let mut sequence_hashes = Vec::new();
-        for token_block in token_blocks.blocks() {
-            let mut block = host_pool
-                .allocate_blocks(1)
-                .await?
-                .into_iter()
-                .next()
-                .unwrap();
-            block.apply_token_block(token_block.clone())?;
-
-            sequence_hashes.push(block.sequence_hash()?);
-            mutable_blocks.push(block);
-        }
-
-        let immutable_blocks = host_pool.register_blocks(mutable_blocks).await?;
-
-        let _ = offload_manager.onboard(immutable_blocks).await?;
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let _device_blocks = device_pool.allocate_blocks(2).await?;
-
-        assert_eq!(
-            device_pool
-                .match_sequence_hashes(sequence_hashes.as_slice())
-                .await?
-                .len(),
-            2
-        );
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let _device_blocks2 = device_pool.allocate_blocks(1).await?;
-
-        assert_eq!(
-            device_pool
-                .match_sequence_hashes(sequence_hashes.as_slice())
-                .await?
-                .len(),
-            1
-        );
 
         Ok(())
     }

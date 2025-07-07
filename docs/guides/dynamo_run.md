@@ -1,6 +1,6 @@
 # Running Dynamo (`dynamo run`)
 
-This guide explains the `dynamo run` command.
+This guide explains the`dynamo run` command.
 
 `dynamo-run` is a CLI tool for exploring the Dynamo components. It's also an example of how to use components from Rust. If you use the Python wheel, it's available as `dynamo run` .
 
@@ -137,7 +137,7 @@ Example 3: Different endpoints.
 
 The KV metrics publisher in VLLM adds a `load_metrics` endpoint to the current component. If the `llama3-1-8b.backend` component above is using patched vllm it will also expose `llama3-1-8b.backend.load_metrics`.
 
-Example 4: Multiple component in a pipeline.
+Example 4: Multiple component in a pipeline
 
 In the P/D disaggregated setup you would have `deepseek-distill-llama8b.prefill.generate` (possibly multiple instance of this) and `deepseek-distill-llama8b.decode.generate`.
 
@@ -349,7 +349,7 @@ Pass `--tensor-parallel-size <NUM-GPUS>` to `dynamo-run`.
 dynamo-run out=sglang ~/llms/Llama-4-Scout-17B-16E-Instruct/ --tensor-parallel-size 8
 ```
 
-To specify the GPU to start from, pass `--base-gpu-id <num>`; for example, on a shared eight GPU machine where GPUs 0–3 are already in use:
+To specify which GPU to start from pass `--base-gpu-id <num>`, for example on a shared eight GPU machine where GPUs 0-3 are already in use:
 ```
 dynamo-run out=sglang <model> --tensor-parallel-size 4 --base-gpu-id 4
 ```
@@ -410,22 +410,6 @@ Inside that virtualenv:
 To pass extra arguments to the vllm engine see [Extra engine arguments](#extra-engine-arguments).
 
 vllm attempts to allocate enough KV cache for the full context length at startup. If that does not fit in your available memory pass `--context-length <value>`.
-
-If you see an error similar to the following:
-```text
-2025-06-28T00:32:32.507Z  WARN dynamo_run::subprocess: Traceback (most recent call last):
-2025-06-28T00:32:32.507Z  WARN dynamo_run::subprocess:   File "/tmp/.tmpYeq5qA", line 29, in <module>
-2025-06-28T00:32:32.507Z  WARN dynamo_run::subprocess:     from dynamo.llm import ModelType, WorkerMetricsPublisher, register_llm
-2025-06-28T00:32:32.507Z  WARN dynamo_run::subprocess: ModuleNotFoundError: No module named 'dynamo'
-```
-Then run
-```
-uv pip install maturin
-pip install patchelf
-cd lib/bindings/python
-maturin develop
-```
-this builds the Python->Rust bindings into that missing dynamo module. Rerun dynamo-run, the problem should be resolved.
 
 **Multi-GPU**
 

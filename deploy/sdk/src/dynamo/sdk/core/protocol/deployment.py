@@ -137,7 +137,7 @@ class Deployment:
 
     name: str
     namespace: str
-    graph: t.Optional[str] = None
+    pipeline: t.Optional[str] = None
     entry_service: t.Optional[Service] = None
     envs: t.Optional[t.List[t.Dict[str, t.Any]]] = None
 
@@ -150,12 +150,12 @@ DeploymentResponse = t.Dict[str, t.Any]
 class DeploymentConfig:
     """Configuration object for deployment operations.
 
-    Consolidates all deployment parameters including graph configuration,
+    Consolidates all deployment parameters including pipeline configuration,
     environment variables, and deployment settings.
     """
 
     # Core deployment settings
-    graph: str
+    pipeline: str
     endpoint: str
     name: t.Optional[str] = None
     target: str = "kubernetes"

@@ -21,12 +21,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use derive_builder::Builder;
-use dynamo_runtime::{slug::Slug, storage::key_value_store::Versioned, transports::nats};
+use dynamo_runtime::slug::Slug;
+use dynamo_runtime::transports::nats;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer as HfTokenizer;
 use url::Url;
 
 use crate::gguf::{Content, ContentConfig, ModelConfigLike};
+use crate::key_value_store::Versioned;
 use crate::protocols::TokenIdType;
 
 /// If a model deployment card hasn't been refreshed in this much time the worker is likely gone
@@ -117,11 +119,11 @@ pub struct ModelDeploymentCard {
     pub revision: u64,
 
     /// Max context (in number of tokens) this model can handle
-    pub context_length: u32,
+    pub context_length: usize,
 
     /// Size of a KV cache block - vllm only currently
     /// Passed to the engine and the KV router.
-    pub kv_cache_block_size: u32,
+    pub kv_cache_block_size: usize,
 }
 
 impl ModelDeploymentCard {

@@ -4,14 +4,11 @@
 use std::sync::Arc;
 
 use dynamo_runtime::transports::etcd;
-use dynamo_runtime::{
-    protocols,
-    slug::Slug,
-    storage::key_value_store::{EtcdStorage, KeyValueStore, KeyValueStoreManager},
-};
+use dynamo_runtime::{protocols, slug::Slug};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    key_value_store::{EtcdStorage, KeyValueStore, KeyValueStoreManager},
     model_card::{self, ModelDeploymentCard},
     model_type::ModelType,
 };

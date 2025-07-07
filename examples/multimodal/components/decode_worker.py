@@ -24,8 +24,8 @@ import torch
 from components.disagg_router import PyDisaggregatedRouter
 from components.encode_worker import VllmEncodeWorker
 from components.prefill_worker import VllmPrefillWorker
+from transformers import LlavaForConditionalGeneration
 from utils.logging import check_required_workers
-from utils.model import construct_mm_data, get_vision_embeddings_info
 from utils.nixl import NixlMetadataStore
 from utils.prefill_queue import PrefillQueue
 from utils.protocol import (
@@ -117,11 +117,6 @@ class VllmDecodeWorker:
             )
 
         runtime = dynamo_context["runtime"]
-        embeddings_shape, self.embeddings_dtype = get_vision_embeddings_info(
-            self.engine_args.model, self.engine_args.num_patches
-        )
-        logger.debug(f"Embeddings shape: {embeddings_shape}")
-        self.embedding_size = embeddings_shape[1]
 
         if self.do_remote_prefill:
             metadata = self.engine_client.nixl_metadata
@@ -138,7 +133,18 @@ class VllmDecodeWorker:
                 await self.disaggregated_router.async_init()
             else:
                 self.disaggregated_router = None
+
+            model = LlavaForConditionalGeneration.from_pretrained(
+                self.engine_args.model,
+                device_map="auto",
+                torch_dtype=torch.bfloat16,
+            ).eval()
+            vision_tower = model.vision_tower
+            self.embedding_size = (
+                vision_tower.vision_model.embeddings.position_embedding.num_embeddings
+            )
         else:
+            EMBEDDINGS_SHAPE = (1, 577, 4096)
             EMBEDDINGS_DTYPE = torch.float16
             EMBEDDINGS_DEVICE = "cuda"
 
@@ -155,7 +161,7 @@ class VllmDecodeWorker:
 
             # Create a longer-lived buffer for receiving the image embeddings.
             embeddings = torch.empty(
-                embeddings_shape, dtype=EMBEDDINGS_DTYPE, device=EMBEDDINGS_DEVICE
+                EMBEDDINGS_SHAPE, dtype=EMBEDDINGS_DTYPE, device=EMBEDDINGS_DEVICE
             )
             descriptor = connect.Descriptor(embeddings)
             # Register the descriptor w/ NIXL (this is optional, if not done here the connect subsytem will take care of this automatically).
@@ -200,15 +206,13 @@ class VllmDecodeWorker:
                 multi_modal_data,
                 remote_prefill_params,
             ) = await self.remote_prefill(request)
+
         else:
             (
                 prompt_ids,
                 multi_modal_data,
                 remote_prefill_params,
             ) = await self.local_prefill(request)
-        logger.debug(f"Prompt ids: {prompt_ids}")
-        logger.debug(f"Multi modal data: {multi_modal_data}")
-        logger.debug(f"Remote prefill params: {remote_prefill_params}")
 
         # rust HTTP requires Delta streaming
         request.sampling_params.output_kind = RequestOutputKind.DELTA
@@ -223,7 +227,7 @@ class VllmDecodeWorker:
             remote_prefill_params=remote_prefill_params,
         ):
             logger.debug(
-                f"Yielding response {{ id: {response.request_id}, prompt: '{response.prompt}' }}"
+                f"Yeilding response {{ id: {response.request_id}, prompt: '{response.prompt}' }}"
             )
             yield MyRequestOutput(
                 request_id=response.request_id,
@@ -290,9 +294,7 @@ class VllmDecodeWorker:
             "Aggregated: embedding data from encode worker provided via multi-modal data to decode model."
         )
         # When using disaggregated serving, the encode worker will have provided the key-value cache updates via the encode worker.
-        multi_modal_data = construct_mm_data(
-            self.engine_args.model, encode_output, embeddings, self.embeddings_dtype
-        )
+        multi_modal_data = {"image": embeddings}
 
         return prompt_ids, multi_modal_data, remote_prefill_params
 
@@ -351,16 +353,17 @@ class VllmDecodeWorker:
         # As a workaround, here we manually insert some placeholder dummy tokens based on the embedding size
         # so that decode worker can pre-allocate the memory with the correct size.
         # The structure of the prompt will be like: "\nUSER: <image> <dummy_tokens>\n<user_prompt>\nASSISTANT:".
-        # Since the "<image>" token is included in the prompt, only need to insert embedding_size dummy tokens after the image token.
+        # Since the "<image>" token is included in the prompt, only need to insert (embedding_size - 1) dummy tokens after the image token.
+        IMAGE_TOKEN_ID = 32000
         DUMMY_TOKEN_ID = 0
         # Find the index of the image token in the prompt token ids
         image_token_index = request.engine_prompt["prompt_token_ids"].index(
-            self.engine_args.image_token_id
+            IMAGE_TOKEN_ID
         )
         dummy_token_index = image_token_index + 1
         prompt_ids = (
             request.engine_prompt["prompt_token_ids"][:dummy_token_index]
-            + [DUMMY_TOKEN_ID] * self.embedding_size
+            + [DUMMY_TOKEN_ID] * (self.embedding_size - 1)
             + request.engine_prompt["prompt_token_ids"][dummy_token_index:]
         )
         logger.debug(

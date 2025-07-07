@@ -904,8 +904,9 @@ func TestDynamoComponentDeploymentReconciler_generateLeaderWorkerSet(t *testing.
 					Name:      "test-lws-deploy-0",
 					Namespace: "default",
 					Labels: map[string]string{
-						commonconsts.KubeLabelDynamoComponent: "test-lws-component",
-						"instance-id":                         "0",
+						commonconsts.KubeLabelDynamoComponent:     "test-lws-component",
+						commonconsts.KubeLabelDynamoComponentType: commonconsts.DynamoApiServerComponentName,
+						"instance-id": "0",
 					},
 				},
 				Spec: leaderworkersetv1.LeaderWorkerSetSpec{
@@ -919,6 +920,7 @@ func TestDynamoComponentDeploymentReconciler_generateLeaderWorkerSet(t *testing.
 									"instance-id":                         "0",
 									"role":                                "leader",
 									commonconsts.KubeLabelDynamoComponent: "test-lws-component",
+									commonconsts.KubeLabelDynamoComponentType: commonconsts.DynamoApiServerComponentName,
 								},
 								Annotations: map[string]string{
 									"scheduling.k8s.io/group-name": "test-lws-deploy-0",
@@ -972,6 +974,7 @@ func TestDynamoComponentDeploymentReconciler_generateLeaderWorkerSet(t *testing.
 									"instance-id":                         "0",
 									"role":                                "worker",
 									commonconsts.KubeLabelDynamoComponent: "test-lws-component",
+									commonconsts.KubeLabelDynamoComponentType: commonconsts.DynamoApiServerComponentName,
 								},
 								Annotations: map[string]string{
 									"scheduling.k8s.io/group-name": "test-lws-deploy-0",

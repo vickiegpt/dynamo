@@ -62,5 +62,4 @@ type ExtraPodSpec struct {
 	Containers                []corev1.Container                `json:"containers,omitempty"`
 	ServiceAccountName        string                            `json:"serviceAccountName,omitempty"`
 	PriorityClassName         string                            `json:"priorityClassName,omitempty"`
-	MainContainer             *corev1.Container                 `json:"mainContainer,omitempty"`
 }

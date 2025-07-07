@@ -15,6 +15,7 @@
 
 from components.frontend import Frontend
 from components.prefill_worker import TensorRTLLMPrefillWorker
+from components.processor import Processor
 from components.worker import TensorRTLLMWorker
 
-Frontend.link(TensorRTLLMWorker).link(TensorRTLLMPrefillWorker)
+Frontend.link(Processor).link(TensorRTLLMWorker).link(TensorRTLLMPrefillWorker)

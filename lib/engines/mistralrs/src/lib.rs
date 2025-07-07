@@ -25,7 +25,7 @@ use dynamo_runtime::protocols::annotated::Annotated;
 
 use dynamo_llm::protocols::openai::{
     chat_completions::{NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse},
-    completions::{prompt_to_string, NvCreateCompletionRequest, NvCreateCompletionResponse},
+    completions::{prompt_to_string, CompletionResponse, NvCreateCompletionRequest},
     embeddings::{NvCreateEmbeddingRequest, NvCreateEmbeddingResponse},
 };
 
@@ -128,7 +128,7 @@ impl MistralRsEngine {
             .build(None)?
         };
 
-        let mut max_seq_len = model.card().context_length as usize;
+        let mut max_seq_len = model.card().context_length;
         if max_seq_len == 0 {
             tracing::info!("context_length is 0. Probably error reading from model.");
             max_seq_len = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN;
@@ -418,6 +418,9 @@ impl
                             id: None,
                             data: Some(delta),
                             event: None,
+                            chunk_tokens: None,
+                            input_tokens: None,
+                            output_tokens: None,
                             comment: None,
                         };
                         yield ann;
@@ -467,17 +470,13 @@ fn to_logit_bias(lb: HashMap<String, serde_json::Value>) -> HashMap<u32, f32> {
 }
 
 #[async_trait]
-impl
-    AsyncEngine<
-        SingleIn<NvCreateCompletionRequest>,
-        ManyOut<Annotated<NvCreateCompletionResponse>>,
-        Error,
-    > for MistralRsEngine
+impl AsyncEngine<SingleIn<NvCreateCompletionRequest>, ManyOut<Annotated<CompletionResponse>>, Error>
+    for MistralRsEngine
 {
     async fn generate(
         &self,
         request: SingleIn<NvCreateCompletionRequest>,
-    ) -> Result<ManyOut<Annotated<NvCreateCompletionResponse>>, Error> {
+    ) -> Result<ManyOut<Annotated<CompletionResponse>>, Error> {
         let (request, context) = request.transfer(());
         let ctx = context.context();
         let (tx, mut rx) = channel(10_000);
@@ -586,6 +585,9 @@ impl
                             id: None,
                             data: Some(inner),
                             event: None,
+                            chunk_tokens: None,
+                            input_tokens: None,
+                            output_tokens: None,
                             comment: None,
                         };
                         yield ann;

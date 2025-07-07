@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from components.frontend import Frontend
+from components.processor import Processor
 from components.worker import TensorRTLLMWorker
 
-Frontend.link(TensorRTLLMWorker)
+Frontend.link(Processor).link(TensorRTLLMWorker)

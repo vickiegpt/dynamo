@@ -15,7 +15,6 @@ use dynamo_runtime::{
 };
 use futures::stream::{self, StreamExt};
 
-pub mod approx;
 pub mod indexer;
 pub mod metrics_aggregator;
 pub mod protocols;
@@ -51,7 +50,7 @@ pub trait WorkerSelector {
         &self,
         workers: &ProcessedEndpoints,
         request: &SchedulingRequest,
-        block_size: u32,
+        block_size: usize,
     ) -> Result<WorkerSelectionResult, KvSchedulerError>;
 }
 
@@ -74,7 +73,7 @@ pub struct KvRouterConfig {
 impl Default for KvRouterConfig {
     fn default() -> Self {
         Self {
-            overlap_score_weight: 1.0,
+            overlap_score_weight: 2.0,
             gpu_cache_usage_weight: 1.0,
             waiting_requests_weight: 1.0,
         }
@@ -105,13 +104,13 @@ impl KvRouterConfig {
 pub struct KvRouter {
     indexer: KvIndexer,
     scheduler: KvScheduler,
-    block_size: u32,
+    block_size: usize,
 }
 
 impl KvRouter {
     pub async fn new(
         component: Component,
-        block_size: u32,
+        block_size: usize,
         selector: Option<Box<dyn WorkerSelector + Send + Sync>>,
     ) -> Result<Self> {
         let cancellation_token = component
@@ -197,7 +196,7 @@ impl KvRouter {
     }
 
     /// Get the block size this router was configured with
-    pub fn block_size(&self) -> u32 {
+    pub fn block_size(&self) -> usize {
         self.block_size
     }
 }

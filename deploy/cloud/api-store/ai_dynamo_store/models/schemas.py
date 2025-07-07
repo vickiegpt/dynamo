@@ -56,7 +56,7 @@ class DeploymentConfigSchema(BaseModel):
 
 
 class UpdateDeploymentSchema(DeploymentConfigSchema):
-    dynamo: Optional[str] = None
+    bento: Optional[str] = None
     component: Optional[str] = None
 
 

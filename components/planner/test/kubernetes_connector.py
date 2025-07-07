@@ -123,7 +123,6 @@ async def test_remove_component_decreases_replicas(kubernetes_connector, mock_ku
     mock_kube_api.update_graph_replicas.assert_called_once_with(
         "test-graph", component_name, 1
     )
-    mock_kube_api.wait_for_graph_deployment_ready.assert_called_once_with("test-graph")
 
 
 @pytest.mark.asyncio
@@ -141,4 +140,3 @@ async def test_remove_component_with_zero_replicas(kubernetes_connector, mock_ku
 
     # Assert
     mock_kube_api.update_graph_replicas.assert_not_called()
-    mock_kube_api.wait_for_graph_deployment_ready.assert_not_called()

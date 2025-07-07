@@ -122,7 +122,7 @@ GetDynamoComponent = Depends(dynamo_component_handler)
 
 
 @router.get(
-    "/dynamo_repositories/{dynamo_component_name}",
+    "/bento_repositories/{dynamo_component_name}",
     responses={
         200: {"description": "Successful Response"},
         422: {"description": "Validation Error"},
@@ -169,16 +169,16 @@ async def get_dynamo_component(
         resource_type=ResourceType.DynamoComponent,
         labels=[],
         description=dynamo_component.description,
-        latest_dynamo=None
+        latest_bento=None
         if not latest_dynamo_component_versions
         else latest_dynamo_component_versions[0],
-        latest_dynamos=latest_dynamo_component_versions,
-        n_dynamos=len(dynamo_components),
+        latest_bentos=latest_dynamo_component_versions,
+        n_bentos=len(dynamo_components),
     )
 
 
 @router.post(
-    "/dynamo_repositories",
+    "/bento_repositories",
     responses={
         200: {"description": "Successful Response"},
         422: {"description": "Validation Error"},
@@ -240,14 +240,14 @@ async def create_dynamo_component(
         resource_type=ResourceType.DynamoComponent,
         labels=[],
         description=db_dynamo_component.description,
-        latest_dynamos=None,
-        latest_dynamo=None,
-        n_dynamos=0,
+        latest_bentos=None,
+        latest_bento=None,
+        n_bentos=0,
     )
 
 
 @router.get(
-    "/dynamo_repositories",
+    "/bento_repositories",
     responses={
         200: {"description": "Successful Response"},
         422: {"description": "Validation Error"},
@@ -375,7 +375,7 @@ GetDynamoComponentVersion = Depends(dynamo_component_version_handler)
 
 
 @router.get(
-    "/dynamo_repositories/{dynamo_component_name}/dynamos/{version}",
+    "/bento_repositories/{dynamo_component_name}/bentos/{version}",
     responses={
         200: {"description": "Successful Response"},
         422: {"description": "Validation Error"},
@@ -415,7 +415,7 @@ async def get_dynamo_component_version(
 
 
 @router.post(
-    "/dynamo_repositories/{dynamo_component_name}/dynamos",
+    "/bento_repositories/{dynamo_component_name}/bentos",
     responses={
         200: {"description": "Successful Response"},
         422: {"description": "Validation Error"},
@@ -483,7 +483,7 @@ async def create_dynamo_component_version(
 
 
 @router.get(
-    "/dynamo_repositories/{dynamo_component_name}/dynamos",
+    "/bento_repositories/{dynamo_component_name}/bentos",
     responses={
         200: {"description": "Successful Response"},
         422: {"description": "Validation Error"},
@@ -544,7 +544,7 @@ async def get_dynamo_component_versions(
 
 
 @router.patch(
-    "/dynamo_repositories/{dynamo_component_name}/dynamos/{version}",
+    "/bento_repositories/{dynamo_component_name}/bentos/{version}",
     responses={
         200: {"description": "Successful Response"},
         422: {"description": "Validation Error"},
@@ -588,7 +588,7 @@ async def update_dynamo_component_version(
 
 
 @router.put(
-    "/dynamo_repositories/{dynamo_component_name}/dynamos/{version}/upload",
+    "/bento_repositories/{dynamo_component_name}/bentos/{version}/upload",
     responses={
         200: {"description": "Successful Response"},
         422: {"description": "Validation Error"},
@@ -636,7 +636,7 @@ def generate_file_path(version) -> str:
 
 
 @router.get(
-    "/dynamo_repositories/{dynamo_component_name}/dynamos/{version}/download",
+    "/bento_repositories/{dynamo_component_name}/bentos/{version}/download",
     responses={
         200: {"description": "Successful Response"},
         422: {"description": "Validation Error"},
@@ -672,7 +672,7 @@ async def download_dynamo_component_version(
 
 
 @router.patch(
-    "/dynamo_repositories/{dynamo_component_name}/dynamos/{version}/start_upload",
+    "/bento_repositories/{dynamo_component_name}/bentos/{version}/start_upload",
     responses={
         200: {"description": "Successful Response"},
         422: {"description": "Validation Error"},
@@ -769,13 +769,13 @@ async def convert_dynamo_component_model_to_schema(
                     name=entity.name,
                     resource_type=ResourceType.DynamoComponent,
                     labels=[],
-                    latest_dynamo=(
+                    latest_bento=(
                         None
                         if not dynamo_component_version_schemas
                         else dynamo_component_version_schemas[0]
                     ),
-                    latest_dynamos=dynamo_component_version_schemas,
-                    n_dynamos=total,
+                    latest_bentos=dynamo_component_version_schemas,
+                    n_bentos=total,
                     description=entity.description,
                 )
             )
@@ -832,7 +832,7 @@ async def convert_dynamo_component_version_model_to_schema(
                 labels=[],
                 manifest=entity.manifest,
                 updated_at=updated_at,
-                dynamo_repository_uid=dynamo_component.id,
+                bento_repository_uid=dynamo_component.id,
                 # upload_started_at=upload_started_at,
                 # upload_finished_at=upload_finished_at,
                 transmission_strategy=TransmissionStrategy.Proxy,

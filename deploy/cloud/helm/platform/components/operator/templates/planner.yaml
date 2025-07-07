@@ -20,7 +20,7 @@ metadata:
   namespace: {{ .Values.namespace }}
 {{- if .Values.dynamo.dockerRegistry.useKubernetesSecret }}
 imagePullSecrets:
-- name: {{ include "dynamo-operator.componentsDockerRegistrySecretName" . }}
+- name: dynamo-regcred
 {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

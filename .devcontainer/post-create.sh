@@ -58,15 +58,17 @@ ln -sf $HOME/dynamo/.build/target/debug/dynamo-run $HOME/dynamo/deploy/sdk/src/d
 ln -sf $HOME/dynamo/.build/target/debug/http $HOME/dynamo/deploy/sdk/src/dynamo/sdk/cli/bin/http
 ln -sf $HOME/dynamo/.build/target/debug/llmctl $HOME/dynamo/deploy/sdk/src/dynamo/sdk/cli/bin/llmctl
 
-# install the python bindings
-cd $HOME/dynamo/lib/bindings/python && retry maturin develop
-
-# installs overall python packages, grabs binaries from .build/target/debug
+# install the python bindings in editable mode
+cd $HOME/dynamo/lib/bindings/python && retry uv pip install -e .
 cd $HOME/dynamo && retry env DYNAMO_BIN_PATH=$HOME/dynamo/.build/target/debug uv pip install -e .
 
 export PYTHONPATH=/home/ubuntu/dynamo/components/planner/src:$PYTHONPATH
 
-# TODO: Deprecated except vLLM v0
+# Add to bashrc only if not already present
+if ! grep -q "source /opt/dynamo/venv/bin/activate" ~/.bashrc; then
+    echo "source /opt/dynamo/venv/bin/activate" >> ~/.bashrc
+fi
+
 if ! grep -q "export VLLM_KV_CAPI_PATH=" ~/.bashrc; then
     echo "export VLLM_KV_CAPI_PATH=$HOME/dynamo/.build/target/debug/libdynamo_llm_capi.so" >> ~/.bashrc
 fi

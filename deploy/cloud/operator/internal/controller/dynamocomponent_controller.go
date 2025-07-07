@@ -40,7 +40,6 @@ import (
 	"github.com/apparentlymart/go-shquot/shquot"
 	"github.com/awslabs/amazon-ecr-credential-helper/ecr-login"
 	"github.com/chrismellard/docker-credential-acr-env/pkg/credhelper"
-	"github.com/goccy/go-yaml"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/google"
@@ -50,6 +49,7 @@ import (
 	"github.com/rs/xid"
 	"github.com/sergeymakinen/go-quote/unix"
 	"github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -852,15 +852,11 @@ func (r *DynamoComponentReconciler) generateImageBuilderPodTemplateSpec(ctx cont
 			Name:      "workspace",
 			MountPath: "/workspace",
 		},
-		{
-			Name:      consts.DockerConfigVolumeName,
-			MountPath: consts.DockerConfigVolumeMountPath,
-		},
 	}
 
 	if dockerConfigJSONSecretName != "" {
 		volumes = append(volumes, corev1.Volume{
-			Name: consts.DockerConfigVolumeName,
+			Name: dockerConfigJSONSecretName,
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
 					SecretName: dockerConfigJSONSecretName,
@@ -873,12 +869,9 @@ func (r *DynamoComponentReconciler) generateImageBuilderPodTemplateSpec(ctx cont
 				},
 			},
 		})
-	} else {
-		volumes = append(volumes, corev1.Volume{
-			Name: consts.DockerConfigVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
-			},
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      dockerConfigJSONSecretName,
+			MountPath: "/kaniko/.docker/",
 		})
 	}
 
@@ -928,6 +921,8 @@ func (r *DynamoComponentReconciler) generateImageBuilderPodTemplateSpec(ctx cont
 
 	buildEngine := getDynamoComponentImageBuildEngine()
 
+	privileged := buildEngine != DynamoComponentImageBuildEngineBuildkitRootless
+
 	dynamoComponentDownloadCommandTemplate, err := template.New("downloadCommand").Parse(`
 set -e
 
@@ -948,6 +943,10 @@ echo "Extracting dynamoComponent tar file..."
 tar -xvf /tmp/downloaded.tar
 echo "Removing dynamoComponent tar file..."
 rm /tmp/downloaded.tar
+{{if not .Privileged}}
+echo "Changing directory permission..."
+chown -R 1000:1000 /workspace
+{{end}}
 echo "Done"
 	`)
 
@@ -962,6 +961,7 @@ echo "Done"
 		"DynamoComponentDownloadURL":    dynamoComponentDownloadURL,
 		"DynamoComponentRepositoryName": dynamoComponentRepositoryName,
 		"DynamoComponentVersion":        dynamoComponentVersion,
+		"Privileged":                    privileged,
 	})
 	if err != nil {
 		err = errors.Wrap(err, "failed to execute download command template")
@@ -1002,44 +1002,6 @@ echo "Done"
 				},
 			},
 		},
-	}
-
-	if dockerConfigJSONSecretName == "" {
-		// if no explicit docker config is provided, we need to provide the docker config to the image builder
-		var ref name.Reference
-		ref, err = name.ParseReference(imageName)
-		if err != nil {
-			err = errors.Wrap(err, "failed to parse reference")
-			return
-		}
-		dockerRegistry := ref.Context().RegistryStr()
-		if isGoogleRegistry(dockerRegistry) {
-			// for GCP, we use the google cloud sdk to get the docker config.
-			initContainers = append(initContainers, corev1.Container{
-				Name:  "gcp-init-docker-config",
-				Image: "google/cloud-sdk:slim",
-				Command: []string{
-					"/bin/bash",
-					"-c",
-					fmt.Sprintf(`set -e
-gcloud --quiet config get-value account
-TOKEN=$(gcloud --quiet auth print-access-token)
-cat > %s/config.json <<EOL
-{
-	"auths": {
-		"%s": {
-			"auth": "$(echo -n "oauth2accesstoken:${TOKEN}" | base64 -w 0)"
-		}
-	}
-}
-EOL
-echo 'Docker config.json created successfully'`, consts.DockerConfigVolumeMountPath, dockerRegistry),
-				},
-				Resources:    downloaderContainerResources,
-				EnvFrom:      downloaderContainerEnvFrom,
-				VolumeMounts: volumeMounts,
-			})
-		}
 	}
 
 	containers := make([]corev1.Container, 0)
@@ -1149,10 +1111,13 @@ echo 'Docker config.json created successfully'`, consts.DockerConfigVolumeMountP
 			Name:  "IFS",
 			Value: "''",
 		},
-		{
+	}
+
+	if dockerConfigJSONSecretName != "" {
+		builderContainerEnvs = append(builderContainerEnvs, corev1.EnvVar{
 			Name:  "DOCKER_CONFIG",
-			Value: consts.DockerConfigVolumeMountPath,
-		},
+			Value: "/kaniko/.docker/",
+		})
 	}
 
 	kanikoCacheRepo := os.Getenv("KANIKO_CACHE_REPO")
@@ -1209,6 +1174,9 @@ echo 'Docker config.json created successfully'`, consts.DockerConfigVolumeMountP
 	if isBuildkit {
 		output := fmt.Sprintf("type=image,name=%s,push=true,registry.insecure=%v", imageName, dockerRegistryInsecure)
 		buildkitdFlags := []string{}
+		if !privileged {
+			buildkitdFlags = append(buildkitdFlags, "--oci-worker-no-process-sandbox")
+		}
 		if isEstargzEnabled() {
 			buildkitdFlags = append(buildkitdFlags, "--oci-worker-snapshotter=stargz")
 			output += ",oci-mediatypes=true,compression=estargz,force-compression=true"
@@ -1247,6 +1215,23 @@ echo 'Docker config.json created successfully'`, consts.DockerConfigVolumeMountP
 		}
 	}
 
+	var builderContainerSecurityContext *corev1.SecurityContext
+
+	if buildEngine == DynamoComponentImageBuildEngineBuildkit {
+		builderContainerSecurityContext = &corev1.SecurityContext{
+			Privileged: ptr.To(true),
+		}
+	} else if buildEngine == DynamoComponentImageBuildEngineBuildkitRootless {
+		kubeAnnotations["container.apparmor.security.beta.kubernetes.io/builder"] = "unconfined"
+		builderContainerSecurityContext = &corev1.SecurityContext{
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeUnconfined,
+			},
+			RunAsUser:  ptr.To(int64(1000)),
+			RunAsGroup: ptr.To(int64(1000)),
+		}
+	}
+
 	// add build args to pass via --build-arg
 	for _, buildArg := range buildArgs {
 		quotedBuildArg := unix.SingleQuote.Quote(buildArg)
@@ -1276,13 +1261,7 @@ echo 'Docker config.json created successfully'`, consts.DockerConfigVolumeMountP
 		EnvFrom:         builderContainerEnvFrom,
 		TTY:             true,
 		Stdin:           true,
-	}
-
-	if buildEngine == DynamoComponentImageBuildEngineKaniko {
-		// we need to run as root when using kaniko
-		container.SecurityContext = &corev1.SecurityContext{
-			RunAsUser: ptr.To(int64(0)),
-		}
+		SecurityContext: builderContainerSecurityContext,
 	}
 
 	if globalDefaultImageBuilderContainerResources != nil {
@@ -1305,11 +1284,6 @@ echo 'Docker config.json created successfully'`, consts.DockerConfigVolumeMountP
 			Volumes:        volumes,
 			InitContainers: initContainers,
 			Containers:     containers,
-			SecurityContext: &corev1.PodSecurityContext{
-				RunAsUser:  ptr.To(int64(1000)),
-				RunAsGroup: ptr.To(int64(1000)),
-				FSGroup:    ptr.To(int64(1000)),
-			},
 		},
 	}
 

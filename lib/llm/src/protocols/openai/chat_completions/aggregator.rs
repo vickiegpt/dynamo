@@ -13,15 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{collections::HashMap, pin::Pin};
-
-use futures::{Stream, StreamExt};
-
 use super::{NvCreateChatCompletionResponse, NvCreateChatCompletionStreamResponse};
 use crate::protocols::{
     codec::{Message, SseCodecError},
     convert_sse_stream, Annotated,
 };
+
+use futures::{Stream, StreamExt};
+use std::{collections::HashMap, pin::Pin};
 
 /// A type alias for a pinned, dynamically-dispatched stream that is `Send` and `Sync`.
 type DataStream<T> = Pin<Box<dyn Stream<Item = T> + Send + Sync>>;
@@ -285,6 +284,9 @@ mod tests {
             data: Some(data),
             id: Some("test_id".to_string()),
             event: None,
+            chunk_tokens: None,
+            input_tokens: None,
+            output_tokens: None,
             comment: None,
         }
     }
@@ -428,6 +430,9 @@ mod tests {
             data: Some(data),
             id: Some("test_id".to_string()),
             event: None,
+            chunk_tokens: None,
+            input_tokens: None,
+            output_tokens: None,
             comment: None,
         };
         let stream = Box::pin(stream::iter(vec![annotated_delta]));

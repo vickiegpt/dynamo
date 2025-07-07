@@ -119,9 +119,9 @@ pub fn compute_block_hash(data: &[u8]) -> LocalBlockHash {
 /// ### Returns
 ///
 /// A vector of `LocalBlockHash` representing the computed hashes for each chunk of tokens.
-pub fn compute_block_hash_for_seq(tokens: &[u32], kv_block_size: u32) -> Vec<LocalBlockHash> {
+pub fn compute_block_hash_for_seq(tokens: &[u32], kv_block_size: usize) -> Vec<LocalBlockHash> {
     tokens
-        .chunks_exact(kv_block_size as usize) // Split into chunks of kv_block_size elements
+        .chunks_exact(kv_block_size) // Split into chunks of kv_block_size elements
         .map(|chunk| {
             let bytes: Vec<u8> = chunk
                 .iter()
@@ -527,7 +527,7 @@ pub struct KvIndexer {
     /// A handle to the background task managing the KV store.
     task: OnceLock<std::thread::JoinHandle<()>>,
     /// The size of the KV block this indexer can handle.
-    kv_block_size: u32,
+    kv_block_size: usize,
 }
 
 impl KvIndexer {
@@ -544,7 +544,7 @@ impl KvIndexer {
     pub fn new_with_frequency(
         token: CancellationToken,
         expiration_duration: Option<Duration>,
-        kv_block_size: u32,
+        kv_block_size: usize,
     ) -> Self {
         let (event_tx, event_rx) = mpsc::channel::<RouterEvent>(2048);
         let (match_tx, match_rx) = mpsc::channel::<MatchRequest>(128);
@@ -611,11 +611,11 @@ impl KvIndexer {
         }
     }
 
-    pub fn block_size(&self) -> u32 {
+    pub fn block_size(&self) -> usize {
         self.kv_block_size
     }
 
-    pub fn new(token: CancellationToken, kv_block_size: u32) -> Self {
+    pub fn new(token: CancellationToken, kv_block_size: usize) -> Self {
         Self::new_with_frequency(token, None, kv_block_size)
     }
 
@@ -697,7 +697,7 @@ pub struct KvIndexerSharded {
     /// A `CancellationToken` for managing shutdown.
     cancel: CancellationToken,
     /// The size of the KV block this indexer can handle.
-    kv_block_size: u32,
+    kv_block_size: usize,
     worker_assignments: HashMap<WorkerId, usize>,
     worker_counts: Vec<usize>,
 
@@ -723,7 +723,7 @@ impl KvIndexerSharded {
         token: CancellationToken,
         num_shards: usize,
         expiration_duration: Option<Duration>,
-        kv_block_size: u32,
+        kv_block_size: usize,
     ) -> Self {
         let worker_assignments: HashMap<WorkerId, usize> = HashMap::new();
         let worker_counts: Vec<usize> = vec![0; num_shards];
@@ -802,11 +802,11 @@ impl KvIndexerSharded {
         }
     }
 
-    pub fn block_size(&self) -> u32 {
+    pub fn block_size(&self) -> usize {
         self.kv_block_size
     }
 
-    pub fn new(token: CancellationToken, num_shards: usize, kv_block_size: u32) -> Self {
+    pub fn new(token: CancellationToken, num_shards: usize, kv_block_size: usize) -> Self {
         Self::new_with_frequency(token, num_shards, None, kv_block_size)
     }
 }
@@ -1312,20 +1312,24 @@ mod tests {
     #[case(11)]
     #[case(32)]
     #[case(64)]
-    fn test_compute_block_hash_for_seq(#[case] kv_block_size: u32) {
+    fn test_compute_block_hash_for_seq(#[case] kv_block_size: usize) {
         setup();
         // create a sequence of 64 elements
-        let sequence = (0..kv_block_size).collect::<Vec<u32>>();
+        let sequence = (0..kv_block_size).map(|i| i as u32).collect::<Vec<u32>>();
         let hashes = compute_block_hash_for_seq(&sequence, kv_block_size);
         assert_eq!(hashes.len(), 1);
 
         // create a sequence of 65 elements
-        let sequence = (0..(kv_block_size + 1)).collect::<Vec<u32>>();
+        let sequence = (0..(kv_block_size + 1))
+            .map(|i| i as u32)
+            .collect::<Vec<u32>>();
         let hashes = compute_block_hash_for_seq(&sequence, kv_block_size);
         assert_eq!(hashes.len(), 1);
 
         // create a sequence of 129 elements
-        let sequence = (0..(2 * kv_block_size + 1)).collect::<Vec<u32>>();
+        let sequence = (0..(2 * kv_block_size + 1))
+            .map(|i| i as u32)
+            .collect::<Vec<u32>>();
         let hashes = compute_block_hash_for_seq(&sequence, kv_block_size);
         assert_eq!(hashes.len(), 2);
     }
@@ -1333,7 +1337,7 @@ mod tests {
     fn make_indexer(
         token: &CancellationToken,
         num_shards: usize,
-        kv_block_size: u32,
+        kv_block_size: usize,
     ) -> Box<dyn KvIndexerInterface> {
         if num_shards == 1 {
             Box::new(KvIndexer::new(token.clone(), kv_block_size))
@@ -1356,7 +1360,7 @@ mod tests {
 
     #[tokio::test]
     #[apply(indexer_template)]
-    async fn test_kv_indexer_new(num_shards: usize, kv_block_size: u32) {
+    async fn test_kv_indexer_new(num_shards: usize, kv_block_size: usize) {
         setup();
         let token: CancellationToken = CancellationToken::new();
         let _ = make_indexer(&token, num_shards, kv_block_size);
@@ -1364,7 +1368,7 @@ mod tests {
 
     #[tokio::test]
     #[apply(indexer_template)]
-    async fn test_find_matches(num_shards: usize, kv_block_size: u32) {
+    async fn test_find_matches(num_shards: usize, kv_block_size: usize) {
         setup();
         let token = CancellationToken::new();
         let kv_indexer = make_indexer(&token, num_shards, kv_block_size);
@@ -1377,7 +1381,7 @@ mod tests {
 
     #[tokio::test]
     #[apply(indexer_template)]
-    async fn test_find_matches_for_request(num_shards: usize, kv_block_size: u32) {
+    async fn test_find_matches_for_request(num_shards: usize, kv_block_size: usize) {
         setup();
         let token = CancellationToken::new();
         let kv_indexer = make_indexer(&token, num_shards, kv_block_size);
@@ -1390,7 +1394,7 @@ mod tests {
 
     #[tokio::test]
     #[apply(indexer_template)]
-    async fn test_apply_event(num_shards: usize, kv_block_size: u32) {
+    async fn test_apply_event(num_shards: usize, kv_block_size: usize) {
         setup();
         let worker_id = 0;
 
@@ -1405,7 +1409,7 @@ mod tests {
 
     #[tokio::test]
     #[apply(indexer_template)]
-    async fn test_shutdown(num_shards: usize, kv_block_size: u32) {
+    async fn test_shutdown(num_shards: usize, kv_block_size: usize) {
         setup();
         let token = CancellationToken::new();
         let mut kv_indexer = make_indexer(&token, num_shards, kv_block_size);
@@ -1415,7 +1419,7 @@ mod tests {
 
     #[tokio::test]
     #[apply(indexer_template)]
-    async fn test_frequency(num_shards: usize, kv_block_size: u32) {
+    async fn test_frequency(num_shards: usize, kv_block_size: usize) {
         const ONE_MILLIS: Duration = Duration::from_millis(1);
 
         setup();

@@ -106,16 +106,7 @@ class ImageContent(BaseModel):
     image_url: ImageURLDetail
 
 
-class VideoURLDetail(BaseModel):
-    url: str
-
-
-class VideoContent(BaseModel):
-    type: Literal["video_url"]
-    video_url: VideoURLDetail
-
-
-MessageContent = Union[TextContent, ImageContent, VideoContent]
+MessageContent = Union[TextContent, ImageContent]
 
 
 class ChatMessage(BaseModel):
@@ -128,25 +119,21 @@ class MultiModalRequest(BaseModel):
     model: str
     messages: List[ChatMessage]
     max_tokens: Optional[int] = None
-    temperature: Optional[float] = None
     stream: Optional[bool] = True
 
 
 class vLLMMultimodalRequest(vLLMGenerateRequest):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    image_url: Optional[str] = None
-    video_url: Optional[str] = None
+    image_url: str
 
 
 class EncodeRequest(BaseModel):
     """
-    Serializable class for encoding requests for both images and videos
+    Serializable class of all the fields vLLM engine requires for inference
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    image_url: Optional[str] = None
-    video_url: Optional[str] = None
-    num_frames: Optional[int] = None
+    image_url: str
     request_id: str
     serialized_request: Optional[connect.SerializedRequest] = None
 
@@ -154,9 +141,6 @@ class EncodeRequest(BaseModel):
 class EncodeResponse(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     request_id: str
-    image_grid_thw: Optional[List[Any]] = None
-    image_sizes: Optional[List[Any]] = None
-    raw_frames: Optional[List[List[List[List[int]]]]] = None
 
 
 class MyRequestOutput(BaseModel):

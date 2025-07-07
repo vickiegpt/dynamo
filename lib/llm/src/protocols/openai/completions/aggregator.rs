@@ -1,24 +1,24 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
+
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-//
+
 // http://www.apache.org/licenses/LICENSE-2.0
-//
+
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Result;
 use futures::StreamExt;
 
-use super::NvCreateCompletionResponse;
+use super::{CompletionChoice, CompletionResponse, CompletionUsage, LogprobResult};
 use crate::protocols::{
     codec::{Message, SseCodecError},
     common::FinishReason,
@@ -29,18 +29,18 @@ use crate::protocols::{
 pub struct DeltaAggregator {
     id: String,
     model: String,
-    created: u32,
-    usage: Option<async_openai::types::CompletionUsage>,
+    created: u64,
+    usage: Option<CompletionUsage>,
     system_fingerprint: Option<String>,
-    choices: HashMap<u32, DeltaChoice>,
+    choices: HashMap<u64, DeltaChoice>,
     error: Option<String>,
 }
 
 struct DeltaChoice {
-    index: u32,
+    index: u64,
     text: String,
     finish_reason: Option<FinishReason>,
-    logprobs: Option<async_openai::types::Logprobs>,
+    logprobs: Option<LogprobResult>,
 }
 
 impl Default for DeltaAggregator {
@@ -64,8 +64,8 @@ impl DeltaAggregator {
 
     /// Aggregates a stream of [`Annotated<CompletionResponse>`]s into a single [`CompletionResponse`].
     pub async fn apply(
-        stream: DataStream<Annotated<NvCreateCompletionResponse>>,
-    ) -> Result<NvCreateCompletionResponse> {
+        stream: DataStream<Annotated<CompletionResponse>>,
+    ) -> Result<CompletionResponse> {
         let aggregator = stream
             .fold(DeltaAggregator::new(), |mut aggregator, delta| async move {
                 let delta = match delta.ok() {
@@ -83,18 +83,18 @@ impl DeltaAggregator {
 
                     // these are cheap to move so we do it every time since we are consuming the delta
                     let delta = delta.data.unwrap();
-                    aggregator.id = delta.inner.id;
-                    aggregator.model = delta.inner.model;
-                    aggregator.created = delta.inner.created;
-                    if let Some(usage) = delta.inner.usage {
+                    aggregator.id = delta.id;
+                    aggregator.model = delta.model;
+                    aggregator.created = delta.created;
+                    if let Some(usage) = delta.usage {
                         aggregator.usage = Some(usage);
                     }
-                    if let Some(system_fingerprint) = delta.inner.system_fingerprint {
+                    if let Some(system_fingerprint) = delta.system_fingerprint {
                         aggregator.system_fingerprint = Some(system_fingerprint);
                     }
 
                     // handle the choices
-                    for choice in delta.inner.choices {
+                    for choice in delta.choices {
                         let state_choice =
                             aggregator
                                 .choices
@@ -108,21 +108,12 @@ impl DeltaAggregator {
 
                         state_choice.text.push_str(&choice.text);
 
-                        // TODO - handle logprobs
+                        // todo - handle logprobs
 
-                        // Handle CompletionFinishReason -> FinishReason conversation
-                        state_choice.finish_reason = match choice.finish_reason {
-                            Some(async_openai::types::CompletionFinishReason::Stop) => {
-                                Some(FinishReason::Stop)
-                            }
-                            Some(async_openai::types::CompletionFinishReason::Length) => {
-                                Some(FinishReason::Length)
-                            }
-                            Some(async_openai::types::CompletionFinishReason::ContentFilter) => {
-                                Some(FinishReason::ContentFilter)
-                            }
-                            None => None,
-                        };
+                        if let Some(finish_reason) = choice.finish_reason {
+                            let reason = FinishReason::from_str(&finish_reason).ok();
+                            state_choice.finish_reason = reason;
+                        }
                     }
                 }
                 aggregator
@@ -140,12 +131,12 @@ impl DeltaAggregator {
         let mut choices: Vec<_> = aggregator
             .choices
             .into_values()
-            .map(async_openai::types::Choice::from)
+            .map(CompletionChoice::from)
             .collect();
 
         choices.sort_by(|a, b| a.index.cmp(&b.index));
 
-        let inner = async_openai::types::CreateCompletionResponse {
+        Ok(CompletionResponse {
             id: aggregator.id,
             created: aggregator.created,
             usage: aggregator.usage,
@@ -153,19 +144,15 @@ impl DeltaAggregator {
             object: "text_completion".to_string(),
             system_fingerprint: aggregator.system_fingerprint,
             choices,
-        };
-
-        let response = NvCreateCompletionResponse { inner };
-
-        Ok(response)
+        })
     }
 }
 
-impl From<DeltaChoice> for async_openai::types::Choice {
+impl From<DeltaChoice> for CompletionChoice {
     fn from(delta: DeltaChoice) -> Self {
-        let finish_reason = delta.finish_reason.map(Into::into);
+        let finish_reason = delta.finish_reason.map(|reason| reason.to_string());
 
-        async_openai::types::Choice {
+        CompletionChoice {
             index: delta.index,
             text: delta.text,
             finish_reason,
@@ -174,63 +161,53 @@ impl From<DeltaChoice> for async_openai::types::Choice {
     }
 }
 
-impl NvCreateCompletionResponse {
+impl CompletionResponse {
     pub async fn from_sse_stream(
         stream: DataStream<Result<Message, SseCodecError>>,
-    ) -> Result<NvCreateCompletionResponse> {
-        let stream = convert_sse_stream::<NvCreateCompletionResponse>(stream);
-        NvCreateCompletionResponse::from_annotated_stream(stream).await
+    ) -> Result<CompletionResponse> {
+        let stream = convert_sse_stream::<CompletionResponse>(stream);
+        CompletionResponse::from_annotated_stream(stream).await
     }
 
     pub async fn from_annotated_stream(
-        stream: DataStream<Annotated<NvCreateCompletionResponse>>,
-    ) -> Result<NvCreateCompletionResponse> {
+        stream: DataStream<Annotated<CompletionResponse>>,
+    ) -> Result<CompletionResponse> {
         DeltaAggregator::apply(stream).await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
-    use futures::stream;
+    use crate::protocols::openai::completions::{CompletionChoice, CompletionResponse};
 
     use super::*;
-    use crate::protocols::openai::completions::NvCreateCompletionResponse;
+    use futures::stream;
 
     fn create_test_delta(
-        index: u32,
+        index: u64,
         text: &str,
         finish_reason: Option<String>,
-    ) -> Annotated<NvCreateCompletionResponse> {
-        // This will silently discard invalid_finish reason values and fall back
-        // to None - totally fine since this is test code
-        let finish_reason = finish_reason
-            .as_deref()
-            .and_then(|s| FinishReason::from_str(s).ok())
-            .map(Into::into);
-
-        let inner = async_openai::types::CreateCompletionResponse {
-            id: "test_id".to_string(),
-            model: "meta/llama-3.1-8b".to_string(),
-            created: 1234567890,
-            usage: None,
-            system_fingerprint: None,
-            choices: vec![async_openai::types::Choice {
-                index,
-                text: text.to_string(),
-                finish_reason,
-                logprobs: None,
-            }],
-            object: "text_completion".to_string(),
-        };
-
-        let response = NvCreateCompletionResponse { inner };
-
+    ) -> Annotated<CompletionResponse> {
         Annotated {
-            data: Some(response),
+            data: Some(CompletionResponse {
+                id: "test_id".to_string(),
+                model: "meta/llama-3.1-8b".to_string(),
+                created: 1234567890,
+                usage: None,
+                system_fingerprint: None,
+                choices: vec![CompletionChoice {
+                    index,
+                    text: text.to_string(),
+                    finish_reason,
+                    logprobs: None,
+                }],
+                object: "text_completion".to_string(),
+            }),
             id: Some("test_id".to_string()),
             event: None,
+            chunk_tokens: None,
+            input_tokens: None,
+            output_tokens: None,
             comment: None,
         }
     }
@@ -238,7 +215,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_stream() {
         // Create an empty stream
-        let stream: DataStream<Annotated<NvCreateCompletionResponse>> = Box::pin(stream::empty());
+        let stream: DataStream<Annotated<CompletionResponse>> = Box::pin(stream::empty());
 
         // Call DeltaAggregator::apply
         let result = DeltaAggregator::apply(stream).await;
@@ -248,12 +225,12 @@ mod tests {
         let response = result.unwrap();
 
         // Verify that the response is empty and has default values
-        assert_eq!(response.inner.id, "");
-        assert_eq!(response.inner.model, "");
-        assert_eq!(response.inner.created, 0);
-        assert!(response.inner.usage.is_none());
-        assert!(response.inner.system_fingerprint.is_none());
-        assert_eq!(response.inner.choices.len(), 0);
+        assert_eq!(response.id, "");
+        assert_eq!(response.model, "");
+        assert_eq!(response.created, 0);
+        assert!(response.usage.is_none());
+        assert!(response.system_fingerprint.is_none());
+        assert_eq!(response.choices.len(), 0);
     }
 
     #[tokio::test]
@@ -272,23 +249,16 @@ mod tests {
         let response = result.unwrap();
 
         // Verify the response fields
-        assert_eq!(response.inner.id, "test_id");
-        assert_eq!(response.inner.model, "meta/llama-3.1-8b");
-        assert_eq!(response.inner.created, 1234567890);
-        assert!(response.inner.usage.is_none());
-        assert!(response.inner.system_fingerprint.is_none());
-        assert_eq!(response.inner.choices.len(), 1);
-        let choice = &response.inner.choices[0];
+        assert_eq!(response.id, "test_id");
+        assert_eq!(response.model, "meta/llama-3.1-8b");
+        assert_eq!(response.created, 1234567890);
+        assert!(response.usage.is_none());
+        assert!(response.system_fingerprint.is_none());
+        assert_eq!(response.choices.len(), 1);
+        let choice = &response.choices[0];
         assert_eq!(choice.index, 0);
         assert_eq!(choice.text, "Hello,".to_string());
-        assert_eq!(
-            choice.finish_reason,
-            Some(async_openai::types::CompletionFinishReason::Length)
-        );
-        assert_eq!(
-            choice.finish_reason,
-            Some(async_openai::types::CompletionFinishReason::Length)
-        );
+        assert_eq!(choice.finish_reason, Some("length".to_string()));
         assert!(choice.logprobs.is_none());
     }
 
@@ -312,52 +282,44 @@ mod tests {
         let response = result.unwrap();
 
         // Verify the response fields
-        assert_eq!(response.inner.choices.len(), 1);
-        let choice = &response.inner.choices[0];
+        assert_eq!(response.choices.len(), 1);
+        let choice = &response.choices[0];
         assert_eq!(choice.index, 0);
         assert_eq!(choice.text, "Hello, world!".to_string());
-        assert_eq!(
-            choice.finish_reason,
-            Some(async_openai::types::CompletionFinishReason::Stop)
-        );
-        assert_eq!(
-            choice.finish_reason,
-            Some(async_openai::types::CompletionFinishReason::Stop)
-        );
+        assert_eq!(choice.finish_reason, Some("stop".to_string()));
     }
 
     #[tokio::test]
     async fn test_multiple_choices() {
         // Create a delta with multiple choices
-        let inner = async_openai::types::CreateCompletionResponse {
-            id: "test_id".to_string(),
-            model: "meta/llama-3.1-8b".to_string(),
-            created: 1234567890,
-            usage: None,
-            system_fingerprint: None,
-            choices: vec![
-                async_openai::types::Choice {
-                    index: 0,
-                    text: "Choice 0".to_string(),
-                    finish_reason: Some(async_openai::types::CompletionFinishReason::Stop),
-                    logprobs: None,
-                },
-                async_openai::types::Choice {
-                    index: 1,
-                    text: "Choice 1".to_string(),
-                    finish_reason: Some(async_openai::types::CompletionFinishReason::Stop),
-                    logprobs: None,
-                },
-            ],
-            object: "text_completion".to_string(),
-        };
-
-        let response = NvCreateCompletionResponse { inner };
-
         let annotated_delta = Annotated {
-            data: Some(response),
+            data: Some(CompletionResponse {
+                id: "test_id".to_string(),
+                model: "meta/llama-3.1-8b".to_string(),
+                created: 1234567890,
+                usage: None,
+                system_fingerprint: None,
+                choices: vec![
+                    CompletionChoice {
+                        index: 0,
+                        text: "Choice 0".to_string(),
+                        finish_reason: Some("stop".to_string()),
+                        logprobs: None,
+                    },
+                    CompletionChoice {
+                        index: 1,
+                        text: "Choice 1".to_string(),
+                        finish_reason: Some("stop".to_string()),
+                        logprobs: None,
+                    },
+                ],
+                object: "text_completion".to_string(),
+            }),
             id: Some("test_id".to_string()),
             event: None,
+            chunk_tokens: None,
+            input_tokens: None,
+            output_tokens: None,
             comment: None,
         };
 
@@ -372,30 +334,16 @@ mod tests {
         let mut response = result.unwrap();
 
         // Verify the response fields
-        assert_eq!(response.inner.choices.len(), 2);
-        response.inner.choices.sort_by(|a, b| a.index.cmp(&b.index)); // Ensure the choices are ordered
-        let choice0 = &response.inner.choices[0];
+        assert_eq!(response.choices.len(), 2);
+        response.choices.sort_by(|a, b| a.index.cmp(&b.index)); // Ensure the choices are ordered
+        let choice0 = &response.choices[0];
         assert_eq!(choice0.index, 0);
         assert_eq!(choice0.text, "Choice 0".to_string());
-        assert_eq!(
-            choice0.finish_reason,
-            Some(async_openai::types::CompletionFinishReason::Stop)
-        );
-        assert_eq!(
-            choice0.finish_reason,
-            Some(async_openai::types::CompletionFinishReason::Stop)
-        );
+        assert_eq!(choice0.finish_reason, Some("stop".to_string()));
 
-        let choice1 = &response.inner.choices[1];
+        let choice1 = &response.choices[1];
         assert_eq!(choice1.index, 1);
         assert_eq!(choice1.text, "Choice 1".to_string());
-        assert_eq!(
-            choice1.finish_reason,
-            Some(async_openai::types::CompletionFinishReason::Stop)
-        );
-        assert_eq!(
-            choice1.finish_reason,
-            Some(async_openai::types::CompletionFinishReason::Stop)
-        );
+        assert_eq!(choice1.finish_reason, Some("stop".to_string()));
     }
 }

@@ -24,7 +24,6 @@ use nixl_sys::NixlDescriptor;
 
 pub use registry::{GlobalRegistry, RegistrationHandle};
 pub use state::{BlockState, BlockStateInvalid};
-pub use transfer::TransferContext;
 
 use crate::block_manager::{
     state::KvBlockManagerState as BlockManager,
@@ -181,17 +180,7 @@ impl<S: Storage, M: BlockMetadata> Block<S, M> {
             BlockState::Complete(state) => Ok(state.token_block().sequence_hash()),
             BlockState::Registered(state, _) => Ok(state.sequence_hash()),
             _ => Err(BlockError::InvalidState(
-                "Block is not complete nor registered.".to_string(),
-            )),
-        }
-    }
-
-    pub fn parent_sequence_hash(&self) -> Result<Option<SequenceHash>, BlockError> {
-        match self.state() {
-            BlockState::Complete(state) => Ok(state.token_block().parent_sequence_hash()),
-            BlockState::Registered(state, _) => Ok(state.parent_sequence_hash()),
-            _ => Err(BlockError::InvalidState(
-                "Block is not complete nor registered.".to_string(),
+                "Block is not complete".to_string(),
             )),
         }
     }
@@ -263,14 +252,14 @@ pub(crate) trait PrivateBlockExt {
     fn register(
         &mut self,
         registry: &mut registry::BlockRegistry,
-    ) -> Result<Option<PublishHandle>, registry::BlockRegistrationError>;
+    ) -> Result<Option<PublishHandle>, registry::BlockRegistationError>;
 }
 
 impl<S: Storage, M: BlockMetadata> PrivateBlockExt for Block<S, M> {
     fn register(
         &mut self,
         registry: &mut registry::BlockRegistry,
-    ) -> Result<Option<PublishHandle>, registry::BlockRegistrationError> {
+    ) -> Result<Option<PublishHandle>, registry::BlockRegistationError> {
         registry.register_block(&mut self.state)
     }
 }
@@ -615,9 +604,6 @@ pub(crate) fn layout_to_blocks<S: Storage, M: BlockMetadata>(
 pub struct MutableBlock<S: Storage, M: BlockMetadata> {
     block: Option<Block<S, M>>,
     return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, M>>,
-    // Use to track parent relationship, as well as ensure that parents of registered blocks stay
-    // alive as long as the child is alive.
-    parent: Option<Arc<MutableBlock<S, M>>>,
 }
 
 impl<S: Storage + NixlDescriptor, M: BlockMetadata> WritableBlock for MutableBlock<S, M> {
@@ -639,12 +625,7 @@ impl<S: Storage, M: BlockMetadata> MutableBlock<S, M> {
         Self {
             block: Some(block),
             return_tx,
-            parent: None,
         }
-    }
-
-    pub fn set_parent(&mut self, parent: Arc<MutableBlock<S, M>>) {
-        self.parent = Some(parent);
     }
 }
 
@@ -787,7 +768,7 @@ impl<S: Storage, M: BlockMetadata> ImmutableBlock<S, M> {
         Self { block }
     }
 
-    pub(crate) fn mutable_block(&self) -> &Arc<MutableBlock<S, M>> {
+    pub fn mutable_block(&self) -> &Arc<MutableBlock<S, M>> {
         &self.block
     }
 }
@@ -1605,7 +1586,7 @@ mod tests {
     use dynamo_runtime::logging::init as init_logging;
     use nixl_sys::Agent as NixlAgent;
 
-    const BLOCK_SIZE: u32 = 4;
+    const BLOCK_SIZE: usize = 4;
     const SALT_HASH: SaltHash = 12345;
 
     // Helper to create a default reset block
@@ -1666,7 +1647,7 @@ mod tests {
 
         // Extend to fill capacity
         assert!(block.add_tokens(Tokens::from(vec![4])).is_ok()); // 1, 2, 3, 4
-        assert_eq!(block.len(), BLOCK_SIZE as usize);
+        assert_eq!(block.len(), BLOCK_SIZE);
 
         // Append when full (should fail)
         assert!(block.add_token(5).is_err(), "Append on full Partial block");
@@ -1690,7 +1671,7 @@ mod tests {
 
         // Fill block again for commit
         assert!(block.add_tokens(Tokens::from(vec![1, 2, 3, 4])).is_ok());
-        assert_eq!(block.len(), BLOCK_SIZE as usize);
+        assert_eq!(block.len(), BLOCK_SIZE);
 
         // --- Partial -> Complete (via commit) --- //
         assert!(block.commit().is_ok());

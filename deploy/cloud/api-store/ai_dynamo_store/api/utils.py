@@ -21,8 +21,8 @@ from typing import Any, Dict, List
 def get_deployment_status(resource: Dict[str, Any]) -> str:
     """
     Get the current status of a deployment.
-    Maps operator status to Dynamo status values.
-    Returns lowercase status values matching Dynamo's DeploymentStatus enum.
+    Maps operator status to BentoML status values.
+    Returns lowercase status values matching BentoML's DeploymentStatus enum.
     """
     status = resource.get("status", {})
     conditions = status.get("conditions", [])
@@ -43,7 +43,7 @@ def get_deployment_status(resource: Dict[str, Any]) -> str:
     if state == "failed":
         return "failed"
     elif state == "pending":
-        return "deploying"  # map pending to deploying to match Dynamo states
+        return "deploying"  # map pending to deploying to match BentoML states
 
     # Default fallback
     return "unknown"
@@ -72,11 +72,11 @@ def build_latest_revision_from_cr(cr: dict) -> dict:
     spec = cr.get("spec", {})
     meta = cr.get("metadata", {})
     now = datetime.utcnow().isoformat() + "Z"
-    dynamo_str = spec.get("dynamoGraph", "unknown:unknown")
-    if ":" in dynamo_str:
-        dynamo_name, dynamo_version = dynamo_str.split(":", 1)
+    bento_str = spec.get("dynamoGraph", "unknown:unknown")
+    if ":" in bento_str:
+        bento_name, bento_version = bento_str.split(":", 1)
     else:
-        dynamo_name, dynamo_version = "unknown", "unknown"
+        bento_name, bento_version = "unknown", "unknown"
     # Dummy creator
     creator = {"name": "system", "email": "", "first_name": "", "last_name": ""}
     # Dummy repository
@@ -85,24 +85,24 @@ def build_latest_revision_from_cr(cr: dict) -> dict:
         "created_at": now,
         "updated_at": now,
         "deleted_at": None,
-        "name": dynamo_name,
-        "resource_type": "dynamo_repository",
+        "name": bento_name,
+        "resource_type": "bento_repository",
         "labels": [],
         "description": "",
-        "latest_dynamo": None,
+        "latest_bento": None,
     }
-    # Dummy dynamo
-    dynamo = {
-        "uid": "dummy-dynamo-uid",
+    # Dummy bento
+    bento = {
+        "uid": "dummy-bento-uid",
         "created_at": now,
         "updated_at": now,
         "deleted_at": None,
-        "name": dynamo_version,
-        "resource_type": "dynamo",
+        "name": bento_version,
+        "resource_type": "bento",
         "labels": [],
         "description": "",
         "repository": repository,
-        "version": dynamo_version,
+        "version": bento_version,
         "image_build_status": "",
         "upload_status": "",
         "upload_finished_reason": "",
@@ -125,7 +125,7 @@ def build_latest_revision_from_cr(cr: dict) -> dict:
             "access_authorization": True,
             "envs": spec.get("envs", []),
         },
-        "dynamo": dynamo,
+        "bento": bento,
     }
     # Revision
     return {

@@ -13,15 +13,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use dynamo_runtime::protocols::annotated::AnnotationsProvider;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
 mod aggregator;
 mod nvext;
 
-pub use aggregator::DeltaAggregator;
 pub use nvext::{NvExt, NvExtProvider};
+// pub use delta::DeltaGenerator;
+pub use aggregator::DeltaAggregator;
+
+use dynamo_runtime::protocols::annotated::AnnotationsProvider;
 
 #[derive(Serialize, Deserialize, Validate, Debug, Clone)]
 pub struct NvCreateEmbeddingRequest {

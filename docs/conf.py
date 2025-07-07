@@ -25,7 +25,6 @@
 
 import json
 import os
-import sys
 from datetime import date
 
 # If extensions (or modules to document with autodoc) are in another directory,
@@ -35,7 +34,8 @@ from datetime import date
 import httplib2
 from packaging.version import Version
 
-sys.path.insert(0, os.path.abspath("_extensions"))
+# import sys
+# sys.path.insert(0, os.path.abspath('.'))
 
 # -- conf.py setup -----------------------------------------------------------
 
@@ -71,7 +71,7 @@ extensions = [
     "myst_parser",
     "sphinx_copybutton",
     "sphinx_design",
-    "sphinx_prompt",
+    "sphinx-prompt",
     # "sphinxcontrib.bibtex",
     "sphinx_tabs.tabs",
     "sphinx_sitemap",
@@ -82,7 +82,6 @@ extensions = [
     "sphinx.ext.ifconfig",
     "sphinx.ext.extlinks",
     "sphinxcontrib.mermaid",
-    "github_alerts",  # Custom extension for GitHub alert conversion
 ]
 
 suppress_warnings = ["myst.domains", "ref.ref", "myst.header"]

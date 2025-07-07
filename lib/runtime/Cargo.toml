@@ -27,8 +27,6 @@ description = "Dynamo Runtime Library"
 [features]
 default = []
 integration = []
-# Tests that require an active ETCD server
-testing-etcd = []
 
 [dependencies]
 # Use workspace dependencies where available

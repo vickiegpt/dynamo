@@ -24,7 +24,7 @@ use dynamo_llm::http::service::{
 use dynamo_llm::protocols::{
     openai::{
         chat_completions::{NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse},
-        completions::{NvCreateCompletionRequest, NvCreateCompletionResponse},
+        completions::{CompletionResponse, NvCreateCompletionRequest},
     },
     Annotated,
 };
@@ -101,17 +101,13 @@ impl
 }
 
 #[async_trait]
-impl
-    AsyncEngine<
-        SingleIn<NvCreateCompletionRequest>,
-        ManyOut<Annotated<NvCreateCompletionResponse>>,
-        Error,
-    > for AlwaysFailEngine
+impl AsyncEngine<SingleIn<NvCreateCompletionRequest>, ManyOut<Annotated<CompletionResponse>>, Error>
+    for AlwaysFailEngine
 {
     async fn generate(
         &self,
         _request: SingleIn<NvCreateCompletionRequest>,
-    ) -> Result<ManyOut<Annotated<NvCreateCompletionResponse>>, Error> {
+    ) -> Result<ManyOut<Annotated<CompletionResponse>>, Error> {
         Err(HttpError {
             code: 401,
             message: "Always fail".to_string(),
@@ -143,7 +139,6 @@ fn compute_index(endpoint: &Endpoint, request_type: &RequestType, status: &Statu
         Endpoint::Completions => 0,
         Endpoint::ChatCompletions => 1,
         Endpoint::Embeddings => todo!(),
-        Endpoint::Responses => todo!(),
     };
 
     let request_type = match request_type {

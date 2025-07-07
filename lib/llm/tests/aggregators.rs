@@ -15,9 +15,7 @@
 
 use dynamo_llm::protocols::{
     codec::{create_message_stream, Message, SseCodecError},
-    openai::{
-        chat_completions::NvCreateChatCompletionResponse, completions::NvCreateCompletionResponse,
-    },
+    openai::{chat_completions::NvCreateChatCompletionResponse, completions::CompletionResponse},
     ContentProvider, DataStream,
 };
 use futures::StreamExt;
@@ -114,13 +112,13 @@ async fn test_openai_chat_edge_case_invalid_deserialize_error() {
 #[tokio::test]
 async fn test_openai_cmpl_stream() {
     let stream = create_stream(CMPL_ROOT_PATH, "completion.streaming.1").take(16);
-    let result = NvCreateCompletionResponse::from_sse_stream(Box::pin(stream))
+    let result = CompletionResponse::from_sse_stream(Box::pin(stream))
         .await
         .unwrap();
 
     // todo: provide a cleaner way to extract the content from choices
     assert_eq!(
-        result.inner.choices.first().unwrap().content(),
+        result.choices.first().unwrap().content(),
         " This is a question that is often asked by those outside of AI research and development"
     );
 }

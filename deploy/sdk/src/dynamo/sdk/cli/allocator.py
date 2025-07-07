@@ -233,7 +233,8 @@ class ResourceAllocator:
                                 f"GPU {stat['index']} ({stat['name']}): "
                                 f"Memory: {format_memory_gb(stat['free_memory'])} free / "
                                 f"{format_memory_gb(stat['total_memory'])} total, "
-                                f"Utilization: {stat['gpu_utilization']}% "
+                                f"Utilization: {stat['gpu_utilization']}%, "
+                                f"Temperature: {stat['temperature']}°C"
                             )
                     except Exception as e:
                         logger.debug(f"Failed to get GPU stats: {e}")

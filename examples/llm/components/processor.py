@@ -24,14 +24,14 @@ from components.worker import VllmWorker
 from transformers import AutoTokenizer
 from utils.chat_processor import ChatProcessor, CompletionsProcessor, ProcessMixIn
 from utils.check_worker import check_required_workers
-from utils.protocol import LocalBlockHashes, MyRequestOutput, vLLMGenerateRequest
+from utils.protocol import MyRequestOutput, Tokens, vLLMGenerateRequest
 from utils.vllm import RouterType, parse_vllm_args
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.entrypoints.openai.protocol import ChatCompletionRequest, CompletionRequest
 from vllm.outputs import RequestOutput
 from vllm.transformers_utils.tokenizer import AnyTokenizer
 
-from dynamo.llm import KvMetricsAggregator, compute_block_hash_for_seq_py
+from dynamo.llm import KvMetricsAggregator
 from dynamo.runtime import EtcdKvCache
 from dynamo.sdk import async_on_start, depends, dynamo_context, endpoint, service
 
@@ -102,11 +102,7 @@ class Processor(ProcessMixIn):
             .client()
         )
 
-        self.use_router = self.engine_args.router in (
-            RouterType.KV,
-            RouterType.KV_LOAD,
-            RouterType.APPROX_KV,
-        )
+        self.use_router = self.engine_args.router in (RouterType.KV, RouterType.KV_LOAD)
         if self.use_router:
             router_ns, router_name = Router.dynamo_address()  # type: ignore
             self.router_client = (
@@ -242,22 +238,13 @@ class Processor(ProcessMixIn):
                 # TODO: queue request at processor when engines are full
                 router_mode = (await self.etcd_kv_cache.get("router")).decode()
 
-                self.use_router = router_mode in (
-                    RouterType.KV,
-                    RouterType.KV_LOAD,
-                    RouterType.APPROX_KV,
-                )
+                self.use_router = router_mode in (RouterType.KV, RouterType.KV_LOAD)
 
                 prefix_hit_rate = 0.0  # Default value
                 if self.use_router:
-                    token_ids = engine_prompt["prompt_token_ids"]
                     router_generator = await self.router_client.generate(
-                        LocalBlockHashes(
-                            hashes=compute_block_hash_for_seq_py(
-                                token_ids, self.engine_args.block_size
-                            ),
-                            tokens=token_ids,
-                            num_tokens=len(token_ids),
+                        Tokens(
+                            tokens=engine_prompt["prompt_token_ids"]
                         ).model_dump_json()
                     )
                     decision = await router_generator.__anext__()

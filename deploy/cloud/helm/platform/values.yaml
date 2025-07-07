@@ -21,21 +21,19 @@ dynamo-operator:
   etcdAddr: ""
   namespaceRestriction:
     enabled: true
-    targetNamespace:
+    targetNamespace: ""
   controllerManager:
     manager:
       image:
         repository: ""
         tag: "latest"
-        pullPolicy: IfNotPresent
       args:
         - --health-probe-bind-address=:8081
         - --metrics-bind-address=127.0.0.1:8080
-  imagePullSecrets: []
   dynamo:
     enableLWS: false
     apiStore:
-      endpoint:
+      endpoint: http://dynamo-store
       clusterName: default
     internalImages:
       dynamoComponentsDownloader: rapidfort/curl:latest
@@ -45,11 +43,10 @@ dynamo-operator:
       debugger: python:3.12-slim
     enableRestrictedSecurityContext: false
     dockerRegistry:
-      useKubernetesSecret: true
-      server:
-      username:
-      password:
-      existingSecretName:
+      useKubernetesSecret: false
+      server: ""
+      username: ""
+      password: ""
       secure: true
       dynamoComponentsRepositoryName: dynamo-pipelines
     imageBuildEngine: buildkit
@@ -59,21 +56,12 @@ dynamo-operator:
     kaniko:
       cacheRepo: ""
       snapshotMode: ""
-    ingress:
-      enabled: false
-      className:
-      tlsSecretName: my-tls-secret
-    istio:
-      enabled: false
-      gateway:
-    ingressHostSuffix: ""
-    virtualServiceSupportsHTTPS: false
 
 dynamo-api-store:
   enabled: true
   namespaceRestriction:
     enabled: true
-    targetNamespace:
+    targetNamespace: ""
   istio:
     enabled: false
     host: ""
@@ -85,7 +73,6 @@ dynamo-api-store:
     repository: ""
     tag: "latest"
     pullPolicy: IfNotPresent
-  imagePullSecrets: []
   ingress:
     enabled: false
     className: nginx
@@ -101,7 +88,7 @@ dynamo-api-store:
 ## @param minio.apiIngress.ingressClassName IngressClass that will be be used to implement the Ingress (Kubernetes 1.18+)
 ## @param minio.apiIngress.hostname Default host for the ingress resource
 minio:
-  enabled: true
+  enabled: false
   mode: standalone
   auth:
     rootUser: minioadmin
@@ -109,8 +96,7 @@ minio:
   persistence:
     enabled: true
     size: 10Gi
-    # Use the cluster default storage-class or override with a named class
-    storageClass: null
+    storageClass: ""
     mountPath: /data
     annotations:
       helm.sh/resource-policy: keep
@@ -148,7 +134,7 @@ minio:
       console: 9001
 
 postgresql:
-  enabled: true
+  enabled: false
   auth:
     existingSecret: ""
     postgresPassword: ""
@@ -160,14 +146,7 @@ postgresql:
       enabled: false
 
 etcd:
-  enabled: true
-  persistence:
-    enabled: true
-    # Use the cluster default storage-class or override with a named class
-    storageClass: null
-    size: 1Gi
-  preUpgrade:
-    enabled: false
+  enabled: false
   replicaCount: 1
   # Explicitly remove authentication
   auth:
@@ -181,7 +160,7 @@ etcd:
     enabled: false
 
 nats:
-  enabled: true
+  enabled: false
   # reference a common CA Certificate or Bundle in all nats config `tls` blocks and nats-box contexts
   # note: `tls.verify` still must be set in the appropriate nats config `tls` blocks to require mTLS
   tlsCA:
