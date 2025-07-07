@@ -4,7 +4,7 @@ Using base vLLM container
 ```
 uv pip uninstall ai-dynamo-vllm
 git clone https://github.com/vllm-project/vllm.git
-cd vllm && git checkout 657f2f3
+cd vllm && git checkout 059d4cd
 VLLM_USE_PRECOMPILED=1 uv pip install --editable .
 ```
 This has this specific commit - https://github.com/vllm-project/vllm/pull/19790
@@ -17,14 +17,33 @@ docker compose -f deploy/metrics/docker-compose.yml up -d
 ## Go
 
 ```bash
+# requires one gpu
 cd examples/vllm_v1
 bash launch/agg.sh
 ```
 
+> **📝 Note:** The bash examples with multiple engines can get cluttered. You can run each command in a seperate terminal to get a better view of the logs.
+
+
 ```bash
+# requires two gpus
 cd examples/vllm_v1
 bash launch/agg_router.sh
 ```
+
+```bash
+# requires two gpus
+cd examples/vllm_v1
+bash launch/disagg.sh
+```
+
+```bash
+# requires three gpus
+cd examples/vllm_v1
+bash launch/disagg_router.sh
+```
+
+> **💡 Tip:** Run a disagg example and try adding another prefill worker once the setup is running!
 
 ```
 curl localhost:8080/v1/chat/completions \

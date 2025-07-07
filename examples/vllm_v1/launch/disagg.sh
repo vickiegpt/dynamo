@@ -10,11 +10,13 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # run ingress
-dynamo run in=http out=dyn --router-mode kv &
+dynamo run in=http out=dyn &
 DYNAMO_PID=$!
 
-# run workers
 CUDA_VISIBLE_DEVICES=0 python3 main.py --model-path Qwen/Qwen3-0.6B --extra-engine-args launch/args.json &
 WORKER_PID=$!
 
-CUDA_VISIBLE_DEVICES=1 python3 main.py --model-path Qwen/Qwen3-0.6B --extra-engine-args launch/args.json
+CUDA_VISIBLE_DEVICES=1 python3 main.py \
+    --model-path Qwen/Qwen3-0.6B \
+    --extra-engine-args launch/args.json \
+    --is-prefill-worker

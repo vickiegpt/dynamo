@@ -14,6 +14,4 @@ dynamo run in=http out=dyn &
 DYNAMO_PID=$!
 
 # run worker
-python3 worker.py \
-    --model-path Qwen/Qwen3-0.6B \
-    --extra-engine-args args.json
+python3 main.py --model-path Qwen/Qwen3-0.6B --extra-engine-args launch/args.json

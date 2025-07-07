@@ -16,9 +16,11 @@
 import argparse
 import json
 import logging
+import socket
 import sys
 from typing import Optional
 
+from vllm.config import KVTransferConfig
 from vllm.distributed.kv_events import KVEventsConfig
 
 logger = logging.getLogger(__name__)
@@ -26,7 +28,14 @@ logger = logging.getLogger(__name__)
 # Only used if you run it manually from the command line
 DEFAULT_ENDPOINT = "dyn://dynamo.backend.generate"
 DEFAULT_MODEL = "Qwen/Qwen3-0.6B"
-DEFAULT_METRICS_ENDPOINT_PORT = 5557
+
+
+def find_free_port() -> int:
+    """Find a free port by binding to port 0."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        port = s.getsockname()[1]
+    return port
 
 
 class Config:
@@ -42,9 +51,10 @@ class Config:
     kv_block_size: int
     context_length: int
     extra_engine_args: str
+    is_prefill_worker: bool
 
 
-def create_vllm_arg_map(config: Config) -> dict:
+def create_vllm_arg_map(config: Config) -> dict[str, str | int | bool | KVEventsConfig]:
     """
     Create vLLM engine argument mapping from config.
 
@@ -54,6 +64,7 @@ def create_vllm_arg_map(config: Config) -> dict:
     Returns:
         Dictionary of arguments for vLLM AsyncEngineArgs
     """
+
     arg_map = {
         "model": config.model_path,
         "task": "generate",
@@ -63,10 +74,15 @@ def create_vllm_arg_map(config: Config) -> dict:
         "enable_prefix_caching": True,
         # KV routing relies on logging KV metrics
         "disable_log_stats": False,
+        # Always set up KV Events for routing
         "kv_events_config": KVEventsConfig(
             enable_kv_cache_events=True,
             publisher="zmq",
             endpoint=f"tcp://*:{config.metrics_endpoint_port}",
+        ),
+        # Always setting up kv transfer for disagg
+        "kv_transfer_config": KVTransferConfig(
+            kv_connector="NixlConnector", kv_role="kv_both"
         ),
     }
 
@@ -104,6 +120,11 @@ def cmd_line_args():
         help=f"Dynamo endpoint string in 'dyn://namespace.component.endpoint' format. Default: {DEFAULT_ENDPOINT}",
     )
     parser.add_argument(
+        "--is-prefill-worker",
+        action="store_true",
+        help="Enable prefill functionality for this worker. Currently overwrites the --endpoint to be a specially chosen dyn://dynamo.prefill.generate",
+    )
+    parser.add_argument(
         "--model-path",
         type=str,
         default=DEFAULT_MODEL,
@@ -112,7 +133,7 @@ def cmd_line_args():
     parser.add_argument(
         "--metrics-endpoint-port",
         type=int,
-        default=DEFAULT_METRICS_ENDPOINT_PORT,
+        default=find_free_port(),
         help="Endpoint where vLLM publishes metrics for dynamo. For DP, we handle the port iteration, however if running multiple instances of a model this has to be changed.",
     )
     parser.add_argument(
@@ -149,6 +170,9 @@ def cmd_line_args():
         # This becomes an `Option` on the Rust side
         config.model_name = None
 
+    if args.is_prefill_worker:
+        args.endpoint = "dyn://dynamo.prefill.generate"
+
     endpoint_str = args.endpoint.replace("dyn://", "", 1)
     endpoint_parts = endpoint_str.split(".")
     if len(endpoint_parts) != 3:
@@ -167,5 +191,6 @@ def cmd_line_args():
     config.kv_block_size = args.kv_block_size
     config.context_length = args.context_length
     config.extra_engine_args = args.extra_engine_args
+    config.is_prefill_worker = args.is_prefill_worker
 
     return config

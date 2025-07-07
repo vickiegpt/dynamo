@@ -46,7 +46,7 @@ class DistributedRuntime:
 
     ...
 
-    def namespace(self, name: str, path: str) -> Namespace:
+    def namespace(self, name: str) -> Namespace:
         """
         Create a `Namespace` object
         """
