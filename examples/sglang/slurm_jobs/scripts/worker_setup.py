@@ -33,7 +33,6 @@ import subprocess
 import time
 from pathlib import Path
 
-from .gen_cmd import get_prefill_command_args, get_decode_command_args, get_sglang_mini_lb_command_args
 import requests
 
 # Network configurations
@@ -206,6 +205,39 @@ def _validate_args(args: argparse.Namespace) -> None:
     if args.gpus_per_node < 1:
         raise ValueError("GPUs per node must be at least 1")
 
+def get_sglang_mini_lb_command_args(prefill_host_ip: str, decode_host_ip: str) -> dict:
+    cmd = (
+        f"python3 -m sglang.srt.disaggregation.launch_lb "
+        f"--prefill http://{prefill_host_ip}:30000 "
+        f"--decode http://{decode_host_ip}:30000 "
+        "--host 0.0.0.0 "
+        "--port 8000 "
+        "--timeout 3600"
+    )
+    return cmd
+
+def setup_env_vars_for_gpu_script(host_ip: str, rank: int, total_gpus: int, total_nodes: int, port: int = DIST_INIT_PORT):
+    """Setup environment variables required by GPU scripts (h100.sh, gb200.sh)"""
+    os.environ["HOST_IP"] = host_ip
+    os.environ["PORT"] = str(port)
+    os.environ["TOTAL_GPUS"] = str(total_gpus)
+    os.environ["RANK"] = str(rank)
+    os.environ["TOTAL_NODES"] = str(total_nodes)
+    
+    logging.info(f"Set HOST_IP: {host_ip}")
+    logging.info(f"Set PORT: {port}")
+    logging.info(f"Set TOTAL_GPUS: {total_gpus}")
+    logging.info(f"Set RANK: {rank}")
+    logging.info(f"Set TOTAL_NODES: {total_nodes}")
+
+def get_gpu_command(worker_type: str, use_sglang_commands: bool, gpu_type: str) -> str:
+    """Generate command to run the appropriate GPU script"""
+    script_name = f"{gpu_type}.sh"
+    script_path = Path(__file__).parent / script_name
+    mode = worker_type  # "prefill" or "decode"
+    cmd = "sglang" if use_sglang_commands else "dynamo"
+    
+    return f"bash {script_path} {mode} {cmd}"
 
 def setup_prefill_node(
     rank: int, prefill_host_ip: str, total_nodes: int, total_gpus: int, use_sglang_commands: bool, gpu_type: str
@@ -244,10 +276,12 @@ def setup_prefill_node(
     else:
         logging.info("Using SGLang servers. No need to setup etcd or nats")
 
-    # NOTE: Default command for h100 and dynamo implements the example in examples/sglang/dsr1-wideep.md
-    cmd_to_run = get_prefill_command_args(gpu_type, use_sglang_commands, prefill_host_ip, total_nodes, rank, total_gpus)
+    # Setup environment variables for GPU script
+    setup_env_vars_for_gpu_script(prefill_host_ip, rank, total_gpus, total_nodes)
+    
+    # Use appropriate GPU script instead of generating command directly
+    cmd_to_run = get_gpu_command("prefill", use_sglang_commands, gpu_type)
     return run_command(cmd_to_run)
-
 
 def setup_decode_node(
     rank: int,
@@ -270,7 +304,11 @@ def setup_decode_node(
         if not wait_for_etcd(f"http://{prefill_host_ip}:{ETCD_CLIENT_PORT}"):
             raise RuntimeError("Failed to connect to etcd")
 
-    cmd_to_run = get_decode_command_args(gpu_type, use_sglang_commands, decode_host_ip, total_nodes, rank, total_gpus)
+    # Setup environment variables for GPU script
+    setup_env_vars_for_gpu_script(decode_host_ip, rank, total_gpus, total_nodes)
+    
+    # Use appropriate GPU script instead of generating command directly
+    cmd_to_run = get_gpu_command("decode", use_sglang_commands, gpu_type)
     return run_command(cmd_to_run)
 
 
