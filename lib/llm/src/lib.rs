@@ -32,6 +32,7 @@ pub mod request_template;
 pub mod tokenizers;
 pub mod tokens;
 pub mod types;
+pub mod global_metrics;
 
 #[cfg(feature = "block-manager")]
 pub mod block_manager;

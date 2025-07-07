@@ -15,8 +15,8 @@
 # limitations under the License.
 
 # Default Values
-model="neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic"
-url="http://localhost:8000"
+model="deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+url="http://localhost:8080"
 mode="aggregated"
 artifacts_root_dir="artifacts_root"
 deployment_kind="dynamo"
@@ -25,8 +25,8 @@ concurrency_list="1,2,4,8,16,32,64,128,256"
 # Input Sequence Length (isl) 3000 and Output Sequence Length (osl) 150 are
 # selected for chat use case. Note that for other use cases, the results and
 # tuning would vary.
-isl=3000
-osl=150
+isl=8000
+osl=256
 
 tp=0
 dp=0

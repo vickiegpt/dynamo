@@ -33,6 +33,7 @@ use prompt::OAIPromptFormatter;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::{collections::HashMap, sync::Arc};
 use tracing;
+use crate::time_global_operation;
 
 use crate::model_card::model::{ModelDeploymentCard, ModelInfo, TokenizerKind};
 use crate::preprocessor::prompt::OAIChatLikeRequest;
@@ -205,9 +206,13 @@ impl OpenAIPreprocessor {
                                 self.formatter.render(request)?
                             };
 
-                            let encoding = tokio::task::block_in_place(|| {
-                                self.tokenizer.encode(&formatted_prompt)
-                            })?;
+                            let encoding = time_global_operation!(
+                                "tokenizer_encode",
+                                "preprocessor",
+                                tokio::task::block_in_place(|| {
+                                    self.tokenizer.encode(&formatted_prompt)
+                                })
+                            )?;
 
                             if request.has_annotation(ANNOTATION_FORMATTED_PROMPT) {
                                 annotations.insert(
@@ -226,15 +231,16 @@ impl OpenAIPreprocessor {
                             builder.token_ids(encoding.token_ids);
                         }
                         TextInput::Batch(texts) => {
-                            let token_batches: Result<Vec<Vec<u32>>, _> = texts
-                                .par_iter()
-                                .map(|text| {
-                                    tokio::task::block_in_place(|| self.tokenizer.encode(text))
-                                        .map(|encoding| encoding.token_ids)
-                                })
-                                .collect();
-
-                            let token_batches = token_batches?;
+                            let mut token_batches = Vec::new();
+                            // TODO: room for optimization here
+                            for text in texts {
+                                let encoding = time_global_operation!(
+                                    "tokenizer_encode_batch",
+                                    "preprocessor",
+                                    tokio::task::block_in_place(|| self.tokenizer.encode(&text))
+                                )?;
+                                token_batches.push(encoding.token_ids);
+                            }
                             builder.batch_token_ids(Some(token_batches));
                             builder.token_ids(vec![]);
                         }

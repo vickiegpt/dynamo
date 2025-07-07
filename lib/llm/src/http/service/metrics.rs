@@ -8,6 +8,19 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Macro to time an operation and record it in metrics
+#[macro_export]
+macro_rules! time_operation {
+    ($metrics:expr, $operation:expr, $component:expr, $block:expr) => {{
+        let start = std::time::Instant::now();
+        let result = $block;
+        let duration = start.elapsed();
+        let duration_micros = duration.as_micros() as u64;
+        $metrics.record_operation_timing($operation, $component, duration_micros);
+        result
+    }};
+}
+
 pub use prometheus::Registry;
 
 use super::RouteDoc;
@@ -32,6 +45,8 @@ pub struct Metrics {
     output_sequence_length: HistogramVec,
     time_to_first_token: HistogramVec,
     inter_token_latency: HistogramVec,
+    // Timing counters for specific operations
+    operation_timing_counter: IntCounterVec,
 }
 
 /// RAII object for inflight gauge and request counters
@@ -189,6 +204,15 @@ impl Metrics {
         )
         .unwrap();
 
+        let operation_timing_counter = IntCounterVec::new(
+            Opts::new(
+                format!("{}_operation_timing_microseconds", prefix),
+                "Cumulative time spent in operations in microseconds",
+            ),
+            &["operation", "component"],
+        )
+        .unwrap();
+
         Metrics {
             request_counter,
             inflight_gauge,
@@ -197,6 +221,7 @@ impl Metrics {
             output_sequence_length,
             time_to_first_token,
             inter_token_latency,
+            operation_timing_counter,
         }
     }
 
@@ -265,7 +290,15 @@ impl Metrics {
         registry.register(Box::new(self.output_sequence_length.clone()))?;
         registry.register(Box::new(self.time_to_first_token.clone()))?;
         registry.register(Box::new(self.inter_token_latency.clone()))?;
+        registry.register(Box::new(self.operation_timing_counter.clone()))?;
         Ok(())
+    }
+
+    /// Record timing for a specific operation
+    pub fn record_operation_timing(&self, operation: &str, component: &str, duration_micros: u64) {
+        self.operation_timing_counter
+            .with_label_values(&[operation, component])
+            .inc_by(duration_micros);
     }
 
     /// Create a new [`InflightGuard`] for the given model and annotate if its a streaming request,

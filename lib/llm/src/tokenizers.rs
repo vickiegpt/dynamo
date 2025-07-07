@@ -25,6 +25,7 @@ pub mod sp;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::{ops::Deref, path::Path};
+use crate::time_global_operation;
 
 use crate::protocols::TokenIdType;
 pub use anyhow::{Error, Result};
@@ -211,9 +212,12 @@ impl DecodeStream {
     /// a valid chunk.
     pub fn step(&mut self, id: u32) -> Result<Option<String>> {
         self.ids.push(id);
-        let string = self
-            .tokenizer
-            .decode(self.ids.as_slice(), self.skip_special_tokens)?;
+        let string = time_global_operation!(
+            "tokenizer_decode",
+            "tokenizers",
+            self.tokenizer
+                .decode(self.ids.as_slice(), self.skip_special_tokens)
+        )?;
 
         if string.len() > self.prefix.len() && !string.ends_with('�') {
             if !(string.starts_with(&self.prefix)) {
@@ -221,9 +225,12 @@ impl DecodeStream {
             }
             let new_text = &string[self.prefix.len()..].to_string();
             let new_prefix_index = self.ids.len() - self.prefix_index;
-            self.prefix = self
-                .tokenizer
-                .decode(self.ids.as_slice(), self.skip_special_tokens)?;
+            self.prefix = time_global_operation!(
+                "tokenizer_decode_prefix",
+                "tokenizers",
+                self.tokenizer
+                    .decode(self.ids.as_slice(), self.skip_special_tokens)
+            )?;
             self.read_index = self.prefix_index;
             self.prefix_index = new_prefix_index;
             Ok(Some(new_text.to_string()))

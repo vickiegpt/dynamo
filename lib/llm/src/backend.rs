@@ -56,6 +56,8 @@ use crate::protocols::{
 use crate::tokenizers::{DecodeStream, HuggingFaceTokenizer, Tokenizer};
 use tokenizers::Tokenizer as HfTokenizer;
 
+use crate::time_global_operation;
+
 /// Represents the output stream from the execution engine
 pub type ExecutionOutputStream = Annotated<LLMEngineOutput>;
 
@@ -402,7 +404,11 @@ impl Decoder {
         self.generated_tokens += 1;
 
         // decode the token
-        let token = self.decode_stream.step(token_id)?;
+        let token = time_global_operation!(
+            "decode_stream_step",
+            "backend",
+            self.decode_stream.step(token_id)
+        )?;
 
         // stop conditions to not apply until the minimum number of tokens have been generated
         if self.generated_tokens < self.min_tokens {

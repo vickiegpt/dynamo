@@ -1745,6 +1745,7 @@ dependencies = [
  "nix 0.26.4",
  "nixl-sys",
  "offset-allocator",
+ "once_cell",
  "oneshot",
  "prometheus",
  "proptest",
