@@ -126,14 +126,25 @@ impl KvbmCacheManager {
     pub fn get_num_offloaded_computed_blocks(
         &self,
         sequence_hashes: Vec<SequenceHash>,
+        num_device_blocks: usize,
     ) -> PyResult<(Option<KvbmBlockList>, Option<KvbmBlockList>)> {
         if sequence_hashes.is_empty() {
             return Ok((None, None));
         }
 
+        if let Some(host) = self.block_manager().host() {
+            host.touch_blocks_blocking(&sequence_hashes)
+                .map_err(to_pyerr)?;
+        }
+
+        if let Some(disk) = self.block_manager().disk() {
+            disk.touch_blocks_blocking(&sequence_hashes)
+                .map_err(to_pyerr)?;
+        }
+
         let (host_blocks, num_matched_host) = if let Some(host) = self.block_manager().host() {
             let blocks = host
-                .match_sequence_hashes_blocking(&sequence_hashes)
+                .match_sequence_hashes_blocking(&sequence_hashes[num_device_blocks..])
                 .map_err(to_pyerr)?;
             if !blocks.is_empty() {
                 let num_blocks = blocks.len();
@@ -145,28 +156,31 @@ impl KvbmCacheManager {
             (None, 0)
         };
 
-        let disk_blocks = if num_matched_host < sequence_hashes.len() {
-            if let Some(disk) = self.block_manager().disk() {
+        let (disk_blocks, num_matched_disk) = if let Some(disk) = self.block_manager().disk() {
+            if num_device_blocks + num_matched_host == sequence_hashes.len() {
+                (None, 0)
+            } else {
                 let blocks = disk
-                    .match_sequence_hashes_blocking(&sequence_hashes[num_matched_host..])
+                    .match_sequence_hashes_blocking(
+                        &sequence_hashes[num_device_blocks + num_matched_host..],
+                    )
                     .map_err(to_pyerr)?;
 
                 if !blocks.is_empty() {
-                    Some(blocks)
+                    let num_blocks = blocks.len();
+                    (Some(blocks), num_blocks)
                 } else {
-                    None
+                    (None, 0)
                 }
-            } else {
-                None
             }
         } else {
-            None
+            (None, 0)
         };
 
         tracing::debug!(
             "in get_num_offloaded_computed_blocks, found {} host blocks and {} disk blocks",
-            host_blocks.as_ref().map(|blocks| blocks.len()).unwrap_or(0),
-            disk_blocks.as_ref().map(|blocks| blocks.len()).unwrap_or(0),
+            num_matched_host,
+            num_matched_disk,
         );
 
         Ok((

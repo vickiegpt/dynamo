@@ -65,6 +65,13 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
                     tracing::error!("failed to send response to match sequence hashes");
                 }
             }
+            PriorityRequest::TouchBlocks(req) => {
+                let (sequence_hashes, resp_tx) = req.dissolve();
+                self.touch_blocks(&sequence_hashes, return_rx).await;
+                if resp_tx.send(Ok(())).is_err() {
+                    tracing::error!("failed to send response to touch blocks");
+                }
+            }
         }
     }
 
@@ -258,6 +265,29 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
             .inc_by(sequence_hashes.len() as u64 - immutable_blocks.len() as u64);
 
         immutable_blocks
+    }
+
+    async fn touch_blocks(
+        &mut self,
+        sequence_hashes: &[SequenceHash],
+        return_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Block<S, L, M>>,
+    ) {
+        for sequence_hash in sequence_hashes {
+            if !self.registry.is_registered(*sequence_hash) {
+                break;
+            }
+
+            let block = if let Some(block) = self.inactive.match_sequence_hash(*sequence_hash) {
+                block
+            } else if self.active.match_sequence_hash(*sequence_hash).is_none() {
+                self.wait_for_returned_block(*sequence_hash, return_rx)
+                    .await
+            } else {
+                continue;
+            };
+
+            self.inactive.return_block(block);
+        }
     }
 
     /// Returns a block to the inactive pool

@@ -104,11 +104,6 @@ class KvbmCacheManager(KVConnectorBase_V1):
 
         num_computed_tokens = block_count * self.block_size
 
-        if self.log_stats:
-            assert self.prefix_cache_stats is not None
-            self.prefix_cache_stats.queries += request.num_tokens
-            self.prefix_cache_stats.hits += num_computed_tokens
-
         return KvbmCacheBlocks(owned_blocks), num_computed_tokens
 
     def _create_slot(self, request: Request) -> list[int]:
@@ -338,7 +333,7 @@ class KvbmCacheManager(KVConnectorBase_V1):
             host_computed_blocks,
             disk_computed_blocks,
         ) = self.cache_manager.get_num_offloaded_computed_blocks(
-            sequence_hashes[num_device_blocks:]
+            sequence_hashes, num_device_blocks
         )
 
         if host_computed_blocks is not None:
@@ -350,6 +345,13 @@ class KvbmCacheManager(KVConnectorBase_V1):
             num_disk_computed_blocks = disk_computed_blocks.block_count()
         else:
             num_disk_computed_blocks = 0
+
+        if self.log_stats:
+            assert self.prefix_cache_stats is not None
+            self.prefix_cache_stats.queries += request.num_tokens
+            self.prefix_cache_stats.hits += (
+                num_device_blocks + num_host_computed_blocks + num_disk_computed_blocks
+            ) * self.block_size
 
         need_to_allocate = (
             num_host_computed_blocks + num_disk_computed_blocks

@@ -105,6 +105,7 @@ type RegisterBlocksReq<S, L, M> =
     RequestResponse<MutableBlocks<S, L, M>, BlockPoolResult<ImmutableBlocks<S, L, M>>>;
 type MatchHashesReq<S, L, M> =
     RequestResponse<Vec<SequenceHash>, BlockPoolResult<ImmutableBlocks<S, L, M>>>;
+type TouchBlocksReq = RequestResponse<Vec<SequenceHash>, BlockPoolResult<()>>;
 type AddBlocksReq<S, L, M> = RequestResponse<Vec<Block<S, L, M>>, ()>;
 
 #[derive(Debug, thiserror::Error)]
@@ -216,6 +217,7 @@ enum PriorityRequest<S: Storage, L: LocalityProvider, M: BlockMetadata> {
     AllocateBlocks(AllocateBlocksReq<S, L, M>),
     RegisterBlocks(RegisterBlocksReq<S, L, M>),
     MatchSequenceHashes(MatchHashesReq<S, L, M>),
+    TouchBlocks(TouchBlocksReq),
 }
 
 enum ControlRequest<S: Storage, L: LocalityProvider, M: BlockMetadata> {
@@ -503,6 +505,37 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M> {
 
         self.priority_tx
             .send(PriorityRequest::MatchSequenceHashes(req))
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
+
+        Ok(resp_rx)
+    }
+
+    pub async fn touch_blocks(
+        &self,
+        sequence_hashes: &[SequenceHash],
+    ) -> Result<(), BlockPoolError> {
+        self._touch_blocks(sequence_hashes)?
+            .await
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
+    }
+
+    pub fn touch_blocks_blocking(
+        &self,
+        sequence_hashes: &[SequenceHash],
+    ) -> Result<(), BlockPoolError> {
+        self._touch_blocks(sequence_hashes)?
+            .blocking_recv()
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
+    }
+
+    fn _touch_blocks(
+        &self,
+        sequence_hashes: &[SequenceHash],
+    ) -> AsyncResponse<BlockPoolResult<()>> {
+        let (req, resp_rx) = TouchBlocksReq::new(sequence_hashes.into());
+
+        self.priority_tx
+            .send(PriorityRequest::TouchBlocks(req))
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
 
         Ok(resp_rx)
@@ -830,11 +863,11 @@ mod tests {
             child_blocks.push(child_block);
         }
 
-        // Register the children first. This can happen with offloading.
-        let child_blocks = pool.register_blocks(child_blocks).await?;
-
-        // After the children are registered, we can register the root block.
+        // Register the root block
         let root_block = pool.register_blocks(vec![root_block]).await?;
+
+        // Register the children
+        let child_blocks = pool.register_blocks(child_blocks).await?;
 
         // Drop both of them.
         drop(root_block);
@@ -854,73 +887,6 @@ mod tests {
         // Check that the root block remains.
         let matched = pool.match_sequence_hashes(&[root_block_hash]).await?;
         assert_eq!(matched.len(), 1);
-
-        Ok(())
-    }
-
-    /// When offloading, it's possible that the tail of a sequence in a pool is evicted before
-    /// the entire sequence can be offloaded. This can happen in the following case:
-    ///
-    /// Assume a sequence of 4 blocks: [0, 1, 2, 3]
-    /// 1. Blocks 0, 1, and 2 are offloaded to host memory.
-    /// 2. Block 2 is evicted from the host.
-    /// 3. Block 3 is offloaded to host memory.
-    /// Now, the contents of the cache are [0, 1] and [3].
-    /// We need to treat these as two separate sequences.
-    #[tokio::test]
-    async fn test_block_pool_fragmentation() -> anyhow::Result<()> {
-        let pool = make_simple_pool(4).await?;
-
-        let tokens = vec![0; 16];
-
-        let token_blocks = TokenBlockSequence::new(Tokens::from(tokens), 4, None);
-        assert_eq!(token_blocks.blocks().len(), 4);
-
-        let mut sequence_hashes = Vec::new();
-
-        // Allocate and register the first 3 blocks.
-        for block in token_blocks.blocks()[..3].iter() {
-            let mut mutable_block = pool.allocate_blocks(1).await?.pop().unwrap();
-            mutable_block.apply_token_block(block.clone())?;
-
-            sequence_hashes.push(mutable_block.sequence_hash()?);
-            let _ = pool.register_blocks(vec![mutable_block]).await?;
-        }
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        // Allocate 2 blocks. This should take the remaining uninitialized block as well as the
-        // tail of the currently registered sequence.
-        let _ = pool.allocate_blocks(2).await?;
-
-        assert_eq!(
-            pool.match_sequence_hashes(sequence_hashes.as_slice())
-                .await?
-                .len(),
-            2
-        );
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        // Allocate 1 more block for the leaf of the sequence.
-        let mut mutable_block = pool.allocate_blocks(1).await?.into_iter().next().unwrap();
-
-        mutable_block.apply_token_block(token_blocks.blocks()[3].clone())?;
-
-        let _ = pool.register_blocks(vec![mutable_block]).await?;
-
-        // We should still only match the first 2 blocks, since the 3rd block has been evicted.
-        assert_eq!(
-            pool.match_sequence_hashes(sequence_hashes.as_slice())
-                .await?
-                .len(),
-            2
-        );
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        // Now, we should be able to allocate all 4 blocks.
-        let _ = pool.allocate_blocks(4).await?;
 
         Ok(())
     }
@@ -967,46 +933,54 @@ mod tests {
         Ok(())
     }
 
-    /// When we move a suffix of a sequence to the active pool (like what happens when onboarding),
-    /// then return it to the inactive pool, we need to ensure that the parent-child relationships
-    /// are still correct, and that the temporary leaf in the inactive pool can't be evicted.
     #[tokio::test]
-    async fn test_block_pool_match_partial() -> anyhow::Result<()> {
+    async fn test_block_pool_touch() -> anyhow::Result<()> {
         let pool = make_simple_pool(4).await?;
 
         let (_, sequence_hashes) = create_blocks(&pool, 4).await?;
 
-        // Assert that all 4 blocks are in the pool.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let _block0 = pool.allocate_blocks(1).await?;
+
+        // The leaf should be evicted.
         assert_eq!(
-            pool.match_sequence_hashes(sequence_hashes.as_slice())
+            pool.match_sequence_hashes(vec![sequence_hashes[3]].as_slice())
                 .await?
                 .len(),
-            4
+            0
         );
+
+        // Now, touch the new leaf.
+        pool.touch_blocks(vec![sequence_hashes[2]].as_slice())
+            .await?;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        // Now, we match only the last 2 blocks
-        let matched_suffix = pool.match_sequence_hashes(&sequence_hashes[2..]).await?;
-        assert_eq!(matched_suffix.len(), 2);
+        let _block1 = pool.allocate_blocks(1).await?;
 
-        // This allocation should fail. Although there are 2 inactive blocks, the leaf is in the active pool.
-        let new_alloc_block = pool.allocate_blocks(1).await?;
-        assert_eq!(new_alloc_block.len(), 0);
-
-        // Now, drop the leaf, and return it to the inactive pool.
-        drop(matched_suffix);
-
-        // All 4 blocks should still be in the pool.
+        // Since we touched block 2, block 1 should have been evicted.
         assert_eq!(
-            pool.match_sequence_hashes(sequence_hashes.as_slice())
+            pool.match_sequence_hashes(vec![sequence_hashes[1]].as_slice())
                 .await?
                 .len(),
-            4
+            0
         );
+
+        pool.touch_blocks(vec![sequence_hashes[3]].as_slice())
+            .await?;
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
+        pool.allocate_blocks(1).await?;
+
+        // Now block 0 was evicted, since it was the last to be touched.
+        assert_eq!(
+            pool.match_sequence_hashes(vec![sequence_hashes[0]].as_slice())
+                .await?
+                .len(),
+            0
+        );
         Ok(())
     }
 }

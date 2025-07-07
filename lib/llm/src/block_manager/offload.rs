@@ -1528,26 +1528,22 @@ mod tests {
         // Allocate 2 blocks on the host.
         let _host_blocks = host_pool.allocate_blocks(2).await?;
 
-        // Check the existing blocks.
+        // The first two blocks should've been evicted.
+        // The last two blocks should still be on the host.
         assert_eq!(
             host_pool
                 .match_sequence_hashes(sequence_hashes.as_slice())
+                .await?
+                .len(),
+            0
+        );
+
+        assert_eq!(
+            host_pool
+                .match_sequence_hashes(&sequence_hashes[2..])
                 .await?
                 .len(),
             2
-        );
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let _host_blocks2 = host_pool.allocate_blocks(1).await?;
-
-        // Now there should only be the first block on host.
-        assert_eq!(
-            host_pool
-                .match_sequence_hashes(sequence_hashes.as_slice())
-                .await?
-                .len(),
-            1
         );
 
         Ok(())
