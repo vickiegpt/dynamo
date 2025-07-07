@@ -20,6 +20,8 @@ MODEL_DIR="{{ model_dir }}"
 CONFIG_DIR="{{ config_dir }}"
 CONTAINER_IMAGE="{{ container_image }}"
 NETWORK_INTERFACE="{{ network_interface }}"
+GPU_TYPE="{{ gpu_type | default('h100') }}"
+USE_SGLANG_COMMANDS="{{ use_sglang_commands | default(false) }}"
 
 {% raw %}
 
@@ -59,16 +61,22 @@ ENROOT_ARGS="\
     --container-mounts=${MODEL_DIR}:/model/,${CONFIG_DIR}:/configs/,${SCRIPT_DIR}:/scripts/,${OUTPUT_DIR}:/outputs/,${LOG_DIR}:/logs/ \
 "
 
+# Build common worker arguments
+WORKER_ARGS="--gpu_type ${GPU_TYPE} --gpus_per_node ${GPUS_PER_NODE}"
+if [ "$USE_SGLANG_COMMANDS" = "true" ]; then
+    WORKER_ARGS="${WORKER_ARGS} --use-sglang-commands"
+fi
+
 # Launch prefill tasks on the first PREFILL_NODES nodes
 for i in $(seq 0 $((PREFILL_NODES - 1))); do
     node=${nodes[$i]}
     rank=$i
     echo "Launching prefill task on node ${i} (rank ${rank}): $node"
     echo "Srun args: $ENROOT_ARGS --nodes=1 --ntasks=1 --nodelist=$node --output=${LOG_DIR}/${node}_prefill.out --error=${LOG_DIR}/${node}_prefill.err"
-    echo "Command: python /scripts/worker_setup.py --prefill_host_ip ${PREFILL_HOST_IP} --decode_host_ip ${DECODE_HOST_IP} --rank ${rank} --total_nodes ${PREFILL_NODES} --worker_type prefill --gpus_per_node ${GPUS_PER_NODE} --gpu_utilization_log /logs/${node}_prefill_gpu_utilization.log &"
+    echo "Command: python /scripts/worker_setup.py --prefill_host_ip ${PREFILL_HOST_IP} --decode_host_ip ${DECODE_HOST_IP} --rank ${rank} --total_nodes ${PREFILL_NODES} --worker_type prefill --gpu_utilization_log /logs/${node}_prefill_gpu_utilization.log ${WORKER_ARGS} &"
     srun $ENROOT_ARGS --nodes=1 --ntasks=1 --nodelist=$node \
     --output=${LOG_DIR}/${node}_prefill.out --error=${LOG_DIR}/${node}_prefill.err \
-    python /scripts/worker_setup.py --prefill_host_ip ${PREFILL_HOST_IP} --decode_host_ip ${DECODE_HOST_IP} --rank ${rank} --total_nodes ${PREFILL_NODES} --worker_type prefill --gpus_per_node ${GPUS_PER_NODE} --gpu_utilization_log /logs/${node}_prefill_gpu_utilization.log &
+    python /scripts/worker_setup.py --prefill_host_ip ${PREFILL_HOST_IP} --decode_host_ip ${DECODE_HOST_IP} --rank ${rank} --total_nodes ${PREFILL_NODES} --worker_type prefill --gpu_utilization_log /logs/${node}_prefill_gpu_utilization.log ${WORKER_ARGS} &
 done
 
 # Launch decode tasks on the next DECODE_NODES nodes
@@ -77,10 +85,10 @@ for i in $(seq $PREFILL_NODES $((PREFILL_NODES + DECODE_NODES - 1))); do
     rank=$((i - PREFILL_NODES))
     echo "Launching decode task on node ${i} (rank ${rank}): $node"
     echo "Srun args: $ENROOT_ARGS --nodes=1 --ntasks=1 --nodelist=$node --output=${LOG_DIR}/${node}_decode.out --error=${LOG_DIR}/${node}_decode.err"
-    echo "Command: python /scripts/worker_setup.py --decode_host_ip ${DECODE_HOST_IP} --prefill_host_ip ${PREFILL_HOST_IP} --rank ${rank} --total_nodes ${DECODE_NODES} --worker_type decode --gpus_per_node ${GPUS_PER_NODE} --gpu_utilization_log /logs/${node}_decode_gpu_utilization.log &"
+    echo "Command: python /scripts/worker_setup.py --decode_host_ip ${DECODE_HOST_IP} --prefill_host_ip ${PREFILL_HOST_IP} --rank ${rank} --total_nodes ${DECODE_NODES} --worker_type decode --gpu_utilization_log /logs/${node}_decode_gpu_utilization.log ${WORKER_ARGS} &"
     srun $ENROOT_ARGS --nodes=1 --ntasks=1 --nodelist=$node \
     --output=${LOG_DIR}/${node}_decode.out --error=${LOG_DIR}/${node}_decode.err \
-    python /scripts/worker_setup.py --decode_host_ip ${DECODE_HOST_IP} --prefill_host_ip ${PREFILL_HOST_IP} --rank ${rank} --total_nodes ${DECODE_NODES} --worker_type decode --gpus_per_node ${GPUS_PER_NODE} --gpu_utilization_log /logs/${node}_decode_gpu_utilization.log &
+    python /scripts/worker_setup.py --decode_host_ip ${DECODE_HOST_IP} --prefill_host_ip ${PREFILL_HOST_IP} --rank ${rank} --total_nodes ${DECODE_NODES} --worker_type decode --gpu_utilization_log /logs/${node}_decode_gpu_utilization.log ${WORKER_ARGS} &
 done
 
 echo ""
