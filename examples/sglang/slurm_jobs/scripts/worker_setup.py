@@ -33,6 +33,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from .gen_cmd import get_prefill_command_args, get_decode_command_args, get_sglang_mini_lb_command_args
 import requests
 
 # Network configurations
@@ -180,7 +181,15 @@ def _parse_command_line_args(args: list[str] | None = None) -> argparse.Namespac
     parser.add_argument(
         "--use-sglang-commands",
         action="store_true",
+        default=False,
         help="Helper to spin up SGLang servers instead of dynamo. This is helpful for benchmarking SGLang as well",
+    )
+    parser.add_argument(
+        "--gpu_type",
+        type=str,
+        choices=["h100", "gb200"],
+        default="h100",
+        help="Type of GPU to use",
     )
 
     return parser.parse_args(args)
@@ -199,13 +208,12 @@ def _validate_args(args: argparse.Namespace) -> None:
 
 
 def setup_prefill_node(
-    rank: int, prefill_host_ip: str, total_nodes: int, total_gpus: int, use_sglang_commands: bool
+    rank: int, prefill_host_ip: str, total_nodes: int, total_gpus: int, use_sglang_commands: bool, gpu_type: str
 ) -> int:
     """
     Setup the prefill node.
     """
     if not use_sglang_commands:
-        python_cmd = "python3 components/worker.py "
         if rank == 0:
             logging.info(f"Setting up host prefill node: {rank}")
             logging.info(f"Starting nats server on node {rank} with IP {prefill_host_ip}")
@@ -233,44 +241,11 @@ def setup_prefill_node(
             logging.info(f"Setting up child prefill node: {rank}")
             if not wait_for_etcd(f"http://{prefill_host_ip}:{ETCD_CLIENT_PORT}"):
                 raise RuntimeError("Failed to connect to etcd")
-
     else:
-        python_cmd = "python3 -m sglang.launch_server "
         logging.info("Using SGLang servers. No need to setup etcd or nats")
 
-    # NOTE: This implements the example in examples/sglang/dsr1-wideep.md
-    # For other examples, the command might have to be modified.
-    # Because we use the sgl arg parser, we can use the same flags for both dynamo and sglang
-    cmd_to_run = (
-        f"{python_cmd} "
-        "--model-path /model/ "
-        "--served-model-name deepseek-ai/DeepSeek-R1 "
-        "--skip-tokenizer-init "
-        "--disaggregation-mode prefill "
-        "--disaggregation-transfer-backend nixl "
-        "--disaggregation-bootstrap-port 30001 "
-        f"--dist-init-addr {prefill_host_ip}:{DIST_INIT_PORT} "
-        f"--nnodes {total_nodes} "
-        f"--node-rank {rank} "
-        f"--tp-size {total_gpus} "
-        f"--dp-size {total_gpus} "
-        "--enable-dp-attention "
-        "--decode-log-interval 1 "
-        "--enable-deepep-moe "
-        "--page-size 1 "
-        "--trust-remote-code "
-        "--moe-dense-tp-size 1 "
-        "--enable-dp-lm-head "
-        "--disable-radix-cache "
-        "--watchdog-timeout 1000000 "
-        "--enable-two-batch-overlap "
-        "--deepep-mode normal "
-        "--mem-fraction-static 0.85 "
-        "--deepep-config /configs/deepep.json "
-        "--ep-num-redundant-experts 32 "
-        "--ep-dispatch-algorithm dynamic "
-        "--eplb-algorithm deepseek "
-    )
+    # NOTE: Default command for h100 and dynamo implements the example in examples/sglang/dsr1-wideep.md
+    cmd_to_run = get_prefill_command_args(gpu_type, use_sglang_commands, prefill_host_ip, total_nodes, rank, total_gpus)
     return run_command(cmd_to_run)
 
 
@@ -280,7 +255,8 @@ def setup_decode_node(
     prefill_host_ip: str,
     total_nodes: int,
     total_gpus: int,
-    use_sglang_commands: bool
+    use_sglang_commands: bool,
+    gpu_type: str
 ) -> int:
     """
     Setup the decode node.
@@ -288,50 +264,13 @@ def setup_decode_node(
     logging.info(f"Setting up child decode node: {rank}")
 
     if use_sglang_commands:
-        python_cmd = "python3 -m sglang.launch_server "
-        sgl_mini_lb_cmd = (
-            "python3 -m sglang.srt.disaggregation.launch_lb "
-            f"--prefill http://{prefill_host_ip}:30000 "
-            f"--decode http://{decode_host_ip}:30000 "
-            "--host 0.0.0.0 "
-            "--port 8000 "
-            "--timeout 3600"
-        )
+        sgl_mini_lb_cmd = get_sglang_mini_lb_command_args(prefill_host_ip, decode_host_ip)
         run_command(sgl_mini_lb_cmd, background=True)
     else:
-        python_cmd = "python3 components/decode_worker.py "
         if not wait_for_etcd(f"http://{prefill_host_ip}:{ETCD_CLIENT_PORT}"):
             raise RuntimeError("Failed to connect to etcd")
 
-    cmd_to_run = (
-        f"{python_cmd} "
-        "--model-path /model/ "
-        "--served-model-name deepseek-ai/DeepSeek-R1 "
-        "--skip-tokenizer-init "
-        "--disaggregation-mode decode "
-        "--disaggregation-transfer-backend nixl "
-        "--disaggregation-bootstrap-port 30001 "
-        f"--dist-init-addr {decode_host_ip}:{DIST_INIT_PORT} "
-        f"--nnodes {total_nodes} "
-        f"--node-rank {rank} "
-        f"--tp-size {total_gpus} "
-        f"--dp-size {total_gpus} "
-        "--enable-dp-attention "
-        "--decode-log-interval 1 "
-        "--enable-deepep-moe "
-        "--page-size 1 "
-        "--trust-remote-code "
-        "--moe-dense-tp-size 1 "
-        "--enable-dp-lm-head "
-        "--disable-radix-cache "
-        "--watchdog-timeout 1000000 "
-        "--enable-two-batch-overlap "
-        "--deepep-mode low_latency "
-        "--mem-fraction-static 0.835 "
-        "--ep-num-redundant-experts 32 "
-        "--cuda-graph-bs 256 "
-    )
-
+    cmd_to_run = get_decode_command_args(gpu_type, use_sglang_commands, decode_host_ip, total_nodes, rank, total_gpus)
     return run_command(cmd_to_run)
 
 
@@ -368,7 +307,8 @@ def main(input_args: list[str] | None = None):
             args.prefill_host_ip,
             args.total_nodes,
             args.total_nodes * args.gpus_per_node,
-            args.use_sglang_commands
+            args.use_sglang_commands,
+            args.gpu_type
         )
     else:
         setup_decode_node(
@@ -377,7 +317,8 @@ def main(input_args: list[str] | None = None):
             args.prefill_host_ip,
             args.total_nodes,
             args.total_nodes * args.gpus_per_node,
-            args.use_sglang_commands
+            args.use_sglang_commands,
+            args.gpu_type
         )
 
     logging.info(f"{args.worker_type.capitalize()} node setup complete")
