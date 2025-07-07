@@ -20,8 +20,8 @@ benchmark_dynamo.sh script.
 
 The script will:
 - Setup the environment
-- Update the YAML config file
-- Start Dynamo graphs.disagg service
+- Generate the python3 command to run the prefill or decode worker
+- Start dynamo (or sglang)
 - Monitor the GPU utilization
 """
 
@@ -177,6 +177,11 @@ def _parse_command_line_args(args: list[str] | None = None) -> argparse.Namespac
         default=None,
         help="File to log GPU utilization (default: None)",
     )
+    parser.add_argument(
+        "--use-sglang-commands",
+        action="store_true",
+        help="Helper to spin up SGLang servers instead of dynamo. This is helpful for benchmarking SGLang as well",
+    )
 
     return parser.parse_args(args)
 
@@ -194,43 +199,50 @@ def _validate_args(args: argparse.Namespace) -> None:
 
 
 def setup_prefill_node(
-    rank: int, prefill_host_ip: str, total_nodes: int, total_gpus: int
+    rank: int, prefill_host_ip: str, total_nodes: int, total_gpus: int, use_sglang_commands: bool
 ) -> int:
     """
     Setup the prefill node.
     """
-    if rank == 0:
-        logging.info(f"Setting up host prefill node: {rank}")
-        logging.info(f"Starting nats server on node {rank} with IP {prefill_host_ip}")
+    if not use_sglang_commands:
+        python_cmd = "python3 components/worker.py "
+        if rank == 0:
+            logging.info(f"Setting up host prefill node: {rank}")
+            logging.info(f"Starting nats server on node {rank} with IP {prefill_host_ip}")
 
-        nats_process = run_command("nats-server -js", background=True)
-        if not nats_process:
-            raise RuntimeError("Failed to start nats-server")
+            nats_process = run_command("nats-server -js", background=True)
+            if not nats_process:
+                raise RuntimeError("Failed to start nats-server")
 
-        etcd_cmd = (
-            f"etcd --listen-client-urls {ETCD_LISTEN_ADDR}:{ETCD_CLIENT_PORT} "
-            f"--advertise-client-urls {ETCD_LISTEN_ADDR}:{ETCD_CLIENT_PORT} "
-            f"--listen-peer-urls {ETCD_LISTEN_ADDR}:{ETCD_PEER_PORT} "
-            f"--initial-cluster default=http://{prefill_host_ip}:{ETCD_PEER_PORT}"
-        )
+            etcd_cmd = (
+                f"etcd --listen-client-urls {ETCD_LISTEN_ADDR}:{ETCD_CLIENT_PORT} "
+                f"--advertise-client-urls {ETCD_LISTEN_ADDR}:{ETCD_CLIENT_PORT} "
+                f"--listen-peer-urls {ETCD_LISTEN_ADDR}:{ETCD_PEER_PORT} "
+                f"--initial-cluster default=http://{prefill_host_ip}:{ETCD_PEER_PORT}"
+            )
 
-        etcd_process = run_command(etcd_cmd, background=True)
-        if not etcd_process:
-            raise RuntimeError("Failed to start etcd")
+            etcd_process = run_command(etcd_cmd, background=True)
+            if not etcd_process:
+                raise RuntimeError("Failed to start etcd")
 
-        ingress_process = run_command("dynamo run in=http out=dyn", background=True)
-        if not ingress_process:
-            raise RuntimeError("Failed to start ingress")
+            ingress_process = run_command("dynamo run in=http out=dyn", background=True)
+            if not ingress_process:
+                raise RuntimeError("Failed to start ingress")
+
+        else:
+            logging.info(f"Setting up child prefill node: {rank}")
+            if not wait_for_etcd(f"http://{prefill_host_ip}:{ETCD_CLIENT_PORT}"):
+                raise RuntimeError("Failed to connect to etcd")
 
     else:
-        logging.info(f"Setting up child prefill node: {rank}")
-        if not wait_for_etcd(f"http://{prefill_host_ip}:{ETCD_CLIENT_PORT}"):
-            raise RuntimeError("Failed to connect to etcd")
+        python_cmd = "python3 -m sglang.launch_server "
+        logging.info("Using SGLang servers. No need to setup etcd or nats")
 
     # NOTE: This implements the example in examples/sglang/dsr1-wideep.md
     # For other examples, the command might have to be modified.
-    dynamo_cmd = (
-        f"python3 components/worker.py "
+    # Because we use the sgl arg parser, we can use the same flags for both dynamo and sglang
+    cmd_to_run = (
+        f"{python_cmd} "
         "--model-path /model/ "
         "--served-model-name deepseek-ai/DeepSeek-R1 "
         "--skip-tokenizer-init "
@@ -259,7 +271,7 @@ def setup_prefill_node(
         "--ep-dispatch-algorithm dynamic "
         "--eplb-algorithm deepseek "
     )
-    return run_command(dynamo_cmd)
+    return run_command(cmd_to_run)
 
 
 def setup_decode_node(
@@ -268,17 +280,31 @@ def setup_decode_node(
     prefill_host_ip: str,
     total_nodes: int,
     total_gpus: int,
+    use_sglang_commands: bool
 ) -> int:
     """
     Setup the decode node.
     """
     logging.info(f"Setting up child decode node: {rank}")
 
-    if not wait_for_etcd(f"http://{prefill_host_ip}:{ETCD_CLIENT_PORT}"):
-        raise RuntimeError("Failed to connect to etcd")
+    if use_sglang_commands:
+        python_cmd = "python3 -m sglang.launch_server "
+        sgl_mini_lb_cmd = (
+            "python3 -m sglang.srt.disaggregation.launch_lb "
+            f"--prefill http://{prefill_host_ip}:30000 "
+            f"--decode http://{decode_host_ip}:30000 "
+            "--host 0.0.0.0 "
+            "--port 8000 "
+            "--timeout 3600"
+        )
+        run_command(sgl_mini_lb_cmd, background=True)
+    else:
+        python_cmd = "python3 components/decode_worker.py "
+        if not wait_for_etcd(f"http://{prefill_host_ip}:{ETCD_CLIENT_PORT}"):
+            raise RuntimeError("Failed to connect to etcd")
 
-    dynamo_cmd = (
-        "python3 components/decode_worker.py "
+    cmd_to_run = (
+        f"{python_cmd} "
         "--model-path /model/ "
         "--served-model-name deepseek-ai/DeepSeek-R1 "
         "--skip-tokenizer-init "
@@ -306,7 +332,7 @@ def setup_decode_node(
         "--cuda-graph-bs 256 "
     )
 
-    return run_command(dynamo_cmd)
+    return run_command(cmd_to_run)
 
 
 def setup_env(prefill_host_ip: str):
@@ -333,6 +359,7 @@ def main(input_args: list[str] | None = None):
     logging.info(f"Prefill host IP: {args.prefill_host_ip}")
     logging.info(f"Decode host IP: {args.decode_host_ip}")
     logging.info(f"Rank: {args.rank}")
+    logging.info(f"Use SGLang commands: {args.use_sglang_commands}")
 
     setup_env(args.prefill_host_ip)
     if args.worker_type == "prefill":
@@ -341,6 +368,7 @@ def main(input_args: list[str] | None = None):
             args.prefill_host_ip,
             args.total_nodes,
             args.total_nodes * args.gpus_per_node,
+            args.use_sglang_commands
         )
     else:
         setup_decode_node(
@@ -349,6 +377,7 @@ def main(input_args: list[str] | None = None):
             args.prefill_host_ip,
             args.total_nodes,
             args.total_nodes * args.gpus_per_node,
+            args.use_sglang_commands
         )
 
     logging.info(f"{args.worker_type.capitalize()} node setup complete")
