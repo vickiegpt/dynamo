@@ -44,8 +44,20 @@ help: ## Display this help.
 
 ##@ Development
 
+.PHONY: ensure-yq
+ensure-yq:
+	@if ! command -v yq &> /dev/null; then \
+		echo "Installing yq..."; \
+		ARCH=$$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/'); \
+		OS=$$(uname -s | tr '[:upper:]' '[:lower:]'); \
+		wget https://github.com/mikefarah/yq/releases/latest/download/yq_$${OS}_$${ARCH} -O /usr/local/bin/yq && \
+		chmod +x /usr/local/bin/yq; \
+	else \
+		echo "yq is already installed: $$(yq --version)"; \
+	fi
+
 .PHONY: manifests
-manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
+manifests: controller-gen ensure-yq ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd:maxDescLen=0 webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 	echo "Removing name from mainContainer required fields"
 	for file in config/crd/bases/*.yaml; do \
