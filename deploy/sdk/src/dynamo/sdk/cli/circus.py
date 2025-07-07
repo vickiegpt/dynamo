@@ -86,23 +86,6 @@ def create_circus_watcher(
     use_sockets: bool = True,
     **kwargs: Any,
 ) -> Watcher:
-    log_dir = os.environ.get("DYN_CIRCUS_LOG_DIR", None)
-    if log_dir is not None:
-        prefix = f"{log_dir}/{name}"
-        os.makedirs(prefix, exist_ok=True)
-        stdout_stream = {
-            "class": "FileStream",
-            "filename": f"{prefix}/output.log",
-            "backup_count": 10,
-        }
-        stderr_stream = {
-            "class": "FileStream",
-            "filename": f"{prefix}/error.log",
-            "backup_count": 10,
-        }
-    else:
-        stdout_stream = None
-        stderr_stream = None
     return Watcher(
         name=name,
         cmd=shlex.quote(cmd) if psutil.POSIX else cmd,
@@ -111,10 +94,7 @@ def create_circus_watcher(
         stop_children=True,
         use_sockets=use_sockets,
         graceful_timeout=86400,
-        respawn=os.environ.get("DYN_CIRCUS_RESPAWN", "false").lower()
-        in ("true", "1", "yes"),
-        stdout_stream=stdout_stream,
-        stderr_stream=stderr_stream,
+        respawn=False,  # TODO
         **kwargs,
     )
 
