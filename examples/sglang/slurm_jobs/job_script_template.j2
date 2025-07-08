@@ -41,7 +41,7 @@ done
 if [ "$GPU_TYPE" = "gb200" ]; then
     PREFILL_HOST_IP=$(srun --nodes=1 --ntasks=1 --nodelist=${nodes[0]} hostname -I | awk '{print $1}')
 else
-    PREFILL_HOST_IP=$(srun --nodes=1 --ntasks=1 --nodelist=${nodes[0]} ip route get $(getent hosts ${nodes[0]} | awk '{ print $1 }') | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
+    PREFILL_HOST_IP=$(srun --nodes=1 --ntasks=1 --nodelist=${nodes[0]} ip route get $(getent ahosts ${nodes[0]} | grep STREAM | head -1 | awk '{print $1}') | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
 fi
 if [ -z "$PREFILL_HOST_IP" ]; then
     echo "Error: Could not retrieve IP address for prefill host ${nodes[0]} on interface $NETWORK_INTERFACE"
@@ -52,7 +52,7 @@ echo "Prefill host IP address: $PREFILL_HOST_IP"
 if [ "$GPU_TYPE" = "gb200" ]; then
     DECODE_HOST_IP=$(srun --nodes=1 --ntasks=1 --nodelist=${nodes[$PREFILL_NODES]} hostname -I | awk '{print $1}')
 else
-    DECODE_HOST_IP=$(srun --nodes=1 --ntasks=1 --nodelist=${nodes[$PREFILL_NODES]} ip route get $(getent hosts ${nodes[$PREFILL_NODES]} | awk '{ print $1 }') | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
+    DECODE_HOST_IP=$(srun --nodes=1 --ntasks=1 --nodelist=${nodes[$PREFILL_NODES]} ip route get $(getent ahosts ${nodes[$PREFILL_NODES]} | grep STREAM | head -1 | awk '{print $1}') | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
 fi
 if [ -z "$DECODE_HOST_IP" ]; then
     echo "Error: Could not retrieve IP address for decode host ${nodes[$PREFILL_NODES]} on interface $NETWORK_INTERFACE"
