@@ -11,9 +11,9 @@ spec:
         image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.1
         resources:
           requests:
-            nvidia.com/gpu: 2
+            gpu: 2
           limits:
-            nvidia.com/gpu: 2
+            gpu: 2
         env:
           - name: HUGGING_FACE_HUB_TOKEN
             valueFrom:
