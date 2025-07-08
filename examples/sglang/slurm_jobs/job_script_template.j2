@@ -71,7 +71,7 @@ ENROOT_ARGS="\
 
 # Build common worker arguments
 WORKER_ARGS="--gpu_type ${GPU_TYPE} --gpus_per_node ${GPUS_PER_NODE}"
-if [ "$USE_SGLANG_COMMANDS" = "true" ]; then
+if [ "$USE_SGLANG_COMMANDS" = "True" ]; then
     WORKER_ARGS="${WORKER_ARGS} --use-sglang-commands"
 fi
 
