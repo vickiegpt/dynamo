@@ -18,10 +18,12 @@ use dynamo_runtime::protocols::annotated::AnnotationsProvider;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
+use crate::engines::ValidateRequest;
+
 use super::{
     common::{self, SamplingOptionsProvider, StopConditionsProvider},
     nvext::{NvExt, NvExtProvider},
-    ContentProvider, OpenAISamplingOptionsProvider, OpenAIStopConditionsProvider,
+    validate, ContentProvider, OpenAISamplingOptionsProvider, OpenAIStopConditionsProvider,
 };
 
 mod aggregator;
@@ -39,41 +41,10 @@ pub struct NvCreateCompletionRequest {
     pub nvext: Option<NvExt>,
 }
 
-/// Legacy OpenAI CompletionResponse
-/// Represents a completion response from the API.
-/// Note: both the streamed and non-streamed response objects share the same
-/// shape (unlike the chat endpoint).
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct CompletionResponse {
-    /// A unique identifier for the completion.
-    pub id: String,
-
-    /// The list of completion choices the model generated for the input prompt.
-    pub choices: Vec<async_openai::types::Choice>,
-
-    /// The Unix timestamp (in seconds) of when the completion was created.
-    pub created: u64,
-
-    /// The model used for completion.
-    pub model: String,
-
-    /// The object type, which is always "text_completion"
-    pub object: String,
-
-    /// Usage statistics for the completion request.
-    pub usage: Option<async_openai::types::CompletionUsage>,
-
-    /// This fingerprint represents the backend configuration that the model runs with.
-    /// Can be used in conjunction with the seed request parameter to understand when backend
-    /// changes have been made that might impact determinism.
-    ///
-    /// NIM Compatibility:
-    /// This field is not supported by the NIM; however it will be added in the future.
-    /// The optional nature of this field will be relaxed when it is supported.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_fingerprint: Option<String>,
-    // TODO(ryan)
-    // pub nvext: Option<NimResponseExt>,
+#[derive(Serialize, Deserialize, Validate, Debug, Clone)]
+pub struct NvCreateCompletionResponse {
+    #[serde(flatten)]
+    pub inner: async_openai::types::CreateCompletionResponse,
 }
 
 impl ContentProvider for async_openai::types::Choice {
@@ -192,8 +163,8 @@ pub struct ResponseFactory {
     #[builder(default = "\"text_completion\".to_string()")]
     pub object: String,
 
-    #[builder(default = "chrono::Utc::now().timestamp() as u64")]
-    pub created: u64,
+    #[builder(default = "chrono::Utc::now().timestamp() as u32")]
+    pub created: u32,
 }
 
 impl ResponseFactory {
@@ -205,8 +176,8 @@ impl ResponseFactory {
         &self,
         choice: async_openai::types::Choice,
         usage: Option<async_openai::types::CompletionUsage>,
-    ) -> CompletionResponse {
-        CompletionResponse {
+    ) -> NvCreateCompletionResponse {
+        let inner = async_openai::types::CreateCompletionResponse {
             id: self.id.clone(),
             object: self.object.clone(),
             created: self.created,
@@ -214,7 +185,8 @@ impl ResponseFactory {
             choices: vec![choice],
             system_fingerprint: self.system_fingerprint.clone(),
             usage,
-        }
+        };
+        NvCreateCompletionResponse { inner }
     }
 }
 
@@ -280,9 +252,14 @@ impl TryFrom<common::StreamingCompletionResponse> for async_openai::types::Choic
             .text
             .ok_or(anyhow::anyhow!("No text in response"))?;
 
-        // Safety: we're downcasting from u64 to u32 here but u32::MAX is 4_294_967_295
+        // SAFETY: we're downcasting from u64 to u32 here but u32::MAX is 4_294_967_295
         // so we're fairly safe knowing we won't generate that many Choices
-        let index = response.delta.index.unwrap_or(0) as u32;
+        let index: u32 = response
+            .delta
+            .index
+            .unwrap_or(0)
+            .try_into()
+            .expect("index exceeds u32::MAX");
 
         // TODO handle aggregating logprobs
         let logprobs = None;
@@ -298,5 +275,32 @@ impl TryFrom<common::StreamingCompletionResponse> for async_openai::types::Choic
         };
 
         Ok(choice)
+    }
+}
+
+/// Implements `ValidateRequest` for `NvCreateCompletionRequest`,
+/// allowing us to validate the data.
+impl ValidateRequest for NvCreateCompletionRequest {
+    fn validate(&self) -> Result<(), anyhow::Error> {
+        validate::validate_model(&self.inner.model)?;
+        validate::validate_prompt(&self.inner.prompt)?;
+        validate::validate_suffix(self.inner.suffix.as_deref())?;
+        validate::validate_max_tokens(self.inner.max_tokens)?;
+        validate::validate_temperature(self.inner.temperature)?;
+        validate::validate_top_p(self.inner.top_p)?;
+        validate::validate_n(self.inner.n)?;
+        // none for stream
+        // none for stream_options
+        validate::validate_logprobs(self.inner.logprobs)?;
+        // none for echo
+        validate::validate_stop(&self.inner.stop)?;
+        validate::validate_presence_penalty(self.inner.presence_penalty)?;
+        validate::validate_frequency_penalty(self.inner.frequency_penalty)?;
+        validate::validate_best_of(self.inner.best_of, self.inner.n)?;
+        validate::validate_logit_bias(&self.inner.logit_bias)?;
+        validate::validate_user(self.inner.user.as_deref())?;
+        // none for seed
+
+        Ok(())
     }
 }

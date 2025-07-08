@@ -21,66 +21,38 @@ dynamo-operator:
   etcdAddr: ""
   namespaceRestriction:
     enabled: true
-    targetNamespace: ""
+    targetNamespace:
   controllerManager:
     manager:
       image:
-        repository: ""
-        tag: "latest"
+        repository: "nvcr.io/nvidia/ai-dynamo/kubernetes-operator"
+        tag: ""
+        pullPolicy: IfNotPresent
       args:
         - --health-probe-bind-address=:8081
         - --metrics-bind-address=127.0.0.1:8080
+  imagePullSecrets: []
   dynamo:
     enableLWS: false
-    apiStore:
-      endpoint: http://dynamo-store
-      clusterName: default
     internalImages:
-      dynamoComponentsDownloader: rapidfort/curl:latest
-      kaniko: gcr.io/kaniko-project/executor:debug
-      buildkit: moby/buildkit:v0.20.2
-      buildkitRootless: moby/buildkit:v0.20.2-rootless
       debugger: python:3.12-slim
     enableRestrictedSecurityContext: false
     dockerRegistry:
       useKubernetesSecret: false
-      server: ""
-      username: ""
-      password: ""
+      server:
+      username:
+      password:
+      existingSecretName:
       secure: true
-      dynamoComponentsRepositoryName: dynamo-pipelines
-    imageBuildEngine: buildkit
-    addNamespacePrefixToImageName: false
-    estargz:
+    ingress:
       enabled: false
-    kaniko:
-      cacheRepo: ""
-      snapshotMode: ""
-
-dynamo-api-store:
-  enabled: true
-  namespaceRestriction:
-    enabled: true
-    targetNamespace: ""
-  istio:
-    enabled: false
-    host: ""
-    gateway: ""
-  dynamo:
-    env:
-      resource_scope: "user"
-  image:
-    repository: ""
-    tag: "latest"
-    pullPolicy: IfNotPresent
-  ingress:
-    enabled: false
-    className: nginx
-    hosts:
-      - host: ""
-        paths:
-          - path: /
-            pathType: Prefix
+      className:
+      tlsSecretName: my-tls-secret
+    istio:
+      enabled: false
+      gateway:
+    ingressHostSuffix: ""
+    virtualServiceSupportsHTTPS: false
 
 ## In-cluster minio deployment configuration
 ## ref: https://github.com/bitnami/charts/blob/minio/13.3.1/bitnami/minio/values.yaml
@@ -88,7 +60,7 @@ dynamo-api-store:
 ## @param minio.apiIngress.ingressClassName IngressClass that will be be used to implement the Ingress (Kubernetes 1.18+)
 ## @param minio.apiIngress.hostname Default host for the ingress resource
 minio:
-  enabled: false
+  enabled: true
   mode: standalone
   auth:
     rootUser: minioadmin
@@ -96,7 +68,8 @@ minio:
   persistence:
     enabled: true
     size: 10Gi
-    storageClass: ""
+    # Use the cluster default storage-class or override with a named class
+    storageClass: null
     mountPath: /data
     annotations:
       helm.sh/resource-policy: keep
@@ -133,20 +106,15 @@ minio:
       api: 9000
       console: 9001
 
-postgresql:
-  enabled: false
-  auth:
-    existingSecret: ""
-    postgresPassword: ""
-    username: "admin"
-    password: "password"
-    database: "dynamo"
-  primary:
-    persistence:
-      enabled: false
-
 etcd:
-  enabled: false
+  enabled: true
+  persistence:
+    enabled: true
+    # Use the cluster default storage-class or override with a named class
+    storageClass: null
+    size: 1Gi
+  preUpgrade:
+    enabled: false
   replicaCount: 1
   # Explicitly remove authentication
   auth:
@@ -160,7 +128,7 @@ etcd:
     enabled: false
 
 nats:
-  enabled: false
+  enabled: true
   # reference a common CA Certificate or Bundle in all nats config `tls` blocks and nats-box contexts
   # note: `tls.verify` still must be set in the appropriate nats config `tls` blocks to require mTLS
   tlsCA:

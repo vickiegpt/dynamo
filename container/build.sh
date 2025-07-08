@@ -58,7 +58,7 @@ BUILD_CONTEXT=$(dirname "$(readlink -f "$SOURCE_DIR")")
 
 # Base Images
 TENSORRTLLM_BASE_IMAGE=nvcr.io/nvidia/pytorch
-TENSORRTLLM_BASE_IMAGE_TAG=25.04-py3
+TENSORRTLLM_BASE_IMAGE_TAG=25.05-py3
 
 # Important Note: Because of ABI compatibility issues between TensorRT-LLM and NGC PyTorch,
 # we need to build the TensorRT-LLM wheel from source.
@@ -94,7 +94,7 @@ TRTLLM_USE_NIXL_KVCACHE_EXPERIMENTAL="0"
 
 # TensorRT-LLM PyPI index URL
 TENSORRTLLM_INDEX_URL="https://pypi.python.org/simple"
-DEFAULT_TENSORRTLLM_PIP_WHEEL="tensorrt-llm==0.21.0rc0"
+DEFAULT_TENSORRTLLM_PIP_WHEEL="tensorrt-llm==1.0.0rc0"
 TENSORRTLLM_PIP_WHEEL=""
 
 
@@ -114,7 +114,7 @@ SGLANG_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
 VLLM_V1_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
 VLLM_V1_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
 
-NIXL_COMMIT=16348080f5bdeb9fe6058a23be140cec020ef3f3
+NIXL_COMMIT=3503658e71143b56f9d5b1b440d84a94b9c41af8
 NIXL_REPO=ai-dynamo/nixl.git
 
 NIXL_UCX_EFA_REF=7ec95b95e524a87e81cac92f5ca8523e3966b16b
