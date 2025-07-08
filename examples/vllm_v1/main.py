@@ -20,11 +20,10 @@ import socket
 from typing import Optional
 
 import uvloop
-from args import Config, cmd_line_args, create_vllm_arg_map, find_free_port
+from args import Config, find_free_port, parse_args
 from handlers import DecodeWorkerHandler, PrefillWorkerHandler
 from publisher import StatLoggerFactory
 from vllm.distributed.kv_events import ZmqEventPublisher
-from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.usage.usage_lib import UsageContext
 from vllm.v1.engine.async_llm import AsyncLLM
 
@@ -43,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 @dynamo_worker(static=False)
 async def worker(runtime: DistributedRuntime):
-    config = cmd_line_args()
+    config = parse_args()
     if config.is_prefill_worker:
         await init_prefill(runtime, config)
     else:
@@ -56,10 +55,7 @@ def setup_vllm_engine(config, stat_logger=None):
 
     set_side_channel_host_and_port()
 
-    arg_map = create_vllm_arg_map(config)
-    logger.info(f"VLLM config: {arg_map}")
-
-    engine_args = AsyncEngineArgs(**arg_map)
+    engine_args = config.engine_args
     # Load default sampling params from `generation_config.json`
     default_sampling_params = (
         engine_args.create_model_config().get_diff_sampling_param()
@@ -80,7 +76,7 @@ def setup_vllm_engine(config, stat_logger=None):
         disable_log_requests=engine_args.disable_log_requests,
         disable_log_stats=engine_args.disable_log_stats,
     )
-    logger.info(f"VllmWorker for {config.model_path} has been initialized")
+    logger.info(f"VllmWorker for {config.model} has been initialized")
     return engine_client, vllm_config, default_sampling_params
 
 
@@ -150,9 +146,9 @@ async def init(runtime: DistributedRuntime, config: Config):
     await register_llm(
         ModelType.Backend,
         generate_endpoint,
-        config.model_path,
-        config.model_name,
-        kv_cache_block_size=config.kv_block_size,
+        config.model,
+        config.served_model_name,
+        kv_cache_block_size=config.engine_args.block_size,
     )
 
     factory = StatLoggerFactory(component)
@@ -165,7 +161,7 @@ async def init(runtime: DistributedRuntime, config: Config):
     factory.set_request_total_slots_all(vllm_config.scheduler_config.max_num_seqs)
     factory.init_publish()
 
-    logger.info(f"VllmWorker for {config.model_path} has been initialized")
+    logger.info(f"VllmWorker for {config.model} has been initialized")
 
     base_zmq_endpoint = vllm_config.kv_events_config.endpoint
     dp_local_rank = vllm_config.parallel_config.data_parallel_rank_local

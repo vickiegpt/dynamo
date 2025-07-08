@@ -9,20 +9,20 @@ cleanup() {
     kill $DYNAMO_PID "${WORKER_PIDS[@]}" 2>/dev/null || true
     wait $DYNAMO_PID "${WORKER_PIDS[@]}" 2>/dev/null || true
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT ERR INT TERM
 
 # run ingress
 DYN_LOG=debug dynamo run in=http out=dyn --router-mode kv &
 DYNAMO_PID=$!
 
 # routing will happen between the two decode workers
-CUDA_VISIBLE_DEVICES=0 python3 main.py --model-path Qwen/Qwen3-0.6B --extra-engine-args launch/args.json &
+CUDA_VISIBLE_DEVICES=0 python3 main.py --model Qwen/Qwen3-0.6B --enforce-eager &
 WORKER_PIDS+=($!)
 
-CUDA_VISIBLE_DEVICES=1 python3 main.py --model-path Qwen/Qwen3-0.6B --extra-engine-args launch/args.json &
+CUDA_VISIBLE_DEVICES=1 python3 main.py --model Qwen/Qwen3-0.6B --enforce-eager &
 WORKER_PIDS+=($!)
 
 CUDA_VISIBLE_DEVICES=2 python3 main.py \
-    --model-path Qwen/Qwen3-0.6B \
-    --extra-engine-args launch/args.json \
+    --model Qwen/Qwen3-0.6B \
+    --enforce-eager \
     --is-prefill-worker

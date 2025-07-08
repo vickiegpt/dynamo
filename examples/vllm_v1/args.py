@@ -13,8 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import argparse
-import json
 import logging
 import socket
 import sys
@@ -22,6 +20,8 @@ from typing import Optional
 
 from vllm.config import KVTransferConfig
 from vllm.distributed.kv_events import KVEventsConfig
+from vllm.engine.arg_utils import AsyncEngineArgs
+from vllm.utils import FlexibleArgumentParser
 
 logger = logging.getLogger(__name__)
 
@@ -41,34 +41,24 @@ def find_free_port() -> int:
 class Config:
     """Command line parameters or defaults"""
 
+    # dynamo specific
     namespace: str
     component: str
     endpoint: str
     metrics_endpoint_port: int
-    model_path: str
-    model_name: Optional[str]
-    tensor_parallel_size: int
-    kv_block_size: int
-    context_length: int
-    extra_engine_args: str
     is_prefill_worker: bool
 
+    # mirror vLLM
+    model: str
+    served_model_name: Optional[str]
 
-def create_vllm_arg_map(config: Config) -> dict[str, str | int | bool | KVEventsConfig]:
-    """
-    Create vLLM engine argument mapping from config.
+    # rest vLLM args
+    engine_args: AsyncEngineArgs
 
-    Args:
-        config: Configuration object containing model and engine parameters
 
-    Returns:
-        Dictionary of arguments for vLLM AsyncEngineArgs
-    """
-
-    arg_map = {
-        "model": config.model_path,
+def overwrite_args(config):
+    defaults = {
         "task": "generate",
-        "tensor_parallel_size": config.tensor_parallel_size,
         "skip_tokenizer_init": True,
         "disable_log_requests": True,
         "enable_prefix_caching": True,
@@ -86,31 +76,20 @@ def create_vllm_arg_map(config: Config) -> dict[str, str | int | bool | KVEvents
         ),
     }
 
-    if config.context_length:
-        # Usually we want it to default to the max (from tokenizer_config.json)
-        arg_map["max_model_len"] = config.context_length
+    # Made decision to always overwrite.
+    # Respecting users original cmd line args at all costs requires a bunch of arg parse work
 
-    if config.kv_block_size > 0:
-        arg_map["block_size"] = config.kv_block_size
-
-    if config.extra_engine_args != "":
-        json_map = {}
-        # extra_engine_args is a filename
-        try:
-            with open(config.extra_engine_args) as f:
-                json_map = json.load(f)
-        except FileNotFoundError:
-            logger.error(f"File {config.extra_engine_args} not found.")
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in {config.extra_engine_args}: {e}")
-        logger.debug(f"Adding extra engine arguments: {json_map}")
-        arg_map = {**arg_map, **json_map}  # json_map gets precedence
-
-    return arg_map
+    logger.debug("Setting Dynamo defaults for vLLM")
+    for key, value in defaults.items():
+        if hasattr(config.engine_args, key):
+            setattr(config.engine_args, key, value)
+            logger.debug(f" engine_args.{key} = {value}")
+        else:
+            raise ValueError(f"{key} not found in AsyncEngineArgs from vLLM.")
 
 
-def cmd_line_args():
-    parser = argparse.ArgumentParser(
+def parse_args() -> Config:
+    parser = FlexibleArgumentParser(
         description="vLLM server integrated with Dynamo LLM."
     )
     parser.add_argument(
@@ -125,50 +104,26 @@ def cmd_line_args():
         help="Enable prefill functionality for this worker. Currently overwrites the --endpoint to be a specially chosen dyn://dynamo.prefill.generate",
     )
     parser.add_argument(
-        "--model-path",
-        type=str,
-        default=DEFAULT_MODEL,
-        help=f"Path to disk model or HuggingFace model identifier to load. Default: {DEFAULT_MODEL}",
-    )
-    parser.add_argument(
         "--metrics-endpoint-port",
         type=int,
         default=find_free_port(),
-        help="Endpoint where vLLM publishes metrics for dynamo. For DP, we handle the port iteration, however if running multiple instances of a model this has to be changed.",
+        help="Endpoint where vLLM publishes metrics for dynamo. For DP, we handle the port iteration.",
     )
-    parser.add_argument(
-        "--model-name",
-        type=str,
-        default="",
-        help="Name to serve the model under. Defaults to deriving it from model path.",
-    )
-    parser.add_argument(
-        "--tensor-parallel-size", type=int, default=1, help="Number of GPUs to use."
-    )
-    parser.add_argument(
-        "--kv-block-size", type=int, default=16, help="Size of a KV cache block."
-    )
-    parser.add_argument(
-        "--context-length",
-        type=int,
-        default=None,
-        help="Max model context length. Defaults to models max, usually model_max_length from tokenizer_config.json. Reducing this reduces VRAM requirements.",
-    )
-    parser.add_argument(
-        "--extra-engine-args",
-        type=str,
-        default="",
-        help="Path to a JSON file containing additional keyword arguments to pass to the vLLM AsyncLLMEngine.",
-    )
+
+    parser = AsyncEngineArgs.add_cli_args(parser)
     args = parser.parse_args()
+    engine_args = AsyncEngineArgs.from_cli_args(args)
 
     config = Config()
-    config.model_path = args.model_path
-    if args.model_name:
-        config.model_name = args.model_name
+    config.model = args.model
+    if args.served_model_name:
+        assert isinstance(
+            args.served_model_name, str
+        ), "We do not support multiple model names."
+        config.served_model_name = args.served_model_name
     else:
         # This becomes an `Option` on the Rust side
-        config.model_name = None
+        config.served_model_name = None
 
     if args.is_prefill_worker:
         args.endpoint = "dyn://dynamo.prefill.generate"
@@ -186,11 +141,16 @@ def cmd_line_args():
     config.namespace = parsed_namespace
     config.component = parsed_component_name
     config.endpoint = parsed_endpoint_name
-    config.metrics_endpoint_port = args.metrics_endpoint_port
-    config.tensor_parallel_size = args.tensor_parallel_size
-    config.kv_block_size = args.kv_block_size
-    config.context_length = args.context_length
-    config.extra_engine_args = args.extra_engine_args
+    config.engine_args = engine_args
     config.is_prefill_worker = args.is_prefill_worker
+    config.metrics_endpoint_port = args.metrics_endpoint_port
+
+    if config.engine_args.block_size is None:
+        config.engine_args.block_size = 16
+        logger.debug(
+            f"Setting reasonable default of {config.engine_args.block_size} for block_size"
+        )
+
+    overwrite_args(config)
 
     return config

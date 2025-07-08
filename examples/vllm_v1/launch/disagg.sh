@@ -7,16 +7,16 @@ cleanup() {
     kill $DYNAMO_PID $WORKER_PID 2>/dev/null || true
     wait $DYNAMO_PID $WORKER_PID 2>/dev/null || true
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT ERR INT TERM
 
 # run ingress
 dynamo run in=http out=dyn &
 DYNAMO_PID=$!
 
-CUDA_VISIBLE_DEVICES=0 python3 main.py --model-path Qwen/Qwen3-0.6B --extra-engine-args launch/args.json &
+CUDA_VISIBLE_DEVICES=0 python3 main.py --model Qwen/Qwen3-0.6B --enforce-eager &
 WORKER_PID=$!
 
 CUDA_VISIBLE_DEVICES=1 python3 main.py \
-    --model-path Qwen/Qwen3-0.6B \
-    --extra-engine-args launch/args.json \
+    --model Qwen/Qwen3-0.6B \
+    --enforce-eager \
     --is-prefill-worker
