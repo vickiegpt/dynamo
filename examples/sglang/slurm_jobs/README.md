@@ -123,6 +123,15 @@ For simplicity of the example, we will make some assumptions about your SLURM cl
    tail -f logs/{JOB_ID}/log.out
    ```
 
+   You can view logs of all prefill or decode workers simultaneously by running:
+   ```bash
+   # prefill workers err (or .out)
+   tail -f logs/{JOB_ID}/*_prefill.err 
+   
+   # decode workers err (or .out)
+   tail -f logs/{JOB_ID}/*_decode.err 
+   ```
+
 5. **Monitor GPU utilization**:
    ```bash
    tail -f logs/{JOB_ID}/{node}_prefill_gpu_utilization.log
