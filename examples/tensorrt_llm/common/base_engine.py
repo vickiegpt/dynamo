@@ -35,12 +35,14 @@ from common.protocol import (
 )
 from common.utils import ManagedThread, ServerType
 from tensorrt_llm.executor import CppExecutorError
+from tensorrt_llm.inputs import default_multimodal_input_loader
 from tensorrt_llm.llmapi import LLM, SamplingParams
 from tensorrt_llm.llmapi.disagg_utils import (
     CtxGenServerConfig,
     parse_disagg_config_file,
 )
 from tensorrt_llm.serve.openai_protocol import DisaggregatedParams
+from transformers import AutoConfig
 
 from dynamo.llm import KvEventPublisher, WorkerMetricsPublisher
 from dynamo.sdk import dynamo_context
@@ -500,7 +502,27 @@ class BaseTensorrtLLMEngine:
         self._ongoing_request_count += 1
 
         try:
-            worker_inputs = request.tokens.tokens
+            if request.image_url and request.prompt:
+                model_dir = (
+                    self._engine_config.model_path or self._engine_config.model_name
+                )
+                config = AutoConfig.from_pretrained(model_dir, trust_remote_code=True)
+                worker_inputs = default_multimodal_input_loader(
+                    tokenizer=self._llm_engine.tokenizer,
+                    model_dir=model_dir,
+                    model_type=config.model_type,
+                    modality="image",
+                    prompts=[request.prompt],
+                    media=[request.image_url],
+                    image_data_format="pt",
+                    device="cuda",
+                )
+            elif request.tokens:
+                worker_inputs = request.tokens.tokens
+            else:
+                raise ValueError(
+                    "Request must have either an image_url and prompt, or tokens."
+                )
 
             disaggregated_params = (
                 DisaggregatedTypeConverter.to_llm_disaggregated_params(

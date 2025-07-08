@@ -17,7 +17,6 @@ import logging
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Union
 
-import torch
 from common.parser import LLMAPIConfig
 from common.protocol import (
     DynamoTRTLLMChatCompletionResponseStreamChoice,
@@ -31,7 +30,6 @@ from common.protocol import (
 )
 from common.utils import ConversationMessage
 from openai.types.chat import ChatCompletionMessageParam
-from tensorrt_llm.inputs import default_multimodal_input_loader
 from tensorrt_llm.llmapi.llm import RequestOutput
 from tensorrt_llm.llmapi.tokenizer import TokenizerBase, tokenizer_factory
 from tensorrt_llm.serve.openai_protocol import (
@@ -59,10 +57,10 @@ class ChatProcessorMixin:
         logger.info(f"Set model name: {self._model_name}")
         self._tokenizer = tokenizer_factory(self._model_name)
         self.chat_processor = ChatProcessor(
-            self._model_name, self._tokenizer, using_engine_generator
+            self._model_name, self._tokenizer, engine_config, using_engine_generator
         )
         self.completions_processor = CompletionsProcessor(
-            self._model_name, self._tokenizer
+            self._model_name, self._tokenizer, engine_config
         )
 
 
@@ -152,9 +150,11 @@ class ChatProcessor(BaseChatProcessor):
         self,
         model: str,
         tokenizer: TokenizerBase,
+        engine_config: LLMAPIConfig,
         using_engine_generator: bool = False,
     ):
         super().__init__(model, tokenizer)
+        self._engine_config = engine_config
         self.using_engine_generator = using_engine_generator
 
     def yield_first_chat(
@@ -298,26 +298,23 @@ class ChatProcessor(BaseChatProcessor):
                         break
             conversation.extend(parse_chat_message_content(message))
 
-        prompt: Union[List[int], "torch.Tensor"]
+        sampling_params = request.to_sampling_params()
+        sampling_params._setup(self.tokenizer)
+        sampling_params.stop = None
+
         if image_url:
-            # For multimodal requests, the goal is to get a formatted text string
-            # (with tokenize=False) that can be passed to the
-            # default_multimodal_input_loader. This loader is responsible for
-            # combining the text and image into the final input tensor. The
-            # text-only path, in contrast, creates final token IDs directly
-            # and supports additional features like tools.
             text_prompt = self.tokenizer.apply_chat_template(
                 conversation, add_generation_prompt=True, tokenize=False
             )
-            prompt = default_multimodal_input_loader(
-                tokenizer=self.tokenizer,
-                model_dir=self._engine_config.model_dir,
-                model_type=self._engine_config.model_type,
-                modality="image",
-                prompts=[text_prompt],
-                media=[image_url],
-                image_data_format="pt",
-                device="cuda",
+            return TRTLLMWorkerRequest(
+                id=request.id,
+                model=request.model,
+                sampling_params=asdict(sampling_params),
+                streaming=request.stream,
+                conversation=conversation,
+                disaggregated_params=request.disaggregated_params,
+                prompt=text_prompt,
+                image_url=image_url,
             )
         else:
             tool_dicts = (
@@ -325,7 +322,7 @@ class ChatProcessor(BaseChatProcessor):
                 if request.tools is None
                 else [tool.model_dump() for tool in request.tools]
             )
-            prompt = self.tokenizer.apply_chat_template(
+            prompt_tokens = self.tokenizer.apply_chat_template(
                 conversation=conversation,
                 tokenize=True,
                 add_generation_prompt=request.add_generation_prompt,
@@ -334,20 +331,15 @@ class ChatProcessor(BaseChatProcessor):
                 chat_template=request.chat_template,
                 **(request.chat_template_kwargs or {}),
             )
-
-        sampling_params = request.to_sampling_params()
-        sampling_params._setup(self.tokenizer)
-        sampling_params.stop = None
-
-        return TRTLLMWorkerRequest(
-            id=request.id,
-            model=request.model,
-            sampling_params=asdict(sampling_params),
-            streaming=request.stream,
-            conversation=conversation,
-            disaggregated_params=request.disaggregated_params,
-            tokens=Tokens(tokens=prompt),
-        )
+            return TRTLLMWorkerRequest(
+                id=request.id,
+                model=request.model,
+                sampling_params=asdict(sampling_params),
+                streaming=request.stream,
+                conversation=conversation,
+                disaggregated_params=request.disaggregated_params,
+                tokens=Tokens(tokens=prompt_tokens),
+            )
 
     async def postprocess(
         self,
@@ -391,9 +383,11 @@ class CompletionsProcessor:
         self,
         model: str,
         tokenizer: TokenizerBase,
+        engine_config: LLMAPIConfig,
     ):
         self.model = model
         self.tokenizer = tokenizer
+        self._engine_config = engine_config
 
     def create_completion_stream_response(self, request, response):
         num_choices = 1 if request.n is None else request.n
@@ -427,33 +421,30 @@ class CompletionsProcessor:
                 "Invalid prompt type. Only string or list of integers are supported."
             )
 
-        tokens: Union[List[int], "torch.Tensor"]
-        if request.image_url:
-            tokens = default_multimodal_input_loader(
-                tokenizer=self.tokenizer,
-                model_dir=self._engine_config.model_dir,
-                model_type=self._engine_config.model_type,
-                modality="image",
-                prompts=[text_prompt],
-                media=[request.image_url],
-                image_data_format="pt",
-                device="cuda",
-            )
-        else:
-            tokens = self.tokenizer.encode(text_prompt)
-
         sampling_params = request.to_sampling_params()
         sampling_params._setup(self.tokenizer)
         sampling_params.stop = None
 
-        return TRTLLMWorkerRequest(
-            id=request.id,
-            model=request.model,
-            streaming=request.stream,
-            sampling_params=asdict(sampling_params),
-            disaggregated_params=request.disaggregated_params,
-            tokens=Tokens(tokens=tokens),
-        )
+        if request.image_url:
+            return TRTLLMWorkerRequest(
+                id=request.id,
+                model=request.model,
+                streaming=request.stream,
+                sampling_params=asdict(sampling_params),
+                disaggregated_params=request.disaggregated_params,
+                prompt=text_prompt,
+                image_url=request.image_url,
+            )
+        else:
+            tokens = self.tokenizer.encode(text_prompt)
+            return TRTLLMWorkerRequest(
+                id=request.id,
+                model=request.model,
+                streaming=request.stream,
+                sampling_params=asdict(sampling_params),
+                disaggregated_params=request.disaggregated_params,
+                tokens=Tokens(tokens=tokens),
+            )
 
     async def postprocess(
         self,

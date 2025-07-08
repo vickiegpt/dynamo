@@ -68,6 +68,7 @@ class TRTLLMWorkerRequest(BaseModel):
     conversation: Optional[List[ConversationMessage]] = Field(default=None)
     tokens: Optional[Tokens] = Field(default=None)
     disaggregated_params: Optional[DisaggregatedParams] = Field(default=None)
+    image_url: Optional[str] = Field(default=None)
 
 
 @dataclass(slots=True)
