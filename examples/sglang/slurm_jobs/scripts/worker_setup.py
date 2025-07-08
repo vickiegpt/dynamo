@@ -206,7 +206,7 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("GPUs per node must be at least 1")
 
 
-def get_sglang_mini_lb_command_args(prefill_host_ip: str, decode_host_ip: str) -> dict:
+def get_sglang_mini_lb_command_args(prefill_host_ip: str, decode_host_ip: str) -> str:
     cmd = (
         f"python3 -m sglang.srt.disaggregation.launch_lb "
         f"--prefill http://{prefill_host_ip}:30000 "
