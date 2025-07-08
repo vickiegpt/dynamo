@@ -104,8 +104,10 @@ def _parse_command_line_args(args: list[str] | None = None) -> argparse.Namespac
         "--gpu-type", choices=["h100", "gb200"], default="h100", help="GPU type to use"
     )
     parser.add_argument(
-        "--use-sglang-commands", action="store_true", default=False, 
-        help="Use SGLang commands instead of Dynamo"
+        "--use-sglang-commands",
+        action="store_true",
+        default=False,
+        help="Use SGLang commands instead of Dynamo",
     )
     return parser.parse_args(args)
 

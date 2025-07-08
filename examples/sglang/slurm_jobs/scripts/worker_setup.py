@@ -205,6 +205,7 @@ def _validate_args(args: argparse.Namespace) -> None:
     if args.gpus_per_node < 1:
         raise ValueError("GPUs per node must be at least 1")
 
+
 def get_sglang_mini_lb_command_args(prefill_host_ip: str, decode_host_ip: str) -> dict:
     cmd = (
         f"python3 -m sglang.srt.disaggregation.launch_lb "
@@ -216,19 +217,27 @@ def get_sglang_mini_lb_command_args(prefill_host_ip: str, decode_host_ip: str) -
     )
     return cmd
 
-def setup_env_vars_for_gpu_script(host_ip: str, rank: int, total_gpus: int, total_nodes: int, port: int = DIST_INIT_PORT):
+
+def setup_env_vars_for_gpu_script(
+    host_ip: str,
+    rank: int,
+    total_gpus: int,
+    total_nodes: int,
+    port: int = DIST_INIT_PORT,
+):
     """Setup environment variables required by GPU scripts (h100.sh, gb200.sh)"""
     os.environ["HOST_IP"] = host_ip
     os.environ["PORT"] = str(port)
     os.environ["TOTAL_GPUS"] = str(total_gpus)
     os.environ["RANK"] = str(rank)
     os.environ["TOTAL_NODES"] = str(total_nodes)
-    
+
     logging.info(f"Set HOST_IP: {host_ip}")
     logging.info(f"Set PORT: {port}")
     logging.info(f"Set TOTAL_GPUS: {total_gpus}")
     logging.info(f"Set RANK: {rank}")
     logging.info(f"Set TOTAL_NODES: {total_nodes}")
+
 
 def get_gpu_command(worker_type: str, use_sglang_commands: bool, gpu_type: str) -> str:
     """Generate command to run the appropriate GPU script"""
@@ -236,11 +245,17 @@ def get_gpu_command(worker_type: str, use_sglang_commands: bool, gpu_type: str) 
     script_path = Path(__file__).parent / script_name
     mode = worker_type  # "prefill" or "decode"
     cmd = "sglang" if use_sglang_commands else "dynamo"
-    
+
     return f"bash {script_path} {mode} {cmd}"
 
+
 def setup_prefill_node(
-    rank: int, prefill_host_ip: str, total_nodes: int, total_gpus: int, use_sglang_commands: bool, gpu_type: str
+    rank: int,
+    prefill_host_ip: str,
+    total_nodes: int,
+    total_gpus: int,
+    use_sglang_commands: bool,
+    gpu_type: str,
 ) -> int:
     """
     Setup the prefill node.
@@ -248,7 +263,9 @@ def setup_prefill_node(
     if not use_sglang_commands:
         if rank == 0:
             logging.info(f"Setting up host prefill node: {rank}")
-            logging.info(f"Starting nats server on node {rank} with IP {prefill_host_ip}")
+            logging.info(
+                f"Starting nats server on node {rank} with IP {prefill_host_ip}"
+            )
 
             nats_process = run_command("nats-server -js", background=True)
             if not nats_process:
@@ -265,7 +282,9 @@ def setup_prefill_node(
             if not etcd_process:
                 raise RuntimeError("Failed to start etcd")
 
-            ingress_process = run_command("dynamo run in=http out=dyn --http-port=8000", background=True)
+            ingress_process = run_command(
+                "dynamo run in=http out=dyn --http-port=8000", background=True
+            )
             if not ingress_process:
                 raise RuntimeError("Failed to start ingress")
 
@@ -278,10 +297,11 @@ def setup_prefill_node(
 
     # Setup environment variables for GPU script
     setup_env_vars_for_gpu_script(prefill_host_ip, rank, total_gpus, total_nodes)
-    
+
     # Use appropriate GPU script instead of generating command directly
     cmd_to_run = get_gpu_command("prefill", use_sglang_commands, gpu_type)
     return run_command(cmd_to_run)
+
 
 def setup_decode_node(
     rank: int,
@@ -290,7 +310,7 @@ def setup_decode_node(
     total_nodes: int,
     total_gpus: int,
     use_sglang_commands: bool,
-    gpu_type: str
+    gpu_type: str,
 ) -> int:
     """
     Setup the decode node.
@@ -298,7 +318,9 @@ def setup_decode_node(
     logging.info(f"Setting up child decode node: {rank}")
 
     if use_sglang_commands:
-        sgl_mini_lb_cmd = get_sglang_mini_lb_command_args(prefill_host_ip, decode_host_ip)
+        sgl_mini_lb_cmd = get_sglang_mini_lb_command_args(
+            prefill_host_ip, decode_host_ip
+        )
         run_command(sgl_mini_lb_cmd, background=True)
     else:
         if not wait_for_etcd(f"http://{prefill_host_ip}:{ETCD_CLIENT_PORT}"):
@@ -306,7 +328,7 @@ def setup_decode_node(
 
     # Setup environment variables for GPU script
     setup_env_vars_for_gpu_script(decode_host_ip, rank, total_gpus, total_nodes)
-    
+
     # Use appropriate GPU script instead of generating command directly
     cmd_to_run = get_gpu_command("decode", use_sglang_commands, gpu_type)
     return run_command(cmd_to_run)
@@ -346,7 +368,7 @@ def main(input_args: list[str] | None = None):
             args.total_nodes,
             args.total_nodes * args.gpus_per_node,
             args.use_sglang_commands,
-            args.gpu_type
+            args.gpu_type,
         )
     else:
         setup_decode_node(
@@ -356,7 +378,7 @@ def main(input_args: list[str] | None = None):
             args.total_nodes,
             args.total_nodes * args.gpus_per_node,
             args.use_sglang_commands,
-            args.gpu_type
+            args.gpu_type,
         )
 
     logging.info(f"{args.worker_type.capitalize()} node setup complete")
