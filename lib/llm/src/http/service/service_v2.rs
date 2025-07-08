@@ -139,6 +139,9 @@ impl HttpServiceConfigBuilder {
         let model_manager = Arc::new(ModelManager::new());
         let state = Arc::new(State::new(model_manager));
 
+        // Initialize global metrics for timing operations
+        let _ = crate::global_metrics::init_global_metrics();
+
         // enable prometheus metrics
         let registry = metrics::Registry::new();
         state.metrics_clone().register(&registry)?;

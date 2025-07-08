@@ -206,6 +206,8 @@ impl OpenAIPreprocessor {
                                 self.formatter.render(request)?
                             };
 
+                            // let start = std::time::Instant::now();
+
                             let encoding = time_global_operation!(
                                 "tokenizer_encode",
                                 "preprocessor",
@@ -213,6 +215,8 @@ impl OpenAIPreprocessor {
                                     self.tokenizer.encode(&formatted_prompt)
                                 })
                             )?;
+                            // let duration = start.elapsed();
+                            // tracing::info!("===== Tokenizer encode duration: {:?} =====", duration);
 
                             if request.has_annotation(ANNOTATION_FORMATTED_PROMPT) {
                                 annotations.insert(

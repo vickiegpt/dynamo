@@ -53,13 +53,19 @@ pub fn init_global_metrics() -> Arc<GlobalMetrics> {
     GLOBAL_METRICS
         .set(metrics.clone())
         .expect("Global metrics already initialized");
-    tracing::info!("Global timing metrics initialized and registered with default Prometheus registry");
+    tracing::info!("===== Global timing metrics initialized and registered with default Prometheus registry =====");
     metrics
 }
 
 /// Get global metrics
 pub fn get_global_metrics() -> Option<&'static Arc<GlobalMetrics>> {
     GLOBAL_METRICS.get()
+}
+
+/// Gather all metrics from the default registry
+/// This function can be called from other crates to get all registered metrics
+pub fn gather_all_metrics() -> Vec<prometheus::proto::MetricFamily> {
+    prometheus::gather()
 }
 
 /// Macro to time an operation and record it in global metrics

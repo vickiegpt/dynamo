@@ -15,7 +15,7 @@
 
 use axum::{body, http::StatusCode, response::IntoResponse, routing::get, Router};
 use prometheus::{
-    proto, register_gauge_with_registry, Encoder, Gauge, Opts, Registry, TextEncoder,
+    proto, register_gauge_with_registry, Encoder, Gauge, Opts, TextEncoder,
 };
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -28,7 +28,7 @@ pub struct RuntimeMetrics {
 }
 
 impl RuntimeMetrics {
-    pub fn new(metrics_registry: &Arc<Registry>) -> anyhow::Result<Arc<Self>> {
+    pub fn new() -> anyhow::Result<Arc<Self>> {
         let uptime_opts = Opts::new(
             "uptime_seconds",
             "Total uptime of the DistributedRuntime in seconds",
@@ -36,7 +36,7 @@ impl RuntimeMetrics {
         .namespace("dynamo")
         .subsystem("runtime");
 
-        let uptime_gauge = register_gauge_with_registry!(uptime_opts, metrics_registry)?;
+        let uptime_gauge = register_gauge_with_registry!(uptime_opts, prometheus::default_registry())?;
 
         Ok(Arc::new(Self { uptime_gauge }))
     }
@@ -49,23 +49,16 @@ impl RuntimeMetrics {
 /// HTTP server state containing pre-created metrics
 pub struct HttpServerState {
     drt: Arc<crate::DistributedRuntime>,
-    registry: Arc<Registry>,
     runtime_metrics: Arc<RuntimeMetrics>,
 }
 
 impl HttpServerState {
     /// Create new HTTP server state with pre-created metrics
     pub fn new(drt: Arc<crate::DistributedRuntime>) -> anyhow::Result<Self> {
-        let registry = Arc::new(Registry::new());
-
         // Create runtime metrics
-        let runtime_metrics = RuntimeMetrics::new(&registry)?;
-
-
-
+        let runtime_metrics = RuntimeMetrics::new()?;
         Ok(Self {
             drt,
-            registry,
             runtime_metrics,
         })
     }
@@ -136,8 +129,8 @@ async fn metrics_handler(state: Arc<HttpServerState>) -> impl IntoResponse {
     let uptime_seconds = state.drt.uptime().as_secs_f64();
     state.runtime_metrics.update_uptime(uptime_seconds);
 
-    // Gather metrics from the registry
-    let metric_families = state.registry.gather();
+    // Gather metrics from the default registry
+    let metric_families = prometheus::gather();
 
     let encoder = TextEncoder::new();
     let mut buffer = Vec::new();
@@ -201,8 +194,7 @@ mod tests {
     #[tokio::test]
     async fn test_runtime_metrics_creation() {
         // Test RuntimeMetrics creation and functionality
-        let registry = Arc::new(Registry::new());
-        let runtime_metrics = RuntimeMetrics::new(&registry).unwrap();
+        let runtime_metrics = RuntimeMetrics::new().unwrap();
 
         // Wait a bit to ensure uptime is measurable
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -211,8 +203,8 @@ mod tests {
         let uptime_seconds = 123.456;
         runtime_metrics.update_uptime(uptime_seconds);
 
-        // Gather metrics from the registry
-        let metric_families = registry.gather();
+        // Gather metrics from the default registry
+        let metric_families = prometheus::gather();
 
         let encoder = TextEncoder::new();
         let mut buffer = Vec::new();
@@ -226,12 +218,12 @@ mod tests {
     #[tokio::test]
     async fn test_runtime_metrics_namespace() {
         // Test that metrics have correct namespace
-        let registry = Arc::new(Registry::new());
-        let runtime_metrics = RuntimeMetrics::new(&registry).unwrap();
+        let runtime_metrics = RuntimeMetrics::new().unwrap();
 
         runtime_metrics.update_uptime(42.0);
 
-        let metric_families = registry.gather();
+        // Gather metrics from the default registry
+        let metric_families = prometheus::gather();
         let encoder = TextEncoder::new();
         let mut buffer = Vec::new();
         encoder.encode(&metric_families, &mut buffer).unwrap();
