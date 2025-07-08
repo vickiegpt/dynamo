@@ -72,7 +72,7 @@ for i in $(seq 0 $((PREFILL_NODES - 1))); do
     node=${nodes[$i]}
     rank=$i
     echo "Launching prefill task on node ${i} (rank ${rank}): $node"
-    
+
     cmd="srun $ENROOT_ARGS --nodes=1 --ntasks=1 --nodelist=$node --output=${LOG_DIR}/${node}_prefill.out --error=${LOG_DIR}/${node}_prefill.err python /scripts/worker_setup.py --prefill_host_ip ${PREFILL_HOST_IP} --decode_host_ip ${DECODE_HOST_IP} --rank ${rank} --total_nodes ${PREFILL_NODES} --worker_type prefill --gpu_utilization_log /logs/${node}_prefill_gpu_utilization.log ${WORKER_ARGS}"
     echo "$cmd"
     $cmd &
@@ -83,7 +83,7 @@ for i in $(seq $PREFILL_NODES $((PREFILL_NODES + DECODE_NODES - 1))); do
     node=${nodes[$i]}
     rank=$((i - PREFILL_NODES))
     echo "Launching decode task on node ${i} (rank ${rank}): $node"
-    
+
     cmd="srun $ENROOT_ARGS --nodes=1 --ntasks=1 --nodelist=$node --output=${LOG_DIR}/${node}_decode.out --error=${LOG_DIR}/${node}_decode.err python /scripts/worker_setup.py --decode_host_ip ${DECODE_HOST_IP} --prefill_host_ip ${PREFILL_HOST_IP} --rank ${rank} --total_nodes ${DECODE_NODES} --worker_type decode --gpu_utilization_log /logs/${node}_decode_gpu_utilization.log ${WORKER_ARGS}"
     echo "$cmd"
     $cmd &

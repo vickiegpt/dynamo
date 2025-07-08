@@ -286,6 +286,7 @@ def setup_head_prefill_node(prefill_host_ip: str) -> None:
     if not cache_flush_server_process:
         raise RuntimeError("Failed to start cache flush server")
 
+
 def setup_prefill_node(
     rank: int,
     prefill_host_ip: str,
