@@ -52,11 +52,12 @@ class LLMAPIConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
-            "pytorch_backend_config": self.pytorch_backend_config,
             "kv_cache_config": self.kv_cache_config,
             "speculative_config": self.speculative_config,
             "skip_tokenizer_init": self.skip_tokenizer_init,
         }
+        if self.pytorch_backend_config:
+            data["pytorch_backend_config"] = self.pytorch_backend_config
         if self.extra_args:
             data.update(self.extra_args)
         return data

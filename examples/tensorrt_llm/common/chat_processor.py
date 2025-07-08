@@ -15,8 +15,9 @@
 
 import logging
 from dataclasses import asdict
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
+import torch
 from common.parser import LLMAPIConfig
 from common.protocol import (
     DynamoTRTLLMChatCompletionResponseStreamChoice,
@@ -30,6 +31,7 @@ from common.protocol import (
 )
 from common.utils import ConversationMessage
 from openai.types.chat import ChatCompletionMessageParam
+from tensorrt_llm.inputs import default_multimodal_input_loader
 from tensorrt_llm.llmapi.llm import RequestOutput
 from tensorrt_llm.llmapi.tokenizer import TokenizerBase, tokenizer_factory
 from tensorrt_llm.serve.openai_protocol import (
@@ -81,6 +83,9 @@ def parse_chat_message_content(
         if part_type == "text":
             text = part["text"]  # type: ignore
             texts.append(text)
+        elif part_type == "image_url":
+            # Image URL is handled in the preprocess step, just ignore here.
+            pass
         else:
             raise NotImplementedError(f"{part_type} is not supported")
 
@@ -281,22 +286,55 @@ class ChatProcessor(BaseChatProcessor):
 
     async def preprocess(self, request):
         conversation: List[Any] = []
+        image_url: Optional[str] = None
         for message in request.messages:
+            # In multi-modal cases, content is a list of parts.
+            # We search for the image_url and extract it.
+            if not image_url and isinstance(message.get("content"), list):
+                for part in message["content"]:
+                    if part["type"] == "image_url":
+                        # We assume one image per request for now.
+                        image_url = part["image_url"]["url"]
+                        break
             conversation.extend(parse_chat_message_content(message))
-        tool_dicts = (
-            None
-            if request.tools is None
-            else [tool.model_dump() for tool in request.tools]
-        )
-        prompt = self.tokenizer.apply_chat_template(
-            conversation=conversation,
-            tokenize=True,
-            add_generation_prompt=request.add_generation_prompt,
-            tools=tool_dicts,
-            documents=request.documents,
-            chat_template=request.chat_template,
-            **(request.chat_template_kwargs or {}),
-        )
+
+        prompt: Union[List[int], "torch.Tensor"]
+        if image_url:
+            # For multimodal requests, the goal is to get a formatted text string
+            # (with tokenize=False) that can be passed to the
+            # default_multimodal_input_loader. This loader is responsible for
+            # combining the text and image into the final input tensor. The
+            # text-only path, in contrast, creates final token IDs directly
+            # and supports additional features like tools.
+            text_prompt = self.tokenizer.apply_chat_template(
+                conversation, add_generation_prompt=True, tokenize=False
+            )
+            prompt = default_multimodal_input_loader(
+                tokenizer=self.tokenizer,
+                model_dir=self._engine_config.model_dir,
+                model_type=self._engine_config.model_type,
+                modality="image",
+                prompts=[text_prompt],
+                media=[image_url],
+                image_data_format="pt",
+                device="cuda",
+            )
+        else:
+            tool_dicts = (
+                None
+                if request.tools is None
+                else [tool.model_dump() for tool in request.tools]
+            )
+            prompt = self.tokenizer.apply_chat_template(
+                conversation=conversation,
+                tokenize=True,
+                add_generation_prompt=request.add_generation_prompt,
+                tools=tool_dicts,
+                documents=request.documents,
+                chat_template=request.chat_template,
+                **(request.chat_template_kwargs or {}),
+            )
+
         sampling_params = request.to_sampling_params()
         sampling_params._setup(self.tokenizer)
         sampling_params.stop = None
@@ -383,11 +421,26 @@ class CompletionsProcessor:
             isinstance(request.prompt, list)
             and all(isinstance(x, int) for x in request.prompt)
         ):
-            prompt = request.prompt
+            text_prompt = request.prompt
         else:
             raise ValueError(
                 "Invalid prompt type. Only string or list of integers are supported."
             )
+
+        tokens: Union[List[int], "torch.Tensor"]
+        if request.image_url:
+            tokens = default_multimodal_input_loader(
+                tokenizer=self.tokenizer,
+                model_dir=self._engine_config.model_dir,
+                model_type=self._engine_config.model_type,
+                modality="image",
+                prompts=[text_prompt],
+                media=[request.image_url],
+                image_data_format="pt",
+                device="cuda",
+            )
+        else:
+            tokens = self.tokenizer.encode(text_prompt)
 
         sampling_params = request.to_sampling_params()
         sampling_params._setup(self.tokenizer)
@@ -399,7 +452,7 @@ class CompletionsProcessor:
             streaming=request.stream,
             sampling_params=asdict(sampling_params),
             disaggregated_params=request.disaggregated_params,
-            tokens=Tokens(tokens=self.tokenizer.encode(prompt)),
+            tokens=Tokens(tokens=tokens),
         )
 
     async def postprocess(

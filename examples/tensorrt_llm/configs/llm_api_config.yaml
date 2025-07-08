@@ -19,7 +19,7 @@
 
 # TODO: figure out how to generate this from the service config or vice versa
 
-model_name: "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+model_name: "Qwen/Qwen2-VL-7B-Instruct"
 model_path: null
 tensor_parallel_size: 1
 moe_expert_parallel_size: 1

@@ -508,9 +508,12 @@ class BaseTensorrtLLMEngine:
                 )
             )
 
+            # In disaggregated mode, a generation worker offloads the prefill phase.
             if self._remote_prefill and self._server_type == ServerType.GEN:
+                # 1. Send a CONTEXT_ONLY request to a remote prefill worker.
                 ctx_response_obj = await self._get_remote_prefill_response(request)
 
+                # 2. Yield the first token received from the prefill worker.
                 yield TRTLLMWorkerResponse(
                     request_id=request.id,
                     prompt_token_ids=ctx_response_obj.prompt_token_ids,
@@ -518,6 +521,7 @@ class BaseTensorrtLLMEngine:
                     finished=ctx_response_obj.finished,
                 ).model_dump_json(exclude_unset=True)
 
+                # 3. Prepare for local generation using state from the prefill response.
                 worker_inputs = ctx_response_obj.prompt_token_ids
                 disaggregated_params = (
                     DisaggregatedTypeConverter.to_llm_disaggregated_params(
@@ -526,6 +530,7 @@ class BaseTensorrtLLMEngine:
                         )
                     )
                 )
+                # Set request type to generation only to skip local prefill.
                 disaggregated_params.request_type = (
                     DisaggRequestType.GENERATION_ONLY.value
                 )
@@ -535,6 +540,10 @@ class BaseTensorrtLLMEngine:
             )
 
             sampling_params = get_sampling_params(request.sampling_params)
+            # TODO: Add image url to the request
+            # Asynchronously generate and stream tokens from the local engine.
+            # - For GEN workers, this performs decoding using remote KV cache.
+            # - For CTX workers, this performs the prefill and returns one response.
             async for response in self._llm_engine.generate_async(
                 inputs=worker_inputs,
                 sampling_params=sampling_params,
@@ -543,8 +552,7 @@ class BaseTensorrtLLMEngine:
                 if self._server_type == ServerType.CTX
                 else request.streaming,
             ):
-                # Convert the disaggregated params to OAI format so
-                # it can be sent over the network.
+                # Convert disaggregated params to a network-friendly format before yielding.
                 response.outputs[
                     0
                 ].disaggregated_params = DisaggregatedTypeConverter.to_oai_disaggregated_params(
@@ -563,5 +571,6 @@ class BaseTensorrtLLMEngine:
         except Exception as e:
             raise RuntimeError("Failed to generate: " + str(e))
 
+        # Start background threads for publishing metrics after first generation.
         self._start_threads()
         self._ongoing_request_count -= 1
