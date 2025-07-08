@@ -41,7 +41,7 @@ done
 if [ "$GPU_TYPE" = "gb200" ]; then
     PREFILL_HOST_IP=$(srun --nodes=1 --ntasks=1 --nodelist=${nodes[0]} hostname -I | awk '{print $1}')
 else
-    PREFILL_HOST_IP=$(srun --nodes=1 --ntasks=1 --nodelist=${nodes[0]} ifconfig $NETWORK_INTERFACE | grep -oP 'inet \K[0-9.]+')
+    PREFILL_HOST_IP=$(srun --nodes=1 --ntasks=1 --nodelist=${nodes[0]} ip route get $(getent hosts ${nodes[0]} | awk '{ print $1 }') | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
 fi
 if [ -z "$PREFILL_HOST_IP" ]; then
     echo "Error: Could not retrieve IP address for prefill host ${nodes[0]} on interface $NETWORK_INTERFACE"
@@ -52,7 +52,7 @@ echo "Prefill host IP address: $PREFILL_HOST_IP"
 if [ "$GPU_TYPE" = "gb200" ]; then
     DECODE_HOST_IP=$(srun --nodes=1 --ntasks=1 --nodelist=${nodes[$PREFILL_NODES]} hostname -I | awk '{print $1}')
 else
-    DECODE_HOST_IP=$(srun --nodes=1 --ntasks=1 --nodelist=${nodes[$PREFILL_NODES]} ifconfig $NETWORK_INTERFACE | grep -oP 'inet \K[0-9.]+')
+    DECODE_HOST_IP=$(srun --nodes=1 --ntasks=1 --nodelist=${nodes[$PREFILL_NODES]} ip route get $(getent hosts ${nodes[$PREFILL_NODES]} | awk '{ print $1 }') | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
 fi
 if [ -z "$DECODE_HOST_IP" ]; then
     echo "Error: Could not retrieve IP address for decode host ${nodes[$PREFILL_NODES]} on interface $NETWORK_INTERFACE"
@@ -81,9 +81,9 @@ for i in $(seq 0 $((PREFILL_NODES - 1))); do
     rank=$i
     echo "Launching prefill task on node ${i} (rank ${rank}): $node"
     
-    cmd="srun $ENROOT_ARGS --nodes=1 --ntasks=1 --nodelist=$node --output=${LOG_DIR}/${node}_prefill.out --error=${LOG_DIR}/${node}_prefill.err python /scripts/worker_setup.py --prefill_host_ip ${PREFILL_HOST_IP} --decode_host_ip ${DECODE_HOST_IP} --rank ${rank} --total_nodes ${PREFILL_NODES} --worker_type prefill --gpu_utilization_log /logs/${node}_prefill_gpu_utilization.log ${WORKER_ARGS} &"
+    cmd="srun $ENROOT_ARGS --nodes=1 --ntasks=1 --nodelist=$node --output=${LOG_DIR}/${node}_prefill.out --error=${LOG_DIR}/${node}_prefill.err python /scripts/worker_setup.py --prefill_host_ip ${PREFILL_HOST_IP} --decode_host_ip ${DECODE_HOST_IP} --rank ${rank} --total_nodes ${PREFILL_NODES} --worker_type prefill --gpu_utilization_log /logs/${node}_prefill_gpu_utilization.log ${WORKER_ARGS}"
     echo "$cmd"
-    $cmd
+    $cmd &
 done
 
 # Launch decode tasks on the next DECODE_NODES nodes
@@ -92,9 +92,9 @@ for i in $(seq $PREFILL_NODES $((PREFILL_NODES + DECODE_NODES - 1))); do
     rank=$((i - PREFILL_NODES))
     echo "Launching decode task on node ${i} (rank ${rank}): $node"
     
-    cmd="srun $ENROOT_ARGS --nodes=1 --ntasks=1 --nodelist=$node --output=${LOG_DIR}/${node}_decode.out --error=${LOG_DIR}/${node}_decode.err python /scripts/worker_setup.py --decode_host_ip ${DECODE_HOST_IP} --prefill_host_ip ${PREFILL_HOST_IP} --rank ${rank} --total_nodes ${DECODE_NODES} --worker_type decode --gpu_utilization_log /logs/${node}_decode_gpu_utilization.log ${WORKER_ARGS} &"
+    cmd="srun $ENROOT_ARGS --nodes=1 --ntasks=1 --nodelist=$node --output=${LOG_DIR}/${node}_decode.out --error=${LOG_DIR}/${node}_decode.err python /scripts/worker_setup.py --decode_host_ip ${DECODE_HOST_IP} --prefill_host_ip ${PREFILL_HOST_IP} --rank ${rank} --total_nodes ${DECODE_NODES} --worker_type decode --gpu_utilization_log /logs/${node}_decode_gpu_utilization.log ${WORKER_ARGS}"
     echo "$cmd"
-    $cmd
+    $cmd &
 done
 
 echo ""
