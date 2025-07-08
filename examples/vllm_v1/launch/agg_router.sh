@@ -14,7 +14,7 @@ dynamo run in=http out=dyn --router-mode kv &
 DYNAMO_PID=$!
 
 # run workers
-CUDA_VISIBLE_DEVICES=0 python3 main.py --model Qwen/Qwen3-0.6B --enforce-eager &
+CUDA_VISIBLE_DEVICES=0 python3 components/main.py --model Qwen/Qwen3-0.6B --enforce-eager &
 WORKER_PID=$!
 
-CUDA_VISIBLE_DEVICES=1 python3 main.py --model Qwen/Qwen3-0.6B --enforce-eager
+CUDA_VISIBLE_DEVICES=1 python3 components/main.py --model Qwen/Qwen3-0.6B --enforce-eager

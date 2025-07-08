@@ -13,10 +13,10 @@ trap cleanup EXIT ERR INT TERM
 dynamo run in=http out=dyn &
 DYNAMO_PID=$!
 
-CUDA_VISIBLE_DEVICES=0 python3 main.py --model Qwen/Qwen3-0.6B --enforce-eager &
+CUDA_VISIBLE_DEVICES=0 python3 components/main.py --model Qwen/Qwen3-0.6B --enforce-eager &
 WORKER_PID=$!
 
-CUDA_VISIBLE_DEVICES=1 python3 main.py \
+CUDA_VISIBLE_DEVICES=1 python3 components/main.py \
     --model Qwen/Qwen3-0.6B \
     --enforce-eager \
     --is-prefill-worker

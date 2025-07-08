@@ -14,4 +14,4 @@ dynamo run in=http out=dyn &
 DYNAMO_PID=$!
 
 # run worker
-python3 main.py --model Qwen/Qwen3-0.6B --enforce-eager
+python3 components/main.py --model Qwen/Qwen3-0.6B --enforce-eager
