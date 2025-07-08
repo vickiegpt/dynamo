@@ -249,7 +249,10 @@ def get_gpu_command(worker_type: str, use_sglang_commands: bool, gpu_type: str) 
     return f"bash {script_path} {mode} {cmd}"
 
 
-def setup_nats_etcd_and_ingress(prefill_host_ip: str) -> None:
+def setup_head_prefill_node(prefill_host_ip: str) -> None:
+    """
+    Setup NATS, etcd, ingress, and http servers on the prefill host node.
+    """
     logging.info(f"Starting nats server on node {prefill_host_ip}")
 
     nats_process = run_command("nats-server -js", background=True)
@@ -274,6 +277,14 @@ def setup_nats_etcd_and_ingress(prefill_host_ip: str) -> None:
     )
     if not ingress_process:
         raise RuntimeError("Failed to start ingress")
+    
+    logging.info(f"Starting http server on port 9001for flush_cache endpoint on node {prefill_host_ip}")
+    cache_flush_server_cmd = (
+        f"python3 utils/sgl_http_server.py --ns dynamo"
+    )
+    cache_flush_server_process = run_command(cache_flush_server_cmd, background=True)
+    if not cache_flush_server_process:
+        raise RuntimeError("Failed to start cache flush server")
 
 def setup_prefill_node(
     rank: int,
@@ -288,7 +299,7 @@ def setup_prefill_node(
     """
     if not use_sglang_commands:
         if rank == 0:
-            setup_nats_etcd_and_ingress(prefill_host_ip)
+            setup_head_prefill_node(prefill_host_ip)
         else:
             logging.info(f"Setting up child prefill node: {rank}")
             if not wait_for_etcd(f"http://{prefill_host_ip}:{ETCD_CLIENT_PORT}"):
