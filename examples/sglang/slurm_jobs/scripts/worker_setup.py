@@ -275,6 +275,7 @@ def setup_nats_etcd_and_ingress(prefill_host_ip: str) -> None:
     if not ingress_process:
         raise RuntimeError("Failed to start ingress")
 
+
 def setup_prefill_node(
     rank: int,
     prefill_host_ip: str,
