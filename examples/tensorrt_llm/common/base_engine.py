@@ -516,9 +516,15 @@ class BaseTensorrtLLMEngine:
                     media=[request.image_url],
                     image_data_format="pt",
                     device="cuda",
-                )
+                )[0]
             elif request.tokens:
                 worker_inputs = request.tokens.tokens
+                if (
+                    isinstance(worker_inputs, list)
+                    and worker_inputs
+                    and isinstance(worker_inputs[0], list)
+                ):
+                    worker_inputs = worker_inputs[0]
             else:
                 raise ValueError(
                     "Request must have either an image_url and prompt, or tokens."
