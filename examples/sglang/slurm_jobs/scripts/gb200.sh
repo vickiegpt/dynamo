@@ -83,6 +83,7 @@ if [ "$mode" = "prefill" ]; then
             --model-path /model/ \
             --trust-remote-code \
             --disaggregation-mode prefill \
+            --disaggregation-transfer-backend nixl \
             --dist-init-addr "$HOST_IP:$PORT" \
             --nnodes "$TOTAL_NODES" \
             --node-rank "$RANK" \
