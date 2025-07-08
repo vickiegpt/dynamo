@@ -249,6 +249,32 @@ def get_gpu_command(worker_type: str, use_sglang_commands: bool, gpu_type: str) 
     return f"bash {script_path} {mode} {cmd}"
 
 
+def setup_nats_etcd_and_ingress(prefill_host_ip: str) -> None:
+    logging.info(f"Starting nats server on node {prefill_host_ip}")
+
+    nats_process = run_command("nats-server -js", background=True)
+    if not nats_process:
+        raise RuntimeError("Failed to start nats-server")
+
+    logging.info(f"Starting etcd server on node {prefill_host_ip}")
+    etcd_cmd = (
+        f"etcd --listen-client-urls {ETCD_LISTEN_ADDR}:{ETCD_CLIENT_PORT} "
+        f"--advertise-client-urls {ETCD_LISTEN_ADDR}:{ETCD_CLIENT_PORT} "
+        f"--listen-peer-urls {ETCD_LISTEN_ADDR}:{ETCD_PEER_PORT} "
+        f"--initial-cluster default=http://{prefill_host_ip}:{ETCD_PEER_PORT}"
+    )
+
+    etcd_process = run_command(etcd_cmd, background=True)
+    if not etcd_process:
+        raise RuntimeError("Failed to start etcd")
+
+    logging.info(f"Starting ingress server on node {prefill_host_ip}")
+    ingress_process = run_command(
+        "dynamo run in=http out=dyn --http-port=8000", background=True
+    )
+    if not ingress_process:
+        raise RuntimeError("Failed to start ingress")
+
 def setup_prefill_node(
     rank: int,
     prefill_host_ip: str,
@@ -262,32 +288,7 @@ def setup_prefill_node(
     """
     if not use_sglang_commands:
         if rank == 0:
-            logging.info(f"Setting up host prefill node: {rank}")
-            logging.info(
-                f"Starting nats server on node {rank} with IP {prefill_host_ip}"
-            )
-
-            nats_process = run_command("nats-server -js", background=True)
-            if not nats_process:
-                raise RuntimeError("Failed to start nats-server")
-
-            etcd_cmd = (
-                f"etcd --listen-client-urls {ETCD_LISTEN_ADDR}:{ETCD_CLIENT_PORT} "
-                f"--advertise-client-urls {ETCD_LISTEN_ADDR}:{ETCD_CLIENT_PORT} "
-                f"--listen-peer-urls {ETCD_LISTEN_ADDR}:{ETCD_PEER_PORT} "
-                f"--initial-cluster default=http://{prefill_host_ip}:{ETCD_PEER_PORT}"
-            )
-
-            etcd_process = run_command(etcd_cmd, background=True)
-            if not etcd_process:
-                raise RuntimeError("Failed to start etcd")
-
-            ingress_process = run_command(
-                "dynamo run in=http out=dyn --http-port=8000", background=True
-            )
-            if not ingress_process:
-                raise RuntimeError("Failed to start ingress")
-
+            setup_nats_etcd_and_ingress(prefill_host_ip)
         else:
             logging.info(f"Setting up child prefill node: {rank}")
             if not wait_for_etcd(f"http://{prefill_host_ip}:{ETCD_CLIENT_PORT}"):
