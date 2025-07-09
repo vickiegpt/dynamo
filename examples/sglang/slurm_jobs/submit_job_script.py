@@ -86,7 +86,7 @@ def _parse_command_line_args(args: list[str] | None = None) -> argparse.Namespac
     parser.add_argument("--config-dir", required=True, help="Config directory path")
     parser.add_argument("--container-image", required=True, help="Container image")
     parser.add_argument(
-        "--time-limit", default="01:00:00", help="Time limit (HH:MM:SS)"
+        "--time-limit", default="04:00:00", help="Time limit (HH:MM:SS)"
     )
     parser.add_argument(
         "--prefill-nodes", type=int, default=2, help="Number of prefill nodes"
