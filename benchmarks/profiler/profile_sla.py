@@ -52,12 +52,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--backend",
         type=str,
-        default="vllm_v0",
-        choices=["vllm_v0", "vllm_v1"],
-        help="backend type (currently only vllm is supported)",
+        default="vllm_v1",
+        choices=["vllm_v1"],
+        help="backend type (currently supported: [vllm_v1])",
     )
     parser.add_argument(
-        "--config", type=str, required=True, help="Path to the dynamo config file"
+        "--config", type=str, required=True, help="Path to the DynamoGraphDeployment yaml file"
     )
     parser.add_argument(
         "--example-dir",
