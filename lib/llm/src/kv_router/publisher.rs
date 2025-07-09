@@ -454,7 +454,7 @@ struct KvEventBatch {
     ts: f64,
     events: Vec<RawKvEvent>,
     #[serde(alias = "dp_rank")]
-    data_parallel_rank: u32 // we are ignoring this for now
+    data_parallel_rank: u32, // we are ignoring this for now
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -787,7 +787,11 @@ mod tests_startup_helpers {
             lora_id: None,
         }];
 
-        let batch = KvEventBatch { ts: 0.0, events, data_parallel_rank: 1 };
+        let batch = KvEventBatch {
+            ts: 0.0,
+            events,
+            data_parallel_rank: 1,
+        };
 
         let payload = Bytes::from(rmps::to_vec(&batch).unwrap());
 
