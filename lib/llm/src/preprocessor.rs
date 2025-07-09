@@ -45,7 +45,7 @@ use dynamo_runtime::pipeline::{
 use dynamo_runtime::protocols::annotated::{Annotated, AnnotationsProvider};
 
 use crate::protocols::{
-    common::{SamplingOptionsProvider, StopConditionsProvider},
+    common::{OutputOptionsProvider, SamplingOptionsProvider, StopConditionsProvider},
     openai::{
         chat_completions::{NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse},
         completions::{NvCreateCompletionRequest, NvCreateCompletionResponse},
@@ -158,6 +158,7 @@ impl OpenAIPreprocessor {
             + AnnotationsProvider
             + SamplingOptionsProvider
             + StopConditionsProvider
+            + OutputOptionsProvider
             + NvExtProvider,
     >(
         &self,
@@ -263,6 +264,7 @@ impl OpenAIPreprocessor {
 
         builder.stop_conditions(stop_conditions);
         builder.sampling_options(request.extract_sampling_options()?);
+        builder.output_options(request.extract_output_options()?);
         builder.annotations(request.annotations().unwrap_or_default());
         builder.mdc_sum(Some(self.mdcsum.clone()));
         builder.estimated_prefix_hit_num_blocks(None);

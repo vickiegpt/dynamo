@@ -21,9 +21,10 @@ use validator::Validate;
 use crate::engines::ValidateRequest;
 
 use super::{
-    common::{self, SamplingOptionsProvider, StopConditionsProvider},
+    common::{self, OutputOptionsProvider, SamplingOptionsProvider, StopConditionsProvider},
     nvext::{NvExt, NvExtProvider},
-    validate, ContentProvider, OpenAISamplingOptionsProvider, OpenAIStopConditionsProvider,
+    validate, ContentProvider, OpenAIOutputOptionsProvider, OpenAISamplingOptionsProvider,
+    OpenAIStopConditionsProvider,
 };
 
 mod aggregator;
@@ -228,6 +229,10 @@ impl TryFrom<NvCreateCompletionRequest> for common::CompletionRequest {
             .extract_sampling_options()
             .map_err(|e| anyhow::anyhow!("Failed to extract sampling options: {}", e))?;
 
+        let output_options = request
+            .extract_output_options()
+            .map_err(|e| anyhow::anyhow!("Failed to extract output options: {}", e))?;
+
         let prompt = common::PromptType::Completion(common::CompletionContext {
             prompt: prompt_to_string(&request.inner.prompt),
             system_prompt: None,
@@ -239,6 +244,7 @@ impl TryFrom<NvCreateCompletionRequest> for common::CompletionRequest {
             sampling_options,
             mdc_sum: None,
             annotations: None,
+            output_options: output_options,
         })
     }
 }
@@ -275,6 +281,36 @@ impl TryFrom<common::StreamingCompletionResponse> for async_openai::types::Choic
         };
 
         Ok(choice)
+    }
+}
+
+impl OpenAIOutputOptionsProvider for NvCreateCompletionRequest {
+    fn get_logprobs(&self) -> Option<u32> {
+        match self.inner.logprobs {
+            Some(logprobs) => Some(logprobs as u32),
+            None => None,
+        }
+    }
+
+    fn get_prompt_logprobs(&self) -> Option<u32> {
+        match self.inner.echo {
+            Some(echo) => {
+                if echo {
+                    Some(1 as u32)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        }
+    }
+
+    fn get_skip_special_tokens(&self) -> Option<bool> {
+        None
+    }
+
+    fn get_formatted_prompt(&self) -> Option<bool> {
+        None
     }
 }
 
