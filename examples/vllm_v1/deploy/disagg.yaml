@@ -19,7 +19,7 @@ metadata:
 spec:
   envs:
     - name: DYN_DEPLOYMENT_CONFIG
-      value: '{"Common":{"model":"deepseek-ai/DeepSeek-R1-Distill-Llama-8B","block-size":64,"max-model-len":16384,"kv-transfer-config":"{\"kv_connector\":\"DynamoNixlConnector\"}"},"Frontend":{"served_model_name":"deepseek-ai/DeepSeek-R1-Distill-Llama-8B","endpoint":"dynamo.VllmWorker.generate","port":8000,"router":"round-robin","common-configs":["block-size"]},"VllmWorker":{"remote-prefill":true,"conditional-disagg":true,"max-local-prefill-length":10,"max-prefill-queue-size":2,"enable-prefix-caching":true,"common-configs":["model","block-size","max-model-len","kv-transfer-config"]},"PrefillWorker":{"max-num-batched-tokens":16384,"common-configs":["model","block-size","max-model-len","kv-transfer-config"]}}'
+      value: '{"Common":{"model":"deepseek-ai/DeepSeek-R1-Distill-Llama-8B","block-size":64,"max-model-len":16384,"kv-transfer-config":"{\"kv_connector\":\"DynamoNixlConnector\"}"},"Frontend":{"served_model_name":"deepseek-ai/DeepSeek-R1-Distill-Llama-8B","endpoint":"dynamo.SimpleLoadBalancer.generate_disagg","port":8000,"router":"round-robin","common-configs":["block-size"]},"VllmDecodeWorker":{"remote-prefill":true,"conditional-disagg":true,"max-local-prefill-length":10,"max-prefill-queue-size":2,"enable-prefix-caching":true,"common-configs":["model","block-size","max-model-len","kv-transfer-config"]},"PrefillWorker":{"max-num-batched-tokens":16384,"common-configs":["model","block-size","max-model-len","kv-transfer-config"]}}'
   services:
     Frontend:
       dynamoNamespace: vllm-v1-disagg
