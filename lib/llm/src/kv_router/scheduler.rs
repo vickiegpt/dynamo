@@ -334,10 +334,12 @@ impl WorkerSelector for DefaultWorkerSelector {
             worker_logits.insert(worker_id, logit);
 
             tracing::info!(
-                "Formula for {worker_id}: {logit:.3} = {:.1} * {normalized_new_blocks:.3} + {:.1} * {gpu_cache_usage:.3} + {:.1} * {num_requests_waiting:.3}",
+                "Formula for {worker_id}: {logit:.3} = {:.1} * {normalized_new_blocks:.3} + {:.1} * {gpu_cache_usage:.3} + {:.1} * {num_requests_waiting:.3} (overlap_blocks: {overlap_blocks}, new_blocks: {new_blocks:.0})",
                 self.kv_router_config.overlap_score_weight,
                 self.kv_router_config.gpu_cache_usage_weight,
                 self.kv_router_config.waiting_requests_weight,
+                overlap_blocks = overlap_blocks,
+                new_blocks = new_blocks,
             );
         }
 

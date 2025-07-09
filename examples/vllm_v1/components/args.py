@@ -117,10 +117,10 @@ def parse_args() -> Config:
     config = Config()
     config.model = args.model
     if args.served_model_name:
-        assert isinstance(
-            args.served_model_name, str
+        assert (
+            len(args.served_model_name) <= 1
         ), "We do not support multiple model names."
-        config.served_model_name = args.served_model_name
+        config.served_model_name = args.served_model_name[0]
     else:
         # This becomes an `Option` on the Rust side
         config.served_model_name = None

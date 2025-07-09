@@ -143,15 +143,16 @@ async def init(runtime: DistributedRuntime, config: Config):
         .client()
     )
 
-    await register_llm(
-        ModelType.Backend,
-        generate_endpoint,
-        config.model,
-        config.served_model_name,
-        kv_cache_block_size=config.engine_args.block_size,
-    )
+    if not config.engine_args.data_parallel_rank:  # if rank is 0 or None then register
+        await register_llm(
+            ModelType.Backend,
+            generate_endpoint,
+            config.model,
+            config.served_model_name,
+            kv_cache_block_size=config.engine_args.block_size,
+        )
 
-    factory = StatLoggerFactory(component)
+    factory = StatLoggerFactory(component, config.engine_args.data_parallel_rank or 0)
     engine_client, vllm_config, default_sampling_params = setup_vllm_engine(
         config, factory
     )
@@ -163,11 +164,11 @@ async def init(runtime: DistributedRuntime, config: Config):
 
     logger.info(f"VllmWorker for {config.model} has been initialized")
 
-    base_zmq_endpoint = vllm_config.kv_events_config.endpoint
-    dp_local_rank = vllm_config.parallel_config.data_parallel_rank_local
-
+    # TODO: We start off with a valid endpoint, then we increment it by dp_rank
+    # May no longer be valid. Lets remove the increment behavior from vLLM and here
     zmq_endpoint = ZmqEventPublisher.offset_endpoint_port(
-        base_zmq_endpoint, data_parallel_rank=dp_local_rank
+        config.engine_args.kv_events_config.endpoint,
+        data_parallel_rank=config.engine_args.data_parallel_rank or 0,
     ).replace("*", "127.0.0.1")
 
     zmq_config = ZmqKvEventPublisherConfig(
@@ -175,13 +176,14 @@ async def init(runtime: DistributedRuntime, config: Config):
         kv_block_size=vllm_config.cache_config.block_size,
         zmq_endpoint=zmq_endpoint,
     )
-    _ = ZmqKvEventPublisher(component=component, config=zmq_config)
+    kv_publisher = ZmqKvEventPublisher(component=component, config=zmq_config)
 
     logger.info(f"Reading Events from {zmq_endpoint}")
 
     handler = DecodeWorkerHandler(
         component, engine_client, default_sampling_params, prefill_worker_client
     )
+    handler.kv_publisher = kv_publisher
 
     try:
         await asyncio.gather(

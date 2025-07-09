@@ -40,6 +40,7 @@ class BaseWorkerHandler(ABC):
         self.component = component
         self.engine_client = engine
         self.default_sampling_params = default_sampling_params
+        self.kv_publisher = None
 
     @abstractmethod
     async def generate(self, request) -> AsyncGenerator[dict, None]:

@@ -23,6 +23,21 @@ from dynamo.llm import WorkerMetricsPublisher
 from dynamo.runtime import Component
 
 
+class NullStatLogger(StatLoggerBase):
+    def __init__(self):
+        pass
+
+    def record(
+        self,
+        scheduler_stats: Optional[SchedulerStats],
+        iteration_stats: Optional[IterationStats],
+    ):
+        pass
+
+    def log_engine_initialized(self):
+        pass
+
+
 class DynamoStatLoggerPublisher(StatLoggerBase):
     """Stat logger publisher. Wrapper for the WorkerMetricsPublisher to match the StatLoggerBase interface."""
 
@@ -84,13 +99,23 @@ class DynamoStatLoggerPublisher(StatLoggerBase):
 class StatLoggerFactory:
     """Factory for creating stat logger publishers. Required by vLLM."""
 
-    def __init__(self, component: Component) -> None:
+    def __init__(self, component: Component, dp_rank: int = 0) -> None:
         self.component = component
-        self.created_loggers = None
+        self.created_logger = None
+        self.dp_rank = dp_rank
+        print(
+            f"DEBUG: StatLoggerFactory created for component: {component}"
+        )  # Debug log
 
     def create_stat_logger(self, dp_rank: int) -> StatLoggerBase:
+        if self.dp_rank != dp_rank:
+            return NullStatLogger()
+        print(f"DEBUG: Creating stat logger for dp_rank: {dp_rank}")  # Debug log
         logger = DynamoStatLoggerPublisher(self.component, dp_rank)
         self.created_logger = logger
+        print(
+            f"DEBUG: Stat logger created successfully for dp_rank: {dp_rank}"
+        )  # Debug log
         return logger
 
     def __call__(self, vllm_config: VllmConfig, dp_rank: int) -> StatLoggerBase:
@@ -98,10 +123,13 @@ class StatLoggerFactory:
 
     # TODO Remove once we publish metadata to etcd
     def set_num_gpu_blocks_all(self, num_blocks):
-        self.created_logger.set_num_gpu_block(num_blocks)
+        if self.created_logger:
+            self.created_logger.set_num_gpu_block(num_blocks)
 
     def set_request_total_slots_all(self, request_total_slots):
-        self.created_logger.set_num_request_total_slots(request_total_slots)
+        if self.created_logger:
+            self.created_logger.set_num_request_total_slots(request_total_slots)
 
     def init_publish(self):
-        self.created_logger.init_publish()
+        if self.created_logger:
+            self.created_logger.init_publish()

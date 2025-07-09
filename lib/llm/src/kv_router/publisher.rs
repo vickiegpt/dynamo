@@ -151,7 +151,6 @@ impl KvEventPublisher {
     }
 
     pub fn publish(&self, event: KvCacheEvent) -> Result<(), mpsc::error::SendError<KvCacheEvent>> {
-        tracing::trace!("Publish event: {:?}", event);
         self.tx.send(event)
     }
 
@@ -195,6 +194,7 @@ async fn start_event_processor<P: EventPublisher + Send + Sync + 'static>(
                 };
 
                 // Encapsulate in a router event and publish.
+                tracing::trace!("Event processor for worker_id {} processing event: {:?}", worker_id, event.data);
                 let router_event = RouterEvent::new(worker_id, event);
                 if let Err(e) = publisher.publish(KV_EVENT_SUBJECT, &router_event).await {
                     tracing::error!("Failed to publish event: {}", e);
@@ -247,6 +247,8 @@ pub async fn start_zmq_listener(
     }
 
     let mut consecutive_errors = 0u32;
+    let mut exit_reason = "unknown";
+    let mut messages_processed = 0u64;
 
     loop {
         tokio::select! {
@@ -254,7 +256,8 @@ pub async fn start_zmq_listener(
 
             // Check for cancellation
             _ = cancellation_token.cancelled() => {
-                tracing::info!("ZMQ listener received cancellation signal");
+                tracing::debug!("ZMQ listener received cancellation signal");
+                exit_reason = "cancellation token cancelled";
                 break;
             }
 
@@ -270,6 +273,7 @@ pub async fn start_zmq_listener(
                             consecutive_errors=%consecutive_errors,
                             "Too many consecutive ZMQ errors, terminating listener"
                         );
+                        exit_reason = "too many consecutive errors";
                         break;
                     }
 
@@ -316,18 +320,29 @@ pub async fn start_zmq_listener(
                     continue;
                 };
 
-                // For each of our events, convert them to [`KvCacheEvent`] and send to the event_processor.
+                tracing::trace!(
+                    "ZMQ listener on {} received batch with {} events (seq={})",
+                    zmq_endpoint,
+                    batch.events.len(),
+                    seq
+                );
                 for raw_event in batch.events.into_iter() {
                     let event = convert_event(raw_event, seq, kv_block_size, &warning_count);
                     if tx.send(event).is_err() {
                         tracing::warn!("Failed to send message to channel - receiver dropped");
+                        exit_reason = "channel receiver dropped";
                         return;
                     }
+                    messages_processed += 1;
                 }
             }
         }
-        tracing::debug!("ZMQ listener exiting");
     }
+    tracing::debug!(
+        "ZMQ listener exiting, reason: {}, messages processed: {}",
+        exit_reason,
+        messages_processed
+    );
 }
 
 /// Convert a raw event coming from the ZMQ channel into the internal

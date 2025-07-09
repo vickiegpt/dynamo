@@ -120,6 +120,18 @@ cd examples/vllm_v1
 bash launch/disagg_router.sh
 ```
 
+#### Single Node Data Parallel Attention / Expert Parallelism
+
+This example is not meant to be performant but showcases dynamo routing to data parallel workers
+
+```bash
+# requires four gpus
+cd examples/vllm_v1
+bash launch/dep.sh
+```
+
+
+
 > [!TIP]
 > Run a disaggregated example and try adding another prefill worker once the setup is running! The system will automatically discover and utilize the new worker.
 
@@ -131,7 +143,7 @@ Send a test request to verify your deployment:
 curl localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Qwen/Qwen3-0.6B",
+    "model": "Qwen/Qwen3-30B-A3B",
     "messages": [
     {
         "role": "user",
