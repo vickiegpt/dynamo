@@ -96,6 +96,7 @@ class VllmV1ConfigModifier:
 
     @classmethod
     def get_model_name(cls, config: dict) -> str:
+        config = json.loads(config["spec"]["envs"][0]["value"])
         if "Common" in config and "served_model_name" in config["Common"]:
             return config["Common"]["served_model_name"]
         else:
@@ -103,6 +104,7 @@ class VllmV1ConfigModifier:
 
     @classmethod
     def get_port(cls, config: dict) -> int:
+        config = json.loads(config["spec"]["envs"][0]["value"])
         if "Common" in config and "port" in config["Common"]:
             return config["Common"]["port"]
         else:
@@ -110,6 +112,7 @@ class VllmV1ConfigModifier:
 
     @classmethod
     def get_kv_cache_size_from_dynamo_log(cls, dynamo_log_fn: str) -> int:
+        # TODO
         try:
             with open(dynamo_log_fn, "r") as f:
                 for line in f:
@@ -129,6 +132,11 @@ class VllmV1ConfigModifier:
                 f"Failed to parse KV cache size from line: {line}. Error: {e}"
             )
         return 0
+    
+    @classmethod
+    def get_endpoint_url(cls) -> str:
+        # TODO
+        pass
 
 CONFIG_MODIFIERS = {
     "vllm_v1": VllmV1ConfigModifier,

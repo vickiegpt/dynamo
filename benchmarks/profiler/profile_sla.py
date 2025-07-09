@@ -72,6 +72,18 @@ if __name__ == "__main__":
         help="Path to the output results directory",
     )
     parser.add_argument(
+        "--minimum-gpu-per-engine",
+        type=int,
+        default=1,
+        help="minimum number of GPUs per engine",
+    )
+    parser.add_argument(
+        "--maximum-gpu-per-engine",
+        type=int,
+        default=1,
+        help="maximum number of GPUs per engine",
+    )
+    parser.add_argument(
         "--isl", type=int, default=3000, help="target input sequence length"
     )
     parser.add_argument(
@@ -124,7 +136,7 @@ if __name__ == "__main__":
     # Get the number of available GPUs
     available_gpus = get_available_gpu_count()
 
-    profile_tp_size = [2**i for i in range(int(math.log2(available_gpus)) + 1)]
+    profile_tp_size = [2**i for i in range(int(math.log2(available_gpus)) + 1) if args.minimum_gpu_per_engine <= 2**i <= args.maximum_gpu_per_engine]
     logger.info(f"Profiling TP sizes: {profile_tp_size}")
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -141,6 +153,7 @@ if __name__ == "__main__":
     for tp_size in profile_tp_size:
         logger.info(f"Profiling prefill with TP size {tp_size}...")
         prefill_config = config_modifier.set_config_tp_size(prefill_config, tp_size)
+        import pdb; pdb.set_trace()
         logger.info(f"Dynamo config: {prefill_config}")
 
         work_dir = f"{args.output_dir}/prefill_tp{tp_size}"
