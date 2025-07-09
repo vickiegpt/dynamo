@@ -251,25 +251,18 @@ impl KvbmCacheManager {
         Ok(usage)
     }
 
-    #[pyo3(signature = (request_id, num_onboard_blocks, host_onboard_blocks=None, disk_onboard_blocks=None))]
+    #[pyo3(signature = (request_id, host_onboard_blocks=None, disk_onboard_blocks=None))]
     pub fn onboard_into_slot(
         &self,
         request_id: String,
-        num_onboard_blocks: usize,
         host_onboard_blocks: Option<KvbmBlockList>,
         disk_onboard_blocks: Option<KvbmBlockList>,
     ) -> PyResult<()> {
-        tracing::debug!(
-            "Onboarding {} blocks into slot for request {}",
-            num_onboard_blocks,
-            request_id
-        );
         self.slot_manager
             .lock()
             .map_err(to_pyerr)?
             .onboard_into_slot(
                 &request_id,
-                num_onboard_blocks,
                 host_onboard_blocks,
                 disk_onboard_blocks,
                 self.block_manager(),
@@ -558,14 +551,13 @@ impl<R: RequestKey> SlotManager<R> {
     pub fn onboard_into_slot(
         &mut self,
         request_id: &R,
-        num_onboard_blocks: usize,
         host_onboard_blocks: Option<KvbmBlockList>,
         disk_onboard_blocks: Option<KvbmBlockList>,
         bm: &VllmBlockManager,
     ) -> Result<(), SlotError> {
         let slot = self.slots.get_mut(request_id).ok_or(SlotError::NotFound)?;
 
-        let host_blocks = if let Some(host_blocks) = host_onboard_blocks {
+        if let Some(host_blocks) = host_onboard_blocks {
             let host_blocks = host_blocks.take_blocks().ok_or(SlotError::Error(
                 "host_onboard_blocks should be ImmutableHost".to_string(),
             ))?;
@@ -574,12 +566,10 @@ impl<R: RequestKey> SlotManager<R> {
                     "host_onboard_blocks should be ImmutableHost".to_string(),
                 ));
             };
-            Some(host_blocks)
-        } else {
-            None
-        };
+            slot.onboard_blocks_to_slot(host_blocks, bm)?;
+        }
 
-        let disk_blocks = if let Some(disk_blocks) = disk_onboard_blocks {
+        if let Some(disk_blocks) = disk_onboard_blocks {
             let disk_blocks = disk_blocks.take_blocks().ok_or(SlotError::Error(
                 "disk_onboard_blocks should be ImmutableDisk".to_string(),
             ))?;
@@ -588,44 +578,8 @@ impl<R: RequestKey> SlotManager<R> {
                     "disk_onboard_blocks should be ImmutableDisk".to_string(),
                 ));
             };
-            Some(disk_blocks)
-        } else {
-            None
-        };
-
-        if host_blocks.is_none() && disk_blocks.is_none() {
-            tracing::debug!("No blocks to onboard for request {}", request_id);
-        } else if host_blocks.is_some() && disk_blocks.is_none() {
-            let host_blocks = host_blocks.unwrap();
-            tracing::debug!(
-                "Onboarding {} host blocks for request {}",
-                num_onboard_blocks,
-                request_id
-            );
-            slot.onboard_blocks_to_slot(host_blocks[..num_onboard_blocks].to_vec(), bm)?;
-        } else if disk_blocks.is_some() && host_blocks.is_none() {
-            let disk_blocks = disk_blocks.unwrap();
-            tracing::debug!(
-                "Onboarding {} disk blocks for request {}",
-                num_onboard_blocks,
-                request_id
-            );
-            slot.onboard_blocks_to_slot(disk_blocks[..num_onboard_blocks].to_vec(), bm)?;
-        } else {
-            let host_blocks = host_blocks.unwrap();
-            let disk_blocks = disk_blocks.unwrap();
-
-            let num_disk_blocks = num_onboard_blocks - host_blocks.len();
-
-            tracing::debug!(
-                "Onboarding {} host and {} disk blocks for request {}",
-                host_blocks.len(),
-                num_disk_blocks,
-                request_id
-            );
-            slot.onboard_blocks_to_slot(host_blocks, bm)?;
-            slot.onboard_blocks_to_slot(disk_blocks[..num_disk_blocks].to_vec(), bm)?;
-        };
+            slot.onboard_blocks_to_slot(disk_blocks, bm)?;
+        }
 
         Ok(())
     }
