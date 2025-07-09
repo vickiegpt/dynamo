@@ -14,7 +14,7 @@
 # limitations under the License.
 
 Frontend:
-  served_model_name: Qwen/Qwen2-VL-7B-Instruct
+  served_model_name: meta-llama/Llama-4-Maverick-17B-128E-Instruct
   endpoint_completions: dynamo.Processor.completions
   endpoint_chat: dynamo.Processor.chat/completions
   port: 8000
