@@ -99,6 +99,7 @@ impl KvbmCacheManager {
     }
 
     /// Returns the number of tokens that have been computed for the given request.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub fn num_computed_tokens(&self, request_id: String) -> PyResult<usize> {
         let slot_manager = self.slot_manager.lock().map_err(to_pyerr)?;
         slot_manager
@@ -108,7 +109,7 @@ impl KvbmCacheManager {
 
     /// Get the computed blocks for the given sequence hashes.
     /// This is used to get the blocks for the request.
-    #[tracing::instrument(level = "debug", skip_all, fields(sequence_hashes = ?sequence_hashes))]
+    #[tracing::instrument(level = "debug", skip(self), ret)]
     pub fn get_computed_blocks(
         &self,
         sequence_hashes: Vec<SequenceHash>,
@@ -127,6 +128,7 @@ impl KvbmCacheManager {
     }
 
     /// Get the number of offloaded computed blocks for the given sequence hashes.
+    #[tracing::instrument(level = "debug", skip(self), ret)]
     pub fn get_num_offloaded_computed_blocks(
         &self,
         sequence_hashes: Vec<SequenceHash>,
@@ -195,6 +197,7 @@ impl KvbmCacheManager {
 
     /// Updates the slot manager with the current request state and allocates new blocks if needed.
     /// Returns the new blocks if they were allocated, otherwise returns None.
+    #[tracing::instrument(level = "debug", skip(self), fields(update = ?update), ret)]
     pub fn allocate_slots(&self, update: SlotUpdate) -> PyResult<Option<BlockStates>> {
         self.slot_manager
             .lock()
@@ -275,7 +278,7 @@ impl KvbmCacheManager {
     }
 }
 
-#[derive(Debug, Clone, Dissolve)]
+#[derive(Clone, Dissolve)]
 pub struct GenericSlotUpdate<R> {
     /// The request ID.
     pub request_id: R,
@@ -312,6 +315,22 @@ pub struct GenericSlotUpdate<R> {
 
     /// Whether to delay caching the blocks.
     pub delay_cache_blocks: Option<bool>,
+}
+
+impl std::fmt::Debug for GenericSlotUpdate<String> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tokens_display = if self.tokens_to_append.len() > 8 {
+            format!(
+                "[{:?}...{:?}]",
+                &self.tokens_to_append[..3],
+                &self.tokens_to_append[self.tokens_to_append.len() - 3..]
+            )
+        } else {
+            format!("{:?}", self.tokens_to_append)
+        };
+
+        write!(f, "GenericSlotUpdate(request_id: {}, request_num_tokens: {}, request_num_computed_tokens: {}, tokens_to_append: {}, num_new_tokens: {}, num_new_computed_tokens: {:?}, new_computed_blocks: {:?}, num_lookahead_blocks: {:?}, delay_cache_blocks: {:?})", self.request_id, self.request_num_tokens, self.request_num_computed_tokens, tokens_display, self.num_new_tokens, self.num_new_computed_tokens, self.new_computed_blocks, self.num_lookahead_blocks, self.delay_cache_blocks)
+    }
 }
 
 #[pyclass]

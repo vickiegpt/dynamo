@@ -36,6 +36,22 @@ pub struct Slot<S: Storage, L: LocalityProvider> {
     mutable: VecDeque<MutableBlock<S, L, BasicMetadata>>,
 }
 
+impl<S: Storage, L: LocalityProvider> std::fmt::Debug for Slot<S, L> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let immutable_block_ids = self
+            .immutable
+            .iter()
+            .map(|b| b.block_id())
+            .collect::<Vec<_>>();
+        let mutable_block_ids = self
+            .mutable
+            .iter()
+            .map(|b| b.block_id())
+            .collect::<Vec<_>>();
+        write!(f, "Slot(computed_position: {}, prefill_position: {}, immutable_block_ids: {:?}, mutable_block_ids: {:?})", self.computed_position, self.prefill_position, immutable_block_ids, mutable_block_ids)
+    }
+}
+
 impl<S: Storage, L: LocalityProvider> Slot<S, L> {
     /// Creates a new slot.
     pub fn new(tokens: Tokens, block_size: usize, salt_hash: SaltHash) -> Self {
@@ -57,7 +73,7 @@ impl<S: Storage, L: LocalityProvider> Slot<S, L> {
 
     /// Updates the sequence with the given tokens.
     /// These tokens will advance the computed sequence position.
-    #[tracing::instrument(level = "debug", skip_all, fields(tokens_to_append = ?tokens_to_append))]
+    #[tracing::instrument(level = "debug", skip(block_pool))]
     pub fn apply_computed_tokens(
         &mut self,
         mut tokens_to_append: Vec<u32>,
@@ -131,12 +147,12 @@ impl<S: Storage, L: LocalityProvider> Slot<S, L> {
         debug_assert!(num_blocks_to_register <= self.mutable.len());
 
         if num_blocks_to_register == 0 {
-            tracing::debug!("no blocks to register");
+            tracing::trace!("no blocks to register");
             return Ok(());
         }
 
         let mut blocks_to_register = Vec::new();
-        tracing::debug!("registering {} blocks", num_blocks_to_register);
+        tracing::trace!("registering {} blocks", num_blocks_to_register);
         assert!(self.mutable.len() >= num_blocks_to_register);
 
         // create an iterator over the mutable blocks zipped with the token blocks
@@ -166,11 +182,8 @@ impl<S: Storage, L: LocalityProvider> Slot<S, L> {
 
         assert_eq!(immutable_blocks.len(), num_blocks_to_register);
 
-        tracing::debug!(
-            "registered {} blocks; new computed_position: {}",
-            immutable_blocks.len(),
-            self.computed_position
-        );
+        tracing::debug!("registered {:?}", immutable_blocks);
+        tracing::debug!("new computed_position: {}", self.computed_position);
 
         self.immutable.extend(immutable_blocks);
 
@@ -183,7 +196,7 @@ impl<S: Storage, L: LocalityProvider> Slot<S, L> {
     /// Here we clear the list of immutable blocks before applying them because vLLM can try to apply
     /// this multiple times if the slot was unable acquire blocks for the remainder of the sequence.
     // TODO: What about something like chunked prefill?
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug")]
     pub fn apply_computed_blocks(
         &mut self,
         computed_blocks: Vec<ImmutableBlock<S, L, BasicMetadata>>,
@@ -215,7 +228,7 @@ impl<S: Storage, L: LocalityProvider> Slot<S, L> {
     /// otherwise returns the block ids of the new blocks.
     ///
     /// An empty vector is returned if no new blocks are required.
-    #[tracing::instrument(level = "debug", skip_all, fields(num_new_tokens = %num_new_tokens))]
+    #[tracing::instrument(level = "debug", skip(block_pool), ret)]
     pub fn allocate_blocks(
         &mut self,
         num_new_tokens: usize,
@@ -244,7 +257,7 @@ impl<S: Storage, L: LocalityProvider> Slot<S, L> {
 
     /// Frees the blocks in the slot.
     /// This will return the blocks in reverse order so that the tail blocks are evicted first.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug")]
     pub fn free_blocks(&mut self) {
         self.mutable.clear();
         let mut immutable_blocks = std::mem::take(&mut self.immutable);

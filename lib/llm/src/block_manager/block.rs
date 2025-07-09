@@ -639,12 +639,24 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> MutableBlock<S, L, M> {
 
 impl<S: Storage, L: LocalityProvider, M: BlockMetadata> std::fmt::Debug for MutableBlock<S, L, M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MutableBlock {{ block: {:?} }}", self.block)
+        match &self.block {
+            Some(block) => {
+                write!(
+                    f,
+                    "MutableBlock(storage_type: {:?}, block_id: {}, sequence_hash: {:?})",
+                    block.block_data().storage_type(),
+                    block.block_id(),
+                    block.sequence_hash().ok()
+                )
+            }
+            None => write!(f, "MutableBlock {{ block: None }}"),
+        }
     }
 }
 
 impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Drop for MutableBlock<S, L, M> {
     fn drop(&mut self) {
+        tracing::debug!("MutableBlock::drop: {:?}", self);
         if let Some(block) = self.block.take() {
             if self.return_tx.send(block).is_err() {
                 tracing::warn!("block pool shutdown before block was returned");
@@ -749,11 +761,29 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> MaybeReturnableBlock<S, 
     }
 }
 
-#[derive(Debug)]
 pub struct ImmutableBlock<S: Storage, L: LocalityProvider, M: BlockMetadata> {
     block: Arc<MutableBlock<S, L, M>>,
     sequence_hash: SequenceHash,
     duplicate: Option<Arc<MutableBlock<S, L, M>>>,
+}
+
+impl<S: Storage, L: LocalityProvider, M: BlockMetadata> std::fmt::Debug
+    for ImmutableBlock<S, L, M>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ImmutableBlock(storage: {:?}, block_id: {}, sequence_hash: {})",
+            self.block
+                .block
+                .as_ref()
+                .expect("block was dropped")
+                .block_data()
+                .storage_type(),
+            self.block_id(),
+            self.sequence_hash
+        )
+    }
 }
 
 // ImmutableBlock inherits identification methods from Block via Deref
