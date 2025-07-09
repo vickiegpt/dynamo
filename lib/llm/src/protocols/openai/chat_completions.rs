@@ -184,7 +184,7 @@ impl OpenAIOutputOptionsProvider for NvCreateChatCompletionRequest {
                 if logprobs {
                     match self.inner.top_logprobs {
                         Some(top_logprobs) => Some(top_logprobs as u32),
-                        None => Some(1 as u32),
+                        None => Some(1_u32),
                     }
                 } else {
                     None

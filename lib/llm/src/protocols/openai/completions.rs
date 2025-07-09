@@ -242,9 +242,9 @@ impl TryFrom<NvCreateCompletionRequest> for common::CompletionRequest {
             prompt,
             stop_conditions,
             sampling_options,
+            output_options,
             mdc_sum: None,
             annotations: None,
-            output_options: output_options,
         })
     }
 }
@@ -286,17 +286,14 @@ impl TryFrom<common::StreamingCompletionResponse> for async_openai::types::Choic
 
 impl OpenAIOutputOptionsProvider for NvCreateCompletionRequest {
     fn get_logprobs(&self) -> Option<u32> {
-        match self.inner.logprobs {
-            Some(logprobs) => Some(logprobs as u32),
-            None => None,
-        }
+        self.inner.logprobs.map(|logprobs| logprobs as u32)
     }
 
     fn get_prompt_logprobs(&self) -> Option<u32> {
         match self.inner.echo {
             Some(echo) => {
                 if echo {
-                    Some(1 as u32)
+                    Some(1_u32)
                 } else {
                     None
                 }
