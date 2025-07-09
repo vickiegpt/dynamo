@@ -852,66 +852,41 @@ def test_kvbm_new_matched_tokens_edge_case(MockCacheManager):
         assert id == request_id
         return entry
 
+    def test_case(
+        num_host_blocks: Optional[int],
+        num_disk_blocks: Optional[int],
+        expected_num_external_computed_tokens: int,
+    ):
+        request = make_request("0", [0] * SEQ_LEN)
+        mock = create_mock(num_host_blocks, num_disk_blocks)
+        (
+            num_external_computed_tokens,
+            async_load,
+        ) = KvbmCacheManager.get_num_new_matched_tokens(mock, request, 0)
+        assert num_external_computed_tokens == expected_num_external_computed_tokens
+        assert not async_load
+
+        entry = get_pending_entry(mock, request.request_id)
+
+        assert (
+            entry[0] is None
+            if num_host_blocks is None
+            else len(entry[0]) == num_host_blocks
+        )
+        assert (
+            entry[1] is None
+            if num_disk_blocks is None
+            else len(entry[1]) == num_disk_blocks
+        )
+
     # Case 1: Some blocks on host, no blocks on disk
-    request = make_request("0", [0] * SEQ_LEN)
-    mock = create_mock(2, None)
-    (
-        num_external_computed_tokens,
-        async_load,
-    ) = KvbmCacheManager.get_num_new_matched_tokens(mock, request, 0)
-
-    assert num_external_computed_tokens == 2 * PAGE_SIZE
-    assert not async_load
-
-    entry = get_pending_entry(mock, request.request_id)
-
-    assert entry[0] == 2
-    assert len(entry[1]) == 2
-    assert entry[2] is None
+    test_case(2, None, 2 * PAGE_SIZE)
 
     # Case 2: No blocks on host, some blocks on disk
-    request = make_request("1", [0] * SEQ_LEN)
-    mock = create_mock(None, 2)
-
-    (
-        num_external_computed_tokens,
-        async_load,
-    ) = KvbmCacheManager.get_num_new_matched_tokens(mock, request, 0)
-
-    assert num_external_computed_tokens == 2 * PAGE_SIZE
-    assert not async_load
-
-    entry = get_pending_entry(mock, request.request_id)
-    assert entry[0] == 2
-    assert entry[1] is None
-    assert len(entry[2]) == 2
+    test_case(None, 2, 2 * PAGE_SIZE)
 
     # Case 3: All blocks on host.
-    request = make_request("2", [0] * SEQ_LEN)
-    mock = create_mock(3, None)
-    (
-        num_external_computed_tokens,
-        async_load,
-    ) = KvbmCacheManager.get_num_new_matched_tokens(mock, request, 0)
-    assert num_external_computed_tokens == SEQ_LEN - 1
-    assert not async_load
-
-    entry = get_pending_entry(mock, request.request_id)
-    assert entry[0] == 2
-    assert len(entry[1]) == 3
-    assert entry[2] is None
+    test_case(3, None, SEQ_LEN - 1)
 
     # Case 4: All blocks on disk.
-    request = make_request("3", [0] * SEQ_LEN)
-    mock = create_mock(None, 3)
-    (
-        num_external_computed_tokens,
-        async_load,
-    ) = KvbmCacheManager.get_num_new_matched_tokens(mock, request, 0)
-    assert num_external_computed_tokens == SEQ_LEN - 1
-    assert not async_load
-
-    entry = get_pending_entry(mock, request.request_id)
-    assert entry[0] == 2
-    assert entry[1] is None
-    assert len(entry[2]) == 3
+    test_case(None, 3, SEQ_LEN - 1)
