@@ -596,16 +596,51 @@ impl<R: RequestKey> SlotManager<R> {
             let host_blocks = host_blocks.unwrap();
             let disk_blocks = disk_blocks.unwrap();
 
-            let num_disk_blocks = num_onboard_blocks - host_blocks.len();
+            // Validate that we have enough blocks to satisfy the request
+            let total_available_blocks = host_blocks.len() + disk_blocks.len();
+            if total_available_blocks < num_onboard_blocks {
+                return Err(SlotError::Error(format!(
+                    "Insufficient blocks for onboarding: requested {} but only {} available ({} host + {} disk)",
+                    num_onboard_blocks,
+                    total_available_blocks,
+                    host_blocks.len(),
+                    disk_blocks.len()
+                )));
+            }
+
+            // Calculate how many disk blocks we need
+            let num_disk_blocks = if host_blocks.len() >= num_onboard_blocks {
+                0
+            } else {
+                num_onboard_blocks - host_blocks.len()
+            };
+
+            // Validate disk blocks slice bounds
+            if num_disk_blocks > disk_blocks.len() {
+                return Err(SlotError::Error(format!(
+                    "Insufficient disk blocks: need {} but only {} available",
+                    num_disk_blocks,
+                    disk_blocks.len()
+                )));
+            }
 
             tracing::debug!(
                 "Onboarding {} host and {} disk blocks for request {}",
-                host_blocks.len(),
+                host_blocks.len().min(num_onboard_blocks),
                 num_disk_blocks,
                 request_id
             );
-            slot.onboard_blocks_to_slot(host_blocks, bm)?;
-            slot.onboard_blocks_to_slot(disk_blocks[..num_disk_blocks].to_vec(), bm)?;
+
+            // Onboard host blocks first (up to the requested amount)
+            let host_blocks_to_use = host_blocks.len().min(num_onboard_blocks);
+            if host_blocks_to_use > 0 {
+                slot.onboard_blocks_to_slot(host_blocks[..host_blocks_to_use].to_vec(), bm)?;
+            }
+
+            // Onboard disk blocks if needed
+            if num_disk_blocks > 0 {
+                slot.onboard_blocks_to_slot(disk_blocks[..num_disk_blocks].to_vec(), bm)?;
+            }
         };
 
         Ok(())
