@@ -31,6 +31,7 @@ context_servers:
   enable_chunked_prefill: false
   kv_cache_config:
     free_gpu_memory_fraction: 0.40
+    enable_block_reuse: false
   cache_transceiver_config:
     max_num_tokens: 20480
     kv_cache_shm_size_bytes: 17179869184 # 16 GB
@@ -49,6 +50,7 @@ generation_servers:
   max_batch_size: 16
   kv_cache_config:
     free_gpu_memory_fraction: 0.40
+    enable_block_reuse: false
   cache_transceiver_config:
     max_num_tokens: 20480
     kv_cache_shm_size_bytes: 17179869184 # 16 GB

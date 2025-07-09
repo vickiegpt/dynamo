@@ -61,7 +61,7 @@ def update_args_from_disagg_config(
     engine_config: LLMAPIConfig, server_config: CtxGenServerConfig
 ):
     # Update the LLM API config with the disaggregated config
-    # Allows for different configs for context and generation servers
+    # Allows for different configs for context and generation server
     engine_config.extra_args.update(**server_config.other_args)
     engine_config.update_sub_configs(server_config.other_args)
     return engine_config
@@ -459,8 +459,15 @@ class BaseTensorrtLLMEngine:
         logger.info("Shutdown complete")
 
     async def _get_remote_prefill_response(self, request):
+        """
+        Sends a request to a remote prefill worker and returns the response.
+        This is used by a generation worker to offload the context phase.
+        """
+        # Create a deep copy of the request to avoid modifying the original.
         prefill_request = copy.deepcopy(request)
+        # We only need one token from the prefill worker to get the initial state.
         prefill_request.sampling_params["max_tokens"] = 1
+        # Set the request type to indicate this is for context processing only.
         prefill_request.disaggregated_params = DisaggregatedParams(
             request_type=DisaggRequestType.CONTEXT_ONLY.value
         )
@@ -469,6 +476,10 @@ class BaseTensorrtLLMEngine:
             raise ValueError("Prefill client not initialized")
 
         # TODO: Use smart KV router to determine which prefill worker to use.
+        # Send the request to a prefill worker and collect the response.
+        logger.info(
+            f"[TRTLLM-DEBUG] Sending prefill request: {prefill_request.model_dump_json(indent=2)}"
+        )
         ctx_responses = [
             ctx_response
             async for ctx_response in await self._prefill_client.round_robin(
@@ -481,6 +492,10 @@ class BaseTensorrtLLMEngine:
             )
         logger.debug(
             f"Received response from prefill worker: {ctx_responses[0].data()}"
+        )
+        # Deserialize the response from the prefill worker.
+        logger.info(
+            f"[TRTLLM-DEBUG] Received prefill response: {ctx_responses[0].data()}"
         )
         ctx_response_obj = TRTLLMWorkerResponse.model_validate_json(
             ctx_responses[0].data()
@@ -502,46 +517,22 @@ class BaseTensorrtLLMEngine:
         self._ongoing_request_count += 1
 
         try:
-            if request.image_url and request.prompt:
-                model_dir = (
-                    self._engine_config.model_path or self._engine_config.model_name
-                )
-                config = AutoConfig.from_pretrained(model_dir, trust_remote_code=True)
-                worker_inputs = default_multimodal_input_loader(
-                    tokenizer=self._llm_engine.tokenizer,
-                    model_dir=model_dir,
-                    model_type=config.model_type,
-                    modality="image",
-                    prompts=[request.prompt],
-                    media=[request.image_url],
-                    image_data_format="pt",
-                    device="cuda",
-                )[0]
-            elif request.tokens:
-                worker_inputs = request.tokens.tokens
-                if (
-                    isinstance(worker_inputs, list)
-                    and worker_inputs
-                    and isinstance(worker_inputs[0], list)
-                ):
-                    worker_inputs = worker_inputs[0]
-            else:
-                raise ValueError(
-                    "Request must have either an image_url and prompt, or tokens."
-                )
-
+            worker_inputs = None
+            # Convert disaggregated params from the wire format to the internal LLM format.
             disaggregated_params = (
                 DisaggregatedTypeConverter.to_llm_disaggregated_params(
                     request.disaggregated_params
                 )
             )
 
-            # In disaggregated mode, a generation worker offloads the prefill phase.
+            # This branch is executed by a Generation worker in a disaggregated setup.
+            # It offloads the prefill (context) phase to a remote Prefill worker.
             if self._remote_prefill and self._server_type == ServerType.GEN:
-                # 1. Send a CONTEXT_ONLY request to a remote prefill worker.
+                # 1. Send a request to a remote prefill worker to handle the context phase.
                 ctx_response_obj = await self._get_remote_prefill_response(request)
 
-                # 2. Yield the first token received from the prefill worker.
+                # 2. Yield the first token from the prefill worker's response immediately.
+                #    This contains the state needed to start local generation.
                 yield TRTLLMWorkerResponse(
                     request_id=request.id,
                     prompt_token_ids=ctx_response_obj.prompt_token_ids,
@@ -549,7 +540,8 @@ class BaseTensorrtLLMEngine:
                     finished=ctx_response_obj.finished,
                 ).model_dump_json(exclude_unset=True)
 
-                # 3. Prepare for local generation using state from the prefill response.
+                # 3. Prepare for local generation using the state from the prefill response.
+                #    The worker_inputs are the token IDs including the first generated token.
                 worker_inputs = ctx_response_obj.prompt_token_ids
                 disaggregated_params = (
                     DisaggregatedTypeConverter.to_llm_disaggregated_params(
@@ -558,20 +550,66 @@ class BaseTensorrtLLMEngine:
                         )
                     )
                 )
-                # Set request type to generation only to skip local prefill.
+                # Set request type to generation_only to skip the prefill phase locally.
                 disaggregated_params.request_type = (
                     DisaggRequestType.GENERATION_ONLY.value
                 )
+            else:
+                # This branch is executed by either a unified worker or a Prefill worker.
+                # It handles the full processing or just the context phase.
+                if request.image_url and request.prompt:
+                    # For multimodal requests, prepare inputs by loading the image
+                    # and tokenizing the prompt.
+                    model_dir = (
+                        self._engine_config.model_path or self._engine_config.model_name
+                    )
+                    config = AutoConfig.from_pretrained(
+                        model_dir, trust_remote_code=True
+                    )
+                    worker_inputs = default_multimodal_input_loader(
+                        tokenizer=self._llm_engine.tokenizer,
+                        model_dir=model_dir,
+                        model_type=config.model_type,
+                        modality="image",
+                        prompts=[request.prompt],
+                        media=[request.image_url],
+                        image_data_format="pt",
+                        device="cuda",
+                    )[0]
+                elif request.tokens:
+                    # For text-only requests, use the provided tokens directly.
+                    worker_inputs = request.tokens.tokens
+                    if (
+                        isinstance(worker_inputs, list)
+                        and worker_inputs
+                        and isinstance(worker_inputs[0], list)
+                    ):
+                        worker_inputs = worker_inputs[0]
+                else:
+                    raise ValueError(
+                        "Request must have either an image_url and prompt, or tokens."
+                    )
 
             logger.debug(
                 f"Worker inputs: {worker_inputs}, disaggregated params: {disaggregated_params}"
             )
 
             sampling_params = get_sampling_params(request.sampling_params)
-            # TODO: Add image url to the request
             # Asynchronously generate and stream tokens from the local engine.
-            # - For GEN workers, this performs decoding using remote KV cache.
+            # - For GEN workers, this performs decoding using remote KV cache state.
             # - For CTX workers, this performs the prefill and returns one response.
+            # - For unified workers, this performs both prefill and decoding.
+            logger.info(
+                f"[TRTLLM-DEBUG] Calling generate_async for request_id={request.id} with server_type={self._server_type.value}, "
+                f"streaming={False if self._server_type == ServerType.CTX else request.streaming}"
+            )
+            logger.info(f"[TRTLLM-DEBUG] generate_async inputs: {worker_inputs}")
+            logger.info(
+                f"[TRTLLM-DEBUG] generate_async sampling_params: {sampling_params}"
+            )
+            logger.info(
+                f"[TRTLLM-DEBUG] generate_async disaggregated_params: {disaggregated_params}"
+            )
             async for response in self._llm_engine.generate_async(
                 inputs=worker_inputs,
                 sampling_params=sampling_params,
@@ -580,7 +618,10 @@ class BaseTensorrtLLMEngine:
                 if self._server_type == ServerType.CTX
                 else request.streaming,
             ):
-                # Convert disaggregated params to a network-friendly format before yielding.
+                # Convert disaggregated params back to a network-friendly format before yielding.
+                logger.info(
+                    f"[TRTLLM-DEBUG] printing response.outputs[0] after generate_async: {response.result.output_token_ids}"
+                )
                 response.outputs[
                     0
                 ].disaggregated_params = DisaggregatedTypeConverter.to_oai_disaggregated_params(
