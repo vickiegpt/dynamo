@@ -45,7 +45,7 @@ class Config:
     namespace: str
     component: str
     endpoint: str
-    metrics_endpoint_port: int
+    kv_events_port: int
     is_prefill_worker: bool
 
     # mirror vLLM
@@ -68,7 +68,7 @@ def overwrite_args(config):
         "kv_events_config": KVEventsConfig(
             enable_kv_cache_events=True,
             publisher="zmq",
-            endpoint=f"tcp://*:{config.metrics_endpoint_port}",
+            endpoint=f"tcp://*:{config.kv_events_port}",
         ),
         # Always setting up kv transfer for disagg
         "kv_transfer_config": KVTransferConfig(
@@ -104,7 +104,7 @@ def parse_args() -> Config:
         help="Enable prefill functionality for this worker. Currently overwrites the --endpoint to be a specially chosen dyn://dynamo.prefill.generate",
     )
     parser.add_argument(
-        "--metrics-endpoint-port",
+        "--kv-events-port",
         type=int,
         default=find_free_port(),
         help="Endpoint where vLLM publishes metrics for dynamo. For DP, we handle the port iteration.",
@@ -143,7 +143,7 @@ def parse_args() -> Config:
     config.endpoint = parsed_endpoint_name
     config.engine_args = engine_args
     config.is_prefill_worker = args.is_prefill_worker
-    config.metrics_endpoint_port = args.metrics_endpoint_port
+    config.kv_events_port = args.kv_events_port
 
     if config.engine_args.block_size is None:
         config.engine_args.block_size = 16

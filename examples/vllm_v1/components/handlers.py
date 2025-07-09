@@ -103,7 +103,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
             try:
                 if self.prefill_worker_client is not None:
                     self.can_prefill = len(self.prefill_worker_client.instance_ids())
-                    logger.info(f"Current Prefill Workers: {self.can_prefill}")
+                    logger.debug(f"Current Prefill Workers: {self.can_prefill}")
                 await asyncio.sleep(5)
             except Exception as e:
                 logger.error(f"Error in prefill check loop: {e}")

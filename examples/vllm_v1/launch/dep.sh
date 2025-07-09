@@ -24,7 +24,8 @@ for i in {0..3}; do
     --data-parallel-rank $i \
     --data-parallel-size 4 \
     --enable-expert-parallel \
-    --enforce-eager &
+    --enforce-eager \
+    --kv-events-port 49500 &
     WORKER_PIDS+=($!)
 done
 
