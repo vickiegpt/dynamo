@@ -26,6 +26,9 @@ To learn what KVBM is, please check [here](https://docs.nvidia.com/dynamo/latest
 To use KVBM in vLLM, you can follow the steps below:
 
 ```bash
+# start up etcd for KVBM leader/worker registration and discovery
+docker compose -f deploy/metrics/docker-compose.yml up -d
+
 # build a container containing vllm and kvbm
 ./container/build.sh --framework kvbm
 
