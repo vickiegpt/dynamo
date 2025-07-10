@@ -82,7 +82,7 @@ if [ "$mode" = "prefill" ]; then
             --model-path /model/ \
             --trust-remote-code \
             --disaggregation-mode prefill \
-            --disaggregation-transfer-backend nixl \
+            --disaggregation-transfer-backend mooncake \
             --dist-init-addr "$HOST_IP:$PORT" \
             --nnodes "$TOTAL_NODES" \
             --node-rank "$RANK" \
@@ -122,7 +122,7 @@ elif [ "$mode" = "decode" ]; then
         python3 -m sglang.launch_server \
             --model-path /model/ \
             --trust-remote-code \
-            --disaggregation-transfer-backend nixl \
+            --disaggregation-transfer-backend mooncake \
             --disaggregation-mode decode \
             --dist-init-addr "$HOST_IP:$PORT" \
             --nnodes "$TOTAL_NODES" \
