@@ -19,9 +19,9 @@
 
 # TODO: figure out how to generate this from the service config or vice versa
 
-model_name: "meta-llama/Llama-4-Maverick-17B-128E-Instruct"
+model_name: "meta-llama/Llama-4-Scout-17B-16E-Instruct"
 model_path: null
-tensor_parallel_size: 1
+tensor_parallel_size: 4
 moe_expert_parallel_size: 1
 enable_attention_dp: false
 max_num_tokens: 16384
@@ -31,7 +31,7 @@ backend: pytorch
 enable_chunked_prefill: true
 
 kv_cache_config:
-  free_gpu_memory_fraction: 0.95
+  free_gpu_memory_fraction: 0.10
 
 # NOTE: pytorch_backend_config section flattened since: https://github.com/NVIDIA/TensorRT-LLM/pull/4603
 # NOTE: overlap_scheduler enabled by default since this commit and changed
