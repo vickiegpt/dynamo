@@ -25,10 +25,15 @@ from typing import List
 import pytest
 
 from dynamo.llm import (
+    ApproxKvIndexer,
+    ForwardPassMetrics,
     KvEventPublisher,
     KvIndexer,
     KvMetricsAggregator,
+    KvStats,
+    RadixTree,
     WorkerMetricsPublisher,
+    WorkerStats,
 )
 from dynamo.runtime import Component, DistributedRuntime
 
@@ -57,6 +62,56 @@ def setup_and_teardown():
 async def distributed_runtime():
     loop = asyncio.get_running_loop()
     return DistributedRuntime(loop, False)
+
+
+async def test_radix_tree_binding(distributed_runtime):
+    """Test RadixTree binding directly with store event and find matches"""
+    import json
+
+    # Create RadixTree instance
+    radix_tree = RadixTree()
+
+    # Create a store event with parent_hash=None, block_hash=0
+    # Following the KvCacheEvent format from the Rust protocols
+    store_event = {
+        "event_id": 1,
+        "data": {
+            "stored": {
+                "parent_hash": None,
+                "blocks": [
+                    {
+                        "block_hash": 0,
+                        "tokens_hash": 0,  # Using 0 for both hashes to match tokens [0]
+                    }
+                ],
+            }
+        },
+    }
+
+    # Convert to JSON bytes
+    event_bytes = json.dumps(store_event).encode("utf-8")
+
+    # Apply the event to worker_id 0
+    worker_id = 0
+    radix_tree.apply_event(worker_id, event_bytes)
+
+    # Find matches for tokens [0]
+    # The sequence parameter expects token hashes, so we use [0] to match tokens_hash=0
+    overlap_scores = radix_tree.find_matches([0])
+
+    # Verify the results
+    assert overlap_scores.scores is not None
+    assert (
+        len(overlap_scores.scores) == 1
+    ), f"Expected 1 worker in scores, got {len(overlap_scores.scores)}"
+    assert worker_id in overlap_scores.scores, f"Worker {worker_id} not found in scores"
+    assert (
+        overlap_scores.scores[worker_id] == 1
+    ), f"Expected score 1 for worker {worker_id}, got {overlap_scores.scores[worker_id]}"
+
+    print(
+        f"✓ RadixTree test passed: worker {worker_id} has score {overlap_scores.scores[worker_id]}"
+    )
 
 
 # TODO Figure out how to test with different kv_block_size
@@ -97,6 +152,30 @@ async def test_event_handler(distributed_runtime):
     await asyncio.sleep(1)
     scores = await indexer.find_matches_for_request(test_token, lora_id)
     assert not scores.scores
+
+
+async def test_approx_kv_indexer(distributed_runtime):
+    kv_block_size = 32
+    namespace = "kv_test"
+    component = "approx_kv"
+    kv_listener = distributed_runtime.namespace(namespace).component(component)
+    await kv_listener.create_service()
+
+    indexer = ApproxKvIndexer(kv_listener, kv_block_size, 30.0)
+
+    tokens = [0] * (kv_block_size * 2)
+
+    scores = await indexer.find_matches_for_request(tokens)
+    assert not scores.scores
+
+    worker_id = 0
+
+    await indexer.process_routing_decision_for_request(tokens, worker_id)
+
+    scores = await indexer.find_matches_for_request(tokens)
+    assert scores.scores
+    assert worker_id in scores.scores
+    assert scores.scores[worker_id] == 2
 
 
 class EventPublisher:
@@ -256,14 +335,31 @@ async def test_metrics_aggregator(distributed_runtime):
 
 
 async def metrics_publisher_task(kv_listener, expected_metrics):
+    # Construct the structured ForwardPassMetrics payload expected by the
+    # current Rust bindings instead of passing the individual scalar values
+    # directly. The API for `WorkerMetricsPublisher.publish`
+    # changed from a list of positional scalars to a single
+    # `ForwardPassMetrics` object.
+
     metrics_publisher = WorkerMetricsPublisher()
-    metrics_publisher.publish(
+
+    worker_stats = WorkerStats(
         expected_metrics["request_active_slots"],
         expected_metrics["request_total_slots"],
+        expected_metrics["num_requests_waiting"],
+        None,
+    )
+
+    kv_stats = KvStats(
         expected_metrics["kv_active_blocks"],
         expected_metrics["kv_total_blocks"],
-        expected_metrics["num_requests_waiting"],
         expected_metrics["gpu_cache_usage_perc"],
         expected_metrics["gpu_prefix_cache_hit_rate"],
     )
+
+    metrics = ForwardPassMetrics(worker_stats, kv_stats, None)
+
+    # Publish and expose the metrics via the endpoint so that the aggregator
+    # test can discover them.
+    metrics_publisher.publish(metrics)
     await metrics_publisher.create_endpoint(kv_listener)

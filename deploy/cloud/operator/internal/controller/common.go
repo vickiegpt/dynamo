@@ -19,7 +19,6 @@ package controller
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/ai-dynamo/dynamo/deploy/cloud/operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -64,6 +63,7 @@ func getIngressHost(ingressSpec v1alpha1.IngressSpec) string {
 	return fmt.Sprintf("%s.%s", host, ingressSuffix)
 }
 
-func getK8sName(value string) string {
-	return strings.ReplaceAll(value, ":", "--")
+type dockerSecretRetriever interface {
+	// returns a list of secret names associated with the docker registry
+	GetSecrets(namespace, registry string) ([]string, error)
 }

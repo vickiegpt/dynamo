@@ -74,12 +74,14 @@ impl DeltaGenerator {
     /// # Returns
     /// * A new instance of [`DeltaGenerator`].
     pub fn new(model: String, options: DeltaGeneratorOptions) -> Self {
-        // SAFETY: Casting from `u64` to `u32` could lead to precision loss after `u32::MAX`,
-        // but this will not be an issue until 2106.
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs() as u32;
+            .as_secs();
+
+        // SAFETY: Casting from `u64` to `u32` could lead to precision loss after `u32::MAX`,
+        // but this will not be an issue until 2106.
+        let now: u32 = now.try_into().expect("timestamp exceeds u32::MAX");
 
         let usage = async_openai::types::CompletionUsage {
             prompt_tokens: 0,
@@ -128,16 +130,15 @@ impl DeltaGenerator {
         finish_reason: Option<async_openai::types::FinishReason>,
         logprobs: Option<async_openai::types::ChatChoiceLogprobs>,
     ) -> async_openai::types::CreateChatCompletionStreamResponse {
-        // TODO: Update for tool calling
         let delta = async_openai::types::ChatCompletionStreamResponseDelta {
+            content: text,
+            function_call: None,
+            tool_calls: None,
             role: if self.msg_counter == 0 {
                 Some(async_openai::types::Role::Assistant)
             } else {
                 None
             },
-            content: text,
-            tool_calls: None,
-            function_call: None,
             refusal: None,
         };
 
@@ -150,6 +151,11 @@ impl DeltaGenerator {
 
         let choices = vec![choice];
 
+        let mut usage = self.usage.clone();
+        if self.options.enable_usage {
+            usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+        }
+
         async_openai::types::CreateChatCompletionStreamResponse {
             id: self.id.clone(),
             object: self.object.clone(),
@@ -158,7 +164,7 @@ impl DeltaGenerator {
             system_fingerprint: self.system_fingerprint.clone(),
             choices,
             usage: if self.options.enable_usage {
-                Some(self.usage.clone())
+                Some(usage)
             } else {
                 None
             },
@@ -186,7 +192,15 @@ impl crate::protocols::openai::DeltaGeneratorExt<NvCreateChatCompletionStreamRes
     ) -> anyhow::Result<NvCreateChatCompletionStreamResponse> {
         // Aggregate token usage if enabled.
         if self.options.enable_usage {
-            self.usage.completion_tokens += delta.token_ids.len() as u32;
+            // SAFETY: Casting from `usize` to `u32` could lead to precision loss after `u32::MAX`,
+            // but this will not be an issue until context lengths exceed 4_294_967_295.
+            let token_length: u32 = delta
+                .token_ids
+                .len()
+                .try_into()
+                .expect("token_ids length exceeds u32::MAX");
+
+            self.usage.completion_tokens += token_length;
         }
 
         // TODO: Implement log probabilities aggregation.
@@ -198,6 +212,9 @@ impl crate::protocols::openai::DeltaGeneratorExt<NvCreateChatCompletionStreamRes
             Some(common::FinishReason::Stop) => Some(async_openai::types::FinishReason::Stop),
             Some(common::FinishReason::Length) => Some(async_openai::types::FinishReason::Length),
             Some(common::FinishReason::Cancelled) => Some(async_openai::types::FinishReason::Stop),
+            Some(common::FinishReason::ContentFilter) => {
+                Some(async_openai::types::FinishReason::ContentFilter)
+            }
             Some(common::FinishReason::Error(err_msg)) => {
                 return Err(anyhow::anyhow!(err_msg));
             }

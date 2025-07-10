@@ -95,12 +95,19 @@ This example can be deployed to a Kubernetes cluster using [Dynamo Cloud](../../
 
 You must have first followed the instructions in [deploy/cloud/helm/README.md](https://github.com/ai-dynamo/dynamo/blob/main/deploy/cloud/helm/README.md) to create your Dynamo cloud deployment.
 
-### Deployment Steps
+### Deployment Steps For your Hello World graph.
 
 For detailed deployment instructions, please refer to the [Operator Deployment Guide](../../docs/guides/dynamo_deploy/operator_deployment.md). The following are the specific commands for the hello world example:
 
 ```bash
-# Set your project root directory
+Make sure your dynamo cloud deploy.sh script from the prior step finished successfully and setup port forwaring in another window
+per its suggestion.
+
+kubectl port-forward svc/...-dynamo-api-store <local-port>:80 -n $NAMESPACE
+
+
+# Set your dynamo root directory
+cd <root dynamo folder>
 export PROJECT_ROOT=$(pwd)
 
 # Configure environment variables (see operator_deployment.md for details)
@@ -117,8 +124,7 @@ cd $PROJECT_ROOT/examples/hello_world
 DYNAMO_TAG=$(dynamo build hello_world:Frontend | grep "Successfully built" | awk '{ print $3 }' | sed 's/\.$//')
 
 # Deploy to Kubernetes
-export DEPLOYMENT_NAME=ci-hw
-dynamo deployment create $DYNAMO_TAG -n $DEPLOYMENT_NAME
+# TODO: Deploy your service using a DynamoGraphDeployment CR.
 ```
 
 ### Testing the Deployment

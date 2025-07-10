@@ -13,14 +13,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::{collections::HashMap, pin::Pin};
+
+use futures::{Stream, StreamExt};
+
 use super::{NvCreateChatCompletionResponse, NvCreateChatCompletionStreamResponse};
 use crate::protocols::{
     codec::{Message, SseCodecError},
     convert_sse_stream, Annotated,
 };
-
-use futures::{Stream, StreamExt};
-use std::{collections::HashMap, pin::Pin};
 
 /// A type alias for a pinned, dynamically-dispatched stream that is `Send` and `Sync`.
 type DataStream<T> = Pin<Box<dyn Stream<Item = T> + Send + Sync>>;
@@ -59,6 +60,8 @@ struct DeltaChoice {
     finish_reason: Option<async_openai::types::FinishReason>,
     /// Optional log probabilities for the chat choice.
     logprobs: Option<async_openai::types::ChatChoiceLogprobs>,
+    // Optional tool calls for the chat choice.
+    tool_calls: Option<Vec<async_openai::types::ChatCompletionMessageToolCall>>,
 }
 
 impl Default for DeltaAggregator {
@@ -134,6 +137,7 @@ impl DeltaAggregator {
                                     role: choice.delta.role,
                                     finish_reason: None,
                                     logprobs: choice.logprobs,
+                                    tool_calls: None,
                                 });
 
                         // Append content if available.
@@ -152,11 +156,31 @@ impl DeltaAggregator {
             .await;
 
         // Return early if an error was encountered.
-        let aggregator = if let Some(error) = aggregator.error {
+        let mut aggregator = if let Some(error) = aggregator.error {
             return Err(error);
         } else {
             aggregator
         };
+
+        // After aggregation, inspect each choice's text for tool call syntax
+        for choice in aggregator.choices.values_mut() {
+            if choice.tool_calls.is_none() {
+                if let Ok(Some(tool_call)) =
+                    crate::preprocessor::tools::try_parse_tool_call_aggregate(&choice.text)
+                {
+                    tracing::debug!(
+                        tool_call_id = %tool_call.id,
+                        function_name = %tool_call.function.name,
+                        arguments = %tool_call.function.arguments,
+                        "Parsed structured tool call from aggregated content"
+                    );
+
+                    choice.tool_calls = Some(vec![tool_call]);
+                    choice.text.clear();
+                    choice.finish_reason = Some(async_openai::types::FinishReason::ToolCalls);
+                }
+            }
+        }
 
         // Extract aggregated choices and sort them by index.
         let mut choices: Vec<_> = aggregator
@@ -195,8 +219,12 @@ impl From<DeltaChoice> for async_openai::types::ChatChoice {
         async_openai::types::ChatChoice {
             message: async_openai::types::ChatCompletionResponseMessage {
                 role: delta.role.expect("delta should have a Role"),
-                content: Some(delta.text),
-                tool_calls: None,
+                content: if delta.tool_calls.is_some() {
+                    None
+                } else {
+                    Some(delta.text)
+                },
+                tool_calls: delta.tool_calls,
                 refusal: None,
                 function_call: None,
                 audio: None,

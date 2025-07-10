@@ -15,13 +15,13 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use super::preprocessor::PreprocessedRequest;
+pub use super::FinishReason;
 use crate::protocols::TokenIdType;
+use dynamo_runtime::protocols::maybe_error::MaybeError;
 
 pub type TokenType = Option<String>;
 pub type LogProbs = Vec<f64>;
-
-pub use super::preprocessor::PreprocessedRequest;
-pub use super::FinishReason;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct BackendOutput {
@@ -46,6 +46,9 @@ pub struct BackendOutput {
     pub finish_reason: Option<FinishReason>,
     // Model Deployment Card checksum
     //pub mdcsum: String,
+
+    // Index field for batch requests to match OpenAI format
+    pub index: Option<u32>,
 }
 
 /// The LLM engine and backnd with manage it's own state, specifically translating how a
@@ -77,6 +80,9 @@ pub struct LLMEngineOutput {
     // TODO: Enrich this with more information as can apply our first-level postprocessing
     // logic and return more detailed information
     pub finish_reason: Option<FinishReason>,
+
+    // Index field for batch requests to match OpenAI format
+    pub index: Option<u32>,
 }
 
 impl LLMEngineOutput {
@@ -88,6 +94,7 @@ impl LLMEngineOutput {
             cum_log_probs: None,
             log_probs: None,
             finish_reason: Some(FinishReason::Cancelled),
+            index: None,
         }
     }
 
@@ -99,6 +106,7 @@ impl LLMEngineOutput {
             cum_log_probs: None,
             log_probs: None,
             finish_reason: Some(FinishReason::Stop),
+            index: None,
         }
     }
 
@@ -110,6 +118,7 @@ impl LLMEngineOutput {
             cum_log_probs: None,
             log_probs: None,
             finish_reason: Some(FinishReason::Length),
+            index: None,
         }
     }
 
@@ -121,6 +130,55 @@ impl LLMEngineOutput {
             cum_log_probs: None,
             log_probs: None,
             finish_reason: Some(FinishReason::Error(err_msg)),
+            index: None,
         }
+    }
+}
+
+impl MaybeError for LLMEngineOutput {
+    fn from_err(err: Box<dyn std::error::Error>) -> Self {
+        LLMEngineOutput::error(format!("{:?}", err))
+    }
+
+    fn err(&self) -> Option<Box<dyn std::error::Error>> {
+        if let Some(FinishReason::Error(err_msg)) = &self.finish_reason {
+            Some(anyhow::Error::msg(err_msg.clone()).into())
+        } else {
+            None
+        }
+    }
+}
+
+/// Raw output from embedding engines containing embedding vectors
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct EmbeddingsEngineOutput {
+    /// Generated embedding vectors (one per input text)
+    pub embeddings: Vec<Vec<f64>>,
+
+    /// Token usage information
+    pub prompt_tokens: u32,
+    pub total_tokens: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_maybe_error() {
+        let output = LLMEngineOutput::stop();
+        assert!(output.err().is_none());
+        assert!(output.is_ok());
+        assert!(!output.is_err());
+
+        let output = LLMEngineOutput::error("Test error".to_string());
+        assert_eq!(format!("{}", output.err().unwrap()), "Test error");
+        assert!(!output.is_ok());
+        assert!(output.is_err());
+
+        let output = LLMEngineOutput::from_err(anyhow::Error::msg("Test error 2").into());
+        assert_eq!(format!("{}", output.err().unwrap()), "Test error 2");
+        assert!(!output.is_ok());
+        assert!(output.is_err());
     }
 }

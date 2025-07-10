@@ -22,7 +22,7 @@ The NVIDIA Dynamo Platform is a high-performance, low-latency inference framewor
 .. admonition:: 💎 Discover the latest developments!
    :class: seealso
 
-   This guide is a snapshot of the `Dynamo GitHub Repository <https://github.com/ai-dynamo/dynamo>`_ for a specific release. For the latest information and examples, see:
+   This guide is a snapshot of the `Dynamo GitHub Repository <https://github.com/ai-dynamo/dynamo>`_ at a specific point in time. For the latest information and examples, see:
 
    - `Dynamo README <https://github.com/ai-dynamo/dynamo/blob/main/README.md>`_
    - `Architecture and features doc <https://github.com/ai-dynamo/dynamo/blob/main/docs/architecture/>`_
@@ -62,19 +62,6 @@ Dive in: Examples
 
         Presents TensorRT-LLM examples and reference implementations for deploying Large Language Models (LLMs) in various configurations.
 
-Overview
---------
-
-Dynamo is inference engine agnostic, supporting TRT-LLM, vLLM, SGLang, and others, and captures LLM-specific capabilities such as:
-
-* **Disaggregated prefill & decode inference** - Maximizes GPU throughput and facilitates trade off between throughput and latency.
-* **Dynamic GPU scheduling** - Optimizes performance based on fluctuating demand.
-* **LLM-aware request routing** - Eliminates unnecessary KV cache re-computation.
-* **Accelerated data transfer** - Reduces inference response time using NIXL.
-* **KV cache offloading** - Leverages several memory hierarchies for higher system throughput.
-
-Built in Rust for performance and in Python for extensibility, Dynamo is fully open-source
-and is driven by a transparent development approach. Check out our repo at https://github.com/ai-dynamo/.
 
 .. toctree::
    :hidden:
@@ -92,7 +79,8 @@ and is driven by a transparent development approach. Check out our repo at https
    Disaggregated Serving <architecture/disagg_serving.md>
    KV Block Manager <architecture/kvbm_intro.rst>
    KV Cache Routing <architecture/kv_cache_routing.md>
-   Planner <architecture/planner.md>
+   Planner <architecture/planner_intro.rst>
+   Dynamo Architecture Flow <architecture/dynamo_flow.md>
 
 .. toctree::
    :hidden:
@@ -120,6 +108,7 @@ and is driven by a transparent development approach. Check out our repo at https
    Dynamo Cloud Kubernetes Platform <guides/dynamo_deploy/dynamo_cloud.md>
    Deploying Dynamo Inference Graphs to Kubernetes using the Dynamo Cloud Platform <guides/dynamo_deploy/operator_deployment.md>
    Manual Helm Deployment <guides/dynamo_deploy/manual_helm_deployment.md>
+   GKE Setup Guide <guides/dynamo_deploy/gke_setup.md>
    Minikube Setup Guide <guides/dynamo_deploy/minikube.md>
    Model Caching with Fluid <guides/dynamo_deploy/model_caching_with_fluid.md>
 
@@ -127,7 +116,7 @@ and is driven by a transparent development approach. Check out our repo at https
    :hidden:
    :caption: Benchmarking
 
-   Planner Benchmark Example <guides/planner_benchmark/benchmark_planner.md>
+   Planner Benchmark Example <guides/planner_benchmark/README.md>
 
 
 .. toctree::
@@ -147,5 +136,11 @@ and is driven by a transparent development approach. Check out our repo at https
    Multinode Examples <examples/multinode.md>
    LLM Deployment Examples using TensorRT-LLM <examples/trtllm.md>
 
+.. toctree::
+   :hidden:
+   :caption: Reference
+
+   Glossary <dynamo_glossary.md>
+   KVBM Reading <architecture/kvbm_reading.md>
 
 

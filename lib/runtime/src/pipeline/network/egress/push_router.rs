@@ -13,23 +13,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::{AsyncEngineContextProvider, ResponseStream};
+use crate::{
+    component::{Client, Endpoint, InstanceSource},
+    engine::{AsyncEngine, Data},
+    pipeline::{
+        error::PipelineErrorExt, AddressedPushRouter, AddressedRequest, Error, ManyOut, SingleIn,
+    },
+    protocols::maybe_error::MaybeError,
+    traits::DistributedRuntimeProvider,
+};
+use async_nats::client::{
+    RequestError as NatsRequestError, RequestErrorKind::NoResponders as NatsNoResponders,
+};
 use async_trait::async_trait;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
+    future::Future,
     marker::PhantomData,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
 };
-
-use crate::{
-    component::{Client, Endpoint, InstanceSource},
-    engine::{AsyncEngine, Data},
-    pipeline::{AddressedPushRouter, AddressedRequest, Error, ManyOut, SingleIn},
-    traits::DistributedRuntimeProvider,
-};
+use tokio_stream::StreamExt;
 
 #[derive(Clone)]
 pub struct PushRouter<T, U>
@@ -88,7 +96,7 @@ async fn addressed_router(endpoint: &Endpoint) -> anyhow::Result<Arc<AddressedPu
 impl<T, U> PushRouter<T, U>
 where
     T: Data + Serialize,
-    U: Data + for<'de> Deserialize<'de>,
+    U: Data + for<'de> Deserialize<'de> + MaybeError,
 {
     pub async fn from_client(client: Client, router_mode: RouterMode) -> anyhow::Result<Self> {
         let addressed = addressed_router(&client.endpoint).await?;
@@ -106,7 +114,7 @@ where
         let counter = self.round_robin_counter.fetch_add(1, Ordering::Relaxed);
 
         let instance_id = {
-            let instances = self.client.instances();
+            let instances = self.client.instances_avail().await;
             let count = instances.len();
             if count == 0 {
                 return Err(anyhow::anyhow!(
@@ -119,16 +127,14 @@ where
         };
         tracing::trace!("round robin router selected {instance_id}");
 
-        let subject = self.client.endpoint.subject_to(instance_id);
-        let request = request.map(|req| AddressedRequest::new(req, subject));
-
-        self.addressed.generate(request).await
+        self.generate_with_fault_detection(instance_id, request)
+            .await
     }
 
     /// Issue a request to a random endpoint
     pub async fn random(&self, request: SingleIn<T>) -> anyhow::Result<ManyOut<U>> {
         let instance_id = {
-            let instances = self.client.instances();
+            let instances = self.client.instances_avail().await;
             let count = instances.len();
             if count == 0 {
                 return Err(anyhow::anyhow!(
@@ -142,10 +148,8 @@ where
         };
         tracing::trace!("random router selected {instance_id}");
 
-        let subject = self.client.endpoint.subject_to(instance_id);
-        let request = request.map(|req| AddressedRequest::new(req, subject));
-
-        self.addressed.generate(request).await
+        self.generate_with_fault_detection(instance_id, request)
+            .await
     }
 
     /// Issue a request to a specific endpoint
@@ -155,7 +159,7 @@ where
         instance_id: i64,
     ) -> anyhow::Result<ManyOut<U>> {
         let found = {
-            let instances = self.client.instances();
+            let instances = self.client.instances_avail().await;
             instances.iter().any(|ep| ep.id() == instance_id)
         };
 
@@ -166,10 +170,8 @@ where
             ));
         }
 
-        let subject = self.client.endpoint.subject_to(instance_id);
-        let request = request.map(|req| AddressedRequest::new(req, subject));
-
-        self.addressed.generate(request).await
+        self.generate_with_fault_detection(instance_id, request)
+            .await
     }
 
     pub async fn r#static(&self, request: SingleIn<T>) -> anyhow::Result<ManyOut<U>> {
@@ -179,13 +181,54 @@ where
         tracing::debug!("router generate");
         self.addressed.generate(request).await
     }
+
+    async fn generate_with_fault_detection(
+        &self,
+        instance_id: i64,
+        request: SingleIn<T>,
+    ) -> anyhow::Result<ManyOut<U>> {
+        let subject = self.client.endpoint.subject_to(instance_id);
+        let request = request.map(|req| AddressedRequest::new(req, subject));
+
+        let stream: anyhow::Result<ManyOut<U>> = self.addressed.generate(request).await;
+        match stream {
+            Ok(stream) => {
+                let engine_ctx = stream.context();
+                let client = self.client.clone();
+                let stream = stream.then(move |res| {
+                    let mut report_instance_down: Option<(Client, i64)> = None;
+                    if let Some(err) = res.err() {
+                        const STREAM_ERR_MSG: &str = "Stream ended before generation completed";
+                        if format!("{:?}", err) == STREAM_ERR_MSG {
+                            report_instance_down = Some((client.clone(), instance_id));
+                        }
+                    }
+                    async move {
+                        if let Some((client, instance_id)) = report_instance_down {
+                            client.report_instance_down(instance_id).await;
+                        }
+                        res
+                    }
+                });
+                Ok(ResponseStream::new(Box::pin(stream), engine_ctx))
+            }
+            Err(err) => {
+                if let Some(req_err) = err.downcast_ref::<NatsRequestError>() {
+                    if matches!(req_err.kind(), NatsNoResponders) {
+                        self.client.report_instance_down(instance_id).await;
+                    }
+                }
+                Err(err)
+            }
+        }
+    }
 }
 
 #[async_trait]
 impl<T, U> AsyncEngine<SingleIn<T>, ManyOut<U>, Error> for PushRouter<T, U>
 where
     T: Data + Serialize,
-    U: Data + for<'de> Deserialize<'de>,
+    U: Data + for<'de> Deserialize<'de> + MaybeError,
 {
     async fn generate(&self, request: SingleIn<T>) -> Result<ManyOut<U>, Error> {
         match self.client.instance_source.as_ref() {

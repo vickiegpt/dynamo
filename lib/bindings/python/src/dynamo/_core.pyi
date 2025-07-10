@@ -272,25 +272,6 @@ class Client:
         """
         ...
 
-class KvRouter:
-    """
-    A router will determine which worker should handle a given request.
-    """
-
-    ...
-
-    def __init__(self, drt: DistributedRuntime, component: Component) -> None:
-        """
-        Create a `KvRouter` object that is associated with the `component`
-        """
-
-    def schedule(self, token_ids: List[int], lora_id: int) -> int:
-        """
-        Return the worker id that should handle the given token ids,
-        exception will be raised if there is no worker available.
-        """
-        ...
-
 class DisaggregatedRouter:
     """
     A router that determines whether to perform prefill locally or remotely based on
@@ -344,6 +325,97 @@ class DisaggregatedRouter:
         """
         ...
 
+def compute_block_hash_for_seq_py(tokens: List[int], kv_block_size: int) -> List[int]:
+    """
+    Compute block hashes for a sequence of tokens
+
+    Args:
+        tokens: List of token IDs
+        kv_block_size: Size of each KV cache block
+
+    Returns:
+        List of block hashes as integers
+    """
+
+    ...
+
+class WorkerStats:
+    """
+    Worker stats.
+    """
+
+    ...
+
+    def __init__(
+        self,
+        request_active_slots: int,
+        request_total_slots: int,
+        num_requests_waiting: int,
+        data_parallel_rank: Optional[int] = None,
+    ) -> None:
+        """
+        Create a `WorkerStats` object.
+        """
+        ...
+
+class KvStats:
+    """
+    KV stats.
+    """
+
+    ...
+
+    def __init__(
+        self,
+        kv_active_blocks: int,
+        kv_total_blocks: int,
+        gpu_cache_usage_perc: float,
+        gpu_prefix_cache_hit_rate: float,
+    ) -> None:
+        """
+        Create a `KvStats` object.
+        """
+        ...
+
+class SpecDecodeStats:
+    """
+    Speculative decoding stats.
+    """
+
+    ...
+
+    def __init__(
+        self,
+        num_spec_tokens: int,
+        num_drafts: int,
+        num_draft_tokens: int,
+        num_accepted_tokens: int,
+        num_accepted_tokens_per_pos: List[int],
+    ) -> None:
+        """
+        Create a `SpecDecodeStats` object when running with speculative decoding.
+        """
+        ...
+
+class ForwardPassMetrics:
+    """
+    A collection of metrics for a forward pass.
+    Includes worker stats, KV stats, and speculative decoding stats.
+    """
+
+    ...
+
+    def __init__(
+        self,
+        worker_stats: WorkerStats,
+        kv_stats: KvStats,
+        spec_decode_stats: Optional[SpecDecodeStats] = None,
+    ) -> None:
+        """
+        Create a `ForwardPassMetrics` object
+        """
+        ...
+
 class WorkerMetricsPublisher:
     """
     A metrics publisher will provide metrics to the router.
@@ -364,17 +436,10 @@ class WorkerMetricsPublisher:
 
     def publish(
         self,
-        request_active_slots: int,
-        request_total_slots: int,
-        kv_active_blocks: int,
-        kv_total_blocks: int,
-        num_requests_waiting: int,
-        gpu_cache_usage_perc: float,
-        gpu_prefix_cache_hit_rate: float,
-        data_parallel_rank: int = 0,
+        metrics: ForwardPassMetrics
     ) -> None:
         """
-        Update the KV metrics being reported.
+        Update the metrics being reported.
         """
         ...
 
@@ -418,7 +483,89 @@ class OverlapScores:
     'scores' is a map of worker id to the score which is the number of matching blocks.
     """
 
-    ...
+    @property
+    def scores(self) -> Dict[int, int]:
+        """
+        Map of worker_id to the score which is the number of matching blocks.
+
+        Returns:
+            Dictionary mapping worker IDs to their overlap scores
+        """
+        ...
+
+    @property
+    def frequencies(self) -> List[int]:
+        """
+        List of frequencies that the blocks have been accessed.
+        Entries with value 0 are omitted.
+
+        Returns:
+            List of access frequencies for each block
+        """
+        ...
+
+class RadixTree:
+    """
+    A RadixTree that tracks KV cache blocks and can find prefix matches for sequences.
+
+    NOTE: This class is not thread-safe and should only be used from a single thread in Python.
+    """
+
+    def __init__(self, expiration_duration_secs: Optional[float] = None) -> None:
+        """
+        Create a new RadixTree instance.
+
+        Args:
+            expiration_duration_secs: Optional expiration duration in seconds for cached blocks.
+                                    If None, blocks never expire.
+        """
+        ...
+
+    def find_matches(
+        self, sequence: List[int], early_exit: bool = False
+    ) -> OverlapScores:
+        """
+        Find prefix matches for the given sequence of block hashes.
+
+        Args:
+            sequence: List of block hashes to find matches for
+            early_exit: If True, stop searching after finding the first match
+
+        Returns:
+            OverlapScores containing worker matching scores and frequencies
+        """
+        ...
+
+    def apply_event(self, worker_id: int, kv_cache_event_bytes: bytes) -> None:
+        """
+        Apply a KV cache event to update the RadixTree state.
+
+        Args:
+            worker_id: ID of the worker that generated the event
+            kv_cache_event_bytes: Serialized KV cache event as bytes
+
+        Raises:
+            ValueError: If the event bytes cannot be deserialized
+        """
+        ...
+
+    def remove_worker(self, worker_id: int) -> None:
+        """
+        Remove all blocks associated with a specific worker.
+
+        Args:
+            worker_id: ID of the worker to remove
+        """
+        ...
+
+    def clear_all_blocks(self, worker_id: int) -> None:
+        """
+        Clear all blocks for a specific worker.
+
+        Args:
+            worker_id: ID of the worker whose blocks should be cleared
+        """
+        ...
 
 class KvIndexer:
     """
@@ -432,6 +579,18 @@ class KvIndexer:
         Create a `KvIndexer` object
         """
 
+    def find_matches(self, sequence: List[int]) -> OverlapScores:
+        """
+        Find prefix matches for the given sequence of block hashes.
+
+        Args:
+            sequence: List of block hashes to find matches for
+
+        Returns:
+            OverlapScores containing worker matching scores and frequencies
+        """
+        ...
+
     def find_matches_for_request(
         self, token_ids: List[int], lora_id: int
     ) -> OverlapScores:
@@ -443,6 +602,35 @@ class KvIndexer:
     def block_size(self) -> int:
         """
         Return the block size of the KV Indexer.
+        """
+        ...
+
+class ApproxKvIndexer:
+    """
+    A KV Indexer that doesn't use KV cache events. It instead relies solely on the input tokens.
+    """
+
+    def __init__(self, component: Component, kv_block_size: int, ttl_secs: float) -> None:
+        """
+        Create a `ApproxKvIndexer` object
+        """
+        ...
+
+    def find_matches_for_request(self, token_ids: List[int], lora_id: int) -> OverlapScores:
+        """
+        Return the overlapping scores of workers for the given token ids.
+        """
+        ...
+
+    def block_size(self) -> int:
+        """
+        Return the block size of the ApproxKvIndexer.
+        """
+        ...
+
+    def process_routing_decision_for_request(self, tokens: List[int], lora_id: int, worker_id: int) -> None:
+        """
+        Notify the indexer that a token sequence has been sent to a specific worker.
         """
         ...
 
@@ -641,8 +829,26 @@ class ModelType:
     """What type of request this model needs: Chat, Component or Backend (pre-processed)"""
     ...
 
-async def register_llm(model_type: ModelType, endpoint: Endpoint, model_path: str, model_name: Optional[str] = None, context_length: Optional[int] = None, kv_cache_block_size: Optional[int] = None) -> None:
+class RouterMode:
+    """Router mode for load balancing requests across workers"""
+    RoundRobin: 'RouterMode'
+    Random: 'RouterMode'
+    KV: 'RouterMode'
+
+async def register_llm(model_type: ModelType, endpoint: Endpoint, model_path: str, model_name: Optional[str] = None, context_length: Optional[int] = None, kv_cache_block_size: Optional[int] = None, router_mode: Optional[RouterMode] = None) -> None:
     """Attach the model at path to the given endpoint, and advertise it as model_type"""
+    ...
+
+class EngineConfig:
+    """Holds internal configuration for a Dynamo engine."""
+    ...
+
+async def make_engine(args: EntrypointArgs) -> EngineConfig:
+    """Make an engine matching the args"""
+    ...
+
+async def run_input(runtime: DistributedRuntime, input: str, engine_config: EngineConfig) -> None:
+    """Start an engine, connect it to an input, and run until stopped."""
     ...
 
 class NatsQueue:
@@ -919,3 +1125,42 @@ class BlockManager:
             List of allocated blocks
         """
         ...
+
+class ZmqKvEventListener:
+    """
+    A ZMQ-based key-value cache event listener that operates independently
+    of the dynamo runtime or event plane infrastructure.
+    """
+
+    def __init__(
+        self, zmq_endpoint: str, zmq_topic: str, kv_block_size: int
+    ) -> None:
+        """
+        Create a new ZmqKvEventListener instance.
+
+        Args:
+            zmq_endpoint: ZeroMQ endpoint to connect to (e.g., "tcp://127.0.0.1:5557")
+            zmq_topic: ZeroMQ topic to subscribe to
+            kv_block_size: Size of KV cache blocks
+        """
+        ...
+
+    async def get_events(self) -> List[str]:
+        """
+        Get all available KV cache events from the ZMQ listener.
+
+        Returns:
+            List of JSON-serialized KV cache events as strings
+
+        Raises:
+            ValueError: If events cannot be serialized to JSON
+        """
+        ...
+
+class EntrypointArgs:
+    """
+    Settings to connect an input to a worker and run them.
+    Use by `dynamo run`.
+    """
+
+    ...
