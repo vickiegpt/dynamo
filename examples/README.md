@@ -1,20 +1,47 @@
 # Quickstart Guide
 
+## Examples Overview
+
+This directory contains various examples demonstrating different use cases and capabilities of Dynamo. Each example showcases specific features and deployment patterns:
+
+| Example | Description |
+|---------|-------------|
+| **hello_world** | Basic multi-service pipeline demonstrating core Dynamo concepts and deployment patterns |
+| **llm_hello_world** | LLM pipeline with interface-based design |
+| **llm** | Comprehensive LLM deployment examples with multiple frameworks |
+| **vllm_v0** | vLLM deployment examples using dynamo-run for high-performance processing |
+| **vllm_v1** | Latest vLLM deployment examples with advanced features |
+| **tensorrt_llm** | TensorRT-LLM deployment examples for optimized inference |
+| **sglang** | SGLang backend examples |
+| **multimodal** | Multimodal model deployment examples (vision + video) |
+| **cli** | Command-line interface examples using Python bindings |
+| **router_standalone** | Experimental Standalone KV router implementation |
+
+Each example includes detailed README files with specific setup instructions, configuration options, and usage examples. Choose the example that best matches your use case and requirements.
+
+---
+
 ## Deploying examples on Kubernetes
 
 This guide will help you quickly deploy and clean up the dynamo example services in Kubernetes.
 
 ### Prerequisites
 
-- **Dynamo Cloud** is already deployed in your target Kubernetes namespace.
-- You have `kubectl` access to your cluster and the correct namespace set in `$NAMESPACE`.
+#### Kubernetes
+You have `kubectl` installed and access to your cluster and the correct namespace set in `$NAMESPACE` environment variable.
+
+#### Dynamo Cloud
+
+First, you need to install the Dynamo Cloud Platform. Dynamo Cloud acts as an orchestration layer between the end user and Kubernetes, handling the complexity of deploying your graphs for you.
+
+Before you can deploy your graphs, you need to deploy the Dynamo Cloud. This is a one-time action, only necessary the first time you deploy a DynamoGraph.
 
 
 ### Create a secret with huggingface token
 
 ```bash
 export HF_TOKEN="huggingfacehub token with read permission to models"
-kubectl create secret generic hf-token-secret --from-literal=HF_TOKEN=$HF_TOKEN -n $KUBE_NS || true
+kubectl create secret generic hf-token-secret --from-literal=HF_TOKEN=$HF_TOKEN -n ${NAMESPACE}|| true
 ```
 
 ---
@@ -24,14 +51,18 @@ Choose the example you want to deploy or delete. The YAML files are located in `
 ### Deploy dynamo example
 
 ```bash
-kubectl apply -f examples/<Backend-Folder>/deploy/k8s/<Example yaml file> -n $NAMESPACE
+export INFERENCE_BACKEND=vllm_v1
+export EXAMPLE_MANIFEST=agg.yaml
+kubectl apply -f examples/$INFERENCE_BACKEND/deploy/k8s/$EXAMPLE_MANIFEST -n $NAMESPACE
 ```
 
 ### Uninstall dynamo example
 
 
 ```bash
-kubectl delete -f examples/<Backend-Folder>/deploy/k8s/<Example yaml file> -n $NAMESPACE
+export INFERENCE_BACKEND=vllm_v1
+export EXAMPLE_MANIFEST=agg.yaml
+kubectl delete -f examples/$INFERENCE_BACKEND/deploy/k8s/$EXAMPLE_MANIFEST -n $NAMESPACE
 ```
 
 ### Using a different dynamo container
