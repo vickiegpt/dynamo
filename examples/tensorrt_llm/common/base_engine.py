@@ -619,9 +619,6 @@ class BaseTensorrtLLMEngine:
                 else request.streaming,
             ):
                 # Convert disaggregated params back to a network-friendly format before yielding.
-                logger.info(
-                    f"[TRTLLM-DEBUG] printing response.outputs[0] after generate_async: {response.result.output_token_ids}"
-                )
                 response.outputs[
                     0
                 ].disaggregated_params = DisaggregatedTypeConverter.to_oai_disaggregated_params(

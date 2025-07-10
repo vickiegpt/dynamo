@@ -24,7 +24,7 @@ Processor:
   router: round-robin
   remote-prefill: true
   ServiceArgs:
-    workers: 2 # to reduce the tokenization bottleneck at a high concurrency
+    workers: 1 # to reduce the tokenization bottleneck at a high concurrency
 
 TensorRTLLMWorker:
   engine_args: "configs/llm_api_config.yaml"
