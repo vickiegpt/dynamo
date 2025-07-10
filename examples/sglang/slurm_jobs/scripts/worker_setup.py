@@ -208,14 +208,14 @@ def _validate_args(args: argparse.Namespace) -> None:
 
 def get_sglang_mini_lb_command_args(prefill_host_ip: str, decode_host_ip: str) -> str:
     cmd = (
+        "pip install sglang-router; "
         f"python3 -m sglang_router.launch_router "
-        f"--policy prefill_decode "
-        f"--prefill-urls http://{prefill_host_ip}:30000:8998 "
-        f"--decode-urls http://{decode_host_ip}:30000 "
-        f"--pd-policy random "
+        f"--policy random "
+        f"--pd-disaggregation "
+        f"--prefill http://{prefill_host_ip}:30000 30001 "
+        f"--decode http://{decode_host_ip}:30000 "
         f"--host 0.0.0.0 "
         f"--port 8000 "
-        f"--timeout 3600"
     )
     return cmd
 
