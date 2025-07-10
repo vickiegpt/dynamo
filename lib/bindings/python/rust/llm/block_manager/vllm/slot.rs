@@ -3,6 +3,11 @@
 
 use super::*;
 
+use tokio::sync::Mutex;
+
+use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
+use dynamo_llm::block_manager::storage::{DiskStorage, PinnedStorage};
+
 #[allow(dead_code)]
 pub enum SlotPosition {
     /// The current position in the sequence representing all tokens that have been computed.
@@ -34,6 +39,9 @@ pub struct Slot<S: Storage, L: LocalityProvider> {
 
     /// The mutable blocks
     mutable: VecDeque<MutableBlock<S, L, BasicMetadata>>,
+
+    /// The immutable blocks that have been onboarded to.
+    onboarded: Arc<Mutex<Vec<ImmutableBlock<S, L, BasicMetadata>>>>,
 }
 
 impl<S: Storage, L: LocalityProvider> std::fmt::Debug for Slot<S, L> {
@@ -64,6 +72,7 @@ impl<S: Storage, L: LocalityProvider> Slot<S, L> {
             sequence,
             immutable: Vec::new(),
             mutable: VecDeque::new(),
+            onboarded: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -311,28 +320,64 @@ impl<S: Storage, L: LocalityProvider> Slot<S, L> {
 }
 
 impl<L: LocalityProvider> Slot<DeviceStorage, L> {
-    pub fn onboard_blocks_to_slot<T: Storage>(
+    pub fn onboard_blocks_to_slot(
         &mut self,
-        offloaded_blocks: Vec<ImmutableBlock<T, L, BasicMetadata>>,
+        host_blocks: Option<Vec<ImmutableBlock<PinnedStorage, L, BasicMetadata>>>,
+        disk_blocks: Option<Vec<ImmutableBlock<DiskStorage, L, BasicMetadata>>>,
+        async_completion_handler: Option<Py<PyAny>>,
         bm: &dynamo_llm::block_manager::KvBlockManager<L, BasicMetadata>,
+        async_completion_rt: &tokio::runtime::Handle
     ) -> Result<(), SlotError> {
-        if offloaded_blocks.len() > self.mutable.len() {
-            return Err(SlotError::from_str(
-                "insufficient mutable blocks to onboard",
-            ));
+        let host_completion = if let Some(host_blocks) = host_blocks {
+            let target_device_blocks = self.mutable.drain(0..host_blocks.len()).collect();
+            Some(bm.onboard_blocks(host_blocks, Some(target_device_blocks)))
+        } else {
+            None
+        };
+
+        let disk_completion = if let Some(disk_blocks) = disk_blocks {
+            let target_device_blocks = self.mutable.drain(0..disk_blocks.len()).collect();
+            Some(bm.onboard_blocks(disk_blocks, Some(target_device_blocks)))
+        } else {
+            None
+        };
+
+        if let Some(completion_handler) = async_completion_handler {
+            let onboarded = self.onboarded.clone();
+
+            let cancel_token = tokio_util::sync::CancellationToken::new();
+
+            CriticalTaskExecutionHandle::new_with_runtime(move |_| async move {
+                if let Some(host_completion) = host_completion {
+                    let host_onboard = host_completion.await??;
+                    onboarded.lock().await.extend(host_onboard);
+                }
+
+                if let Some(disk_completion) = disk_completion {
+                    let disk_onboard = disk_completion.await??;
+                    onboarded.lock().await.extend(disk_onboard);
+                }
+
+                // TODO(jthomson04): This seems a bit sus. Also not ideal that we may block in here.
+                tracing::debug!("Trying to acquire GIL!");
+                Python::with_gil(|py| {
+                    tracing::debug!("Acquired GIL!");
+                    completion_handler.call(py, (), None).expect("Failed to call python completion handler.");
+                });
+
+                Ok(())
+            }, cancel_token.clone(), "Onboarding completion handler", &async_completion_rt).map_err(|e| SlotError::from_str(&format!("Failed to spawn onboarding completion handler: {:?}", e)))?.detach();
+        } else {
+            if let Some(host_completion) = host_completion {
+                let host_onboard = host_completion.blocking_recv().unwrap().expect("Failed to onboard host blocks");
+                self.immutable.extend(host_onboard);
+            }
+
+            if let Some(disk_completion) = disk_completion {
+                let disk_onboard = disk_completion.blocking_recv().unwrap().expect("Failed to onboard disk blocks");
+                self.immutable.extend(disk_onboard);
+            }
         }
-
-        self.computed_position += offloaded_blocks.len() * self.sequence.block_size();
-
-        let target_device_blocks = self.mutable.drain(0..offloaded_blocks.len()).collect();
-
-        let immutable_device_blocks = bm
-            .onboard_blocks(offloaded_blocks, Some(target_device_blocks))
-            .blocking_recv()
-            .unwrap()
-            .map_err(|e| SlotError::from_str(&format!("failed to onboard blocks: {:?}", e)))?;
-
-        self.immutable.extend(immutable_device_blocks);
 
         Ok(())
     }

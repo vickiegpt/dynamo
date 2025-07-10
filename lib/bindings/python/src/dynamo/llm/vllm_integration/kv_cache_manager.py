@@ -18,7 +18,7 @@ from vllm.distributed.kv_transfer.kv_connector.v1.base import (
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks, PrefixCacheStats
 from vllm.v1.core.kv_cache_utils import KVCacheBlock
 from vllm.v1.core.sched.output import SchedulerOutput
-from vllm.v1.request import Request
+from vllm.v1.request import Request, RequestStatus
 
 if TYPE_CHECKING:
     from vllm.attention.backends.abstract import AttentionMetadata
@@ -31,6 +31,16 @@ from dynamo.llm.vllm_integration.rust import BlockManager
 from dynamo.llm.vllm_integration.rust import KvbmCacheManager as RustKvbmCacheManager
 from dynamo.llm.vllm_integration.rust import KvbmRequest, SlotUpdate
 
+class MockSingleTypeManager:
+    def cache_blocks(self, *args, **kwargs):
+        pass
+
+class MockReqToBlockHashes:
+    def __init__(self):
+        self.req_to_block_hashes = {}
+    
+    def __getitem__(self, request_id: str):
+        pass
 
 class KvbmCacheManager(KVConnectorBase_V1):
     """
@@ -60,6 +70,9 @@ class KvbmCacheManager(KVConnectorBase_V1):
         # FIXME: make prefix cache stats conditional on log_stats
         self.prefix_cache_stats = PrefixCacheStats() if log_stats else None
         self.pending_onboard_blocks = {}
+
+        self.single_type_manager = MockSingleTypeManager()
+        self.req_to_block_hashes = MockReqToBlockHashes()
 
     @property
     def usage(self) -> float:
@@ -325,7 +338,7 @@ class KvbmCacheManager(KVConnectorBase_V1):
                 - `True` if external KV cache tokens will be loaded
                   asynchronously (between scheduler steps).
         """
-        sequence_hashes = self._create_slot(request)
+        sequence_hashes = self._create_slot(request)[:-1]
 
         num_device_blocks = num_computed_tokens // self.block_size
 
@@ -363,25 +376,35 @@ class KvbmCacheManager(KVConnectorBase_V1):
             need_to_allocate -= 1
 
         if need_to_allocate > 0:
+            # TODO: We need a much better way to determine whether blocks should be onboarded asynchronously.
+            should_load_async = True
+
             self.pending_onboard_blocks[request.request_id] = (
+                should_load_async,
                 host_computed_blocks,
                 disk_computed_blocks,
             )
 
-            return need_to_allocate, False
+            return need_to_allocate, should_load_async
 
         return 0, False
 
+    # WARNING: This is a BRUTAL hack.
+    # We modify the connector interface to hijack the scheduler component that gets the finished transfer ids from the connector.
     def update_state_after_alloc(
-        self, request: "Request", blocks: "KVCacheBlocks", num_external_tokens: int
+        self, request: "Request", blocks: "KVCacheBlocks", num_external_tokens: int, finished_recving_kv_req_ids: set[str]
     ):
+        def async_handler():
+            print("ADDING TO FINISHED RECVING KV REQ IDS!")
+            finished_recving_kv_req_ids.add(request.request_id)
+
         if request.request_id not in self.pending_onboard_blocks:
             return
 
-        host_blocks, disk_blocks = self.pending_onboard_blocks.pop(request.request_id)
+        should_load_async, host_blocks, disk_blocks = self.pending_onboard_blocks.pop(request.request_id)
 
         self.cache_manager.onboard_into_slot(
-            request.request_id, host_blocks, disk_blocks
+            request.request_id, host_blocks, disk_blocks, async_handler if should_load_async else None
         )
 
     def build_connector_meta(

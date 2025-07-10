@@ -3,7 +3,7 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use derive_getters::Dissolve;
@@ -251,12 +251,13 @@ impl KvbmCacheManager {
         Ok(usage)
     }
 
-    #[pyo3(signature = (request_id, host_onboard_blocks=None, disk_onboard_blocks=None))]
+    #[pyo3(signature = (request_id, host_onboard_blocks=None, disk_onboard_blocks=None, async_completion_handler=None))]
     pub fn onboard_into_slot(
         &self,
         request_id: String,
         host_onboard_blocks: Option<KvbmBlockList>,
         disk_onboard_blocks: Option<KvbmBlockList>,
+        async_completion_handler: Option<Py<PyAny>>
     ) -> PyResult<()> {
         self.slot_manager
             .lock()
@@ -265,6 +266,7 @@ impl KvbmCacheManager {
                 &request_id,
                 host_onboard_blocks,
                 disk_onboard_blocks,
+                async_completion_handler,
                 self.block_manager(),
             )
             .map_err(to_pyerr)
@@ -395,14 +397,19 @@ impl SlotError {
 pub struct SlotManager<R: RequestKey> {
     slots: HashMap<R, Slot<DeviceStorage, Logical<DistributedLeaderWorkerResources>>>,
     block_size: usize,
+    async_transfer_runtime: Arc<tokio::runtime::Runtime>
 }
 
 impl<R: RequestKey> SlotManager<R> {
     /// Creates a new slot manager.
     pub fn new(block_size: usize) -> Self {
+
+        let async_transfer_runtime = Arc::new(tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap());
+
         Self {
             slots: HashMap::new(),
             block_size,
+            async_transfer_runtime,
         }
     }
 
@@ -452,20 +459,13 @@ impl<R: RequestKey> SlotManager<R> {
             num_new_computed_tokens,
             new_computed_blocks,
             num_lookahead_blocks,
-            delay_cache_blocks,
+            _delay_cache_blocks,
         ) = update.dissolve();
 
         // TODO(ryan): add support for lookahead blocks
         if num_lookahead_blocks.is_some() {
             return Err(SlotError::Error(
                 "num_lookahead_blocks is not supported".to_string(),
-            ));
-        }
-
-        // TODO: add support for delay_cache_blocks
-        if delay_cache_blocks.unwrap_or(false) {
-            return Err(SlotError::Error(
-                "delay_cache_blocks is not supported".to_string(),
             ));
         }
 
@@ -553,33 +553,32 @@ impl<R: RequestKey> SlotManager<R> {
         request_id: &R,
         host_onboard_blocks: Option<KvbmBlockList>,
         disk_onboard_blocks: Option<KvbmBlockList>,
+        async_completion_handler: Option<Py<PyAny>>,
         bm: &VllmBlockManager,
     ) -> Result<(), SlotError> {
         let slot = self.slots.get_mut(request_id).ok_or(SlotError::NotFound)?;
 
-        if let Some(host_blocks) = host_onboard_blocks {
-            let host_blocks = host_blocks.take_blocks().ok_or(SlotError::Error(
-                "host_onboard_blocks should be ImmutableHost".to_string(),
-            ))?;
+       let host_blocks = host_onboard_blocks.map(|b| {
+            let host_blocks = b.take_blocks().ok_or(SlotError::Error("host_onboard_blocks has already been taken.".to_string()))?;
             let BlockListType::ImmutableHost(host_blocks) = host_blocks else {
                 return Err(SlotError::Error(
                     "host_onboard_blocks should be ImmutableHost".to_string(),
                 ));
             };
-            slot.onboard_blocks_to_slot(host_blocks, bm)?;
-        }
+            Ok(host_blocks)
+        }).transpose()?;
 
-        if let Some(disk_blocks) = disk_onboard_blocks {
-            let disk_blocks = disk_blocks.take_blocks().ok_or(SlotError::Error(
-                "disk_onboard_blocks should be ImmutableDisk".to_string(),
-            ))?;
+        let disk_blocks = disk_onboard_blocks.map(|b| {
+            let disk_blocks = b.take_blocks().ok_or(SlotError::Error("disk_onboard_blocks has already been taken.".to_string()))?;
             let BlockListType::ImmutableDisk(disk_blocks) = disk_blocks else {
                 return Err(SlotError::Error(
                     "disk_onboard_blocks should be ImmutableDisk".to_string(),
                 ));
             };
-            slot.onboard_blocks_to_slot(disk_blocks, bm)?;
-        }
+            Ok(disk_blocks)
+        }).transpose()?;
+
+        slot.onboard_blocks_to_slot(host_blocks, disk_blocks, async_completion_handler, bm, self.async_transfer_runtime.handle())?;
 
         Ok(())
     }
