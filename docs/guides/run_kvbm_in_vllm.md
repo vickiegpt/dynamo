@@ -35,13 +35,13 @@ To use KVBM in vLLM, you can follow the steps below:
 # enable using kvbm instead of vllm's own kv cache manager
 export DYNAMO_KVBM_MANAGER=kvbm
 
-# enable kv offloading to CPU memory
-# 4 means 4GB of CPU memory would be used
-export DYNAMO_KVBM_CPU_CACHE=4
+# enable kv offloading to host memory
+# 4 means 4GB of host memory would be used
+export DYNAMO_KVBM_HOST_CACHE_GB=4
 
 # enable kv offloading to disk
 # 8 means 8GB of disk would be used
-export DYNAMO_KVBM_DISK_CACHE=8
+export DYNAMO_KVBM_DISK_CACHE_GB=8
 
 # serve an example LLM model
 vllm serve deepseek-ai/DeepSeek-R1-Distill-Llama-8B
