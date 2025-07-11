@@ -34,15 +34,17 @@ impl<Locality: LocalityProvider, Metadata: BlockMetadata> ControllerHandler<Loca
         Ok(pool_controller.status().await?)
     }
 
-    async fn handle_reset(&self, request: ResetRequest) -> Result<()> {
-        let (cache_level, sequence_hashes) = request.dissolve();
-        match sequence_hashes {
-            Some(sequence_hashes) => {
-                self.reset_blocks(cache_level, sequence_hashes).await?;
-                Ok(())
-            }
-            None => self.reset_pool(&cache_level).await,
-        }
+    async fn handle_pool_reset(&self, cache_level: &CacheLevel) -> Result<()> {
+        self.reset_pool(cache_level).await
+    }
+
+    async fn handle_blocks_reset(
+        &self,
+        cache_level: &CacheLevel,
+        sequence_hashes: Vec<SequenceHash>,
+    ) -> Result<ResetBlocksResponse> {
+        let pool_controller = self.get_pool_controller(cache_level)?;
+        Ok(pool_controller.reset_blocks(&sequence_hashes).await?)
     }
 
     async fn handle_reset_all(&self) -> Result<()> {
@@ -52,16 +54,6 @@ impl<Locality: LocalityProvider, Metadata: BlockMetadata> ControllerHandler<Loca
             }
         }
         Ok(())
-    }
-
-    async fn reset_blocks(
-        &self,
-        cache_level: CacheLevel,
-        sequence_hashes: Vec<SequenceHash>,
-    ) -> Result<()> {
-        let pool_controller = self.get_pool_controller(&cache_level)?;
-        pool_controller.reset_blocks(&sequence_hashes).await?;
-        unimplemented!("reset blocks")
     }
 }
 
@@ -78,9 +70,17 @@ impl<Locality: LocalityProvider, Metadata: BlockMetadata>
                 make_response(self.handle_status(&cache_level).await)
             }
 
-            ControlMessage::Reset(request) => {
+            ControlMessage::ResetPool(cache_level) => {
                 // handle reset
-                make_unit_response(self.handle_reset(request).await)
+                make_unit_response(self.handle_pool_reset(&cache_level).await)
+            }
+
+            ControlMessage::ResetBlocks(request) => {
+                // handle reset blocks
+                make_response(
+                    self.handle_blocks_reset(&request.cache_level, request.sequence_hashes)
+                        .await,
+                )
             }
 
             ControlMessage::ResetAll => {

@@ -31,9 +31,18 @@ impl ControlClient {
     }
 
     pub async fn reset_pool(&self, cache_level: CacheLevel) -> Result<()> {
-        self.execute::<()>(ControlMessage::Reset(ResetRequest {
+        self.execute::<()>(ControlMessage::ResetPool(cache_level))
+            .await
+    }
+
+    pub async fn reset_blocks(
+        &self,
+        cache_level: CacheLevel,
+        sequence_hashes: Vec<SequenceHash>,
+    ) -> Result<ResetBlocksResponse> {
+        self.execute::<ResetBlocksResponse>(ControlMessage::ResetBlocks(ResetRequest {
             cache_level,
-            sequence_hashes: None,
+            sequence_hashes,
         }))
         .await
     }

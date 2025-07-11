@@ -17,7 +17,7 @@ use dynamo_runtime::{
     utils::task::CriticalTaskExecutionHandle,
 };
 
-use crate::block_manager::pool::PoolStatus;
+use crate::block_manager::pool::{PoolStatus, ResetBlocksResponse};
 
 pub type HandlerInput = SingleIn<ControlMessage>;
 pub type HandlerOutput = ManyOut<Annotated<serde_json::Value>>;
@@ -63,7 +63,8 @@ impl<Locality: LocalityProvider, Metadata: BlockMetadata> Controller<Locality, M
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ControlMessage {
     Status(CacheLevel),
-    Reset(ResetRequest),
+    ResetPool(CacheLevel),
+    ResetBlocks(ResetRequest),
     ResetAll,
 }
 
@@ -77,7 +78,7 @@ pub enum CacheLevel {
 #[derive(Debug, Clone, Serialize, Deserialize, Dissolve)]
 pub struct ResetRequest {
     pub cache_level: CacheLevel,
-    pub sequence_hashes: Option<Vec<SequenceHash>>,
+    pub sequence_hashes: Vec<SequenceHash>,
 }
 
 pub type MaybeError = Option<String>;
@@ -87,18 +88,6 @@ pub enum ResetResponse {
     ResetAll(MaybeError),
     ResetPool(MaybeError),
     ResetBlocks(ResetBlocksResponse),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResetBlocksResponse {
-    /// Blocks that were successfully reset
-    pub reset_success: Vec<SequenceHash>,
-
-    /// Blocks that are still active
-    pub active_blocks: Vec<SequenceHash>,
-
-    /// Blocks that were not found
-    pub not_found_blocks: Vec<SequenceHash>,
 }
 
 #[cfg(test)]
@@ -195,6 +184,16 @@ mod tests {
         assert!(one_allocated_status.inactive_blocks.is_empty());
         assert_eq!(one_allocated_status.empty_blocks, initial_block_count - 1);
 
+        // try to reset the block by its sequence hash
+        let reset_response = client
+            .reset_blocks(CacheLevel::G1, vec![sequence_hash, 1337])
+            .await
+            .unwrap();
+
+        assert_eq!(reset_response.reset_blocks.len(), 0);
+        assert_eq!(reset_response.not_found.len(), 1);
+        assert_eq!(reset_response.not_reset.len(), 1);
+
         println!("✅ Single allocation success");
 
         block_manager
@@ -215,11 +214,24 @@ mod tests {
 
         println!("✅ Single allocation drop success");
 
-        client.reset_pool(CacheLevel::G1).await.unwrap();
+        // try to reset the block by its sequence hash
+        let reset_response = client
+            .reset_blocks(CacheLevel::G1, vec![sequence_hash, 1337])
+            .await
+            .unwrap();
 
-        let after_reset_response = client.status(CacheLevel::G1).await.unwrap();
-        assert_eq!(after_reset_response.active_blocks.len(), 0);
-        assert_eq!(after_reset_response.inactive_blocks.len(), 0);
-        assert_eq!(after_reset_response.empty_blocks, initial_block_count);
+        assert_eq!(reset_response.reset_blocks.len(), 1);
+        assert_eq!(reset_response.not_found.len(), 1);
+        assert_eq!(reset_response.not_reset.len(), 0);
+
+        let g2_status = client.status(CacheLevel::G2).await.unwrap();
+        assert_eq!(g2_status.active_blocks.len(), 0);
+        assert_eq!(g2_status.inactive_blocks.len(), 1); // offloaded block
+
+        client.reset_pool(CacheLevel::G2).await.unwrap();
+
+        let g2_status = client.status(CacheLevel::G2).await.unwrap();
+        assert_eq!(g2_status.active_blocks.len(), 0);
+        assert_eq!(g2_status.inactive_blocks.len(), 0); // offloaded block
     }
 }
