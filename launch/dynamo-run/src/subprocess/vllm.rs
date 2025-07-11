@@ -14,4 +14,4 @@
 // limitations under the License.
 
 /// Source code of the VLLM sub-process
-pub const PY: &str = include_str!("vllm_inc.py");
+pub const PY: &str = include_str!("vllm_v1_inc_lmcache.py");
