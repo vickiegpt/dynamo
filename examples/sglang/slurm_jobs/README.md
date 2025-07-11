@@ -61,11 +61,10 @@ For simplicity of the example, we will make some assumptions about your SLURM cl
 
 ## Usage
 
+> [!NOTE]
+> The logic for finding prefill and decode node IPs in [`job_script_template.j2`](job_script_template.j2) is still a work in progress. You may need to tweak the `srun`/`ip route`/`getent`/`awk` bits for your cluster, especially if your networking or hostname conventions differ. PRs and suggestions welcome.
+
 1. **Submit a benchmark job**:
-
-   > [!NOTE]
-   > The logic for finding prefill and decode node IPs in [`job_script_template.j2`](job_script_template.j2) is still a work in progress. You may need to tweak the `srun`/`ip route`/`getent`/`awk` bits for your cluster, especially if your networking or hostname conventions differ. PRs and suggestions welcome.
-
    ```bash
    python submit_job_script.py \
      --template job_script_template.j2 \
