@@ -23,10 +23,12 @@ pub type HandlerInput = SingleIn<ControlMessage>;
 pub type HandlerOutput = ManyOut<Annotated<serde_json::Value>>;
 
 /// Code that translates request/response messages to/from the block manager
+#[derive(Clone)]
 struct ControllerHandler<Locality: LocalityProvider, Metadata: BlockMetadata> {
     block_manager: KvBlockManager<Locality, Metadata>,
 }
 
+#[derive(Clone)]
 pub struct Controller<Locality: LocalityProvider, Metadata: BlockMetadata> {
     _handler: Arc<ControllerHandler<Locality, Metadata>>,
 }
