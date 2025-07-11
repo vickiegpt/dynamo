@@ -102,6 +102,12 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
                     tracing::error!("failed to send response to add blocks");
                 }
             }
+            ControlRequest::Status(req) => {
+                let (_, resp_rx) = req.dissolve();
+                if resp_rx.send(Ok(self.status())).is_err() {
+                    tracing::error!("failed to send response to status");
+                }
+            }
         }
     }
 
@@ -357,6 +363,16 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
 
     fn publisher(&self) -> Publisher {
         Publisher::new(self.event_manager.clone())
+    }
+
+    fn status(&self) -> PoolStatus {
+        let active = self.active.status();
+        let (inactive, empty) = self.inactive.status();
+        PoolStatus {
+            active_blocks: active,
+            inactive_blocks: inactive,
+            empty_blocks: empty,
+        }
     }
 }
 

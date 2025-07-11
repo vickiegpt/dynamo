@@ -33,6 +33,7 @@ pub mod storage;
 
 // dynamo rt integration
 pub mod component;
+pub mod controller;
 
 pub use crate::common::dtype::DType;
 pub use block::{
