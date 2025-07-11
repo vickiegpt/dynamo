@@ -53,5 +53,10 @@ async def main():
         pass
 
 
+def start():
+    """Console script entry point"""
+    uvloop.run(main())
+
+
 if __name__ == "__main__":
     uvloop.run(main())
