@@ -41,7 +41,7 @@ spec:
     VllmDecodeWorker:
       dynamoNamespace: vllm-v1-disagg
       envFromSecret: hf-token-secret
-      replicas: 1
+      replicas: 2
       resources:
         requests:
           cpu: "10"
