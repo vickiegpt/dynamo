@@ -52,12 +52,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--backend",
         type=str,
-        default="vllm_v0",
-        choices=["vllm_v0", "vllm_v1"],
-        help="backend type (currently only vllm is supported)",
+        default="vllm_v1",
+        choices=["vllm_v1"],
+        help="backend type, currently support [vllm_v1]",
     )
     parser.add_argument(
-        "--config", type=str, required=True, help="Path to the dynamo config file"
+        "--config", type=str, required=True, help="Path to the DynamoGraphDeployment config file"
     )
     parser.add_argument(
         "--example-dir",
@@ -70,6 +70,18 @@ if __name__ == "__main__":
         type=str,
         default="profiling_results",
         help="Path to the output results directory",
+    )
+    parser.add_argument(
+        "--min-num-gpus-per-engine",
+        type=int,
+        default=1,
+        help="minimum number of GPUs per engine",
+    )
+    parser.add_argument(
+        "--max-num-gpus-per-engine",
+        type=int,
+        default=8,
+        help="maximum number of GPUs per engine",
     )
     parser.add_argument(
         "--isl", type=int, default=3000, help="target input sequence length"
@@ -121,10 +133,11 @@ if __name__ == "__main__":
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
 
-    # Get the number of available GPUs
-    available_gpus = get_available_gpu_count()
-
-    profile_tp_size = [2**i for i in range(int(math.log2(available_gpus)) + 1)]
+    profile_tp_size = [
+        2**i
+        for i in range(int(math.log2(args.max_num_gpus_per_engine)) + 1)
+        if args.min_num_gpus_per_engine <= 2**i <= args.max_num_gpus_per_engine
+    ]
     logger.info(f"Profiling TP sizes: {profile_tp_size}")
 
     os.makedirs(args.output_dir, exist_ok=True)
