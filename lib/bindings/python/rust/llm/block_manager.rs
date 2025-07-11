@@ -32,6 +32,9 @@ pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<BlockManager>()?;
     m.add_class::<distributed::KvbmWorker>()?;
     m.add_class::<distributed::KvbmLeader>()?;
+    m.add_class::<BlockManagerClient>()?;
+    m.add_class::<PoolStatus>()?;
+    m.add_class::<ResetBlocksResponse>()?;
 
     vllm::add_to_module(m)?;
 
@@ -156,6 +159,11 @@ impl BlockManager {
     }
 
     fn init_controller(&mut self, component: Component) -> PyResult<()> {
+        if self._controller.is_some() {
+            tracing::warn!("Controller already initialized. Ignoring init_controller call.");
+            return Ok(());
+        }
+
         let block_manager = self.inner.clone();
         let controller = self
             ._rt
