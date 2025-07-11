@@ -46,6 +46,7 @@ type VllmBlockManager = dynamo_llm::block_manager::KvBlockManager<
 pub struct BlockManager {
     inner: Arc<VllmBlockManager>,
     _rt: Arc<tokio::runtime::Runtime>,
+    pub leader: Option<Arc<dynamo_llm::block_manager::distributed::KvbmLeader>>,    
 }
 
 #[pymethods]
@@ -123,11 +124,13 @@ impl BlockManager {
         };
 
         let config = config.build().map_err(to_pyerr)?;
+
+        let leader_clone = leader.clone();
         Ok(BlockManager {
             inner: Arc::from(
                 rt.block_on(async {
                     let resources =
-                        DistributedLeaderWorkerResources::new(leader, cancel_token.child_token())?;
+                        DistributedLeaderWorkerResources::new(leader_clone, cancel_token.child_token())?;
 
                     dynamo_llm::block_manager::KvBlockManager::<
                         Logical<DistributedLeaderWorkerResources>,
@@ -138,6 +141,7 @@ impl BlockManager {
                 .map_err(to_pyerr)?,
             ),
             _rt: rt,
+            leader,
         })
     }
 
@@ -150,5 +154,10 @@ impl BlockManager {
     #[inline(always)]
     pub fn get_block_manager(&self) -> &VllmBlockManager {
         self.inner.as_ref()
+    }
+
+    #[inline(always)]
+    pub fn leader(&self) -> Option<Arc<dynamo_llm::block_manager::distributed::KvbmLeader>> {
+        self.leader.clone()
     }
 }

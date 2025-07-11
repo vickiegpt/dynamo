@@ -34,7 +34,7 @@ testing-full  = ["testing-cuda", "testing-nixl"]
 testing-cuda  = ["dep:cudarc"]
 testing-nixl  = ["dep:nixl-sys"]
 testing-etcd = []
-block-manager = ["dep:nixl-sys", "dep:cudarc", "dep:ndarray", "dep:nix"]
+block-manager = ["dep:nixl-sys", "dep:cudarc", "dep:ndarray", "dep:nix", "dep:aligned-vec"]
 sentencepiece = ["dep:sentencepiece"]
 
 [dependencies]
@@ -92,6 +92,7 @@ nixl-sys = {git="https://github.com/ai-dynamo/nixl", rev = "fa800bcfe3814b08df9c
 cudarc = { version = "0.16.2", features = ["cuda-12020"], optional = true }
 ndarray = { version = "0.16", optional = true }
 nix = { version = "0.26", optional = true }
+aligned-vec = { version = "0.6.4", optional = true }
 
 # protocols
 unicode-segmentation = "1.12"
@@ -141,5 +142,4 @@ insta = { version = "1.41", features = [
   "redactions",
   "filters",
 ] }
-aligned-vec = "0.6.4"
 lazy_static = "1.4"

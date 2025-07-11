@@ -50,8 +50,6 @@ impl DiskStorage {
             std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
         }
 
-        tracing::debug!("Allocating disk cache file at {}", file_path.display());
-
         let template = CString::new(file_path.to_str().unwrap()).unwrap();
         let mut template_bytes = template.into_bytes_with_nul();
 
@@ -72,6 +70,8 @@ impl DiskStorage {
                 StorageError::AllocationFailed(format!("Failed to read temp file name: {}", e))
             })?
             .to_string();
+
+        tracing::debug!("Allocating disk cache file at {}", file_name);
 
         // We need to use fallocate to actually allocate the storage and create the blocks on disk.
         fallocate(raw_fd, FallocateFlags::empty(), 0, size as i64).map_err(|e| {

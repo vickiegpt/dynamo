@@ -32,10 +32,10 @@ pub struct Slot<S: Storage, L: LocalityProvider> {
     sequence: TokenBlockSequence,
 
     /// The immutable blocks
-    immutable: Vec<ImmutableBlock<S, L, BasicMetadata>>,
+    pub immutable: Vec<ImmutableBlock<S, L, BasicMetadata>>,
 
     /// The mutable blocks
-    mutable: VecDeque<MutableBlock<S, L, BasicMetadata>>,
+    pub mutable: VecDeque<MutableBlock<S, L, BasicMetadata>>,
 
     /// Blocks to be onboarded from the host
     /// We must hold these blocks in the slot state until the scheduler trigger the onboarding.
@@ -316,6 +316,7 @@ impl<S: Storage, L: LocalityProvider> Slot<S, L> {
     /// This will return the blocks in reverse order so that the tail blocks are evicted first.
     #[tracing::instrument(level = "debug")]
     pub fn free_blocks(&mut self) {
+        tracing::debug!("Freeing blocks for slot with computed position: {}", self.computed_position);
         self.mutable.clear();
         let mut immutable_blocks = std::mem::take(&mut self.immutable);
         immutable_blocks.reverse();

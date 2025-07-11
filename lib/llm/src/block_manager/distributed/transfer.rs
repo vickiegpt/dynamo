@@ -12,6 +12,7 @@ use BlockTransferPool::*;
 use crate::block_manager::{
     block::{
         data::local::LocalBlockData,
+        debug::hash_block_contents,
         locality,
         transfer::{TransferContext, WriteTo, WriteToStrategy},
         Block, BlockDataProvider, BlockDataProviderMut, ReadableBlock, WritableBlock,
@@ -132,6 +133,13 @@ impl Handler for BlockTransferHandler {
 
         let request: BlockTransferRequest = serde_json::from_slice(&message.data[0])?;
 
+        if request.blocks().len() == 0 {
+            let hashes = self.device.as_ref().unwrap().iter().map(hash_block_contents).collect::<Result<Vec<_>>>()?;
+            tracing::debug!("Block Hashes: {:?}", hashes);
+            message.ack().await?;
+            return Ok(());
+        }
+
         tracing::debug!(
             "Performing transfer of {} blocks from {:?} to {:?}",
             request.blocks().len(),
@@ -140,10 +148,66 @@ impl Handler for BlockTransferHandler {
         );
 
         let notify = match (request.from_pool(), request.to_pool()) {
-            (Device, Host) => self.begin_transfer(&self.device, &self.host, request).await,
-            (Host, Device) => self.begin_transfer(&self.host, &self.device, request).await,
-            (Host, Disk) => self.begin_transfer(&self.host, &self.disk, request).await,
-            (Disk, Device) => self.begin_transfer(&self.disk, &self.device, request).await,
+            (Device, Host) => {
+                let device = self.device.as_ref().unwrap();
+                let block_hash = hash_block_contents(&device[request.blocks()[0].0])?;
+                tracing::debug!("Offloading block {} to {} with hash: {:?}", request.blocks()[0].0, request.blocks()[0].1, block_hash);
+                
+                let target_block = self.host.as_ref().unwrap()[request.blocks()[0].1].clone();
+
+                let res = self.begin_transfer(&self.device, &self.host, request).await;
+
+                let source_block_hash = hash_block_contents(&target_block)?;
+                assert_eq!(source_block_hash, block_hash);
+
+                res
+            },
+            (Host, Device) => {
+                tracing::debug!("Onboarding blocks {:?}", request.blocks());
+                self.begin_transfer(&self.host, &self.device, request).await
+            },
+            (Host, Disk) => {
+                let host = self.host.as_ref().unwrap();
+
+                let block_hash = hash_block_contents(&host[request.blocks()[0].0])?;
+
+                let target_block = self.disk.as_ref().unwrap()[request.blocks()[0].1].clone();
+
+                let initial_target_hash = hash_block_contents(&target_block);
+
+                let res = self.begin_transfer(&self.host, &self.disk, request).await;
+
+                res.unwrap().await?;
+                message.ack().await?;
+
+                let source_block_hash = hash_block_contents(&target_block)?;
+                assert_eq!(source_block_hash, block_hash, "Host -> Disk content hash mismatch. Initial hash: {:?}", initial_target_hash);
+
+                return Ok(());
+            },
+            (Disk, Device) => {
+                tracing::debug!("Onboarding blocks {:?}", request.blocks());
+                let disk = self.disk.as_ref().unwrap();
+
+                let source_block = disk[request.blocks()[0].0].clone();
+
+                let initial_source_hash = hash_block_contents(&source_block)?;
+
+                let target_block = self.device.as_ref().unwrap()[request.blocks()[0].1].clone();
+                let initial_target_hash = hash_block_contents(&target_block);
+
+                let res = self.begin_transfer(&self.disk, &self.device, request).await;
+
+                res.unwrap().await?;
+
+                let final_source_hash = hash_block_contents(&source_block)?;
+                let final_target_hash = hash_block_contents(&target_block)?;
+                assert_eq!(initial_source_hash, final_target_hash, "Disk -> Device content hash mismatch. intial source hash: {:?}, final source hash: {:?}, initial target hash: {:?}, final target hash: {:?}", initial_source_hash, final_source_hash, initial_target_hash, final_target_hash);
+
+                message.ack().await?;
+
+                return Ok(());
+            },
             _ => {
                 return Err(anyhow::anyhow!("Invalid transfer type."));
             }

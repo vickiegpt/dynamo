@@ -183,6 +183,7 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
                 let immutable = if duplication_setting
                     == BlockRegistrationDuplicationSetting::Allowed
                 {
+                    tracing::debug!("Found duplicate block for sequence hash: {}, block id: {}", sequence_hash, block.block_id());
                     immutable.with_duplicate(block.into()).expect("incompatible immutable block; only primary should be returned from match_sequence_hash")
                 } else {
                     // immediate return the block to the pool if duplicates are disabled
@@ -201,6 +202,7 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
             let (mutable, duplicate) =
                 if let Some(raw_block) = self.inactive.match_sequence_hash(sequence_hash) {
                     // We already have a match, so our block is a duplicate.
+                    tracing::debug!("Found duplicate block for sequence hash: {}, block id: {}", sequence_hash, block.block_id());
                     assert!(matches!(raw_block.state(), BlockState::Registered(_, _)));
                     (
                         MutableBlock::new(raw_block, self.return_tx.clone()),

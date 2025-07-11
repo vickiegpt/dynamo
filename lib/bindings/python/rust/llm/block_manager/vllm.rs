@@ -4,6 +4,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     sync::Mutex,
+    sync::atomic::{Ordering, AtomicUsize}
 };
 
 use derive_getters::Dissolve;
@@ -11,11 +12,10 @@ use pyo3::{prelude::*, wrap_pymodule};
 
 use dynamo_llm::{
     block_manager::{
-        block::{
-            data::logical::distributed_leader_worker::DistributedLeaderWorkerResources,
-            locality::{LocalityProvider, Logical},
-            BlockId, ImmutableBlock, MutableBlock,
-        },
+        block::data::logical::distributed_leader_worker::DistributedLeaderWorkerResources,
+        block::locality::{LocalityProvider, Logical},
+        block::{BlockId, ImmutableBlock, MutableBlock},
+        distributed::{BlockTransferRequest, BlockTransferPool},
         pool::{BlockPool, BlockPoolError},
         BasicMetadata, DeviceStorage, Storage,
     },
@@ -66,6 +66,26 @@ pub struct KvCacheEvent {}
 impl KvbmCacheManager {
     #[inline(always)]
     pub fn block_manager(&self) -> &VllmBlockManager {
+
+        static SHOULD_HASH: AtomicUsize = AtomicUsize::new(0);
+
+        if SHOULD_HASH.fetch_add(1, Ordering::Relaxed) % 4 == 0 {
+            let request = BlockTransferRequest::new(
+                BlockTransferPool::Device,
+                BlockTransferPool::Host,
+                vec![],
+            );
+
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build().unwrap();
+
+            rt.block_on(async move {
+                let notify = self.block_manager.leader().as_ref().unwrap().transfer_blocks_request(request).await.unwrap();
+                notify.await.unwrap();
+            });
+        }
+
         self.block_manager.get_block_manager()
     }
 }
@@ -178,6 +198,7 @@ impl KvbmCacheManager {
 
     /// Free the entire slot for the given request ID.
     pub fn free_block_hashes(&self, request_id: String) -> PyResult<()> {
+        tracing::debug!("free_block_hashes: request {}", request_id);
         let mut slot_manager = self.slot_manager.lock().map_err(to_pyerr)?;
         slot_manager.drop_slot(&request_id);
         Ok(())
@@ -454,6 +475,10 @@ impl<R: RequestKey> SlotManager<R> {
 
         let slot = self.slots.get_mut(&request_id).ok_or(SlotError::NotFound)?;
 
+        let immutable_ids = slot.immutable.iter().map(|block| block.block_id()).collect::<Vec<_>>();
+        let mutable_ids = slot.mutable.iter().map(|block| block.block_id()).collect::<Vec<_>>();
+        tracing::debug!("Request {} using immutable ids {:?} and mutable ids {:?}", request_id, immutable_ids, mutable_ids);
+
         // we always apply the matched blocks to the beginning of the sequence; however,
         // if we fail to allocate the requested new blocks, vllm treats the request as never started,
         // so we need to drop the applied immutable block. however, if we have successfully advanced
@@ -520,6 +545,7 @@ impl<R: RequestKey> SlotManager<R> {
 
     #[tracing::instrument(level = "debug", skip(self), fields(request_id = %request_id))]
     pub fn free_blocks(&mut self, request_id: &R) {
+        tracing::debug!("free_blocks: request {}", request_id);
         if let Some(slot) = self.slots.get_mut(request_id) {
             slot.free_blocks();
         } else {

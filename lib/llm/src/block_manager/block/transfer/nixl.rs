@@ -66,12 +66,14 @@ where
                 let dst_desc = dst_view.as_nixl_descriptor_mut();
 
                 unsafe {
+                    dbg!(src_desc.as_ptr(), src_desc.size(), src_desc.device_id());
                     src_dl.add_desc(
                         src_desc.as_ptr() as usize,
                         src_desc.size(),
                         src_desc.device_id(),
                     )?;
 
+                    dbg!(dst_desc.as_ptr(), dst_desc.size(), dst_desc.device_id());
                     dst_dl.add_desc(
                         dst_desc.as_ptr() as usize,
                         dst_desc.size(),
@@ -121,8 +123,8 @@ where
         .storage_type()
         .nixl_mem_type();
 
-    let mut src_dl = XferDescList::new(src_mem_type, true)?;
-    let mut dst_dl = XferDescList::new(dst_mem_type, true)?;
+    let mut src_dl = XferDescList::new(src_mem_type, false)?;
+    let mut dst_dl = XferDescList::new(dst_mem_type, false)?;
 
     for (src, dst) in src.iter().zip(dst.iter_mut()) {
         append_xfer_request(src, dst, &mut src_dl, &mut dst_dl)?;

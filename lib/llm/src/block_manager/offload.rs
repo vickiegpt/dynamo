@@ -574,6 +574,7 @@ mod tests {
     use crate::block_manager::{
         block::{
             locality::Local, BasicMetadata, BlockDataExt, BlockDataProvider, Blocks, MutableBlock,
+            debug::get_block_contents,
         },
         layout::{nixl::NixlLayout, FullyContiguous, LayerSeparate, LayoutType},
         pool::{BlockPool, BlockRegistrationDuplicationSetting},
@@ -587,16 +588,16 @@ mod tests {
     use nixl_sys::{MemoryRegion, NixlDescriptor};
 
     use aligned_vec::avec;
-    use cudarc::runtime::sys::{cudaMemcpy, cudaMemcpyKind, cudaMemset};
+    use cudarc::runtime::sys::cudaMemset;
     use prometheus::Registry;
     use rstest::*;
     use std::fs::File;
-    use std::io::{Read, Seek, SeekFrom, Write};
+    use std::io::{Seek, SeekFrom, Write};
     use std::mem::ManuallyDrop;
     use std::os::unix::io::FromRawFd;
 
     const BLOCK_SIZE: usize = 4;
-    const NUM_LAYERS: usize = 8;
+    const NUM_LAYERS: usize = 32;
 
     type DevicePool = Option<Arc<BlockPool<DeviceStorage, Local, BasicMetadata>>>;
     type HostPool = Option<Arc<BlockPool<PinnedStorage, Local, BasicMetadata>>>;
@@ -778,7 +779,7 @@ mod tests {
 
     fn populate_block<S: Storage + NixlDescriptor>(
         block: &impl BlockDataProvider<StorageType = S>,
-        value: u8,
+        mut value: u8,
     ) -> Result<()> {
         let block_data = block.block_data();
 
@@ -811,76 +812,29 @@ mod tests {
                     _ => panic!(),
                 }
             }
+            value += 1;
         }
 
         Ok(())
     }
 
-    fn get_block_contents<S: Storage + NixlDescriptor>(
-        block: &impl BlockDataProvider<StorageType = S>,
-    ) -> Result<Vec<u8>> {
-        let block_data = block.block_data();
-
-        let mut contents: Vec<u8> = Vec::new();
-
-        for layer_idx in 0..block_data.num_layers() {
-            for outer_idx in 0..block_data.num_outer_dims() {
-                let layer_view = block_data.layer_view(layer_idx, outer_idx)?;
-                match block_data.storage_type() {
-                    StorageType::Device(_) => unsafe {
-                        let mut buffer = vec![0_u8; layer_view.size()];
-
-                        cudaMemcpy(
-                            buffer.as_mut_ptr() as *mut std::ffi::c_void,
-                            layer_view.as_ptr() as *const std::ffi::c_void,
-                            layer_view.size(),
-                            cudaMemcpyKind::cudaMemcpyDeviceToHost,
-                        )
-                        .result()?;
-
-                        contents.extend(buffer);
-                    },
-                    StorageType::Pinned => unsafe {
-                        contents.extend(
-                            std::slice::from_raw_parts(layer_view.as_ptr(), layer_view.size())
-                                .to_vec(),
-                        );
-                    },
-                    StorageType::Disk(_) => {
-                        let nixl_desc = layer_view.as_nixl_descriptor();
-                        let mut file: ManuallyDrop<File>;
-                        let mut aligned = avec![[4096] | 0; layer_view.size()];
-
-                        unsafe {
-                            file =
-                                ManuallyDrop::new(File::from_raw_fd(nixl_desc.device_id() as i32));
-                            file.seek(SeekFrom::Start(nixl_desc.as_ptr() as u64))?;
-                        }
-                        file.read_exact(&mut aligned)?;
-                        contents.extend(aligned.to_vec());
-                    }
-                    _ => anyhow::bail!("Unsupported storage type."),
-                }
-            }
-        }
-
-        Ok(contents.to_vec())
-    }
-
     fn check_block_contents(
         block1: &impl BlockDataProvider<StorageType = impl Storage + NixlDescriptor>,
         block2: &impl BlockDataProvider<StorageType = impl Storage + NixlDescriptor>,
-        value: u8,
+        mut value: u8,
     ) -> Result<()> {
         let contents1 = get_block_contents(block1)?;
         let contents2 = get_block_contents(block2)?;
 
         assert_eq!(contents1.len(), contents2.len());
 
-        for (c1_value, c2_value) in contents1.iter().zip(contents2.iter()) {
-            if *c1_value != *c2_value || *c1_value != value {
-                panic!("{} != {} != {}", c1_value, c2_value, value);
+        for (layer1, layer2) in contents1.iter().zip(contents2.iter()) {
+            for (c1_value, c2_value) in layer1.iter().zip(layer2.iter()) {
+                if *c1_value != *c2_value || *c1_value != value {
+                    panic!("{} != {} != {}", c1_value, c2_value, value);
+                }
             }
+            value += 1;
         }
         Ok(())
     }

@@ -174,10 +174,10 @@ impl ZmqActiveMessageLeader {
             message.push_back(data.into());
         }
 
-        tracing::debug!(
-            "ZmqActiveMessageLeader: Broadcasting message with id: {}",
-            id
-        );
+        // tracing::debug!(
+        //     "ZmqActiveMessageLeader: Broadcasting message with id: {}",
+        //     id
+        // );
         self.pub_socket
             .lock()
             .await
@@ -216,18 +216,18 @@ impl ZmqActiveMessageLeader {
                         pending_messages.entry(id)
                     {
                         entry.get_mut().remaining_workers -= 1;
-                        tracing::debug!(
-                            "ZmqActiveMessageLeader: Received ACK for message with id: {}. There are {} remaining workers.",
-                            id,
-                            entry.get().remaining_workers
-                        );
+                        // tracing::debug!(
+                        //     "ZmqActiveMessageLeader: Received ACK for message with id: {}. There are {} remaining workers.",
+                        //     id,
+                        //     entry.get().remaining_workers
+                        // );
                         // If all workers have ACKed, notify the completion indicator.
                         if entry.get().remaining_workers == 0 {
                             let e = entry.remove();
-                            tracing::debug!(
-                                "ZmqActiveMessageLeader: Message with id: {} completed.",
-                                id
-                            );
+                            // tracing::debug!(
+                            //     "ZmqActiveMessageLeader: Message with id: {} completed.",
+                            //     id
+                            // );
                             // It's possible that the receiver has already been dropped,
                             // so ignore any send error here.
                             let _ = e.completion_indicator.send(());
@@ -295,7 +295,7 @@ impl MessageHandle {
         message.push_back(id.to_be_bytes().as_slice().into());
         let message = Multipart(message);
         self.push_handle.lock().await.send(message).await?;
-        tracing::debug!("ZmqActiveMessageWorker: ACKed message with id: {}", id);
+        // tracing::debug!("ZmqActiveMessageWorker: ACKed message with id: {}", id);
         Ok(())
     }
 }
@@ -397,11 +397,11 @@ impl ZmqActiveMessageWorker {
                     // TODO: We may want to make this dynamic, and expose a function
                     // to dynamically add/remove handlers.
                     if let Some(handler) = message_handlers.get(&message_handle.function) {
-                        tracing::debug!(
-                            "ZmqActiveMessageWorker: Handling message with id: {} for function: {}",
-                            message_handle.message_id,
-                            message_handle.function
-                        );
+                        // tracing::debug!(
+                        //     "ZmqActiveMessageWorker: Handling message with id: {} for function: {}",
+                        //     message_handle.message_id,
+                        //     message_handle.function
+                        // );
                         let handler_clone = handler.clone();
                         let handle_text = format!("ZmqActiveMessageWorker: Handler for function: {}", message_handle.function);
                         CriticalTaskExecutionHandle::new(
