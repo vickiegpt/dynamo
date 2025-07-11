@@ -103,6 +103,8 @@ pub struct ResetBlocksResponse {
 
 #[cfg(test)]
 mod tests {
+    use crate::tokens::Tokens;
+
     use super::super::tests::create_reference_block_manager;
     use super::*;
 
@@ -162,13 +164,34 @@ mod tests {
             .unwrap();
 
         assert_eq!(device_block.len(), 1);
-        let device_block = device_block.pop().unwrap();
+        let mut device_block = device_block.pop().unwrap();
+
+        let tokens = Tokens::from(vec![1, 2, 3, 4]);
+        let token_sequence = tokens.into_sequence(block_manager.block_size() as u32, Some(0));
+        let token_block = token_sequence.blocks().first().unwrap();
+
+        device_block.apply_token_block(token_block.clone()).unwrap();
+
+        let mut immutable_device_blocks = block_manager
+            .device()
+            .unwrap()
+            .register_blocks(vec![device_block])
+            .await
+            .unwrap();
+
+        assert_eq!(immutable_device_blocks.len(), 1);
+        let immutable_device_block = immutable_device_blocks.pop().unwrap();
+        let sequence_hash = immutable_device_block.sequence_hash();
 
         let should_fail = client.reset_pool(CacheLevel::G1).await;
         assert!(should_fail.is_err());
 
         let one_allocated_status = client.status(CacheLevel::G1).await.unwrap();
-        assert!(one_allocated_status.active_blocks.is_empty());
+        assert_eq!(one_allocated_status.active_blocks.len(), 1);
+        assert_eq!(
+            *one_allocated_status.active_blocks.first().unwrap(),
+            sequence_hash
+        );
         assert!(one_allocated_status.inactive_blocks.is_empty());
         assert_eq!(one_allocated_status.empty_blocks, initial_block_count - 1);
 
@@ -177,10 +200,26 @@ mod tests {
         block_manager
             .device()
             .unwrap()
-            .try_return_block(device_block.into())
+            .try_return_block(immutable_device_block.into())
             .await
             .unwrap();
 
+        let after_drop_resposne = client.status(CacheLevel::G1).await.unwrap();
+        assert_eq!(after_drop_resposne.active_blocks.len(), 0);
+        assert_eq!(after_drop_resposne.inactive_blocks.len(), 1);
+        assert_eq!(
+            *after_drop_resposne.inactive_blocks.first().unwrap(),
+            sequence_hash
+        );
+        assert_eq!(after_drop_resposne.empty_blocks, initial_block_count - 1);
+
+        println!("✅ Single allocation drop success");
+
         client.reset_pool(CacheLevel::G1).await.unwrap();
+
+        let after_reset_response = client.status(CacheLevel::G1).await.unwrap();
+        assert_eq!(after_reset_response.active_blocks.len(), 0);
+        assert_eq!(after_reset_response.inactive_blocks.len(), 0);
+        assert_eq!(after_reset_response.empty_blocks, initial_block_count);
     }
 }

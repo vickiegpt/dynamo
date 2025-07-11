@@ -47,7 +47,7 @@ impl<Locality: LocalityProvider, Metadata: BlockMetadata> ControllerHandler<Loca
 
     async fn handle_reset_all(&self) -> Result<()> {
         for cache_level in &[CacheLevel::G1, CacheLevel::G2, CacheLevel::G3] {
-            if let Some(pool_controller) = self.get_pool_controller(cache_level).ok() {
+            if let Ok(pool_controller) = self.get_pool_controller(cache_level) {
                 pool_controller.reset().await?;
             }
         }
@@ -60,6 +60,7 @@ impl<Locality: LocalityProvider, Metadata: BlockMetadata> ControllerHandler<Loca
         sequence_hashes: Vec<SequenceHash>,
     ) -> Result<()> {
         let pool_controller = self.get_pool_controller(&cache_level)?;
+        pool_controller.reset_blocks(&sequence_hashes).await?;
         unimplemented!("reset blocks")
     }
 }
@@ -82,7 +83,10 @@ impl<Locality: LocalityProvider, Metadata: BlockMetadata>
                 make_unit_response(self.handle_reset(request).await)
             }
 
-            ControlMessage::ResetAll => make_unit_response(self.handle_reset_all().await),
+            ControlMessage::ResetAll => {
+                // hadnle reset all
+                make_unit_response(self.handle_reset_all().await)
+            }
         };
 
         let stream = stream::once(async move { annotated });

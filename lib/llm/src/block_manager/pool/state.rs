@@ -108,6 +108,15 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
                     tracing::error!("failed to send response to status");
                 }
             }
+            ControlRequest::ResetBlocks(req) => {
+                let (sequence_hashes, resp_rx) = req.dissolve();
+                if resp_rx
+                    .send(Ok(self.try_reset_blocks(&sequence_hashes)))
+                    .is_err()
+                {
+                    tracing::error!("failed to send response to reset blocks");
+                }
+            }
         }
     }
 
@@ -374,6 +383,33 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
             empty_blocks: empty,
         }
     }
+
+    fn try_reset_blocks(&mut self, sequence_hashes: &[SequenceHash]) -> ResetBlocksResponse {
+        let mut reset_blocks = Vec::new();
+        let mut not_found = Vec::new();
+        let mut not_reset = Vec::new();
+
+        for sequence_hash in sequence_hashes {
+            if !self.registry.is_registered(*sequence_hash) {
+                not_found.push(*sequence_hash);
+                continue;
+            }
+
+            if let Some(mut block) = self.inactive.match_sequence_hash(*sequence_hash) {
+                reset_blocks.push(*sequence_hash);
+                block.reset();
+                self.inactive.return_block(block);
+            } else {
+                not_reset.push(*sequence_hash);
+            }
+        }
+
+        ResetBlocksResponse {
+            reset_blocks,
+            not_found,
+            not_reset,
+        }
+    }
 }
 
 impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> ProgressEngine<S, L, M> {
@@ -444,48 +480,3 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> ProgressEngine
         true
     }
 }
-// pub(crate) async fn progress_engine<S: Storage, M: BlockMetadata>(
-//     event_manager: Arc<dyn EventManager>,
-//     mut priority_rx: tokio::sync::mpsc::UnboundedReceiver<PriorityRequest<S, M>>,
-//     mut ctrl_rx: tokio::sync::mpsc::UnboundedReceiver<ControlRequest<S, M>>,
-//     cancel_token: CancellationToken,
-// ) {
-//     let (return_tx, mut return_rx) = tokio::sync::mpsc::unbounded_channel();
-//     let mut state = State::<S, M>::new(event_manager, return_tx);
-
-//     loop {
-//         tokio::select! {
-//             biased;
-
-//             Some(priority_req) = priority_rx.recv(), if !priority_rx.is_closed() => {
-//                 state.handle_priority_request(priority_req, &mut return_rx).await;
-//             }
-
-//             Some(req) = ctrl_rx.recv(), if !ctrl_rx.is_closed() => {
-//                 state.handle_control_request(req);
-//             }
-
-//             Some(block) = return_rx.recv() => {
-//                 state.handle_return_block(block);
-//             }
-
-//             _ = cancel_token.cancelled() => {
-//                 break;
-//             }
-//         }
-//     }
-// }
-
-// pub(crate) async fn progress_engine_v2<S: Storage, M: BlockMetadata>(
-//     event_manager: Arc<dyn EventManager>,
-//     priority_rx: tokio::sync::mpsc::UnboundedReceiver<PriorityRequest<S, M>>,
-//     ctrl_rx: tokio::sync::mpsc::UnboundedReceiver<ControlRequest<S, M>>,
-//     cancel_token: CancellationToken,
-// ) {
-//     let mut progress_engine =
-//         ProgressEngine::<S, M>::new(event_manager, priority_rx, ctrl_rx, cancel_token);
-
-//     while progress_engine.step().await {
-//         tracing::trace!("progress engine step");
-//     }
-// }

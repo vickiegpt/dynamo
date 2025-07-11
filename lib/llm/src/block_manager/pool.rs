@@ -155,6 +155,7 @@ type AddBlocksReq<S, L, M> = RequestResponse<Vec<Block<S, L, M>>, ()>;
 type ResetReq = RequestResponse<(), BlockPoolResult<()>>;
 type ReturnBlockReq<S, L, M> = RequestResponse<Vec<Block<S, L, M>>, BlockPoolResult<()>>;
 type StatusReq = RequestResponse<(), BlockPoolResult<PoolStatus>>;
+type ResetBlocksReq = RequestResponse<Vec<SequenceHash>, BlockPoolResult<ResetBlocksResponse>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BlockPoolError {
@@ -316,6 +317,7 @@ enum PriorityRequest<S: Storage, L: LocalityProvider, M: BlockMetadata> {
 enum ControlRequest<S: Storage, L: LocalityProvider, M: BlockMetadata> {
     AddBlocks(AddBlocksReq<S, L, M>),
     Status(StatusReq),
+    ResetBlocks(ResetBlocksReq),
 }
 
 impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M> {
@@ -745,6 +747,38 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M> {
 
         Ok(resp_rx)
     }
+
+    /// Attempt to reset a set of blocks.
+    pub async fn reset_blocks(
+        &self,
+        sequence_hashes: &[SequenceHash],
+    ) -> Result<ResetBlocksResponse, BlockPoolError> {
+        self._reset_blocks(sequence_hashes)?
+            .await
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
+    }
+
+    pub fn reset_blocks_blocking(
+        &self,
+        sequence_hashes: &[SequenceHash],
+    ) -> Result<ResetBlocksResponse, BlockPoolError> {
+        self._reset_blocks(sequence_hashes)?
+            .blocking_recv()
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
+    }
+
+    fn _reset_blocks(
+        &self,
+        sequence_hashes: &[SequenceHash],
+    ) -> AsyncResponse<BlockPoolResult<ResetBlocksResponse>> {
+        let (req, resp_rx) = ResetBlocksReq::new(sequence_hashes.into());
+
+        self.ctrl_tx
+            .send(ControlRequest::ResetBlocks(req))
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
+
+        Ok(resp_rx)
+    }
 }
 
 /// State of the pool when queried.
@@ -766,6 +800,18 @@ pub struct PoolStatus {
     pub empty_blocks: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Dissolve)]
+pub struct ResetBlocksResponse {
+    /// Blocks that were reset
+    pub reset_blocks: Vec<SequenceHash>,
+
+    /// Blocks that were not found in the pool
+    pub not_found: Vec<SequenceHash>,
+
+    /// Blocks that were not reset
+    pub not_reset: Vec<SequenceHash>,
+}
+
 pub trait PoolController: Send + Sync + 'static {
     /// Returns the [`PoolStatus`] of the pool.
     fn status_blocking(&self) -> Result<PoolStatus, BlockPoolError>;
@@ -774,6 +820,12 @@ pub trait PoolController: Send + Sync + 'static {
     ///
     /// This function will error unless all blocks have returned to the inactive pool.
     fn reset_blocking(&self) -> Result<(), BlockPoolError>;
+
+    /// Attempt to reset a set of blocks.
+    fn reset_blocks_blocking(
+        &self,
+        sequence_hashes: &[SequenceHash],
+    ) -> Result<ResetBlocksResponse, BlockPoolError>;
 }
 
 #[async_trait::async_trait]
@@ -785,6 +837,12 @@ pub trait AsyncPoolController: Send + Sync + 'static {
     ///
     /// This function will error unless all blocks have returned to the inactive pool.
     async fn reset(&self) -> Result<(), BlockPoolError>;
+
+    /// Attempt to reset a set of blocks.
+    async fn reset_blocks(
+        &self,
+        sequence_hashes: &[SequenceHash],
+    ) -> Result<ResetBlocksResponse, BlockPoolError>;
 }
 
 impl<S: Storage, L: LocalityProvider, M: BlockMetadata> PoolController for BlockPool<S, L, M> {
@@ -794,6 +852,13 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> PoolController for Block
 
     fn reset_blocking(&self) -> Result<(), BlockPoolError> {
         self.reset_blocking()
+    }
+
+    fn reset_blocks_blocking(
+        &self,
+        sequence_hashes: &[SequenceHash],
+    ) -> Result<ResetBlocksResponse, BlockPoolError> {
+        self.reset_blocks_blocking(sequence_hashes)
     }
 }
 
@@ -805,6 +870,13 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> AsyncPoolController for 
 
     async fn reset(&self) -> Result<(), BlockPoolError> {
         self.reset().await
+    }
+
+    async fn reset_blocks(
+        &self,
+        sequence_hashes: &[SequenceHash],
+    ) -> Result<ResetBlocksResponse, BlockPoolError> {
+        self.reset_blocks(sequence_hashes).await
     }
 }
 

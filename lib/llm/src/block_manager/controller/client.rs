@@ -56,13 +56,20 @@ impl ControlClient {
         let resp = stream
             .next()
             .await
-            .ok_or(anyhow::anyhow!("No response from controller"))?;
-        let data = resp
-            .into_result()?
-            .ok_or(anyhow::anyhow!("No response from controller"))?;
-        let result: T = serde_json::from_value(data)?;
-        let next = stream.next().await;
-        assert!(next.is_none());
-        Ok(result)
+            .ok_or(anyhow::anyhow!("Failed to get a response from controller"))?;
+        tracing::info!("Response: {:?}", resp);
+        match resp.into_result() {
+            Ok(data) => match data {
+                Some(value) => {
+                    let result: T = serde_json::from_value(value)?;
+                    Ok(result)
+                }
+                None => {
+                    let result: T = serde_json::from_value(Value::Null)?;
+                    Ok(result)
+                }
+            },
+            Err(e) => Err(e)?,
+        }
     }
 }
