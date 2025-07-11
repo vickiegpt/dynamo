@@ -77,12 +77,15 @@ if [ "$mode" = "prefill" ]; then
         SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=2048 \
         SGLANG_MOONCAKE_ALLOCATOR_SO_PATH=/configs/hook.so \
         SGLANG_MOONCAKE_CUSTOM_POOL=True \
+        NIXL_LOG_LEVEL=TRACE \
+        UCX_LOG_LEVEL=debug \
+        MC_FORCE_MNNVL=1 \
         python3 -m sglang.launch_server \
             --served-model-name deepseek-ai/DeepSeek-R1 \
             --model-path /model/ \
             --trust-remote-code \
             --disaggregation-mode prefill \
-            --disaggregation-transfer-backend mooncake \
+            --disaggregation-transfer-backend nixl \
             --dist-init-addr "$HOST_IP:$PORT" \
             --nnodes "$TOTAL_NODES" \
             --node-rank "$RANK" \
@@ -107,7 +110,8 @@ if [ "$mode" = "prefill" ]; then
             --disable-cuda-graph \
             --chunked-prefill-size 16384 \
             --max-total-tokens 32768 \
-            --mem-fraction-static 0.9
+            --mem-fraction-static 0.9 \
+            --log-level debug
     fi
 elif [ "$mode" = "decode" ]; then
     if [ "$cmd" = "dynamo" ]; then
@@ -119,6 +123,9 @@ elif [ "$mode" = "decode" ]; then
         SGLANG_NUM_RESERVED_DECODE_TOKENS=176 \
         SGLANG_MOONCAKE_ALLOCATOR_SO_PATH=/configs/hook.so \
         SGLANG_MOONCAKE_CUSTOM_POOL=True \
+        NIXL_LOG_LEVEL=TRACE \
+        UCX_LOG_LEVEL=debug \
+        MC_FORCE_MNNVL=1 \
         python3 -m sglang.launch_server \
             --model-path /model/ \
             --trust-remote-code \
@@ -147,6 +154,7 @@ elif [ "$mode" = "decode" ]; then
             --attention-backend cutlass_mla \
             --watchdog-timeout 1000000 \
             --chunked-prefill-size 36864 \
-            --mem-fraction-static 0.82
+            --mem-fraction-static 0.82 \
+            --log-level debug
     fi
 fi
