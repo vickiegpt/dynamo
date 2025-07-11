@@ -75,7 +75,7 @@ llmctl = "dynamo.sdk.cli.run_executable:llmctl"
 http = "dynamo.sdk.cli.run_executable:http"
 metrics = "dynamo.sdk.cli.run_executable:metrics"
 mock_worker = "dynamo.sdk.cli.run_executable:mock_worker"
-#dynamo-frontend = "ingress.main:start"
+dynamo-frontend = "ingress.main:start"
 
 [build-system]
 requires = ["hatchling"]
