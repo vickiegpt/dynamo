@@ -25,16 +25,19 @@ impl ControlClient {
         })
     }
 
+    #[tracing::instrument(level = "debug", skip(self), ret)]
     pub async fn status(&self, cache_level: CacheLevel) -> Result<PoolStatus> {
         self.execute::<PoolStatus>(ControlMessage::Status(cache_level))
             .await
     }
 
+    #[tracing::instrument(level = "debug", skip(self), ret)]
     pub async fn reset_pool(&self, cache_level: CacheLevel) -> Result<()> {
         self.execute::<()>(ControlMessage::ResetPool(cache_level))
             .await
     }
 
+    #[tracing::instrument(level = "debug", skip(self), ret)]
     pub async fn reset_blocks(
         &self,
         cache_level: CacheLevel,
@@ -47,18 +50,10 @@ impl ControlClient {
         .await
     }
 
-    // pub async fn reset_all_pools(&self) -> Result<()> {}
-
-    // pub async fn reset_pool(&self, cache_level: CacheLevel) -> Result<()> {}
-
-    // pub async fn reset_blocks(&self, sequence_hashes: Vec<SequenceHash>) -> Result<()> {}
-
-    // pub async fn reset_blocks_by_cache_level(
-    //     &self,
-    //     cache_levels: Vec<CacheLevel>,
-    //     sequence_hashes: Vec<SequenceHash>,
-    // ) -> Result<()> {
-    // }
+    #[tracing::instrument(level = "debug", skip(self), ret)]
+    pub async fn reset_all_pools(&self) -> Result<()> {
+        self.execute::<()>(ControlMessage::ResetAll).await
+    }
 
     async fn execute<T: DeserializeOwned>(&self, message: ControlMessage) -> Result<T> {
         let mut stream = self.client.direct(message.into(), self.instance_id).await?;
@@ -66,7 +61,6 @@ impl ControlClient {
             .next()
             .await
             .ok_or(anyhow::anyhow!("Failed to get a response from controller"))?;
-        tracing::info!("Response: {:?}", resp);
         match resp.into_result() {
             Ok(data) => match data {
                 Some(value) => {

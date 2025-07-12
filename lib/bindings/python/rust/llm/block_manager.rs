@@ -248,6 +248,12 @@ impl BlockManagerClient {
             .map_err(to_pyerr)?;
         Ok(PoolStatus { inner: status })
     }
+
+    fn reset_all_pools(&self) -> PyResult<()> {
+        pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(self.inner.reset_all_pools())
+            .map_err(to_pyerr)
+    }
 }
 
 impl BlockManagerClient {
