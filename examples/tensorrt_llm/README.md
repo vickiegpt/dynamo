@@ -145,6 +145,6 @@ curl localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '
 ```
 
 #### Additional notes
-1. All vision models mentioned here are supported : https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc0/examples/pytorch
+1. All vision models mentioned here are supported : https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc0/examples/pytorch (Except Llama-4-Maverick it is WIP)
 2. Apply [this](https://gist.github.com/chang-l/81cec031267f92b7a6e2b7a70a4c76e1) patch to your tensorrt_llm installation inside the dynamo container to enable llama4 models
 Tentative location : `/usr/local/lib/python3.12/dist-packages/tensorrt_llm/_torch/models/modeling_llama.py`
