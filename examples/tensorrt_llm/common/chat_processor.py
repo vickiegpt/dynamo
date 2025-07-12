@@ -23,7 +23,6 @@ from common.protocol import (
     DynamoTRTLLMChatCompletionStreamResponse,
     DynamoTRTLLMCompletionResponseStreamChoice,
     DynamoTRTLLMCompletionStreamResponse,
-    Tokens,
     TRTLLMWorkerRequest,
     TRTLLMWorkerResponse,
     TRTLLMWorkerResponseOutput,
@@ -302,44 +301,16 @@ class ChatProcessor(BaseChatProcessor):
         sampling_params._setup(self.tokenizer)
         sampling_params.stop = None
 
-        if image_url:
-            text_prompt = self.tokenizer.apply_chat_template(
-                conversation, add_generation_prompt=True, tokenize=False
-            )
-            return TRTLLMWorkerRequest(
-                id=request.id,
-                model=request.model,
-                sampling_params=asdict(sampling_params),
-                streaming=request.stream,
-                conversation=conversation,
-                disaggregated_params=request.disaggregated_params,
-                prompt=text_prompt,
-                image_url=image_url,
-            )
-        else:
-            tool_dicts = (
-                None
-                if request.tools is None
-                else [tool.model_dump() for tool in request.tools]
-            )
-            prompt_tokens = self.tokenizer.apply_chat_template(
-                conversation=conversation,
-                tokenize=True,
-                add_generation_prompt=request.add_generation_prompt,
-                tools=tool_dicts,
-                documents=request.documents,
-                chat_template=request.chat_template,
-                **(request.chat_template_kwargs or {}),
-            )
-            return TRTLLMWorkerRequest(
-                id=request.id,
-                model=request.model,
-                sampling_params=asdict(sampling_params),
-                streaming=request.stream,
-                conversation=conversation,
-                disaggregated_params=request.disaggregated_params,
-                tokens=Tokens(tokens=prompt_tokens),
-            )
+        return TRTLLMWorkerRequest(
+            id=request.id,
+            model=request.model,
+            sampling_params=asdict(sampling_params),
+            streaming=request.stream,
+            conversation=conversation,
+            disaggregated_params=request.disaggregated_params,
+            prompt=conversation[-1]["content"] if conversation else "",
+            image_url=image_url,
+        )
 
     async def postprocess(
         self,
@@ -425,26 +396,15 @@ class CompletionsProcessor:
         sampling_params._setup(self.tokenizer)
         sampling_params.stop = None
 
-        if request.image_url:
-            return TRTLLMWorkerRequest(
-                id=request.id,
-                model=request.model,
-                streaming=request.stream,
-                sampling_params=asdict(sampling_params),
-                disaggregated_params=request.disaggregated_params,
-                prompt=text_prompt,
-                image_url=request.image_url,
-            )
-        else:
-            tokens = self.tokenizer.encode(text_prompt)
-            return TRTLLMWorkerRequest(
-                id=request.id,
-                model=request.model,
-                streaming=request.stream,
-                sampling_params=asdict(sampling_params),
-                disaggregated_params=request.disaggregated_params,
-                tokens=Tokens(tokens=tokens),
-            )
+        return TRTLLMWorkerRequest(
+            id=request.id,
+            model=request.model,
+            streaming=request.stream,
+            sampling_params=asdict(sampling_params),
+            disaggregated_params=request.disaggregated_params,
+            prompt=text_prompt,
+            image_url=request.image_url,
+        )
 
     async def postprocess(
         self,

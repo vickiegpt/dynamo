@@ -117,117 +117,34 @@ dynamo serve graphs.disagg:Frontend -f ./configs/disagg.yaml
 cd /workspace/examples/tensorrt_llm
 dynamo serve graphs.disagg_router:Frontend -f ./configs/disagg_router.yaml
 ```
-
-#### Multi-Node Disaggregated Serving
-
-In the following example, we will demonstrate how to run a Disaggregated Serving
-deployment across multiple nodes. For simplicity, we will demonstrate how to
-deploy a single Decode worker on one node, and a single Prefill worker on the other node.
-However, the instance counts, TP sizes, other configs, and responsibilities of each node
-can be customized and deployed in similar ways.
-
-##### Head Node
-
-Start nats/etcd:
+#### Example Client
 ```bash
-# NATS data persisted to /tmp/nats/jetstream by default
-nats-server -js &
-
-# Persist data to /tmp/etcd, otherwise defaults to ${PWD}/default.etcd if left unspecified
-etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://0.0.0.0:2379 --data-dir /tmp/etcd &
-
-# NOTE: Clearing out the etcd and nats jetstream data directories across runs
-#       helps to guarantee a clean and reproducible results.
+curl localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '{
+    "model": "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Describe the image"
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://huggingface.co/datasets/YiYiXu/testing-images/resolve/main/seashore.png"
+                    }
+                }
+            ]
+        }
+    ],
+    "stream": false,
+    "max_tokens": 160
+}'
+{"id":"chatcmpl-3b112e60192e490fb92a0a474d7f2013","choices":[{"index":0,"message":{"content":"TheThe image depicts a turbulent sea under a stormy sky, with large waves crashing against each other. The water is dark and choppy, with white foam forming at the crests of the waves. The sky above is overcast and gray, with thick clouds that suggest an impending storm. The overall atmosphere of the image is one of power and intensity, capturing the raw energy of the ocean in a moment of turmoil.<|eot|>","refusal":null,"tool_calls":null,"role":"assistant","function_call":null,"audio":null},"finish_reason":"stop","logprobs":null}],"created":1752191807,"model":"meta-llama/Llama-4-Scout-17B-16E-Instruct","service_tier":null,"system_fingerprint":null,"object":"chat.completion","usage":null}
 ```
 
-Launch graph of Frontend, Processor, and TensorRTLLMWorker (decode) on head node:
-
-```bash
-cd /workspace/examples/tensorrt_llm
-dynamo serve graphs.agg:Frontend -f ./configs/disagg.yaml &
-```
-
-Notes:
-- The aggregated graph (`graphs.agg`) is chosen here because it also describes
-  our desired deployment settings for the head node: launching the utility components
-  (Frontend, Processor), and only the decode worker (TensorRTLLMWorker configured with
-  `remote-prefill` enabled). We plan to launch the `TensorRTLLMPrefillWorker`
-  independently on a separate node in the next step of this demonstration.
-  You are free to customize the graph and configuration of components launched on
-  each node.
-- The disaggregated config `configs/disagg.yaml` is intentionally chosen here as a
-  single source of truth to be used for deployments on all of our nodes, describing
-  the configurations for all of our components, including both decode and prefill
-  workers, but can be customized based on your deployment needs.
-
-##### Worker Node(s)
-
-Set environment variables pointing at the etcd/nats endpoints on the head node
-so the Dynamo Distributed Runtime can orchestrate communication and
-discoverability between the head node and worker nodes:
-```bash
-# if not head node
-export HEAD_NODE_IP="<head-node-ip>"
-export NATS_SERVER="nats://${HEAD_NODE_IP}:4222"
-export ETCD_ENDPOINTS="${HEAD_NODE_IP}:2379"
-```
-
-Deploy a Prefill worker:
-```
-cd /workspace/examples/tensorrt_llm
-dynamo serve components.prefill_worker:TensorRTLLMPrefillWorker -f ./configs/disagg.yaml --service-name TensorRTLLMPrefillWorker &
-```
-
-Now you have a 2-node deployment with 1 Decode worker on the head node, and 1 Prefill worker on a worker node!
-
-##### Additional Notes for Multi-Node Deployments
-
-Notes:
-- To include a router in this deployment, change the graph to one that includes the router, such as `graphs.agg_router`,
-  and change the config to one that includes the router, such as `configs/disagg_router.yaml`
-- This step is assuming you're disaggregated serving and planning to launch prefill workers on separate nodes.
-  Howerver, for an aggregated deployment with additional aggregated worker replicas on other nodes, this step
-  remains mostly the same. The primary difference between aggregation and disaggregation for this step is
-  whether or not the `TensorRTLLMWorker` is configured to do `remote-prefill` or not in the config file
-  (ex: `configs/disagg.yaml` vs `configs/agg.yaml`).
-- To apply the same concept for launching additional decode workers on worker nodes, you can
-  directly start them, similar to the prefill worker step above:
-  ```bash
-  # Example: deploy decode worker only
-  cd /workspace/examples/tensorrt_llm
-  dynamo serve components.worker:TensorRTLLMWorker -f ./configs/disagg.yaml --service-name TensorRTLLMWorker &
-  ```
-- If you see an error about MPI Spawn failing during TRTLLM Worker initialziation on a Slurm-based cluster,
-  try unsetting the following environment variables before launching the TRTLLM worker. If you intend to
-  run other slurm-based commands or processes on the same node after deploying the TRTLLM worker, you may
-  want to save these values into temporary variables and then restore them afterwards.
-  ```bash
-  # Workaround for error: `mpi4py.MPI.Exception: MPI_ERR_SPAWN: could not spawn processes`
-  unset SLURM_JOBID SLURM_JOB_ID SLURM_NODELIST
-  ```
-
-### Client
-
-See [client](../llm/README.md#client) section to learn how to send request to the deployment.
-
-NOTE: To send a request to a multi-node deployment, target the node which deployed the `Frontend` component.
-
-### Close deployment
-
-See [close deployment](../../docs/guides/dynamo_serve.md#close-deployment) section to learn about how to close the deployment.
-
-### Benchmarking
-
-To benchmark your deployment with GenAI-Perf, see this utility script, configuring the
-`model` name and `host` based on your deployment: [perf.sh](../llm/benchmarks/perf.sh)
-
-### Future Work
-
-Remaining tasks:
-- [x] Add support for the disaggregated serving.
-- [x] Add multi-node support.
-- [x] Add instructions for benchmarking.
-- [ ] Add integration test coverage.
-- [ ] Merge the code base with llm example to reduce the code duplication.
-- [ ] Use processor from dynamo-llm framework.
-- [ ] Enable NIXL integration with TensorRT-LLM once available. Currently, TensorRT-LLM uses UCX to transfer KV cache.
+#### Additional notes
+1. All vision models mentioned here are supported : https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc0/examples/pytorch
+2. Apply [this](https://gist.github.com/chang-l/81cec031267f92b7a6e2b7a70a4c76e1) patch to your tensorrt_llm installation inside the dynamo container to enable llama4 models
+Tentative location : `/usr/local/lib/python3.12/dist-packages/tensorrt_llm/_torch/models/modeling_llama.py`
