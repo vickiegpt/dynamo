@@ -41,6 +41,7 @@ spec:
     VllmDecodeWorker:
       dynamoNamespace: vllm-v1-disagg
       envFromSecret: hf-token-secret
+      componentType: worker
       replicas: 2
       resources:
         requests:
@@ -64,6 +65,7 @@ spec:
     VllmPrefillWorker:
       dynamoNamespace: vllm-v1-disagg
       envFromSecret: hf-token-secret
+      componentType: worker
       replicas: 1
       resources:
         requests:

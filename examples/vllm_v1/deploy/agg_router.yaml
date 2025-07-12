@@ -15,7 +15,7 @@
 apiVersion: nvidia.com/v1alpha1
 kind: DynamoGraphDeployment
 metadata:
-  name: agg
+  name: vllm-v1-agg-router
 spec:
   services:
     Frontend:
@@ -31,7 +31,7 @@ spec:
           memory: "2Gi"
       extraPodSpec:
         mainContainer:
-          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.2
+          image: nvcr.io/nvidian/nim-llm-dev/vllm_v1-runtime:dep-216.0
           workingDir: /workspace/examples/vllm_v1
           args:
             - dynamo
@@ -41,6 +41,7 @@ spec:
     VllmDecodeWorker:
       envFromSecret: hf-token-secret
       dynamoNamespace: vllm-v1-agg
+      componentType: worker
       replicas: 2
       resources:
         requests:
@@ -53,7 +54,7 @@ spec:
           gpu: "1"
       extraPodSpec:
         mainContainer:
-          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.2
+          image: nvcr.io/nvidian/nim-llm-dev/vllm_v1-runtime:dep-216.0
           workingDir: /workspace/examples/vllm_v1
           args:
             - python3
