@@ -76,7 +76,7 @@ if [ "$mode" = "prefill" ]; then
         # GB200 sglang prefill command
         SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=2048 \
         SGLANG_MOONCAKE_ALLOCATOR_SO_PATH=/configs/hook.so \
-        SGLANG_MOONCAKE_CUSTOM_POOL=True \
+        SGLANG_MOONCAKE_CUSTOM_MEM_POOL=True \
         NIXL_LOG_LEVEL=TRACE \
         UCX_LOG_LEVEL=debug \
         MC_FORCE_MNNVL=1 \
@@ -122,7 +122,7 @@ elif [ "$mode" = "decode" ]; then
         SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=768 \
         SGLANG_NUM_RESERVED_DECODE_TOKENS=176 \
         SGLANG_MOONCAKE_ALLOCATOR_SO_PATH=/configs/hook.so \
-        SGLANG_MOONCAKE_CUSTOM_POOL=True \
+        SGLANG_MOONCAKE_CUSTOM_MEM_POOL=True \
         NIXL_LOG_LEVEL=TRACE \
         UCX_LOG_LEVEL=debug \
         MC_FORCE_MNNVL=1 \
