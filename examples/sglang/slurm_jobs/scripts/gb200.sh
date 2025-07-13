@@ -95,7 +95,7 @@ if [ "$mode" = "prefill" ]; then
             --host 0.0.0.0 \
             --decode-log-interval 1 \
             --max-running-requests 6144 \
-            --context-length 2176 \
+            --context-length 10000 \
             --disable-radix-cache \
             --enable-deepep-moe \
             --deepep-mode low_latency \
@@ -140,7 +140,7 @@ elif [ "$mode" = "decode" ]; then
             --host 0.0.0.0 \
             --decode-log-interval 1 \
             --max-running-requests 36864 \
-            --context-length 2176 \
+            --context-length 10000 \
             --disable-radix-cache \
             --enable-deepep-moe \
             --deepep-mode low_latency \
