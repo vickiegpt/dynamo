@@ -15,9 +15,16 @@ use tokio::sync::oneshot;
 
 // Import the runtime types we need
 use dynamo_runtime::engine::{
-    AsyncEngineContext, AsyncEngineContextProvider, AsyncEngineStream, Data, ResponseStream,
+    AsyncEngineContext, AsyncEngineContextProvider, AsyncEngineStream, Data, DataStream,
+    EngineStream, ResponseStream,
 };
 use std::sync::Arc;
+
+/// Type alias for a receiver of recorded stream data
+pub type RecordedStreamReceiver<R> = oneshot::Receiver<RecordedStream<R>>;
+
+/// Type alias for the return type of recording functions
+pub type RecordingResult<R> = (EngineStream<R>, RecordedStreamReceiver<R>);
 
 /// A response wrapper that adds timing information with minimal overhead
 #[derive(Debug, Clone)]
@@ -141,7 +148,7 @@ impl<T> RecordedStream<T> {
 /// Following the pattern of ResponseStream for AsyncEngine compatibility
 pub struct RecordingStream<R: Data> {
     /// The wrapped stream
-    stream: Pin<Box<dyn Stream<Item = R> + Send + Sync>>,
+    stream: DataStream<R>,
     /// Context from the original stream
     ctx: Arc<dyn AsyncEngineContext>,
     /// Recording mode
@@ -159,7 +166,7 @@ impl<R: Data> Unpin for RecordingStream<R> {}
 impl<R: Data + Clone> RecordingStream<R> {
     /// Create a new recording stream from a raw stream and context
     pub fn from_stream_and_context(
-        stream: Pin<Box<dyn Stream<Item = R> + Send + Sync>>,
+        stream: DataStream<R>,
         ctx: Arc<dyn AsyncEngineContext>,
         mode: RecordingMode,
         capacity: Option<usize>,
@@ -182,7 +189,7 @@ impl<R: Data + Clone> RecordingStream<R> {
 
     /// Create a new recording stream from an AsyncEngineStream (private constructor)
     fn from_async_engine_stream(
-        stream: Pin<Box<dyn AsyncEngineStream<R>>>,
+        stream: EngineStream<R>,
         mode: RecordingMode,
         capacity: Option<usize>,
         recorded_tx: oneshot::Sender<RecordedStream<R>>,
@@ -192,7 +199,7 @@ impl<R: Data + Clone> RecordingStream<R> {
     }
 
     /// Convert to Pin<Box<dyn AsyncEngineStream<R>>>
-    pub fn into_async_engine_stream(self) -> Pin<Box<dyn AsyncEngineStream<R>>> {
+    pub fn into_async_engine_stream(self) -> EngineStream<R> {
         Box::pin(self)
     }
 }
@@ -230,7 +237,9 @@ impl<R: Data + Clone> Stream for RecordingStream<R> {
                         this.responses.push(timestamped);
 
                         // Continue consuming but don't emit
-                        self.poll_next(cx)
+                        // self.poll_next(cx)
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
                     }
                 }
             }
@@ -273,12 +282,9 @@ impl<R: Data + Clone> std::fmt::Debug for RecordingStream<R> {
 /// Create a recording stream that wraps an AsyncEngineStream
 /// Returns a pinned stream and a receiver for the recorded data
 pub fn record_stream<R: Data + Clone>(
-    stream: Pin<Box<dyn AsyncEngineStream<R>>>,
+    stream: EngineStream<R>,
     mode: RecordingMode,
-) -> (
-    Pin<Box<dyn AsyncEngineStream<R>>>,
-    oneshot::Receiver<RecordedStream<R>>,
-) {
+) -> RecordingResult<R> {
     let (tx, rx) = oneshot::channel();
     let recording_stream = RecordingStream::from_async_engine_stream(stream, mode, None, tx);
     let boxed_stream = Box::pin(recording_stream);
@@ -288,13 +294,10 @@ pub fn record_stream<R: Data + Clone>(
 /// Create a recording stream from a raw stream and context
 /// Returns a pinned stream and a receiver for the recorded data
 pub fn record_stream_with_context<R: Data + Clone>(
-    stream: Pin<Box<dyn Stream<Item = R> + Send + Sync>>,
+    stream: DataStream<R>,
     ctx: Arc<dyn AsyncEngineContext>,
     mode: RecordingMode,
-) -> (
-    Pin<Box<dyn AsyncEngineStream<R>>>,
-    oneshot::Receiver<RecordedStream<R>>,
-) {
+) -> RecordingResult<R> {
     let (tx, rx) = oneshot::channel();
     let recording_stream = RecordingStream::from_stream_and_context(stream, ctx, mode, None, tx);
     let boxed_stream = Box::pin(recording_stream);
@@ -303,13 +306,10 @@ pub fn record_stream_with_context<R: Data + Clone>(
 
 /// Create a recording stream with capacity hint
 pub fn record_stream_with_capacity<R: Data + Clone>(
-    stream: Pin<Box<dyn AsyncEngineStream<R>>>,
+    stream: EngineStream<R>,
     mode: RecordingMode,
     capacity: usize,
-) -> (
-    Pin<Box<dyn AsyncEngineStream<R>>>,
-    oneshot::Receiver<RecordedStream<R>>,
-) {
+) -> RecordingResult<R> {
     let (tx, rx) = oneshot::channel();
     let recording_stream =
         RecordingStream::from_async_engine_stream(stream, mode, Some(capacity), tx);
@@ -319,13 +319,10 @@ pub fn record_stream_with_capacity<R: Data + Clone>(
 
 /// Create a recording stream with capacity hint from request
 pub fn record_stream_with_request_hint<R: Data + Clone, Req: CapacityHint>(
-    stream: Pin<Box<dyn AsyncEngineStream<R>>>,
+    stream: EngineStream<R>,
     mode: RecordingMode,
     request: &Req,
-) -> (
-    Pin<Box<dyn AsyncEngineStream<R>>>,
-    oneshot::Receiver<RecordedStream<R>>,
-) {
+) -> RecordingResult<R> {
     let capacity = request.estimated_response_count();
     match capacity {
         Some(cap) => record_stream_with_capacity(stream, mode, cap),
@@ -335,14 +332,11 @@ pub fn record_stream_with_request_hint<R: Data + Clone, Req: CapacityHint>(
 
 /// Create a recording stream from a raw stream and context with capacity hint
 pub fn record_stream_with_context_and_capacity<R: Data + Clone>(
-    stream: Pin<Box<dyn Stream<Item = R> + Send + Sync>>,
+    stream: DataStream<R>,
     ctx: Arc<dyn AsyncEngineContext>,
     mode: RecordingMode,
     capacity: usize,
-) -> (
-    Pin<Box<dyn AsyncEngineStream<R>>>,
-    oneshot::Receiver<RecordedStream<R>>,
-) {
+) -> RecordingResult<R> {
     let (tx, rx) = oneshot::channel();
     let recording_stream =
         RecordingStream::from_stream_and_context(stream, ctx, mode, Some(capacity), tx);
@@ -354,65 +348,8 @@ pub fn record_stream_with_context_and_capacity<R: Data + Clone>(
 pub fn record_response_stream<R: Data + Clone>(
     response_stream: Pin<Box<ResponseStream<R>>>,
     mode: RecordingMode,
-) -> (
-    Pin<Box<dyn AsyncEngineStream<R>>>,
-    oneshot::Receiver<RecordedStream<R>>,
-) {
+) -> RecordingResult<R> {
     record_stream(response_stream, mode)
-}
-
-/// Serializable performance metrics extracted from recorded streams
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StreamPerformanceMetrics {
-    /// Total number of responses
-    pub response_count: usize,
-    /// Total stream duration in milliseconds
-    pub total_duration_ms: u64,
-    /// Average time between responses in milliseconds
-    pub avg_inter_response_time_ms: Option<u64>,
-    /// Minimum time between responses in milliseconds
-    pub min_inter_response_time_ms: Option<u64>,
-    /// Maximum time between responses in milliseconds
-    pub max_inter_response_time_ms: Option<u64>,
-    /// Time to first response in milliseconds
-    pub time_to_first_response_ms: Option<u64>,
-    /// Responses per second
-    pub responses_per_second: Option<f64>,
-}
-
-impl<T> From<&RecordedStream<T>> for StreamPerformanceMetrics {
-    fn from(recorded: &RecordedStream<T>) -> Self {
-        let inter_times = recorded.inter_response_times();
-
-        let avg_inter_response_time_ms = recorded
-            .average_inter_response_time()
-            .map(|d| d.as_millis() as u64);
-
-        let min_inter_response_time_ms = inter_times.iter().min().map(|d| d.as_millis() as u64);
-
-        let max_inter_response_time_ms = inter_times.iter().max().map(|d| d.as_millis() as u64);
-
-        let time_to_first_response_ms = recorded
-            .responses
-            .first()
-            .map(|r| r.elapsed_since(recorded.start_time).as_millis() as u64);
-
-        let responses_per_second = if recorded.total_duration.as_secs_f64() > 0.0 {
-            Some(recorded.response_count() as f64 / recorded.total_duration.as_secs_f64())
-        } else {
-            None
-        };
-
-        Self {
-            response_count: recorded.response_count(),
-            total_duration_ms: recorded.total_duration.as_millis() as u64,
-            avg_inter_response_time_ms,
-            min_inter_response_time_ms,
-            max_inter_response_time_ms,
-            time_to_first_response_ms,
-            responses_per_second,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -421,6 +358,60 @@ mod tests {
     use dynamo_runtime::engine::ResponseStream;
     use futures::stream;
     use std::time::Duration;
+
+    /// Serializable performance metrics extracted from recorded streams
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct StreamPerformanceMetrics {
+        /// Total number of responses
+        pub response_count: usize,
+        /// Total stream duration in milliseconds
+        pub total_duration_ms: u64,
+        /// Average time between responses in milliseconds
+        pub avg_inter_response_time_ms: Option<u64>,
+        /// Minimum time between responses in milliseconds
+        pub min_inter_response_time_ms: Option<u64>,
+        /// Maximum time between responses in milliseconds
+        pub max_inter_response_time_ms: Option<u64>,
+        /// Time to first response in milliseconds
+        pub time_to_first_response_ms: Option<u64>,
+        /// Responses per second
+        pub responses_per_second: Option<f64>,
+    }
+
+    impl<T> From<&RecordedStream<T>> for StreamPerformanceMetrics {
+        fn from(recorded: &RecordedStream<T>) -> Self {
+            let inter_times = recorded.inter_response_times();
+
+            let avg_inter_response_time_ms = recorded
+                .average_inter_response_time()
+                .map(|d| d.as_millis() as u64);
+
+            let min_inter_response_time_ms = inter_times.iter().min().map(|d| d.as_millis() as u64);
+
+            let max_inter_response_time_ms = inter_times.iter().max().map(|d| d.as_millis() as u64);
+
+            let time_to_first_response_ms = recorded
+                .responses
+                .first()
+                .map(|r| r.elapsed_since(recorded.start_time).as_millis() as u64);
+
+            let responses_per_second = if recorded.total_duration.as_secs_f64() > 0.0 {
+                Some(recorded.response_count() as f64 / recorded.total_duration.as_secs_f64())
+            } else {
+                None
+            };
+
+            Self {
+                response_count: recorded.response_count(),
+                total_duration_ms: recorded.total_duration.as_millis() as u64,
+                avg_inter_response_time_ms,
+                min_inter_response_time_ms,
+                max_inter_response_time_ms,
+                time_to_first_response_ms,
+                responses_per_second,
+            }
+        }
+    }
 
     #[test]
     fn test_timestamped_response_creation() {
