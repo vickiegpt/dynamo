@@ -14,6 +14,7 @@ import json
 import os
 import random
 import yaml
+import argparse
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 import aiofiles
@@ -103,6 +104,7 @@ class DynamoDeploymentClient:
             timeout: Maximum time to wait in seconds
         """
         start_time = asyncio.get_event_loop().time()
+        # TODO: A little brittle, also should output intermediate status every so often.
         while (asyncio.get_event_loop().time() - start_time) < timeout:
             try:
                 status = await self.custom_api.get_namespaced_custom_object_status(
@@ -112,11 +114,30 @@ class DynamoDeploymentClient:
                     plural="dynamographdeployments",
                     name=self.deployment_name
                 )
-                if status.get('status', {}).get('ready', False):
+                # print(f"Current status: {status.get('status', {})}")
+                
+                # Check both conditions:
+                # 1. Ready condition is True
+                # 2. State is successful
+                status_obj = status.get('status', {})
+                conditions = status_obj.get('conditions', [])
+                
+                ready_condition = False
+                for condition in conditions:
+                    if (condition.get('type') == 'Ready' and 
+                        condition.get('status') == 'True'):
+                        ready_condition = True
+                        break
+                
+                state_successful = status_obj.get('state') == 'successful'
+                
+                if ready_condition and state_successful:
+                    print("Deployment is ready: Ready condition is True and state is successful")
                     return True
+                    
             except kubernetes.client.rest.ApiException:
                 pass
-            await asyncio.sleep(5)
+            await asyncio.sleep(20)
         raise TimeoutError("Deployment failed to become ready within timeout")
 
     @asynccontextmanager
@@ -181,8 +202,10 @@ class DynamoDeploymentClient:
             component_dir = base_dir / component
             component_dir.mkdir(exist_ok=True)
             
-            # List pods for this component
-            label_selector = f"app={self.deployment_name}-{component}"
+            # List pods for this component using the selector label
+            # nvidia.com/selector: deployment-name-component
+            label_selector = f"nvidia.com/selector={self.deployment_name}-{component.lower()}"
+            
             pods = await self.core_api.list_namespaced_pod(
                 namespace=self.namespace,
                 label_selector=label_selector
@@ -195,7 +218,7 @@ class DynamoDeploymentClient:
                         name=pod.metadata.name,
                         namespace=self.namespace
                     )
-                    async with aiofiles.open(component_dir / f"replica_{i}.log", 'w') as f:
+                    async with aiofiles.open(component_dir / f"{i}.log", 'w') as f:
                         await f.write(logs)
                 except kubernetes.client.rest.ApiException as e:
                     print(f"Error getting logs for pod {pod.metadata.name}: {e}")
@@ -217,25 +240,35 @@ class DynamoDeploymentClient:
                 raise
 
 async def main():
-    # Example usage with custom log directory
+    parser = argparse.ArgumentParser(description='Deploy and manage DynamoGraphDeployment CRDs')
+    parser.add_argument('--namespace', '-n', required=True,
+                      help='Kubernetes namespace to deploy to (default: default)')
+    parser.add_argument('--yaml-file', '-f', required=True,
+                      help='Path to the DynamoGraphDeployment YAML file')
+    parser.add_argument('--log-dir', '-l', default='/tmp/dynamo_logs',
+                      help='Base directory for logs (default: /tmp/dynamo_logs)')
+    
+    args = parser.parse_args()
+
+    # Example usage with parsed arguments
     client = DynamoDeploymentClient(
-        namespace="default",
-        base_log_dir="/tmp/dynamo_logs"  # Example custom log directory
+        namespace=args.namespace,
+        base_log_dir=args.log_dir
     )
     
     try:
         # Create deployment from yaml file
-        await client.create_deployment("examples/vllm/deploy/agg.yaml")
+        await client.create_deployment(args.yaml_file)
         
         # Wait for deployment to be ready
         print("Waiting for deployment to be ready...")
         await client.wait_for_deployment_ready()
         print("Deployment is ready!")
         
-        # Test chat completion
-        print("Testing chat completion...")
-        response = await client.check_chat_completion()
-        print(f"Chat completion response: {response}")
+        # # Test chat completion
+        # print("Testing chat completion...")
+        # response = await client.check_chat_completion()
+        # print(f"Chat completion response: {response}")
         
         # Get logs
         print("Getting deployment logs...")
