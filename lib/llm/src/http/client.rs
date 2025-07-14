@@ -499,17 +499,6 @@ impl GenericBYOTClient {
     ) -> Result<ByotHttpResponseStream, HttpClientError> {
         let ctx_arc: Arc<dyn AsyncEngineContext> = Arc::new(context.clone());
 
-        if !request
-            .get("stream")
-            .unwrap_or(&Value::Bool(false))
-            .as_bool()
-            .unwrap_or(false)
-        {
-            return Err(HttpClientError::InvalidRequest(
-                "chat_stream requires the request to have 'stream': true".to_string(),
-            ));
-        }
-
         if self.base.is_verbose() {
             tracing::info!(
                 "Starting generic BYOT chat stream for request {}",
