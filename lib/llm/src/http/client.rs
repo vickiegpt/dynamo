@@ -331,10 +331,6 @@ impl<T> std::fmt::Debug for AsyncEngineStreamWrapper<T> {
     }
 }
 
-// This is unsafe because we're claiming the stream is Sync when it might not be
-// But this is needed for the AsyncEngineStream trait compatibility
-unsafe impl<T> Sync for HttpResponseStream<T> {}
-
 impl<T: Data> std::fmt::Debug for HttpResponseStream<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HttpResponseStream")
