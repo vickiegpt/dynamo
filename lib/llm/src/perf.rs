@@ -343,6 +343,7 @@ mod tests {
     use super::*;
     use dynamo_runtime::engine::ResponseStream;
     use futures::stream;
+    use serde::{Deserialize, Serialize};
     use std::time::Duration;
 
     /// Serializable performance metrics extracted from recorded streams
