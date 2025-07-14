@@ -19,6 +19,24 @@ metadata:
 spec:
   services:
     Frontend:
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 8000
+        initialDelaySeconds: 60
+        periodSeconds: 60
+        timeoutSeconds: 30
+        failureThreshold: 10
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - 'curl -s http://localhost:8000/health | jq -e ".status == \"healthy\""'
+        initialDelaySeconds: 60
+        periodSeconds: 60
+        timeoutSeconds: 30
+        failureThreshold: 10
       dynamoNamespace: vllm-v1-agg
       componentType: main
       replicas: 1
@@ -38,6 +56,8 @@ spec:
             - run
             - in=http
             - out=dyn
+            - --http-port
+            - "8000"
     VllmDecodeWorker:
       envFromSecret: hf-token-secret
       dynamoNamespace: vllm-v1-agg
