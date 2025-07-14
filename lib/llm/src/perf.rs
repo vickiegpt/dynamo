@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Performance recording and analysis for streaming LLM responses
 //!
 //! This module provides mechanisms to record streaming responses with minimal overhead
