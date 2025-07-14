@@ -460,7 +460,6 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> InactiveBlockPool<S, L, 
         }
 
         for i in 0..count {
-            tracing::trace!(current = i + 1, total = count, "Acquiring free block");
             // Directly call the logic in acquire_free_block
             // Note: acquire_free_block has its own instrumentation
             if let Some(block) = self.acquire_free_block() {
