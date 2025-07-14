@@ -36,6 +36,7 @@ from utils.utils import (
     shutdown_deployment,
     wait_for_server_ready,
 )
+from utils.k8s_utils import deploy_dynamo_graph_deployment, shutdown_deployment
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -160,9 +161,16 @@ if __name__ == "__main__":
         os.makedirs(work_dir, exist_ok=True)
 
         prefill_config_fn = f"{work_dir}/config.yaml"
-        dynamo_log_fn = f"{work_dir}/dynamo.log"
         with open(prefill_config_fn, "w") as f:
             yaml.dump(prefill_config, f)
+            
+        k8s_deployment = deploy_dynamo_graph_deployment(
+            config=prefill_config,
+            log_dir=f"{work_dir}/log",
+            model_name=model_name,
+            port=port,
+            timeout=600, # 10 minutes timeout waiting for server to be ready 
+        )
 
         # Start the dynamo serve process
         logger.info(f"Starting dynamo serve with TP size {tp_size}...")
@@ -192,7 +200,7 @@ if __name__ == "__main__":
             prefill_ttft.append(ttft)
             prefill_thpt_per_gpu.append(args.isl / ttft / tp_size * 1000)
 
-        shutdown_deployment(dynamo_process)
+        shutdown_deployment(k8s_deployment)
 
     # Plot the results as a 2D scatter plot
     if prefill_tp_size and prefill_ttft and prefill_thpt_per_gpu:
