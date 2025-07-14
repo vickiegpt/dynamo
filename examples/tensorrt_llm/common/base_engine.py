@@ -151,6 +151,7 @@ class BaseTensorrtLLMEngine:
             )
             logger.info("KvEventPublisher is initialized")
 
+        engine_config.skip_tokenizer_init = False
         self._engine_config = engine_config
 
     def _init_engine(self):
@@ -595,6 +596,14 @@ class BaseTensorrtLLMEngine:
             )
 
             sampling_params = get_sampling_params(request.sampling_params)
+            sampling_params.end_id = None
+            sampling_params.pad_id = None
+            sampling_params.skip_special_tokens = True
+            sampling_params.add_special_tokens = True
+            sampling_params.spaces_between_special_tokens = True
+            sampling_params.stop_token_ids = None
+            sampling_params.logprobs = False
+            request.streaming = False
             # Asynchronously generate and stream tokens from the local engine.
             # - For GEN workers, this performs decoding using remote KV cache state.
             # - For CTX workers, this performs the prefill and returns one response.
