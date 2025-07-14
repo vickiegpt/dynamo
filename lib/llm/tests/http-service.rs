@@ -508,7 +508,7 @@ fn service_with_engines(
 #[fixture]
 fn pure_openai_client(#[default(8990)] port: u16) -> PureOpenAIClient {
     let config = HttpClientConfig {
-        openai_config: OpenAIConfig::new().with_api_base(&format!("http://localhost:{}/v1", port)),
+        openai_config: OpenAIConfig::new().with_api_base(format!("http://localhost:{}/v1", port)),
         verbose: false,
     };
     PureOpenAIClient::new(config)
@@ -517,7 +517,7 @@ fn pure_openai_client(#[default(8990)] port: u16) -> PureOpenAIClient {
 #[fixture]
 fn nv_custom_client(#[default(8991)] port: u16) -> NvCustomClient {
     let config = HttpClientConfig {
-        openai_config: OpenAIConfig::new().with_api_base(&format!("http://localhost:{}/v1", port)),
+        openai_config: OpenAIConfig::new().with_api_base(format!("http://localhost:{}/v1", port)),
         verbose: false,
     };
     NvCustomClient::new(config)
@@ -526,7 +526,7 @@ fn nv_custom_client(#[default(8991)] port: u16) -> NvCustomClient {
 #[fixture]
 fn generic_byot_client(#[default(8992)] port: u16) -> GenericBYOTClient {
     let config = HttpClientConfig {
-        openai_config: OpenAIConfig::new().with_api_base(&format!("http://localhost:{}/v1", port)),
+        openai_config: OpenAIConfig::new().with_api_base(format!("http://localhost:{}/v1", port)),
         verbose: false,
     };
     GenericBYOTClient::new(config)
