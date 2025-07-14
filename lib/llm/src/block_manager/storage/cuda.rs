@@ -407,8 +407,13 @@ impl CudaContextProivder for DeviceStorage {
 impl Drop for DeviceStorage {
     fn drop(&mut self) {
         self.handles.release();
-        if let DeviceStorageType::Owned = self._storage_type {
-            unsafe { cudarc::driver::result::free_sync(self.ptr as _) }.unwrap();
+        match &self._storage_type {
+            DeviceStorageType::Owned => {
+                unsafe { cudarc::driver::result::free_sync(self.ptr as _) }.unwrap()
+            }
+            DeviceStorageType::Torch { _tensor } => {
+                // Do nothing. The torch storage is resposible for cleaning up itself.
+            }
         }
     }
 }
