@@ -197,27 +197,6 @@ impl<R: Data + Clone> RecordingStream<R> {
     }
 }
 
-impl<R: Data + Clone> From<Pin<Box<dyn AsyncEngineStream<R>>>> for RecordingStream<R> {
-    fn from(stream: Pin<Box<dyn AsyncEngineStream<R>>>) -> Self {
-        let (tx, _rx) = oneshot::channel(); // Note: receiver is dropped, for convenience
-        Self::from_async_engine_stream(stream, RecordingMode::Scan, None, tx)
-    }
-}
-
-impl<R: Data + Clone> From<ResponseStream<R>> for RecordingStream<R> {
-    fn from(response_stream: ResponseStream<R>) -> Self {
-        let (tx, _rx) = oneshot::channel(); // Note: receiver is dropped, for convenience
-        Self::from_async_engine_stream(Box::pin(response_stream), RecordingMode::Scan, None, tx)
-    }
-}
-
-impl<R: Data + Clone> From<Pin<Box<ResponseStream<R>>>> for RecordingStream<R> {
-    fn from(response_stream: Pin<Box<ResponseStream<R>>>) -> Self {
-        let (tx, _rx) = oneshot::channel(); // Note: receiver is dropped, for convenience
-        Self::from_async_engine_stream(response_stream, RecordingMode::Scan, None, tx)
-    }
-}
-
 impl<R: Data + Clone> Stream for RecordingStream<R> {
     type Item = R;
 
@@ -612,21 +591,6 @@ mod tests {
 
         // Verify timing was recorded
         assert!(recorded.total_duration() > Duration::from_nanos(0));
-    }
-
-    #[test]
-    fn test_recording_stream_from_implementations() {
-        // Test the From implementations work (without async execution)
-        let test_data = vec!["token1", "token2"];
-        let base_stream = stream::iter(test_data);
-        let ctx = Arc::new(MockContext::new());
-        let response_stream = ResponseStream::new(Box::pin(base_stream), ctx);
-
-        // Test From<Pin<Box<ResponseStream<R>>>>
-        let _recording_stream: RecordingStream<&str> = response_stream.into();
-
-        // The From implementation should work without panicking
-        // (We can't easily test the actual execution without async setup)
     }
 
     // Mock context for testing
