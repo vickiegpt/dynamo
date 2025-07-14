@@ -482,6 +482,21 @@ async fn test_http_service() {
 
 // === HTTP Client Tests ===
 
+/// Wait for the HTTP service to be ready by checking its health endpoint
+async fn wait_for_service_ready(port: u16) {
+    let start = tokio::time::Instant::now();
+    let timeout = tokio::time::Duration::from_secs(5);
+    loop {
+        match reqwest::get(&format!("http://localhost:{}/health", port)).await {
+            Ok(_) => break,
+            Err(_) if start.elapsed() < timeout => {
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            }
+            Err(e) => panic!("Service failed to start within timeout: {}", e),
+        }
+    }
+}
+
 #[fixture]
 fn service_with_engines(
     #[default(8990)] port: u16,
@@ -545,8 +560,8 @@ async fn test_pure_openai_client(
     // Start the service
     let task = tokio::spawn(async move { service.run(token).await });
 
-    // Give the service time to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Wait for service to be ready
+    wait_for_service_ready(8990).await;
 
     // Test successful streaming request
     let request = async_openai::types::CreateChatCompletionRequestArgs::default()
@@ -656,8 +671,8 @@ async fn test_nv_custom_client(
     // Start the service
     let task = tokio::spawn(async move { service.run(token).await });
 
-    // Give the service time to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Wait for service to be ready
+    wait_for_service_ready(8991).await;
 
     // Test successful streaming request
     let inner_request = async_openai::types::CreateChatCompletionRequestArgs::default()
@@ -782,8 +797,8 @@ async fn test_generic_byot_client(
     // Start the service
     let task = tokio::spawn(async move { service.run(token).await });
 
-    // Give the service time to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Wait for service to be ready
+    wait_for_service_ready(8992).await;
 
     // Test successful streaming request
     let request = serde_json::json!({
