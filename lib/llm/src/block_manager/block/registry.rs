@@ -42,6 +42,7 @@ use super::state::BlockState;
 use crate::tokens::{BlockHash, SequenceHash, TokenBlock};
 
 use derive_getters::Getters;
+use std::sync::atomic::AtomicUsize;
 use tokio::{runtime::Handle, sync::mpsc};
 
 pub type GlobalRegistry = Arc<Mutex<HashMap<SequenceHash, Weak<RegistrationHandle>>>>;
@@ -222,6 +223,9 @@ impl BlockRegistry {
     }
 }
 
+pub static REGISTRATION_CREATED_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static REGISTRATION_DROPPED_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 #[derive(Getters)]
 pub struct RegistrationHandle {
     #[getter(copy)]
@@ -244,6 +248,8 @@ impl RegistrationHandle {
         token_block: &TokenBlock,
         release_manager: Arc<dyn EventReleaseManager>,
     ) -> Self {
+        REGISTRATION_CREATED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         Self {
             block_hash: token_block.block_hash(),
             sequence_hash: token_block.sequence_hash(),
@@ -266,6 +272,8 @@ impl std::fmt::Debug for RegistrationHandle {
 
 impl Drop for RegistrationHandle {
     fn drop(&mut self) {
+        REGISTRATION_DROPPED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         self.release_manager.block_release(self);
     }
 }

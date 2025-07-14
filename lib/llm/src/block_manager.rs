@@ -172,6 +172,10 @@ impl<Metadata: BlockMetadata> KvBlockManager<Metadata> {
     ) -> BlockResult<DeviceStorage, Metadata> {
         self.state.onboard_blocks(blocks).await
     }
+
+    pub fn print_global_registry_stats(&self) {
+        self.state.print_global_registry_stats();
+    }
 }
 
 impl<Metadata: BlockMetadata> Drop for KvBlockManager<Metadata> {

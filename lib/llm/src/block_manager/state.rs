@@ -25,6 +25,8 @@ use super::{
 use std::sync::Arc;
 use tokio::runtime::Handle;
 
+use crate::block_manager::block::registry::{REGISTRATION_CREATED_COUNT, REGISTRATION_DROPPED_COUNT};
+
 #[allow(dead_code)]
 pub struct KvBlockManagerState<Metadata: BlockMetadata> {
     worker_id: WorkerID,
@@ -266,6 +268,10 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<Metadata> {
         Ok(state)
     }
 
+    pub fn print_global_registry_stats(&self) {
+        println!("Lost block fraction: {}", REGISTRATION_DROPPED_COUNT.load(std::sync::atomic::Ordering::Relaxed) as f32 / REGISTRATION_CREATED_COUNT.load(std::sync::atomic::Ordering::Relaxed) as f32);
+    }
+    
     /// Exports the local blockset configuration as a serialized object.
     pub fn export_local_blockset(&self) -> Result<SerializedNixlBlockSet> {
         SerializedNixlBlockSet::try_from(&self.local_block_set)

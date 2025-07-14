@@ -380,11 +380,12 @@ async fn benchmark(manager: KvBlockManager<BasicMetadata>, args: Args) -> Result
     let stats_clone = stats.clone();
 
     // Block manager worker.
+    let manager_clone = manager.clone();
     let block_manager_worker = tokio::spawn(async move {
         let mut handles = Vec::new();
 
         while let Some(mut request) = req_rx.recv().await {
-            let manager = manager.clone();
+            let manager = manager_clone.clone();
             let stats = stats_clone.clone();
 
             // We don't necessarily want to finish one request before starting the next.
@@ -624,6 +625,8 @@ async fn benchmark(manager: KvBlockManager<BasicMetadata>, args: Args) -> Result
             .map(|s| s.num_blocks)
             .sum::<usize>()
     );
+
+    manager.print_global_registry_stats();
 
     Ok(())
 }
