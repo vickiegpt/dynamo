@@ -7,7 +7,6 @@
 //! during collection, then analyze the recorded data for performance insights.
 
 use futures::Stream;
-use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -357,6 +356,7 @@ mod tests {
     use super::*;
     use dynamo_runtime::engine::ResponseStream;
     use futures::stream;
+    use serde::{Deserialize, Serialize};
     use std::time::Duration;
 
     /// Serializable performance metrics extracted from recorded streams
