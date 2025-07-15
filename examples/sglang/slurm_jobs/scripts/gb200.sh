@@ -69,23 +69,32 @@ fi
 
 # Construct command based on mode and cmd
 if [ "$mode" = "prefill" ]; then
+    # We need to install Mooncake from source inside of the container for now 
+    bash /configs/install_mooncake_from_src.sh
     if [ "$cmd" = "dynamo" ]; then
         echo "Error: dynamo command not implemented for GB200"
         exit 1
     elif [ "$cmd" = "sglang" ]; then
         # GB200 sglang prefill command
+        # We are not using a init-expert-location file for e2e benchmarking
+        # We also don't currently have a --deepep-config file for GB200
+        # Need to increase --context-length to 10k for 8k1k benchmarking
         SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=2048 \
-        SGLANG_MOONCAKE_ALLOCATOR_SO_PATH=/configs/hook.so \
+        MC_TE_METRIC=true \
+        SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE=100000 \
+        SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=100000 \
+        SGLANG_DISAGGREGATION_WAITING_TIMEOUT=100000 \
         SGLANG_MOONCAKE_CUSTOM_MEM_POOL=True \
-        NIXL_LOG_LEVEL=TRACE \
-        UCX_LOG_LEVEL=debug \
-        MC_FORCE_MNNVL=1 \
+        NCCL_MNNVL_ENABLE=1 \
+        NCCL_CUMEM_ENABLE=1 \
+        SGLANG_USE_MESSAGE_QUEUE_BROADCASTER=0 \
+        SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK=1 \
+        PYTHONUNBUFFERED=1 \
         python3 -m sglang.launch_server \
             --served-model-name deepseek-ai/DeepSeek-R1 \
             --model-path /model/ \
             --trust-remote-code \
             --disaggregation-mode prefill \
-            --disaggregation-transfer-backend nixl \
             --dist-init-addr "$HOST_IP:$PORT" \
             --nnodes "$TOTAL_NODES" \
             --node-rank "$RANK" \
@@ -95,7 +104,7 @@ if [ "$mode" = "prefill" ]; then
             --host 0.0.0.0 \
             --decode-log-interval 1 \
             --max-running-requests 6144 \
-            --context-length 10000 \
+            --context-length 2716 \
             --disable-radix-cache \
             --enable-deepep-moe \
             --deepep-mode low_latency \
@@ -107,29 +116,38 @@ if [ "$mode" = "prefill" ]; then
             --eplb-algorithm deepseek \
             --attention-backend cutlass_mla \
             --watchdog-timeout 1000000 \
+            --init-export-location
             --disable-cuda-graph \
             --chunked-prefill-size 16384 \
             --max-total-tokens 32768 \
-            --mem-fraction-static 0.9 \
+            --mem-fraction-static 0.8 \
             --log-level debug
     fi
 elif [ "$mode" = "decode" ]; then
+    # We need to install Mooncake from source inside of the container for now 
+    bash /configs/install_mooncake_from_src.sh
     if [ "$cmd" = "dynamo" ]; then
         echo "Error: dynamo command not implemented for GB200"
         exit 1
     elif [ "$cmd" = "sglang" ]; then
         # GB200 sglang decode command
+        # Need to increase --context-length to 10k for 8k1k benchmarking
+        # We are not using a init-expert-location file for e2e benchmarking
         SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=768 \
-        SGLANG_NUM_RESERVED_DECODE_TOKENS=176 \
-        SGLANG_MOONCAKE_ALLOCATOR_SO_PATH=/configs/hook.so \
+        MC_TE_METRIC=true \
+        SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE=100000 \
+        SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=100000 \
+        SGLANG_DISAGGREGATION_WAITING_TIMEOUT=100000 \
+        SGLANG_HACK_SEQ_BOOTSTRAP_ROOM=1 \
         SGLANG_MOONCAKE_CUSTOM_MEM_POOL=True \
-        NIXL_LOG_LEVEL=TRACE \
-        UCX_LOG_LEVEL=debug \
-        MC_FORCE_MNNVL=1 \
+        NCCL_MNNVL_ENABLE=1 \
+        NCCL_CUMEM_ENABLE=1 \
+        SGLANG_USE_MESSAGE_QUEUE_BROADCASTER=0 \
+        SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK=1 \
+        PYTHONUNBUFFERED=1 \
         python3 -m sglang.launch_server \
             --model-path /model/ \
             --trust-remote-code \
-            --disaggregation-transfer-backend mooncake \
             --disaggregation-mode decode \
             --dist-init-addr "$HOST_IP:$PORT" \
             --nnodes "$TOTAL_NODES" \
@@ -140,7 +158,7 @@ elif [ "$mode" = "decode" ]; then
             --host 0.0.0.0 \
             --decode-log-interval 1 \
             --max-running-requests 36864 \
-            --context-length 10000 \
+            --context-length 2716 \
             --disable-radix-cache \
             --enable-deepep-moe \
             --deepep-mode low_latency \
