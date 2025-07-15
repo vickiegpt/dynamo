@@ -341,7 +341,7 @@ pub fn record_response_stream<R: Data + Clone>(
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use dynamo_runtime::engine::ResponseStream;
     use futures::stream;
