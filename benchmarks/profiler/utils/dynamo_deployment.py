@@ -6,6 +6,8 @@
 #   "PyYAML",
 #   "aiofiles",
 #   "kubernetes-asyncio",
+#   "kr8s",           # added
+#   "httpx",          # added
 # ]
 # ///
 
@@ -21,6 +23,9 @@ import aiofiles
 import kubernetes_asyncio as kubernetes
 from kubernetes_asyncio import client, config
 from contextlib import asynccontextmanager
+import httpx                          # added for HTTP requests
+from kr8s.asyncio.objects import Service
+
 
 # Example chat completion request for testing deployments
 EXAMPLE_CHAT_REQUEST = {
@@ -143,52 +148,31 @@ class DynamoDeploymentClient:
     @asynccontextmanager
     async def port_forward(self, port: Optional[int] = None):
         """
-        Port forward the frontend service to local machine.
-        
-        Args:
-            port: Local port to use. If None, uses a random port.
-            
-        Yields:
-            The local port number being used
+        Forward the service's HTTP port to a local port.
         """
         if port is None:
             port = random.randint(49152, 65535)
-            
-        service_name = f"{self.deployment_name}-frontend"
-        cmd = f"kubectl port-forward service/{service_name} {port}:8000 -n {self.namespace}"
-        
-        process = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
+        svc_name = f"{self.deployment_name}-frontend"
+        # Get the Service and forward its HTTP port (8000)
+        service = await Service.get(svc_name, namespace=self.namespace)
+        pf = service.portforward(remote_port=8000, local_port=port)
+        await pf.start()
         try:
-            # Wait briefly to ensure port-forward is established
-            await asyncio.sleep(2)
             yield port
         finally:
-            process.terminate()
-            await process.wait()
+            await pf.stop()
 
     async def check_chat_completion(self):
         """
-        Test the deployment with a chat completion request.
+        Test the deployment with a chat completion request using httpx.
         """
         async with self.port_forward() as port:
             url = f"http://localhost:{port}/v1/chat/completions"
-            
-            cmd = f"""curl -X POST {url} \\
-                     -H "Content-Type: application/json" \\
-                     -d '{json.dumps(EXAMPLE_CHAT_REQUEST)}'"""
-            
-            process = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await process.communicate()
-            return stdout.decode()
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, json=EXAMPLE_CHAT_REQUEST)
+                response.raise_for_status()
+                return response.text
+
 
     async def get_deployment_logs(self):
         """
@@ -265,10 +249,10 @@ async def main():
         await client.wait_for_deployment_ready()
         print("Deployment is ready!")
         
-        # # Test chat completion
-        # print("Testing chat completion...")
-        # response = await client.check_chat_completion()
-        # print(f"Chat completion response: {response}")
+        # Test chat completion
+        print("Testing chat completion...")
+        response = await client.check_chat_completion()
+        print(f"Chat completion response: {response}")
         
         # Get logs
         print("Getting deployment logs...")
