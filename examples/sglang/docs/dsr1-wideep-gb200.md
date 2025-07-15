@@ -24,9 +24,9 @@ Dynamo supports SGLang's GB200 implementation of wide expert parallelism and lar
 1. Build the SGLang DeepEP container on an ARM64 machine.
 
 ```bash
-git clone https://github.com/kyleliang-nv/sglang.git
-git checkout sglang_gb200_wideep_docker
-cd sglang/docker
+git clone https://github.com/kyleliang-nv/sglang.git # temporary
+cd sglang
+git checkout sglang_gb200_wideep_docker # temporary
 docker build -f docker/Dockerfile -t sgl-blackwell-wideep --build-arg BUILD_TYPE=blackwell --build-arg CUDA_VERSION=12.8.1 .
 ```
 
@@ -34,7 +34,8 @@ docker build -f docker/Dockerfile -t sgl-blackwell-wideep --build-arg BUILD_TYPE
 
 ```bash
 cd $DYNAMO_ROOT
-docker build -f container/Dockerfile.gb200 . -t dynamo-wideep-gb200 --no-cache
+git checkout ishan/more-slurm-targets # temporary
+docker build -f container/Dockerfile.sglang-gb200 . -t dynamo-wideep-gb200 --no-cache
 ```
 
 
