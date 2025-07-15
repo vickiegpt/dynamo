@@ -17,6 +17,7 @@ import logging
 import socket
 import sys
 from typing import Optional
+import os
 
 from vllm.config import KVTransferConfig
 from vllm.distributed.kv_events import KVEventsConfig
@@ -57,6 +58,21 @@ class Config:
 
 
 def overwrite_args(config):
+    # Check if LMCache should be enabled
+    enable_lmcache = os.getenv("ENABLE_LMCACHE", "0").lower() in ("1", "true", "yes")
+    
+    # Set kv_transfer_config based on LMCache setting
+    if enable_lmcache:
+        kv_transfer_config = KVTransferConfig(
+            kv_connector="LMCacheConnectorV1", kv_role="kv_both"
+        )
+        logger.info("Using LMCache configuration")
+    else:
+        kv_transfer_config = KVTransferConfig(
+            kv_connector="NixlConnector", kv_role="kv_both"
+        )
+        logger.info("Using NixlConnector configuration")
+    
     defaults = {
         "task": "generate",
         "skip_tokenizer_init": True,
@@ -70,10 +86,8 @@ def overwrite_args(config):
             publisher="zmq",
             endpoint=f"tcp://*:{config.kv_events_port}",
         ),
-        # Always setting up kv transfer for disagg
-        "kv_transfer_config": KVTransferConfig(
-            kv_connector="NixlConnector", kv_role="kv_both"
-        ),
+        # Setting up kv transfer based on LMCache setting
+        "kv_transfer_config": kv_transfer_config,
     }
 
     # Made decision to always overwrite.

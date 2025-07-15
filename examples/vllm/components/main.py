@@ -27,6 +27,8 @@ from publisher import StatLoggerFactory
 from vllm.distributed.kv_events import ZmqEventPublisher
 from vllm.usage.usage_lib import UsageContext
 from vllm.v1.engine.async_llm import AsyncLLM
+# LMCache imports
+from vllm.config import KVTransferConfig
 
 from dynamo.llm import (
     ModelType,
@@ -41,6 +43,22 @@ configure_dynamo_logging()
 logger = logging.getLogger(__name__)
 
 
+def setup_lmcache_environment():
+    """Setup LMCache environment variables for KV cache offloading"""
+    # LMCache configuration
+    lmcache_config = {
+        "LMCACHE_CHUNK_SIZE": "256",  # Token chunk size
+        "LMCACHE_LOCAL_CPU": "True",  # Enable CPU memory backend
+        "LMCACHE_MAX_LOCAL_CPU_SIZE": "1",  # CPU memory limit in GB
+    }
+    
+    # Set environment variables
+    for key, value in lmcache_config.items():
+        if key not in os.environ:  # Only set if not already configured
+            os.environ[key] = value
+            logger.info(f"Set LMCache environment variable: {key}={value}")
+
+
 async def graceful_shutdown(runtime):
     """
     By calling `runtime.shutdown()`, the endpoints will immediately be unavailable.
@@ -49,6 +67,17 @@ async def graceful_shutdown(runtime):
     and the engine will be shutdown by Python's garbage collector.
     """
     logging.info("Received shutdown signal, shutting down DistributedRuntime")
+    
+    # Cleanup LMCache if needed
+    try:
+        from lmcache.v1.cache_engine import LMCacheEngineBuilder
+        from lmcache.integration.vllm.utils import ENGINE_NAME
+        LMCacheEngineBuilder.destroy(ENGINE_NAME)
+    except ImportError:
+        logger.debug("LMCache not available for cleanup")
+    except Exception as e:
+        logger.warning(f"Error during LMCache cleanup: {e}")
+    
     runtime.shutdown()
     logging.info("DistributedRuntime shutdown complete")
 
@@ -81,6 +110,17 @@ def setup_vllm_engine(config, stat_logger=None):
     set_side_channel_host_and_port()
 
     engine_args = config.engine_args
+    
+    # KV transfer config is now handled by args.py based on ENABLE_LMCACHE env var
+    # Check if LMCache is enabled
+    enable_lmcache = os.getenv("ENABLE_LMCACHE", "0").lower() in ("1", "true", "yes")
+    if enable_lmcache:
+        setup_lmcache_environment()
+        logger.info("LMCache is enabled")
+    else:
+        logger.info("LMCache is disabled")
+
+    
     # Load default sampling params from `generation_config.json`
     default_sampling_params = (
         engine_args.create_model_config().get_diff_sampling_param()
@@ -101,7 +141,10 @@ def setup_vllm_engine(config, stat_logger=None):
         disable_log_requests=engine_args.disable_log_requests,
         disable_log_stats=engine_args.disable_log_stats,
     )
-    logger.info(f"VllmWorker for {config.model} has been initialized")
+    if enable_lmcache:
+        logger.info(f"VllmWorker for {config.model} has been initialized with LMCache support")
+    else:
+        logger.info(f"VllmWorker for {config.model} has been initialized")
     return engine_client, vllm_config, default_sampling_params
 
 
@@ -234,5 +277,7 @@ async def init(runtime: DistributedRuntime, config: Config):
 
 
 if __name__ == "__main__":
+    logger.info("this is a test")
+    print("this is a test")
     uvloop.install()
     asyncio.run(worker())
