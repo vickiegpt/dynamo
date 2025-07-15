@@ -639,7 +639,7 @@ impl<R: RequestKey> SlotManager<R> {
             num_new_matched_tokens -= self.block_size;
         }
 
-        slot.store_onboard_blocks(host_blocks, disk_blocks)?;
+        slot.store_onboard_blocks(host_blocks, disk_blocks);
 
         Ok((num_new_matched_tokens, false))
     }
