@@ -6,6 +6,8 @@
 //! This module provides mechanisms to record streaming responses with minimal overhead
 //! during collection, then analyze the recorded data for performance insights.
 
+pub mod logprobs;
+
 use futures::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
