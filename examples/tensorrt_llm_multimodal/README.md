@@ -96,25 +96,25 @@ that get spawned depend upon the chosen graph.
 
 #### Aggregated serving
 ```bash
-cd /workspace/examples/tensorrt_llm
+cd /workspace/examples/tensorrt_llm_multimodal
 dynamo serve graphs.agg:Frontend -f ./configs/agg.yaml
 ```
 
 #### Aggregated serving with KV Routing
 ```bash
-cd /workspace/examples/tensorrt_llm
+cd /workspace/examples/tensorrt_llm_multimodal
 dynamo serve graphs.agg_router:Frontend -f ./configs/agg_router.yaml
 ```
 
 #### Disaggregated serving
 ```bash
-cd /workspace/examples/tensorrt_llm
+cd /workspace/examples/tensorrt_llm_multimodal
 dynamo serve graphs.disagg:Frontend -f ./configs/disagg.yaml
 ```
 
 #### Disaggregated serving with KV Routing
 ```bash
-cd /workspace/examples/tensorrt_llm
+cd /workspace/examples/tensorrt_llm_multimodal
 dynamo serve graphs.disagg_router:Frontend -f ./configs/disagg_router.yaml
 ```
 #### Example Client
@@ -144,7 +144,7 @@ curl localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '
 {"id":"chatcmpl-3b112e60192e490fb92a0a474d7f2013","choices":[{"index":0,"message":{"content":"TheThe image depicts a turbulent sea under a stormy sky, with large waves crashing against each other. The water is dark and choppy, with white foam forming at the crests of the waves. The sky above is overcast and gray, with thick clouds that suggest an impending storm. The overall atmosphere of the image is one of power and intensity, capturing the raw energy of the ocean in a moment of turmoil.<|eot|>","refusal":null,"tool_calls":null,"role":"assistant","function_call":null,"audio":null},"finish_reason":"stop","logprobs":null}],"created":1752191807,"model":"meta-llama/Llama-4-Scout-17B-16E-Instruct","service_tier":null,"system_fingerprint":null,"object":"chat.completion","usage":null}
 ```
 
-#### Additional notes
+#### Additional notes (Must do before inference)
 1. All vision models mentioned here are supported : https://github.com/NVIDIA/TensorRT-LLM/tree/v1.0.0rc0/examples/pytorch (Except Llama-4-Maverick it is WIP)
 2. Apply [this](https://gist.github.com/chang-l/81cec031267f92b7a6e2b7a70a4c76e1) patch to your tensorrt_llm installation inside the dynamo container to enable llama4 models
-Tentative location : `/usr/local/lib/python3.12/dist-packages/tensorrt_llm/_torch/models/modeling_llama.py`
+Location : `/usr/local/lib/python3.12/dist-packages/tensorrt_llm/_torch/models/modeling_llama.py`

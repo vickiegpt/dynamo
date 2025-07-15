@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from components.frontend import Frontend
+from components.web import Frontend
 from components.prefill_worker import TensorRTLLMPrefillWorker
 from components.processor import Processor
 from components.worker import TensorRTLLMWorker
