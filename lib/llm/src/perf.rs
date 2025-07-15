@@ -76,17 +76,18 @@ pub enum RecordingMode {
     Sink,
 }
 
-/// Container for recorded streaming responses with analysis capabilities
+/// Container for recorded streaming responses.
+/// This forms the core object on which analysis is performed.
 #[derive(Debug, Clone)]
 pub struct RecordedStream<T> {
     /// All recorded responses with timestamps
-    pub responses: Vec<TimestampedResponse<T>>,
-    /// Total duration from first to last response
-    pub total_duration: Duration,
+    responses: Vec<TimestampedResponse<T>>,
+
     /// When recording started
-    pub start_time: Instant,
+    start_time: Instant,
+
     /// When recording ended
-    pub end_time: Instant,
+    end_time: Instant,
 }
 
 impl<T> RecordedStream<T> {
@@ -96,10 +97,8 @@ impl<T> RecordedStream<T> {
         start_time: Instant,
         end_time: Instant,
     ) -> Self {
-        let total_duration = end_time.duration_since(start_time);
         Self {
             responses,
-            total_duration,
             start_time,
             end_time,
         }
@@ -112,34 +111,22 @@ impl<T> RecordedStream<T> {
 
     /// Get the total duration of the stream
     pub fn total_duration(&self) -> Duration {
-        self.total_duration
+        self.end_time.duration_since(self.start_time)
     }
 
-    /// Calculate the average time between responses
-    pub fn average_inter_response_time(&self) -> Option<Duration> {
-        if self.responses.len() < 2 {
-            return None;
-        }
-
-        let total_time = self.total_duration;
-        let intervals = self.responses.len() - 1;
-        Some(total_time / intervals as u32)
+    /// Get the responses recorded
+    pub fn responses(&self) -> &[TimestampedResponse<T>] {
+        &self.responses
     }
 
-    /// Get inter-response timings (time between consecutive responses)
-    pub fn inter_response_times(&self) -> Vec<Duration> {
-        self.responses
-            .windows(2)
-            .map(|pair| pair[1].timestamp.duration_since(pair[0].timestamp))
-            .collect()
+    /// Get the start time of the stream
+    pub fn start_time(&self) -> &Instant {
+        &self.start_time
     }
 
-    /// Get response timings relative to stream start
-    pub fn response_timings(&self) -> Vec<Duration> {
-        self.responses
-            .iter()
-            .map(|r| r.elapsed_since(self.start_time))
-            .collect()
+    /// Get the end time of the stream
+    pub fn end_time(&self) -> &Instant {
+        &self.end_time
     }
 }
 
@@ -356,62 +343,7 @@ mod tests {
     use super::*;
     use dynamo_runtime::engine::ResponseStream;
     use futures::stream;
-    use serde::{Deserialize, Serialize};
     use std::time::Duration;
-
-    /// Serializable performance metrics extracted from recorded streams
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct StreamPerformanceMetrics {
-        /// Total number of responses
-        pub response_count: usize,
-        /// Total stream duration in milliseconds
-        pub total_duration_ms: u64,
-        /// Average time between responses in milliseconds
-        pub avg_inter_response_time_ms: Option<u64>,
-        /// Minimum time between responses in milliseconds
-        pub min_inter_response_time_ms: Option<u64>,
-        /// Maximum time between responses in milliseconds
-        pub max_inter_response_time_ms: Option<u64>,
-        /// Time to first response in milliseconds
-        pub time_to_first_response_ms: Option<u64>,
-        /// Responses per second
-        pub responses_per_second: Option<f64>,
-    }
-
-    impl<T> From<&RecordedStream<T>> for StreamPerformanceMetrics {
-        fn from(recorded: &RecordedStream<T>) -> Self {
-            let inter_times = recorded.inter_response_times();
-
-            let avg_inter_response_time_ms = recorded
-                .average_inter_response_time()
-                .map(|d| d.as_millis() as u64);
-
-            let min_inter_response_time_ms = inter_times.iter().min().map(|d| d.as_millis() as u64);
-
-            let max_inter_response_time_ms = inter_times.iter().max().map(|d| d.as_millis() as u64);
-
-            let time_to_first_response_ms = recorded
-                .responses
-                .first()
-                .map(|r| r.elapsed_since(recorded.start_time).as_millis() as u64);
-
-            let responses_per_second = if recorded.total_duration.as_secs_f64() > 0.0 {
-                Some(recorded.response_count() as f64 / recorded.total_duration.as_secs_f64())
-            } else {
-                None
-            };
-
-            Self {
-                response_count: recorded.response_count(),
-                total_duration_ms: recorded.total_duration.as_millis() as u64,
-                avg_inter_response_time_ms,
-                min_inter_response_time_ms,
-                max_inter_response_time_ms,
-                time_to_first_response_ms,
-                responses_per_second,
-            }
-        }
-    }
 
     #[test]
     fn test_timestamped_response_creation() {
@@ -451,15 +383,6 @@ mod tests {
 
         assert_eq!(recorded.response_count(), 3);
         assert_eq!(recorded.total_duration(), Duration::from_millis(250));
-
-        let inter_times = recorded.inter_response_times();
-        assert_eq!(inter_times.len(), 2);
-        assert_eq!(inter_times[0], Duration::from_millis(100));
-        assert_eq!(inter_times[1], Duration::from_millis(150));
-
-        // Test average calculation
-        let avg = recorded.average_inter_response_time().unwrap();
-        assert_eq!(avg, Duration::from_millis(125)); // (250ms / 2 intervals)
     }
 
     #[test]
@@ -480,13 +403,9 @@ mod tests {
 
         let end_time = start_time + Duration::from_millis(150);
         let recorded = RecordedStream::new(responses, start_time, end_time);
-        let metrics = StreamPerformanceMetrics::from(&recorded);
 
-        assert_eq!(metrics.response_count, 2);
-        assert_eq!(metrics.total_duration_ms, 150);
-        assert_eq!(metrics.time_to_first_response_ms, Some(50));
-        assert_eq!(metrics.min_inter_response_time_ms, Some(100));
-        assert_eq!(metrics.max_inter_response_time_ms, Some(100));
+        assert_eq!(recorded.response_count(), 2);
+        assert_eq!(recorded.total_duration(), Duration::from_millis(150));
     }
 
     #[tokio::test]
