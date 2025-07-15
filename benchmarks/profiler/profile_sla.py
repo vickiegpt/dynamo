@@ -105,7 +105,6 @@ async def run_profile(args):
 
         # run genai-perf
         async with client.port_forward() as port:
-            import pdb; pdb.set_trace()
             genai_perf_artifact_dir = f"{work_dir}/gap_isl{args.isl}"
             gap_result = benchmark_prefill(
                 args.isl, genai_perf_artifact_dir, model_name, port
