@@ -17,7 +17,7 @@ import argparse
 import logging
 import math
 import os
-import subprocess
+import asyncio
 
 import numpy as np
 import yaml
@@ -30,13 +30,7 @@ from utils.plot import (
     plot_prefill_interpolation,
     plot_prefill_performance,
 )
-from utils.utils import (
-    get_available_gpu_count,
-    get_dynamo_serve_cmd,
-    shutdown_deployment,
-    wait_for_server_ready,
-)
-from utils.k8s_utils import deploy_dynamo_graph_deployment, shutdown_deployment
+from utils.dynamo_deployment import DynamoDeploymentClient
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -50,6 +44,12 @@ logger.addHandler(console_handler)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--namespace",
+        type=str,
+        default="dynamo-sla-profiler",
+        help="Kubernetes namespace to deploy the DynamoGraphDeployment",
+    )
     parser.add_argument(
         "--backend",
         type=str,
@@ -144,7 +144,6 @@ if __name__ == "__main__":
     os.makedirs(args.output_dir, exist_ok=True)
 
     model_name = config_modifier.get_model_name(config)
-    port = config_modifier.get_port(config)
 
     # first profile prefill
     prefill_tp_size = []
@@ -163,27 +162,34 @@ if __name__ == "__main__":
         prefill_config_fn = f"{work_dir}/config.yaml"
         with open(prefill_config_fn, "w") as f:
             yaml.dump(prefill_config, f)
-            
-        k8s_deployment = deploy_dynamo_graph_deployment(
-            config=prefill_config,
-            log_dir=f"{work_dir}/log",
-            model_name=model_name,
-            port=port,
-            timeout=600, # 10 minutes timeout waiting for server to be ready 
-        )
+        
+        with DynamoDeploymentClient(namespace=args.namespace, base_log_dir=work_dir) as client:
+            asyncio.run(client.create_deployment(prefill_config_fn))
+            logger.info("Waiting for deployment to be ready...")
+            asyncio.run(client.wait_for_deployment_ready())
+            logger.info("Deployment is ready")
 
-        # run genai-perf
-        genai_perf_artifact_dir = f"{work_dir}/gap_isl{args.isl}"
-        gap_result = benchmark_prefill(
-            args.isl, genai_perf_artifact_dir, model_name, port
-        )
-        if gap_result is not None:
-            ttft = gap_result["time_to_first_token"]["avg"]
-            prefill_tp_size.append(tp_size)
-            prefill_ttft.append(ttft)
-            prefill_thpt_per_gpu.append(args.isl / ttft / tp_size * 1000)
+            port = asyncio.run(client.port_forward())
+            logger.info(f"Port forwarded to {port}")
 
-        shutdown_deployment(k8s_deployment)
+            logger.info("Getting deployment logs...")
+            asyncio.run(client.get_deployment_logs())
+            logger.info(f"Logs have been saved to {client.base_log_dir / client.deployment_name}")
+
+            # run genai-perf
+            genai_perf_artifact_dir = f"{work_dir}/gap_isl{args.isl}"
+            gap_result = benchmark_prefill(
+                args.isl, genai_perf_artifact_dir, model_name, port
+            )
+            if gap_result is not None:
+                ttft = gap_result["time_to_first_token"]["avg"]
+                prefill_tp_size.append(tp_size)
+                prefill_ttft.append(ttft)
+                prefill_thpt_per_gpu.append(args.isl / ttft / tp_size * 1000)
+
+            print("Cleaning up deployment...")
+            asyncio.run(client.delete_deployment())
+            print("Deployment deleted")
 
     # Plot the results as a 2D scatter plot
     if prefill_tp_size and prefill_ttft and prefill_thpt_per_gpu:
@@ -216,47 +222,54 @@ if __name__ == "__main__":
         with open(decode_config_fn, "w") as f:
             yaml.dump(decode_config, f)
             
-        k8s_deployment = deploy_dynamo_graph_deployment(
-            config=decode_config,
-            log_dir=f"{work_dir}/log",
-            model_name=model_name,
-            port=port,
-            timeout=600, # 10 minutes timeout waiting for server to be ready 
-        )
+        with DynamoDeploymentClient(namespace=args.namespace, base_log_dir=work_dir) as client:
+            asyncio.run(client.create_deployment(decode_config_fn))
+            logger.info("Waiting for deployment to be ready...")
+            asyncio.run(client.wait_for_deployment_ready())
+            logger.info("Deployment is ready")
 
-        max_kv_tokens = config_modifier.get_kv_cache_size_from_dynamo_log(f"{work_dir}/log")
-        max_concurrency = max_kv_tokens // (args.isl + args.osl)
-        sweep_num_request = [
-            num for num in DECODE_NUM_REQUESTS_RANGE if num < max_concurrency
-        ]
-        logger.info(
-            f"Sweeping num_request range based on maximum number of kv tokens: {sweep_num_request}"
-        )
+            port = asyncio.run(client.port_forward())
+            logger.info(f"Port forwarded to {port}")
 
-        engine_decode_itl = []
-        engine_decode_thpt_per_gpu = []
-        for num_request in sweep_num_request:
-            genai_perf_artifact_dir = f"{work_dir}/gap_request{num_request}_isl{args.isl}_osl{args.osl}_n{num_request}"
-            gap_result = benchmark_decode(
-                args.isl,
-                args.osl,
-                num_request,
-                genai_perf_artifact_dir,
-                model_name,
-                port,
+            logger.info("Getting deployment logs...")
+            asyncio.run(client.get_deployment_logs())
+            logger.info(f"Logs have been saved to {client.base_log_dir / client.deployment_name}")
+
+            max_kv_tokens = config_modifier.get_kv_cache_size_from_dynamo_log(f"{work_dir}/vllm-v1-agg/vllmdecodeworker/0.log")
+            max_concurrency = max_kv_tokens // (args.isl + args.osl)
+            sweep_num_request = [
+                num for num in DECODE_NUM_REQUESTS_RANGE if num < max_concurrency
+            ]
+            logger.info(
+                f"Sweeping num_request range based on maximum number of kv tokens: {sweep_num_request}"
             )
-            if gap_result is not None:
-                itl = gap_result["inter_token_latency"]["avg"]
-                thpt_per_gpu = gap_result["output_token_throughput"]["avg"] / tp_size
-                engine_decode_itl.append(itl)
-                engine_decode_thpt_per_gpu.append(thpt_per_gpu)
-                decode_tp_size.append(tp_size)
-                decode_itl.append(itl)
-                decode_thpt_per_gpu.append(thpt_per_gpu)
-                decode_concurrency.append(num_request)
-                decode_kv_cache_size.append(max_kv_tokens)
 
-        shutdown_deployment(k8s_deployment)
+            engine_decode_itl = []
+            engine_decode_thpt_per_gpu = []
+            for num_request in sweep_num_request:
+                genai_perf_artifact_dir = f"{work_dir}/gap_request{num_request}_isl{args.isl}_osl{args.osl}_n{num_request}"
+                gap_result = benchmark_decode(
+                    args.isl,
+                    args.osl,
+                    num_request,
+                    genai_perf_artifact_dir,
+                    model_name,
+                    port,
+                )
+                if gap_result is not None:
+                    itl = gap_result["inter_token_latency"]["avg"]
+                    thpt_per_gpu = gap_result["output_token_throughput"]["avg"] / tp_size
+                    engine_decode_itl.append(itl)
+                    engine_decode_thpt_per_gpu.append(thpt_per_gpu)
+                    decode_tp_size.append(tp_size)
+                    decode_itl.append(itl)
+                    decode_thpt_per_gpu.append(thpt_per_gpu)
+                    decode_concurrency.append(num_request)
+                    decode_kv_cache_size.append(max_kv_tokens)
+                
+            print("Cleaning up deployment...")
+            asyncio.run(client.delete_deployment())
+            print("Deployment deleted")
 
         # Store partial results for plotting later
         decode_results.append((tp_size, engine_decode_itl, engine_decode_thpt_per_gpu))
@@ -340,31 +353,38 @@ if __name__ == "__main__":
     with open(prefill_config_fn, "w") as f:
         yaml.dump(prefill_config, f)
             
-    k8s_deployment = deploy_dynamo_graph_deployment(
-        config=prefill_config,
-        log_dir=f"{work_dir}/log",
-        model_name=model_name,
-        port=port,
-        timeout=600, # 10 minutes timeout waiting for server to be ready 
-    )
+    with DynamoDeploymentClient(namespace=args.namespace, base_log_dir=work_dir) as client:
+        asyncio.run(client.create_deployment(prefill_config_fn))
+        logger.info("Waiting for deployment to be ready...")
+        asyncio.run(client.wait_for_deployment_ready())
+        logger.info("Deployment is ready")
 
-    for isl in range(
-        100,
-        args.max_context_length,
-        (args.max_context_length - 100) // args.prefill_interpolation_granularity,
-    ):
-        # run genai-perf
-        genai_perf_artifact_dir = f"{work_dir}/gap_isl{isl}"
-        gap_result = benchmark_prefill(
-            isl, genai_perf_artifact_dir, model_name, port
-        )
-        if gap_result is not None:
-            ttft = gap_result["time_to_first_token"]["avg"]
-            prefill_isl.append(isl)
-            prefill_ttft.append(ttft)
-            prefill_thpt_per_gpu.append(isl / ttft / best_prefill_tp * 1000)
+        port = asyncio.run(client.port_forward())
+        logger.info(f"Port forwarded to {port}")
 
-    shutdown_deployment(k8s_deployment)
+        logger.info("Getting deployment logs...")
+        asyncio.run(client.get_deployment_logs())
+        logger.info(f"Logs have been saved to {client.base_log_dir / client.deployment_name}")
+
+        for isl in range(
+            100,
+            args.max_context_length,
+            (args.max_context_length - 100) // args.prefill_interpolation_granularity,
+        ):
+            # run genai-perf
+            genai_perf_artifact_dir = f"{work_dir}/gap_isl{isl}"
+            gap_result = benchmark_prefill(
+                isl, genai_perf_artifact_dir, model_name, port
+            )
+            if gap_result is not None:
+                ttft = gap_result["time_to_first_token"]["avg"]
+                prefill_isl.append(isl)
+                prefill_ttft.append(ttft)
+                prefill_thpt_per_gpu.append(isl / ttft / best_prefill_tp * 1000)
+
+        print("Cleaning up deployment...")
+        asyncio.run(client.delete_deployment())
+        print("Deployment deleted")
 
     # Interpolate prefill_ttft vs prefill_isl with quadratic function (y=ax^2+bx+c)
     if len(prefill_isl) > 2:
@@ -409,47 +429,54 @@ if __name__ == "__main__":
     with open(decode_config_fn, "w") as f:
         yaml.dump(decode_config, f)
         
-    k8s_deployment = deploy_dynamo_graph_deployment(
-        config=decode_config,
-        log_dir=f"{work_dir}/log",
-        model_name=model_name,
-        port=port,
-        timeout=600, # 10 minutes timeout waiting for server to be ready 
-    )
+    with DynamoDeploymentClient(namespace=args.namespace, base_log_dir=work_dir) as client:
+        asyncio.run(client.create_deployment(decode_config_fn))
+        logger.info("Waiting for deployment to be ready...")
+        asyncio.run(client.wait_for_deployment_ready())
+        logger.info("Deployment is ready")
 
-    max_kv_tokens = config_modifier.get_kv_cache_size_from_dynamo_log(f"{work_dir}/log")
+        port = asyncio.run(client.port_forward())
+        logger.info(f"Port forwarded to {port}")
 
-    osl = 500  # not too large to reduce ITL variance, not too small to have stable measurement
-    for isl in range(
-        100,
-        args.max_context_length - osl,
-        (args.max_context_length - osl) // args.decode_interpolation_granularity,
-    ):
-        max_concurrency = max_kv_tokens // (isl + osl)
-        sweep_num_request = list(
-            range(
-                1,
-                max_concurrency,
-                max_concurrency // args.decode_interpolation_granularity,
-            )
-        )
-        for num_request in sweep_num_request:
-            genai_perf_artifact_dir = (
-                f"{work_dir}/gap_isl{isl}_osl{osl}_n{num_request}"
-            )
-            gap_result = benchmark_decode(
-                isl, osl, num_request, genai_perf_artifact_dir, model_name, port
-            )
-            if gap_result is not None:
-                itl = gap_result["inter_token_latency"]["avg"]
-                x_kv_usage.append((isl + osl / 2) * num_request / max_kv_tokens)
-                y_context_length.append(isl + osl / 2)
-                z_itl.append(itl)
-                z_thpt_per_gpu.append(
-                    gap_result["output_token_throughput"]["avg"] / tp_size
+        logger.info("Getting deployment logs...")
+        asyncio.run(client.get_deployment_logs())
+        logger.info(f"Logs have been saved to {client.base_log_dir / client.deployment_name}")
+
+        max_kv_tokens = config_modifier.get_kv_cache_size_from_dynamo_log(f"{work_dir}/vllm-v1-agg/vllmdecodeworker/0.log")
+
+        osl = 500  # not too large to reduce ITL variance, not too small to have stable measurement
+        for isl in range(
+            100,
+            args.max_context_length - osl,
+            (args.max_context_length - osl) // args.decode_interpolation_granularity,
+        ):
+            max_concurrency = max_kv_tokens // (isl + osl)
+            sweep_num_request = list(
+                range(
+                    1,
+                    max_concurrency,
+                    max_concurrency // args.decode_interpolation_granularity,
                 )
+            )
+            for num_request in sweep_num_request:
+                genai_perf_artifact_dir = (
+                    f"{work_dir}/gap_isl{isl}_osl{osl}_n{num_request}"
+                )
+                gap_result = benchmark_decode(
+                    isl, osl, num_request, genai_perf_artifact_dir, model_name, port
+                )
+                if gap_result is not None:
+                    itl = gap_result["inter_token_latency"]["avg"]
+                    x_kv_usage.append((isl + osl / 2) * num_request / max_kv_tokens)
+                    y_context_length.append(isl + osl / 2)
+                    z_itl.append(itl)
+                    z_thpt_per_gpu.append(
+                        gap_result["output_token_throughput"]["avg"] / tp_size
+                    )
 
-    shutdown_deployment(k8s_deployment)
+        print("Cleaning up deployment...")
+        asyncio.run(client.delete_deployment())
+        print("Deployment deleted")
 
     # Save the data points to a .npz file
     save_path = f"{work_dir}/raw_data.npz"
