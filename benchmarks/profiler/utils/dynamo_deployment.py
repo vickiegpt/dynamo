@@ -14,6 +14,7 @@
 import argparse
 import asyncio
 import random
+import time 
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, Union
@@ -114,9 +115,9 @@ class DynamoDeploymentClient:
         Args:
             timeout: Maximum time to wait in seconds
         """
-        start_time = asyncio.get_event_loop().time()
+        start_time = time.time()
         # TODO: A little brittle, also should output intermediate status every so often.
-        while (asyncio.get_event_loop().time() - start_time) < timeout:
+        while (time.time() - start_time) < timeout:
             try:
                 status = await self.custom_api.get_namespaced_custom_object_status(
                     group="nvidia.com",

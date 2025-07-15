@@ -42,86 +42,7 @@ formatter = logging.Formatter(
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Profile the TTFT and ITL of the Prefill and Decode engine with different parallelization mapping. When profiling prefill we mock/fix decode,when profiling decode we mock/fix prefill."
-    )
-    parser.add_argument(
-        "--namespace",
-        type=str,
-        default="dynamo-sla-profiler",
-        help="Kubernetes namespace to deploy the DynamoGraphDeployment",
-    )
-    parser.add_argument(
-        "--backend",
-        type=str,
-        default="vllm_v1",
-        choices=["vllm_v1"],
-        help="backend type, currently support [vllm_v1]",
-    )
-    parser.add_argument(
-        "--config",
-        type=str,
-        required=True,
-        help="Path to the DynamoGraphDeployment config file",
-    )
-    parser.add_argument(
-        "--example-dir",
-        type=str,
-        default=None,
-        help="path to the example directory, if not provided, will try to infer from config file location",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        default="profiling_results",
-        help="Path to the output results directory",
-    )
-    parser.add_argument(
-        "--min-num-gpus-per-engine",
-        type=int,
-        default=1,
-        help="minimum number of GPUs per engine",
-    )
-    parser.add_argument(
-        "--max-num-gpus-per-engine",
-        type=int,
-        default=8,
-        help="maximum number of GPUs per engine",
-    )
-    parser.add_argument(
-        "--isl", type=int, default=3000, help="target input sequence length"
-    )
-    parser.add_argument(
-        "--osl", type=int, default=500, help="target output sequence length"
-    )
-    parser.add_argument(
-        "--ttft", type=int, default=50, help="target Time To First Token in ms"
-    )
-    parser.add_argument(
-        "--itl", type=int, default=10, help="target Inter Token Latency in ms"
-    )
-    # below are arguments used for interpolating TTFT and ITL under different ISL/OSL
-    parser.add_argument(
-        "--max-context-length",
-        type=int,
-        default=16384,
-        help="maximum context length supported by the served model",
-    )
-    parser.add_argument(
-        "--prefill-interpolation-granularity",
-        type=int,
-        default=16,
-        help="how many samples to benchmark to interpolate TTFT under different ISL",
-    )
-    parser.add_argument(
-        "--decode-interpolation-granularity",
-        type=int,
-        default=6,
-        help="how many samples to benchmark to interpolate ITL under different active kv cache size and decode context length",
-    )
-    args = parser.parse_args()
-
+async def run_profile(args):
     config_modifier = CONFIG_MODIFIERS[args.backend]
 
     if args.example_dir is None:
@@ -168,37 +89,37 @@ if __name__ == "__main__":
         with open(prefill_config_fn, "w") as f:
             yaml.dump(prefill_config, f)
 
-        with DynamoDeploymentClient(
+        client = DynamoDeploymentClient(
             namespace=args.namespace, base_log_dir=work_dir
-        ) as client:
-            asyncio.run(client.create_deployment(prefill_config_fn))
-            logger.info("Waiting for deployment to be ready...")
-            asyncio.run(client.wait_for_deployment_ready())
-            logger.info("Deployment is ready")
+        ) 
+        await client.create_deployment(prefill_config_fn)
+        logger.info("Waiting for deployment to be ready...")
+        await client.wait_for_deployment_ready()
+        logger.info("Deployment is ready")
 
-            port = asyncio.run(client.port_forward())
-            logger.info(f"Port forwarded to {port}")
+        port = await client.port_forward()
+        logger.info(f"Port forwarded to {port}")
 
-            logger.info("Getting deployment logs...")
-            asyncio.run(client.get_deployment_logs())
-            logger.info(
-                f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
-            )
+        logger.info("Getting deployment logs...")
+        await client.get_deployment_logs()
+        logger.info(
+            f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
+        )
 
-            # run genai-perf
-            genai_perf_artifact_dir = f"{work_dir}/gap_isl{args.isl}"
-            gap_result = benchmark_prefill(
-                args.isl, genai_perf_artifact_dir, model_name, port
-            )
-            if gap_result is not None:
-                ttft = gap_result["time_to_first_token"]["avg"]
-                prefill_tp_size.append(tp_size)
-                prefill_ttft.append(ttft)
-                prefill_thpt_per_gpu.append(args.isl / ttft / tp_size * 1000)
+        # run genai-perf
+        genai_perf_artifact_dir = f"{work_dir}/gap_isl{args.isl}"
+        gap_result = benchmark_prefill(
+            args.isl, genai_perf_artifact_dir, model_name, port
+        )
+        if gap_result is not None:
+            ttft = gap_result["time_to_first_token"]["avg"]
+            prefill_tp_size.append(tp_size)
+            prefill_ttft.append(ttft)
+            prefill_thpt_per_gpu.append(args.isl / ttft / tp_size * 1000)
 
-            print("Cleaning up deployment...")
-            asyncio.run(client.delete_deployment())
-            print("Deployment deleted")
+        print("Cleaning up deployment...")
+        await client.delete_deployment()
+        print("Deployment deleted")
 
     # Plot the results as a 2D scatter plot
     if prefill_tp_size and prefill_ttft and prefill_thpt_per_gpu:
@@ -231,62 +152,62 @@ if __name__ == "__main__":
         with open(decode_config_fn, "w") as f:
             yaml.dump(decode_config, f)
 
-        with DynamoDeploymentClient(
+        client = DynamoDeploymentClient(
             namespace=args.namespace, base_log_dir=work_dir
-        ) as client:
-            asyncio.run(client.create_deployment(decode_config_fn))
-            logger.info("Waiting for deployment to be ready...")
-            asyncio.run(client.wait_for_deployment_ready())
-            logger.info("Deployment is ready")
+        ) 
+        await client.create_deployment(decode_config_fn)
+        logger.info("Waiting for deployment to be ready...")
+        await client.wait_for_deployment_ready()
+        logger.info("Deployment is ready")
 
-            port = asyncio.run(client.port_forward())
-            logger.info(f"Port forwarded to {port}")
+        port = await client.port_forward()
+        logger.info(f"Port forwarded to {port}")
 
-            logger.info("Getting deployment logs...")
-            asyncio.run(client.get_deployment_logs())
-            logger.info(
-                f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
+        logger.info("Getting deployment logs...")
+        await client.get_deployment_logs()
+        logger.info(
+            f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
+        )
+
+        max_kv_tokens = config_modifier.get_kv_cache_size_from_dynamo_log(
+            f"{work_dir}/vllm-v1-agg/vllmdecodeworker/0.log"
+        )
+        max_concurrency = max_kv_tokens // (args.isl + args.osl)
+        sweep_num_request = [
+            num for num in DECODE_NUM_REQUESTS_RANGE if num < max_concurrency
+        ]
+        logger.info(
+            f"Sweeping num_request range based on maximum number of kv tokens: {sweep_num_request}"
+        )
+
+        engine_decode_itl = []
+        engine_decode_thpt_per_gpu = []
+        for num_request in sweep_num_request:
+            genai_perf_artifact_dir = f"{work_dir}/gap_request{num_request}_isl{args.isl}_osl{args.osl}_n{num_request}"
+            gap_result = benchmark_decode(
+                args.isl,
+                args.osl,
+                num_request,
+                genai_perf_artifact_dir,
+                model_name,
+                port,
             )
-
-            max_kv_tokens = config_modifier.get_kv_cache_size_from_dynamo_log(
-                f"{work_dir}/vllm-v1-agg/vllmdecodeworker/0.log"
-            )
-            max_concurrency = max_kv_tokens // (args.isl + args.osl)
-            sweep_num_request = [
-                num for num in DECODE_NUM_REQUESTS_RANGE if num < max_concurrency
-            ]
-            logger.info(
-                f"Sweeping num_request range based on maximum number of kv tokens: {sweep_num_request}"
-            )
-
-            engine_decode_itl = []
-            engine_decode_thpt_per_gpu = []
-            for num_request in sweep_num_request:
-                genai_perf_artifact_dir = f"{work_dir}/gap_request{num_request}_isl{args.isl}_osl{args.osl}_n{num_request}"
-                gap_result = benchmark_decode(
-                    args.isl,
-                    args.osl,
-                    num_request,
-                    genai_perf_artifact_dir,
-                    model_name,
-                    port,
+            if gap_result is not None:
+                itl = gap_result["inter_token_latency"]["avg"]
+                thpt_per_gpu = (
+                    gap_result["output_token_throughput"]["avg"] / tp_size
                 )
-                if gap_result is not None:
-                    itl = gap_result["inter_token_latency"]["avg"]
-                    thpt_per_gpu = (
-                        gap_result["output_token_throughput"]["avg"] / tp_size
-                    )
-                    engine_decode_itl.append(itl)
-                    engine_decode_thpt_per_gpu.append(thpt_per_gpu)
-                    decode_tp_size.append(tp_size)
-                    decode_itl.append(itl)
-                    decode_thpt_per_gpu.append(thpt_per_gpu)
-                    decode_concurrency.append(num_request)
-                    decode_kv_cache_size.append(max_kv_tokens)
+                engine_decode_itl.append(itl)
+                engine_decode_thpt_per_gpu.append(thpt_per_gpu)
+                decode_tp_size.append(tp_size)
+                decode_itl.append(itl)
+                decode_thpt_per_gpu.append(thpt_per_gpu)
+                decode_concurrency.append(num_request)
+                decode_kv_cache_size.append(max_kv_tokens)
 
-            print("Cleaning up deployment...")
-            asyncio.run(client.delete_deployment())
-            print("Deployment deleted")
+        print("Cleaning up deployment...")
+        await client.delete_deployment()
+        print("Deployment deleted")
 
         # Store partial results for plotting later
         decode_results.append((tp_size, engine_decode_itl, engine_decode_thpt_per_gpu))
@@ -370,42 +291,42 @@ if __name__ == "__main__":
     with open(prefill_config_fn, "w") as f:
         yaml.dump(prefill_config, f)
 
-    with DynamoDeploymentClient(
+    client = DynamoDeploymentClient(
         namespace=args.namespace, base_log_dir=work_dir
-    ) as client:
-        asyncio.run(client.create_deployment(prefill_config_fn))
-        logger.info("Waiting for deployment to be ready...")
-        asyncio.run(client.wait_for_deployment_ready())
-        logger.info("Deployment is ready")
+    ) 
+    await client.create_deployment(prefill_config_fn)
+    logger.info("Waiting for deployment to be ready...")
+    await client.wait_for_deployment_ready()
+    logger.info("Deployment is ready")
 
-        port = asyncio.run(client.port_forward())
-        logger.info(f"Port forwarded to {port}")
+    port = await client.port_forward()
+    logger.info(f"Port forwarded to {port}")
 
-        logger.info("Getting deployment logs...")
-        asyncio.run(client.get_deployment_logs())
-        logger.info(
-            f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
+    logger.info("Getting deployment logs...")
+    await client.get_deployment_logs()
+    logger.info(
+        f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
+    )
+
+    for isl in range(
+        100,
+        args.max_context_length,
+        (args.max_context_length - 100) // args.prefill_interpolation_granularity,
+    ):
+        # run genai-perf
+        genai_perf_artifact_dir = f"{work_dir}/gap_isl{isl}"
+        gap_result = benchmark_prefill(
+            isl, genai_perf_artifact_dir, model_name, port
         )
+        if gap_result is not None:
+            ttft = gap_result["time_to_first_token"]["avg"]
+            prefill_isl.append(isl)
+            prefill_ttft.append(ttft)
+            prefill_thpt_per_gpu.append(isl / ttft / best_prefill_tp * 1000)
 
-        for isl in range(
-            100,
-            args.max_context_length,
-            (args.max_context_length - 100) // args.prefill_interpolation_granularity,
-        ):
-            # run genai-perf
-            genai_perf_artifact_dir = f"{work_dir}/gap_isl{isl}"
-            gap_result = benchmark_prefill(
-                isl, genai_perf_artifact_dir, model_name, port
-            )
-            if gap_result is not None:
-                ttft = gap_result["time_to_first_token"]["avg"]
-                prefill_isl.append(isl)
-                prefill_ttft.append(ttft)
-                prefill_thpt_per_gpu.append(isl / ttft / best_prefill_tp * 1000)
-
-        print("Cleaning up deployment...")
-        asyncio.run(client.delete_deployment())
-        print("Deployment deleted")
+    print("Cleaning up deployment...")
+    await client.delete_deployment()
+    print("Deployment deleted")
 
     # Interpolate prefill_ttft vs prefill_isl with quadratic function (y=ax^2+bx+c)
     if len(prefill_isl) > 2:
@@ -450,60 +371,60 @@ if __name__ == "__main__":
     with open(decode_config_fn, "w") as f:
         yaml.dump(decode_config, f)
 
-    with DynamoDeploymentClient(
+    client = DynamoDeploymentClient(
         namespace=args.namespace, base_log_dir=work_dir
-    ) as client:
-        asyncio.run(client.create_deployment(decode_config_fn))
-        logger.info("Waiting for deployment to be ready...")
-        asyncio.run(client.wait_for_deployment_ready())
-        logger.info("Deployment is ready")
+    ) 
+    await client.create_deployment(decode_config_fn)
+    logger.info("Waiting for deployment to be ready...")
+    await client.wait_for_deployment_ready()
+    logger.info("Deployment is ready")
 
-        port = asyncio.run(client.port_forward())
-        logger.info(f"Port forwarded to {port}")
+    port = await client.port_forward()
+    logger.info(f"Port forwarded to {port}")
 
-        logger.info("Getting deployment logs...")
-        asyncio.run(client.get_deployment_logs())
-        logger.info(
-            f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
-        )
+    logger.info("Getting deployment logs...")
+    await client.get_deployment_logs()
+    logger.info(
+        f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
+    )
 
-        max_kv_tokens = config_modifier.get_kv_cache_size_from_dynamo_log(
-            f"{work_dir}/vllm-v1-agg/vllmdecodeworker/0.log"
-        )
+    max_kv_tokens = config_modifier.get_kv_cache_size_from_dynamo_log(
+        f"{work_dir}/vllm-v1-agg/vllmdecodeworker/0.log"
+    )
 
-        osl = 500  # not too large to reduce ITL variance, not too small to have stable measurement
-        for isl in range(
-            100,
-            args.max_context_length - osl,
-            (args.max_context_length - osl) // args.decode_interpolation_granularity,
-        ):
-            max_concurrency = max_kv_tokens // (isl + osl)
-            sweep_num_request = list(
-                range(
-                    1,
-                    max_concurrency,
-                    max_concurrency // args.decode_interpolation_granularity,
-                )
+    osl = 500  # not too large to reduce ITL variance, not too small to have stable measurement
+    for isl in range(
+        100,
+        args.max_context_length - osl,
+        (args.max_context_length - osl) // args.decode_interpolation_granularity,
+    ):
+        max_concurrency = max_kv_tokens // (isl + osl)
+        sweep_num_request = list(
+            range(
+                1,
+                max_concurrency,
+                max_concurrency // args.decode_interpolation_granularity,
             )
-            for num_request in sweep_num_request:
-                genai_perf_artifact_dir = (
-                    f"{work_dir}/gap_isl{isl}_osl{osl}_n{num_request}"
+        )
+        for num_request in sweep_num_request:
+            genai_perf_artifact_dir = (
+                f"{work_dir}/gap_isl{isl}_osl{osl}_n{num_request}"
+            )
+            gap_result = benchmark_decode(
+                isl, osl, num_request, genai_perf_artifact_dir, model_name, port
+            )
+            if gap_result is not None:
+                itl = gap_result["inter_token_latency"]["avg"]
+                x_kv_usage.append((isl + osl / 2) * num_request / max_kv_tokens)
+                y_context_length.append(isl + osl / 2)
+                z_itl.append(itl)
+                z_thpt_per_gpu.append(
+                    gap_result["output_token_throughput"]["avg"] / tp_size
                 )
-                gap_result = benchmark_decode(
-                    isl, osl, num_request, genai_perf_artifact_dir, model_name, port
-                )
-                if gap_result is not None:
-                    itl = gap_result["inter_token_latency"]["avg"]
-                    x_kv_usage.append((isl + osl / 2) * num_request / max_kv_tokens)
-                    y_context_length.append(isl + osl / 2)
-                    z_itl.append(itl)
-                    z_thpt_per_gpu.append(
-                        gap_result["output_token_throughput"]["avg"] / tp_size
-                    )
 
-        print("Cleaning up deployment...")
-        asyncio.run(client.delete_deployment())
-        print("Deployment deleted")
+    print("Cleaning up deployment...")
+    await client.delete_deployment()
+    print("Deployment deleted")
 
     # Save the data points to a .npz file
     save_path = f"{work_dir}/raw_data.npz"
@@ -521,3 +442,86 @@ if __name__ == "__main__":
     plot_decode_3d_surface(
         x_kv_usage, y_context_length, z_itl, best_decode_tp, work_dir
     )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Profile the TTFT and ITL of the Prefill and Decode engine with different parallelization mapping. When profiling prefill we mock/fix decode,when profiling decode we mock/fix prefill."
+    )
+    parser.add_argument(
+        "--namespace",
+        type=str,
+        default="dynamo-sla-profiler",
+        help="Kubernetes namespace to deploy the DynamoGraphDeployment",
+    )
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="vllm_v1",
+        choices=["vllm_v1"],
+        help="backend type, currently support [vllm_v1]",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help="Path to the DynamoGraphDeployment config file",
+    )
+    parser.add_argument(
+        "--example-dir",
+        type=str,
+        default=None,
+        help="path to the example directory, if not provided, will try to infer from config file location",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="profiling_results",
+        help="Path to the output results directory",
+    )
+    parser.add_argument(
+        "--min-num-gpus-per-engine",
+        type=int,
+        default=1,
+        help="minimum number of GPUs per engine",
+    )
+    parser.add_argument(
+        "--max-num-gpus-per-engine",
+        type=int,
+        default=8,
+        help="maximum number of GPUs per engine",
+    )
+    parser.add_argument(
+        "--isl", type=int, default=3000, help="target input sequence length"
+    )
+    parser.add_argument(
+        "--osl", type=int, default=500, help="target output sequence length"
+    )
+    parser.add_argument(
+        "--ttft", type=int, default=50, help="target Time To First Token in ms"
+    )
+    parser.add_argument(
+        "--itl", type=int, default=10, help="target Inter Token Latency in ms"
+    )
+    # below are arguments used for interpolating TTFT and ITL under different ISL/OSL
+    parser.add_argument(
+        "--max-context-length",
+        type=int,
+        default=16384,
+        help="maximum context length supported by the served model",
+    )
+    parser.add_argument(
+        "--prefill-interpolation-granularity",
+        type=int,
+        default=16,
+        help="how many samples to benchmark to interpolate TTFT under different ISL",
+    )
+    parser.add_argument(
+        "--decode-interpolation-granularity",
+        type=int,
+        default=6,
+        help="how many samples to benchmark to interpolate ITL under different active kv cache size and decode context length",
+    )
+    args = parser.parse_args()
+
+    asyncio.run(run_profile(args))

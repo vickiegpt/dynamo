@@ -45,3 +45,6 @@ tensorboardX==2.6.2.2
 transformers
 types-PyYAML
 uvicorn
+aiofiles
+kubernetes_asyncio
+kr8s

@@ -37,6 +37,9 @@ class VllmV1ConfigModifier:
     def convert_config(cls, config: dict, target: Literal["prefill", "decode"]) -> dict:
         config = deepcopy(config)
 
+        # set metadata name
+        config["metadata"]["name"] = "vllm-v1-agg"
+
         # disable planner
         if "Planner" in config["spec"]["services"]:
             del config["spec"]["services"]["Planner"]
