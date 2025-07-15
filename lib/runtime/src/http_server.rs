@@ -14,9 +14,7 @@
 // limitations under the License.
 
 use axum::{body, http::StatusCode, response::IntoResponse, routing::get, Router};
-use prometheus::{
-    proto, register_gauge_with_registry, Encoder, Gauge, Opts, Registry, TextEncoder,
-};
+use crate::profiling::{MetricsRegistry, MetricGauge};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -24,48 +22,50 @@ use tracing;
 
 /// Runtime metrics for HTTP server
 pub struct RuntimeMetrics {
-    uptime_gauge: Gauge,
+    pub backend: Arc<dyn MetricsRegistry>,
+    pub uptime_gauge: Box<dyn MetricGauge>,
 }
 
 impl RuntimeMetrics {
-    pub fn new(metrics_registry: &Arc<Registry>) -> anyhow::Result<Arc<Self>> {
-        let uptime_opts = Opts::new(
+    pub fn new(backend: Arc<dyn MetricsRegistry>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let uptime_gauge = backend.create_gauge(
             "uptime_seconds",
             "Total uptime of the DistributedRuntime in seconds",
-        )
-        .namespace("dynamo")
-        .subsystem("runtime");
-
-        let uptime_gauge = register_gauge_with_registry!(uptime_opts, metrics_registry)?;
-
-        Ok(Arc::new(Self { uptime_gauge }))
+            &[("service", "dynamo"), ("subsystem", "runtime")]
+        )?;
+        Ok(Self {
+            backend,
+            uptime_gauge
+        })
     }
 
-    pub fn update_uptime(&self, uptime_seconds: f64) {
-        self.uptime_gauge.set(uptime_seconds);
+    /// Get a reference to the backend
+    pub fn get_backend(&self) -> &Arc<dyn MetricsRegistry> {
+        &self.backend
     }
 }
 
 /// HTTP server state containing pre-created metrics
 pub struct HttpServerState {
     drt: Arc<crate::DistributedRuntime>,
-    registry: Arc<Registry>,
     runtime_metrics: Arc<RuntimeMetrics>,
 }
 
 impl HttpServerState {
-    /// Create new HTTP server state with pre-created metrics
-    pub fn new(drt: Arc<crate::DistributedRuntime>) -> anyhow::Result<Self> {
-        let registry = Arc::new(Registry::new());
-
-        // Create runtime metrics
-        let runtime_metrics = RuntimeMetrics::new(&registry)?;
-
+    /// Create new HTTP server state with the provided metrics backend
+    pub fn new(drt: Arc<crate::DistributedRuntime>, backend: Arc<dyn MetricsRegistry>) -> anyhow::Result<Self> {
+        let runtime_metrics = match RuntimeMetrics::new(backend) {
+            Ok(metrics) => Arc::new(metrics),
+            Err(e) => return Err(anyhow::anyhow!("Failed to create runtime metrics: {}", e)),
+        };
         Ok(Self {
             drt,
-            registry,
             runtime_metrics,
         })
+    }
+
+    pub fn drt(&self) -> &Arc<crate::DistributedRuntime> {
+        &self.drt
     }
 }
 
@@ -75,14 +75,10 @@ pub async fn spawn_http_server(
     port: u16,
     cancel_token: CancellationToken,
     drt: Arc<crate::DistributedRuntime>,
+    metrics_backend: Arc<dyn MetricsRegistry>,
 ) -> anyhow::Result<(std::net::SocketAddr, tokio::task::JoinHandle<()>)> {
-    tracing::info!(
-        "[spawn_http_server] called with host={}, port={}",
-        host,
-        port
-    );
-    // Create HTTP server state with pre-created metrics
-    let server_state = Arc::new(HttpServerState::new(drt)?);
+    // Create HTTP server state with the provided metrics backend
+    let server_state = Arc::new(HttpServerState::new(drt, metrics_backend)?);
 
     let app = Router::new()
         .route(
@@ -141,6 +137,7 @@ pub async fn spawn_http_server(
             tracing::error!("HTTP server error: {}", e);
         }
     });
+
     Ok((actual_address, handle))
 }
 
@@ -156,30 +153,16 @@ async fn health_handler(state: Arc<HttpServerState>) -> impl IntoResponse {
 async fn metrics_handler(state: Arc<HttpServerState>) -> impl IntoResponse {
     // Update the uptime gauge with current value
     let uptime_seconds = state.drt.uptime().as_secs_f64();
-    state.runtime_metrics.update_uptime(uptime_seconds);
+    state.runtime_metrics.uptime_gauge.set(uptime_seconds);
 
-    // Gather metrics from the registry
-    let metric_families = state.registry.gather();
-
-    let encoder = TextEncoder::new();
-    let mut buffer = Vec::new();
-
-    match encoder.encode(&metric_families, &mut buffer) {
-        Ok(()) => match String::from_utf8(buffer) {
-            Ok(response) => (StatusCode::OK, response),
-            Err(e) => {
-                tracing::error!("Failed to encode metrics as UTF-8: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Failed to encode metrics as UTF-8".to_string(),
-                )
-            }
-        },
+    // Get metrics from the backend
+    match state.runtime_metrics.backend.root_prometheus_format_str() {
+        Ok(response) => (StatusCode::OK, response),
         Err(e) => {
-            tracing::error!("Failed to encode metrics: {}", e);
+            tracing::error!("Failed to get metrics from backend: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to encode metrics".to_string(),
+                "Failed to get metrics".to_string(),
             )
         }
     }
@@ -188,6 +171,7 @@ async fn metrics_handler(state: Arc<HttpServerState>) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::profiling::PrometheusRegistry;
     use tokio::time::{sleep, Duration};
 
     #[tokio::test]
@@ -223,48 +207,47 @@ mod tests {
     #[tokio::test]
     async fn test_runtime_metrics_creation() {
         // Test RuntimeMetrics creation and functionality
-        let registry = Arc::new(Registry::new());
-        let runtime_metrics = RuntimeMetrics::new(&registry).unwrap();
+        let backend = Arc::new(PrometheusRegistry::new("test")) as Arc<dyn MetricsRegistry>;
+        let runtime_metrics = RuntimeMetrics::new(backend).unwrap();
 
         // Wait a bit to ensure uptime is measurable
         tokio::time::sleep(Duration::from_millis(10)).await;
 
         // Test updating uptime
         let uptime_seconds = 123.456;
-        runtime_metrics.update_uptime(uptime_seconds);
+        runtime_metrics.uptime_gauge.set(uptime_seconds);
 
-        // Gather metrics from the registry
-        let metric_families = registry.gather();
+        // Get metrics from the backend
+        let response = runtime_metrics.backend.root_prometheus_format_str().unwrap();
+        println!("Full metrics response:\n{}", response);
 
-        let encoder = TextEncoder::new();
-        let mut buffer = Vec::new();
-        encoder.encode(&metric_families, &mut buffer).unwrap();
-
-        let response = String::from_utf8(buffer).unwrap();
-        assert!(response.contains("dynamo_runtime_uptime_seconds"));
-        assert!(response.contains("123.456"));
+        let expected = "\
+# HELP test_uptime_seconds Total uptime of the DistributedRuntime in seconds
+# TYPE test_uptime_seconds gauge
+test_uptime_seconds 123.456
+";
+        assert_eq!(response, expected);
     }
 
     #[tokio::test]
     async fn test_runtime_metrics_namespace() {
         // Test that metrics have correct namespace
-        let registry = Arc::new(Registry::new());
-        let runtime_metrics = RuntimeMetrics::new(&registry).unwrap();
+        let backend = Arc::new(PrometheusRegistry::new("test")) as Arc<dyn MetricsRegistry>;
+        let runtime_metrics = RuntimeMetrics::new(backend).unwrap();
 
-        runtime_metrics.update_uptime(42.0);
+        runtime_metrics.uptime_gauge.set(42.0);
 
-        let metric_families = registry.gather();
-        let encoder = TextEncoder::new();
-        let mut buffer = Vec::new();
-        encoder.encode(&metric_families, &mut buffer).unwrap();
+        let response = runtime_metrics.backend.root_prometheus_format_str().unwrap();
+        println!("Full metrics response:\n{}", response);
 
-        let response = String::from_utf8(buffer).unwrap();
-        // Check for the full metric name with namespace and subsystem
-        assert!(response.contains("dynamo_runtime_uptime_seconds"));
-        assert!(response.contains("Total uptime of the DistributedRuntime in seconds"));
+        let expected = "\
+# HELP test_uptime_seconds Total uptime of the DistributedRuntime in seconds
+# TYPE test_uptime_seconds gauge
+test_uptime_seconds 42
+";
+        assert_eq!(response, expected);
     }
 
-    /*
     #[tokio::test]
     async fn test_spawn_http_server_endpoints() {
         use std::sync::Arc;
@@ -272,14 +255,15 @@ mod tests {
         use tokio_util::sync::CancellationToken;
         // use tokio::io::{AsyncReadExt, AsyncWriteExt};
         // use reqwest for HTTP requests
-        let runtime = crate::Runtime::from_settings().unwrap();
+        let runtime = crate::Runtime::single_threaded().unwrap();
         let drt = Arc::new(
             crate::DistributedRuntime::from_settings_without_discovery(runtime)
                 .await
                 .unwrap(),
         );
         let cancel_token = CancellationToken::new();
-        let (addr, server_handle) = spawn_http_server("127.0.0.1", 0, cancel_token.clone(), drt)
+        let metrics_backend = Arc::new(PrometheusRegistry::new("test")) as Arc<dyn MetricsRegistry>;
+        let (addr, server_handle) = spawn_http_server("127.0.0.1", 0, cancel_token.clone(), drt, metrics_backend)
             .await
             .unwrap();
         println!("[test] Waiting for server to start...");
@@ -324,5 +308,4 @@ mod tests {
             }
         }
     }
-    */
 }

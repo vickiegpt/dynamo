@@ -30,10 +30,7 @@ use clap::Parser;
 use dynamo_llm::kv_router::scheduler::KVHitRateEvent;
 use dynamo_llm::kv_router::KV_HIT_RATE_SUBJECT;
 use dynamo_runtime::{
-    error, logging,
-    traits::events::{EventPublisher, EventSubscriber},
-    utils::{Duration, Instant},
-    DistributedRuntime, ErrorContext, Result, Runtime, Worker,
+    error, logging, pipeline::PushRouter, protocols::annotated::Annotated, traits::events::{EventPublisher, EventSubscriber}, utils::{Duration, Instant}, DistributedRuntime, ErrorContext, Result, Runtime, Worker
 };
 use futures::stream::StreamExt;
 use std::sync::Arc;
@@ -173,6 +170,20 @@ async fn app(runtime: Runtime) -> Result<()> {
     let namespace_clone = namespace.clone();
     let metrics_collector_clone = metrics_collector.clone();
 
+
+    // Create a client for the target endpoint
+    let client = target_endpoint.client().await?;
+    client.wait_for_instances().await?;
+    let router =
+        PushRouter::<String, Annotated<String>>::from_client(client, Default::default()).await?;
+
+    let mut stream = router.random("hello world".to_string().into()).await?;
+
+    while let Some(resp) = stream.next().await {
+        println!("{:?}", resp);
+    }
+
+    // Note: Subscribing to KVHitRateEvent for illustration purposes. They're not used in production.
     // Spawn a task to handle KV hit rate events
     tokio::spawn(async move {
         match namespace_clone.subscribe(kv_hit_rate_subject).await {
@@ -182,7 +193,6 @@ async fn app(runtime: Runtime) -> Result<()> {
                 while let Some(msg) = subscriber.next().await {
                     match serde_json::from_slice::<KVHitRateEvent>(&msg.payload) {
                         Ok(event) => {
-                            // TODO: Lower to debug
                             let cache_hit_pct =
                                 (event.overlap_blocks as f64 / event.isl_blocks as f64) * 100.0;
                             tracing::debug!(
@@ -244,6 +254,7 @@ async fn app(runtime: Runtime) -> Result<()> {
         // approach where each KV Router computes and published its own metrics.
         // Publish metrics event
         namespace.publish(&event_name, &processed).await?;
+        println!("Published metrics event: {event_name}");
 
         // Wait until cancelled or the next tick
         match tokio::time::timeout_at(next, token.cancelled()).await {
@@ -251,6 +262,11 @@ async fn app(runtime: Runtime) -> Result<()> {
             Err(_) => continue,
         }
     }
+
+
+
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     Ok(())
 }

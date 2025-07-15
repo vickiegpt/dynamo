@@ -1089,6 +1089,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "http_server_metrics"
+version = "0.3.2"
+dependencies = [
+ "dynamo-runtime",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -554,6 +554,7 @@ pub async fn collect_endpoints(
     timeout: Duration,
 ) -> Result<Vec<EndpointInfo>> {
     // Collect stats from each backend
+    println!("Collecting stats from component: {component:?}, subject: {subject:?}");
     let stream = component.scrape_stats(timeout).await?;
 
     // Filter the stats by the service subject

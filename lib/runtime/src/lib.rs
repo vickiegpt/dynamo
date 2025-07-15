@@ -40,6 +40,7 @@ pub mod http_server;
 pub mod logging;
 pub mod pipeline;
 pub mod prelude;
+pub mod profiling;
 pub mod protocols;
 pub mod runnable;
 pub mod runtime;
@@ -101,4 +102,8 @@ pub struct DistributedRuntime {
 
     // Start time for tracking uptime
     start_time: std::time::Instant,
+
+    // TODO(keivenc): clean this up
+    // metrics_registry: Arc<prometheus::Registry>,
+    metrics_registry: Arc<OnceCell<Arc<dyn profiling::MetricsRegistry>>>,
 }

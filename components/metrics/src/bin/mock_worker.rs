@@ -58,18 +58,21 @@ impl AsyncEngine<SingleIn<String>, ManyOut<Annotated<String>>, Error> for MockRe
     async fn generate(&self, input: SingleIn<String>) -> Result<ManyOut<Annotated<String>>> {
         let (data, ctx) = input.into_parts();
 
-        let chars = data
-            .chars()
-            .map(|c| Annotated::from_data(c.to_string()))
-            .collect::<Vec<_>>();
+        tracing::info!("Received data: {}", data);
+        // let chars = data
+        //     .chars()
+        //     .map(|c| Annotated::from_data(c.to_string()))
+        //     .collect::<Vec<_>>();
 
-        let stream = stream::iter(chars);
+        //let stream = stream::iter(chars);
+        let response = Annotated::from_data("received".to_string());
+        let stream = stream::iter(vec![response]);
 
         Ok(ResponseStream::new(Box::pin(stream), ctx.context()))
     }
 }
 
-// FIXME: These events are just for testing and may not currently be used.
+// Note: Publishing KVHitRateEvent for illustration purposes. They're not used in production.
 /// Spawns a background task that periodically publishes mock KV hit rate events
 async fn mock_event_publisher(namespace: Namespace) {
     // NOTE: These events are just for testing, and shouldn't be interpreted
