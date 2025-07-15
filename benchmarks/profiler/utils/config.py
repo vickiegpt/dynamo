@@ -18,6 +18,7 @@ from copy import deepcopy
 from typing import Literal
 
 from utils.defaults import DEFAULT_MODEL_NAME, DYNAMO_RUN_DEFAULT_PORT
+
 from dynamo.planner.defaults import WORKER_COMPONENT_NAMES
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ formatter = logging.Formatter(
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
+
 class VllmV1ConfigModifier:
     @classmethod
     def convert_config(cls, config: dict, target: Literal["prefill", "decode"]) -> dict:
@@ -41,10 +43,18 @@ class VllmV1ConfigModifier:
 
         if target == "prefill":
             # convert prefill worker into decode worker
-            config["spec"]["services"][WORKER_COMPONENT_NAMES["vllm_v1"].decode_worker] = config["spec"]["services"][WORKER_COMPONENT_NAMES["vllm_v1"].prefill_worker]
-            del config["spec"]["services"][WORKER_COMPONENT_NAMES["vllm_v1"].prefill_worker]
+            config["spec"]["services"][
+                WORKER_COMPONENT_NAMES["vllm_v1"].decode_worker
+            ] = config["spec"]["services"][
+                WORKER_COMPONENT_NAMES["vllm_v1"].prefill_worker
+            ]
+            del config["spec"]["services"][
+                WORKER_COMPONENT_NAMES["vllm_v1"].prefill_worker
+            ]
 
-            args = config["spec"]["services"][WORKER_COMPONENT_NAMES["vllm_v1"].decode_worker]["extraPodSpec"]["mainContainer"]["args"]
+            args = config["spec"]["services"][
+                WORKER_COMPONENT_NAMES["vllm_v1"].decode_worker
+            ]["extraPodSpec"]["mainContainer"]["args"]
 
             # remove --is-prefill-worker flag
             args.remove("--is-prefill-worker")
@@ -57,9 +67,13 @@ class VllmV1ConfigModifier:
 
         elif target == "decode":
             # delete prefill worker
-            del config["spec"]["services"][WORKER_COMPONENT_NAMES["vllm_v1"].prefill_worker]
+            del config["spec"]["services"][
+                WORKER_COMPONENT_NAMES["vllm_v1"].prefill_worker
+            ]
 
-            args = config["spec"]["services"][WORKER_COMPONENT_NAMES["vllm_v1"].decode_worker]["extraPodSpec"]["mainContainer"]["args"]
+            args = config["spec"]["services"][
+                WORKER_COMPONENT_NAMES["vllm_v1"].decode_worker
+            ]["extraPodSpec"]["mainContainer"]["args"]
 
             # enable prefix caching
             if "--enable-prefix-caching" not in args:
@@ -68,7 +82,9 @@ class VllmV1ConfigModifier:
                 args.remove("--no-enable-prefix-caching")
 
         # set num workers to 1
-        decode_worker_config = config["spec"]["services"][WORKER_COMPONENT_NAMES["vllm_v1"].decode_worker]
+        decode_worker_config = config["spec"]["services"][
+            WORKER_COMPONENT_NAMES["vllm_v1"].decode_worker
+        ]
         decode_worker_config["replicas"] = 1
 
         return config
@@ -77,7 +93,9 @@ class VllmV1ConfigModifier:
     def set_config_tp_size(cls, config: dict, tp_size: int):
         config = deepcopy(config)
 
-        args = config["spec"]["services"][WORKER_COMPONENT_NAMES["vllm_v1"].decode_worker]["extraPodSpec"]["mainContainer"]["args"]
+        args = config["spec"]["services"][
+            WORKER_COMPONENT_NAMES["vllm_v1"].decode_worker
+        ]["extraPodSpec"]["mainContainer"]["args"]
 
         try:
             idx = args.index("--tensor-parallel-size")
@@ -91,22 +109,30 @@ class VllmV1ConfigModifier:
     @classmethod
     def get_model_name(cls, config: dict) -> str:
         worker_name = WORKER_COMPONENT_NAMES["vllm_v1"].decode_worker
-        args = config["spec"]["services"][worker_name]["extraPodSpec"]["mainContainer"]["args"]
+        args = config["spec"]["services"][worker_name]["extraPodSpec"]["mainContainer"][
+            "args"
+        ]
 
         for i, arg in enumerate(args):
             if arg == "--model" and i + 1 < len(args):
                 return args[i + 1]
-        
-        logger.warning(f"Model name not found in configuration args, using default model name: {DEFAULT_MODEL_NAME}")
+
+        logger.warning(
+            f"Model name not found in configuration args, using default model name: {DEFAULT_MODEL_NAME}"
+        )
         return DEFAULT_MODEL_NAME
 
     @classmethod
     def get_port(cls, config: dict) -> int:
-        args = config["spec"]["services"]["Frontend"]["extraPodSpec"]["mainContainer"]["args"]
+        args = config["spec"]["services"]["Frontend"]["extraPodSpec"]["mainContainer"][
+            "args"
+        ]
         for arg in args:
             if arg.startswith("port="):
                 return int(arg.split("=")[1])
-        logger.warning(f"Port not found in configuration args, using default port: {DYNAMO_RUN_DEFAULT_PORT}")
+        logger.warning(
+            f"Port not found in configuration args, using default port: {DYNAMO_RUN_DEFAULT_PORT}"
+        )
         return DYNAMO_RUN_DEFAULT_PORT
 
     @classmethod

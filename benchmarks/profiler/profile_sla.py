@@ -14,15 +14,16 @@
 # limitations under the License.
 
 import argparse
+import asyncio
 import logging
 import math
 import os
-import asyncio
 
 import numpy as np
 import yaml
 from utils.config import CONFIG_MODIFIERS
 from utils.defaults import DECODE_NUM_REQUESTS_RANGE
+from utils.dynamo_deployment import DynamoDeploymentClient
 from utils.genai_perf import benchmark_decode, benchmark_prefill
 from utils.plot import (
     plot_decode_3d_surface,
@@ -30,7 +31,6 @@ from utils.plot import (
     plot_prefill_interpolation,
     plot_prefill_performance,
 )
-from utils.dynamo_deployment import DynamoDeploymentClient
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -43,7 +43,9 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Profile the TTFT and ITL of the Prefill and Decode engine with different parallelization mapping. When profiling prefill we mock/fix decode,when profiling decode we mock/fix prefill."
+    )
     parser.add_argument(
         "--namespace",
         type=str,
@@ -58,7 +60,10 @@ if __name__ == "__main__":
         help="backend type, currently support [vllm_v1]",
     )
     parser.add_argument(
-        "--config", type=str, required=True, help="Path to the DynamoGraphDeployment config file"
+        "--config",
+        type=str,
+        required=True,
+        help="Path to the DynamoGraphDeployment config file",
     )
     parser.add_argument(
         "--example-dir",
@@ -162,8 +167,10 @@ if __name__ == "__main__":
         prefill_config_fn = f"{work_dir}/config.yaml"
         with open(prefill_config_fn, "w") as f:
             yaml.dump(prefill_config, f)
-        
-        with DynamoDeploymentClient(namespace=args.namespace, base_log_dir=work_dir) as client:
+
+        with DynamoDeploymentClient(
+            namespace=args.namespace, base_log_dir=work_dir
+        ) as client:
             asyncio.run(client.create_deployment(prefill_config_fn))
             logger.info("Waiting for deployment to be ready...")
             asyncio.run(client.wait_for_deployment_ready())
@@ -174,7 +181,9 @@ if __name__ == "__main__":
 
             logger.info("Getting deployment logs...")
             asyncio.run(client.get_deployment_logs())
-            logger.info(f"Logs have been saved to {client.base_log_dir / client.deployment_name}")
+            logger.info(
+                f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
+            )
 
             # run genai-perf
             genai_perf_artifact_dir = f"{work_dir}/gap_isl{args.isl}"
@@ -221,8 +230,10 @@ if __name__ == "__main__":
         decode_config_fn = f"{work_dir}/config.yaml"
         with open(decode_config_fn, "w") as f:
             yaml.dump(decode_config, f)
-            
-        with DynamoDeploymentClient(namespace=args.namespace, base_log_dir=work_dir) as client:
+
+        with DynamoDeploymentClient(
+            namespace=args.namespace, base_log_dir=work_dir
+        ) as client:
             asyncio.run(client.create_deployment(decode_config_fn))
             logger.info("Waiting for deployment to be ready...")
             asyncio.run(client.wait_for_deployment_ready())
@@ -233,9 +244,13 @@ if __name__ == "__main__":
 
             logger.info("Getting deployment logs...")
             asyncio.run(client.get_deployment_logs())
-            logger.info(f"Logs have been saved to {client.base_log_dir / client.deployment_name}")
+            logger.info(
+                f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
+            )
 
-            max_kv_tokens = config_modifier.get_kv_cache_size_from_dynamo_log(f"{work_dir}/vllm-v1-agg/vllmdecodeworker/0.log")
+            max_kv_tokens = config_modifier.get_kv_cache_size_from_dynamo_log(
+                f"{work_dir}/vllm-v1-agg/vllmdecodeworker/0.log"
+            )
             max_concurrency = max_kv_tokens // (args.isl + args.osl)
             sweep_num_request = [
                 num for num in DECODE_NUM_REQUESTS_RANGE if num < max_concurrency
@@ -258,7 +273,9 @@ if __name__ == "__main__":
                 )
                 if gap_result is not None:
                     itl = gap_result["inter_token_latency"]["avg"]
-                    thpt_per_gpu = gap_result["output_token_throughput"]["avg"] / tp_size
+                    thpt_per_gpu = (
+                        gap_result["output_token_throughput"]["avg"] / tp_size
+                    )
                     engine_decode_itl.append(itl)
                     engine_decode_thpt_per_gpu.append(thpt_per_gpu)
                     decode_tp_size.append(tp_size)
@@ -266,7 +283,7 @@ if __name__ == "__main__":
                     decode_thpt_per_gpu.append(thpt_per_gpu)
                     decode_concurrency.append(num_request)
                     decode_kv_cache_size.append(max_kv_tokens)
-                
+
             print("Cleaning up deployment...")
             asyncio.run(client.delete_deployment())
             print("Deployment deleted")
@@ -352,8 +369,10 @@ if __name__ == "__main__":
     prefill_config_fn = f"{work_dir}/config.yaml"
     with open(prefill_config_fn, "w") as f:
         yaml.dump(prefill_config, f)
-            
-    with DynamoDeploymentClient(namespace=args.namespace, base_log_dir=work_dir) as client:
+
+    with DynamoDeploymentClient(
+        namespace=args.namespace, base_log_dir=work_dir
+    ) as client:
         asyncio.run(client.create_deployment(prefill_config_fn))
         logger.info("Waiting for deployment to be ready...")
         asyncio.run(client.wait_for_deployment_ready())
@@ -364,7 +383,9 @@ if __name__ == "__main__":
 
         logger.info("Getting deployment logs...")
         asyncio.run(client.get_deployment_logs())
-        logger.info(f"Logs have been saved to {client.base_log_dir / client.deployment_name}")
+        logger.info(
+            f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
+        )
 
         for isl in range(
             100,
@@ -428,8 +449,10 @@ if __name__ == "__main__":
     decode_config_fn = f"{work_dir}/config.yaml"
     with open(decode_config_fn, "w") as f:
         yaml.dump(decode_config, f)
-        
-    with DynamoDeploymentClient(namespace=args.namespace, base_log_dir=work_dir) as client:
+
+    with DynamoDeploymentClient(
+        namespace=args.namespace, base_log_dir=work_dir
+    ) as client:
         asyncio.run(client.create_deployment(decode_config_fn))
         logger.info("Waiting for deployment to be ready...")
         asyncio.run(client.wait_for_deployment_ready())
@@ -440,9 +463,13 @@ if __name__ == "__main__":
 
         logger.info("Getting deployment logs...")
         asyncio.run(client.get_deployment_logs())
-        logger.info(f"Logs have been saved to {client.base_log_dir / client.deployment_name}")
+        logger.info(
+            f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
+        )
 
-        max_kv_tokens = config_modifier.get_kv_cache_size_from_dynamo_log(f"{work_dir}/vllm-v1-agg/vllmdecodeworker/0.log")
+        max_kv_tokens = config_modifier.get_kv_cache_size_from_dynamo_log(
+            f"{work_dir}/vllm-v1-agg/vllmdecodeworker/0.log"
+        )
 
         osl = 500  # not too large to reduce ITL variance, not too small to have stable measurement
         for isl in range(
