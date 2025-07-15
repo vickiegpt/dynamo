@@ -112,7 +112,6 @@ if [ "$mode" = "prefill" ]; then
             --eplb-algorithm deepseek \
             --attention-backend cutlass_mla \
             --watchdog-timeout 1000000 \
-            --init-export-location
             --disable-cuda-graph \
             --chunked-prefill-size 16384 \
             --max-total-tokens 32768 \
@@ -161,7 +160,6 @@ if [ "$mode" = "prefill" ]; then
             --eplb-algorithm deepseek \
             --attention-backend cutlass_mla \
             --watchdog-timeout 1000000 \
-            --init-export-location
             --disable-cuda-graph \
             --chunked-prefill-size 16384 \
             --max-total-tokens 32768 \
