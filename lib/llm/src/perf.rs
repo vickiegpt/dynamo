@@ -343,62 +343,7 @@ mod tests {
     use super::*;
     use dynamo_runtime::engine::ResponseStream;
     use futures::stream;
-    use serde::{Deserialize, Serialize};
     use std::time::Duration;
-
-    /// Serializable performance metrics extracted from recorded streams
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct StreamPerformanceMetrics {
-        /// Total number of responses
-        pub response_count: usize,
-        /// Total stream duration in milliseconds
-        pub total_duration_ms: u64,
-        /// Average time between responses in milliseconds
-        pub avg_inter_response_time_ms: Option<u64>,
-        /// Minimum time between responses in milliseconds
-        pub min_inter_response_time_ms: Option<u64>,
-        /// Maximum time between responses in milliseconds
-        pub max_inter_response_time_ms: Option<u64>,
-        /// Time to first response in milliseconds
-        pub time_to_first_response_ms: Option<u64>,
-        /// Responses per second
-        pub responses_per_second: Option<f64>,
-    }
-
-    impl<T> From<&RecordedStream<T>> for StreamPerformanceMetrics {
-        fn from(recorded: &RecordedStream<T>) -> Self {
-            let inter_times = recorded.inter_response_times();
-
-            let avg_inter_response_time_ms = recorded
-                .average_inter_response_time()
-                .map(|d| d.as_millis() as u64);
-
-            let min_inter_response_time_ms = inter_times.iter().min().map(|d| d.as_millis() as u64);
-
-            let max_inter_response_time_ms = inter_times.iter().max().map(|d| d.as_millis() as u64);
-
-            let time_to_first_response_ms = recorded
-                .responses
-                .first()
-                .map(|r| r.elapsed_since(recorded.start_time).as_millis() as u64);
-
-            let responses_per_second = if recorded.total_duration.as_secs_f64() > 0.0 {
-                Some(recorded.response_count() as f64 / recorded.total_duration.as_secs_f64())
-            } else {
-                None
-            };
-
-            Self {
-                response_count: recorded.response_count(),
-                total_duration_ms: recorded.total_duration.as_millis() as u64,
-                avg_inter_response_time_ms,
-                min_inter_response_time_ms,
-                max_inter_response_time_ms,
-                time_to_first_response_ms,
-                responses_per_second,
-            }
-        }
-    }
 
     #[test]
     fn test_timestamped_response_creation() {
