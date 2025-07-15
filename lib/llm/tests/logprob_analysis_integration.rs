@@ -210,20 +210,20 @@ fn create_multi_choice_stream() -> Arc<RecordedStream<NvCreateChatCompletionStre
     Arc::new(stream)
 }
 
-fn create_stream_from_recorded_sse_stream(
-    file: &str,
-) -> Arc<RecordedStream<NvCreateChatCompletionStreamResponse>> {
-    let data = std::fs::read_to_string(file).unwrap();
-    let sse_stream = create_message_stream(&data);
-    let response_stream =
-        convert_sse_stream::<NvCreateChatCompletionStreamResponse>(Box::pin(sse_stream));
+// fn create_stream_from_recorded_sse_stream(
+//     file: &str,
+// ) -> Arc<RecordedStream<NvCreateChatCompletionStreamResponse>> {
+//     let data = std::fs::read_to_string(file).unwrap();
+//     let sse_stream = create_message_stream(&data);
+//     let response_stream =
+//         convert_sse_stream::<NvCreateChatCompletionStreamResponse>(Box::pin(sse_stream));
 
-    let context = Arc::new(MockContext::new());
-    let response_stream = record_stream_with_context(response_stream, context, RecordingMode::Sink);
-    let filtered_stream = response_stream.filter_map(|annotated| async move { annotated.data });
-    let (recorded_stream, recording_rx) =
-        record_stream_with_context(Box::pin(filtered_stream), ctx, RecordingMode::Sink);
-}
+//     let context = Arc::new(MockContext::new());
+//     let response_stream = record_stream_with_context(response_stream, context, RecordingMode::Sink);
+//     let filtered_stream = response_stream.filter_map(|annotated| async move { annotated.data });
+//     let (recorded_stream, recording_rx) =
+//         record_stream_with_context(Box::pin(filtered_stream), ctx, RecordingMode::Sink);
+// }
 
 fn create_stream_with_multiple_close_tokens(
 ) -> Arc<RecordedStream<NvCreateChatCompletionStreamResponse>> {

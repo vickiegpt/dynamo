@@ -24,7 +24,7 @@ use crate::protocols::{
 };
 
 /// A type alias for a pinned, dynamically-dispatched stream that is `Send` and `Sync`.
-type DataStream<T> = Pin<Box<dyn Stream<Item = T> + Send + Sync>>;
+type DataStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 
 /// Aggregates a stream of [`NvCreateChatCompletionStreamResponse`]s into a single
 /// [`NvCreateChatCompletionResponse`]. This struct accumulates incremental responses
