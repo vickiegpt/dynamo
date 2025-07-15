@@ -90,15 +90,12 @@ async def run_profile(args):
             yaml.dump(prefill_config, f)
 
         client = DynamoDeploymentClient(
-            namespace=args.namespace, base_log_dir=work_dir
+            namespace=args.namespace, base_log_dir=work_dir, model_name=model_name
         ) 
         await client.create_deployment(prefill_config_fn)
         logger.info("Waiting for deployment to be ready...")
         await client.wait_for_deployment_ready()
         logger.info("Deployment is ready")
-
-        port = await client.port_forward()
-        logger.info(f"Port forwarded to {port}")
 
         logger.info("Getting deployment logs...")
         await client.get_deployment_logs()
@@ -107,15 +104,17 @@ async def run_profile(args):
         )
 
         # run genai-perf
-        genai_perf_artifact_dir = f"{work_dir}/gap_isl{args.isl}"
-        gap_result = benchmark_prefill(
-            args.isl, genai_perf_artifact_dir, model_name, port
-        )
-        if gap_result is not None:
-            ttft = gap_result["time_to_first_token"]["avg"]
-            prefill_tp_size.append(tp_size)
-            prefill_ttft.append(ttft)
-            prefill_thpt_per_gpu.append(args.isl / ttft / tp_size * 1000)
+        async with client.port_forward() as port:
+            import pdb; pdb.set_trace()
+            genai_perf_artifact_dir = f"{work_dir}/gap_isl{args.isl}"
+            gap_result = benchmark_prefill(
+                args.isl, genai_perf_artifact_dir, model_name, port
+            )
+            if gap_result is not None:
+                ttft = gap_result["time_to_first_token"]["avg"]
+                prefill_tp_size.append(tp_size)
+                prefill_ttft.append(ttft)
+                prefill_thpt_per_gpu.append(args.isl / ttft / tp_size * 1000)
 
         print("Cleaning up deployment...")
         await client.delete_deployment()
@@ -153,15 +152,12 @@ async def run_profile(args):
             yaml.dump(decode_config, f)
 
         client = DynamoDeploymentClient(
-            namespace=args.namespace, base_log_dir=work_dir
+            namespace=args.namespace, base_log_dir=work_dir, model_name=model_name
         ) 
         await client.create_deployment(decode_config_fn)
         logger.info("Waiting for deployment to be ready...")
         await client.wait_for_deployment_ready()
         logger.info("Deployment is ready")
-
-        port = await client.port_forward()
-        logger.info(f"Port forwarded to {port}")
 
         logger.info("Getting deployment logs...")
         await client.get_deployment_logs()
@@ -182,28 +178,29 @@ async def run_profile(args):
 
         engine_decode_itl = []
         engine_decode_thpt_per_gpu = []
-        for num_request in sweep_num_request:
-            genai_perf_artifact_dir = f"{work_dir}/gap_request{num_request}_isl{args.isl}_osl{args.osl}_n{num_request}"
-            gap_result = benchmark_decode(
-                args.isl,
-                args.osl,
-                num_request,
-                genai_perf_artifact_dir,
-                model_name,
-                port,
-            )
-            if gap_result is not None:
-                itl = gap_result["inter_token_latency"]["avg"]
-                thpt_per_gpu = (
-                    gap_result["output_token_throughput"]["avg"] / tp_size
+        async with client.port_forward() as port:
+            for num_request in sweep_num_request:
+                genai_perf_artifact_dir = f"{work_dir}/gap_request{num_request}_isl{args.isl}_osl{args.osl}_n{num_request}"
+                gap_result = benchmark_decode(
+                    args.isl,
+                    args.osl,
+                    num_request,
+                    genai_perf_artifact_dir,
+                    model_name,
+                    port,
                 )
-                engine_decode_itl.append(itl)
-                engine_decode_thpt_per_gpu.append(thpt_per_gpu)
-                decode_tp_size.append(tp_size)
-                decode_itl.append(itl)
-                decode_thpt_per_gpu.append(thpt_per_gpu)
-                decode_concurrency.append(num_request)
-                decode_kv_cache_size.append(max_kv_tokens)
+                if gap_result is not None:
+                    itl = gap_result["inter_token_latency"]["avg"]
+                    thpt_per_gpu = (
+                        gap_result["output_token_throughput"]["avg"] / tp_size
+                    )
+                    engine_decode_itl.append(itl)
+                    engine_decode_thpt_per_gpu.append(thpt_per_gpu)
+                    decode_tp_size.append(tp_size)
+                    decode_itl.append(itl)
+                    decode_thpt_per_gpu.append(thpt_per_gpu)
+                    decode_concurrency.append(num_request)
+                    decode_kv_cache_size.append(max_kv_tokens)
 
         print("Cleaning up deployment...")
         await client.delete_deployment()
@@ -292,15 +289,12 @@ async def run_profile(args):
         yaml.dump(prefill_config, f)
 
     client = DynamoDeploymentClient(
-        namespace=args.namespace, base_log_dir=work_dir
+        namespace=args.namespace, base_log_dir=work_dir, model_name=model_name
     ) 
     await client.create_deployment(prefill_config_fn)
     logger.info("Waiting for deployment to be ready...")
     await client.wait_for_deployment_ready()
     logger.info("Deployment is ready")
-
-    port = await client.port_forward()
-    logger.info(f"Port forwarded to {port}")
 
     logger.info("Getting deployment logs...")
     await client.get_deployment_logs()
@@ -308,21 +302,22 @@ async def run_profile(args):
         f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
     )
 
-    for isl in range(
-        100,
-        args.max_context_length,
-        (args.max_context_length - 100) // args.prefill_interpolation_granularity,
-    ):
-        # run genai-perf
-        genai_perf_artifact_dir = f"{work_dir}/gap_isl{isl}"
-        gap_result = benchmark_prefill(
-            isl, genai_perf_artifact_dir, model_name, port
-        )
-        if gap_result is not None:
-            ttft = gap_result["time_to_first_token"]["avg"]
-            prefill_isl.append(isl)
-            prefill_ttft.append(ttft)
-            prefill_thpt_per_gpu.append(isl / ttft / best_prefill_tp * 1000)
+    async with client.port_forward() as port:
+        for isl in range(
+            100,
+            args.max_context_length,
+            (args.max_context_length - 100) // args.prefill_interpolation_granularity,
+        ):
+            # run genai-perf
+            genai_perf_artifact_dir = f"{work_dir}/gap_isl{isl}"
+            gap_result = benchmark_prefill(
+                isl, genai_perf_artifact_dir, model_name, port
+            )
+            if gap_result is not None:
+                ttft = gap_result["time_to_first_token"]["avg"]
+                prefill_isl.append(isl)
+                prefill_ttft.append(ttft)
+                prefill_thpt_per_gpu.append(isl / ttft / best_prefill_tp * 1000)
 
     print("Cleaning up deployment...")
     await client.delete_deployment()
@@ -379,9 +374,6 @@ async def run_profile(args):
     await client.wait_for_deployment_ready()
     logger.info("Deployment is ready")
 
-    port = await client.port_forward()
-    logger.info(f"Port forwarded to {port}")
-
     logger.info("Getting deployment logs...")
     await client.get_deployment_logs()
     logger.info(
@@ -393,34 +385,35 @@ async def run_profile(args):
     )
 
     osl = 500  # not too large to reduce ITL variance, not too small to have stable measurement
-    for isl in range(
-        100,
-        args.max_context_length - osl,
-        (args.max_context_length - osl) // args.decode_interpolation_granularity,
-    ):
-        max_concurrency = max_kv_tokens // (isl + osl)
-        sweep_num_request = list(
-            range(
-                1,
-                max_concurrency,
-                max_concurrency // args.decode_interpolation_granularity,
-            )
-        )
-        for num_request in sweep_num_request:
-            genai_perf_artifact_dir = (
-                f"{work_dir}/gap_isl{isl}_osl{osl}_n{num_request}"
-            )
-            gap_result = benchmark_decode(
-                isl, osl, num_request, genai_perf_artifact_dir, model_name, port
-            )
-            if gap_result is not None:
-                itl = gap_result["inter_token_latency"]["avg"]
-                x_kv_usage.append((isl + osl / 2) * num_request / max_kv_tokens)
-                y_context_length.append(isl + osl / 2)
-                z_itl.append(itl)
-                z_thpt_per_gpu.append(
-                    gap_result["output_token_throughput"]["avg"] / tp_size
+    async with client.port_forward() as port:
+        for isl in range(
+            100,
+            args.max_context_length - osl,
+            (args.max_context_length - osl) // args.decode_interpolation_granularity,
+        ):
+            max_concurrency = max_kv_tokens // (isl + osl)
+            sweep_num_request = list(
+                range(
+                    1,
+                    max_concurrency,
+                    max_concurrency // args.decode_interpolation_granularity,
                 )
+            )
+            for num_request in sweep_num_request:
+                genai_perf_artifact_dir = (
+                    f"{work_dir}/gap_isl{isl}_osl{osl}_n{num_request}"
+                )
+                gap_result = benchmark_decode(
+                    isl, osl, num_request, genai_perf_artifact_dir, model_name, port
+                )
+                if gap_result is not None:
+                    itl = gap_result["inter_token_latency"]["avg"]
+                    x_kv_usage.append((isl + osl / 2) * num_request / max_kv_tokens)
+                    y_context_length.append(isl + osl / 2)
+                    z_itl.append(itl)
+                    z_thpt_per_gpu.append(
+                        gap_result["output_token_throughput"]["avg"] / tp_size
+                    )
 
     print("Cleaning up deployment...")
     await client.delete_deployment()

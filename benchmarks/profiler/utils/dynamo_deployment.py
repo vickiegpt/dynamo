@@ -44,6 +44,7 @@ class DynamoDeploymentClient:
     def __init__(
         self,
         namespace: str,
+        model_name: str = "Qwen/Qwen3-0.6B",
         deployment_name: str = "vllm-v1-agg",
         base_log_dir: Optional[str] = None,
     ):
@@ -57,6 +58,7 @@ class DynamoDeploymentClient:
         """
         self.namespace = namespace
         self.deployment_name = deployment_name
+        self.model_name = model_name
         self.components = []  # Will store component names from CR
         self.deployment_spec = None  # Will store the full deployment spec
         self.base_log_dir = Path(base_log_dir) if base_log_dir else Path("logs")
@@ -177,6 +179,7 @@ class DynamoDeploymentClient:
         """
         Test the deployment with a chat completion request using httpx.
         """
+        EXAMPLE_CHAT_REQUEST["model"] = self.model_name
         async with self.port_forward() as port:
             url = f"http://localhost:{port}/v1/chat/completions"
             async with httpx.AsyncClient() as client:
