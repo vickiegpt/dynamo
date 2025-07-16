@@ -419,15 +419,9 @@ impl<L: LocalityProvider> Slot<DeviceStorage, L> {
         &mut self,
         host_blocks: Vec<ImmutableBlock<PinnedStorage, L, BasicMetadata>>,
         disk_blocks: Vec<ImmutableBlock<DiskStorage, L, BasicMetadata>>,
-    ) -> Result<(), SlotError> {
-        if self.onboard_from_host.is_some() || self.onboard_from_disk.is_some() {
-            return Err(SlotError::from_str("onboard blocks already stored"));
-        }
-
+    ) {
         self.onboard_from_host = Some(host_blocks);
         self.onboard_from_disk = Some(disk_blocks);
-
-        Ok(())
     }
 }
 
