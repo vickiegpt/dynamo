@@ -396,7 +396,8 @@ class BaseTensorrtLLMEngine:
                 llm = await loop.run_in_executor(
                     None,
                     lambda: LLM(
-                        model=self._engine_config.model_name,
+                        model=self._engine_config.model_path
+                        or self._engine_config.model_name,
                         **self._engine_config.to_dict(),
                     ),
                 )
@@ -478,7 +479,7 @@ class BaseTensorrtLLMEngine:
 
         # TODO: Use smart KV router to determine which prefill worker to use.
         # Send the request to a prefill worker and collect the response.
-        logger.info(
+        logger.debug(
             f"[TRTLLM-DEBUG] Sending prefill request: {prefill_request.model_dump_json(indent=2)}"
         )
         ctx_responses = [
@@ -495,7 +496,7 @@ class BaseTensorrtLLMEngine:
             f"Received response from prefill worker: {ctx_responses[0].data()}"
         )
         # Deserialize the response from the prefill worker.
-        logger.info(
+        logger.debug(
             f"[TRTLLM-DEBUG] Received prefill response: {ctx_responses[0].data()}"
         )
         ctx_response_obj = TRTLLMWorkerResponse.model_validate_json(
@@ -608,15 +609,15 @@ class BaseTensorrtLLMEngine:
             # - For GEN workers, this performs decoding using remote KV cache state.
             # - For CTX workers, this performs the prefill and returns one response.
             # - For unified workers, this performs both prefill and decoding.
-            logger.info(
+            logger.debug(
                 f"[TRTLLM-DEBUG] Calling generate_async for request_id={request.id} with server_type={self._server_type.value}, "
                 f"streaming={False if self._server_type == ServerType.CTX else request.streaming}"
             )
-            logger.info(f"[TRTLLM-DEBUG] generate_async inputs: {worker_inputs}")
-            logger.info(
+            logger.debug(f"[TRTLLM-DEBUG] generate_async inputs: {worker_inputs}")
+            logger.debug(
                 f"[TRTLLM-DEBUG] generate_async sampling_params: {sampling_params}"
             )
-            logger.info(
+            logger.debug(
                 f"[TRTLLM-DEBUG] generate_async disaggregated_params: {disaggregated_params}"
             )
             async for response in self._llm_engine.generate_async(
