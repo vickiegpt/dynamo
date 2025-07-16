@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use crate::pipeline::{
     AddressedPushRouter, AddressedRequest, AsyncEngine, Data, ManyOut, PushRouter, RouterMode,
@@ -192,13 +180,20 @@ impl Client {
     ) -> Result<Arc<InstanceSource>> {
         let drt = endpoint.drt();
         let instance_sources = drt.instance_sources();
-        let mut instance_sources = instance_sources.lock().await;
-
-        if let Some(instance_source) = instance_sources.get(endpoint) {
-            if let Some(instance_source) = instance_source.upgrade() {
-                return Ok(instance_source);
-            } else {
-                instance_sources.remove(endpoint);
+        {
+            // TODO: There seems no way we could call this from more than one thread, so we don't
+            // need this mutex.
+            // It came from https://github.com/ai-dynamo/dynamo/pull/974 .
+            // Leaving in for now to sanity check.
+            let Ok(mut instance_sources) = instance_sources.try_lock() else {
+                anyhow::bail!("Attempt to create two concurrent watchers. Should never happen.");
+            };
+            if let Some(instance_source) = instance_sources.get(endpoint) {
+                if let Some(instance_source) = instance_source.upgrade() {
+                    return Ok(instance_source);
+                } else {
+                    instance_sources.remove(endpoint);
+                }
             }
         }
 
@@ -272,7 +267,10 @@ impl Client {
         });
 
         let instance_source = Arc::new(InstanceSource::Dynamic(watch_rx));
-        instance_sources.insert(endpoint.clone(), Arc::downgrade(&instance_source));
+        instance_sources
+            .lock()
+            .await
+            .insert(endpoint.clone(), Arc::downgrade(&instance_source));
         Ok(instance_source)
     }
 }
