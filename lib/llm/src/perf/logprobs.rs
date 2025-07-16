@@ -1173,7 +1173,7 @@ mod tests {
     async fn test_real_sse_stream_analysis() {
         // Read the real SSE data with logprobs
         let data = std::fs::read_to_string(
-            "tests/data/replays/deepseek-r1-distill-llama-8b/chat-completions.stream.logprobs.1",
+            "tests/data/replays/deepseek-r1-distill-llama-8b/chat-completions.stream.1",
         )
         .expect("Failed to read test data file");
 
