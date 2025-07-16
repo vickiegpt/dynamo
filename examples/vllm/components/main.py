@@ -43,14 +43,61 @@ configure_dynamo_logging()
 logger = logging.getLogger(__name__)
 
 
-def setup_lmcache_environment():
-    """Setup LMCache environment variables for KV cache offloading"""
-    # LMCache configuration
-    lmcache_config = {
-        "LMCACHE_CHUNK_SIZE": "256",  # Token chunk size
-        "LMCACHE_LOCAL_CPU": "True",  # Enable CPU memory backend
-        "LMCACHE_MAX_LOCAL_CPU_SIZE": "1",  # CPU memory limit in GB
-    }
+def setup_lmcache_environment(is_prefill_worker=False):
+    """Setup LMCache environment variables for KV cache offloading
+    
+    Args:
+        is_prefill_worker: True if this is a prefill worker, False for decode worker
+    """
+    # Check if disaggregated serving is enabled
+    enable_disaggregated = os.getenv("ENABLE_LMCACHE_DISAG", "0").lower() in ("1", "true", "yes")
+    
+    if enable_disaggregated:
+        # Disaggregated serving configuration - disable CPU offloading, use NIXL
+        logger.info("Using LMCache disaggregated serving configuration")
+        
+        # Base LMCache configuration for disaggregated serving
+        base_config = {
+            "LMCACHE_CHUNK_SIZE": "256",  # Token chunk size
+            "LMCACHE_LOCAL_CPU": "False",  # Disable CPU memory backend for disaggregated mode
+            "LMCACHE_MAX_LOCAL_CPU_SIZE": "0",  # No CPU memory limit
+            "LMCACHE_MAX_LOCAL_DISK_SIZE": "0",  # No disk storage
+            "LMCACHE_REMOTE_SERDE": "NULL",  # No remote serialization
+            # NIXL configuration for KV cache transfer
+            "LMCACHE_ENABLE_NIXL": "True",
+            "LMCACHE_NIXL_RECEIVER_HOST": "localhost",  # Host where decoder is running
+            "LMCACHE_NIXL_RECEIVER_PORT": "55555",  # Port where decoder is listening
+            "LMCACHE_NIXL_BUFFER_SIZE": "1073741824",  # 1GB buffer for KV cache transfer
+            "LMCACHE_NIXL_BUFFER_DEVICE": "cuda",  # Use GPU memory for buffer
+            "LMCACHE_NIXL_ENABLE_GC": "True",  # Enable garbage collection
+        }
+        
+        # Role-specific configuration
+        if is_prefill_worker:
+            # Prefiller acts as KV cache sender
+            role_config = {
+                "LMCACHE_NIXL_ROLE": "sender",
+            }
+            logger.info("Setting up LMCache for prefill worker (sender)")
+        else:
+            # Decoder acts as KV cache receiver
+            role_config = {
+                "LMCACHE_NIXL_ROLE": "receiver",
+            }
+            logger.info("Setting up LMCache for decode worker (receiver)")
+        
+        # Combine configurations
+        lmcache_config = {**base_config, **role_config}
+        
+    else:
+        # Traditional CPU offloading configuration
+        logger.info("Using LMCache traditional CPU offloading configuration")
+        
+        lmcache_config = {
+            "LMCACHE_CHUNK_SIZE": "256",  # Token chunk size
+            "LMCACHE_LOCAL_CPU": "True",  # Enable CPU memory backend
+            "LMCACHE_MAX_LOCAL_CPU_SIZE": "1",  # CPU memory limit in GB
+        }
     
     # Set environment variables
     for key, value in lmcache_config.items():
@@ -98,12 +145,14 @@ async def worker(runtime: DistributedRuntime):
     logging.info("Signal handlers set up for graceful shutdown")
 
     if config.is_prefill_worker:
+        logging.info("Starting as prefill worker (KV cache sender)")
         await init_prefill(runtime, config)
     else:
+        logging.info("Starting as decode worker (KV cache receiver)")
         await init(runtime, config)
 
 
-def setup_vllm_engine(config, stat_logger=None):
+def setup_vllm_engine(config, stat_logger=None, is_prefill_worker=False):
     os.environ["VLLM_NO_USAGE_STATS"] = "1"  # Avoid internal HTTP requests
     os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
@@ -114,9 +163,17 @@ def setup_vllm_engine(config, stat_logger=None):
     # KV transfer config is now handled by args.py based on ENABLE_LMCACHE env var
     # Check if LMCache is enabled
     enable_lmcache = os.getenv("ENABLE_LMCACHE", "0").lower() in ("1", "true", "yes")
+    enable_disaggregated = os.getenv("ENABLE_LMCACHE_DISAG", "0").lower() in ("1", "true", "yes")
+    
     if enable_lmcache:
-        setup_lmcache_environment()
-        logger.info("LMCache is enabled")
+        setup_lmcache_environment(is_prefill_worker)
+        if enable_disaggregated:
+            if is_prefill_worker:
+                logger.info("LMCache disaggregated serving enabled for prefill worker")
+            else:
+                logger.info("LMCache disaggregated serving enabled for decode worker")
+        else:
+            logger.info("LMCache traditional CPU offloading enabled")
     else:
         logger.info("LMCache is disabled")
 
@@ -142,7 +199,13 @@ def setup_vllm_engine(config, stat_logger=None):
         disable_log_stats=engine_args.disable_log_stats,
     )
     if enable_lmcache:
-        logger.info(f"VllmWorker for {config.model} has been initialized with LMCache support")
+        if enable_disaggregated:
+            if is_prefill_worker:
+                logger.info(f"VllmWorker for {config.model} has been initialized with LMCache disaggregated serving (prefill worker)")
+            else:
+                logger.info(f"VllmWorker for {config.model} has been initialized with LMCache disaggregated serving (decode worker)")
+        else:
+            logger.info(f"VllmWorker for {config.model} has been initialized with LMCache CPU offloading")
     else:
         logger.info(f"VllmWorker for {config.model} has been initialized")
     return engine_client, vllm_config, default_sampling_params
@@ -185,7 +248,7 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
     generate_endpoint = component.endpoint(config.endpoint)
     clear_endpoint = component.endpoint("clear_kv_blocks")
 
-    engine_client, _, default_sampling_params = setup_vllm_engine(config)
+    engine_client, _, default_sampling_params = setup_vllm_engine(config, is_prefill_worker=True)
 
     # TODO register_prefill in similar vein to register_llm
 
@@ -232,7 +295,7 @@ async def init(runtime: DistributedRuntime, config: Config):
 
     factory = StatLoggerFactory(component, config.engine_args.data_parallel_rank or 0)
     engine_client, vllm_config, default_sampling_params = setup_vllm_engine(
-        config, factory
+        config, factory, is_prefill_worker=False
     )
 
     # TODO Hack to get data, move this to registering in ETCD
@@ -277,7 +340,5 @@ async def init(runtime: DistributedRuntime, config: Config):
 
 
 if __name__ == "__main__":
-    logger.info("this is a test")
-    print("this is a test")
     uvloop.install()
     asyncio.run(worker())
