@@ -51,9 +51,8 @@ cd TensorRT-LLM
 
 # Checkout the specified commit.
 # Switch to the main branch to pull the latest changes.
-git checkout main
+git checkout release/0.21
 git pull
-git checkout $TRTLLM_COMMIT
 
 # Update the submodules.
 git submodule update --init --recursive
