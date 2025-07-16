@@ -41,11 +41,8 @@ pub trait MetricsRegistry: Send + Sync {
     /// Retrieve child registries
     fn get_children_registries(&self) -> Vec<Arc<dyn MetricsRegistry>>;
 
-    /// Add a child registry to this registry
-    fn add_child_registry(
-        &mut self,
-        child: Arc<dyn MetricsRegistry>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    /// Create and add a new child registry, returning it
+    fn create_child_registry(&self, prefix: &str) -> Arc<dyn MetricsRegistry>;
 
     /// Create a new counter metric
     fn create_counter(
@@ -80,6 +77,7 @@ pub trait MetricsRegistry: Send + Sync {
     fn all_prometheus_format_str(
         &self,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        self.update()?;
         let mut result = self.root_prometheus_format_str()?;
 
         // Recursively get metrics from all child registries
@@ -102,6 +100,9 @@ pub trait MetricsRegistry: Send + Sync {
 
     /// Iterate over all created metrics
     fn for_each_metric(&self, f: &mut dyn FnMut(&dyn Metric));
+
+    /// Run all registered update functions
+    fn update(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }
 
 /// Prometheus Registry
@@ -109,6 +110,7 @@ pub struct PrometheusRegistry {
     prefix: String,
     metrics: Arc<Mutex<std::collections::HashMap<String, Box<dyn Metric>>>>,
     children_registries: Arc<Mutex<Vec<Arc<dyn MetricsRegistry>>>>,
+    update_functions: Arc<Mutex<Vec<Box<dyn Fn() + Send + Sync>>>>,
     prom_registry: prometheus::Registry,
 }
 
@@ -119,6 +121,7 @@ impl PrometheusRegistry {
             prefix: prefix.to_string(),
             metrics: Arc::new(Mutex::new(std::collections::HashMap::new())),
             children_registries: Arc::new(Mutex::new(Vec::new())),
+            update_functions: Arc::new(Mutex::new(Vec::new())),
             prom_registry: prometheus::Registry::new(),
         }
     }
@@ -133,13 +136,11 @@ impl MetricsRegistry for PrometheusRegistry {
         self.children_registries.lock().unwrap().clone()
     }
 
-    fn add_child_registry(
-        &mut self,
-        child: Arc<dyn MetricsRegistry>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut children = self.children_registries.lock().unwrap();
-        children.push(child);
-        Ok(())
+    fn create_child_registry(&self, prefix: &str) -> Arc<dyn MetricsRegistry> {
+        let child_prefix = format!("{}_{}", self.prefix, prefix);
+        let child = Arc::new(PrometheusRegistry::new(&child_prefix));
+        self.children_registries.lock().unwrap().push(child.clone());
+        child
     }
 
     fn create_counter(
@@ -148,7 +149,7 @@ impl MetricsRegistry for PrometheusRegistry {
         description: &str,
         _labels: &[(&str, &str)],
     ) -> Result<Box<dyn MetricCounter>, Box<dyn std::error::Error + Send + Sync>> {
-        let prefixed_name = format!("{}_{}", self.prefix(), name);
+        let prefixed_name = format!("{}__{}", self.prefix(), name);
 
         // Check if metric name is already registered and add to metrics
         let mut metrics = self.metrics.lock().unwrap();
@@ -184,7 +185,7 @@ impl MetricsRegistry for PrometheusRegistry {
         description: &str,
         _labels: &[(&str, &str)],
     ) -> Result<Box<dyn MetricGauge>, Box<dyn std::error::Error + Send + Sync>> {
-        let prefixed_name = format!("{}_{}", self.prefix(), name);
+        let prefixed_name = format!("{}__{}", self.prefix(), name);
 
         // Check if metric name is already registered and add to metrics
         let mut metrics = self.metrics.lock().unwrap();
@@ -220,7 +221,7 @@ impl MetricsRegistry for PrometheusRegistry {
         description: &str,
         _labels: &[(&str, &str)],
     ) -> Result<Box<dyn MetricHistogram>, Box<dyn std::error::Error + Send + Sync>> {
-        let prefixed_name = format!("{}_{}", self.prefix(), name);
+        let prefixed_name = format!("{}__{}", self.prefix(), name);
 
         // Check if metric name is already registered and add to metrics
         let mut metrics = self.metrics.lock().unwrap();
@@ -268,6 +269,14 @@ impl MetricsRegistry for PrometheusRegistry {
         for metric in metrics.values() {
             f(metric.as_ref());
         }
+    }
+
+    fn update(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let update_functions = self.update_functions.lock().unwrap();
+        for func in update_functions.iter() {
+            func();
+        }
+        Ok(())
     }
 }
 
@@ -767,13 +776,13 @@ mod tests {
         }
 
         // Define ChildMetrics struct
-        struct ChildMetrics<R: MetricsRegistry> {
-            registry: Arc<R>,
+        struct ChildMetrics {
+            registry: Arc<dyn MetricsRegistry>,
             pub child_histogram: Box<dyn MetricHistogram>,
         }
 
-        impl<R: MetricsRegistry> ChildMetrics<R> {
-            fn new(registry: Arc<R>) -> Self {
+        impl ChildMetrics {
+            fn new(registry: Arc<dyn MetricsRegistry>) -> Self {
                 let child_histogram = registry
                     .create_histogram(
                         "requests",
@@ -790,14 +799,11 @@ mod tests {
         }
 
         // Create parent registry
-        let mut parent_registry = PrometheusRegistry::new("parent");
+        let parent_registry = PrometheusRegistry::new("parent");
 
-        // Create child registry
-        let child_registry = Arc::new(PrometheusRegistry::new("child"));
+        // Create child registry and add it to parent
+        let child_registry = parent_registry.create_child_registry("child");
         let child_metrics = ChildMetrics::new(child_registry.clone());
-
-        // Add child to parent
-        parent_registry.add_child_registry(child_registry).unwrap();
 
         // Now wrap parent in Arc after adding children
         let parent_registry = Arc::new(parent_registry);
@@ -841,19 +847,19 @@ mod tests {
 
                 // Check that the output contains expected content
                 assert!(
-                    metrics.contains("parent_requests 3"),
+                    metrics.contains("parent__requests 3"),
                     "Should contain parent counter value"
                 );
                 assert!(
-                    metrics.contains("child_requests_bucket"),
+                    metrics.contains("parent_child__requests_bucket"),
                     "Should contain child histogram bucket"
                 );
                 assert!(
-                    metrics.contains("child_requests_sum 4"),
+                    metrics.contains("parent_child__requests_sum 4"),
                     "Should contain child histogram sum"
                 );
                 assert!(
-                    metrics.contains("child_requests_count 2"),
+                    metrics.contains("parent_child__requests_count 2"),
                     "Should contain child histogram count"
                 );
 

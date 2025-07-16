@@ -75,44 +75,7 @@ impl DistributedRuntime {
             component_registry: component::Registry::new(),
             is_static,
             instance_sources: Arc::new(Mutex::new(HashMap::new())),
-            start_time: std::time::Instant::now(),
-            metrics_registry: Arc::new(OnceCell::new()),
         };
-
-        // Start HTTP server for health and metrics (if enabled)
-        let config = crate::config::RuntimeConfig::from_settings().unwrap_or_default();
-        if config.system_server_enabled() {
-            let drt_arc = Arc::new(distributed_runtime.clone());
-            let runtime_clone = distributed_runtime.runtime.clone();
-            let drt_for_metrics = distributed_runtime.clone();
-            // Get the metrics registry from the distributed runtime
-            let metrics_registry = match drt_for_metrics.metrics_registry().await {
-                Ok(registry) => registry,
-                Err(e) => {
-                    tracing::error!("Failed to get metrics registry: {}", e);
-                    return Err(e.into());
-                }
-            };
-            // spawn_http_server spawns its own background task:
-            match crate::http_server::spawn_http_server(
-                &config.system_host,
-                config.system_port,
-                runtime_clone.child_token(),
-                drt_arc,
-                metrics_registry,
-            )
-            .await
-            {
-                Ok((addr, _)) => {
-                    tracing::info!("HTTP server started successfully on {}", addr);
-                }
-                Err(e) => {
-                    tracing::error!("HTTP server startup failed: {}", e);
-                }
-            }
-        } else {
-            tracing::debug!("Health and metrics HTTP server is disabled via DYN_SYSTEM_ENABLED");
-        }
 
         Ok(distributed_runtime)
     }
@@ -203,24 +166,6 @@ impl DistributedRuntime {
 
     pub fn instance_sources(&self) -> Arc<Mutex<HashMap<Endpoint, Weak<InstanceSource>>>> {
         self.instance_sources.clone()
-    }
-
-    /// Get the uptime of this DistributedRuntime in seconds
-    pub fn uptime(&self) -> std::time::Duration {
-        self.start_time.elapsed()
-    }
-
-    /// Get the registry for adding custom metrics
-    // TODO(keivenc): add a method to change the default registry
-    pub async fn metrics_registry(&self) -> Result<Arc<dyn profiling::MetricsRegistry>> {
-        Ok(self
-            .metrics_registry
-            .get_or_init(async move {
-                Arc::new(profiling::PrometheusRegistry::new("dynamo"))
-                    as Arc<dyn profiling::MetricsRegistry>
-            })
-            .await
-            .clone())
     }
 }
 

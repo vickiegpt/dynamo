@@ -31,9 +31,9 @@ async fn app(runtime: Runtime) -> Result<()> {
     let distributed = DistributedRuntime::from_settings(runtime.clone()).await?;
 
     let namespace = distributed.namespace(DEFAULT_NAMESPACE)?;
-    let component = namespace.component("backend")?;
+    let component = namespace.component("component")?;
 
-    let client = component.endpoint("generate").client().await?;
+    let client = component.endpoint("endpoint").client().await?;
 
     client.wait_for_instances().await?;
     let router =

@@ -29,7 +29,12 @@
 //!
 //! TODO: Top-level Overview of Endpoints/Functions
 
-use crate::{discovery::Lease, service::ServiceSet, transports::etcd::EtcdPath};
+use crate::{
+    discovery::Lease,
+    profiling::{self, MetricGauge, MetricsRegistry, PrometheusRegistry},
+    service::ServiceSet,
+    transports::etcd::EtcdPath,
+};
 
 use super::{
     error,
@@ -39,6 +44,8 @@ use super::{
     utils::Duration,
     DistributedRuntime, Result, Runtime,
 };
+use std::sync::OnceLock;
+use std::time::Instant;
 
 use crate::pipeline::network::{ingress::push_endpoint::PushEndpoint, PushWorkHandler};
 use crate::protocols::Endpoint as EndpointId;
@@ -416,6 +423,9 @@ pub struct Namespace {
 
     #[builder(default = "None")]
     parent: Option<Arc<Namespace>>,
+
+    #[builder(private)]
+    metrics_registry: Arc<dyn profiling::MetricsRegistry>,
 }
 
 impl DistributedRuntimeProvider for Namespace {
@@ -434,6 +444,16 @@ impl std::fmt::Debug for Namespace {
     }
 }
 
+pub struct NamespaceMetrics {
+    registry: Arc<dyn profiling::MetricsRegistry>,
+}
+
+impl NamespaceMetrics {
+    pub fn new(registry: Arc<dyn profiling::MetricsRegistry>) -> anyhow::Result<Self> {
+        Ok(Self { registry })
+    }
+}
+
 impl RuntimeProvider for Namespace {
     fn rt(&self) -> &Runtime {
         self.runtime.rt()
@@ -448,11 +468,48 @@ impl std::fmt::Display for Namespace {
 
 impl Namespace {
     pub(crate) fn new(runtime: DistributedRuntime, name: String, is_static: bool) -> Result<Self> {
-        Ok(NamespaceBuilder::default()
+        // Create a new metrics registry for this namespace. This is the top level (parent) metrics registry.
+        // TODO(keiven): parameterize this to pick PrometheusMetrics, NullMetrics, etc...
+        let metrics_registry = Arc::new(profiling::PrometheusRegistry::new(&name));
+
+        NamespaceBuilder::default()
             .runtime(Arc::new(runtime))
-            .name(name)
+            .name(name.clone())
             .is_static(is_static)
-            .build()?)
+            .metrics_registry(metrics_registry.clone())
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build namespace: {}", e))?
+            .start_http_server()
+    }
+
+    /// Start HTTP server for health and metrics if enabled in configuration
+    pub(crate) fn start_http_server(self) -> Result<Self> {
+        let config = crate::config::RuntimeConfig::from_settings().unwrap_or_default();
+        if !config.system_server_enabled() {
+            tracing::debug!("Health and metrics HTTP server is disabled via DYN_SYSTEM_ENABLED");
+            return Ok(self);
+        }
+
+        let host = config.system_host.clone();
+        let port = config.system_port;
+        let cancel_token = self.runtime.child_token();
+        let metrics_registry = self.metrics_registry.clone();
+
+        // Spawn HTTP server startup in background
+        tokio::spawn(async move {
+            match crate::http_server::spawn_http_server(&host, port, cancel_token, metrics_registry)
+                .await
+            {
+                Ok((addr, _)) => {
+                    tracing::info!("HTTP server started successfully on {}", addr);
+                }
+                Err(e) => {
+                    tracing::error!("HTTP server startup failed: {}", e);
+                }
+            }
+        });
+
+        Ok(self)
     }
 
     /// Create a [`Component`] in the namespace who's endpoints can be discovered with etcd
@@ -483,6 +540,11 @@ impl Namespace {
             Some(parent) => format!("{}.{}", parent.name(), self.name),
             None => self.name.clone(),
         }
+    }
+
+    /// Get a reference to the metrics registry
+    pub fn metrics_registry(&self) -> &Arc<dyn profiling::MetricsRegistry> {
+        &self.metrics_registry
     }
 }
 

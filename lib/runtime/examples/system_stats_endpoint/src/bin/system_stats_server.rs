@@ -21,14 +21,14 @@ use dynamo_runtime::{
         async_trait, network::Ingress, AsyncEngine, AsyncEngineContextProvider, Error, ManyOut,
         ResponseStream, SingleIn,
     },
-    profiling::{MetricCounter, MetricGauge, MetricHistogram, MetricsRegistry},
+    profiling::{MetricCounter, MetricGauge, MetricHistogram, MetricsRegistry, PrometheusRegistry},
     protocols::annotated::Annotated,
     stream, DistributedRuntime, Result, Runtime, Worker,
 };
+
 use std::sync::Arc;
 
 /// Service metrics struct using the metric classes from profiling.rs
-// TODO(keiven): implement register trait
 pub struct ExampleHTTPMetrics {
     registry: Arc<dyn MetricsRegistry>,
     pub request_counter: Box<dyn MetricCounter>,
@@ -39,32 +39,32 @@ pub struct ExampleHTTPMetrics {
 impl ExampleHTTPMetrics {
     /// Create a new ServiceMetrics instance using the metric backend
     pub fn new(
-        backend: Arc<dyn MetricsRegistry>,
+        registry: Arc<dyn MetricsRegistry>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Create request counter
         // TODO: namespace - component - name
-        let request_counter = backend.create_counter(
+        let request_counter = registry.create_counter(
             "service_requests_total",
             "Total number of requests processed",
             &[("service", "backend")],
         )?;
 
         // Create active requests gauge
-        let active_requests_gauge = backend.create_gauge(
+        let active_requests_gauge = registry.create_gauge(
             "service_active_requests",
             "Number of requests currently being processed",
             &[("service", "backend")],
         )?;
 
         // Create request duration histogram
-        let request_duration_histogram = backend.create_histogram(
+        let request_duration_histogram = registry.create_histogram(
             "service_request_duration_seconds",
             "Request duration in seconds",
             &[("service", "backend")],
         )?;
 
         Ok(ExampleHTTPMetrics {
-            registry: backend,
+            registry,
             request_counter,
             active_requests_gauge,
             request_duration_histogram,
@@ -129,38 +129,37 @@ impl AsyncEngine<SingleIn<String>, ManyOut<Annotated<String>>, Error> for Reques
 }
 
 async fn backend(runtime: DistributedRuntime) -> Result<()> {
-    // Get the metrics backend from the runtime (async, lazy-initialized)
-    let registry = runtime.metrics_registry().await?;
-    // Initialize metrics using the profiling-based struct
-    let metrics =
-        Arc::new(ExampleHTTPMetrics::new(registry.clone()).map_err(|e| Error::msg(e.to_string()))?);
-
-    // attach an ingress to an engine, with the RequestHandler using the metrics struct
-    let ingress = Ingress::for_engine(RequestHandler::new(metrics.clone()))?;
-
-    // make the ingress discoverable via a component service
-    // we must first create a service, then we can attach one more more endpoints
     /*
     service, <namespace>_<service>__<metric_name>
     component, <namespace>_<component>__<metric_name>
     endpoint, <namespace>_<service>_<component>_<endpoint>__<metric_name>
         */
-    runtime
-        .namespace(DEFAULT_NAMESPACE)?
-        .component("backend")?
+    let namespace = runtime
+        .namespace(DEFAULT_NAMESPACE)?;
+
+    // Get the metrics backend from the runtime
+    let metrics_registry = namespace.metrics_registry();
+    // Initialize metrics using the profiling-based struct
+    let metrics =
+        Arc::new(ExampleHTTPMetrics::new(metrics_registry.clone()).map_err(|e| Error::msg(e.to_string()))?);
+
+    // make the ingress discoverable via a component service
+    // we must first create a service, then we can attach one more more endpoints
+    // attach an ingress to an engine, with the RequestHandler using the metrics struct
+    let ingress = Ingress::for_engine(RequestHandler::new(metrics.clone()))?;
+
+    namespace
+        .component("component")?
         .service_builder()
         .create()
         .await?
-        .endpoint("generate")
+        .endpoint("endpoint")
         .endpoint_builder()
         .stats_handler(|stats| {
             println!("stats: {:?}", stats);
             let stats = MyStats { val: 10 };
             serde_json::to_value(stats).unwrap()
         })
-        // TODO(keiven): add metrics and healthcheck handlers
-        //.metrics_handler(metrics.backend().prometheus_format_str().to_string())
-        //.healthcheck_handler(some_function_here, metrics)
         .handler(ingress)
         .start()
         .await?;
@@ -179,7 +178,7 @@ mod tests {
 
         // Create a Prometheus backend using the profiling module
         let metrics_backend =
-            Arc::new(PrometheusRegistry::new("test_service")) as Arc<dyn MetricsRegistry>;
+            Arc::new(PrometheusRegistry::new("prefix")) as Arc<dyn MetricsRegistry>;
 
         // Create ServiceMetrics using the new struct
         let service_metrics = ExampleHTTPMetrics::new(metrics_backend.clone()).unwrap();
@@ -223,15 +222,15 @@ mod tests {
 
                 // Verify the output contains expected metric names
                 assert!(
-                    metrics.contains("test_service_service_requests_total"),
+                    metrics.contains("prefix_service_requests_total"),
                     "Should contain request counter"
                 );
                 assert!(
-                    metrics.contains("test_service_service_active_requests"),
+                    metrics.contains("prefix_service_active_requests"),
                     "Should contain active requests gauge"
                 );
                 assert!(
-                    metrics.contains("test_service_service_request_duration_seconds"),
+                    metrics.contains("prefix_service_request_duration_seconds"),
                     "Should contain duration histogram"
                 );
             }

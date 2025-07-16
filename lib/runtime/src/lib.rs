@@ -99,11 +99,4 @@ pub struct DistributedRuntime {
     is_static: bool,
 
     instance_sources: Arc<Mutex<HashMap<Endpoint, Weak<InstanceSource>>>>,
-
-    // Start time for tracking uptime
-    start_time: std::time::Instant,
-
-    // TODO(keivenc): clean this up
-    // metrics_registry: Arc<prometheus::Registry>,
-    metrics_registry: Arc<OnceCell<Arc<dyn profiling::MetricsRegistry>>>,
 }
