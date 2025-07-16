@@ -59,14 +59,12 @@ impl AsyncEngine<SingleIn<String>, ManyOut<Annotated<String>>, Error> for MockRe
         let (data, ctx) = input.into_parts();
 
         tracing::info!("Received data: {}", data);
-        // let chars = data
-        //     .chars()
-        //     .map(|c| Annotated::from_data(c.to_string()))
-        //     .collect::<Vec<_>>();
+        let chars = data
+            .chars()
+            .map(|c| Annotated::from_data(c.to_string()))
+            .collect::<Vec<_>>();
 
-        //let stream = stream::iter(chars);
-        let response = Annotated::from_data("received".to_string());
-        let stream = stream::iter(vec![response]);
+        let stream = stream::iter(chars);
 
         Ok(ResponseStream::new(Box::pin(stream), ctx.context()))
     }
