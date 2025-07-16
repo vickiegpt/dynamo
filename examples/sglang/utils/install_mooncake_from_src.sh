@@ -11,14 +11,15 @@ export TORCH_CUDA_ARCH_LIST=10.0
 
 echo $LD_LIBRARY_PATH
 
-# Uninstall any existing package
-#pip install --break-system-packages mooncake-transfer-engine
+# Uninstall any existing mooncake package
+pip install --break-system-packages mooncake-transfer-engine
 
 # Clone & build
 # Once Mooncake main branch has fixed 
 # 1. proper g++ compilation
 # 2. solved std::function call issue - we can swap back to ToT
 # As of 7/16 10:20AM PST - I've been told its was solved but I have not been able to test it E2E
+# So for now we will stay on my side branch 
 git clone https://github.com/ishandhanani/Mooncake.git
 cd Mooncake
 git checkout ishan/pr-571-diff-build

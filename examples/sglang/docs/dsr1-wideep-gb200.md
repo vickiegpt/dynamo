@@ -74,4 +74,6 @@ python3 submit_job_script.py \
   --decode-nodes 12
 ```
 
+**UNTESTED**: if you want to spin up dynamo, you can remove the `--use-sglang-commands` flag.
+
 6. This will create a logs directory in the `examples/sglang/slurm_jobs` directory. You can `cd` into the directory, cd into your job id, and then run `tail -f *_prefill.err *_decode.err` or `tail -f *_prefill.out *_decode.out` to see the logs.
