@@ -15,9 +15,13 @@ echo $LD_LIBRARY_PATH
 #pip install --break-system-packages mooncake-transfer-engine
 
 # Clone & build
+# Once Mooncake main branch has fixed 
+# 1. proper g++ compilation
+# 2. solved std::function call issue - we can swap back to ToT
+# As of 7/16 10:20AM PST - I've been told its was solved but I have not been able to test it E2E
 git clone https://github.com/ishandhanani/Mooncake.git
 cd Mooncake
-git checkout ishan/manual-nvl-installation
+git checkout ishan/pr-571-diff-build
 bash dependencies.sh -y
 mkdir -p build
 cd build

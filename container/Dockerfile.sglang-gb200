@@ -6,7 +6,7 @@ ARG ARCH_ALT=aarch64
 
 WORKDIR /sgl-workspace
 # https://github.com/ai-dynamo/dynamo/pull/1938
-ARG DYNAMO_COMMIT="3c6fc6fdaf61397813cc58f4c1de7ece4c0203f0"
+ARG DYNAMO_COMMIT="aba60996f225038b691d9f255da515b27695b179"
 RUN git clone https://github.com/ai-dynamo/dynamo.git && cd dynamo && git checkout ${DYNAMO_COMMIT}
 
 # install dynamo in editable mode
@@ -63,21 +63,6 @@ RUN wget --tries=3 --waitretry=5 https://github.com/etcd-io/etcd/releases/downlo
     tar -xvf /tmp/etcd.tar.gz -C /usr/local/bin/etcd --strip-components=1 && \
     rm /tmp/etcd.tar.gz
 ENV PATH=/usr/local/bin/etcd/:$PATH
-
-# Install perf_analyzer and genai-perf
-RUN apt-get update -y && \
-    apt-get install -y --no-install-recommends \
-    rapidjson-dev \
-    zlib1g-dev
-
-RUN git clone --depth=1 https://github.com/triton-inference-server/perf_analyzer.git && \
-    mkdir perf_analyzer/build && \
-    cmake -B perf_analyzer/build -S perf_analyzer && \
-    cmake --build perf_analyzer/build -- -j8
-
-ENV PATH=/sgl-workspace/perf_analyzer/build/perf_analyzer/src/perf-analyzer-build:$PATH
-
-RUN pip install --break-system-packages genai-perf
 
 COPY examples/sglang/configs/deepseek_r1/wideep/* /sgl-workspace/dynamo/examples/sglang/configs/
 COPY examples/sglang/utils/benchmarking/* /sgl-workspace/dynamo/examples/sglang/utils/

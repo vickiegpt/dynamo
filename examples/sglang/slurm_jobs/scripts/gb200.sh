@@ -66,6 +66,7 @@ if [ -z "$TOTAL_NODES" ]; then
     exit 1
 fi
 
+# TODO: since the args for sglang and dynamo are the same, we can be a bit cleaner here
 
 # Construct command based on mode and cmd
 if [ "$mode" = "prefill" ]; then

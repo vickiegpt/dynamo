@@ -23,14 +23,20 @@ Dynamo supports SGLang's GB200 implementation of wide expert parallelism and lar
 
 1. Build the SGLang DeepEP container on an ARM64 machine.
 
+> [!NOTE]  
+> This sglang side branch is based on an open [PR](https://github.com/sgl-project/sglang/pull/7721/files) to SGLang that allows their main dockerfile to be built for aarch64. Once that PR is merged in, we can add the gb200 dockerfile to the main sglang repo.
+
 ```bash
-git clone https://github.com/kyleliang-nv/sglang.git # temporary
+git clone https://github.com/kyleliang-nv/sglang.git
 cd sglang
-git checkout sglang_gb200_wideep_docker # temporary
+git checkout sglang_gb200_wideep_docker
 docker build -f docker/Dockerfile -t sgl-blackwell-wideep --build-arg BUILD_TYPE=blackwell --build-arg CUDA_VERSION=12.8.1 .
 ```
 
 2. Build the Dynamo container
+
+> [!NOTE]  
+> This is a side branch that contains all of the scripts to run on GB200s. Once the PR is merged in, we can switch to the main branch.
 
 ```bash
 cd $DYNAMO_ROOT
@@ -38,6 +44,34 @@ git checkout ishan/more-slurm-targets # temporary
 docker build -f container/Dockerfile.sglang-gb200 . -t dynamo-wideep-gb200 --no-cache
 ```
 
+3. In your SLURM cluster, clone dynamo and switch to this side branch.
 
+```bash
+git clone https://github.com/ai-dynamo/dynamo.git
+git checkout ishan/more-slurm-targets
+cd examples/sglang/slurm_jobs
+```
 
+4. Ensure you have the proper paths that you can use to mount things to the container
 
+- The path to the DSR1 model which should be mounted to the `--model-dir` flag
+- The path to the `install_mooncake_from_src.sh` which will be mounted to the `--config-dir` flag
+
+5. Run the following command to submit the job
+
+```bash
+python3 submit_job_script.py \
+  --template job_script_template.j2 \
+  --model-dir <path-to-dsr1-model> \
+  --container-image <image-from-step-2> \
+  --account <your-account> \
+  --gpus-per-node 4 \
+  --config-dir <path-to-configs> \
+  --network-interface enp138s0f0np0 \
+  --gpu-type gb200 \
+  --use-sglang-commands \
+  --prefill-nodes 2 \
+  --decode-nodes 12
+```
+
+6. This will create a logs directory in the `examples/sglang/slurm_jobs` directory. You can `cd` into the directory, cd into your job id, and then run `tail -f *_prefill.err *_decode.err` or `tail -f *_prefill.out *_decode.out` to see the logs.
