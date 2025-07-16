@@ -70,7 +70,7 @@ fi
 
 # Construct command based on mode and cmd
 if [ "$mode" = "prefill" ]; then
-    # We need to install Mooncake from source inside of the container for now 
+    # We need to install Mooncake from source inside of the container for now
     bash /configs/install_mooncake_from_src.sh $cmd
     if [ "$cmd" = "dynamo" ]; then
     # We are not using a init-expert-location file for e2e benchmarking
@@ -119,7 +119,7 @@ if [ "$mode" = "prefill" ]; then
             --max-total-tokens 32768 \
             --mem-fraction-static 0.8 \
             --log-level debug
-        
+
     elif [ "$cmd" = "sglang" ]; then
         # GB200 sglang prefill command
         # We are not using a init-expert-location file for e2e benchmarking
@@ -170,7 +170,7 @@ if [ "$mode" = "prefill" ]; then
             --log-level debug
     fi
 elif [ "$mode" = "decode" ]; then
-    # We need to install Mooncake from source inside of the container for now 
+    # We need to install Mooncake from source inside of the container for now
     bash /configs/install_mooncake_from_src.sh $cmd
     if [ "$cmd" = "dynamo" ]; then
         # Need to increase --context-length to 10k for 8k1k benchmarking
@@ -217,7 +217,7 @@ elif [ "$mode" = "decode" ]; then
             --chunked-prefill-size 36864 \
             --mem-fraction-static 0.82 \
             --log-level debug
-        
+
     elif [ "$cmd" = "sglang" ]; then
         # GB200 sglang decode command
         # Need to increase --context-length to 10k for 8k1k benchmarking

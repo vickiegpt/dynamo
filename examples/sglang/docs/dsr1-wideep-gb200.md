@@ -23,7 +23,7 @@ Dynamo supports SGLang's GB200 implementation of wide expert parallelism and lar
 
 1. Build the SGLang DeepEP container on an ARM64 machine.
 
-> [!NOTE]  
+> [!NOTE]
 > This sglang side branch is based on an open [PR](https://github.com/sgl-project/sglang/pull/7721/files) to SGLang that allows their main dockerfile to be built for aarch64. Once that PR is merged in, we can add the gb200 dockerfile to the main sglang repo.
 
 ```bash
@@ -35,7 +35,7 @@ docker build -f docker/Dockerfile -t sgl-blackwell-wideep --build-arg BUILD_TYPE
 
 2. Build the Dynamo container
 
-> [!NOTE]  
+> [!NOTE]
 > This is a side branch that contains all of the scripts to run on GB200s. Once the PR is merged in, we can switch to the main branch.
 
 ```bash
