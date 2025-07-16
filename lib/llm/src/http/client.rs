@@ -303,10 +303,6 @@ impl<T: Data> AsyncEngineContextProvider for AsyncEngineStreamWrapper<T> {
     }
 }
 
-// // This is unsafe because we're claiming the stream is Sync when it might not be
-// // But this is needed for the AsyncEngineStream trait
-// unsafe impl<T> Sync for AsyncEngineStreamWrapper<T> {}
-
 impl<T: Data> AsyncEngineStream<T> for AsyncEngineStreamWrapper<T> {}
 
 impl<T> std::fmt::Debug for AsyncEngineStreamWrapper<T> {
