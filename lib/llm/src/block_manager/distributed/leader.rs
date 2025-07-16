@@ -17,8 +17,6 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-const INIT_TIMEOUT_SECS: u64 = 120;
-
 /// Data that is sent to workers over ETCD to establish a ZMQ connection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KvbmLeaderData {
@@ -43,6 +41,10 @@ pub struct KvbmLeaderConfig {
     /// The world size.
     #[builder(default = "1")]
     world_size: usize,
+
+    /// The leader-worker init connection timeout seconds.
+    #[builder(default = "120")]
+    leader_init_timeout_secs: u64,
 }
 
 impl KvbmLeaderConfig {
@@ -85,10 +87,11 @@ impl KvbmLeader {
         });
 
         // Build our leader barrier and publish the data.
+        // TODO: Use a separate timeout parameter from the ZMQ connection timeout
         let leader_barrier: LeaderBarrier<KvbmLeaderData, ()> = LeaderBarrier::new(
             config.barrier_id.clone(),
             config.world_size,
-            Some(Duration::from_secs(INIT_TIMEOUT_SECS)),
+            Some(Duration::from_secs(config.leader_init_timeout_secs)),
         );
 
         let worker_data = leader_barrier
@@ -105,7 +108,7 @@ impl KvbmLeader {
         let zmq_leader = ZmqActiveMessageLeader::new(
             leader_sockets,
             config.world_size,
-            Duration::from_secs(INIT_TIMEOUT_SECS),
+            Duration::from_secs(config.leader_init_timeout_secs),
             cancel_token.clone(),
         )
         .await?;
