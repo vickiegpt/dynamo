@@ -3,46 +3,29 @@
 # We've been having some trouble with the mooncake installation when we build
 # the container. This script is ran before SGL starts up and allows us to use
 # the mnnvl capabilites from mooncake main
-#
-# Usage: ./install_mooncake.sh <dynamo|sglang>
-if [ "$#" -ne 1 ]; then
-  echo "Usage: $0 <dynamo|sglang>"
-  exit 1
-fi
-
-MODE="$1"
-case "$MODE" in
-  dynamo)
-    SUDO=""
-    ;;
-  sglang)
-    SUDO="sudo"
-    ;;
-  *)
-    echo "Error: invalid mode '$MODE'. Use 'dynamo' or 'sglang'."
-    exit 1
-    ;;
-esac
 
 cd /sgl-workspace
 
-# Clean up previous build
-$SUDO rm -rf Mooncake/
+# Try to set this
+export TORCH_CUDA_ARCH_LIST=10.0
+
+echo $LD_LIBRARY_PATH
 
 # Uninstall any existing package
-pip uninstall -y mooncake-transfer-engine
+#pip install --break-system-packages mooncake-transfer-engine
 
 # Clone & build
-git clone https://github.com/kvcache-ai/Mooncake.git
+git clone https://github.com/ishandhanani/Mooncake.git
 cd Mooncake
-bash dependencies.sh
-
+git checkout ishan/manual-nvl-installation
+bash dependencies.sh -y
 mkdir -p build
 cd build
 cmake .. -DUSE_MNNVL=ON
 make -j
 
-# Install (with sudo if in sglang mode)
-$SUDO make install
+make install
 
-echo "Mooncake built and installed in '$MODE' mode."
+chmod +x /usr/local/lib/python3.10/dist-packages/mooncake/nvlink_allocator.so
+
+echo "Mooncake built and installed"
