@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(dead_code)]
+
 use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
@@ -201,6 +203,7 @@ async fn test_service_source_node_sink() {
 // [segment_source] <----------------------- [backend]
 #[tokio::test]
 #[ignore = "Blocked by AsyncEngineStream trait missing Sync supertrait"]
+#[expect(unused_variables)]
 async fn test_disaggregated_service() {
     println!("Running test_disaggregated_service");
 

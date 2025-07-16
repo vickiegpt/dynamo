@@ -7,11 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use dynamo_llm::perf::logprobs::analyze_logprob_sensitivity;
-use dynamo_llm::perf::{
-    record_stream, record_stream_with_context, RecordedStream, RecordingMode, TimestampedResponse,
-};
-use dynamo_llm::protocols::codec::create_message_stream;
-use dynamo_llm::protocols::convert_sse_stream;
+use dynamo_llm::perf::{RecordedStream, TimestampedResponse};
 use dynamo_llm::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse;
 
 use async_openai::types::{
@@ -19,6 +15,17 @@ use async_openai::types::{
     ChatCompletionTokenLogprob, CreateChatCompletionStreamResponse, FinishReason, Role,
     TopLogprobs,
 };
+
+// Type aliases to simplify complex test data structures
+type TokenAlternative = (&'static str, f32);
+type TokenData = (&'static str, f32, Vec<TokenAlternative>);
+type TokenDataVec = Vec<TokenData>;
+
+// Type aliases for multi-choice test data (using String instead of &str)
+type StringTokenAlternative = (String, f32);
+type StringTokenData = (String, f32, Vec<StringTokenAlternative>);
+type ChoiceTokenData = Vec<StringTokenData>;
+type MultiChoiceData = Vec<ChoiceTokenData>;
 
 /// Test full workflow with realistic streaming data
 #[test]
@@ -42,7 +49,7 @@ fn test_realistic_streaming_analysis() {
     assert!(!close_positions.is_empty());
 
     let percentage = analysis.close_position_percentage_for_choice(0, 0.2);
-    assert!(percentage >= 0.0 && percentage <= 100.0);
+    assert!((0.0..=100.0).contains(&percentage));
 }
 
 /// Test multiple choices analysis
@@ -324,14 +331,14 @@ fn create_large_stream(
 /// This ensures realistic probability distributions that sum to ≤ 1
 fn create_response_with_linear_probs(
     _content: &str,
-    token_data: Vec<(&str, f32, Vec<(&str, f32)>)>,
+    token_data: TokenDataVec,
 ) -> NvCreateChatCompletionStreamResponse {
     let token_logprobs = token_data
         .into_iter()
         .map(|(token, prob, alternatives)| {
             // Validate probabilities
             assert!(
-                prob >= 0.0 && prob <= 1.0,
+                (0.0..=1.0).contains(&prob),
                 "Probability must be in [0, 1]: {}",
                 prob
             );
@@ -346,7 +353,7 @@ fn create_response_with_linear_probs(
                 .into_iter()
                 .map(|(alt_token, alt_prob)| {
                     assert!(
-                        alt_prob >= 0.0 && alt_prob <= 1.0,
+                        (0.0..=1.0).contains(&alt_prob),
                         "Probability must be in [0, 1]: {}",
                         alt_prob
                     );
@@ -399,7 +406,7 @@ fn create_response_with_linear_probs(
 }
 
 fn create_multi_choice_response(
-    choices_data: Vec<Vec<(String, f32, Vec<(String, f32)>)>>,
+    choices_data: MultiChoiceData,
 ) -> NvCreateChatCompletionStreamResponse {
     let choices = choices_data
         .into_iter()
@@ -410,7 +417,7 @@ fn create_multi_choice_response(
                 .map(|(token, prob, alternatives)| {
                     // Validate probabilities
                     assert!(
-                        prob >= 0.0 && prob <= 1.0,
+                        (0.0..=1.0).contains(&prob),
                         "Probability must be in [0, 1]: {}",
                         prob
                     );
@@ -425,7 +432,7 @@ fn create_multi_choice_response(
                         .into_iter()
                         .map(|(alt_token, alt_prob)| {
                             assert!(
-                                alt_prob >= 0.0 && alt_prob <= 1.0,
+                                (0.0..=1.0).contains(&alt_prob),
                                 "Probability must be in [0, 1]: {}",
                                 alt_prob
                             );

@@ -439,6 +439,11 @@ pub struct MultipleCloseTokens {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Type aliases to simplify complex test data structures
+    type TestTokenAlternative = (&'static str, f32);
+    type TestTokenData = (&'static str, f32, Vec<TestTokenAlternative>);
+    type TestTokenDataVec = Vec<TestTokenData>;
     use crate::perf::{record_stream_with_context, RecordingMode, TimestampedResponse};
     use crate::protocols::codec::create_message_stream;
     use crate::protocols::convert_sse_stream;
@@ -723,9 +728,7 @@ mod tests {
         analyze_logprob_sensitivity(arc_stream)
     }
 
-    fn create_analysis_with_mixed_sampling(
-        mixed_data: Vec<(&str, f32, Vec<(&str, f32)>)>,
-    ) -> SensitivityAnalysis {
+    fn create_analysis_with_mixed_sampling(mixed_data: TestTokenDataVec) -> SensitivityAnalysis {
         let start_time = Instant::now();
         let token_logprobs: Vec<ChatCompletionTokenLogprob> = mixed_data
             .into_iter()
@@ -782,7 +785,7 @@ mod tests {
     ) -> ChatCompletionTokenLogprob {
         // Validate that probabilities are in [0, 1] range
         assert!(
-            prob >= 0.0 && prob <= 1.0,
+            (0.0..=1.0).contains(&prob),
             "Probability must be in [0, 1]: {}",
             prob
         );
@@ -1134,7 +1137,7 @@ mod tests {
         // This should be detected as greedy since we have some clear differences
 
         let greedy_percentage = analysis.greedy_selection_percentage(0);
-        assert!(greedy_percentage >= 0.0 && greedy_percentage <= 100.0); // Valid percentage range
+        assert!((0.0..=100.0).contains(&greedy_percentage)); // Valid percentage range
     }
 
     #[test]
@@ -1145,7 +1148,7 @@ mod tests {
 
         // Should still work - the algorithm adapts to different logprob patterns
         let greedy_percentage = analysis.greedy_selection_percentage(0);
-        assert!(greedy_percentage >= 0.0 && greedy_percentage <= 100.0); // Valid percentage range
+        assert!((0.0..=100.0).contains(&greedy_percentage)); // Valid percentage range
     }
 
     #[test]
@@ -1247,7 +1250,7 @@ mod tests {
 
         let percentage = analysis.close_position_percentage_for_choice(0, 0.1);
         assert!(
-            percentage >= 0.0 && percentage <= 100.0,
+            (0.0..=100.0).contains(&percentage),
             "Percentage should be valid"
         );
 
