@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import random
 import time 
+import socket
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, Union
@@ -164,7 +165,18 @@ class DynamoDeploymentClient:
         Forward the service's HTTP port to a local port.
         """
         if port is None:
-            port = random.randint(49152, 65535)
+            # Find a free port in the ephemeral port range
+            for _ in range(100):  # Try up to 100 times
+                candidate_port = random.randint(49152, 65535)
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    try:
+                        s.bind(('localhost', candidate_port))
+                        port = candidate_port
+                        break
+                    except OSError:
+                        continue  # Port is in use, try another
+            if port is None:
+                raise RuntimeError("Could not find a free port after 100 attempts")
         svc_name = f"{self.deployment_name}-frontend"
         # Get the Service and forward its HTTP port (8000)
         service = Service.get(svc_name, namespace=self.namespace)
