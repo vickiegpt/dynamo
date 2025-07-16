@@ -30,7 +30,12 @@ use clap::Parser;
 use dynamo_llm::kv_router::scheduler::KVHitRateEvent;
 use dynamo_llm::kv_router::KV_HIT_RATE_SUBJECT;
 use dynamo_runtime::{
-    error, logging, pipeline::PushRouter, protocols::annotated::Annotated, traits::events::{EventPublisher, EventSubscriber}, utils::{Duration, Instant}, DistributedRuntime, ErrorContext, Result, Runtime, Worker
+    error, logging,
+    pipeline::PushRouter,
+    protocols::annotated::Annotated,
+    traits::events::{EventPublisher, EventSubscriber},
+    utils::{Duration, Instant},
+    DistributedRuntime, ErrorContext, Result, Runtime, Worker,
 };
 use futures::stream::StreamExt;
 use std::sync::Arc;
@@ -170,7 +175,6 @@ async fn app(runtime: Runtime) -> Result<()> {
     let namespace_clone = namespace.clone();
     let metrics_collector_clone = metrics_collector.clone();
 
-
     // Create a client for the target endpoint
     let client = target_endpoint.client().await?;
     client.wait_for_instances().await?;
@@ -262,9 +266,6 @@ async fn app(runtime: Runtime) -> Result<()> {
             Err(_) => continue,
         }
     }
-
-
-
 
     tokio::time::sleep(Duration::from_secs(3)).await;
 

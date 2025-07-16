@@ -106,17 +106,7 @@ impl ServiceClient {
     ) -> Result<Message> {
         let subject = subject.into();
         let payload = payload.into();
-        println!("*** unary: subject={}, payload={:?}", subject, payload);
-        tracing::info!(
-            "*** unary: subject={}, payload={:?}",
-            subject,
-            payload
-        );
-        let response = self
-            .nats_client
-            .client()
-            .request(subject, payload)
-            .await?;
+        let response = self.nats_client.client().request(subject, payload).await?;
         Ok(response)
     }
 

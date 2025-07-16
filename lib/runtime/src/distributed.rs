@@ -216,7 +216,8 @@ impl DistributedRuntime {
         Ok(self
             .metrics_registry
             .get_or_init(async move {
-                Arc::new(profiling::PrometheusRegistry::new("dynamo")) as Arc<dyn profiling::MetricsRegistry>
+                Arc::new(profiling::PrometheusRegistry::new("dynamo"))
+                    as Arc<dyn profiling::MetricsRegistry>
             })
             .await
             .clone())

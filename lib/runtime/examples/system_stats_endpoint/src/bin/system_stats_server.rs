@@ -21,8 +21,8 @@ use dynamo_runtime::{
         async_trait, network::Ingress, AsyncEngine, AsyncEngineContextProvider, Error, ManyOut,
         ResponseStream, SingleIn,
     },
+    profiling::{MetricCounter, MetricGauge, MetricHistogram, MetricsRegistry},
     protocols::annotated::Annotated,
-    profiling::{MetricsRegistry, MetricCounter, MetricGauge, MetricHistogram},
     stream, DistributedRuntime, Result, Runtime, Worker,
 };
 use std::sync::Arc;
@@ -38,27 +38,29 @@ pub struct ExampleHTTPMetrics {
 
 impl ExampleHTTPMetrics {
     /// Create a new ServiceMetrics instance using the metric backend
-    pub fn new(backend: Arc<dyn MetricsRegistry>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn new(
+        backend: Arc<dyn MetricsRegistry>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Create request counter
         // TODO: namespace - component - name
         let request_counter = backend.create_counter(
             "service_requests_total",
             "Total number of requests processed",
-            &[("service", "backend")]
+            &[("service", "backend")],
         )?;
 
         // Create active requests gauge
         let active_requests_gauge = backend.create_gauge(
             "service_active_requests",
             "Number of requests currently being processed",
-            &[("service", "backend")]
+            &[("service", "backend")],
         )?;
 
         // Create request duration histogram
         let request_duration_histogram = backend.create_histogram(
             "service_request_duration_seconds",
             "Request duration in seconds",
-            &[("service", "backend")]
+            &[("service", "backend")],
         )?;
 
         Ok(ExampleHTTPMetrics {
@@ -128,16 +130,23 @@ impl AsyncEngine<SingleIn<String>, ManyOut<Annotated<String>>, Error> for Reques
 
 async fn backend(runtime: DistributedRuntime) -> Result<()> {
     // Get the metrics backend from the runtime (async, lazy-initialized)
-    let backend = runtime.metrics_registry().await?;
+    let registry = runtime.metrics_registry().await?;
     // Initialize metrics using the profiling-based struct
-    let metrics = Arc::new(ExampleHTTPMetrics::new(backend.clone()).map_err(|e| Error::msg(e.to_string()))?);
+    let metrics =
+        Arc::new(ExampleHTTPMetrics::new(registry.clone()).map_err(|e| Error::msg(e.to_string()))?);
 
     // attach an ingress to an engine, with the RequestHandler using the metrics struct
     let ingress = Ingress::for_engine(RequestHandler::new(metrics.clone()))?;
 
     // make the ingress discoverable via a component service
     // we must first create a service, then we can attach one more more endpoints
-    runtime.namespace(DEFAULT_NAMESPACE)?
+    /*
+    service, <namespace>_<service>__<metric_name>
+    component, <namespace>_<component>__<metric_name>
+    endpoint, <namespace>_<service>_<component>_<endpoint>__<metric_name>
+        */
+    runtime
+        .namespace(DEFAULT_NAMESPACE)?
         .component("backend")?
         .service_builder()
         .create()
@@ -169,7 +178,8 @@ mod tests {
         println!("=== ServiceMetrics with Profiling Backend Test ===");
 
         // Create a Prometheus backend using the profiling module
-        let metrics_backend = Arc::new(PrometheusRegistry::new("test_service")) as Arc<dyn MetricsRegistry>;
+        let metrics_backend =
+            Arc::new(PrometheusRegistry::new("test_service")) as Arc<dyn MetricsRegistry>;
 
         // Create ServiceMetrics using the new struct
         let service_metrics = ExampleHTTPMetrics::new(metrics_backend.clone()).unwrap();
@@ -185,10 +195,25 @@ mod tests {
         service_metrics.request_duration_histogram.observe(0.25);
 
         // Verify the metrics values
-        assert_eq!(service_metrics.request_counter.get_value(), 3, "Request counter should be 3");
-        assert_eq!(service_metrics.active_requests_gauge.get_value(), 6.0, "Active requests should be 6.0");
-        assert_eq!(service_metrics.request_duration_histogram.get_count(), 2, "Should have 2 duration observations");
-        assert!((service_metrics.request_duration_histogram.get_sum() - 0.35).abs() < f64::EPSILON, "Sum should be 0.35");
+        assert_eq!(
+            service_metrics.request_counter.get_value(),
+            3,
+            "Request counter should be 3"
+        );
+        assert_eq!(
+            service_metrics.active_requests_gauge.get_value(),
+            6.0,
+            "Active requests should be 6.0"
+        );
+        assert_eq!(
+            service_metrics.request_duration_histogram.get_count(),
+            2,
+            "Should have 2 duration observations"
+        );
+        assert!(
+            (service_metrics.request_duration_histogram.get_sum() - 0.35).abs() < f64::EPSILON,
+            "Sum should be 0.35"
+        );
 
         // Get the Prometheus metrics output
         match service_metrics.backend().root_prometheus_format_str() {
@@ -197,9 +222,18 @@ mod tests {
                 println!("{}", metrics);
 
                 // Verify the output contains expected metric names
-                assert!(metrics.contains("test_service_service_requests_total"), "Should contain request counter");
-                assert!(metrics.contains("test_service_service_active_requests"), "Should contain active requests gauge");
-                assert!(metrics.contains("test_service_service_request_duration_seconds"), "Should contain duration histogram");
+                assert!(
+                    metrics.contains("test_service_service_requests_total"),
+                    "Should contain request counter"
+                );
+                assert!(
+                    metrics.contains("test_service_service_active_requests"),
+                    "Should contain active requests gauge"
+                );
+                assert!(
+                    metrics.contains("test_service_service_request_duration_seconds"),
+                    "Should contain duration histogram"
+                );
             }
             Err(e) => {
                 panic!("Failed to get metrics: {}", e);
