@@ -151,7 +151,8 @@ def benchmark_prefill(isl, genai_perf_artifact_dir, model_name, port):
     genai_perf_cmd = get_prefill_genai_perf_cmd(
         isl, genai_perf_artifact_dir, model=model_name, port=port
     )
-    import pdb; pdb.set_trace()
+    print(f"genai-perf cmd: {genai_perf_cmd}")
+    # import pdb; pdb.set_trace()
     gap_process = subprocess.Popen(
         genai_perf_cmd,
         stdout=subprocess.PIPE,

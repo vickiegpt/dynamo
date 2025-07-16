@@ -104,7 +104,7 @@ async def run_profile(args):
         )
 
         # run genai-perf
-        async with client.port_forward() as port:
+        with client.port_forward() as port:
             genai_perf_artifact_dir = f"{work_dir}/gap_isl{args.isl}"
             gap_result = benchmark_prefill(
                 args.isl, genai_perf_artifact_dir, model_name, port
@@ -177,7 +177,8 @@ async def run_profile(args):
 
         engine_decode_itl = []
         engine_decode_thpt_per_gpu = []
-        async with client.port_forward() as port:
+        with client.port_forward() as port:
+
             for num_request in sweep_num_request:
                 genai_perf_artifact_dir = f"{work_dir}/gap_request{num_request}_isl{args.isl}_osl{args.osl}_n{num_request}"
                 gap_result = benchmark_decode(
@@ -301,7 +302,7 @@ async def run_profile(args):
         f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
     )
 
-    async with client.port_forward() as port:
+    with client.port_forward() as port:
         for isl in range(
             100,
             args.max_context_length,
@@ -384,7 +385,7 @@ async def run_profile(args):
     )
 
     osl = 500  # not too large to reduce ITL variance, not too small to have stable measurement
-    async with client.port_forward() as port:
+    with client.port_forward() as port:
         for isl in range(
             100,
             args.max_context_length - osl,

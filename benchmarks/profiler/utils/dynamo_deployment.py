@@ -15,7 +15,7 @@ import argparse
 import asyncio
 import random
 import time 
-from contextlib import asynccontextmanager
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, Union
 
@@ -23,7 +23,7 @@ import aiofiles
 import httpx  # added for HTTP requests
 import kubernetes_asyncio as kubernetes
 import yaml
-from kr8s.asyncio.objects import Service
+from kr8s.objects import Service
 from kubernetes_asyncio import client, config
 
 # Example chat completion request for testing deployments
@@ -158,8 +158,8 @@ class DynamoDeploymentClient:
             await asyncio.sleep(20)
         raise TimeoutError("Deployment failed to become ready within timeout")
 
-    @asynccontextmanager
-    async def port_forward(self, port: Optional[int] = None):
+    @contextmanager
+    def port_forward(self, port: Optional[int] = None):
         """
         Forward the service's HTTP port to a local port.
         """
@@ -167,21 +167,21 @@ class DynamoDeploymentClient:
             port = random.randint(49152, 65535)
         svc_name = f"{self.deployment_name}-frontend"
         # Get the Service and forward its HTTP port (8000)
-        service = await Service.get(svc_name, namespace=self.namespace)
+        service = Service.get(svc_name, namespace=self.namespace)
         pf = service.portforward(remote_port=8000, local_port=port)
-        await pf.start()
+        pf.start()
         try:
             yield port
         finally:
-            await pf.stop()
+            pf.stop()
 
     async def check_chat_completion(self):
         """
         Test the deployment with a chat completion request using httpx.
         """
         EXAMPLE_CHAT_REQUEST["model"] = self.model_name
-        async with self.port_forward() as port:
-            url = f"http://localhost:{port}/v1/chat/completions"
+        with self.port_forward() as port:
+            url = f"http://localhost:{port}/v1/chat/completions"            
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, json=EXAMPLE_CHAT_REQUEST)
                 response.raise_for_status()
