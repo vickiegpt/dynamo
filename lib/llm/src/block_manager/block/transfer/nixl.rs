@@ -16,14 +16,49 @@
 use super::*;
 
 use anyhow::Result;
-use nixl_sys::{MemoryRegion, NixlDescriptor, XferDescList};
+use nixl_sys::{MemoryRegion, NixlDescriptor, XferDescList, MemType};
 use std::future::Future;
+use std::fs::File;
+use std::io::Write;
+use serde::{Serialize, Deserialize};
+use std::sync::{Arc, Mutex};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct XferDesc {
+    addr: usize,
+    len: usize,
+    dev_id: u64,
+}
+
+struct XferDescListWrapper<'a> {
+    list: XferDescList<'a>,
+    descs: Vec<XferDesc>,
+    mem_type: MemType,
+}
+
+impl<'a> XferDescListWrapper<'a> {
+    fn new(mem_type: MemType) -> Result<Self> {
+        let list = XferDescList::new(mem_type, true)?;
+        Ok(Self {
+            list,
+            descs: Vec::new(),
+            mem_type,
+        })
+    }
+
+    fn add_desc(&mut self, addr: usize, len: usize, dev_id: u64) -> Result<()> {
+        self.list.add_desc(addr, len, dev_id)?;
+        self.descs.push(XferDesc { addr, len, dev_id });
+        Ok(())
+    }
+
+}
 
 fn append_xfer_request<Source, Destination>(
     src: &Arc<Source>,
     dst: &mut Destination,
-    src_dl: &mut XferDescList,
-    dst_dl: &mut XferDescList,
+    src_dl: &mut XferDescListWrapper,
+    dst_dl: &mut XferDescListWrapper,
 ) -> Result<()>
 where
     Source: BlockDataProvider,
@@ -37,17 +72,8 @@ where
         let dst_desc = dst_data.block_view_mut()?.as_nixl_descriptor_mut();
 
         unsafe {
-            src_dl.add_desc(
-                src_desc.as_ptr() as usize,
-                src_desc.size(),
-                src_desc.device_id(),
-            )?;
-
-            dst_dl.add_desc(
-                dst_desc.as_ptr() as usize,
-                dst_desc.size(),
-                dst_desc.device_id(),
-            )?;
+            src_dl.add_desc(src_desc.as_ptr() as usize, src_desc.size(), src_desc.device_id())?;
+            dst_dl.add_desc(dst_desc.as_ptr() as usize, dst_desc.size(), dst_desc.device_id())?;
         }
 
         Ok(())
@@ -79,6 +105,46 @@ where
             }
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct Xfer {
+    timestamp: u128,
+    source_mem_type: MemType,
+    target_mem_type: MemType,
+    source_descs: Vec<XferDesc>,
+    target_descs: Vec<XferDesc>,
+}
+
+impl Xfer {
+    fn new(sources: &XferDescListWrapper, targets: &XferDescListWrapper) -> Self {
+        Self {
+            timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(),
+            source_mem_type: sources.mem_type,
+            target_mem_type: targets.mem_type,
+            source_descs: sources.descs.clone(),
+            target_descs: targets.descs.clone(),
+        }
+    }
+}
+
+lazy_static::lazy_static! {
+    static ref NIXL_LOG_FILE: Option<Arc<Mutex<File>>> = {
+        if let Ok(log_file) = std::env::var("NIXL_LOG_FILE") {
+            Some(Arc::new(Mutex::new(File::create(log_file).unwrap())))
+        } else {
+            None
+        }
+    };
+}
+
+fn log_xfer_descs(src_dl: &XferDescListWrapper, dst_dl: &XferDescListWrapper) {
+    if let Some(log_file) = NIXL_LOG_FILE.as_ref() {
+        let mut log_file = log_file.lock().unwrap();
+        let xfer = Xfer::new(src_dl, dst_dl);
+        let serialized = serde_json::to_string(&xfer).unwrap();
+        writeln!(log_file, "{}", serialized).unwrap();
     }
 }
 
@@ -117,19 +183,21 @@ where
         .storage_type()
         .nixl_mem_type();
 
-    let mut src_dl = XferDescList::new(src_mem_type, true)?;
-    let mut dst_dl = XferDescList::new(dst_mem_type, true)?;
+    let mut src_dl = XferDescListWrapper::new(src_mem_type)?;
+    let mut dst_dl = XferDescListWrapper::new(dst_mem_type)?;
 
     for (src, dst) in src.iter().zip(dst.iter_mut()) {
         append_xfer_request(src, dst, &mut src_dl, &mut dst_dl)?;
     }
 
-    debug_assert!(!src_dl.has_overlaps()? && !dst_dl.has_overlaps()?);
+    debug_assert!(!src_dl.list.has_overlaps()? && !dst_dl.list.has_overlaps()?);
+
+    log_xfer_descs(&src_dl, &dst_dl);
 
     let xfer_req = nixl_agent.create_xfer_req(
         transfer_type.as_xfer_op(),
-        &src_dl,
-        &dst_dl,
+        &src_dl.list,
+        &dst_dl.list,
         &nixl_agent.name(),
         None,
     )?;
