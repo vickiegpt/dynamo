@@ -104,9 +104,11 @@ impl ServiceClient {
         subject: impl Into<String>,
         payload: impl Into<Bytes>,
     ) -> Result<Message> {
-        let subject = subject.into();
-        let payload = payload.into();
-        let response = self.nats_client.client().request(subject, payload).await?;
+        let response = self
+            .nats_client
+            .client()
+            .request(subject.into(), payload.into())
+            .await?;
         Ok(response)
     }
 

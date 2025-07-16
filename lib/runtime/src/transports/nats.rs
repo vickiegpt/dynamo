@@ -109,7 +109,6 @@ impl Client {
     pub async fn scrape_service(&self, service_name: &str) -> Result<Subscriber> {
         let subject = format!("$SRV.STATS.{}", service_name);
         let reply_subject = format!("_INBOX.{}", nuid::next());
-        println!("Scraping subject: {subject}, reply subject: {reply_subject}");
         let subscription = self.client.subscribe(reply_subject.clone()).await?;
 
         // Publish the request with the reply-to subject

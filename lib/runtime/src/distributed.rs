@@ -22,7 +22,6 @@ use crate::{
     transports::{etcd, nats, tcp},
     ErrorContext,
 };
-//use prometheus::Registry;
 
 use super::{error, Arc, DistributedRuntime, OnceCell, Result, Runtime, Weak, OK};
 

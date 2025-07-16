@@ -31,7 +31,7 @@
 
 use crate::{
     discovery::Lease,
-    profiling::{self, MetricGauge, MetricsRegistry, PrometheusRegistry},
+    profiling::{MetricsRegistry, PrometheusRegistry},
     service::ServiceSet,
     transports::etcd::EtcdPath,
 };
@@ -425,7 +425,7 @@ pub struct Namespace {
     parent: Option<Arc<Namespace>>,
 
     #[builder(private)]
-    metrics_registry: Arc<dyn profiling::MetricsRegistry>,
+    metrics_registry: Arc<dyn MetricsRegistry>,
 }
 
 impl DistributedRuntimeProvider for Namespace {
@@ -445,11 +445,11 @@ impl std::fmt::Debug for Namespace {
 }
 
 pub struct NamespaceMetrics {
-    registry: Arc<dyn profiling::MetricsRegistry>,
+    registry: Arc<dyn MetricsRegistry>,
 }
 
 impl NamespaceMetrics {
-    pub fn new(registry: Arc<dyn profiling::MetricsRegistry>) -> anyhow::Result<Self> {
+    pub fn new(registry: Arc<dyn MetricsRegistry>) -> anyhow::Result<Self> {
         Ok(Self { registry })
     }
 }
@@ -470,7 +470,7 @@ impl Namespace {
     pub(crate) fn new(runtime: DistributedRuntime, name: String, is_static: bool) -> Result<Self> {
         // Create a new metrics registry for this namespace. This is the top level (parent) metrics registry.
         // TODO(keiven): parameterize this to pick PrometheusMetrics, NullMetrics, etc...
-        let metrics_registry = Arc::new(profiling::PrometheusRegistry::new(&name));
+        let metrics_registry = Arc::new(PrometheusRegistry::new(&name));
 
         NamespaceBuilder::default()
             .runtime(Arc::new(runtime))
@@ -543,7 +543,7 @@ impl Namespace {
     }
 
     /// Get a reference to the metrics registry
-    pub fn metrics_registry(&self) -> &Arc<dyn profiling::MetricsRegistry> {
+    pub fn metrics_registry(&self) -> &Arc<dyn MetricsRegistry> {
         &self.metrics_registry
     }
 }

@@ -21,7 +21,7 @@ use dynamo_runtime::{
         async_trait, network::Ingress, AsyncEngine, AsyncEngineContextProvider, Error, ManyOut,
         ResponseStream, SingleIn,
     },
-    profiling::{MetricCounter, MetricGauge, MetricHistogram, MetricsRegistry, PrometheusRegistry},
+    profiling::{MetricCounter, MetricGauge, MetricHistogram, MetricsRegistry},
     protocols::annotated::Annotated,
     stream, DistributedRuntime, Result, Runtime, Worker,
 };
