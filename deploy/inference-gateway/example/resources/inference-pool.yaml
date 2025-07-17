@@ -25,4 +25,4 @@ spec:
     failureMode: FailOpen
     group: ""
     kind: Service
-    name: dynamo-deepseek-epp
+    name: dynamo-epp
