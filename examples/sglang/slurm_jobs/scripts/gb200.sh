@@ -70,8 +70,6 @@ fi
 
 # Construct command based on mode and cmd
 if [ "$mode" = "prefill" ]; then
-    # We need to install Mooncake from source inside of the container for now
-    bash /configs/install_mooncake_from_src.sh $cmd
     if [ "$cmd" = "dynamo" ]; then
     # We are not using a init-expert-location file for e2e benchmarking
         # We also don't currently have a --deepep-config file for GB200
@@ -170,8 +168,6 @@ if [ "$mode" = "prefill" ]; then
             --log-level debug
     fi
 elif [ "$mode" = "decode" ]; then
-    # We need to install Mooncake from source inside of the container for now
-    bash /configs/install_mooncake_from_src.sh $cmd
     if [ "$cmd" = "dynamo" ]; then
         # Need to increase --context-length to 10k for 8k1k benchmarking
         # We are not using a init-expert-location file for e2e benchmarking

@@ -54,8 +54,7 @@ cd examples/sglang/slurm_jobs
 
 4. Ensure you have the proper paths that you can use to mount things to the container
 
-- The path to the DSR1 model which should be mounted to the `--model-dir` flag
-- The path to the `install_mooncake_from_src.sh` which will be mounted to the `--config-dir` flag
+- The path to the DSR1 model which should be mounted to the `--model-dir` flag and `--config-dir` flag 
 
 5. Run the following command to submit the job
 
@@ -66,7 +65,7 @@ python3 submit_job_script.py \
   --container-image <image-from-step-2> \
   --account <your-account> \
   --gpus-per-node 4 \
-  --config-dir <path-to-configs> \
+  --config-dir <path-to-dsr1-model> \
   --network-interface enp138s0f0np0 \
   --gpu-type gb200 \
   --use-sglang-commands \
