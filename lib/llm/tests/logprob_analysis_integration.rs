@@ -34,12 +34,15 @@ fn test_realistic_streaming_analysis() {
     let analysis = analyze_logprob_sensitivity(stream);
 
     // Verify basic structure
-    assert_eq!(analysis.total_positions, 3);
+    assert_eq!(analysis.total_responses, 3);
     assert_eq!(analysis.choice_analyses.len(), 1);
-    assert_eq!(analysis.choice_analyses[0].positions_analyzed, 3);
+    assert_eq!(
+        analysis.choice_analyses.get(&0).unwrap().positions_analyzed,
+        3
+    );
 
     // Check that positions are sorted by closeness
-    let positions = &analysis.choice_analyses[0].position_closeness;
+    let positions = &analysis.choice_analyses.get(&0).unwrap().position_closeness;
     for i in 1..positions.len() {
         assert!(positions[i - 1].probability_difference <= positions[i].probability_difference);
     }
@@ -62,8 +65,8 @@ fn test_multiple_choices_independent_analysis() {
     assert_eq!(analysis.choice_analyses.len(), 2);
 
     // Each choice should be analyzed independently
-    let choice0_count = analysis.choice_analyses[0].positions_analyzed;
-    let choice1_count = analysis.choice_analyses[1].positions_analyzed;
+    let choice0_count = analysis.choice_analyses.get(&0).unwrap().positions_analyzed;
+    let choice1_count = analysis.choice_analyses.get(&1).unwrap().positions_analyzed;
     assert_eq!(choice0_count, 2);
     assert_eq!(choice1_count, 2);
 
@@ -104,7 +107,7 @@ fn test_edge_cases() {
     // Empty stream
     let empty_stream = create_empty_stream();
     let analysis = analyze_logprob_sensitivity(empty_stream);
-    assert_eq!(analysis.total_positions, 0);
+    assert_eq!(analysis.total_responses, 0);
     assert!(analysis.choice_analyses.is_empty());
 
     // Single token positions (no alternatives)
@@ -149,11 +152,12 @@ fn test_large_dataset_performance() {
     assert!(elapsed.as_millis() < 100);
 
     // Verify correctness
-    assert_eq!(analysis.total_positions, 100);
+    assert_eq!(analysis.total_responses, 100);
     assert_eq!(analysis.choice_analyses.len(), 5);
 
-    for (i, choice_analysis) in analysis.choice_analyses.iter().enumerate() {
-        assert_eq!(choice_analysis.choice_index, i);
+    for i in 0..5 {
+        let choice_analysis = analysis.choice_analyses.get(&(i as u32)).unwrap();
+        assert_eq!(choice_analysis.choice_index, i as u32);
         assert_eq!(choice_analysis.positions_analyzed, 100);
     }
 }
