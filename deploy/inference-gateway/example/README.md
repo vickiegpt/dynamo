@@ -138,8 +138,10 @@ export GATEWAY_URL=<Gateway-URL>
 
 To test the gateway in minikube, use the following command:
 ```bash
-minikube tunnel &
+# start minikube tunnel
+minikube tunnel
 
+# in a separate terminal
 GATEWAY_URL=$(kubectl get svc inference-gateway -o yaml -o jsonpath='{.spec.clusterIP}')
 echo $GATEWAY_URL
 ```
