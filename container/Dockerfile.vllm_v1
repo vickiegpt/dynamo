@@ -296,7 +296,7 @@ RUN uv pip install maturin[patchelf]
 
 USER $USERNAME
 ENV HOME=/home/$USERNAME
-ENV PYTHONPATH=$HOME/dynamo/deploy/sdk/src:$PYTHONPATH:$HOME/dynamo/components/planner/src:$PYTHONPATH
+ENV PYTHONPATH=$PYTHONPATH:$HOME/dynamo/components/planner/src:$PYTHONPATH
 ENV CARGO_TARGET_DIR=$HOME/dynamo/.build/target
 WORKDIR $HOME
 
@@ -361,7 +361,6 @@ COPY hatch_build.py /workspace/
 COPY lib/ /workspace/lib/
 COPY components /workspace/components
 COPY launch /workspace/launch
-COPY deploy/sdk /workspace/deploy/sdk
 
 RUN cargo build \
 	--release \

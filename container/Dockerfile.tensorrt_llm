@@ -275,7 +275,6 @@ COPY hatch_build.py /workspace/
 COPY lib/ /workspace/lib/
 COPY components /workspace/components
 COPY launch /workspace/launch
-COPY deploy/sdk /workspace/deploy/sdk
 
 RUN cargo build \
 	--release \

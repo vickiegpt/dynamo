@@ -171,11 +171,9 @@ Otherwise, to develop locally, we recommend working inside of the container
 ./container/run.sh -it --mount-workspace
 
 cargo build --release
-mkdir -p /workspace/deploy/sdk/src/dynamo/sdk/cli/bin
-cp /workspace/target/release/dynamo-run /workspace/deploy/sdk/src/dynamo/sdk/cli/bin
 
 uv pip install -e .
-export PYTHONPATH=$PYTHONPATH:/workspace/deploy/sdk/src:/workspace/components/planner/src
+export PYTHONPATH=$PYTHONPATH:/workspace/components/planner/src
 ```
 
 
