@@ -191,6 +191,7 @@ elif [ "$mode" = "decode" ]; then
             --trust-remote-code \
             --disaggregation-mode decode \
             --dist-init-addr "$HOST_IP:$PORT" \
+            --disaggregation-bootstrap-port 30001 \
             --nnodes "$TOTAL_NODES" \
             --node-rank "$RANK" \
             --tp-size "$TOTAL_GPUS" \
@@ -238,6 +239,7 @@ elif [ "$mode" = "decode" ]; then
             --trust-remote-code \
             --disaggregation-mode decode \
             --dist-init-addr "$HOST_IP:$PORT" \
+            --disaggregation-bootstrap-port 30001 \
             --nnodes "$TOTAL_NODES" \
             --node-rank "$RANK" \
             --tp-size "$TOTAL_GPUS" \
