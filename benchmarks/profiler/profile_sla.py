@@ -42,7 +42,6 @@ formatter = logging.Formatter(
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
-
 async def run_profile(args):
     config_modifier = CONFIG_MODIFIERS[args.backend]
 
@@ -92,7 +91,7 @@ async def run_profile(args):
 
         client = DynamoDeploymentClient(
             namespace=args.namespace, base_log_dir=work_dir, model_name=model_name
-        )
+        ) 
         await client.create_deployment(prefill_config_fn)
         logger.info("Waiting for deployment to be ready...")
         await client.wait_for_deployment_ready()
@@ -105,10 +104,10 @@ async def run_profile(args):
         )
 
         # run genai-perf
-        with client.get_service_url_with_port_forward() as base_url:
+        with client.port_forward() as port:
             genai_perf_artifact_dir = f"{work_dir}/gap_isl{args.isl}"
             gap_result = benchmark_prefill(
-                args.isl, genai_perf_artifact_dir, model_name, base_url=base_url
+                args.isl, genai_perf_artifact_dir, model_name, port
             )
             if gap_result is not None:
                 ttft = gap_result["time_to_first_token"]["avg"]
@@ -153,7 +152,7 @@ async def run_profile(args):
 
         client = DynamoDeploymentClient(
             namespace=args.namespace, base_log_dir=work_dir, model_name=model_name
-        )
+        ) 
         await client.create_deployment(decode_config_fn)
         logger.info("Waiting for deployment to be ready...")
         await client.wait_for_deployment_ready()
@@ -178,7 +177,8 @@ async def run_profile(args):
 
         engine_decode_itl = []
         engine_decode_thpt_per_gpu = []
-        with client.get_service_url_with_port_forward() as base_url:
+        with client.port_forward() as port:
+
             for num_request in sweep_num_request:
                 genai_perf_artifact_dir = f"{work_dir}/gap_request{num_request}_isl{args.isl}_osl{args.osl}_n{num_request}"
                 gap_result = benchmark_decode(
@@ -187,7 +187,7 @@ async def run_profile(args):
                     num_request,
                     genai_perf_artifact_dir,
                     model_name,
-                    base_url=base_url,
+                    port,
                 )
                 if gap_result is not None:
                     itl = gap_result["inter_token_latency"]["avg"]
@@ -290,7 +290,7 @@ async def run_profile(args):
 
     client = DynamoDeploymentClient(
         namespace=args.namespace, base_log_dir=work_dir, model_name=model_name
-    )
+    ) 
     await client.create_deployment(prefill_config_fn)
     logger.info("Waiting for deployment to be ready...")
     await client.wait_for_deployment_ready()
@@ -302,7 +302,7 @@ async def run_profile(args):
         f"Logs have been saved to {client.base_log_dir / client.deployment_name}"
     )
 
-    with client.get_service_url_with_port_forward() as base_url:
+    with client.port_forward() as port:
         for isl in range(
             100,
             args.max_context_length,
@@ -311,7 +311,7 @@ async def run_profile(args):
             # run genai-perf
             genai_perf_artifact_dir = f"{work_dir}/gap_isl{isl}"
             gap_result = benchmark_prefill(
-                isl, genai_perf_artifact_dir, model_name, base_url=base_url
+                isl, genai_perf_artifact_dir, model_name, port
             )
             if gap_result is not None:
                 ttft = gap_result["time_to_first_token"]["avg"]
@@ -366,7 +366,9 @@ async def run_profile(args):
     with open(decode_config_fn, "w") as f:
         yaml.dump(decode_config, f)
 
-    client = DynamoDeploymentClient(namespace=args.namespace, base_log_dir=work_dir)
+    client = DynamoDeploymentClient(
+        namespace=args.namespace, base_log_dir=work_dir
+    ) 
     await client.create_deployment(decode_config_fn)
     logger.info("Waiting for deployment to be ready...")
     await client.wait_for_deployment_ready()
@@ -383,7 +385,7 @@ async def run_profile(args):
     )
 
     osl = 500  # not too large to reduce ITL variance, not too small to have stable measurement
-    with client.get_service_url_with_port_forward() as base_url:
+    with client.port_forward() as port:
         for isl in range(
             100,
             args.max_context_length - osl,
@@ -402,12 +404,7 @@ async def run_profile(args):
                     f"{work_dir}/gap_isl{isl}_osl{osl}_n{num_request}"
                 )
                 gap_result = benchmark_decode(
-                    isl,
-                    osl,
-                    num_request,
-                    genai_perf_artifact_dir,
-                    model_name,
-                    base_url=base_url,
+                    isl, osl, num_request, genai_perf_artifact_dir, model_name, port
                 )
                 if gap_result is not None:
                     itl = gap_result["inter_token_latency"]["avg"]
