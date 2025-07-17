@@ -69,4 +69,37 @@ COPY examples/sglang/utils/benchmarking/* /sgl-workspace/dynamo/examples/sglang/
 
 ENV PYTHONPATH=/sgl-workspace/dynamo/deploy/sdk/src:/workspace/dynamo/components/planner/src:/workspace/examples/sglang:$PYTHONPATH
 
+# properly install cmake so that gap can be installed
+RUN cmake --version
+
+ARG CMAKE_VERSION=3.31.8
+RUN mkdir /sgl-workspace/cmake_build
+WORKDIR /sgl-workspace/cmake_build
+
+# uninstall CMake
+RUN apt-get purge -y cmake
+# download newer version of CMake
+RUN wget https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-$(uname -m).tar.gz && \
+    tar -xvzf cmake-${CMAKE_VERSION}-linux-$(uname -m).tar.gz && \
+    mv cmake-${CMAKE_VERSION}-linux-$(uname -m) custom_cmake
+ENV PATH=/sgl-workspace/cmake_build/custom_cmake/bin:$PATH
+
+# should be 3.31.8
+RUN cmake --version
+
+# Install perf_analyzer and genai-perf
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+    rapidjson-dev \
+    zlib1g-dev
+
+RUN git clone --depth=1 https://github.com/triton-inference-server/perf_analyzer.git && \
+    mkdir perf_analyzer/build && \
+    cmake -B perf_analyzer/build -S perf_analyzer && \
+    cmake --build perf_analyzer/build -- -j8
+
+ENV PATH=/sgl-workspace/perf_analyzer/build/perf_analyzer/src/perf-analyzer-build:$PATH
+
+RUN pip install --break-system-packages genai-perf
+
 WORKDIR /sgl-workspace/dynamo/examples/sglang
