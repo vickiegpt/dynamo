@@ -176,14 +176,17 @@ RUN uv pip install /workspace/wheels/nixl/*.whl
 
 # Install vllm - keep this early in Dockerfile to avoid
 # rebuilds from unrelated source code changes
-ARG VLLM_REF="059d4cd"
+# [gluo NOTE] currently using a fork of vllm until the fix
+# for multi-modal disaggregated serving is merged upstream.
+# see https://github.com/vllm-project/vllm/pull/21074
+ARG VLLM_REF="eaadf838ebe93e29a38a6fc1bab5a9801abe7d2c"
 ENV CUDA_HOME=/usr/local/cuda
 RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
     --mount=type=cache,target=/root/.cache/uv \
     uv pip install pip cuda-python && \
     mkdir /opt/vllm && \
     cd /opt/vllm && \
-    git clone https://github.com/vllm-project/vllm.git && \
+    git clone https://github.com/GuanLuo/vllm.git && \
     cd vllm && \
     git checkout $VLLM_REF && \
     VLLM_USE_PRECOMPILED=1 uv pip install -e . && \
