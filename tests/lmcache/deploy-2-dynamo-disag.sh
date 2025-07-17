@@ -53,4 +53,4 @@ CUDA_VISIBLE_DEVICES=0 python3 components/main.py --model $MODEL_URL --enforce-e
 CUDA_VISIBLE_DEVICES=1 python3 components/main.py \
     --model $MODEL_URL \
     --enforce-eager \
-    --is-prefill-worker &
+    --is-prefill-worker
