@@ -186,7 +186,7 @@ elif [ "$mode" = "decode" ]; then
         SGLANG_USE_MESSAGE_QUEUE_BROADCASTER=0 \
         SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK=1 \
         PYTHONUNBUFFERED=1 \
-        python3 components/worker.py \
+        python3 components/decode_worker.py \
             --model-path /model/ \
             --trust-remote-code \
             --disaggregation-mode decode \
