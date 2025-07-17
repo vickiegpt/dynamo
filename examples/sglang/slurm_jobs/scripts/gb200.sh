@@ -89,6 +89,7 @@ if [ "$mode" = "prefill" ]; then
         python3 components/worker.py \
             --served-model-name deepseek-ai/DeepSeek-R1 \
             --model-path /model/ \
+            --skip-tokenizer-init \
             --trust-remote-code \
             --disaggregation-mode prefill \
             --dist-init-addr "$HOST_IP:$PORT" \
@@ -187,7 +188,9 @@ elif [ "$mode" = "decode" ]; then
         SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK=1 \
         PYTHONUNBUFFERED=1 \
         python3 components/decode_worker.py \
+            --served-model-name deepseek-ai/DeepSeek-R1 \
             --model-path /model/ \
+            --skip-tokenizer-init \
             --trust-remote-code \
             --disaggregation-mode decode \
             --dist-init-addr "$HOST_IP:$PORT" \
