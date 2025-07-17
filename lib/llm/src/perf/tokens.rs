@@ -45,6 +45,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -53,6 +54,7 @@ use crate::perf::RecordedStream;
 use crate::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse;
 use crate::protocols::TokenIdType;
 use crate::tokenizers::traits::TokenCounter;
+use crate::tokenizers::Encoding;
 
 pub type TokenCount = usize;
 pub type ForwardPassDuration = Duration;
@@ -233,6 +235,34 @@ pub struct TokenEvent {
     pub content: Option<String>,
 }
 
+/// Validation results comparing chunk-by-chunk tokenization vs full text tokenization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenizationValidation {
+    /// Total tokens from chunk-by-chunk tokenization
+    pub chunk_total_tokens: TokenCount,
+    /// Total tokens from full text tokenization
+    pub full_text_total_tokens: TokenCount,
+    /// Whether the token counts match
+    pub counts_match: bool,
+    /// Detailed encoding information (when available)
+    pub encoding_details: Option<EncodingDetails>,
+    /// Any validation errors found (structured as JSON for detailed error information)
+    pub validation_errors: Vec<serde_json::Value>,
+}
+
+/// Detailed encoding information from the tokenizer
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncodingDetails {
+    /// Token IDs from full text tokenization
+    pub token_ids: Vec<crate::protocols::TokenIdType>,
+    /// Token strings from full text tokenization
+    pub token_strings: Vec<String>,
+    /// Token offsets from full text tokenization
+    pub token_offsets: Vec<(usize, usize)>,
+    /// Whether special tokens were skipped
+    pub skipped_special_tokens: bool,
+}
+
 /// Analysis for a single choice across the entire stream
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChoiceTokenAnalysis {
@@ -252,6 +282,14 @@ pub struct ChoiceTokenAnalysis {
     pub responses_with_choice: usize,
     /// Position where the choice finished (if it finished)
     pub finish_position: Option<usize>,
+    /// Full concatenated content for this choice
+    pub concatenated_content: String,
+    /// BLAKE3 hash of the concatenated content
+    pub content_blake3_hash: String,
+    /// 12-character shortened hash
+    pub content_hash_short: String,
+    /// Validation results comparing chunk vs full text tokenization
+    pub full_tokenization_validation: Option<TokenizationValidation>,
 }
 
 /// Comprehensive token analysis for all choices in a recorded stream
@@ -267,7 +305,7 @@ pub struct TokenAnalysis {
     pub is_stream_complete: bool,
 }
 
-/// Validates and analyzes token counting from a recorded stream
+/// Validates and analyzes token counting from a recorded stream with enhanced validation
 pub fn analyze_token_counting<T: TokenExtractor>(
     recorded_stream: Arc<RecordedStream<T>>,
     tokenizer: Option<&dyn TokenCounter>,
@@ -278,11 +316,22 @@ pub fn analyze_token_counting<T: TokenExtractor>(
     // Track which choices have finished and when
     let mut finished_choices: HashMap<u32, usize> = HashMap::new();
 
+    // Collect content for each choice for full-text validation
+    let mut choice_content: HashMap<u32, Vec<String>> = HashMap::new();
+
     for (stream_pos, timestamped_response) in recorded_stream.responses().iter().enumerate() {
         let response = &timestamped_response.response;
         let tokens_by_choice = response.extract_tokens_by_choice(tokenizer);
 
         for (choice_index, choice_token_data) in tokens_by_choice {
+            // Collect content for this choice
+            if let Some(content) = &choice_token_data.content {
+                choice_content
+                    .entry(choice_index)
+                    .or_default()
+                    .push(content.clone());
+            }
+
             // Get or create choice analysis
             let choice_analysis =
                 choice_analyses
@@ -296,6 +345,10 @@ pub fn analyze_token_counting<T: TokenExtractor>(
                         token_timeline: Vec::new(),
                         responses_with_choice: 0,
                         finish_position: None,
+                        concatenated_content: String::new(),
+                        content_blake3_hash: String::new(),
+                        content_hash_short: String::new(),
+                        full_tokenization_validation: None,
                     });
 
             choice_analysis.responses_with_choice += 1;
@@ -339,6 +392,31 @@ pub fn analyze_token_counting<T: TokenExtractor>(
         }
     }
 
+    // Perform full-text validation for each choice
+    for (choice_index, analysis) in choice_analyses.iter_mut() {
+        if let Some(content_parts) = choice_content.get(choice_index) {
+            // Concatenate all content for this choice
+            let concatenated = content_parts.join("");
+            analysis.concatenated_content = concatenated.clone();
+
+            // Compute BLAKE3 hash
+            let hash = blake3::hash(concatenated.as_bytes());
+            let hash_hex = hash.to_hex();
+            analysis.content_blake3_hash = hash_hex.to_string();
+            analysis.content_hash_short = hash_hex.chars().take(12).collect();
+
+            // Perform full-text tokenization validation if tokenizer is available
+            if let Some(tokenizer) = tokenizer {
+                analysis.full_tokenization_validation = Some(validate_full_text_tokenization(
+                    &concatenated,
+                    analysis.total_tokens,
+                    &analysis.token_timeline,
+                    tokenizer,
+                ));
+            }
+        }
+    }
+
     // Validate that all choices are complete
     let incomplete_choices: Vec<u32> = choice_analyses
         .values()
@@ -360,6 +438,214 @@ pub fn analyze_token_counting<T: TokenExtractor>(
         choice_analyses,
         validation_errors,
         is_stream_complete,
+    }
+}
+
+/// Validates that individual chunks align with the corresponding portions of full text tokenization
+/// Adds structured error details to validation_errors if alignment fails
+fn validate_chunk_alignment(
+    full_text: &str,
+    full_text_token_ids: &[TokenIdType],
+    token_timeline: &[TokenEvent],
+    tokenizer: &dyn TokenCounter,
+    validation_errors: &mut Vec<serde_json::Value>,
+) {
+    let mut char_position = 0;
+    let mut token_position = 0;
+    let mut chunk_alignment_errors = Vec::new();
+
+    // Only process chunks that have content
+    let content_chunks: Vec<_> = token_timeline
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, event)| event.content.as_ref().map(|content| (idx, event, content)))
+        .collect();
+
+    if content_chunks.is_empty() {
+        return; // No chunks to validate
+    }
+
+    let total_chunks = content_chunks.len();
+
+    for (chunk_index, event, chunk_content) in content_chunks {
+        let char_start = char_position;
+        let char_end = char_position + chunk_content.len();
+
+        // Tokenize this chunk in isolation
+        let (chunk_token_ids, chunk_token_count) =
+            match tokenizer.count_tokens_with_ids(chunk_content) {
+                Ok(result) => result,
+                Err(e) => {
+                    chunk_alignment_errors.push(json!({
+                        "type": "tokenization_failed",
+                        "chunk_index": chunk_index,
+                        "stream_position": event.stream_position,
+                        "content": chunk_content,
+                        "error": e.to_string()
+                    }));
+                    (Vec::new(), 0)
+                }
+            };
+
+        // Verify chunk token count matches what was recorded in the timeline
+        if chunk_token_count != event.tokens_in_chunk {
+            chunk_alignment_errors.push(json!({
+                "type": "chunk_token_count_mismatch",
+                "chunk_index": chunk_index,
+                "stream_position": event.stream_position,
+                "content": chunk_content,
+                "recorded_tokens": event.tokens_in_chunk,
+                "retokenized_tokens": chunk_token_count
+            }));
+        }
+
+        // Extract expected tokens from full text tokenization
+        let token_start = token_position;
+        let token_end = token_position + chunk_token_count;
+        let expected_token_ids = if token_end <= full_text_token_ids.len() {
+            full_text_token_ids[token_start..token_end].to_vec()
+        } else {
+            chunk_alignment_errors.push(json!({
+                "type": "token_range_exceeded",
+                "chunk_index": chunk_index,
+                "stream_position": event.stream_position,
+                "content": chunk_content,
+                "token_range": [token_start, token_end],
+                "full_text_length": full_text_token_ids.len()
+            }));
+            Vec::new()
+        };
+
+        // Check if tokens match
+        let tokens_match = chunk_token_ids == expected_token_ids;
+        if !tokens_match && !chunk_token_ids.is_empty() && !expected_token_ids.is_empty() {
+            chunk_alignment_errors.push(json!({
+                "type": "token_sequence_mismatch",
+                "chunk_index": chunk_index,
+                "stream_position": event.stream_position,
+                "content": chunk_content,
+                "chunk_token_ids": chunk_token_ids,
+                "expected_token_ids": expected_token_ids,
+                "char_range": [char_start, char_end],
+                "token_range": [token_start, token_end]
+            }));
+        }
+
+        // Update positions for next chunk
+        char_position = char_end;
+        token_position = token_end;
+    }
+
+    // Verify that we've consumed all the text
+    if char_position != full_text.len() {
+        chunk_alignment_errors.push(json!({
+            "type": "character_position_mismatch",
+            "processed_chars": char_position,
+            "expected_chars": full_text.len()
+        }));
+    }
+
+    // Verify that we've consumed all the tokens
+    if token_position != full_text_token_ids.len() {
+        chunk_alignment_errors.push(json!({
+            "type": "token_position_mismatch",
+            "processed_tokens": token_position,
+            "expected_tokens": full_text_token_ids.len()
+        }));
+    }
+
+    // Only add chunk alignment errors if there are any
+    if !chunk_alignment_errors.is_empty() {
+        validation_errors.push(json!({
+            "type": "chunk_alignment_validation",
+            "total_chunks_validated": total_chunks,
+            "errors": chunk_alignment_errors
+        }));
+    }
+}
+
+/// Validates full-text tokenization against chunk-by-chunk tokenization with alignment
+fn validate_full_text_tokenization(
+    full_text: &str,
+    chunk_total_tokens: TokenCount,
+    token_timeline: &[TokenEvent],
+    tokenizer: &dyn TokenCounter,
+) -> TokenizationValidation {
+    let mut validation_errors = Vec::new();
+
+    // Perform full-text tokenization
+    let (full_text_token_ids, full_text_total_tokens) =
+        match tokenizer.count_tokens_with_ids(full_text) {
+            Ok(result) => result,
+            Err(e) => {
+                validation_errors.push(json!({
+                    "type": "full_text_tokenization_failed",
+                    "error": e.to_string()
+                }));
+                return TokenizationValidation {
+                    chunk_total_tokens,
+                    full_text_total_tokens: 0,
+                    counts_match: false,
+                    encoding_details: None,
+                    validation_errors,
+                };
+            }
+        };
+
+    // Check if counts match
+    let counts_match = chunk_total_tokens == full_text_total_tokens;
+    if !counts_match {
+        validation_errors.push(json!({
+            "type": "token_count_mismatch",
+            "chunk_total_tokens": chunk_total_tokens,
+            "full_text_total_tokens": full_text_total_tokens
+        }));
+    }
+
+    // Try to get detailed encoding information if available
+    let encoding_details = if let Ok(encoding) = tokenizer.encode_detailed(full_text) {
+        extract_encoding_details(&encoding)
+    } else {
+        None
+    };
+
+    // Perform chunk alignment validation (only when we have a tokenizer)
+    validate_chunk_alignment(
+        full_text,
+        &full_text_token_ids,
+        token_timeline,
+        tokenizer,
+        &mut validation_errors,
+    );
+
+    TokenizationValidation {
+        chunk_total_tokens,
+        full_text_total_tokens,
+        counts_match,
+        encoding_details,
+        validation_errors,
+    }
+}
+
+/// Extracts detailed information from an Encoding object
+fn extract_encoding_details(encoding: &Encoding) -> Option<EncodingDetails> {
+    match encoding {
+        Encoding::Hf(hf_encoding) => {
+            Some(EncodingDetails {
+                token_ids: hf_encoding.get_ids().to_vec(),
+                token_strings: hf_encoding.get_tokens().to_vec(),
+                token_offsets: hf_encoding.get_offsets().to_vec(),
+                skipped_special_tokens: false, // TODO: Track this properly
+            })
+        }
+        Encoding::Sp(token_ids) => {
+            Some(EncodingDetails {
+                token_ids: token_ids.clone(),
+                token_strings: vec![], // SentencePiece doesn't provide token strings in our wrapper
+                token_offsets: vec![], // SentencePiece doesn't provide offsets in our wrapper
+                skipped_special_tokens: false, // TODO: Track this properly
+            })
+        }
     }
 }
 
@@ -431,6 +717,103 @@ impl TokenAnalysis {
                 analysis.primary_data_source.description(),
                 status
             );
+
+            // Print content hash information
+            if !analysis.concatenated_content.is_empty() {
+                println!(
+                    "    Content: {} chars, hash: {} ({})",
+                    analysis.concatenated_content.len(),
+                    analysis.content_hash_short,
+                    analysis.content_blake3_hash
+                );
+            }
+
+            // Print tokenization validation results
+            if let Some(validation) = &analysis.full_tokenization_validation {
+                let validation_status = if validation.counts_match {
+                    "✓ PASS"
+                } else {
+                    "❌ FAIL"
+                };
+                println!(
+                    "    Tokenization validation: {} (chunk: {}, full: {})",
+                    validation_status,
+                    validation.chunk_total_tokens,
+                    validation.full_text_total_tokens
+                );
+
+                if !validation.validation_errors.is_empty() {
+                    for error in &validation.validation_errors {
+                        match error.get("type").and_then(|v| v.as_str()) {
+                            Some("chunk_alignment_validation") => {
+                                let total_chunks = error
+                                    .get("total_chunks_validated")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let errors = error
+                                    .get("errors")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| arr.len())
+                                    .unwrap_or(0);
+
+                                println!(
+                                    "      Chunk alignment: ❌ MISALIGNED ({} chunks validated, {} errors)",
+                                    total_chunks, errors
+                                );
+                            }
+                            Some("token_count_mismatch") => {
+                                let chunk_tokens = error
+                                    .get("chunk_total_tokens")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                let full_tokens = error
+                                    .get("full_text_total_tokens")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0);
+                                println!(
+                                    "      ⚠️  Token count mismatch: chunk-by-chunk={}, full-text={}",
+                                    chunk_tokens, full_tokens
+                                );
+                            }
+                            Some("full_text_tokenization_failed") => {
+                                let err_msg = error
+                                    .get("error")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown error");
+                                println!("      ⚠️  Failed to tokenize full text: {}", err_msg);
+                            }
+                            _ => {
+                                println!("      ⚠️  {}", error);
+                            }
+                        }
+                    }
+                } else {
+                    // If no validation errors, check if we had chunks to validate
+                    // (this indicates successful chunk alignment)
+                    if let Some(analysis) = &self.choice_analyses.get(&choice_index) {
+                        let content_chunks = analysis
+                            .token_timeline
+                            .iter()
+                            .filter(|event| event.content.is_some())
+                            .count();
+                        if content_chunks > 0 {
+                            println!(
+                                "      Chunk alignment: ✓ ALL ALIGNED ({} chunks validated)",
+                                content_chunks
+                            );
+                        }
+                    }
+                }
+
+                if let Some(details) = &validation.encoding_details {
+                    println!(
+                        "      Encoding: {} token IDs, {} strings, {} offsets",
+                        details.token_ids.len(),
+                        details.token_strings.len(),
+                        details.token_offsets.len()
+                    );
+                }
+            }
         }
     }
 
@@ -500,10 +883,27 @@ mod tests {
             &self,
             text: &str,
         ) -> crate::tokenizers::Result<(Vec<TokenIdType>, usize)> {
-            // Simple mock: create fake token IDs (just indices) and count words
-            let count = text.split_whitespace().count();
-            let token_ids: Vec<TokenIdType> = (0..count as u32).collect();
-            Ok((token_ids, count))
+            // More realistic mock: assign consistent token IDs based on word hash
+            // This ensures the same word gets the same token ID regardless of context
+            let words: Vec<&str> = text.split_whitespace().collect();
+            let token_ids: Vec<TokenIdType> = words
+                .iter()
+                .map(|word| {
+                    // Simple hash to get consistent IDs for same words
+                    let mut hash = 0u32;
+                    for byte in word.bytes() {
+                        hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
+                    }
+                    hash % 10000 // Keep IDs reasonable
+                })
+                .collect();
+            Ok((token_ids, words.len()))
+        }
+
+        fn encode_detailed(&self, text: &str) -> crate::tokenizers::Result<Encoding> {
+            // Use the same logic as count_tokens_with_ids
+            let (token_ids, _) = self.count_tokens_with_ids(text)?;
+            Ok(Encoding::Sp(token_ids))
         }
     }
 
@@ -932,6 +1332,123 @@ mod tests {
     }
 
     #[test]
+    fn test_chunk_alignment_validation() {
+        let tokenizer = MockTokenizer;
+
+        // Create a case where chunk alignment should work perfectly
+        let analysis = create_analysis_with_responses(
+            vec![
+                create_mock_response_with_content(0, "Hello world", false, None), // 2 tokens
+                create_mock_response_with_content(0, " this is", false, None),    // 2 tokens
+                create_mock_response_with_content(0, " a test", true, Some(FinishReason::Stop)), // 2 tokens
+            ],
+            Some(&tokenizer),
+        );
+
+        let choice_analysis = &analysis.choice_analyses[&0];
+        assert_eq!(choice_analysis.total_tokens, 6); // 2 + 2 + 2
+
+        // Check that we have tokenization validation with chunk alignments
+        let validation = choice_analysis
+            .full_tokenization_validation
+            .as_ref()
+            .unwrap();
+        assert!(validation.counts_match);
+
+        // Should have no validation errors (indicating successful chunk alignment)
+        assert!(validation.validation_errors.is_empty());
+
+        // Verify concatenated content matches
+        let expected_full_text = "Hello world this is a test";
+        assert_eq!(choice_analysis.concatenated_content, expected_full_text);
+    }
+
+    #[test]
+    fn test_chunk_alignment_with_empty_chunks() {
+        let tokenizer = MockTokenizer;
+
+        // Test case with empty chunks mixed in
+        let analysis = create_analysis_with_responses(
+            vec![
+                create_mock_response_with_content(0, "Hello", false, None),
+                create_mock_response_with_content(0, "", false, None), // Empty chunk
+                create_mock_response_with_content(0, " world", false, None),
+                create_mock_response_with_content(0, "", true, Some(FinishReason::Stop)), // Empty finish
+            ],
+            Some(&tokenizer),
+        );
+
+        let choice_analysis = &analysis.choice_analyses[&0];
+        let validation = choice_analysis
+            .full_tokenization_validation
+            .as_ref()
+            .unwrap();
+
+        // Should have no validation errors (indicating successful chunk alignment)
+        assert!(validation.validation_errors.is_empty());
+    }
+
+    #[test]
+    fn test_chunk_alignment_errors_captured() {
+        // Create a custom tokenizer that produces misaligned results
+        struct MisalignedTokenizer;
+
+        impl TokenCounter for MisalignedTokenizer {
+            fn count_tokens(&self, text: &str) -> crate::tokenizers::Result<TokenCount> {
+                Ok(text.split_whitespace().count())
+            }
+
+            fn count_tokens_with_ids(
+                &self,
+                text: &str,
+            ) -> crate::tokenizers::Result<(Vec<TokenIdType>, usize)> {
+                let words: Vec<&str> = text.split_whitespace().collect();
+                // Create different token IDs for the same words when tokenized in different contexts
+                let token_ids: Vec<TokenIdType> = words
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| i as u32 + if text.contains("isolated") { 1000 } else { 0 })
+                    .collect();
+                Ok((token_ids, words.len()))
+            }
+
+            fn encode_detailed(&self, text: &str) -> crate::tokenizers::Result<Encoding> {
+                let (token_ids, _) = self.count_tokens_with_ids(text)?;
+                Ok(Encoding::Sp(token_ids))
+            }
+        }
+
+        let tokenizer = MisalignedTokenizer;
+
+        // Create responses that will produce alignment errors
+        let analysis = create_analysis_with_responses(
+            vec![
+                create_mock_response_with_content(0, "isolated word", false, None),
+                create_mock_response_with_content(0, " test", true, Some(FinishReason::Stop)),
+            ],
+            Some(&tokenizer),
+        );
+
+        let choice_analysis = &analysis.choice_analyses[&0];
+        let validation = choice_analysis
+            .full_tokenization_validation
+            .as_ref()
+            .unwrap();
+
+        // Should have validation errors due to misaligned tokenization
+        assert!(!validation.validation_errors.is_empty());
+
+        // Check that we have a chunk alignment validation error
+        let has_chunk_alignment_error = validation.validation_errors.iter().any(|error| {
+            error.get("type").and_then(|v| v.as_str()) == Some("chunk_alignment_validation")
+        });
+        assert!(
+            has_chunk_alignment_error,
+            "Should have chunk alignment validation errors"
+        );
+    }
+
+    #[test]
     fn test_real_tokenizer_integration() {
         // This test shows how to use the real tokenizer infrastructure
         // Note: This test uses a mock since we don't have a real tokenizer file in tests
@@ -945,7 +1462,7 @@ mod tests {
 
         let (token_ids, count) = mock_tokenizer.count_tokens_with_ids("Hello world").unwrap();
         assert_eq!(count, 2);
-        assert_eq!(token_ids, vec![0, 1]); // Mock IDs
+        assert_eq!(token_ids.len(), 2); // Should have 2 token IDs
 
         // Test integration with our analysis system
         let analysis = create_analysis_with_responses(

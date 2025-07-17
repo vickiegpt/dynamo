@@ -93,6 +93,9 @@ pub mod traits {
 
         /// Get both token IDs and count for the input text
         fn count_tokens_with_ids(&self, input: &str) -> Result<(Vec<TokenIdType>, usize)>;
+
+        /// Get the full encoding for detailed analysis (optional)
+        fn encode_detailed(&self, input: &str) -> Result<Encoding>;
     }
 
     /// Blanket implementation for anything that implements Encoder
@@ -106,6 +109,10 @@ pub mod traits {
             let token_ids = encoding.token_ids().to_vec();
             let count = token_ids.len();
             Ok((token_ids, count))
+        }
+
+        fn encode_detailed(&self, input: &str) -> Result<Encoding> {
+            self.encode(input)
         }
     }
 }
@@ -157,6 +164,10 @@ impl traits::TokenCounter for Tokenizer {
         let token_ids = encoding.token_ids().to_vec();
         let count = token_ids.len();
         Ok((token_ids, count))
+    }
+
+    fn encode_detailed(&self, input: &str) -> Result<Encoding> {
+        self.0.encode(input)
     }
 }
 
