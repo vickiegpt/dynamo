@@ -33,7 +33,7 @@ allow = [
     "MPL-2.0",
     "CDLA-Permissive-2.0",
     "Zlib",
-    "bzip2/libbzip2"
+    "bzip2-1.0.6"
 ]
 
 # TODO exceptions
@@ -53,9 +53,6 @@ license-files = [
     { path = "LICENSE", hash = 0xbd0eed23 }
 ]
 
-[[licenses.clarify]]
-name = "libbz2-rs-sys"
-expression = "bzip2/libbzip2"
 
 [bans]
 deny = [
