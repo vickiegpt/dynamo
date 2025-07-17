@@ -9,6 +9,7 @@
 pub mod logprobs;
 pub mod tokens;
 
+use anyhow::Context as ErrorContext;
 use dynamo_runtime::protocols::annotated::Annotated;
 use futures::Stream;
 use serde::de::DeserializeOwned;
@@ -393,8 +394,9 @@ pub fn read_annotated_stream_from_file<T: Serialize + DeserializeOwned>(
     path: &str,
 ) -> Result<DataStream<Annotated<T>>, anyhow::Error> {
     // Read the entire file as a string
-    let data =
-        std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("Failed to read file: {}", e))?;
+    let data = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("Failed to read file: {}", e))
+        .with_context(|| format!("Failed to read file: {}", path))?;
 
     // Create SSE stream from the string data
     let sse_stream = parse_sse_stream(&data);
