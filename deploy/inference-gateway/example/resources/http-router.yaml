@@ -22,23 +22,23 @@ spec:
     kind: Gateway
     name: inference-gateway
   rules:
+  # - backendRefs:
+  #   - group: inference.networking.x-k8s.io
+  #     kind: InferencePool
+  #     name: qwen-pool
+  #   matches:
+  #   - path:
+  #       type: PathPrefix
+  #       value: /
+  #   timeouts:
+  #     request: 300s
   - backendRefs:
     - group: inference.networking.x-k8s.io
       kind: InferencePool
-      name: qwen-pool
+      name: gemma-pool
     matches:
     - path:
         type: PathPrefix
         value: /
     timeouts:
       request: 300s
-  # - backendRefs:
-  #   - group: inference.networking.x-k8s.io
-  #     kind: InferencePool
-  #     name: gemma-pool
-  #   matches:
-  #   - path:
-  #       type: PathPrefix
-  #       value: /gemma
-  #   timeouts:
-  #     request: 300s
