@@ -18,13 +18,13 @@ backend: pytorch
 tensor_parallel_size: 4
 pipeline_parallel_size: 1
 
-max_batch_size: 1
+max_batch_size: 128
 # ISL 9400
 max_num_tokens: 9400
 max_seq_len: 9400
 
 kv_cache_config:
-  free_gpu_memory_fraction: 0.75
+  free_gpu_memory_fraction: 0.95
 
 disable_overlap_scheduler: true
 print_iter_log: true
