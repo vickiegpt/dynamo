@@ -10,7 +10,7 @@ IMAGE="${IMAGE:-""}"
 # but you may freely customize the mounts based on your cluster. A common practice
 # is to mount paths to NFS storage for common scripts, model weights, etc.
 # NOTE: This can be a comma separated list of multiple mounts as well.
-DEFAULT_MOUNT="${PWD}/../:/mnt"
+DEFAULT_MOUNT="${PWD}/../../:/mnt"
 MOUNTS="${MOUNTS:-${DEFAULT_MOUNT}}"
 
 # Example values, assuming 4 nodes with 4 GPUs on each node, such as 4xGB200 nodes.
@@ -37,35 +37,19 @@ if [[ -z ${IMAGE} ]]; then
   exit 1
 fi
 
-# NOTE: Output streamed to stdout for ease of understanding the example, but
-# in practice you would probably set `srun --output ... --error ...` to pipe
-# the stdout/stderr to files.
-echo "Launching frontend services in background."
-srun \
-  --overlap \
-  --container-image "${IMAGE}" \
-  --container-mounts "${MOUNTS}" \
-  --verbose \
-  --label \
-  -A "${ACCOUNT}" \
-  -J "${ACCOUNT}-dynamo.trtllm" \
-  --nodelist "${HEAD_NODE}" \
-  --nodes 1 \
-  --jobid "${SLURM_JOB_ID}" \
-  /mnt/multinode/start_frontend_services.sh &
 
 # NOTE: Output streamed to stdout for ease of understanding the example, but
 # in practice you would probably set `srun --output ... --error ...` to pipe
 # the stdout/stderr to files.
 for ((i=1; i<=${NUM_WORKERS}; i++)); do
   echo "Launching multi-node worker in background."
-  DISAGGREGATION_MODE="prefill_and_decode" \
+  ENGINE_CONFIG=${ENGINE_CONFIG} \
   srun \
     --mpi pmix \
     --oversubscribe \
     --container-image "${IMAGE}" \
     --container-mounts "${MOUNTS}" \
-    --container-env ETCD_ENDPOINTS,NATS_SERVER,HEAD_NODE_IP,HEAD_NODE,DISAGGREGATION_MODE,ENGINE_CONFIG \
+    --container-env ETCD_ENDPOINTS,NATS_SERVER,HEAD_NODE_IP,HEAD_NODE,ENGINE_CONFIG \
     --verbose \
     --label \
     -A "${ACCOUNT}" \
@@ -73,5 +57,5 @@ for ((i=1; i<=${NUM_WORKERS}; i++)); do
     --nodes "${NUM_NODES}" \
     --ntasks-per-node "${NUM_GPUS_PER_NODE}" \
     --jobid "${SLURM_JOB_ID}" \
-  /mnt/multinode/start_trtllm_worker.sh &
+    /mnt/multinode/start_baseline_worker.sh &
 done

@@ -13,13 +13,15 @@ IMAGE="${IMAGE:-""}"
 DEFAULT_MOUNT="${PWD}/../:/mnt"
 MOUNTS="${MOUNTS:-${DEFAULT_MOUNT}}"
 
-# Example values, assuming 4 nodes with 4 GPUs on each node, such as 4xGB200 nodes.
-# For 8xH100 nodes as an example, you may set this to 2 nodes x 8 gpus/node instead.
-NUM_NODES=${NUM_NODES:-4}
 NUM_GPUS_PER_NODE=${NUM_GPUS_PER_NODE:-4}
-NUM_WORKERS=${NUM_WORKERS:-1}
 
-export ENGINE_CONFIG="${ENGINE_CONFIG:-/mnt/engine_configs/deepseek_r1/wide_ep/wide_ep_agg.yaml}"
+NUM_PREFILL_NODES=${NUM_PREFILL_NODES:-1}
+NUM_PREFILL_WORKERS=${NUM_PREFILL_WORKERS:-7}
+PREFILL_ENGINE_CONFIG="${PREFILL_ENGINE_CONFIG:-/mnt/engine_configs/deepseek_r1/wide_ep_32/wide_ep_prefill.yaml}"
+
+NUM_DECODE_NODES=${NUM_DECODE_NODES:-8}
+NUM_DECODE_WORKERS=${NUM_DECODE_WORKERS:-1}
+DECODE_ENGINE_CONFIG="${DECODE_ENGINE_CONFIG:-/mnt/engine_configs/deepseek_r1/wide_ep_32/wide_ep_decode.yaml}"
 
 # Automate settings of certain variables for convenience, but you are free
 # to manually set these for more control as well.
@@ -42,6 +44,8 @@ fi
 # the stdout/stderr to files.
 echo "Launching frontend services in background."
 srun \
+  --mpi pmix \
+  --oversubscribe \
   --overlap \
   --container-image "${IMAGE}" \
   --container-mounts "${MOUNTS}" \
@@ -52,14 +56,15 @@ srun \
   --nodelist "${HEAD_NODE}" \
   --nodes 1 \
   --jobid "${SLURM_JOB_ID}" \
-  /mnt/multinode/start_frontend_services.sh &
+  /mnt/multinode/start_baseline_frontend.sh &
 
 # NOTE: Output streamed to stdout for ease of understanding the example, but
 # in practice you would probably set `srun --output ... --error ...` to pipe
 # the stdout/stderr to files.
-for ((i=1; i<=${NUM_WORKERS}; i++)); do
-  echo "Launching multi-node worker in background."
-  DISAGGREGATION_MODE="prefill_and_decode" \
+for ((i=1; i<=${NUM_PREFILL_WORKERS}; i++)); do
+  echo "Launching multi-node prefill worker $i in background."
+  export DISAGGREGATION_MODE=prefill \
+  ENGINE_CONFIG=${PREFILL_ENGINE_CONFIG} \
   srun \
     --mpi pmix \
     --oversubscribe \
@@ -70,8 +75,28 @@ for ((i=1; i<=${NUM_WORKERS}; i++)); do
     --label \
     -A "${ACCOUNT}" \
     -J "${ACCOUNT}-dynamo.trtllm" \
-    --nodes "${NUM_NODES}" \
+    --nodes ${NUM_PREFILL_NODES} \
     --ntasks-per-node "${NUM_GPUS_PER_NODE}" \
     --jobid "${SLURM_JOB_ID}" \
-  /mnt/multinode/start_trtllm_worker.sh &
+    /mnt/multinode/start_baseline_worker.sh &
+done
+
+for ((i=1; i<=${NUM_DECODE_WORKERS}; i++)); do
+  echo "Launching multi-node decode worker $i in background."
+  export DISAGGREGATION_MODE=decode \
+  ENGINE_CONFIG=${DECODE_ENGINE_CONFIG} \
+  srun \
+  --mpi pmix \
+  --oversubscribe \
+  --container-image "${IMAGE}" \
+  --container-mounts "${MOUNTS}" \
+  --container-env ETCD_ENDPOINTS,NATS_SERVER,HEAD_NODE_IP,HEAD_NODE,DISAGGREGATION_MODE,ENGINE_CONFIG \
+  --verbose \
+  --label \
+  -A "${ACCOUNT}" \
+  -J "${ACCOUNT}-dynamo.trtllm" \
+  --nodes "${NUM_DECODE_NODES}" \
+  --ntasks-per-node "${NUM_GPUS_PER_NODE}" \
+  --jobid "${SLURM_JOB_ID}" \
+  /mnt/multinode/start_baseline_worker.sh &
 done
