@@ -46,6 +46,7 @@ def get_llm_response(args, prompt):
     if res.status_code != 200:
         raise Exception(f"Error: {res.status_code} {res.text}")
     response_json = res.json()
+    # print(response_json["choices"][0]["message"]["content"])
     return response_json["choices"][0]["message"]["content"]
 
 
@@ -57,7 +58,7 @@ def prompt_string(df, idx, include_answer=True):
     k = df.shape[1] - 2  # number of columns - 2 (question and answer)
     for i in range(k):
         prompt += f"\n{choices[i]}. {df.iloc[idx, i + 1]}"
-    prompt += "\nAnswer:"
+    prompt += "\nRespond with **only the letter** (A, B, C, D).  Do **not** output any explanation, analysis, or extra words. Answer:"
     if include_answer:
         prompt += f" {df.iloc[idx, k]}\n\n"
     return prompt

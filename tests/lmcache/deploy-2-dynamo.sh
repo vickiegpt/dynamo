@@ -39,9 +39,9 @@ sleep 2
 export ENABLE_LMCACHE=1
 
 # Set LMCache configuration environment variables
-export LMCACHE_CHUNK_SIZE=256
-export LMCACHE_LOCAL_CPU=True
-export LMCACHE_MAX_LOCAL_CPU_SIZE=2
+# export LMCACHE_CHUNK_SIZE=256
+# export LMCACHE_LOCAL_CPU=True
+# export LMCACHE_MAX_LOCAL_CPU_SIZE=1
 
 echo "🔧 Starting dynamo worker with LMCache enabled..."
 
