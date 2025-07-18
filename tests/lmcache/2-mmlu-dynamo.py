@@ -46,7 +46,6 @@ def get_llm_response(args, prompt):
     if res.status_code != 200:
         raise Exception(f"Error: {res.status_code} {res.text}")
     response_json = res.json()
-    # print(response_json["choices"][0]["message"]["content"])
     return response_json["choices"][0]["message"]["content"]
 
 
