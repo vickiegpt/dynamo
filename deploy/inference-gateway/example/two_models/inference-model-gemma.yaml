@@ -15,7 +15,7 @@
 apiVersion: inference.networking.x-k8s.io/v1alpha2
 kind: InferenceModel
 metadata:
-  name: gemma3
+  name: gemma3-model
   namespace: default
 spec:
   criticality: Critical
