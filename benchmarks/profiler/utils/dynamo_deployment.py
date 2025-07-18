@@ -1,22 +1,21 @@
-#!/usr/bin/env -S uv run --script
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 #
-# /// script
-# requires-python = ">=3.10"
-# dependencies = [
-#   "PyYAML",
-#   "aiofiles",
-#   "kubernetes-asyncio",
-#   "kr8s",           # added
-#   "httpx",          # added
-# ]
-# ///
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import argparse
 import asyncio
-import random
-import time 
-import socket
-from contextlib import contextmanager
+import time
 from pathlib import Path
 from typing import Optional, Union
 
@@ -24,7 +23,6 @@ import aiofiles
 import httpx  # added for HTTP requests
 import kubernetes_asyncio as kubernetes
 import yaml
-from kr8s.objects import Service
 from kubernetes_asyncio import client, config
 
 # Example chat completion request for testing deployments
@@ -48,6 +46,7 @@ class DynamoDeploymentClient:
         model_name: str = "Qwen/Qwen3-0.6B",
         deployment_name: str = "vllm-v1-agg",
         base_log_dir: Optional[str] = None,
+        service_name: Optional[str] = None,
     ):
         """
         Initialize the client with the namespace and deployment name.
@@ -56,10 +55,12 @@ class DynamoDeploymentClient:
             namespace: The Kubernetes namespace
             deployment_name: Name of the deployment, defaults to vllm-v1-agg
             base_log_dir: Base directory for storing logs, defaults to ./logs if not specified
+            service_name: Service name for connecting to the service, defaults to {deployment_name}-frontend
         """
         self.namespace = namespace
         self.deployment_name = deployment_name
         self.model_name = model_name
+        self.service_name = service_name or f"{deployment_name}-frontend"
         self.components = []  # Will store component names from CR
         self.deployment_spec = None  # Will store the full deployment spec
         self.base_log_dir = Path(base_log_dir) if base_log_dir else Path("logs")
@@ -76,6 +77,16 @@ class DynamoDeploymentClient:
         self.k8s_client = client.ApiClient()
         self.custom_api = client.CustomObjectsApi(self.k8s_client)
         self.core_api = client.CoreV1Api(self.k8s_client)
+
+    def get_service_url(self) -> str:
+        """
+        Get the service URL using Kubernetes service DNS.
+        """
+        service_url = (
+            f"http://{self.service_name}.{self.namespace}.svc.cluster.local:8000"
+        )
+        print(f"Using service URL: {service_url}")
+        return service_url
 
     async def create_deployment(self, deployment: Union[dict, str]):
         """
@@ -128,20 +139,22 @@ class DynamoDeploymentClient:
         # TODO: A little brittle, also should output intermediate status every so often.
         while (time.time() - start_time) < timeout:
             try:
-                status = await self.custom_api.get_namespaced_custom_object_status(
+                status = await self.custom_api.get_namespaced_custom_object(
                     group="nvidia.com",
                     version="v1alpha1",
                     namespace=self.namespace,
                     plural="dynamographdeployments",
                     name=self.deployment_name,
                 )
-                # print(f"Current status: {status.get('status', {})}")
-
                 # Check both conditions:
                 # 1. Ready condition is True
                 # 2. State is successful
                 status_obj = status.get("status", {})
                 conditions = status_obj.get("conditions", [])
+                current_state = status_obj.get("state", "unknown")
+
+                print(f"Current deployment state: {current_state}")
+                print(f"Current conditions: {conditions}")
 
                 ready_condition = False
                 for condition in conditions:
@@ -159,51 +172,27 @@ class DynamoDeploymentClient:
                         "Deployment is ready: Ready condition is True and state is successful"
                     )
                     return True
+                else:
+                    print(
+                        f"Deployment not ready yet - Ready condition: {ready_condition}, State successful: {state_successful}"
+                    )
 
             except kubernetes.client.rest.ApiException:
                 pass
             await asyncio.sleep(20)
         raise TimeoutError("Deployment failed to become ready within timeout")
 
-    @contextmanager
-    def port_forward(self, port: Optional[int] = None):
-        """
-        Forward the service's HTTP port to a local port.
-        """
-        if port is None:
-            # Find a free port in the ephemeral port range
-            for _ in range(100):  # Try up to 100 times
-                candidate_port = random.randint(49152, 65535)
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    try:
-                        s.bind(('localhost', candidate_port))
-                        port = candidate_port
-                        break
-                    except OSError:
-                        continue  # Port is in use, try another
-            if port is None:
-                raise RuntimeError("Could not find a free port after 100 attempts")
-        svc_name = f"{self.deployment_name}-frontend"
-        # Get the Service and forward its HTTP port (8000)
-        service = Service.get(svc_name, namespace=self.namespace)
-        pf = service.portforward(remote_port=8000, local_port=port)
-        pf.start()
-        try:
-            yield port
-        finally:
-            pf.stop()
-
     async def check_chat_completion(self):
         """
         Test the deployment with a chat completion request using httpx.
         """
         EXAMPLE_CHAT_REQUEST["model"] = self.model_name
-        with self.port_forward() as port:
-            url = f"http://localhost:{port}/v1/chat/completions"
-            async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=EXAMPLE_CHAT_REQUEST)
-                response.raise_for_status()
-                return response.text
+        base_url = self.get_service_url()
+        url = f"{base_url}/v1/chat/completions"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=EXAMPLE_CHAT_REQUEST)
+            response.raise_for_status()
+            return response.text
 
     async def get_deployment_logs(self):
         """
@@ -277,11 +266,20 @@ async def main():
         default="/tmp/dynamo_logs",
         help="Base directory for logs (default: /tmp/dynamo_logs)",
     )
+    parser.add_argument(
+        "--service-name",
+        "-s",
+        help="Service name for connecting to the service (default: {deployment_name}-frontend)",
+    )
 
     args = parser.parse_args()
 
     # Example usage with parsed arguments
-    client = DynamoDeploymentClient(namespace=args.namespace, base_log_dir=args.log_dir)
+    client = DynamoDeploymentClient(
+        namespace=args.namespace,
+        base_log_dir=args.log_dir,
+        service_name=args.service_name,
+    )
 
     try:
         # Create deployment from yaml file
