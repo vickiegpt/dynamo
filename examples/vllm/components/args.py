@@ -53,74 +53,6 @@ class Config:
     # rest vLLM args
     engine_args: AsyncEngineArgs
 
-
-def overwrite_args(config):
-    # Check if LMCache should be enabled
-    enable_lmcache = os.getenv("ENABLE_LMCACHE", "0").lower() in ("1", "true", "yes")
-    
-    # Set kv_transfer_config based on LMCache setting
-    if enable_lmcache:
-        # Check if disaggregated mode is enabled
-        enable_lmcache_disag = os.getenv("ENABLE_LMCACHE_DISAG", "0").lower() in ("1", "true", "yes")
-        
-        if enable_lmcache_disag:
-            kv_transfer_config = KVTransferConfig(
-                kv_connector="MultiConnector",
-                kv_role="kv_both",
-                kv_connector_extra_config={
-                    "connectors": [
-                        {
-                            "kv_connector": "LMCacheConnectorV1",
-                            "kv_role": "kv_both"
-                        },
-                        {
-                            "kv_connector": "NixlConnector",
-                            "kv_role": "kv_both",
-                        }
-                    ]
-                }
-            )
-            logger.info("Using LMCache with disaggregated serving (MultiConnector)")
-        else:
-            kv_transfer_config = KVTransferConfig(
-                kv_connector="LMCacheConnectorV1", kv_role="kv_both"
-            )
-            logger.info("Using LMCache configuration")
-    else:
-        kv_transfer_config = KVTransferConfig(
-            kv_connector="NixlConnector", kv_role="kv_both"
-        )
-        logger.info("Using NixlConnector configuration")
-    
-    defaults = {
-        "task": "generate",
-        "skip_tokenizer_init": True,
-        "disable_log_requests": True,
-        "enable_prefix_caching": True,
-        # KV routing relies on logging KV metrics
-        "disable_log_stats": False,
-        # Always set up KV Events for routing
-        "kv_events_config": KVEventsConfig(
-            enable_kv_cache_events=True,
-            publisher="zmq",
-            endpoint=f"tcp://*:{config.kv_events_port}",
-        ),
-        # Setting up kv transfer based on LMCache setting
-        "kv_transfer_config": kv_transfer_config,
-    }
-
-    # Made decision to always overwrite.
-    # Respecting users original cmd line args at all costs requires a bunch of arg parse work
-
-    logger.debug("Setting Dynamo defaults for vLLM")
-    for key, value in defaults.items():
-        if hasattr(config.engine_args, key):
-            setattr(config.engine_args, key, value)
-            logger.debug(f" engine_args.{key} = {value}")
-        else:
-            raise ValueError(f"{key} not found in AsyncEngineArgs from vLLM.")
-
-
 def parse_args() -> Config:
     parser = FlexibleArgumentParser(
         description="vLLM server integrated with Dynamo LLM."
@@ -278,6 +210,42 @@ def overwrite_args(config):
 
     dp_rank = config.engine_args.data_parallel_rank or 0
 
+    # Check if LMCache should be enabled
+    enable_lmcache = os.getenv("ENABLE_LMCACHE", "0").lower() in ("1", "true", "yes")
+
+    # Set kv_transfer_config based on LMCache setting
+    if enable_lmcache:
+        # Check if disaggregated mode is enabled
+        enable_lmcache_disag = os.getenv("ENABLE_LMCACHE_DISAG", "0").lower() in ("1", "true", "yes")
+        
+        if enable_lmcache_disag:
+            kv_transfer_config = KVTransferConfig(
+                kv_connector="MultiConnector",
+                kv_role="kv_both",
+                kv_connector_extra_config={
+                    "connectors": [
+                        {
+                            "kv_connector": "LMCacheConnectorV1",
+                            "kv_role": "kv_both"
+                        },
+                        {
+                            "kv_connector": "NixlConnector",
+                            "kv_role": "kv_both",
+                        }
+                    ]
+                }
+            )
+            logger.info("Using LMCache with disaggregated serving (MultiConnector)")
+        else:
+            kv_transfer_config = KVTransferConfig(
+                kv_connector="LMCacheConnectorV1", kv_role="kv_both"
+            )
+            logger.info("Using LMCache configuration")
+    else:
+        kv_transfer_config = KVTransferConfig(
+            kv_connector="NixlConnector", kv_role="kv_both"
+        )
+        logger.info("Using NixlConnector configuration")
     defaults = {
         "task": "generate",
         "skip_tokenizer_init": True,
@@ -286,9 +254,7 @@ def overwrite_args(config):
         # KV routing relies on logging KV metrics
         "disable_log_stats": False,
         # Always setting up kv transfer for disagg
-        "kv_transfer_config": KVTransferConfig(
-            kv_connector="NixlConnector", kv_role="kv_both"
-        ),
+        "kv_transfer_config": kv_transfer_config,
         "kv_events_config": KVEventsConfig(
             enable_kv_cache_events=True,
             publisher="zmq",
