@@ -194,14 +194,12 @@ impl KvbmCacheManager {
             .lock()
             .map_err(to_pyerr)?
             .get_block_ids(&request_id)
-            .inspect_err(|e| {
-                match e {
-                    SlotError::NotFound => {
-                        tracing::warn!(request_id, "slot was never allocated for this request");
-                    }
-                    _ => {
-                        tracing::error!(request_id, "failed to get block ids: {:?}", e);
-                    }
+            .inspect_err(|e| match e {
+                SlotError::NotFound => {
+                    tracing::warn!(request_id, "slot was never allocated for this request");
+                }
+                _ => {
+                    tracing::error!(request_id, "failed to get block ids: {:?}", e);
                 }
             })
             .unwrap_or_default())

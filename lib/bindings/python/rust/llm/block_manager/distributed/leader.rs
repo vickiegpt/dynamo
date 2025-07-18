@@ -51,7 +51,8 @@ impl KvbmLeader {
         let num_disk_blocks = compute_num_blocks(DISK_CACHE, DISK_CACHE_OVERRIDE, bytes_per_block);
 
         let barrier_id = get_barrier_id();
-        let leader_init_timeout_sec: u64 = get_leader_init_timeout_secs(LEADER_WORKER_INIT_TIMEOUT_SECS);
+        let leader_init_timeout_sec: u64 =
+            get_leader_init_timeout_secs(LEADER_WORKER_INIT_TIMEOUT_SECS);
 
         let config = KvbmLeaderConfig::builder()
             .barrier_id(barrier_id)
