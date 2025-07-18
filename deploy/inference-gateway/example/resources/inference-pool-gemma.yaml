@@ -12,33 +12,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
+
+## Maps to a Dynamo graph deployment for a model
+apiVersion: inference.networking.x-k8s.io/v1alpha2
+kind: InferencePool
 metadata:
-  name: llm-route
+  name: gemma-pool
+  namespace: default
 spec:
-  parentRefs:
-  - group: gateway.networking.k8s.io
-    kind: Gateway
-    name: inference-gateway
-  rules:
-  - backendRefs:
-    - group: inference.networking.x-k8s.io
-      kind: InferencePool
-      name: qwen-pool
-    matches:
-    - path:
-        type: PathPrefix
-        value: /
-    timeouts:
-      request: 300s
-  # - backendRefs:
-  #   - group: inference.networking.x-k8s.io
-  #     kind: InferencePool
-  #     name: gemma-pool
-  #   matches:
-  #   - path:
-  #       type: PathPrefix
-  #       value: /gemma
-  #   timeouts:
-  #     request: 300s
+  targetPortNumber: 8000
+  selector:
+    nvidia.com/dynamo-component: Frontend
+    nvidia.com/dynamo-namespace: gemma-dns
+  extensionRef:
+    failureMode: FailOpen
+    group: ""
+    kind: Service
+    name: gemma-epp

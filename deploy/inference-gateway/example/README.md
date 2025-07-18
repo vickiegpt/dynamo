@@ -159,7 +159,7 @@ Send inference request to gateway:
 curl $GATEWAY_URL/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "model": "google/gemma-3-1b-it",
     "messages": [
     {
         "role": "user",

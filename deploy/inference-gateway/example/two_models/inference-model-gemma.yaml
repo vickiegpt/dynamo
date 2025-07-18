@@ -23,4 +23,4 @@ spec:
   poolRef:
     group: inference.networking.x-k8s.io
     kind: InferencePool
-    name: dynamo-deepseek
+    name: gemma-pool
