@@ -4,13 +4,13 @@
 
 # This is one of the only variables that must be set currently. The image must contain
 # genai-perf installation.
-IMAGE_BENCH="${IMAGE_BENCH:-""}"
+IMAGE_BENCH="${IMAGE_BENCH:-"nvcr.io/nvidia/tritonserver:25.06-py3-sdk"}"
 
 # Set to mount current host directory to /mnt inside the container as an example,
 # but you may freely customize the mounts based on your cluster. A common practice
 # is to mount paths to NFS storage for common scripts, model weights, etc.
 # NOTE: This can be a comma separated list of multiple mounts as well.
-DEFAULT_MOUNT="${PWD}/../:/mnt,${PWD}/../../../benchmarks:/benchmarks"
+DEFAULT_MOUNT="${PWD}/../:/mnt,${PWD}/../../../../benchmarks:/benchmarks"
 MOUNTS="${MOUNTS:-${DEFAULT_MOUNT}}"
 
 # Set the default values for the benchmark parameters
