@@ -42,3 +42,12 @@ spec:
         value: /
     timeouts:
       request: 300s
+
+
+    - headers:
+      - name: model
+        type: Exact
+        value: deepseek-r1-tp16
+    path:
+      type: PathPrefix
+      value: /v1/completions
