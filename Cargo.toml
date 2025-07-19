@@ -75,8 +75,9 @@ xxhash-rust = { version = "0.8", features = ["xxh3", "const_xxh3"] }
 insta.opt-level = 3
 
 [profile.dev]
-# release level optimizations otherwise everything feels slow
-opt-level = 3
+# NOTE: users that wish for better dev perf should put the following settings in their
+# ~/.cargo or project's workspace
+# opt-level = 3
 
 [profile.release]
 # These make the build much slower but shrink the binary, and could help performance
