@@ -101,11 +101,9 @@ jobs:
     - name: Run Cargo Check
       working-directory: ${{ matrix.dir }}
       run: |
-        cargo check --locked
         cargo build --locked
         cargo clippy --locked --no-deps --all-targets -- -D warnings
         cargo test --locked --all-targets
-      timeout-minutes: 10
 
     # - name: Run Unit Tests
     #   working-directory: ${{ matrix.dir }}
