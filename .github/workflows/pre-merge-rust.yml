@@ -49,11 +49,23 @@ jobs:
       run: |
         sudo apt-get update -y
         sudo apt-get install -y protobuf-compiler
-    - name: Cache Cargo Registry
-      uses: actions/cache@v3
+
+    # - name: Cache Cargo Registry
+    #   uses: actions/cache@v3
+    #   with:
+    #     path: ~/.cargo/registry
+    #     key: ${{ runner.os }}-cargo-registry-${{ github.head_ref || github.ref_name }}-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
       with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-${{ github.head_ref || github.ref_name }}-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ matrix.dir }}-${{ runner.os }}-rust-${{ hashFiles('**/Cargo.lock') }}
+        cache-directories: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+
     - name: Cache Cargo Tools
       uses: actions/cache@v3
       with:
