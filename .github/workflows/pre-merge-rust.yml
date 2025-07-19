@@ -95,5 +95,5 @@ jobs:
     - name: Run Cargo Check
       working-directory: ${{ matrix.dir }}
       run: |
-        cargo clippy --locked --no-deps --all-targets -- -D warnings
-        cargo test --locked --all-targets
+        cargo clippy --profile=ci --locked --no-deps --all-targets -- -D warnings
+        cargo test --profile=ci --locked --all-targets
