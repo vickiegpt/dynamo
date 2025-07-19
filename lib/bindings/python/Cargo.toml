@@ -79,6 +79,7 @@ pythonize = "0.23"
 dlpark = { version = "0.5", features = ["pyo3", "half"], optional = true }
 
 [profile.ci]
+inherits = "dev"
 debug = 0            # No debug symbols
 opt-level = 1        # Some optimizations
 codegen-units = 4    # Faster compilation
