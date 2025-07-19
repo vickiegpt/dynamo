@@ -82,34 +82,35 @@ jobs:
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
         rustup toolchain install 1.86.0-x86_64-unknown-linux-gnu
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
+    - name: Set up Rust Toolchain Components
+      run: rustup component add rustfmt clippy
     - name: Verify Code Formatting
       working-directory: ${{ matrix.dir }}
       run: cargo fmt -- --check
-    - name: Run Clippy Checks
-      working-directory: ${{ matrix.dir }}
-      run: cargo clippy --no-deps --all-targets -- -D warnings
+
+    # - name: Run Clippy Checks
+    #   working-directory: ${{ matrix.dir }}
+    #   run: cargo clippy --no-deps --all-targets -- -D warnings
+
     - name: Install and Run cargo-deny
       working-directory: ${{ matrix.dir }}
       run: |
         cargo-deny --version || cargo install cargo-deny@0.16.4
         cargo-deny --no-default-features check --hide-inclusion-graph licenses bans --config ${{ github.workspace }}/deny.toml
 
-    - name: Set up Rust Toolchain Components
-      run: rustup component add rustfmt clippy
-
     - name: Run Cargo Check
       working-directory: ${{ matrix.dir }}
       run: |
         cargo check --locked
         cargo build --locked
+        cargo clippy --locked --no-deps --all-targets -- -D warnings
         cargo test --locked --all-targets
-      timeout-minutes: 5
+      timeout-minutes: 10
 
-    - name: Run Unit Tests
-      working-directory: ${{ matrix.dir }}
-      # NOTE: --all-targets doesn't run doc tests
-      run: cargo test --locked --all-targets
+    # - name: Run Unit Tests
+    #   working-directory: ${{ matrix.dir }}
+    #   # NOTE: --all-targets doesn't run doc tests
+    #   run: cargo test --locked --all-targets
 
     #   # NOTE: doc tests are by far the slowest tests to run
     #   # The unit tests are much faster and trigger many more failure conditions
