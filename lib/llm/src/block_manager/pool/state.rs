@@ -27,6 +27,7 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
         global_registry: GlobalRegistry,
         async_runtime: Handle,
         metrics: Arc<PoolMetrics>,
+        dummy_pool: bool,
     ) -> Self {
         Self {
             active: ActiveBlockPool::new(),
@@ -35,6 +36,7 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
             return_tx,
             event_manager,
             metrics,
+            dummy_pool,
         }
     }
 
@@ -90,6 +92,13 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
                     tracing::error!("failed to send response to return block");
                 }
             }
+            PriorityRequest::AcquireDummyBlocksById(req) => {
+                let (ids, resp_tx) = req.dissolve();
+                let blocks = self.acquire_dummy_blocks_by_id(ids);
+                if resp_tx.send(blocks).is_err() {
+                    tracing::error!("failed to send response to acquire dummy blocks by id");
+                }
+            }
         }
     }
 
@@ -131,6 +140,10 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
         &mut self,
         count: usize,
     ) -> Result<Vec<MutableBlock<S, L, M>>, BlockPoolError> {
+        if self.dummy_pool {
+            return Err(BlockPoolError::ExpectedDummyBlockPool(false));
+        }
+
         let available_blocks = self.inactive.available_blocks() as usize;
 
         if available_blocks < count {
@@ -168,6 +181,10 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
         return_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Block<S, L, M>>,
     ) -> Result<Vec<ImmutableBlock<S, L, M>>, BlockPoolError> {
         assert!(!blocks.is_empty(), "no blocks to register");
+
+        if self.dummy_pool {
+            return Ok(vec![]);
+        }
 
         let expected_len = blocks.len();
         let mut immutable_blocks = Vec::new();
@@ -279,6 +296,10 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
         sequence_hashes: Vec<SequenceHash>,
         return_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Block<S, L, M>>,
     ) -> Vec<ImmutableBlock<S, L, M>> {
+        if self.dummy_pool {
+            return vec![];
+        }
+
         let mut immutable_blocks = Vec::new();
         for sequence_hash in &sequence_hashes {
             if !self.registry.is_registered(*sequence_hash) {
@@ -331,6 +352,10 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
         sequence_hashes: &[SequenceHash],
         return_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Block<S, L, M>>,
     ) {
+        if self.dummy_pool {
+            return;
+        }
+
         for sequence_hash in sequence_hashes {
             if !self.registry.is_registered(*sequence_hash) {
                 break;
@@ -355,6 +380,20 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
         self.inactive.return_block(block);
     }
 
+    /// Acquires blocks from the inactive pool by their IDs.
+    pub fn acquire_dummy_blocks_by_id(&mut self, ids: Vec<usize>) -> Result<Vec<MutableBlock<S, L, M>>, BlockPoolError> {
+        if !self.dummy_pool {
+            return Err(BlockPoolError::ExpectedDummyBlockPool(true));
+        }
+
+        let blocks = ids.into_iter().map(|id| {
+            let block = self.inactive.acquire_uninitialized_block_by_id(id).unwrap();
+            MutableBlock::new(block, self.return_tx.clone())
+        }).collect();
+
+        Ok(blocks)
+    }
+
     fn publisher(&self) -> Publisher {
         Publisher::new(self.event_manager.clone())
     }
@@ -371,6 +410,7 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> ProgressEngine
         global_registry: GlobalRegistry,
         async_runtime: Handle,
         metrics: Arc<PoolMetrics>,
+        dummy_pool: bool,
     ) -> Self {
         let (return_tx, return_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut state = State::<S, L, M>::new(
@@ -379,6 +419,7 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> ProgressEngine
             global_registry,
             async_runtime,
             metrics.clone(),
+            dummy_pool,
         );
 
         let count = blocks.len();

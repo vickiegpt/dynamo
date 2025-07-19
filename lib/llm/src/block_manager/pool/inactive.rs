@@ -18,6 +18,7 @@ use std::sync::atomic::AtomicU64;
 use crate::block_manager::block::{locality::LocalityProvider, BlockState};
 
 use super::*;
+use itertools::Itertools;
 use tracing::instrument;
 
 #[derive(Default)]
@@ -529,6 +530,20 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> InactiveBlockPool<S, L, 
         }
 
         Ok(())
+    }
+
+    /// Try to acquire an uninitialized block based on its ID.
+    pub fn acquire_uninitialized_block_by_id(&mut self, id: usize) -> Option<Block<S, L, M>> {
+        // First, check the uninitialized set.
+        if let Some((index, _)) = self.uninitialized_set.iter().find_position(|block| block.block_id() == id) {
+            let block = self.uninitialized_set.remove(index).unwrap();
+
+            self.available_blocks.fetch_sub(1, Ordering::Relaxed);
+
+            Some(block)
+        } else {
+            None
+        }
     }
 }
 

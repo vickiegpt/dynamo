@@ -16,6 +16,8 @@ pub struct DistributedLeaderWorkerResources {
     /// Make this an option to make testing easier.
     // TODO(jthomson04): We should be using NullResources for this.
     transfer_tx: Option<mpsc::UnboundedSender<TransferRequest>>,
+
+    using_connector: bool,
 }
 
 impl std::fmt::Debug for DistributedLeaderWorkerResources {
@@ -28,6 +30,7 @@ impl DistributedLeaderWorkerResources {
     pub fn new(
         leader: Option<Arc<KvbmLeader>>,
         cancel_token: CancellationToken,
+        using_connector: bool,
     ) -> anyhow::Result<Self> {
         if let Some(leader) = leader {
             let (transfer_tx, transfer_rx) = mpsc::unbounded_channel();
@@ -43,9 +46,10 @@ impl DistributedLeaderWorkerResources {
 
             Ok(Self {
                 transfer_tx: Some(transfer_tx),
+                using_connector,
             })
         } else {
-            Ok(Self { transfer_tx: None })
+            Ok(Self { transfer_tx: None, using_connector })
         }
     }
 
@@ -107,10 +111,13 @@ impl LogicalResources for DistributedLeaderWorkerResources {
             let source_idxs = sources.iter().map(|source| source.block_data().block_id());
             let target_idxs = targets.iter().map(|target| target.block_data().block_id());
 
+            let is_connector_triggered = self.using_connector && target_pool == BlockTransferPool::Device;
+
             let request = BlockTransferRequest::new(
                 source_pool,
                 target_pool,
                 source_idxs.zip(target_idxs).collect(),
+                is_connector_triggered,
             );
 
             let (tx, rx) = oneshot::channel();

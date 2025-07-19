@@ -153,6 +153,7 @@ type TouchBlocksReq = RequestResponse<Vec<SequenceHash>, BlockPoolResult<()>>;
 type AddBlocksReq<S, L, M> = RequestResponse<Vec<Block<S, L, M>>, ()>;
 type ResetReq = RequestResponse<(), BlockPoolResult<()>>;
 type ReturnBlockReq<S, L, M> = RequestResponse<Vec<Block<S, L, M>>, BlockPoolResult<()>>;
+type AcquireDummyBlocksByIdReq<S, L, M> = RequestResponse<Vec<usize>, BlockPoolResult<MutableBlocks<S, L, M>>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BlockPoolError {
@@ -185,6 +186,9 @@ pub enum BlockPoolError {
 
     #[error("No blocks to register")]
     NoBlocksToRegister,
+
+    #[error("Expected dummy block pool: {0}")]
+    ExpectedDummyBlockPool(bool),
 }
 
 #[derive(Builder, Dissolve)]
@@ -212,6 +216,9 @@ pub struct BlockPoolArgs<S: Storage, L: LocalityProvider, M: BlockMetadata> {
 
     #[builder(default = "BlockRegistrationDuplicationSetting::Allowed")]
     default_duplication_setting: BlockRegistrationDuplicationSetting,
+
+    #[builder(default = "false")]
+    dummy_pool: bool,
 }
 
 impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPoolArgsBuilder<S, L, M> {
@@ -225,6 +232,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPoolArgsBuilder<S, 
             async_runtime,
             metrics,
             default_duplication_setting,
+            dummy_pool,
         ) = args.dissolve();
 
         tracing::info!("building block pool");
@@ -236,6 +244,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPoolArgsBuilder<S, 
             async_runtime,
             metrics,
             default_duplication_setting,
+            dummy_pool,
         );
 
         Ok(pool)
@@ -307,6 +316,7 @@ enum PriorityRequest<S: Storage, L: LocalityProvider, M: BlockMetadata> {
     RegisterBlocks(RegisterBlocksReq<S, L, M>),
     MatchSequenceHashes(MatchHashesReq<S, L, M>),
     TouchBlocks(TouchBlocksReq),
+    AcquireDummyBlocksById(AcquireDummyBlocksByIdReq<S, L, M>),
     Reset(ResetReq),
     ReturnBlock(ReturnBlockReq<S, L, M>),
 }
@@ -339,6 +349,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M> {
         async_runtime: Handle,
         metrics: Arc<PoolMetrics>,
         default_duplication_setting: BlockRegistrationDuplicationSetting,
+        dummy_pool: bool,
     ) -> Self {
         let (pool, progress_engine) = Self::with_progress_engine(
             event_manager,
@@ -348,6 +359,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M> {
             async_runtime,
             metrics,
             default_duplication_setting,
+            dummy_pool,
         );
 
         // pool.runtime.handle().spawn(async move {
@@ -393,6 +405,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M> {
         async_runtime: Handle,
         metrics: Arc<PoolMetrics>,
         default_duplication_setting: BlockRegistrationDuplicationSetting,
+        dummy_pool: bool,
     ) -> (Self, ProgressEngine<S, L, M>) {
         let (priority_tx, priority_rx) = tokio::sync::mpsc::unbounded_channel();
         let (ctrl_tx, ctrl_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -406,6 +419,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M> {
             global_registry,
             async_runtime,
             metrics,
+            dummy_pool,
         );
 
         let available_blocks_counter = progress_engine.available_blocks_counter.clone();
@@ -718,6 +732,31 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M> {
 
         Ok(resp_rx)
     }
+
+    /// Acquires blocks from the inactive pool by their IDs.
+    /// Only available in dummy block pools.
+    pub async fn acquire_dummy_blocks_by_id(&self, ids: Vec<usize>) -> BlockPoolResult<MutableBlocks<S, L, M>> {
+        self._acquire_dummy_blocks_by_id(ids)?
+            .await
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
+    }
+
+    /// Blocking version of [`BlockPool::acquire_dummy_blocks_by_id`].
+    pub fn acquire_dummy_blocks_by_id_blocking(&self, ids: Vec<usize>) -> BlockPoolResult<MutableBlocks<S, L, M>> {
+        self._acquire_dummy_blocks_by_id(ids)?
+            .blocking_recv()
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
+    }
+
+    fn _acquire_dummy_blocks_by_id(&self, ids: Vec<usize>) -> AsyncResponse<BlockPoolResult<MutableBlocks<S, L, M>>> {
+        let (req, resp_rx) = AcquireDummyBlocksByIdReq::new(ids);
+
+        self.priority_tx
+            .send(PriorityRequest::AcquireDummyBlocksById(req))
+            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?;
+
+        Ok(resp_rx)
+    }
 }
 
 struct State<S: Storage, L: LocalityProvider, M: BlockMetadata> {
@@ -727,6 +766,7 @@ struct State<S: Storage, L: LocalityProvider, M: BlockMetadata> {
     return_tx: tokio::sync::mpsc::UnboundedSender<Block<S, L, M>>,
     event_manager: Arc<dyn EventManager>,
     metrics: Arc<PoolMetrics>,
+    dummy_pool: bool,
 }
 
 struct ProgressEngine<S: Storage, L: LocalityProvider, M: BlockMetadata> {
@@ -766,6 +806,7 @@ mod tests {
                 async_runtime,
                 metrics,
                 default_duplication_setting,
+                dummy_pool,
             ) = args.dissolve();
 
             let (pool, progress_engine) = BlockPool::with_progress_engine(
@@ -776,6 +817,7 @@ mod tests {
                 async_runtime,
                 metrics,
                 default_duplication_setting,
+                dummy_pool,
             );
 
             Ok((pool, progress_engine))

@@ -145,6 +145,7 @@ mod tests {
                     utils::BlockTransferPool::Device,
                     utils::BlockTransferPool::Host,
                     vec![(block_idx, block_idx)],
+                    false,
                 ))
                 .await?
                 .await?;
@@ -156,6 +157,7 @@ mod tests {
                     utils::BlockTransferPool::Host,
                     utils::BlockTransferPool::Disk,
                     vec![(block_idx, block_idx)],
+                    false,
                 ))
                 .await?
                 .await?;
@@ -167,6 +169,7 @@ mod tests {
                     utils::BlockTransferPool::Disk,
                     utils::BlockTransferPool::Device,
                     vec![(block_idx, block_idx)],
+                    false,
                 ))
                 .await?
                 .await?;

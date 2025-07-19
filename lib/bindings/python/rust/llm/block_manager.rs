@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 mod distributed;
 
 pub mod vllm;
+pub mod vllm_connector;
 
 /// Add bingings from this crate to the provided module
 pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -32,6 +33,7 @@ pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<distributed::KvbmLeader>()?;
 
     vllm::add_to_module(m)?;
+    vllm_connector::add_to_module(m)?;
 
     Ok(())
 }
@@ -52,12 +54,13 @@ pub struct BlockManager {
 #[pymethods]
 impl BlockManager {
     #[new]
-    #[pyo3(signature = (worker_id, leader = None, page_size = 32, num_device_blocks = None))]
+    #[pyo3(signature = (worker_id, leader = None, page_size = 32, num_device_blocks = None, is_connector = false))]
     fn new(
         worker_id: u64,
         leader: Option<distributed::KvbmLeader>,
         page_size: usize,
         num_device_blocks: Option<usize>,
+        is_connector: bool,
     ) -> PyResult<Self> {
         let cancel_token = CancellationToken::new();
         let mut config = dynamo_llm::block_manager::KvBlockManagerConfig::builder().runtime(
@@ -139,7 +142,7 @@ impl BlockManager {
             inner: Arc::from(
                 rt.block_on(async {
                     let resources =
-                        DistributedLeaderWorkerResources::new(leader, cancel_token.child_token())?;
+                        DistributedLeaderWorkerResources::new(leader, cancel_token.child_token(), is_connector)?;
 
                     dynamo_llm::block_manager::KvBlockManager::<
                         Logical<DistributedLeaderWorkerResources>,
