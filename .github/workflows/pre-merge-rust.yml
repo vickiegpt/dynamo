@@ -46,7 +46,7 @@ jobs:
     - name: Set up system dependencies
       run: |
         sudo apt-get update -y
-        sudo apt-get install -y protobuf-compiler bzip2
+        sudo apt-get install -y protobuf-compiler libbz2-1.0
     - name: Cache Cargo Registry
       uses: actions/cache@v3
       with:
