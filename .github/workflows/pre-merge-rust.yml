@@ -43,11 +43,12 @@ jobs:
       contents: read
     steps:
     - uses: actions/checkout@v4
+      with:
+        lfs: true
     - name: Set up system dependencies
       run: |
         sudo apt-get update -y
-        sudo apt-get install -y protobuf-compiler git-lfs
-        git lfs install
+        sudo apt-get install -y protobuf-compiler
     - name: Cache Cargo Registry
       uses: actions/cache@v3
       with:
@@ -84,10 +85,13 @@ jobs:
       run: |
         cargo-deny --version || cargo install cargo-deny@0.16.4
         cargo-deny --no-default-features check --hide-inclusion-graph licenses bans --config ${{ github.workspace }}/deny.toml
-    - name: Run Doc Tests
-      working-directory: ${{ matrix.dir }}
-      run: cargo doc --no-deps && cargo test --locked --doc
     - name: Run Unit Tests
       working-directory: ${{ matrix.dir }}
       # NOTE: --all-targets doesn't run doc tests
       run: cargo test --locked --all-targets
+
+      # NOTE: doc tests are by far the slowest tests to run
+      # The unit tests are much faster and trigger many more failure conditions
+    - name: Run Doc Tests
+      working-directory: ${{ matrix.dir }}
+      run: cargo doc --no-deps && cargo test --locked --doc
