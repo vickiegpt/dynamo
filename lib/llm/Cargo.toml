@@ -51,12 +51,12 @@ async-stream = { workspace = true }
 async-trait = { workspace = true }
 async-nats = { workspace = true }
 async_zmq = { workspace = true }
-bzip2 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 derive_builder = {workspace = true }
 either = { workspace = true }
 etcd-client = { workspace = true }
+flate2 = { workspace = true }
 futures =  { workspace = true }
 hf-hub = { workspace = true }
 humantime = { workspace = true } # input/batch

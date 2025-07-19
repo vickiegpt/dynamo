@@ -38,13 +38,13 @@ async-stream = { version = "0.3" }
 async-trait = { version = "0.1" }
 async_zmq = { version = "0.4.0" }
 blake3 = { version = "1" }
-bzip2 = { version = "0.6" }  # Purpose: Pure Rust bzip2 compression/decompression
 bytes = { version = "1" }
 chrono = { version = "0.4", default-features = false, features = ["alloc", "std", "clock", "now", "serde"] }
 derive_builder = { version = "0.20" }
 derive-getters = { version = "0.5" }
 either = { version = "1.13", features = ["serde"] }
 etcd-client = { version = "0.14", features = ["tls"] }
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }  # Purpose: Pure Rust gzip compression/decompression
 futures = { version = "0.3" }
 hf-hub = { version = "0.4.2", default-features = false, features = ["tokio", "rustls-tls"] }
 humantime = { version = "2.2.0" }

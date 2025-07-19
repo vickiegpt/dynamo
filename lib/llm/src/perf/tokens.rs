@@ -1492,12 +1492,12 @@ mod tests {
     #[tokio::test]
     async fn test_deepseek_stream_with_extracted_tokenizer() -> Result<()> {
         use crate::tokenizers::Tokenizer;
-        use crate::utils::bzip2::Bzip2Extractor;
+        use crate::utils::gzip::GzipExtractor;
         use std::sync::Arc;
 
         // Step 1: Extract and validate the tokenizer
-        let tokenizer_path = "tests/data/replays/deepseek-r1-distill-llama-8b/tokenizer-deepseek-r1-distill-llama-8b.json.bz2";
-        let extraction = Bzip2Extractor::builder()
+        let tokenizer_path = "tests/data/replays/deepseek-r1-distill-llama-8b/tokenizer-deepseek-r1-distill-llama-8b.json.gz";
+        let extraction = GzipExtractor::builder()
             .source_path(tokenizer_path)
             .target_filename("tokenizer.json")
             .extract()?;
