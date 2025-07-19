@@ -46,7 +46,8 @@ jobs:
     - name: Set up system dependencies
       run: |
         sudo apt-get update -y
-        sudo apt-get install -y protobuf-compiler libbz2-dev
+        sudo apt-get install -y protobuf-compiler git-lfs
+        git lfs install
     - name: Cache Cargo Registry
       uses: actions/cache@v3
       with:
