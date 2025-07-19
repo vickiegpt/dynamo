@@ -370,7 +370,7 @@ pub fn record_response_stream<R: Data + Clone>(
 /// println!("Recorded {} responses", recorded.response_count());
 /// ```
 pub async fn record_data_stream<R: Data + Clone>(
-    mut data_stream: DataStream<R>,
+    data_stream: impl Stream<Item = R>,
 ) -> RecordedStream<R> {
     use futures::StreamExt;
 
@@ -379,6 +379,7 @@ pub async fn record_data_stream<R: Data + Clone>(
     let mut sequence_number = 0;
 
     // Consume the entire stream
+    tokio::pin!(data_stream);
     while let Some(item) = data_stream.next().await {
         responses.push(TimestampedResponse::new(item, sequence_number));
         sequence_number += 1;
@@ -392,7 +393,7 @@ pub async fn record_data_stream<R: Data + Clone>(
 /// Read an annotated stream from a file and collect all items
 pub fn read_annotated_stream_from_file<T: Serialize + DeserializeOwned>(
     path: &str,
-) -> Result<DataStream<Annotated<T>>, anyhow::Error> {
+) -> Result<impl Stream<Item = Annotated<T>>, anyhow::Error> {
     // Read the entire file as a string
     let data = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("Failed to read file: {}", e))
@@ -402,7 +403,7 @@ pub fn read_annotated_stream_from_file<T: Serialize + DeserializeOwned>(
     let sse_stream = parse_sse_stream(&data);
 
     // Convert SSE messages to annotated stream
-    Ok(convert_sse_to_annotated_stream::<T>(Box::pin(sse_stream)))
+    Ok(convert_sse_to_annotated_stream::<T>(sse_stream))
 }
 
 #[cfg(test)]
