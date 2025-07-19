@@ -1707,9 +1707,9 @@ dependencies = [
 
 [[package]]
 name = "digit-layout"
-version = "0.2.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09157630eece4139f6cc5a457556d308c3465ecd5af492f0e5aadc043997e2ce"
+checksum = "21cba97b8c9bd3d9a6381565825ddabba86ddcd3a3ba090f48f39c1217d7f0d4"
 dependencies = [
  "half 2.6.0",
 ]
@@ -1837,6 +1837,7 @@ dependencies = [
 name = "dynamo-llm"
 version = "0.3.2"
 dependencies = [
+ "ahash",
  "akin",
  "aligned-vec",
  "anyhow",
@@ -1899,8 +1900,8 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
- "toktrie 0.6.31",
- "toktrie_hf_tokenizers 0.6.31",
+ "toktrie 1.1.0",
+ "toktrie_hf_tokenizers 1.1.0",
  "tracing",
  "unicode-segmentation",
  "url",
@@ -2810,9 +2811,9 @@ dependencies = [
 
 [[package]]
 name = "ggml-quants"
-version = "0.0.0"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a27693512784e0786212eb0bef841779a6337d2d04520ed475b4d5a864f98366"
+checksum = "b5e19ad18fcb0c1bc4f4ee534a17a6743055be2952ea6c51f094d0867a927d4e"
 dependencies = [
  "digit-layout",
  "half 2.6.0",
@@ -2821,15 +2822,15 @@ dependencies = [
 
 [[package]]
 name = "ggus"
-version = "0.4.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ac5654356c6f7f6116905aeaf92ab002c3d03414ada5dbe0bb2e32aa5fea173"
+checksum = "fc099d0395c63a57e0e97069e1dfe23a2c1d9c72aaf16bab2648701316c341a5"
 dependencies = [
- "fancy-regex",
  "ggml-quants",
  "indexmap 2.10.0",
  "log",
  "num_enum",
+ "regex",
 ]
 
 [[package]]
@@ -7147,7 +7148,6 @@ dependencies = [
  "fancy-regex",
  "getrandom 0.3.3",
  "hf-hub",
- "indicatif",
  "itertools 0.14.0",
  "log",
  "macro_rules_attribute",
@@ -7280,19 +7280,6 @@ dependencies = [
 
 [[package]]
 name = "toktrie"
-version = "0.6.31"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32dfaa37eed7e440ee93b236b736600ccbbfa47e4a0b15f0b74a4d3f4cf9b5a3"
-dependencies = [
- "anyhow",
- "bytemuck",
- "bytemuck_derive",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "toktrie"
 version = "1.0.0"
 source = "git+https://github.com/guidance-ai/llguidance.git?rev=c432092#c432092d37b8ccd1afeeff3e7f9c9a29aae0a87e"
 dependencies = [
@@ -7304,17 +7291,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "toktrie_hf_tokenizers"
-version = "0.6.31"
+name = "toktrie"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a5e426e5cfb8237a7244bc53e6136022987a16d66d07050ff81c0a56c5a8a25"
+checksum = "747b19d4f97f841cc720aaffb1fa3dbf08bc72abd9199dcf34b0fad7b1a3691c"
 dependencies = [
  "anyhow",
- "log",
+ "bytemuck",
+ "bytemuck_derive",
  "serde",
  "serde_json",
- "tokenizers",
- "toktrie 0.6.31",
 ]
 
 [[package]]
@@ -7328,6 +7314,20 @@ dependencies = [
  "serde_json",
  "tokenizers",
  "toktrie 1.0.0",
+]
+
+[[package]]
+name = "toktrie_hf_tokenizers"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d77f942aa9bcd67f39dfeec0d5b80a40ae32e5ae38c0c58777b7d47fa393177f"
+dependencies = [
+ "anyhow",
+ "log",
+ "serde",
+ "serde_json",
+ "tokenizers",
+ "toktrie 1.1.0",
 ]
 
 [[package]]
