@@ -44,7 +44,7 @@ pub use config::*;
 
 pub use layout::{nixl::NixlLayout, LayoutConfig, LayoutConfigBuilder, LayoutError, LayoutType};
 pub use offload::request::BlockResult;
-pub use pool::{BlockPool, ManagedBlockPool};
+pub use pool::{BlockPool, ManagedBlockPool, ExternalBlockPool};
 pub use storage::{
     nixl::NixlRegisterableStorage, DeviceStorage, DiskStorage, PinnedStorage, Storage,
     StorageAllocator,

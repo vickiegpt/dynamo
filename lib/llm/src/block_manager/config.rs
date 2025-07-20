@@ -103,6 +103,12 @@ pub enum BlockParallelismStrategy {
     LeaderWorkerSharded,
 }
 
+#[derive(Debug, Clone)]
+pub enum PoolType {
+    Managed,
+    External
+}
+
 #[derive(Builder, Validate)]
 #[builder(pattern = "owned", build_fn(validate = "Self::validate"))]
 pub struct KvManagerLayoutConfig<S: Storage + NixlRegisterableStorage> {
@@ -128,6 +134,9 @@ pub struct KvManagerLayoutConfig<S: Storage + NixlRegisterableStorage> {
     /// The type of block parallelism strategy to use
     #[builder(default)]
     pub logical: Option<BlockParallelismStrategy>,
+
+    #[builder(default = "PoolType::Managed")]
+    pub pool_type: PoolType,
 }
 
 impl<S: Storage + NixlRegisterableStorage> KvManagerLayoutConfig<S> {

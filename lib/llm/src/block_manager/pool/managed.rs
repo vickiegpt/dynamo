@@ -132,7 +132,7 @@ pub enum ControlRequest<S: Storage, L: LocalityProvider, M: BlockMetadata> {
     AddBlocks(AddBlocksReq<S, L, M>),
 }
 
-/// Manages the blocks in a specific storage backenda
+/// Manages the blocks in a specific storage backend
 pub struct ManagedBlockPool<S: Storage, L: LocalityProvider, M: BlockMetadata> {
     priority_tx: tokio::sync::mpsc::UnboundedSender<PriorityRequest<S, L, M>>,
     ctrl_tx: tokio::sync::mpsc::UnboundedSender<ControlRequest<S, L, M>>,

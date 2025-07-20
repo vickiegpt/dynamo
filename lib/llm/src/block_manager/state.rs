@@ -115,6 +115,11 @@ impl<R: LogicalResources, Metadata: BlockMetadata>
     KvBlockManagerState<locality::Logical<R>, Metadata>
 {
     pub async fn new(config: KvBlockManagerConfig, logical_resources: R) -> Result<Arc<Self>> {
+
+        let disk_pool_type = config.disk_layout.as_ref().map(|layout| layout.pool_type.clone());
+        let host_pool_type = config.host_layout.as_ref().map(|layout| layout.pool_type.clone());
+        let device_pool_type = config.device_layout.as_ref().map(|layout| layout.pool_type.clone());
+
         let mut resources = Resources::new(config)?;
         let block_data_factories =
             logical::LogicalBlockFactories::new(&mut resources, logical_resources)?;
@@ -124,7 +129,7 @@ impl<R: LogicalResources, Metadata: BlockMetadata>
         let (disk_pool, disk_blocks) = match disk_factory {
             Some(factory) => {
                 let (pool, blocks) =
-                    create_block_pool::<_, _, Metadata>(factory, &resources, "disk")?;
+                    create_block_pool::<_, _, Metadata>(factory, &resources, "disk", disk_pool_type.unwrap())?;
                 (Some(pool), Some(blocks))
             }
             None => {
@@ -136,7 +141,7 @@ impl<R: LogicalResources, Metadata: BlockMetadata>
         let (host_pool, host_blocks) = match host_factory {
             Some(factory) => {
                 let (pool, blocks) =
-                    create_block_pool::<_, _, Metadata>(factory, &resources, "host")?;
+                    create_block_pool::<_, _, Metadata>(factory, &resources, "host", host_pool_type.unwrap())?;
                 (Some(pool), Some(blocks))
             }
             None => {
@@ -148,7 +153,7 @@ impl<R: LogicalResources, Metadata: BlockMetadata>
         let (device_pool, device_blocks) = match device_factory {
             Some(factory) => {
                 let (pool, blocks) =
-                    create_block_pool::<_, _, Metadata>(factory, &resources, "device")?;
+                    create_block_pool::<_, _, Metadata>(factory, &resources, "device", device_pool_type.unwrap())?;
                 (Some(pool), Some(blocks))
             }
             None => {
@@ -218,6 +223,10 @@ impl<R: LogicalResources, Metadata: BlockMetadata>
 // - this will allow us to use the locality abstraction to build our factories and block pools
 impl<Metadata: BlockMetadata> KvBlockManagerState<locality::Local, Metadata> {
     pub async fn new(config: KvBlockManagerConfig) -> Result<Arc<Self>> {
+        let disk_pool_type = config.disk_layout.as_ref().map(|layout| layout.pool_type.clone());
+        let host_pool_type = config.host_layout.as_ref().map(|layout| layout.pool_type.clone());
+        let device_pool_type = config.device_layout.as_ref().map(|layout| layout.pool_type.clone());
+
         let mut resources = Resources::new(config)?;
         let block_data_factories = local::LocalBlockDataFactories::new(&mut resources)?;
 
@@ -227,7 +236,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<locality::Local, Metadata> {
         let (disk_pool, disk_blocks) = match disk_factory {
             Some(factory) => {
                 let (pool, blocks) =
-                    create_block_pool::<_, _, Metadata>(factory, &resources, "disk")?;
+                    create_block_pool::<_, _, Metadata>(factory, &resources, "disk", disk_pool_type.unwrap())?;
                 (Some(pool), Some(blocks))
             }
             None => {
@@ -239,7 +248,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<locality::Local, Metadata> {
         let (host_pool, host_blocks) = match host_factory {
             Some(factory) => {
                 let (pool, blocks) =
-                    create_block_pool::<_, _, Metadata>(factory, &resources, "host")?;
+                    create_block_pool::<_, _, Metadata>(factory, &resources, "host", host_pool_type.unwrap())?;
                 (Some(pool), Some(blocks))
             }
             None => {
@@ -251,7 +260,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<locality::Local, Metadata> {
         let (device_pool, device_blocks) = match device_factory {
             Some(factory) => {
                 let (pool, blocks) =
-                    create_block_pool::<_, _, Metadata>(factory, &resources, "disk")?;
+                    create_block_pool::<_, _, Metadata>(factory, &resources, "disk", device_pool_type.unwrap())?;
                 (Some(pool), Some(blocks))
             }
             None => {
@@ -506,17 +515,28 @@ pub(crate) fn create_block_pool<S: Storage, L: LocalityProvider, M: BlockMetadat
     factory: impl IntoBlocks<S, L>,
     resources: &Resources,
     pool_name: &str,
+    pool_type: PoolType,
 ) -> Result<(Arc<dyn BlockPool<S, L, M>>, Vec<Block<S, L, M>>)> {
-    let pool = ManagedBlockPool::<S, L, M>::builder()
-        .cancel_token(resources.cancellation_token.clone())
-        .global_registry(resources.global_registry.clone())
-        .async_runtime(resources.async_rt_handle.clone())
-        .event_manager(resources.event_manager.clone())
-        .pool_metrics(resources.metrics.pool(pool_name))
-        .build()?;
+
+    let pool: Arc<dyn BlockPool<S, L, M>> = match pool_type {
+        PoolType::Managed => {
+            Arc::new(ManagedBlockPool::<S, L, M>::builder()
+            .cancel_token(resources.cancellation_token.clone())
+            .global_registry(resources.global_registry.clone())
+            .async_runtime(resources.async_rt_handle.clone())
+            .event_manager(resources.event_manager.clone())
+            .pool_metrics(resources.metrics.pool(pool_name))
+            .build()?)
+        }
+        // TODO: Support the full range of functionality for external pools
+        PoolType::External => {
+            Arc::new(ExternalBlockPool::<S, L, M>::builder()
+                .cancel_token(resources.cancellation_token.clone())
+                .async_runtime(resources.async_rt_handle.clone())
+                .build()?)
+        }
+    };
 
     let blocks = factory.into_blocks()?;
-    Ok((Arc::new(pool), blocks))
+    Ok((pool, blocks))
 }
-
-// Block state operations moved to block.rs for better organization and private field access
