@@ -85,7 +85,7 @@ pub struct KvbmWorker {
 #[pymethods]
 impl KvbmWorker {
     #[new]
-    #[pyo3(signature = (num_device_blocks, page_size, tensors, device_id=0, worker_id=0, dtype_width_bytes=2))]
+    #[pyo3(signature = (num_device_blocks, page_size, tensors, device_id=0, worker_id=0, dtype_width_bytes=2, is_connector=false))]
     fn new(
         num_device_blocks: usize,
         page_size: usize,
@@ -93,6 +93,8 @@ impl KvbmWorker {
         device_id: usize,
         worker_id: usize,
         dtype_width_bytes: usize,
+        // TODO: Figure out how to incorporate this into our active message handler.
+        is_connector: bool,
     ) -> PyResult<Self> {
         let mut vllm_tensors: Vec<Arc<dyn TorchTensor>> = Vec::with_capacity(tensors.len());
 

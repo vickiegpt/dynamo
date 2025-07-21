@@ -21,6 +21,8 @@ try:
     from dynamo._core import BlockManager as BlockManager
     from dynamo._core import KvbmLeader as KvbmLeader
     from dynamo._core import KvbmWorker as KvbmWorker
+
+    from dynamo._core import KvbmConnectorLeader as KvbmConnectorLeader
 except ImportError:
     pass  # BlockManager is not enabled by default
 

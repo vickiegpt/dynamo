@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 mod distributed;
 
 pub mod vllm;
+pub mod vllm_connector;
 
 /// Add bingings from this crate to the provided module
 pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -32,6 +33,7 @@ pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<distributed::KvbmLeader>()?;
 
     vllm::add_to_module(m)?;
+    vllm_connector::add_to_module(m)?;
 
     Ok(())
 }
@@ -48,7 +50,7 @@ pub struct BlockManager {
     _rt: Arc<tokio::runtime::Runtime>,
 }
 
-// TODO: This is in desperate need of a massive refactor. We bind and instantiate this in Python, but we never actually use it.
+// TODO: This is in desperate need of a massive refactor. We bind and instantiate this in Python, but we never actually use it in python.
 #[pymethods]
 impl BlockManager {
     #[new]
