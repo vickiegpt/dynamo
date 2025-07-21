@@ -360,15 +360,6 @@ pub fn record_response_stream<R: Data + Clone>(
 ///
 /// # Returns
 /// A `RecordedStream` containing all the responses with timing information
-///
-/// # Example
-/// ```rust,ignore
-/// use dynamo_llm::perf::record_data_stream;
-///
-/// let stream = create_my_data_stream();
-/// let recorded = record_data_stream(stream).await;
-/// println!("Recorded {} responses", recorded.response_count());
-/// ```
 pub async fn record_data_stream<R: Data + Clone>(
     data_stream: impl Stream<Item = R>,
 ) -> RecordedStream<R> {

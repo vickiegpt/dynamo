@@ -6,43 +6,6 @@
 //! This module provides comprehensive token counting and analysis capabilities for streaming
 //! chat completion responses. It supports multiple data sources for token counting with
 //! different levels of accuracy and includes validation for completeness and consistency.
-//!
-//! # Example Usage
-//!
-//! ```rust,ignore
-//! use dynamo_llm::perf::{RecordedStream, analyze_token_counting};
-//! use std::sync::Arc;
-//!
-//! // Record a stream (see RecordedStream documentation for details)
-//! let recorded_stream: Arc<RecordedStream<_>> = /* ... */;
-//!
-//! // Option 1: Single token approximation (simplest but least accurate)
-//! let analysis = analyze_token_counting(recorded_stream.clone(), None);
-//!
-//! // Option 2: With a tokenizer (more accurate)
-//! use dynamo_llm::tokenizers::Tokenizer;
-//! let tokenizer = Tokenizer::from_file("path/to/tokenizer.json")?;
-//! let analysis = analyze_token_counting(recorded_stream, Some(&*tokenizer));
-//!
-//! // Print comprehensive analysis
-//! analysis.print_summary();
-//!
-//! // Check for validation errors
-//! if analysis.has_errors() {
-//!     println!("Validation errors found: {:?}", analysis.validation_errors);
-//! }
-//!
-//! // Get token count for specific choice
-//! if let Some(tokens) = analysis.total_tokens_for_choice(0) {
-//!     println!("Choice 0 generated {} tokens", tokens);
-//! }
-//!
-//! // Check data source consistency
-//! let consistency_errors = analysis.validate_data_source_consistency();
-//! if !consistency_errors.is_empty() {
-//!     println!("Data source inconsistencies: {:?}", consistency_errors);
-//! }
-//! ```
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;

@@ -8,27 +8,6 @@
 //! in git-lfs that need to be decompressed for processing by code expecting file paths.
 //!
 //! Uses pure Rust implementation with no system dependencies.
-//!
-//! # Example Usage
-//!
-//! ```rust,ignore
-//! use dynamo_llm::utils::gzip::GzipExtractor;
-//!
-//! // Simple extraction with default filename
-//! let extraction = GzipExtractor::builder()
-//!     .source_path("data.json.gz")
-//!     .extract()?;
-//!
-//! let file_path = extraction.file_path();
-//! process_file(file_path)?;
-//! // Automatic cleanup when `extraction` goes out of scope
-//!
-//! // Custom target filename
-//! let extraction = GzipExtractor::builder()
-//!     .source_path("foo-x-y-z.json.gz")
-//!     .target_filename("foo.json")
-//!     .extract()?;
-//! ```
 
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
@@ -98,15 +77,6 @@ impl GzipExtractorBuilder {
     /// - Target filename is invalid
     /// - Temporary directory creation fails
     /// - Decompression operation fails
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let extraction = GzipExtractor::builder()
-    ///     .source_path("data.json.gz")
-    ///     .target_filename("extracted.json")
-    ///     .extract()?;
-    /// ```
     pub fn extract(self) -> Result<GzipExtraction> {
         let source_path = self
             .source_path
@@ -242,16 +212,6 @@ impl GzipExtraction {
     /// Returns an error if:
     /// - The file cannot be read
     /// - The computed hash doesn't match the expected hash
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let extraction = GzipExtractor::builder()
-    ///     .source_path("data.json.gz")
-    ///     .extract()?;
-    ///
-    /// extraction.validate_blake3_hash("c61f943c9f3266a60a7e00e815591061f17564f297dd84433a101fb43eb15608")?;
-    /// ```
     pub fn validate_blake3_hash(&self, expected_hash: &str) -> Result<()> {
         let file_contents = self.read_to_bytes()?;
         let computed_hash = blake3::hash(&file_contents);
