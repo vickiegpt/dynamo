@@ -280,13 +280,13 @@ mod tests {
                     .build()
                     .unwrap(),
             )
-            // .disk_layout(
-            //     KvManagerLayoutConfig::builder()
-            //         .num_blocks(16)
-            //         .allocator(storage::DiskAllocator)
-            //         .build()
-            //         .unwrap(),
-            // )
+            .disk_layout(
+                KvManagerLayoutConfig::builder()
+                    .num_blocks(16)
+                    .allocator(storage::DiskAllocator)
+                    .build()
+                    .unwrap(),
+            )
             .host_layout(
                 KvManagerLayoutConfig::builder()
                     .num_blocks(16)

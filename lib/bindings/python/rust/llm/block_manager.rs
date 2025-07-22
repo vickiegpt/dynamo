@@ -204,20 +204,6 @@ pub struct BlockManagerClient {
 
 #[pymethods]
 impl BlockManagerClient {
-    // #[staticmethod]
-    // fn new<'p>(
-    //     py: Python<'p>,
-    //     component: Component,
-    //     instance_id: i64,
-    // ) -> PyResult<Bound<'p, PyAny>> {
-    //     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-    //         let client = ControlClient::new(component.inner, instance_id)
-    //             .await
-    //             .map_err(to_pyerr)?;
-    //         Ok(BlockManagerClient { inner: client })
-    //     })
-    // }
-
     #[new]
     fn new(component: Component, instance_id: i64) -> PyResult<Self> {
         let client = pyo3_async_runtimes::tokio::get_runtime()
