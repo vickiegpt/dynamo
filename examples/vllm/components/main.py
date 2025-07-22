@@ -25,6 +25,8 @@ from publisher import StatLoggerFactory
 from vllm.distributed.kv_events import ZmqEventPublisher
 from vllm.usage.usage_lib import UsageContext
 from vllm.v1.engine.async_llm import AsyncLLM
+# LMCache imports
+from vllm.config import KVTransferConfig
 
 from dynamo.llm import (
     ModelType,
@@ -39,6 +41,27 @@ configure_dynamo_logging()
 logger = logging.getLogger(__name__)
 
 
+def setup_lmcache_environment():
+    """Setup LMCache environment variables for KV cache offloading
+    
+    When ENABLE_LMCACHE is enabled, LMCache will be used with MultiConnector:
+    - LMCacheConnector: Handles get_num_new_matched_tokens (cache matching logic)
+    - NixlConnector: Handles actual KV cache transfer between workers
+    """
+    # LMCache configuration for matching logic
+    lmcache_config = {
+        "LMCACHE_CHUNK_SIZE": "256",  # Token chunk size
+        "LMCACHE_LOCAL_CPU": "True",  # Enable CPU memory backend
+        "LMCACHE_MAX_LOCAL_CPU_SIZE": "20",  # CPU memory limit in GB
+    }
+    
+    # Set environment variables
+    for key, value in lmcache_config.items():
+        if key not in os.environ:  # Only set if not already configured
+            os.environ[key] = value
+            logger.info(f"Set LMCache environment variable: {key}={value}")
+
+
 async def graceful_shutdown(runtime):
     """
     By calling `runtime.shutdown()`, the endpoints will immediately be unavailable.
@@ -47,12 +70,37 @@ async def graceful_shutdown(runtime):
     and the engine will be shutdown by Python's garbage collector.
     """
     logging.info("Received shutdown signal, shutting down DistributedRuntime")
+    
+    # Cleanup LMCache if needed
+    try:
+        from lmcache.v1.cache_engine import LMCacheEngineBuilder
+        from lmcache.integration.vllm.utils import ENGINE_NAME
+        LMCacheEngineBuilder.destroy(ENGINE_NAME)
+    except ImportError:
+        logger.debug("LMCache not available for cleanup")
+    except Exception as e:
+        logger.warning(f"Error during LMCache cleanup: {e}")
+    
     runtime.shutdown()
     logging.info("DistributedRuntime shutdown complete")
 
 
 @dynamo_worker(static=False)
 async def worker(runtime: DistributedRuntime):
+    """
+    Main worker function that can run as either prefill or decode worker.
+    
+    Environment variables:
+    - ENABLE_LMCACHE: Enable/disable LMCache with MultiConnector (0/1, false/true, no/yes)
+    
+    When ENABLE_LMCACHE=1:
+    - Uses MultiConnector with LMCacheConnector + NixlConnector
+    - LMCacheConnector: Handles cache matching logic (get_num_new_matched_tokens)
+    - NixlConnector: Handles actual KV cache transfer between workers
+    
+    When ENABLE_LMCACHE=0:
+    - Uses default vLLM KV transfer (typically NixlConnector only)
+    """
     config = parse_args()
 
     etcd_client = runtime.etcd_client()
@@ -71,8 +119,10 @@ async def worker(runtime: DistributedRuntime):
     logging.info("Signal handlers set up for graceful shutdown")
 
     if config.is_prefill_worker:
+        logging.info("Starting as prefill worker")
         await init_prefill(runtime, config)
     else:
+        logging.info("Starting as decode worker")
         await init(runtime, config)
 
 
@@ -81,6 +131,18 @@ def setup_vllm_engine(config, stat_logger=None):
     os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
     engine_args = config.engine_args
+    
+    # KV transfer config is now handled by args.py based on ENABLE_LMCACHE env var
+    # Check if LMCache is enabled
+    enable_lmcache = os.getenv("ENABLE_LMCACHE", "0").lower() in ("1", "true", "yes")
+    
+    if enable_lmcache:
+        setup_lmcache_environment()
+        logger.info("LMCache enabled for VllmWorker")
+    else:
+        logger.info("LMCache is disabled")
+
+    
     # Load default sampling params from `generation_config.json`
     default_sampling_params = (
         engine_args.create_model_config().get_diff_sampling_param()
@@ -101,7 +163,10 @@ def setup_vllm_engine(config, stat_logger=None):
         disable_log_requests=engine_args.disable_log_requests,
         disable_log_stats=engine_args.disable_log_stats,
     )
-    logger.info(f"VllmWorker for {config.model} has been initialized")
+    if enable_lmcache:
+        logger.info(f"VllmWorker for {config.model} has been initialized with LMCache")
+    else:
+        logger.info(f"VllmWorker for {config.model} has been initialized")
     return engine_client, vllm_config, default_sampling_params
 
 

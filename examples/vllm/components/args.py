@@ -21,6 +21,7 @@ import socket
 import sys
 import time
 from typing import Optional
+import os
 
 from vllm.config import KVTransferConfig
 from vllm.distributed.kv_events import KVEventsConfig
@@ -210,6 +211,43 @@ def overwrite_args(config):
 
     dp_rank = config.engine_args.data_parallel_rank or 0
 
+    # Check if LMCache should be enabled
+    enable_lmcache = os.getenv("ENABLE_LMCACHE", "0").lower() in ("1", "true", "yes")
+
+    # Set kv_transfer_config based on LMCache setting
+    if enable_lmcache:
+        # Check if disaggregated mode is enabled
+        enable_lmcache_disag = os.getenv("ENABLE_LMCACHE_DISAG", "0").lower() in ("1", "true", "yes")
+        
+        if enable_lmcache_disag:
+            kv_transfer_config = KVTransferConfig(
+                kv_connector="MultiConnector",
+                kv_role="kv_both",
+                kv_connector_extra_config={
+                    "connectors": [
+                        {
+                            "kv_connector": "LMCacheConnectorV1",
+                            "kv_role": "kv_both"
+                        },
+                        {
+                            "kv_connector": "NixlConnector",
+                            "kv_role": "kv_both",
+                        }
+                    ]
+                }
+            )
+            logger.info("Using LMCache with disaggregated serving (MultiConnector)")
+        else:
+            kv_transfer_config = KVTransferConfig(
+                kv_connector="LMCacheConnectorV1", kv_role="kv_both"
+            )
+            logger.info("Using LMCache configuration")
+    else:
+        kv_transfer_config = KVTransferConfig(
+            kv_connector="NixlConnector", kv_role="kv_both"
+        )
+        logger.info("Using NixlConnector configuration")
+
     defaults = {
         "task": "generate",
         "skip_tokenizer_init": True,
@@ -218,9 +256,7 @@ def overwrite_args(config):
         # KV routing relies on logging KV metrics
         "disable_log_stats": False,
         # Always setting up kv transfer for disagg
-        "kv_transfer_config": KVTransferConfig(
-            kv_connector="NixlConnector", kv_role="kv_both"
-        ),
+        "kv_transfer_config": kv_transfer_config,
         "kv_events_config": KVEventsConfig(
             enable_kv_cache_events=True,
             publisher="zmq",
