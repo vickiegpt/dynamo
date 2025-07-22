@@ -129,6 +129,8 @@ class DecodeWorkerHandler(BaseWorkerHandler):
             if value is not None and hasattr(sampling_params, key):
                 setattr(sampling_params, key, value)
 
+        sampling_params.ignore_eos = True
+
         if self.can_prefill:
             # Create a copy for prefill with specific modifications
             prefill_sampling_params = deepcopy(sampling_params)
