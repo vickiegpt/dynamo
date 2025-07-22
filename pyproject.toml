@@ -60,12 +60,23 @@ Repository = "https://github.com/ai-dynamo/dynamo.git"
 
 [project.optional-dependencies]
 all = [
-    "ai-dynamo-vllm~=0.8.4",
     "nixl",
 ]
 
 vllm = [
-    "ai-dynamo-vllm~=0.8.4"
+	"uvloop",
+	"vllm==0.9.2",
+]
+
+sglang = [
+	"uvloop",
+	"sglang[all]>=0.4.9.post2",
+]
+
+llama_cpp = [
+	"uvloop",
+	"llama-cpp-python",
+	# "llama-cpp-python -C cmake.args=\"-DGGML_CUDA=on\"",
 ]
 
 [project.scripts]
