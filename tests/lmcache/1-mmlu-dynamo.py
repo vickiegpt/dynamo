@@ -27,15 +27,10 @@ choices = ["A", "B", "C", "D"]
 # 1. set the seed of LLM requests to a fixed number (42)
 # 2. set temperature to 0 on requests
 def get_llm_response(args, prompt):
-    # Use dynamo's chat/completions API format
+    # Use dynamo's completions API format
     data = {
         "model": args.model,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
+        "prompt": prompt,
         "temperature": 0,
         "max_tokens": 3,
         "stream": False,
@@ -46,7 +41,7 @@ def get_llm_response(args, prompt):
     if res.status_code != 200:
         raise Exception(f"Error: {res.status_code} {res.text}")
     response_json = res.json()
-    return response_json["choices"][0]["message"]["content"]
+    return response_json["choices"][0]["text"]
 
 
 # grab the idx'th row of the df and generate a prompt string
