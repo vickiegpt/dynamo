@@ -25,7 +25,7 @@ use crate::traits::events::{EventPublisher, EventSubscriber};
 #[async_trait]
 impl EventPublisher for Namespace {
     fn subject(&self) -> String {
-        format!("namespace.{}", self.name)
+        format!("namespace.{}", self.name())
     }
 
     async fn publish(

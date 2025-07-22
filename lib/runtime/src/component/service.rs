@@ -51,7 +51,8 @@ impl ServiceConfigBuilder {
 
         let description = description.unwrap_or(format!(
             "{PROJECT_NAME} component {} in namespace {}",
-            component.name, component.namespace
+            component.name(),
+            component.namespace
         ));
 
         let stats_handler_registry: Arc<Mutex<HashMap<String, EndpointStatsHandler>>> =
