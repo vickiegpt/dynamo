@@ -44,10 +44,31 @@ pub const PATH_KEYWORD: &str = "_path";
 /// Instance type for endpoints
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InstanceType {
-    /// Distributed instance with lease ID
+    /// Distributed instance with lease ID (always positive)
     Distributed(i64),
     /// Local instance (direct AsyncEngine access)
     Local,
+}
+
+impl InstanceType {
+    /// Create a distributed instance with validation
+    ///
+    /// # Errors
+    /// Returns an error if the lease_id is not positive (etcd leases are always > 0)
+    pub fn distributed(lease_id: i64) -> Result<Self, DescriptorError> {
+        if lease_id <= 0 {
+            return Err(DescriptorError::InvalidInstanceId(format!(
+                "Distributed instance ID must be positive, got: {}",
+                lease_id
+            )));
+        }
+        Ok(InstanceType::Distributed(lease_id))
+    }
+
+    /// Create a local instance
+    pub fn local() -> Self {
+        InstanceType::Local
+    }
 }
 
 impl fmt::Display for InstanceType {
@@ -66,8 +87,25 @@ impl FromStr for InstanceType {
         match s {
             "local" => Ok(InstanceType::Local),
             hex_str => {
+                // Enforce lowercase hex only (consistent with our naming conventions)
+                if hex_str.chars().any(|c| c.is_ascii_uppercase()) {
+                    return Err(DescriptorError::InvalidInstanceId(format!(
+                        "Instance ID must use lowercase hex only, got: {}",
+                        hex_str
+                    )));
+                }
+
                 let id = i64::from_str_radix(hex_str, 16)
                     .map_err(|_| DescriptorError::InvalidInstanceId(hex_str.to_string()))?;
+
+                // Validate that distributed instance ID is positive (etcd leases are always > 0)
+                if id <= 0 {
+                    return Err(DescriptorError::InvalidInstanceId(format!(
+                        "Distributed instance ID must be positive, got: {}",
+                        id
+                    )));
+                }
+
                 Ok(InstanceType::Distributed(id))
             }
         }
@@ -294,18 +332,57 @@ impl EntityDescriptor {
         let mut path_segments = Vec::new();
 
         for pair in query_part.split('&') {
+            if pair.is_empty() {
+                continue;
+            }
+
             let kv: Vec<&str> = pair.splitn(2, '=').collect();
             if kv.len() != 2 {
-                continue;
+                return Err(DescriptorError::InvalidUrl(format!(
+                    "Query parameter must have format 'key=value', got: {}",
+                    pair
+                )));
             }
 
             let key = kv[0];
             let value = kv[1];
 
+            // Check for empty values
+            if value.is_empty() {
+                return Err(DescriptorError::InvalidUrl(format!(
+                    "Query parameter '{}' cannot have empty value",
+                    key
+                )));
+            }
+
             match key {
-                "component" => component = Some(value.to_string()),
-                "endpoint" => endpoint = Some(value.to_string()),
-                "instance" => instance = Some(value.parse()?),
+                "component" => {
+                    if component.is_some() {
+                        return Err(DescriptorError::InvalidUrl(format!(
+                            "Duplicate parameter: {}",
+                            key
+                        )));
+                    }
+                    component = Some(value.to_string());
+                }
+                "endpoint" => {
+                    if endpoint.is_some() {
+                        return Err(DescriptorError::InvalidUrl(format!(
+                            "Duplicate parameter: {}",
+                            key
+                        )));
+                    }
+                    endpoint = Some(value.to_string());
+                }
+                "instance" => {
+                    if instance.is_some() {
+                        return Err(DescriptorError::InvalidUrl(format!(
+                            "Duplicate parameter: {}",
+                            key
+                        )));
+                    }
+                    instance = Some(value.parse()?);
+                }
                 "path" => path_segments.push(value.to_string()),
                 _ => return Err(DescriptorError::UnknownQueryParameter(key.to_string())),
             }
@@ -330,9 +407,12 @@ impl EntityDescriptor {
         }
 
         let path_without_prefix = &input[DYNAMO_SCHEME.len()..];
-        let segments: Vec<&str> = path_without_prefix.split('/').collect();
+        let segments: Vec<&str> = path_without_prefix
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect();
 
-        if segments.is_empty() || segments[0].is_empty() {
+        if segments.is_empty() {
             return Err(DescriptorError::EmptyNamespace);
         }
 
@@ -345,12 +425,12 @@ impl EntityDescriptor {
         let mut i = 0;
 
         // Parse namespace segments until we hit a keyword
-        while i < segments.len()
-            && !matches!(
-                segments[i],
-                COMPONENT_KEYWORD | ENDPOINT_KEYWORD | PATH_KEYWORD
-            )
-        {
+        // Note: _internal is allowed as a namespace segment, but other _-prefixed segments are keywords
+        while i < segments.len() {
+            if segments[i].starts_with('_') && segments[i] != "_internal" {
+                // This is a keyword, stop parsing namespace segments
+                break;
+            }
             namespace_segments.push(segments[i].to_string());
             i += 1;
         }
@@ -394,6 +474,11 @@ impl EntityDescriptor {
                 }
                 PATH_KEYWORD => {
                     i += 1;
+                    if i >= segments.len() {
+                        return Err(DescriptorError::InvalidUrl(
+                            "Path keyword requires at least one path segment".to_string(),
+                        ));
+                    }
                     while i < segments.len() {
                         path_segments.push(segments[i].to_string());
                         i += 1;
@@ -1130,7 +1215,7 @@ impl From<PathDescriptor> for EntityDescriptor {
 }
 
 /// Builder for constructing EntityDescriptor instances
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct EntityDescriptorBuilder {
     namespace_segments: Vec<String>,
     component: Option<String>,
@@ -2173,5 +2258,316 @@ mod tests {
         // Should reject underscore prefixed segments (normal validation rules apply)
         let invalid_path_result = internal_ns.path(&["_system", "_cache"]);
         assert!(invalid_path_result.is_err());
+    }
+
+    // === COMPREHENSIVE EDGE CASE TESTS ===
+
+    #[test]
+    fn test_parsing_edge_cases() {
+        // Empty and malformed URLs
+        assert!(EntityDescriptor::parse("").is_err());
+        assert!(EntityDescriptor::parse("dynamo://").is_err());
+        assert!(EntityDescriptor::parse("dynamo:").is_err());
+        assert!(EntityDescriptor::parse("http://prod").is_err());
+
+        // Trailing slashes and empty segments (empty segments are filtered out)
+        assert!(EntityDescriptor::parse("dynamo://prod/").is_ok()); // Should be valid
+        assert!(EntityDescriptor::parse("dynamo://prod//api").is_ok()); // Empty segments filtered out
+        assert!(EntityDescriptor::parse("dynamo:///prod").is_ok()); // Leading empty filtered out
+
+        // Query parameter edge cases
+        assert!(EntityDescriptor::parse("dynamo://ns?").is_ok()); // Empty query
+        assert!(EntityDescriptor::parse("dynamo://ns?component=").is_err()); // Empty value
+        assert!(EntityDescriptor::parse("dynamo://ns?component=a&component=b").is_err()); // Duplicate
+        assert!(EntityDescriptor::parse("dynamo://ns?unknown=value").is_err()); // Unknown param
+        assert!(EntityDescriptor::parse("dynamo://ns?component").is_err()); // No value
+
+        // Keyword format edge cases
+        assert!(EntityDescriptor::parse("dynamo://ns/_c/").is_err()); // Empty component
+        assert!(EntityDescriptor::parse("dynamo://ns/_e/ep").is_err()); // Endpoint without component
+        assert!(EntityDescriptor::parse("dynamo://ns/_c/comp/_e/").is_err()); // Empty endpoint
+        assert!(EntityDescriptor::parse("dynamo://ns/_path/").is_err()); // Empty path after keyword
+        assert!(EntityDescriptor::parse("dynamo://ns/_unknown/value").is_err());
+        // Unknown keyword
+    }
+
+    #[test]
+    fn test_instance_type_edge_cases() {
+        // Test valid boundary values for Distributed instances (must be positive)
+        let max_instance = InstanceType::Distributed(i64::MAX);
+        let one_instance = InstanceType::Distributed(1);
+
+        // Test string conversion for boundary values
+        assert_eq!(max_instance.to_string(), format!("{:x}", i64::MAX));
+        assert_eq!(one_instance.to_string(), "1");
+
+        // Test parsing of valid boundary values
+        let max_str = format!("{:x}", i64::MAX);
+        assert_eq!(max_str.parse::<InstanceType>().unwrap(), max_instance);
+        assert_eq!("1".parse::<InstanceType>().unwrap(), one_instance);
+
+        // Test constructor validation
+        assert!(InstanceType::distributed(i64::MAX).is_ok());
+        assert!(InstanceType::distributed(1).is_ok());
+        assert!(InstanceType::distributed(0x1234).is_ok());
+
+        // Test that non-positive values are rejected
+        assert!(InstanceType::distributed(0).is_err());
+        assert!(InstanceType::distributed(-1).is_err());
+        assert!(InstanceType::distributed(i64::MIN).is_err());
+
+        // Test that parsing non-positive hex values fails
+        assert!("0".parse::<InstanceType>().is_err()); // Zero is invalid
+
+        // Test invalid hex strings
+        assert!("".parse::<InstanceType>().is_err());
+        assert!("zzz".parse::<InstanceType>().is_err());
+        assert!("123g".parse::<InstanceType>().is_err());
+        assert!("local123".parse::<InstanceType>().is_err());
+
+        // Test case sensitivity (should be case sensitive - only lowercase allowed)
+        assert!("ABCD".parse::<InstanceType>().is_err());
+        assert!("Local".parse::<InstanceType>().is_err());
+        assert!("LOCAL".parse::<InstanceType>().is_err());
+
+        // Test local instance constructor
+        assert_eq!(InstanceType::local(), InstanceType::Local);
+    }
+
+    #[test]
+    fn test_validation_boundary_conditions() {
+        let builder = EntityDescriptor::builder();
+
+        // Test very long namespace segments (within reason)
+        let long_segment = "a".repeat(100);
+        assert!(builder.clone().namespace(&[&long_segment]).build().is_ok());
+
+        // Test many namespace segments
+        let many_segments: Vec<&str> = (0..20)
+            .map(|i| match i {
+                0 => "seg0",
+                1 => "seg1",
+                2 => "seg2",
+                3 => "seg3",
+                4 => "seg4",
+                5 => "seg5",
+                6 => "seg6",
+                7 => "seg7",
+                8 => "seg8",
+                9 => "seg9",
+                10 => "seg10",
+                11 => "seg11",
+                12 => "seg12",
+                13 => "seg13",
+                14 => "seg14",
+                15 => "seg15",
+                16 => "seg16",
+                17 => "seg17",
+                18 => "seg18",
+                _ => "seg19",
+            })
+            .collect();
+        assert!(builder.clone().namespace(&many_segments).build().is_ok());
+
+        // Test many path segments
+        let many_paths: Vec<&str> = (0..50)
+            .map(|i| match i % 5 {
+                0 => "path0",
+                1 => "path1",
+                2 => "path2",
+                3 => "path3",
+                _ => "path4",
+            })
+            .collect();
+        assert!(builder
+            .clone()
+            .namespace(&["ns"])
+            .path_segments(&many_paths)
+            .build()
+            .is_ok());
+
+        // Test edge characters
+        assert!(builder.clone().namespace(&["a"]).build().is_ok()); // Single char
+        assert!(builder.clone().namespace(&["9"]).build().is_ok()); // Single digit
+        assert!(builder.clone().namespace(&["_"]).build().is_ok()); // Single underscore
+        assert!(builder.clone().namespace(&["a9_"]).build().is_ok()); // All valid chars
+
+        // Test invalid single characters
+        assert!(builder.clone().namespace(&["-"]).build().is_err());
+        assert!(builder.clone().namespace(&["A"]).build().is_err());
+        assert!(builder.clone().namespace(&["."]).build().is_err());
+        assert!(builder.clone().namespace(&[" "]).build().is_err());
+    }
+
+    #[test]
+    fn test_internal_namespace_comprehensive() {
+        // Test parsing complex internal URLs
+        let complex_url = "dynamo://_internal/_c/system/_e/monitor:local/_path/metrics/cpu/usage";
+        let parsed = EntityDescriptor::parse(complex_url).unwrap();
+        assert_eq!(parsed.namespace_segments(), &["_internal"]);
+        assert_eq!(parsed.component(), Some("system"));
+        assert_eq!(parsed.endpoint(), Some("monitor"));
+        assert_eq!(parsed.instance(), Some(&InstanceType::Local));
+        assert_eq!(parsed.path_segments(), &["metrics", "cpu", "usage"]);
+
+        // Test that regular PathDescriptor creation works with _internal (parsing fix allows this)
+        assert!(PathDescriptor::from_namespace_path(&["_internal"], &["test"]).is_ok());
+
+        // Test InternalNamespace with various field combinations
+        let internal_ns = InternalNamespace::new().unwrap();
+
+        // Should work: InternalNamespace -> regular component -> regular path
+        let path_result = internal_ns
+            .clone()
+            .component("logger")
+            .unwrap()
+            .path(&["application", "errors"]);
+        assert!(path_result.is_ok());
+
+        // Should fail: InternalNamespace with invalid component names
+        assert!(internal_ns.clone().component("").is_err());
+        assert!(internal_ns.clone().component("invalid-name").is_err());
+        assert!(internal_ns.clone().component("Invalid").is_err());
+        assert!(internal_ns.clone().component("_private").is_err());
+    }
+
+    #[test]
+    fn test_error_specificity() {
+        // Test that different validation errors return appropriate error types
+        let result = EntityDescriptor::builder().build();
+        assert!(matches!(result, Err(DescriptorError::EmptyNamespace)));
+
+        let result = EntityDescriptor::builder()
+            .namespace(&["ns"])
+            .component("")
+            .build();
+        assert!(matches!(result, Err(DescriptorError::EmptyComponent)));
+
+        let result = EntityDescriptor::builder()
+            .namespace(&["ns"])
+            .component("comp")
+            .endpoint("")
+            .build();
+        assert!(matches!(result, Err(DescriptorError::EmptyEndpoint)));
+
+        let result = EntityDescriptor::builder()
+            .namespace(&["ns"])
+            .endpoint("ep")
+            .build();
+        assert!(matches!(
+            result,
+            Err(DescriptorError::EndpointWithoutComponent)
+        ));
+
+        let result = EntityDescriptor::builder()
+            .namespace(&["ns"])
+            .component("comp")
+            .instance(InstanceType::Local)
+            .build();
+        assert!(matches!(
+            result,
+            Err(DescriptorError::InstanceWithoutEndpoint)
+        ));
+
+        // Test parsing error specificity
+        let result = EntityDescriptor::parse("http://invalid");
+        assert!(matches!(result, Err(DescriptorError::InvalidPrefix)));
+
+        let result = EntityDescriptor::parse("dynamo://ns?unknown=value");
+        assert!(matches!(
+            result,
+            Err(DescriptorError::UnknownQueryParameter(_))
+        ));
+    }
+
+    #[test]
+    fn test_builder_edge_cases() {
+        let mut builder = EntityDescriptor::builder();
+
+        // Test multiple calls to same builder method (should replace)
+        builder = builder.namespace(&["first"]);
+        builder = builder.namespace(&["second"]);
+        let desc = builder.build().unwrap();
+        assert_eq!(desc.namespace_segments(), &["second"]);
+
+        // Test append methods
+        let desc = EntityDescriptor::builder()
+            .namespace(&["base"])
+            .append_namespace(&["extra"])
+            .path_segments(&["initial"])
+            .append_path(&["more"])
+            .build()
+            .unwrap();
+        assert_eq!(desc.namespace_segments(), &["base", "extra"]);
+        assert_eq!(desc.path_segments(), &["initial", "more"]);
+
+        // Test build_unchecked vs build consistency for valid descriptors
+        let builder = EntityDescriptor::builder()
+            .namespace(&["ns"])
+            .component("comp");
+
+        let desc1 = builder.clone().build().unwrap();
+        let desc2 = builder.clone().build_unchecked();
+        assert_eq!(desc1, desc2);
+    }
+
+    #[test]
+    fn test_format_consistency() {
+        // Test that query parameters maintain consistent ordering
+        let desc = EntityDescriptor::builder()
+            .namespace(&["ns"])
+            .component("comp")
+            .endpoint("ep")
+            .instance(InstanceType::Local)
+            .path_segments(&["a", "b"])
+            .build()
+            .unwrap();
+
+        let url = desc.to_url();
+        // Should be: dynamo://ns?component=comp&endpoint=ep&instance=local&path=a&path=b
+        assert!(url.starts_with("dynamo://ns?"));
+        assert!(url.contains("component=comp"));
+        assert!(url.contains("endpoint=ep"));
+        assert!(url.contains("instance=local"));
+        assert!(url.contains("path=a"));
+        assert!(url.contains("path=b"));
+
+        // Test that both formats round-trip correctly
+        let query_parsed = EntityDescriptor::parse(&url).unwrap();
+        let etcd_path = desc.to_etcd_path();
+        let etcd_parsed = EntityDescriptor::parse(&etcd_path).unwrap();
+
+        assert_eq!(desc, query_parsed);
+        assert_eq!(desc, etcd_parsed);
+        assert_eq!(query_parsed, etcd_parsed);
+    }
+
+    #[test]
+    fn test_clone_and_equality() {
+        let desc = EntityDescriptor::builder()
+            .namespace(&["prod", "api"])
+            .component("gateway")
+            .endpoint("http")
+            .instance(InstanceType::Distributed(0x1234))
+            .path_segments(&["config", "v1"])
+            .build()
+            .unwrap();
+
+        // Test that clone produces equal objects
+        let cloned = desc.clone();
+        assert_eq!(desc, cloned);
+        assert_eq!(desc.to_url(), cloned.to_url());
+        assert_eq!(desc.to_etcd_path(), cloned.to_etcd_path());
+
+        // Test specialized descriptor cloning
+        let ns_desc = NamespaceDescriptor::from_namespace(&["test"]).unwrap();
+        let ns_cloned = ns_desc.clone();
+        assert_eq!(ns_desc, ns_cloned);
+
+        // Test hash consistency (for HashMap usage)
+        use std::collections::HashMap;
+        let mut map = HashMap::new();
+        map.insert(desc.clone(), "value");
+        assert_eq!(map.get(&cloned), Some(&"value"));
     }
 }
