@@ -191,8 +191,8 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
             "enable_nixl": "True",
             "nixl_role": "sender",
             "nixl_receiver_host": "localhost",
-            "nixl_receiver_port": 55555,
-            "nixl_buffer_size": 1073741824,
+            "nixl_receiver_port": "55555",
+            "nixl_buffer_size": "1073741824",
             "nixl_buffer_device": "cuda",
             "nixl_enable_gc": "True",
         }
@@ -246,8 +246,8 @@ async def init(runtime: DistributedRuntime, config: Config):
             "enable_nixl": "True",
             "nixl_role": "receiver",
             "nixl_receiver_host": "localhost",
-            "nixl_receiver_port": 55555,
-            "nixl_buffer_size": 1073741824,
+            "nixl_receiver_port": "55555",
+            "nixl_buffer_size": "1073741824",
             "nixl_buffer_device": "cuda",
             "nixl_enable_gc": "True",
         }
