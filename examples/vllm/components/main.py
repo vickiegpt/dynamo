@@ -188,13 +188,13 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
         # nixl_buffer_device: "cuda"   # Use GPU memory for buffer
         # nixl_enable_gc: True         # Enable garbage collection
         lmcache_prefill_config = {
-            "enable_nixl": True,
+            "enable_nixl": "True",
             "nixl_role": "sender",
             "nixl_receiver_host": "localhost",
             "nixl_receiver_port": 55555,
             "nixl_buffer_size": 1073741824,
             "nixl_buffer_device": "cuda",
-            "nixl_enable_gc": True,
+            "nixl_enable_gc": "True",
         }
         # set the environment variables
         for key, value in lmcache_prefill_config.items():
@@ -243,13 +243,13 @@ async def init(runtime: DistributedRuntime, config: Config):
         # nixl_buffer_device: "cuda"   # Use GPU memory for buffer
         # nixl_enable_gc: True         # Enable garbage collection
         lmcache_decode_config = {
-            "enable_nixl": True,
+            "enable_nixl": "True",
             "nixl_role": "receiver",
             "nixl_receiver_host": "localhost",
             "nixl_receiver_port": 55555,
             "nixl_buffer_size": 1073741824,
             "nixl_buffer_device": "cuda",
-            "nixl_enable_gc": True,
+            "nixl_enable_gc": "True",
         }
         # set the environment variables
         for key, value in lmcache_decode_config.items():
