@@ -62,11 +62,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--environment", 
         default=SLAPlannerDefaults.environment,
+        choices=["kubernetes"],
         help="Environment type"
     )
     parser.add_argument(
         "--backend", 
         default=SLAPlannerDefaults.backend,
+        choices=["vllm_v1"],
         help="Backend type"
     )
     parser.add_argument(

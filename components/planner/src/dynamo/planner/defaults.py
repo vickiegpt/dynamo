@@ -18,7 +18,7 @@
 class BasePlannerDefaults:
     namespace = "dynamo"
     environment = "kubernetes"
-    backend = "vllm_v0"
+    backend = "vllm_v1"
     no_operation = False
     log_dir = None
     adjustment_interval = 180  # in seconds
