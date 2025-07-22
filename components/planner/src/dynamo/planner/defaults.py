@@ -18,7 +18,7 @@
 class BasePlannerDefaults:
     namespace = "dynamo"
     environment = "kubernetes"
-    backend = "vllm_v1"
+    backend = "vllm"
     no_operation = False
     log_dir = None
     adjustment_interval = 180  # in seconds
@@ -47,14 +47,7 @@ class SLAPlannerDefaults(BasePlannerDefaults):
     load_prediction_window_size = 50  # predict load using how many recent load samples
 
 
-class VllmV0ComponentName:
-    prefill_worker = "PrefillWorker"
-    prefill_worker_endpoint = "mock"
-    decode_worker = "VllmWorker"
-    decode_worker_endpoint = "generate"
-
-
-class VllmV1ComponentName:
+class VllmComponentName:
     prefill_worker = "VllmPrefillWorker"
     prefill_worker_endpoint = "generate"
     decode_worker = "VllmDecodeWorker"
@@ -62,6 +55,5 @@ class VllmV1ComponentName:
 
 
 WORKER_COMPONENT_NAMES = {
-    "vllm_v0": VllmV0ComponentName,
-    "vllm_v1": VllmV1ComponentName,
+    "vllm": VllmComponentName,
 }

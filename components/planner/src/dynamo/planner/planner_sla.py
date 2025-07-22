@@ -20,9 +20,8 @@ import logging
 from pydantic import BaseModel
 
 from dynamo.planner.defaults import SLAPlannerDefaults
-from dynamo.runtime import DistributedRuntime, dynamo_worker
-
 from dynamo.planner.utils.planner_core import start_sla_planner
+from dynamo.runtime import DistributedRuntime, dynamo_worker
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +33,9 @@ INIT_PLANNER_START_DELAY = 30
 class RequestType(BaseModel):
     text: str
 
+
 @dynamo_worker(static=False)
 async def init_planner(runtime: DistributedRuntime, args):
-
     await asyncio.sleep(INIT_PLANNER_START_DELAY)
 
     await start_sla_planner(runtime, args)
@@ -55,108 +54,97 @@ async def init_planner(runtime: DistributedRuntime, args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SLA Planner")
     parser.add_argument(
-        "--namespace", 
+        "--namespace",
         default=SLAPlannerDefaults.namespace,
-        help="Namespace for the planner"
+        help="Namespace for the planner",
     )
     parser.add_argument(
-        "--environment", 
+        "--environment",
         default=SLAPlannerDefaults.environment,
         choices=["kubernetes"],
-        help="Environment type"
+        help="Environment type",
     )
     parser.add_argument(
-        "--backend", 
+        "--backend",
         default=SLAPlannerDefaults.backend,
-        choices=["vllm_v1"],
-        help="Backend type"
+        choices=["vllm"],
+        help="Backend type",
     )
     parser.add_argument(
-        "--no-operation", 
+        "--no-operation",
         action="store_true",
         default=SLAPlannerDefaults.no_operation,
-        help="Enable no-operation mode"
+        help="Enable no-operation mode",
     )
     parser.add_argument(
-        "--log-dir", 
-        default=SLAPlannerDefaults.log_dir,
-        help="Log directory path"
+        "--log-dir", default=SLAPlannerDefaults.log_dir, help="Log directory path"
     )
     parser.add_argument(
-        "--adjustment-interval", 
+        "--adjustment-interval",
         type=int,
         default=SLAPlannerDefaults.adjustment_interval,
-        help="Adjustment interval in seconds"
+        help="Adjustment interval in seconds",
     )
     parser.add_argument(
-        "--max-gpu-budget", 
+        "--max-gpu-budget",
         type=int,
         default=SLAPlannerDefaults.max_gpu_budget,
-        help="Maximum GPU budget"
+        help="Maximum GPU budget",
     )
     parser.add_argument(
-        "--min-endpoint", 
+        "--min-endpoint",
         type=int,
         default=SLAPlannerDefaults.min_endpoint,
-        help="Minimum number of endpoints"
+        help="Minimum number of endpoints",
     )
     parser.add_argument(
-        "--decode-engine-num-gpu", 
+        "--decode-engine-num-gpu",
         type=int,
         default=SLAPlannerDefaults.decode_engine_num_gpu,
-        help="Number of GPUs for decode engine"
+        help="Number of GPUs for decode engine",
     )
     parser.add_argument(
-        "--prefill-engine-num-gpu", 
+        "--prefill-engine-num-gpu",
         type=int,
         default=SLAPlannerDefaults.prefill_engine_num_gpu,
-        help="Number of GPUs for prefill engine"
+        help="Number of GPUs for prefill engine",
     )
     parser.add_argument(
-        "--prometheus-endpoint", 
+        "--prometheus-endpoint",
         default=SLAPlannerDefaults.prometheus_endpoint,
-        help="Prometheus endpoint URL"
+        help="Prometheus endpoint URL",
     )
     parser.add_argument(
-        "--profile-results-dir", 
+        "--profile-results-dir",
         default=SLAPlannerDefaults.profile_results_dir,
-        help="Profile results directory"
+        help="Profile results directory",
     )
     parser.add_argument(
-        "--isl", 
-        type=int,
-        default=SLAPlannerDefaults.isl,
-        help="Input sequence length"
+        "--isl", type=int, default=SLAPlannerDefaults.isl, help="Input sequence length"
     )
     parser.add_argument(
-        "--osl", 
-        type=int,
-        default=SLAPlannerDefaults.osl,
-        help="Output sequence length"
+        "--osl", type=int, default=SLAPlannerDefaults.osl, help="Output sequence length"
     )
     parser.add_argument(
-        "--ttft", 
+        "--ttft",
         type=float,
         default=SLAPlannerDefaults.ttft,
-        help="Time to first token"
+        help="Time to first token",
     )
     parser.add_argument(
-        "--itl", 
-        type=float,
-        default=SLAPlannerDefaults.itl,
-        help="Inter-token latency"
+        "--itl", type=float, default=SLAPlannerDefaults.itl, help="Inter-token latency"
     )
     parser.add_argument(
-        "--load-predictor", 
+        "--load-predictor",
         default=SLAPlannerDefaults.load_predictor,
-        help="Load predictor type"
+        help="Load predictor type",
     )
     parser.add_argument(
-        "--load-prediction-window-size", 
+        "--load-prediction-window-size",
         type=int,
         default=SLAPlannerDefaults.load_prediction_window_size,
-        help="Load prediction window size"
+        help="Load prediction window size",
     )
-    
+
     args = parser.parse_args()
     asyncio.run(init_planner(args))
