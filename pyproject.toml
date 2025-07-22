@@ -70,9 +70,6 @@ vllm = [
 
 [project.scripts]
 dynamo = "dynamo.sdk.cli.cli:cli"
-dynamo-run = "dynamo.sdk.cli.run_executable:dynamo_run"
-metrics = "dynamo.sdk.cli.run_executable:metrics"
-mock_worker = "dynamo.sdk.cli.run_executable:mock_worker"
 
 [build-system]
 requires = ["hatchling"]
