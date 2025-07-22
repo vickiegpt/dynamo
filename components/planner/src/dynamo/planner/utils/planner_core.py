@@ -55,9 +55,7 @@ class Planner:
         self.namespace = args.namespace
 
         if not args.no_operation:
-            if args.environment == "local":
-                self.connector = LocalConnector(args.namespace, runtime)
-            elif args.environment == "kubernetes":
+            if args.environment == "kubernetes":
                 self.connector = KubernetesConnector(args.namespace)
             else:
                 raise ValueError(f"Invalid environment: {args.environment}")

@@ -17,7 +17,7 @@
 # Source of truth for planner defaults
 class BasePlannerDefaults:
     namespace = "dynamo"
-    environment = "local"
+    environment = "kubernetes"
     backend = "vllm_v0"
     no_operation = False
     log_dir = None
