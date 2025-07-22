@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from dynamo.planner import KubernetesConnector, LocalConnector
+from dynamo.planner import KubernetesConnector
 from dynamo.planner.defaults import WORKER_COMPONENT_NAMES, SLAPlannerDefaults
 from dynamo.planner.utils.load_predictor import LOAD_PREDICTORS
 from dynamo.planner.utils.perf_interpolation import (
