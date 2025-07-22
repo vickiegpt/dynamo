@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 //! # KV Cache Block Pool Management
 //!
 //! This module provides the primary [`BlockPool`] structure for managing KV cache blocks.
@@ -43,6 +46,7 @@
 use super::*;
 
 pub mod active;
+pub mod controller;
 pub mod inactive;
 pub mod priority_key;
 pub mod state;
@@ -117,6 +121,8 @@ type TouchBlocksReq = RequestResponse<Vec<SequenceHash>, BlockPoolResult<()>>;
 type AddBlocksReq<S, L, M> = RequestResponse<Vec<Block<S, L, M>>, ()>;
 type ResetReq = RequestResponse<(), BlockPoolResult<()>>;
 type ReturnBlockReq<S, L, M> = RequestResponse<Vec<Block<S, L, M>>, BlockPoolResult<()>>;
+type StatusReq = RequestResponse<(), BlockPoolResult<BlockPoolStatus>>;
+type ResetBlocksReq = RequestResponse<Vec<SequenceHash>, BlockPoolResult<ResetBlocksResponse>>;
 
 // Update the request enums to use the cleaner types
 pub enum PriorityRequest<S: Storage, L: LocalityProvider, M: BlockMetadata> {
@@ -130,6 +136,8 @@ pub enum PriorityRequest<S: Storage, L: LocalityProvider, M: BlockMetadata> {
 
 pub enum ControlRequest<S: Storage, L: LocalityProvider, M: BlockMetadata> {
     AddBlocks(AddBlocksReq<S, L, M>),
+    Status(StatusReq),
+    ResetBlocks(ResetBlocksReq),
 }
 
 /// Manages the blocks in a specific storage backenda
@@ -464,21 +472,6 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M>
         sequence_hashes: &[SequenceHash],
     ) -> Result<(), BlockPoolError> {
         self._touch_blocks(sequence_hashes)?
-            .blocking_recv()
-            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
-    }
-
-    /// Resets the pool to its initial state.
-    ///
-    /// This function will error unless all blocks have returned to the inactive pool.
-    async fn reset(&self) -> BlockPoolResult<()> {
-        self._reset()?
-            .await
-            .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
-    }
-
-    fn reset_blocking(&self) -> BlockPoolResult<()> {
-        self._reset()?
             .blocking_recv()
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
     }
