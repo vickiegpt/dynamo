@@ -217,31 +217,31 @@ def overwrite_args(config):
     # Set kv_transfer_config based on LMCache setting
     if enable_lmcache:
         # Check if disaggregated mode is enabled
-        enable_lmcache_disag = os.getenv("ENABLE_LMCACHE_DISAG", "0").lower() in ("1", "true", "yes")
+        # enable_lmcache_disag = os.getenv("ENABLE_LMCACHE_DISAG", "0").lower() in ("1", "true", "yes")
         
-        if enable_lmcache_disag:
-            kv_transfer_config = KVTransferConfig(
-                kv_connector="MultiConnector",
-                kv_role="kv_both",
-                kv_connector_extra_config={
-                    "connectors": [
-                        {
-                            "kv_connector": "LMCacheConnectorV1",
-                            "kv_role": "kv_both"
-                        },
-                        {
-                            "kv_connector": "NixlConnector",
-                            "kv_role": "kv_both",
-                        }
-                    ]
-                }
-            )
-            logger.info("Using LMCache with disaggregated serving (MultiConnector)")
-        else:
-            kv_transfer_config = KVTransferConfig(
-                kv_connector="LMCacheConnectorV1", kv_role="kv_both"
-            )
-            logger.info("Using LMCache configuration")
+        # if enable_lmcache_disag:
+        #     kv_transfer_config = KVTransferConfig(
+        #         kv_connector="MultiConnector",
+        #         kv_role="kv_both",
+        #         kv_connector_extra_config={
+        #             "connectors": [
+        #                 {
+        #                     "kv_connector": "LMCacheConnectorV1",
+        #                     "kv_role": "kv_both"
+        #                 },
+        #                 {
+        #                     "kv_connector": "NixlConnector",
+        #                     "kv_role": "kv_both",
+        #                 }
+        #             ]
+        #         }
+        #     )
+        #     logger.info("Using LMCache with disaggregated serving (MultiConnector)")
+        # else:
+        kv_transfer_config = KVTransferConfig(
+            kv_connector="LMCacheConnectorV1", kv_role="kv_both"
+        )
+        logger.info("Using LMCache configuration")
     else:
         kv_transfer_config = KVTransferConfig(
             kv_connector="NixlConnector", kv_role="kv_both"

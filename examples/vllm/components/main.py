@@ -175,6 +175,33 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
     Instantiate and serve
     """
 
+    # Check if LMCache is enabled
+    enable_lmcache = os.getenv("ENABLE_LMCACHE", "0").lower() in ("1", "true", "yes")
+    enable_lmcache_disag = os.getenv("ENABLE_LMCACHE_DISAG", "0").lower() in ("1", "true", "yes")
+    if enable_lmcache and enable_lmcache_disag:
+        # NIXL configuration for KV cache transfer
+        # enable_nixl: True
+        # nixl_role: "sender"          # Prefiller acts as KV cache sender
+        # nixl_receiver_host: "localhost"  # Host where decoder is running
+        # nixl_receiver_port: 55555        # Port where decoder is listening
+        # nixl_buffer_size: 1073741824  # 1GB buffer for KV cache transfer
+        # nixl_buffer_device: "cuda"   # Use GPU memory for buffer
+        # nixl_enable_gc: True         # Enable garbage collection
+        lmcache_prefill_config = {
+            "enable_nixl": True,
+            "nixl_role": "sender",
+            "nixl_receiver_host": "localhost",
+            "nixl_receiver_port": 55555,
+            "nixl_buffer_size": 1073741824,
+            "nixl_buffer_device": "cuda",
+            "nixl_enable_gc": True,
+        }
+        # set the environment variables
+        for key, value in lmcache_prefill_config.items():
+            if key not in os.environ:  # Only set if not already configured
+                os.environ[key] = value
+                logging.info(f"Set LMCache environment variable: {key}={value}")
+
     component = runtime.namespace(config.namespace).component(config.component)
     await component.create_service()
 
@@ -203,6 +230,34 @@ async def init(runtime: DistributedRuntime, config: Config):
     """
     Instantiate and serve
     """
+    # Check if LMCache is enabled
+    enable_lmcache = os.getenv("ENABLE_LMCACHE", "0").lower() in ("1", "true", "yes")
+    enable_lmcache_disag = os.getenv("ENABLE_LMCACHE_DISAG", "0").lower() in ("1", "true", "yes")
+    if enable_lmcache and enable_lmcache_disag:
+        # NIXL configuration for KV cache transfer
+        # enable_nixl: True
+        # nixl_role: "receiver"        # Decoder acts as KV cache receiver
+        # nixl_receiver_host: "localhost"  # Host where decoder is listening
+        # nixl_receiver_port: 55555        # Port where decoder is listening
+        # nixl_buffer_size: 1073741824  # 1GB buffer for KV cache transfer
+        # nixl_buffer_device: "cuda"   # Use GPU memory for buffer
+        # nixl_enable_gc: True         # Enable garbage collection
+        lmcache_decode_config = {
+            "enable_nixl": True,
+            "nixl_role": "receiver",
+            "nixl_receiver_host": "localhost",
+            "nixl_receiver_port": 55555,
+            "nixl_buffer_size": 1073741824,
+            "nixl_buffer_device": "cuda",
+            "nixl_enable_gc": True,
+        }
+        # set the environment variables
+        for key, value in lmcache_decode_config.items():
+            if key not in os.environ:  # Only set if not already configured
+                os.environ[key] = value
+                logging.info(f"Set LMCache environment variable: {key}={value}")
+
+
 
     component = runtime.namespace(config.namespace).component(config.component)
     await component.create_service()
