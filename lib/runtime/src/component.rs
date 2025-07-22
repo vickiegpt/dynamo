@@ -29,7 +29,12 @@
 //!
 //! TODO: Top-level Overview of Endpoints/Functions
 
-use crate::{discovery::Lease, service::ServiceSet, transports::etcd::EtcdPath};
+use crate::{
+    discovery::Lease,
+    entity::descriptor::{ComponentDescriptor, EndpointDescriptor, NamespaceDescriptor},
+    service::ServiceSet,
+    transports::etcd::EtcdPath,
+};
 
 use super::{
     error,

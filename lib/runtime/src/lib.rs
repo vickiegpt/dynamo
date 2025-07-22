@@ -36,7 +36,9 @@ pub use config::RuntimeConfig;
 pub mod component;
 pub mod discovery;
 pub mod engine;
+pub mod entity;
 pub mod http_server;
+pub mod local;
 pub mod logging;
 pub mod pipeline;
 pub mod prelude;
@@ -68,10 +70,22 @@ enum RuntimeType {
 /// Local [Runtime] which provides access to shared resources local to the physical node/machine.
 #[derive(Debug, Clone)]
 pub struct Runtime {
-    id: Arc<String>,
     primary: RuntimeType,
     secondary: RuntimeType,
     cancellation_token: CancellationToken,
+}
+
+/// Local [Runtime] which provides access to shared resources local to the physical node/machine.
+#[derive(Clone)]
+pub struct LocalRuntime {
+    runtime: Runtime,
+
+    // local registry for endpoint engines
+    endpoint_engines: Arc<
+        std::sync::Mutex<
+            HashMap<entity::descriptor::EndpointDescriptor, Arc<dyn engine::AnyAsyncEngine>>,
+        >,
+    >,
 }
 
 /// Distributed [Runtime] which provides access to shared resources across the cluster, this includes

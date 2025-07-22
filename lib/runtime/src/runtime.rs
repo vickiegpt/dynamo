@@ -37,9 +37,6 @@ pub use tokio_util::sync::CancellationToken;
 
 impl Runtime {
     fn new(runtime: RuntimeType, secondary: Option<RuntimeType>) -> Result<Runtime> {
-        // worker id
-        let id = Arc::new(uuid::Uuid::new_v4().to_string());
-
         // create a cancellation token
         let cancellation_token = CancellationToken::new();
 
@@ -53,7 +50,6 @@ impl Runtime {
         };
 
         Ok(Runtime {
-            id,
             primary: runtime,
             secondary,
             cancellation_token,
@@ -85,11 +81,6 @@ impl Runtime {
         let config = config::RuntimeConfig::single_threaded();
         let owned = RuntimeType::Shared(Arc::new(config.create_runtime()?));
         Runtime::new(owned, None)
-    }
-
-    /// Returns the unique identifier for the [`Runtime`]
-    pub fn id(&self) -> &str {
-        &self.id
     }
 
     /// Returns a [`tokio::runtime::Handle`] for the primary/application thread pool

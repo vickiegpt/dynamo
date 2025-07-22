@@ -84,3 +84,10 @@ impl DiscoveryClient {
     //     unimplemented!()
     // }
 }
+
+
+pub trait DiscoveryPlane {
+
+
+
+}
