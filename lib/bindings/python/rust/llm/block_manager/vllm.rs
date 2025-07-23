@@ -546,14 +546,12 @@ impl<R: RequestKey> SlotManager<R> {
         match self.slots.remove(request_id) {
             Some(slot) => {
                 let isl = slot.num_tokens(SlotPosition::Prefill);
-                let tsl = slot.num_tokens(SlotPosition::All);
                 let isl_device = slot.num_blocks_cached_from_device() * self.block_size;
                 let isl_host = slot.num_blocks_cached_from_host() * self.block_size;
                 let isl_disk = slot.num_blocks_cached_from_disk() * self.block_size;
                 tracing::info!(
-                    request_id, "request complete isl: {}, osl: {} - cache hits: device: {}, host: {}, disk: {} - prefilled: {}",
+                    request_id, "request complete isl: {} - cache hits: device: {}, host: {}, disk: {} - prefilled: {}",
                     isl,
-                    tsl - isl,
                     isl_device,
                     isl_host,
                     isl_disk,
