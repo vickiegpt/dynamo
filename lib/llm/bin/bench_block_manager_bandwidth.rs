@@ -16,9 +16,9 @@
 use anyhow::Result;
 use clap::Parser;
 use dynamo_llm::block_manager::{
-    block::{BlockExt, MutableBlock},
+    block::MutableBlock,
     storage::{DeviceAllocator, DiskAllocator, PinnedAllocator},
-    BasicMetadata, BlockMetadata, BlockPool, KvBlockManager, KvBlockManagerConfig,
+    locality, BasicMetadata, BlockMetadata, BlockPool, KvBlockManager, KvBlockManagerConfig,
     KvManagerLayoutConfig, KvManagerModelConfig, KvManagerRuntimeConfig, Storage,
 };
 
@@ -54,7 +54,7 @@ struct Args {
     iterations: usize,
 }
 
-fn build_manager(args: &Args) -> Result<KvBlockManager<BasicMetadata>> {
+async fn build_manager(args: &Args) -> Result<KvBlockManager<locality::Local, BasicMetadata>> {
     let runtime_config = KvManagerRuntimeConfig::builder().worker_id(0).build()?;
 
     let model_config = KvManagerModelConfig::builder()
@@ -87,14 +87,14 @@ fn build_manager(args: &Args) -> Result<KvBlockManager<BasicMetadata>> {
         .disk_layout(disk_layout)
         .build()?;
 
-    KvBlockManager::<BasicMetadata>::new(config)
+    KvBlockManager::<locality::Local, BasicMetadata>::new(config).await
 }
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let manager = build_manager(&args)?;
+    let manager = build_manager(&args).await?;
 
     benchmark(manager, args).await?;
 
@@ -103,9 +103,9 @@ pub async fn main() -> Result<()> {
 
 /// Create a block in the 'COMPLETED' state.
 async fn completed_block<S: Storage, Metadata: BlockMetadata>(
-    pool: &BlockPool<S, Metadata>,
+    pool: &dyn BlockPool<S, locality::Local, Metadata>,
     tokens: Vec<u32>,
-) -> Result<MutableBlock<S, Metadata>> {
+) -> Result<MutableBlock<S, locality::Local, Metadata>> {
     let mut block = pool.allocate_blocks(1).await?.into_iter().next().unwrap();
 
     block.init_sequence(42)?;
@@ -125,8 +125,8 @@ fn get_bandwidth_gbs(latencies: Vec<Duration>, args: &Args) -> f64 {
 }
 
 async fn onboard_bandwidth<S: Storage, M: BlockMetadata>(
-    manager: &KvBlockManager<M>,
-    source: &BlockPool<S, M>,
+    manager: &KvBlockManager<locality::Local, M>,
+    source: &dyn BlockPool<S, locality::Local, M>,
     args: &Args,
 ) -> Result<()> {
     let mut latencies = Vec::new();
@@ -146,7 +146,7 @@ async fn onboard_bandwidth<S: Storage, M: BlockMetadata>(
         }
 
         let start = Instant::now();
-        let _ = manager.onboard_blocks(blocks).await?;
+        let _ = manager.onboard_blocks(blocks, None).await?;
         let duration = start.elapsed();
         latencies.push(duration);
     }
@@ -163,7 +163,10 @@ async fn onboard_bandwidth<S: Storage, M: BlockMetadata>(
     Ok(())
 }
 
-async fn benchmark(manager: KvBlockManager<BasicMetadata>, args: Args) -> Result<()> {
+async fn benchmark(
+    manager: KvBlockManager<locality::Local, BasicMetadata>,
+    args: Args,
+) -> Result<()> {
     println!("Warmup...");
 
     let device = manager.device().unwrap();
@@ -183,13 +186,13 @@ async fn benchmark(manager: KvBlockManager<BasicMetadata>, args: Args) -> Result
         sleep(Duration::from_millis(100)).await;
 
         let disk_block = disk
-            .match_sequence_hashes(vec![immutable_device_block.sequence_hash()?].as_slice())
+            .match_sequence_hashes(vec![immutable_device_block.sequence_hash()].as_slice())
             .await?
             .into_iter()
             .next()
             .unwrap();
 
-        let _ = manager.onboard_blocks(vec![disk_block]).await?;
+        let _ = manager.onboard_blocks(vec![disk_block], None).await?;
     }
 
     println!("Starting benchmark...");
