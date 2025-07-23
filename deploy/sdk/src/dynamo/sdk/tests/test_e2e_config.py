@@ -23,7 +23,6 @@ from typer.testing import CliRunner
 
 from dynamo.sdk.cli.cli import cli
 
-
 runner = CliRunner()
 
 
