@@ -479,7 +479,7 @@ $LD_LIBRARY_PATH
 
 # Copy entire venv
 # Theres a lot of stuff we'd have to re-compile (for arm64)
-# TODO: Do not copy the venv, use pip ai-dynamo[vllm] to replicate end user environment
+# TODO: use pip ai-dynamo[vllm] in venv to replicate end user environment
 # Copy metrics binary from wheel_builder image, not part of ai-dynamo wheel
 COPY --from=ci_minimum /workspace/target/release/metrics /usr/local/bin/metrics
 COPY --from=ci_minimum ${VIRTUAL_ENV} ${VIRTUAL_ENV}
@@ -492,6 +492,7 @@ COPY tests/ /workspace/tests/
 COPY examples/ /workspace/examples/
 COPY deploy/ /workspace/deploy/
 COPY benchmarks/ /workspace/benchmarks/
+RUN uv pip install /workspace/benchmarks
 
 # Copy launch banner
 RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/launch_message.txt \

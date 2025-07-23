@@ -17,8 +17,6 @@ import pytest
 
 from dynamo.sdk.core.protocol.interface import LinkedServices
 
-pytestmark = pytest.mark.pre_merge
-
 
 def test_remove_backend2():
     from dynamo.sdk.tests.pipeline import Backend, Backend2, Frontend, Middle
