@@ -39,3 +39,4 @@
 .dockerignore
 **/target/*
 **/*safetensors
+deploy/sdk/src/dynamo
