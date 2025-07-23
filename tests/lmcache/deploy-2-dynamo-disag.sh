@@ -38,6 +38,7 @@ sleep 2
 
 # Enable LMCache
 export ENABLE_LMCACHE=1
+export LMCACHE_ENABLE_DISAG=1
 
 # Set LMCache configuration environment variables
 export LMCACHE_CHUNK_SIZE=256
@@ -49,6 +50,8 @@ echo "🔧 Starting dynamo disaggregated serving with LMCache enabled..."
 dynamo run in=http out=dyn &
 
 CUDA_VISIBLE_DEVICES=0 python3 components/main.py --model $MODEL_URL --enforce-eager &
+
+sleep 10
 
 CUDA_VISIBLE_DEVICES=1 python3 components/main.py \
     --model $MODEL_URL \
