@@ -492,7 +492,6 @@ COPY tests/ /workspace/tests/
 COPY examples/ /workspace/examples/
 COPY deploy/ /workspace/deploy/
 COPY benchmarks/ /workspace/benchmarks/
-RUN uv pip install /workspace/benchmarks
 
 # Copy launch banner
 RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/launch_message.txt \
