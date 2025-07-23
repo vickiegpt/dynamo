@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 //! The Preprocessor consists of the following modules
 //!
@@ -27,8 +15,10 @@ pub mod prompt;
 pub mod tools;
 
 use anyhow::Result;
+use async_openai::types::EncodingFormat;
 use futures::stream::{self, StreamExt};
 use prompt::OAIPromptFormatter;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::{collections::HashMap, sync::Arc};
 use tracing;
 
@@ -46,16 +36,20 @@ use crate::protocols::{
     common::{SamplingOptionsProvider, StopConditionsProvider},
     openai::{
         chat_completions::{NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse},
-        completions::{CompletionResponse, NvCreateCompletionRequest},
+        completions::{NvCreateCompletionRequest, NvCreateCompletionResponse},
+        embeddings::{NvCreateEmbeddingRequest, NvCreateEmbeddingResponse},
         nvext::NvExtProvider,
         DeltaGeneratorExt,
     },
 };
 use crate::tokenizers::{traits::Tokenizer, HuggingFaceTokenizer};
 
-use crate::preprocessor::prompt::PromptFormatter;
+use crate::preprocessor::prompt::{PromptFormatter, PromptInput, TextInput, TokenInput};
 
 pub use crate::protocols::common::llm_backend::{BackendOutput, PreprocessedRequest};
+pub use crate::protocols::common::preprocessor::PreprocessedEmbeddingRequest;
+
+use crate::protocols::common::llm_backend::EmbeddingsEngineOutput;
 
 pub const ANNOTATION_FORMATTED_PROMPT: &str = "formatted_prompt";
 pub const ANNOTATION_TOKEN_IDS: &str = "token_ids";
@@ -160,33 +154,78 @@ impl OpenAIPreprocessor {
         let mut annotations = HashMap::new();
         let mut builder = PreprocessedRequest::builder();
 
-        let use_raw_prompt = request
-            .nvext()
-            .is_some_and(|ext| ext.use_raw_prompt.unwrap_or(false));
-
-        let formatted_prompt = if use_raw_prompt {
-            match request.raw_prompt() {
-                Some(prompt) => prompt,
-                None => {
-                    tracing::warn!("Raw prompt requested but not available");
-                    self.formatter.render(request)?
+        // match request type before any conversion/processing
+        match request.prompt_input_type() {
+            PromptInput::Tokens(_) => {
+                if let Some(token_input) = request.extract_tokens() {
+                    match token_input {
+                        TokenInput::Single(tokens) => {
+                            builder.token_ids(tokens);
+                        }
+                        TokenInput::Batch(token_batches) => {
+                            if token_batches.len() == 1 {
+                                builder.token_ids(token_batches[0].clone());
+                            } else {
+                                builder.batch_token_ids(Some(token_batches));
+                                builder.token_ids(vec![]);
+                            }
+                        }
+                    }
                 }
             }
-        } else {
-            self.formatter.render(request)?
-        };
+            PromptInput::Text(_) => {
+                if let Some(text_input) = request.extract_text() {
+                    match text_input {
+                        TextInput::Single(_) => {
+                            let use_raw_prompt = request
+                                .nvext()
+                                .is_some_and(|ext| ext.use_raw_prompt.unwrap_or(false));
 
-        let encoding = tokio::task::block_in_place(|| self.tokenizer.encode(&formatted_prompt))?;
+                            let formatted_prompt = if use_raw_prompt {
+                                match request.raw_prompt() {
+                                    Some(prompt) => prompt,
+                                    None => {
+                                        tracing::warn!("Raw prompt requested but not available");
+                                        self.formatter.render(request)?
+                                    }
+                                }
+                            } else {
+                                self.formatter.render(request)?
+                            };
 
-        if request.has_annotation(ANNOTATION_FORMATTED_PROMPT) {
-            annotations.insert(ANNOTATION_FORMATTED_PROMPT.to_string(), formatted_prompt);
-        }
+                            let encoding = self.tokenizer.encode(&formatted_prompt)?;
 
-        if request.has_annotation(ANNOTATION_TOKEN_IDS) {
-            annotations.insert(
-                ANNOTATION_TOKEN_IDS.to_string(),
-                serde_json::to_string(&encoding.token_ids)?,
-            );
+                            if request.has_annotation(ANNOTATION_FORMATTED_PROMPT) {
+                                annotations.insert(
+                                    ANNOTATION_FORMATTED_PROMPT.to_string(),
+                                    formatted_prompt,
+                                );
+                            }
+
+                            if request.has_annotation(ANNOTATION_TOKEN_IDS) {
+                                annotations.insert(
+                                    ANNOTATION_TOKEN_IDS.to_string(),
+                                    serde_json::to_string(encoding.token_ids())?,
+                                );
+                            }
+
+                            builder.token_ids(encoding.token_ids().to_vec());
+                        }
+                        TextInput::Batch(texts) => {
+                            let token_batches: Vec<Vec<u32>> = texts
+                                .par_iter()
+                                .map(|text| {
+                                    self.tokenizer
+                                        .encode(text)
+                                        .map(|encoded| encoded.token_ids().to_vec())
+                                })
+                                .collect::<Result<Vec<_>>>()?;
+                            builder.batch_token_ids(Some(token_batches));
+                            builder.token_ids(vec![]);
+                        }
+                    }
+                }
+            }
         }
 
         let mut stop_conditions = request.extract_stop_conditions()?;
@@ -207,12 +246,73 @@ impl OpenAIPreprocessor {
             builder.eos_token_ids(self.model_info.eos_token_ids());
         }
 
-        builder.token_ids(encoding.token_ids);
-        builder.sampling_options(request.extract_sampling_options()?);
         builder.stop_conditions(stop_conditions);
+        builder.sampling_options(request.extract_sampling_options()?);
         builder.annotations(request.annotations().unwrap_or_default());
         builder.mdc_sum(Some(self.mdcsum.clone()));
         builder.estimated_prefix_hit_num_blocks(None);
+
+        Ok((builder.build()?, annotations))
+    }
+
+    /// Preprocess an embedding request, handling both text and token ID inputs.
+    ///
+    /// For text inputs, tokenizes the text using the configured tokenizer.
+    /// For token ID inputs, uses the provided token IDs directly and skips tokenization.
+    ///
+    /// Returns both the preprocessed request and a hashmap of annotations.
+    pub async fn preprocess_embedding_request(
+        &self,
+        request: &NvCreateEmbeddingRequest,
+    ) -> Result<(PreprocessedEmbeddingRequest, HashMap<String, String>)> {
+        let mut annotations = HashMap::new();
+        let mut builder = PreprocessedEmbeddingRequest::builder();
+
+        let all_token_ids = match &request.inner.input {
+            async_openai::types::EmbeddingInput::String(s) => {
+                let encoding = self.tokenizer.encode(s)?;
+                vec![encoding.token_ids().to_vec()]
+            }
+            async_openai::types::EmbeddingInput::StringArray(arr) => {
+                let input_strs: Vec<String> = arr.to_vec();
+                let encodings = tokio::task::spawn_blocking({
+                    let tokenizer = self.tokenizer.clone();
+                    let strs = input_strs.clone();
+                    move || {
+                        tokenizer.encode_batch(&strs.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+                    }
+                })
+                .await??;
+                let token_arrays: Vec<Vec<u32>> = encodings
+                    .into_iter()
+                    .map(|encoding| encoding.token_ids().to_vec())
+                    .collect();
+                token_arrays
+            }
+            async_openai::types::EmbeddingInput::IntegerArray(token_ids) => vec![token_ids.clone()],
+            async_openai::types::EmbeddingInput::ArrayOfIntegerArray(token_arrays) => {
+                token_arrays.clone()
+            }
+        };
+
+        // Handle annotations
+        if request.has_annotation(ANNOTATION_TOKEN_IDS) {
+            annotations.insert(
+                ANNOTATION_TOKEN_IDS.to_string(),
+                serde_json::to_string(&all_token_ids)?,
+            );
+        }
+
+        builder.token_ids(all_token_ids);
+        builder.model(request.inner.model.clone());
+        builder.encoding_format(request.inner.encoding_format.as_ref().map(|f| match f {
+            EncodingFormat::Float => "float".to_string(),
+            EncodingFormat::Base64 => "base64".to_string(),
+        }));
+        builder.dimensions(request.inner.dimensions);
+
+        builder.annotations(request.annotations().unwrap_or_default());
+        builder.mdc_sum(Some(self.mdcsum.clone()));
 
         Ok((builder.build()?, annotations))
     }
@@ -319,6 +419,46 @@ impl OpenAIPreprocessor {
 
         ResponseStream::new(Box::pin(stream), context)
     }
+
+    /// Transform engine embedding output stream to OpenAI embedding response stream
+    pub fn transform_embedding_postprocessor_stream(
+        stream: ManyOut<Annotated<EmbeddingsEngineOutput>>,
+        original_request: NvCreateEmbeddingRequest,
+    ) -> ManyOut<Annotated<NvCreateEmbeddingResponse>> {
+        let context = stream.context();
+
+        let transformed_stream = stream.map(move |output| {
+            output.map_data(|engine_output| {
+                // Convert engine output to OpenAI response format
+                let embeddings: Vec<async_openai::types::Embedding> = engine_output
+                    .embeddings
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, embedding)| async_openai::types::Embedding {
+                        index: index as u32,
+                        object: "embedding".to_string(),
+                        embedding: embedding.into_iter().map(|f| f as f32).collect(),
+                    })
+                    .collect();
+
+                let response = NvCreateEmbeddingResponse {
+                    inner: async_openai::types::CreateEmbeddingResponse {
+                        object: "list".to_string(),
+                        model: original_request.inner.model.clone(),
+                        data: embeddings,
+                        usage: async_openai::types::EmbeddingUsage {
+                            prompt_tokens: engine_output.prompt_tokens,
+                            total_tokens: engine_output.total_tokens,
+                        },
+                    },
+                };
+
+                Ok(response)
+            })
+        });
+
+        ResponseStream::new(Box::pin(transformed_stream), context)
+    }
 }
 
 // for pals, we do not want to add the generation prompt to the formatted prompt
@@ -388,7 +528,7 @@ impl
 impl
     Operator<
         SingleIn<NvCreateCompletionRequest>,
-        ManyOut<Annotated<CompletionResponse>>,
+        ManyOut<Annotated<NvCreateCompletionResponse>>,
         SingleIn<PreprocessedRequest>,
         ManyOut<Annotated<BackendOutput>>,
     > for OpenAIPreprocessor
@@ -403,7 +543,7 @@ impl
                 Error,
             >,
         >,
-    ) -> Result<ManyOut<Annotated<CompletionResponse>>, Error> {
+    ) -> Result<ManyOut<Annotated<NvCreateCompletionResponse>>, Error> {
         // unpack the request
         let (request, context) = request.into_parts();
 
@@ -414,13 +554,13 @@ impl
         let (common_request, annotations) = self.preprocess_request(&request)?;
 
         // update isl
-        response_generator.update_isl(common_request.token_ids.len() as i32);
+        response_generator.update_isl(common_request.token_ids.len() as u32);
 
         // repack the common completion request
         let common_request = context.map(|_| common_request);
 
         // create a stream of annotations this will be prepend to the response stream
-        let annotations: Vec<Annotated<CompletionResponse>> = annotations
+        let annotations: Vec<Annotated<NvCreateCompletionResponse>> = annotations
             .into_iter()
             .flat_map(|(k, v)| Annotated::from_annotation(k, &v))
             .collect();
@@ -438,5 +578,53 @@ impl
 
         // return the response stream
         Ok(ResponseStream::new(Box::pin(stream), context))
+    }
+}
+
+#[async_trait]
+impl
+    Operator<
+        SingleIn<NvCreateEmbeddingRequest>,
+        ManyOut<Annotated<NvCreateEmbeddingResponse>>,
+        SingleIn<PreprocessedEmbeddingRequest>,
+        ManyOut<Annotated<EmbeddingsEngineOutput>>,
+    > for OpenAIPreprocessor
+{
+    async fn generate(
+        &self,
+        request: SingleIn<NvCreateEmbeddingRequest>,
+        next: Arc<
+            dyn AsyncEngine<
+                SingleIn<PreprocessedEmbeddingRequest>,
+                ManyOut<Annotated<EmbeddingsEngineOutput>>,
+                Error,
+            >,
+        >,
+    ) -> Result<ManyOut<Annotated<NvCreateEmbeddingResponse>>, Error> {
+        // Unpack request
+        let (request, context) = request.into_parts();
+
+        // Preprocess the embedding request
+        let (preprocessed_request, annotations) =
+            self.preprocess_embedding_request(&request).await?;
+
+        // Forward to next stage
+        let preprocessed_request = context.map(|_| preprocessed_request);
+        let response_stream = next.generate(preprocessed_request).await?;
+
+        // Transform response stream back to OpenAI format
+        let stream = Self::transform_embedding_postprocessor_stream(response_stream, request);
+        let context = stream.context();
+
+        // Prepend annotations
+        let annotations_stream = stream::iter(
+            annotations
+                .into_iter()
+                .flat_map(|(k, v)| Annotated::from_annotation(k, &v))
+                .collect::<Vec<_>>(),
+        );
+
+        let combined_stream = annotations_stream.chain(stream);
+        Ok(ResponseStream::new(Box::pin(combined_stream), context))
     }
 }

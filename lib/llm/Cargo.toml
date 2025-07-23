@@ -25,17 +25,20 @@ readme.workspace = true
 description = "Dynamo LLM Library"
 
 [features]
+# todo(ops): get this working in CI as a default.
 default = []
-
-# todo: enable this as default
-# default = ["block-manager", "testing-full"]
 
 testing-full  = ["testing-cuda", "testing-nixl"]
 testing-cuda  = ["dep:cudarc"]
 testing-nixl  = ["dep:nixl-sys"]
+testing-etcd = []
 block-manager = ["dep:nixl-sys", "dep:cudarc", "dep:ndarray", "dep:nix"]
 sentencepiece = ["dep:sentencepiece"]
 block-manager-bench = ["block-manager", "testing-cuda", "dep:clap", "dep:indicatif", "dep:plotters", "dep:ordered-float", "dep:json"]
+
+[[bench]]
+name = "tokenizer"
+harness = false
 
 [dependencies]
 # repo
@@ -43,6 +46,7 @@ dynamo-runtime = { workspace = true }
 
 # workspace
 anyhow = { workspace = true }
+async-openai = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
 async-nats = { workspace = true }
@@ -53,7 +57,9 @@ derive_builder = {workspace = true }
 either = { workspace = true }
 etcd-client = { workspace = true }
 futures =  { workspace = true }
+futures-util = "0.3.31"
 hf-hub = { workspace = true }
+humantime = { workspace = true } # input/batch
 rand = { workspace = true }
 oneshot = { workspace = true }
 prometheus = { workspace = true }
@@ -62,6 +68,7 @@ serde_json = { workspace = true }
 strum = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+tmq = "0.5.0"
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
@@ -72,7 +79,6 @@ uuid = { workspace = true }
 xxhash-rust = { workspace = true }
 
 akin = "0.4.0"
-async-openai = "0.27.2"
 blake3 = "1"
 bytemuck = "1.22"
 candle-core = { version = "0.8.0" }
@@ -81,8 +87,11 @@ offset-allocator = "0.2"
 regex = "1"
 rayon = "1"
 
+# input/text
+dialoguer = { version = "0.11", default-features = false, features = ["editor", "history"] }
+
 # block_manager
-nixl-sys = {git="https://github.com/ai-dynamo/nixl", rev = "a7c654d46a14cd5ce635cc8c02433d71df93dedf", optional = true }
+nixl-sys = {version = "0.4", optional = true}
 cudarc = { version = "0.16.2", features = ["cuda-12020"], optional = true }
 ndarray = { version = "0.16", optional = true }
 nix = { version = "0.26", optional = true }
@@ -91,7 +100,7 @@ nix = { version = "0.26", optional = true }
 unicode-segmentation = "1.12"
 
 # http-service
-axum = "0.8"
+axum = { workspace = true }
 
 # tokenizers
 tokenizers = { version = "0.21.1", default-features = false, features = [
@@ -129,10 +138,12 @@ ordered-float = { version = "5.0.0", optional = true }
 json = { version = "0.12.4", optional = true}
 
 [dev-dependencies]
+approx = "0.5"
 assert_matches = "1.5"
+criterion = { version = "0.3", features = ["html_reports"] }
 hf-hub = { workspace = true }
 proptest = "1.5.0"
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+reqwest = { workspace = true }
 rstest = "0.18.2"
 rstest_reuse = "0.7.0"
 tempfile = "3.17.1"

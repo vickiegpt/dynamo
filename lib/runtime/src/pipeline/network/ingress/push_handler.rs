@@ -62,7 +62,7 @@ where
         // todo - eventually have a handler class which will returned an abstracted object, but for now,
         // we only support tcp here, so we can just unwrap the connection info
         tracing::trace!("creating tcp response stream");
-        let mut publisher = tcp::client::TcpClient::create_response_steam(
+        let mut publisher = tcp::client::TcpClient::create_response_stream(
             request.context(),
             control_msg.connection_info,
         )
@@ -89,22 +89,56 @@ where
                 stream
             }
             Err(e) => {
-                tracing::error!("Failed to generate response stream: {:?}", e);
-                let _result = publisher.send_prologue(Some(e.to_string())).await;
+                let error_string = e.to_string();
+
+                #[cfg(debug_assertions)]
+                {
+                    tracing::debug!(
+                        "Failed to generate response stream (with debug backtrace): {:?}",
+                        e
+                    );
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    tracing::error!("Failed to generate response stream: {}", error_string);
+                }
+
+                let _result = publisher.send_prologue(Some(error_string)).await;
                 Err(e)?
             }
         };
 
         let context = stream.context();
 
+        // TODO: Detect end-of-stream using Server-Sent Events (SSE)
+        let mut send_complete_final = true;
         while let Some(resp) = stream.next().await {
             tracing::trace!("Sending response: {:?}", resp);
-            let resp_bytes = serde_json::to_vec(&resp)
+            let resp_wrapper = NetworkStreamWrapper {
+                data: Some(resp),
+                complete_final: false,
+            };
+            let resp_bytes = serde_json::to_vec(&resp_wrapper)
                 .expect("fatal error: invalid response object - this should never happen");
             if (publisher.send(resp_bytes.into()).await).is_err() {
                 tracing::error!("Failed to publish response for stream {}", context.id());
                 context.stop_generating();
+                send_complete_final = false;
                 break;
+            }
+        }
+        if send_complete_final {
+            let resp_wrapper = NetworkStreamWrapper::<U> {
+                data: None,
+                complete_final: true,
+            };
+            let resp_bytes = serde_json::to_vec(&resp_wrapper)
+                .expect("fatal error: invalid response object - this should never happen");
+            if (publisher.send(resp_bytes.into()).await).is_err() {
+                tracing::error!(
+                    "Failed to publish complete final for stream {}",
+                    context.id()
+                );
             }
         }
 

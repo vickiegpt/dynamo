@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 from typing import (
     Any,
@@ -46,7 +34,7 @@ class DistributedRuntime:
 
     ...
 
-    def namespace(self, name: str, path: str) -> Namespace:
+    def namespace(self, name: str) -> Namespace:
         """
         Create a `Namespace` object
         """
@@ -272,25 +260,6 @@ class Client:
         """
         ...
 
-class KvRouter:
-    """
-    A router will determine which worker should handle a given request.
-    """
-
-    ...
-
-    def __init__(self, drt: DistributedRuntime, component: Component) -> None:
-        """
-        Create a `KvRouter` object that is associated with the `component`
-        """
-
-    def schedule(self, token_ids: List[int], lora_id: int) -> int:
-        """
-        Return the worker id that should handle the given token ids,
-        exception will be raised if there is no worker available.
-        """
-        ...
-
 class DisaggregatedRouter:
     """
     A router that determines whether to perform prefill locally or remotely based on
@@ -355,7 +324,85 @@ def compute_block_hash_for_seq_py(tokens: List[int], kv_block_size: int) -> List
     Returns:
         List of block hashes as integers
     """
+
     ...
+
+class WorkerStats:
+    """
+    Worker stats.
+    """
+
+    ...
+
+    def __init__(
+        self,
+        request_active_slots: int,
+        request_total_slots: int,
+        num_requests_waiting: int,
+        data_parallel_rank: Optional[int] = None,
+    ) -> None:
+        """
+        Create a `WorkerStats` object.
+        """
+        ...
+
+class KvStats:
+    """
+    KV stats.
+    """
+
+    ...
+
+    def __init__(
+        self,
+        kv_active_blocks: int,
+        kv_total_blocks: int,
+        gpu_cache_usage_perc: float,
+        gpu_prefix_cache_hit_rate: float,
+    ) -> None:
+        """
+        Create a `KvStats` object.
+        """
+        ...
+
+class SpecDecodeStats:
+    """
+    Speculative decoding stats.
+    """
+
+    ...
+
+    def __init__(
+        self,
+        num_spec_tokens: int,
+        num_drafts: int,
+        num_draft_tokens: int,
+        num_accepted_tokens: int,
+        num_accepted_tokens_per_pos: List[int],
+    ) -> None:
+        """
+        Create a `SpecDecodeStats` object when running with speculative decoding.
+        """
+        ...
+
+class ForwardPassMetrics:
+    """
+    A collection of metrics for a forward pass.
+    Includes worker stats, KV stats, and speculative decoding stats.
+    """
+
+    ...
+
+    def __init__(
+        self,
+        worker_stats: WorkerStats,
+        kv_stats: KvStats,
+        spec_decode_stats: Optional[SpecDecodeStats] = None,
+    ) -> None:
+        """
+        Create a `ForwardPassMetrics` object
+        """
+        ...
 
 class WorkerMetricsPublisher:
     """
@@ -369,7 +416,7 @@ class WorkerMetricsPublisher:
         Create a `WorkerMetricsPublisher` object
         """
 
-    def create_service(self, component: Component) -> None:
+    def create_endpoint(self, component: Component) -> None:
         """
         Similar to Component.create_service, but only service created through
         this method will interact with KV router of the same component.
@@ -377,17 +424,10 @@ class WorkerMetricsPublisher:
 
     def publish(
         self,
-        request_active_slots: int,
-        request_total_slots: int,
-        kv_active_blocks: int,
-        kv_total_blocks: int,
-        num_requests_waiting: int,
-        gpu_cache_usage_perc: float,
-        gpu_prefix_cache_hit_rate: float,
-        data_parallel_rank: int = 0,
+        metrics: ForwardPassMetrics
     ) -> None:
         """
-        Update the KV metrics being reported.
+        Update the metrics being reported.
         """
         ...
 
@@ -527,6 +567,18 @@ class KvIndexer:
         Create a `KvIndexer` object
         """
 
+    def find_matches(self, sequence: List[int]) -> OverlapScores:
+        """
+        Find prefix matches for the given sequence of block hashes.
+
+        Args:
+            sequence: List of block hashes to find matches for
+
+        Returns:
+            OverlapScores containing worker matching scores and frequencies
+        """
+        ...
+
     def find_matches_for_request(
         self, token_ids: List[int], lora_id: int
     ) -> OverlapScores:
@@ -538,6 +590,35 @@ class KvIndexer:
     def block_size(self) -> int:
         """
         Return the block size of the KV Indexer.
+        """
+        ...
+
+class ApproxKvIndexer:
+    """
+    A KV Indexer that doesn't use KV cache events. It instead relies solely on the input tokens.
+    """
+
+    def __init__(self, component: Component, kv_block_size: int, ttl_secs: float) -> None:
+        """
+        Create a `ApproxKvIndexer` object
+        """
+        ...
+
+    def find_matches_for_request(self, token_ids: List[int], lora_id: int) -> OverlapScores:
+        """
+        Return the overlapping scores of workers for the given token ids.
+        """
+        ...
+
+    def block_size(self) -> int:
+        """
+        Return the block size of the ApproxKvIndexer.
+        """
+        ...
+
+    def process_routing_decision_for_request(self, tokens: List[int], lora_id: int, worker_id: int) -> None:
+        """
+        Notify the indexer that a token sequence has been sent to a specific worker.
         """
         ...
 
@@ -736,8 +817,32 @@ class ModelType:
     """What type of request this model needs: Chat, Component or Backend (pre-processed)"""
     ...
 
-async def register_llm(model_type: ModelType, endpoint: Endpoint, model_path: str, model_name: Optional[str] = None, context_length: Optional[int] = None, kv_cache_block_size: Optional[int] = None) -> None:
+class RouterMode:
+    """Router mode for load balancing requests across workers"""
+    ...
+
+class RouterConfig:
+    """How to route the request"""
+    ...
+
+class KvRouterConfig:
+    """Values for KV router"""
+    ...
+
+async def register_llm(model_type: ModelType, endpoint: Endpoint, model_path: str, model_name: Optional[str] = None, context_length: Optional[int] = None, kv_cache_block_size: Optional[int] = None, router_mode: Optional[RouterMode] = None) -> None:
     """Attach the model at path to the given endpoint, and advertise it as model_type"""
+    ...
+
+class EngineConfig:
+    """Holds internal configuration for a Dynamo engine."""
+    ...
+
+async def make_engine(args: EntrypointArgs) -> EngineConfig:
+    """Make an engine matching the args"""
+    ...
+
+async def run_input(runtime: DistributedRuntime, input: str, engine_config: EngineConfig) -> None:
+    """Start an engine, connect it to an input, and run until stopped."""
     ...
 
 class NatsQueue:
@@ -1015,6 +1120,23 @@ class BlockManager:
         """
         ...
 
+class KvbmCacheManager:
+    """
+    A KV cache manager for VLLM
+    """
+
+    def __init__(self, block_manager: BlockManager) -> None:
+        ...
+
+
+class KvbmRequest:
+    """
+    A request for KV cache
+    """
+
+    def __init__(self, request_id: int, tokens: List[int], block_size: int) -> None:
+        ...
+
 class ZmqKvEventListener:
     """
     A ZMQ-based key-value cache event listener that operates independently
@@ -1045,3 +1167,11 @@ class ZmqKvEventListener:
             ValueError: If events cannot be serialized to JSON
         """
         ...
+
+class EntrypointArgs:
+    """
+    Settings to connect an input to a worker and run them.
+    Use by `dynamo run`.
+    """
+
+    ...

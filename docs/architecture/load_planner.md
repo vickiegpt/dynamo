@@ -2,6 +2,9 @@
 
 This document covers load-based planner in `examples/llm/components/planner.py`.
 
+> [!WARNING]
+> Bare metal deployment with local connector is deprecated. The only option to deploy load-based planner is via k8s. We will update the examples in this document soon.
+
 ## Load-based Scaling Up/Down Prefill/Decode Workers
 
 To adjust the number of prefill/decode workers, planner monitors the following metrics:
@@ -27,7 +30,8 @@ We assume there is no piggy-backed prefill requests in the decode engine. Even i
 
 ```bash
 cd $DYNAMO_HOME/benchmarks/profiler/
-python -m utils.profile_sla \
+python -m profile_sla \
+  --backend <vllm_v0/vllm_v1> \
   --config <path-to-dynamo-config-file> \
   --output-dir <path-to-profile-results-dir> \
   --isl <target-isl> \

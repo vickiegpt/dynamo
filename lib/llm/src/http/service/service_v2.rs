@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::env::var;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,7 +12,6 @@ use crate::discovery::ModelManager;
 use crate::request_template::RequestTemplate;
 use anyhow::Result;
 use derive_builder::Builder;
-use dynamo_runtime::DistributedRuntime;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -19,7 +19,6 @@ use tokio_util::sync::CancellationToken;
 pub struct State {
     metrics: Arc<Metrics>,
     manager: Arc<ModelManager>,
-    runtime: Option<Arc<DistributedRuntime>>,
 }
 
 impl State {
@@ -27,15 +26,6 @@ impl State {
         Self {
             manager,
             metrics: Arc::new(Metrics::default()),
-            runtime: None,
-        }
-    }
-
-    pub fn with_runtime(manager: Arc<ModelManager>, runtime: Arc<DistributedRuntime>) -> Self {
-        Self {
-            manager,
-            metrics: Arc::new(Metrics::default()),
-            runtime: Some(runtime),
         }
     }
 
@@ -50,11 +40,6 @@ impl State {
 
     pub fn manager_clone(&self) -> Arc<ModelManager> {
         self.manager.clone()
-    }
-
-    /// Get the DistributedRuntime if available
-    pub fn runtime(&self) -> Option<&DistributedRuntime> {
-        self.runtime.as_ref().map(|r| r.as_ref())
     }
 
     // TODO
@@ -94,11 +79,11 @@ pub struct HttpServiceConfig {
     #[builder(default = "true")]
     enable_embeddings_endpoints: bool,
 
-    #[builder(default = "None")]
-    request_template: Option<RequestTemplate>,
+    #[builder(default = "true")]
+    enable_responses_endpoints: bool,
 
     #[builder(default = "None")]
-    runtime: Option<Arc<DistributedRuntime>>,
+    request_template: Option<RequestTemplate>,
 }
 
 impl HttpService {
@@ -148,16 +133,29 @@ impl HttpService {
     }
 }
 
+/// Environment variable to set the metrics endpoint path (default: `/metrics`)
+static HTTP_SVC_METRICS_PATH_ENV: &str = "DYN_HTTP_SVC_METRICS_PATH";
+/// Environment variable to set the models endpoint path (default: `/v1/models`)
+static HTTP_SVC_MODELS_PATH_ENV: &str = "DYN_HTTP_SVC_MODELS_PATH";
+/// Environment variable to set the health endpoint path (default: `/health`)
+static HTTP_SVC_HEALTH_PATH_ENV: &str = "DYN_HTTP_SVC_HEALTH_PATH";
+/// Environment variable to set the live endpoint path (default: `/live`)
+static HTTP_SVC_LIVE_PATH_ENV: &str = "DYN_HTTP_SVC_LIVE_PATH";
+/// Environment variable to set the chat completions endpoint path (default: `/v1/chat/completions`)
+static HTTP_SVC_CHAT_PATH_ENV: &str = "DYN_HTTP_SVC_CHAT_PATH";
+/// Environment variable to set the completions endpoint path (default: `/v1/completions`)
+static HTTP_SVC_CMP_PATH_ENV: &str = "DYN_HTTP_SVC_CMP_PATH";
+/// Environment variable to set the embeddings endpoint path (default: `/v1/embeddings`)
+static HTTP_SVC_EMB_PATH_ENV: &str = "DYN_HTTP_SVC_EMB_PATH";
+/// Environment variable to set the responses endpoint path (default: `/v1/responses`)
+static HTTP_SVC_RESPONSES_PATH_ENV: &str = "DYN_HTTP_SVC_RESPONSES_PATH";
+
 impl HttpServiceConfigBuilder {
     pub fn build(self) -> Result<HttpService, anyhow::Error> {
         let config: HttpServiceConfig = self.build_internal()?;
 
         let model_manager = Arc::new(ModelManager::new());
-        let state = if let Some(runtime) = config.runtime {
-            Arc::new(State::with_runtime(model_manager, runtime))
-        } else {
-            Arc::new(State::new(model_manager))
-        };
+        let state = Arc::new(State::new(model_manager));
 
         // enable prometheus metrics
         let registry = metrics::Registry::new();
@@ -168,26 +166,40 @@ impl HttpServiceConfigBuilder {
         let mut all_docs = Vec::new();
 
         let mut routes = vec![
-            metrics::router(registry, None),
-            super::openai::list_models_router(state.clone(), None),
-            super::health::health_check_router(state.clone(), None),
-            super::clear_kv_blocks::clear_kv_blocks_router(state.clone(), None),
+            metrics::router(registry, var(HTTP_SVC_METRICS_PATH_ENV).ok()),
+            super::openai::list_models_router(state.clone(), var(HTTP_SVC_MODELS_PATH_ENV).ok()),
+            super::health::health_check_router(state.clone(), var(HTTP_SVC_HEALTH_PATH_ENV).ok()),
+            super::health::live_check_router(state.clone(), var(HTTP_SVC_LIVE_PATH_ENV).ok()),
         ];
 
         if config.enable_chat_endpoints {
             routes.push(super::openai::chat_completions_router(
                 state.clone(),
-                config.request_template,
-                None,
+                config.request_template.clone(), // TODO clone()? reference?
+                var(HTTP_SVC_CHAT_PATH_ENV).ok(),
             ));
         }
 
         if config.enable_cmpl_endpoints {
-            routes.push(super::openai::completions_router(state.clone(), None));
+            routes.push(super::openai::completions_router(
+                state.clone(),
+                var(HTTP_SVC_CMP_PATH_ENV).ok(),
+            ));
         }
 
         if config.enable_embeddings_endpoints {
-            routes.push(super::openai::embeddings_router(state.clone(), None));
+            routes.push(super::openai::embeddings_router(
+                state.clone(),
+                var(HTTP_SVC_EMB_PATH_ENV).ok(),
+            ));
+        }
+
+        if config.enable_responses_endpoints {
+            routes.push(super::openai::responses_router(
+                state.clone(),
+                config.request_template,
+                var(HTTP_SVC_RESPONSES_PATH_ENV).ok(),
+            ));
         }
 
         // for (route_docs, route) in routes.into_iter().chain(self.routes.into_iter()) {

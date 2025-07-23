@@ -1,23 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use std::env;
 
 use clap::Parser;
 
-use dynamo_run::{Input, Output};
+use dynamo_llm::entrypoint::input::Input;
+use dynamo_run::Output;
 use dynamo_runtime::logging;
 
 const HELP: &str = r#"
@@ -61,8 +50,9 @@ fn main() -> anyhow::Result<()> {
 
     // max_worker_threads and max_blocking_threads from env vars or config file.
     let rt_config = dynamo_runtime::RuntimeConfig::from_settings()?;
+    tracing::debug!("Runtime config: {rt_config}");
 
-    // One per process. Wraps a Runtime with holds two tokio runtimes.
+    // One per process. Wraps a Runtime with holds one or two tokio runtimes.
     let worker = dynamo_runtime::Worker::from_config(rt_config)?;
 
     worker.execute(wrapper)
@@ -81,6 +71,13 @@ async fn wrapper(runtime: dynamo_runtime::Runtime) -> anyhow::Result<()> {
         let usage = USAGE.replace("ENGINE_LIST", &engine_list);
         println!("{usage}");
         println!("{HELP}");
+        return Ok(());
+    } else if args[0] == "--version" {
+        if let Some(describe) = option_env!("VERGEN_GIT_DESCRIBE") {
+            println!("dynamo-run {}", describe);
+        } else {
+            println!("Version not available (git describe not available)");
+        }
         return Ok(());
     }
     for arg in env::args().skip(1).take(2) {
@@ -120,5 +117,17 @@ async fn wrapper(runtime: dynamo_runtime::Runtime) -> anyhow::Result<()> {
             .chain(env::args().skip(non_flag_params)),
     )?;
 
+    if is_in_dynamic(&in_opt) && is_out_dynamic(&out_opt) {
+        anyhow::bail!("Cannot use endpoint for both in and out");
+    }
+
     dynamo_run::run(runtime, in_opt, out_opt, flags).await
+}
+
+fn is_in_dynamic(in_opt: &Input) -> bool {
+    matches!(in_opt, Input::Endpoint(_))
+}
+
+fn is_out_dynamic(out_opt: &Option<Output>) -> bool {
+    matches!(out_opt, Some(Output::Dynamic))
 }

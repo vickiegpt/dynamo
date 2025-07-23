@@ -17,22 +17,26 @@ use dynamo_runtime::component::Namespace;
 use dynamo_runtime::traits::events::EventPublisher;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::borrow::BorrowMut;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Mutex;
 
 use super::protocols::WorkerSelectionResult;
 use super::WorkerSelector;
 use crate::kv_router::indexer::OverlapScores;
-pub use crate::kv_router::protocols::ForwardPassMetrics;
+use crate::kv_router::protocols::LoadMetrics;
 use crate::kv_router::scoring::ProcessedEndpoints;
+use crate::kv_router::sequence::ActiveSequencesMultiWorker;
 use crate::kv_router::KvRouterConfig;
 use crate::kv_router::KV_HIT_RATE_SUBJECT;
+use crate::tokens::TokenBlockSequence;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KVHitRateEvent {
     pub worker_id: i64,
     pub isl_blocks: usize,
-    pub overlap_blocks: usize,
+    pub overlap_blocks: u32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -49,11 +53,11 @@ pub enum KvSchedulerError {
 
 /// [gluo FIXME] exactly the same as EndpointInfo except that 'data'
 /// is cleaned (not optional)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Endpoint {
     pub name: String,
     pub subject: String,
-    pub data: ForwardPassMetrics,
+    pub data: LoadMetrics,
 }
 
 impl Endpoint {
@@ -71,28 +75,38 @@ impl Endpoint {
     }
 }
 
+#[derive(Debug)]
+pub struct SchedulingResponse {
+    pub best_worker_id: i64,
+    pub overlap_blocks: u32, // Add this field
+    pub endpoints_changed: Option<Vec<i64>>,
+}
+
 pub struct SchedulingRequest {
     pub isl_tokens: usize,
-    pub overlap: OverlapScores,
-    resp_tx: tokio::sync::oneshot::Sender<i64>,
+    pub overlaps: OverlapScores,
+    pub potential_blocks: HashMap<i64, usize>,
+    pub potential_tokens: HashMap<i64, usize>,
+    resp_tx: tokio::sync::oneshot::Sender<SchedulingResponse>,
 }
 
 impl SchedulingRequest {
-    pub fn respond(self, worker_id: i64) {
-        if self.resp_tx.send(worker_id).is_err() {
-            tracing::trace!("failed to send response to requestor");
+    pub fn respond(self, response: SchedulingResponse) {
+        if self.resp_tx.send(response).is_err() {
+            tracing::error!("failed to send response to requestor");
         }
     }
 }
 
 pub struct KvScheduler {
     request_tx: tokio::sync::mpsc::Sender<SchedulingRequest>,
+    sequences: Arc<Mutex<ActiveSequencesMultiWorker>>,
 }
 
 impl KvScheduler {
     pub async fn start(
         ns: Namespace,
-        block_size: usize,
+        block_size: u32,
         endpoints_rx: tokio::sync::watch::Receiver<ProcessedEndpoints>,
         selector: Option<Box<dyn WorkerSelector + Send + Sync>>,
     ) -> Result<Self, KvSchedulerError> {
@@ -110,12 +124,18 @@ impl KvScheduler {
             }
         });
 
+        let sequences = Arc::new(Mutex::new(ActiveSequencesMultiWorker::new(
+            block_size as usize,
+            endpoints.worker_ids(),
+        )));
+
         // Channel to accept new scheduling requests
         let (request_tx, request_rx) = tokio::sync::mpsc::channel::<SchedulingRequest>(1024);
         // Background task to handle scheduling requests
         tokio::spawn(async move {
             let mut request: SchedulingRequest;
             let mut request_rx = request_rx;
+            let mut pending_endpoint_update: Option<Vec<i64>> = None;
             tracing::trace!("scheduler background task started");
 
             'outer: loop {
@@ -137,30 +157,34 @@ impl KvScheduler {
 
                     _ = endpoints_rx.changed() => {
                         endpoints = endpoints_rx.borrow_and_update().clone();
+                        pending_endpoint_update = Some(endpoints.worker_ids());
                         continue 'outer;
                     }
                 };
+
                 loop {
                     match selector.select_worker(&endpoints, &request, block_size) {
                         Ok(selection) => {
-                            let worker_id = process_worker_selection(
-                                endpoints.borrow_mut(),
-                                selection,
-                                &event_tx,
-                            );
-                            request.respond(worker_id);
+                            if let Err(e) = event_tx.send(KVHitRateEvent {
+                                worker_id: selection.worker_id,
+                                isl_blocks: selection.required_blocks as usize,
+                                overlap_blocks: selection.overlap_blocks,
+                            }) {
+                                tracing::warn!("Failed to send KV hit rate event: {:?}", e);
+                            }
+
+                            let response = SchedulingResponse {
+                                best_worker_id: selection.worker_id,
+                                overlap_blocks: selection.overlap_blocks,
+                                endpoints_changed: pending_endpoint_update.take(),
+                            };
+                            request.respond(response);
                             continue 'outer;
                         }
                         Err(KvSchedulerError::AllWorkersBusy) => {
                             tracing::trace!("all workers busy; waiting for more capacity");
-                            match endpoints_rx.changed().await {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    tracing::error!("error waiting for endpoints change: {:?}", e);
-                                    break 'outer;
-                                }
-                            };
-                            endpoints = endpoints_rx.borrow_and_update().clone();
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                            continue;
                         }
                         Err(e) => {
                             tracing::error!("error scheduling request: {:?}", e);
@@ -173,61 +197,139 @@ impl KvScheduler {
             tracing::trace!("background endpoint subscriber shutting down");
         });
 
-        Ok(KvScheduler { request_tx })
+        Ok(KvScheduler {
+            request_tx,
+            sequences,
+        })
     }
 
     pub async fn schedule(
         &self,
-        overlap: OverlapScores,
+        request_id: String,
         isl_tokens: usize,
+        block_size: u32,
+        tokens: &[u32],
+        overlaps: OverlapScores,
     ) -> Result<i64, KvSchedulerError> {
+        let mut sequences = self.sequences.lock().await;
+
+        let token_sequence = TokenBlockSequence::from_slice(tokens, block_size, None);
+        let (potential_blocks, potential_tokens) =
+            sequences.potential_blocks_and_tokens(token_sequence, overlaps.clone());
+
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
         let request = SchedulingRequest {
             isl_tokens,
-            overlap,
+            overlaps,
+            potential_blocks,
+            potential_tokens,
             resp_tx,
         };
         self.request_tx
             .send(request)
             .await
             .map_err(|_| KvSchedulerError::SubscriberShutdown)?;
-        let res = resp_rx
+        let response = resp_rx
             .await
             .map_err(|_| KvSchedulerError::SubscriberShutdown)?;
-        Ok(res)
+
+        if let Some(new_worker_ids) = response.endpoints_changed {
+            sequences.update_workers(new_worker_ids);
+        }
+
+        let token_sequence = TokenBlockSequence::from_slice(tokens, block_size, None);
+        sequences.add_request(
+            request_id,
+            token_sequence,
+            response.overlap_blocks,
+            response.best_worker_id,
+        );
+
+        Ok(response.best_worker_id)
+    }
+
+    /// Push tokens to a specific request's sequence
+    pub async fn push(&self, request_id: &String, tokens: &[u32]) {
+        let mut sequences = self.sequences.lock().await;
+        sequences.push(request_id, tokens)
+    }
+
+    /// Free all blocks associated with a request
+    pub async fn free(&self, request_id: &String) {
+        let mut sequences = self.sequences.lock().await;
+        sequences.free(request_id)
     }
 }
 
-// This becomes the driver function that handles the selection result
-pub fn process_worker_selection(
-    workers: &mut ProcessedEndpoints,
-    selection: WorkerSelectionResult,
-    event_tx: &tokio::sync::mpsc::UnboundedSender<KVHitRateEvent>,
-) -> i64 {
-    let worker = workers
-        .endpoints
-        .get_mut(&selection.worker_id)
-        .expect("worker not found");
-
-    // Update worker state predictively
-    // Will be overwritten on next polling of metrics
-    worker.data.num_requests_waiting += 1;
-    // Assumes radix attention so KV load is only incremented by uncached blocks
-    // overlap_blocks can be bigger than required_blocks. I don't know if that's a bug or not.
-    worker.data.kv_active_blocks += selection
-        .required_blocks
-        .saturating_sub(selection.overlap_blocks as u64);
-
-    // Emit event
-    if let Err(e) = event_tx.send(KVHitRateEvent {
-        worker_id: selection.worker_id,
-        isl_blocks: selection.required_blocks as usize,
-        overlap_blocks: selection.overlap_blocks,
-    }) {
-        tracing::warn!("Failed to send KV hit rate event: {:?}", e);
+// Helper function for softmax sampling
+fn softmax_sample(logits: &HashMap<i64, f64>, temperature: f64) -> i64 {
+    if logits.is_empty() {
+        panic!("Empty logits for softmax sampling");
     }
 
-    selection.worker_id
+    // Guard: if temperature is 0, return the key with the smallest logit value
+    if temperature == 0.0 {
+        // Find the minimum logit value
+        let min_logit = logits.values().fold(f64::INFINITY, |a, &b| a.min(b));
+
+        // Collect all keys with the minimum logit value (to handle ties)
+        let min_keys: Vec<_> = logits
+            .iter()
+            .filter(|(_, &v)| v == min_logit)
+            .map(|(k, _)| *k)
+            .collect();
+
+        // Randomly select from the minimum keys (handles single key case naturally)
+        let mut rng = rand::rng();
+        let index = rng.random_range(0..min_keys.len());
+        return min_keys[index];
+    }
+
+    let keys: Vec<_> = logits.keys().copied().collect();
+    let values: Vec<_> = logits.values().copied().collect();
+
+    // Find min and max for normalization
+    let min_val = values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+    let max_val = values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+    let probabilities = if min_val == max_val {
+        // All values are the same, uniform probability
+        vec![1.0 / keys.len() as f64; keys.len()]
+    } else {
+        // Normalize values
+        let normalized: Vec<_> = values
+            .iter()
+            .map(|&v| {
+                let norm = v / (max_val - min_val);
+                // Lower is better, so negate
+                -norm
+            })
+            .collect();
+
+        // Apply temperature and softmax
+        let scaled: Vec<_> = normalized.iter().map(|&v| v / temperature).collect();
+
+        let max_scaled = scaled.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let exp_values: Vec<_> = scaled.iter().map(|&v| (v - max_scaled).exp()).collect();
+
+        let sum_exp: f64 = exp_values.iter().sum();
+        exp_values.iter().map(|&v| v / sum_exp).collect()
+    };
+
+    // Sample from the probability distribution
+    let mut rng = rand::rng();
+    let sample: f64 = rng.random();
+
+    let mut cumsum = 0.0;
+    for (i, &prob) in probabilities.iter().enumerate() {
+        cumsum += prob;
+        if sample <= cumsum {
+            return keys[i];
+        }
+    }
+
+    // Fallback to last key (shouldn't normally reach here)
+    keys[keys.len() - 1]
 }
 
 // Default implementation matching the Python _cost_function
@@ -249,7 +351,7 @@ impl WorkerSelector for DefaultWorkerSelector {
         &self,
         workers: &ProcessedEndpoints,
         request: &SchedulingRequest,
-        block_size: usize,
+        block_size: u32,
     ) -> Result<WorkerSelectionResult, KvSchedulerError> {
         assert!(request.isl_tokens > 0);
 
@@ -257,94 +359,73 @@ impl WorkerSelector for DefaultWorkerSelector {
             return Err(KvSchedulerError::NoEndpoints);
         }
 
-        let mut worker_scores = HashMap::new();
-        let mut max_waiting = 0.0;
+        let isl = request.isl_tokens;
+        let request_blocks = isl.div_ceil(block_size as usize);
+        let overlaps = &request.overlaps.scores;
 
-        // Calculate worker scores and find max waiting requests
-        for (worker_id, ep) in workers.endpoints.iter() {
-            // Calculate score similar to Python version
-            if let Some(score) = request.overlap.scores.get(worker_id) {
-                let score = *score as f64 * block_size as f64 / request.isl_tokens as f64;
-                worker_scores.insert(worker_id, score);
-            }
+        // active blocks for decoding
+        let potential_active_blocks = &request.potential_blocks;
+        // active tokens in the batch (processed by the linear layers), mostly prefill tokens
+        let potential_active_tokens = &request.potential_tokens;
 
-            // Track max waiting requests
-            max_waiting = f64::max(max_waiting, ep.data.num_requests_waiting as f64);
-        }
-
-        // make immutable
-        let worker_scores = worker_scores;
-        let max_waiting = max_waiting;
+        let mut worker_logits = HashMap::new();
+        let mut max_logit = f64::NEG_INFINITY;
 
         // Calculate logits for each worker
-        let mut best_logit = f64::NEG_INFINITY;
-        let mut best_workers = Vec::new();
+        for (worker_id, _) in workers.endpoints.iter() {
+            // this is the number of tokens each worker would have if the request were scheduled there
+            let potential_tokens = *potential_active_tokens.get(worker_id).unwrap_or_else(|| {
+                tracing::warn!(
+                    "assuming {isl} tokens for {worker_id}, as the endpoint does not exist yet"
+                );
+                &isl
+            }) as f64;
 
-        for (worker_id, ep) in workers.endpoints.iter() {
-            let worker_id = *worker_id;
+            // this is the number of blocks each worker would have if the request were scheduled there
+            let potential_blocks = *potential_active_blocks.get(worker_id).unwrap_or_else(||
+                {tracing::warn!("assuming {request_blocks} decoding blocks for {worker_id}, as the endpoint does not exist yet");
+                &request_blocks
+            }) as f64;
 
-            // Get score or default to 0.0
-            let score = worker_scores.get(&worker_id).copied().unwrap_or(0.0);
+            let potential_prefill_blocks = potential_tokens / (block_size as f64);
 
-            // Calculate normalized metrics
-            let gpu_cache_usage = ep.data.gpu_cache_usage_perc as f64;
-            let normalized_waiting = if max_waiting > 0.0 {
-                ep.data.num_requests_waiting as f64 / max_waiting
-            } else {
-                0.0
-            };
+            // Calculate logit (lower is better)
+            let logit = self.kv_router_config.overlap_score_weight * potential_prefill_blocks
+                + potential_blocks;
+            max_logit = max_logit.max(logit);
 
-            // Calculate logit using same formula as Python
-            let logit = self.kv_router_config.overlap_score_weight * score
-                - self.kv_router_config.gpu_cache_usage_weight * gpu_cache_usage
-                - self.kv_router_config.waiting_requests_weight * normalized_waiting;
+            worker_logits.insert(*worker_id, logit);
 
-            tracing::trace!(
-                "Formula for {worker_id}: {logit:.3} = {:.1} * {score:.3} - {:.1} * {gpu_cache_usage:.3} - {:.1} * {normalized_waiting:.3}",
+            tracing::info!(
+                "Formula for {worker_id}: {logit:.3} = {:.1} * {potential_prefill_blocks:.3} + {potential_blocks:.3}  (cached_blocks: {})",
                 self.kv_router_config.overlap_score_weight,
-                self.kv_router_config.gpu_cache_usage_weight,
-                self.kv_router_config.waiting_requests_weight,
+                overlaps.get(worker_id).unwrap_or(&0),
             );
+        }
 
-            // Track best workers
-            match logit.partial_cmp(&best_logit) {
-                Some(std::cmp::Ordering::Greater) => {
-                    best_logit = logit;
-                    best_workers.clear();
-                    best_workers.push(worker_id);
-                }
-                Some(std::cmp::Ordering::Equal) => {
-                    best_workers.push(worker_id);
-                }
-                _ => {}
+        // Normalize by dividing by max value
+        if max_logit > 0.0 {
+            for logit in worker_logits.values_mut() {
+                *logit /= max_logit;
             }
         }
 
-        // Return early if no valid workers found
-        if best_workers.is_empty() {
-            return Err(KvSchedulerError::NoEndpoints);
-        } else if best_logit == 0.0 {
-            tracing::debug!("best worker logit is 0");
-        }
+        // Use softmax sampling to select worker
+        let temperature = self.kv_router_config.router_temperature;
+        let best_worker_id = softmax_sample(&worker_logits, temperature);
 
-        let worker_id = if best_workers.len() == 1 {
-            best_workers[0]
-        } else {
-            // Randomly select from best workers
-            let mut rng = rand::rng();
-            best_workers[rng.random_range(0..best_workers.len())]
-        };
+        let overlap_blocks = overlaps.get(&best_worker_id).copied().unwrap_or(0);
+        let best_logit = worker_logits[&best_worker_id];
 
-        // Lower to trace level eventually. Nice to see KV routing working for now.
-        tracing::debug!("Selected worker: {worker_id}, logit: {best_logit:.3}");
-
-        // Log selection metrics
-        let total_blocks = std::cmp::max(request.isl_tokens / block_size, 1) as u64;
-        let overlap_blocks = request.overlap.scores.get(&worker_id).copied().unwrap_or(0) as usize;
+        tracing::info!(
+            "Selected worker: {}, normalized logit: {:.3}",
+            best_worker_id,
+            best_logit
+        );
 
         Ok(WorkerSelectionResult {
-            worker_id,
-            required_blocks: total_blocks,
+            worker_id: best_worker_id,
+            required_blocks: request_blocks as u64,
             overlap_blocks,
         })
     }
@@ -354,185 +435,58 @@ impl WorkerSelector for DefaultWorkerSelector {
 mod tests {
     use super::*;
 
-    // Helper to create a worker endpoint
-    fn create_endpoint(
-        worker_id: i64,
-        gpu_cache_usage_perc: f32,
-        num_requests_waiting: u64,
-    ) -> Endpoint {
-        Endpoint {
-            name: format!("worker-{}", worker_id),
-            subject: format!("worker-subject-{:x}", worker_id),
-            data: ForwardPassMetrics {
-                gpu_cache_usage_perc,
-                num_requests_waiting,
-                // Other fields can be default initialized for this test
-                ..Default::default()
-            },
+    #[test]
+    fn test_softmax_sample_single_key() {
+        // Test that with a single key, softmax_sample always returns that key
+        let mut logits = HashMap::new();
+        let worker_id = 42;
+        logits.insert(worker_id, 0.5); // The value doesn't matter
+
+        // Test with different temperatures
+        for temperature in &[0.1, 1.0, 10.0] {
+            let result = softmax_sample(&logits, *temperature);
+            assert_eq!(result, worker_id, "Should return the only available worker");
         }
+
+        // Test with different logit values
+        logits.clear();
+        logits.insert(worker_id, -100.0); // Very negative value
+        assert_eq!(softmax_sample(&logits, 1.0), worker_id);
+
+        logits.clear();
+        logits.insert(worker_id, 100.0); // Very positive value
+        assert_eq!(softmax_sample(&logits, 1.0), worker_id);
+
+        logits.clear();
+        logits.insert(worker_id, 0.0); // Zero value
+        assert_eq!(softmax_sample(&logits, 1.0), worker_id);
     }
 
-    // Helper to create ProcessedEndpoints
-    struct WorkerInfo {
-        id: i64,
-        usage: f32,
-        waiting: u64,
-    }
-    fn create_workers(workers: Vec<WorkerInfo>) -> ProcessedEndpoints {
-        let mut endpoints = HashMap::new();
-        for worker in workers {
-            endpoints.insert(
-                worker.id,
-                create_endpoint(worker.id, worker.usage, worker.waiting),
+    #[test]
+    fn test_softmax_sample_zero_temperature() {
+        // Test that with temperature 0, softmax_sample returns the key with smallest logit
+        let mut logits = HashMap::new();
+        logits.insert(1, 5.0);
+        logits.insert(2, 3.0); // This has the smallest logit
+        logits.insert(3, 7.0);
+        logits.insert(4, 3.5);
+
+        // With temperature 0, should always return worker 2 (smallest logit)
+        for _ in 0..10 {
+            let result = softmax_sample(&logits, 0.0);
+            assert_eq!(
+                result, 2,
+                "Should return worker with smallest logit when temperature is 0"
             );
         }
-        ProcessedEndpoints {
-            endpoints,
-            load_avg: 0.0,
-            load_std: 0.0,
-        }
-    }
 
-    // Helper to create a scheduling request
-    struct WorkerOverlap {
-        worker_id: i64,
-        overlap_blocks: u32,
-    }
-    fn create_request(overlaps: Vec<WorkerOverlap>, isl_tokens: usize) -> SchedulingRequest {
-        SchedulingRequest {
-            isl_tokens,
-            overlap: OverlapScores {
-                scores: overlaps
-                    .into_iter()
-                    .map(|wo| (wo.worker_id, wo.overlap_blocks))
-                    .collect(),
-                frequencies: vec![],
-            },
-            resp_tx: tokio::sync::oneshot::channel().0,
-        }
-    }
+        // Test with negative values
+        logits.clear();
+        logits.insert(10, -1.0);
+        logits.insert(20, -5.0); // This has the smallest logit
+        logits.insert(30, 0.0);
 
-    #[test]
-    fn test_select_worker_basic() {
-        // Setup workers
-        let workers = create_workers(vec![
-            WorkerInfo {
-                id: 1,
-                usage: 0.50,
-                waiting: 1,
-            },
-            WorkerInfo {
-                id: 2,
-                usage: 0.80,
-                waiting: 0,
-            },
-        ]);
-
-        // Setup request: 100 tokens, block_size=20 (5 blocks)
-        let request = create_request(
-            vec![
-                WorkerOverlap {
-                    worker_id: 1,
-                    overlap_blocks: 3,
-                },
-                WorkerOverlap {
-                    worker_id: 2,
-                    overlap_blocks: 4,
-                },
-            ],
-            100,
-        );
-        let selector = DefaultWorkerSelector::new(None);
-        let block_size = 20;
-
-        // Execute selection
-        let result = selector
-            .select_worker(&workers, &request, block_size)
-            .expect("Should select a worker");
-        // Worker 2 should win because:
-        // Worker1: 2.0 * 0.600 - 1.0 * 0.500 - 1.0 * 1.000 = -0.3
-        // Worker2: 2.0 * 0.800 - 1.0 * 0.800 - 1.0 * 0.000 = 0.8
-        assert_eq!(result.worker_id, 2);
-        assert_eq!(result.required_blocks, 5); // 100 tokens / 20 block_size
-        assert_eq!(result.overlap_blocks, 4);
-    }
-
-    #[test]
-    fn test_no_endpoints() {
-        let workers = create_workers(vec![]);
-        let request = create_request(vec![], 100);
-        let selector = DefaultWorkerSelector::new(None);
-        let block_size = 20;
-
-        match selector.select_worker(&workers, &request, block_size) {
-            Err(KvSchedulerError::NoEndpoints) => {} // Expected
-            _ => panic!("Should return NoEndpoints error"),
-        }
-    }
-
-    #[test]
-    fn test_no_overlap_scores() {
-        // Workers exist but request has no overlap scores
-        let workers = create_workers(vec![WorkerInfo {
-            id: 1,
-            usage: 0.50,
-            waiting: 1,
-        }]);
-        let request = create_request(vec![], 100); // No overlaps
-        let selector = DefaultWorkerSelector::new(None);
-        let block_size = 20;
-
-        let result = selector
-            .select_worker(&workers, &request, block_size)
-            .expect("Should fallback to selecting worker");
-
-        // Worker1 should be selected with 0 overlap
-        assert_eq!(result.worker_id, 1);
-        assert_eq!(result.overlap_blocks, 0);
-    }
-
-    #[test]
-    fn test_custom_weights() {
-        // Setup workers
-        let workers = create_workers(vec![
-            WorkerInfo {
-                id: 1,
-                usage: 0.50,
-                waiting: 1,
-            },
-            WorkerInfo {
-                id: 2,
-                usage: 0.80,
-                waiting: 0,
-            },
-        ]);
-
-        // Custom config with high priority on GPU usage
-        let config = KvRouterConfig {
-            gpu_cache_usage_weight: 10.0, // Very high weight
-            overlap_score_weight: 2.0,    // just current defaults
-            waiting_requests_weight: 1.0,
-        };
-        let selector = DefaultWorkerSelector::new(Some(config));
-        let request = create_request(
-            vec![
-                WorkerOverlap {
-                    worker_id: 1,
-                    overlap_blocks: 3,
-                },
-                WorkerOverlap {
-                    worker_id: 2,
-                    overlap_blocks: 4,
-                },
-            ],
-            100,
-        );
-        let block_size = 20;
-
-        let result = selector
-            .select_worker(&workers, &request, block_size)
-            .expect("Should select worker");
-
-        assert_eq!(result.worker_id, 1);
+        let result = softmax_sample(&logits, 0.0);
+        assert_eq!(result, 20, "Should handle negative logits correctly");
     }
 }

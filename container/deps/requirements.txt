@@ -14,6 +14,7 @@
 # limitations under the License.
 
 accelerate==1.6.0
+av==15.0.0
 fastapi==0.115.6
 ftfy
 genai-perf==0.0.13
@@ -31,12 +32,13 @@ pmdarima
 pre-commit
 prometheus-api-client
 prophet
-protobuf==5.27.3
+protobuf==5.29.5
 pydantic==2.7.1
 pynvml
 pyright
 PyYAML
 scikit-learn
+scipy<1.14.0  # Pin scipy version for pmdarima compatibility
 sentencepiece
 tensorboard==2.19.0
 tensorboardX==2.6.2.2

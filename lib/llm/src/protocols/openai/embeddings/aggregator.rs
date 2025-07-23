@@ -19,11 +19,8 @@ use crate::protocols::{
     convert_sse_stream, Annotated,
 };
 
+use dynamo_runtime::engine::DataStream;
 use futures::{Stream, StreamExt};
-use std::pin::Pin;
-
-/// A type alias for a pinned, dynamically-dispatched stream that is `Send` and `Sync`.
-type DataStream<T> = Pin<Box<dyn Stream<Item = T> + Send + Sync>>;
 
 /// Aggregates a stream of [`NvCreateEmbeddingResponse`]s into a single
 /// [`NvCreateEmbeddingResponse`]. For embeddings, this is typically simpler
@@ -61,7 +58,7 @@ impl DeltaAggregator {
     /// * `Ok(NvCreateEmbeddingResponse)` if aggregation is successful.
     /// * `Err(String)` if an error occurs during processing.
     pub async fn apply(
-        stream: DataStream<Annotated<NvCreateEmbeddingResponse>>,
+        stream: impl Stream<Item = Annotated<NvCreateEmbeddingResponse>>,
     ) -> Result<NvCreateEmbeddingResponse, String> {
         let aggregator = stream
             .fold(DeltaAggregator::new(), |mut aggregator, delta| async move {
@@ -136,7 +133,7 @@ impl NvCreateEmbeddingResponse {
     /// * `Ok(NvCreateEmbeddingResponse)` if aggregation succeeds.
     /// * `Err(String)` if an error occurs.
     pub async fn from_annotated_stream(
-        stream: DataStream<Annotated<NvCreateEmbeddingResponse>>,
+        stream: impl Stream<Item = Annotated<NvCreateEmbeddingResponse>>,
     ) -> Result<NvCreateEmbeddingResponse, String> {
         DeltaAggregator::apply(stream).await
     }

@@ -48,6 +48,15 @@ impl<T: Send + Sync + 'static> Context<T> {
         }
     }
 
+    pub fn rejoin<U: Send + Sync + 'static>(current: T, context: Context<U>) -> Self {
+        Context {
+            current,
+            controller: context.controller,
+            registry: context.registry,
+            stages: context.stages,
+        }
+    }
+
     pub fn with_controller(current: T, controller: Controller) -> Self {
         Context {
             current,
@@ -66,8 +75,14 @@ impl<T: Send + Sync + 'static> Context<T> {
         }
     }
 
+    /// Get the id of the context
     pub fn id(&self) -> &str {
         self.controller.id()
+    }
+
+    /// Get the content of the context
+    pub fn content(&self) -> &T {
+        &self.current
     }
 
     pub fn controller(&self) -> &Controller {

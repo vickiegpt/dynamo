@@ -62,7 +62,7 @@ impl KvEventSource {
     /// Start the event source from a [`KvEventSourceConfig`].
     fn start(
         component: Component,
-        kv_block_size: usize,
+        kv_block_size: u32,
         source_config: KvEventSourceConfig,
         cancellation_token: CancellationToken,
         tx: mpsc::UnboundedSender<KvCacheEvent>,
@@ -98,7 +98,7 @@ impl KvEventSource {
 /// A publisher of KV events.
 pub struct KvEventPublisher {
     /// The size of the KV block.
-    kv_block_size: usize,
+    kv_block_size: u32,
     /// The source of KV events.
     /// Can be `None` if all events provided through [`KvEventPublisher::publish`].
     source: Option<KvEventSource>,
@@ -112,7 +112,7 @@ impl KvEventPublisher {
     pub fn new(
         component: Component,
         worker_id: i64,
-        kv_block_size: usize,
+        kv_block_size: u32,
         source_config: Option<KvEventSourceConfig>,
     ) -> Result<Self> {
         let cancellation_token = CancellationToken::new();
@@ -151,11 +151,10 @@ impl KvEventPublisher {
     }
 
     pub fn publish(&self, event: KvCacheEvent) -> Result<(), mpsc::error::SendError<KvCacheEvent>> {
-        tracing::trace!("Publish event: {:?}", event);
         self.tx.send(event)
     }
 
-    pub fn kv_block_size(&self) -> usize {
+    pub fn kv_block_size(&self) -> u32 {
         self.kv_block_size
     }
 
@@ -195,6 +194,7 @@ async fn start_event_processor<P: EventPublisher + Send + Sync + 'static>(
                 };
 
                 // Encapsulate in a router event and publish.
+                tracing::trace!("Event processor for worker_id {} processing event: {:?}", worker_id, event.data);
                 let router_event = RouterEvent::new(worker_id, event);
                 if let Err(e) = publisher.publish(KV_EVENT_SUBJECT, &router_event).await {
                     tracing::error!("Failed to publish event: {}", e);
@@ -223,7 +223,7 @@ pub async fn start_zmq_listener(
     zmq_topic: String,
     tx: mpsc::UnboundedSender<KvCacheEvent>,
     cancellation_token: CancellationToken,
-    kv_block_size: usize,
+    kv_block_size: u32,
 ) {
     tracing::debug!(
         "KVEventPublisher connecting to ZMQ endpoint {} (topic '{}')",
@@ -247,15 +247,19 @@ pub async fn start_zmq_listener(
     }
 
     let mut consecutive_errors = 0u32;
+    #[allow(unused_assignments)]
+    let mut exit_reason = "unknown";
+    let mut messages_processed = 0u64;
 
-    loop {
+    'main: loop {
         tokio::select! {
             biased;
 
             // Check for cancellation
             _ = cancellation_token.cancelled() => {
-                tracing::info!("ZMQ listener received cancellation signal");
-                break;
+                tracing::debug!("ZMQ listener received cancellation signal");
+                exit_reason = "cancellation token cancelled";
+                break 'main;
             }
 
             // Receive message
@@ -270,7 +274,8 @@ pub async fn start_zmq_listener(
                             consecutive_errors=%consecutive_errors,
                             "Too many consecutive ZMQ errors, terminating listener"
                         );
-                        break;
+                        exit_reason = "too many consecutive errors";
+                        break 'main;
                     }
 
                     // Simple exponential backoff with max exponent to prevent overflow
@@ -316,18 +321,29 @@ pub async fn start_zmq_listener(
                     continue;
                 };
 
-                // For each of our events, convert them to [`KvCacheEvent`] and send to the event_processor.
+                tracing::trace!(
+                    "ZMQ listener on {} received batch with {} events (seq={})",
+                    zmq_endpoint,
+                    batch.events.len(),
+                    seq
+                );
                 for raw_event in batch.events.into_iter() {
                     let event = convert_event(raw_event, seq, kv_block_size, &warning_count);
                     if tx.send(event).is_err() {
                         tracing::warn!("Failed to send message to channel - receiver dropped");
-                        return;
+                        exit_reason = "channel receiver dropped";
+                        break 'main;
                     }
+                    messages_processed += 1;
                 }
             }
         }
-        tracing::debug!("ZMQ listener exiting");
     }
+    tracing::debug!(
+        "ZMQ listener exiting, reason: {}, messages processed: {}",
+        exit_reason,
+        messages_processed
+    );
 }
 
 /// Convert a raw event coming from the ZMQ channel into the internal
@@ -335,7 +351,7 @@ pub async fn start_zmq_listener(
 fn convert_event(
     raw: RawKvEvent,
     event_id: u64,
-    kv_block_size: usize,
+    kv_block_size: u32,
     warning_count: &Arc<AtomicU32>,
 ) -> KvCacheEvent {
     match raw {
@@ -382,7 +398,7 @@ fn convert_event(
 }
 
 pub fn create_stored_block_from_parts(
-    kv_block_size: usize,
+    kv_block_size: u32,
     block_hash: i64,
     token_ids: &[u32],
     _lora_id: u64,
@@ -395,7 +411,7 @@ pub fn create_stored_block_from_parts(
 }
 
 pub fn create_stored_blocks(
-    kv_block_size: usize,
+    kv_block_size: u32,
     token_ids: &[u32],
     num_block_tokens: &[u64],
     block_hashes: &[i64],
@@ -438,6 +454,8 @@ pub fn create_stored_blocks(
 struct KvEventBatch {
     ts: f64,
     events: Vec<RawKvEvent>,
+    #[serde(alias = "dp_rank")]
+    data_parallel_rank: u32, // we are ignoring this for now
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -770,7 +788,11 @@ mod tests_startup_helpers {
             lora_id: None,
         }];
 
-        let batch = KvEventBatch { ts: 0.0, events };
+        let batch = KvEventBatch {
+            ts: 0.0,
+            events,
+            data_parallel_rank: 1,
+        };
 
         let payload = Bytes::from(rmps::to_vec(&batch).unwrap());
 

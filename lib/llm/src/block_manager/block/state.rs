@@ -43,7 +43,7 @@ impl BlockState {
             return Err(BlockStateInvalid("Block is not reset".to_string()));
         }
 
-        let block = PartialTokenBlock::create_sequence_root(page_size, salt_hash);
+        let block = PartialTokenBlock::create_sequence_root(page_size as u32, salt_hash);
         *self = BlockState::Partial(PartialState::new(block));
         Ok(())
     }
@@ -93,6 +93,9 @@ impl BlockState {
         }
     }
 
+    /// Apply an entry [TokenBlock] to the block.
+    /// The block must be in the reset state on entry. The block will transition to
+    /// the completed state after this call.
     pub fn apply_token_block(&mut self, token_block: TokenBlock) -> Result<()> {
         match self {
             BlockState::Reset => {
