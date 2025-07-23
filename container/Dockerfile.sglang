@@ -269,8 +269,6 @@ RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=$HOME/.comman
 
 RUN mkdir -p /home/$USERNAME/.cache/
 
-ENV VLLM_KV_CAPI_PATH=$HOME/dynamo/.build/target/debug/libdynamo_llm_capi.so
-
 ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
 
 ##################################
@@ -376,9 +374,6 @@ RUN uv pip install /workspace/dist/ai_dynamo_runtime*cp312*.whl && \
 RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/launch_message.txt \
     sed '/^#\s/d' /workspace/launch_message.txt > ~/.launch_screen && \
     echo "cat ~/.launch_screen" >> ~/.bashrc
-
-# Tell vllm to use the Dynamo LLM C API for KV Cache Routing
-ENV VLLM_KV_CAPI_PATH=/opt/dynamo/bindings/lib/libdynamo_llm_capi.so
 
 ENV PYTHONPATH=/workspace/dynamo/deploy/sdk/src:/workspace/dynamo/components/planner/src:/workspace/examples/sglang/utils:$PYTHONPATH
 

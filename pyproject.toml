@@ -60,13 +60,13 @@ Repository = "https://github.com/ai-dynamo/dynamo.git"
 
 [project.optional-dependencies]
 vllm = [
-	"uvloop",
+    "uvloop",
     "nixl",
-	"vllm==0.9.2",
+    "vllm==0.9.2",
 ]
 
 sglang = [
-	"uvloop",
+    "uvloop",
     "nixl",
     "sglang[runtime_common]==0.4.9.post1",
     "einops",
@@ -81,7 +81,7 @@ llama_cpp = [
 ]
 
 all = [
-    ai-dynamo[llama_cpp, sglang, vllm]
+    "ai-dynamo[llama_cpp, sglang, vllm]",
 ]
 
 [build-system]

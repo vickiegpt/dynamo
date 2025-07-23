@@ -476,6 +476,8 @@ $LD_LIBRARY_PATH
 # Copy entire venv
 # Theres a lot of stuff we'd have to re-compile (for arm64)
 # TODO: Do not copy the venv, use pip ai-dynamo[vllm] to replicate end user environment
+# Copy metrics binary from wheel_builder image, not part of ai-dynamo wheel
+COPY --from=ci_minimum /workspace/target/release/metrics /usr/local/bin/metrics
 COPY --from=ci_minimum ${VIRTUAL_ENV} ${VIRTUAL_ENV}
 
 # Once UX refactor is merged
