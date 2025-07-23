@@ -458,7 +458,7 @@ ENV PATH=/usr/local/bin/etcd/:$PATH
 
 # Copy UCX from base image as plugin for NIXL
 # Copy NIXL source from wheel_builder image
-# Copy dynamo wheels for gitlab artifacts 
+# Copy dynamo wheels for gitlab artifacts
 COPY --from=base /usr/local/ucx /usr/local/ucx
 COPY --from=wheel_builder $NIXL_PREFIX $NIXL_PREFIX
 COPY --from=wheel_builder /workspace/dist/*.whl wheelhouse/
