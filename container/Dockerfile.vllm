@@ -202,7 +202,7 @@ RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
         chmod +x /tmp/install_vllm.sh && \
         /tmp/install_vllm.sh --editable --vllm-ref $VLLM_REF --max-jobs $MAX_JOBS --arch $ARCH --installation-dir /opt --deepgemm-ref $DEEPGEMM_REF --flashinf-ref $FLASHINF_REF --torch-backend $TORCH_BACKEND; \
     else \
-        uv pip install vllm==${VLLM_VERSION}; \
+        uv pip install "vllm==${VLLM_VERSION}"; \
     fi
 
 ENV LD_LIBRARY_PATH=\
