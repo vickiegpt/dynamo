@@ -90,6 +90,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = [
+    "deploy/sdk/src/dynamo",
     "components/frontend/src/dynamo",
     "components/planner/src/dynamo",
     "components/backends/llama_cpp/src/dynamo",
@@ -139,7 +140,6 @@ tmp_path_retention_policy = "failed"
 # NOTE
 # We ignore model.py explcitly here to avoid mypy errors with duplicate modules
 # pytest overrides the default mypy exclude configuration and so we exclude here as well
-# Ignore mypy check for api-store component from Dynamo Deploy. Mypy analysis will fail since this package (and its dependencies) are not installed.
 addopts = [
     "-ra",
     "--showlocals",
