@@ -391,6 +391,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M>
         &self,
         count: usize,
     ) -> Result<Vec<MutableBlock<S, L, M>>, BlockPoolError> {
+        let _span = nvtx::range!("Allocate Blocks Request");
         self._allocate_blocks(count)?
             .await
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
@@ -400,6 +401,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M>
         &self,
         count: usize,
     ) -> Result<Vec<MutableBlock<S, L, M>>, BlockPoolError> {
+        let _span = nvtx::range!("Allocate Blocks Request");
         self._allocate_blocks(count)?
             .blocking_recv()
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
@@ -419,6 +421,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M>
         &self,
         blocks: Vec<MutableBlock<S, L, M>>,
     ) -> BlockPoolResult<ImmutableBlocks<S, L, M>> {
+        let _span = nvtx::range!("Register Blocks Request");
         self._register_blocks(blocks, self.default_duplication_setting)?
             .await
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
@@ -428,6 +431,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M>
         &self,
         blocks: Vec<MutableBlock<S, L, M>>,
     ) -> BlockPoolResult<ImmutableBlocks<S, L, M>> {
+        let _span = nvtx::range!("Register Blocks Request");
         self._register_blocks(blocks, self.default_duplication_setting)?
             .blocking_recv()
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
@@ -447,6 +451,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M>
         &self,
         sequence_hashes: &[SequenceHash],
     ) -> BlockPoolResult<ImmutableBlocks<S, L, M>> {
+        let _span = nvtx::range!("Match Sequence Hashes Request");
         self._match_sequence_hashes(sequence_hashes)?
             .await
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
@@ -456,12 +461,14 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M>
         &self,
         sequence_hashes: &[SequenceHash],
     ) -> BlockPoolResult<ImmutableBlocks<S, L, M>> {
+        let _span = nvtx::range!("Match Sequence Hashes Request");
         self._match_sequence_hashes(sequence_hashes)?
             .blocking_recv()
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
     }
 
     async fn touch_blocks(&self, sequence_hashes: &[SequenceHash]) -> Result<(), BlockPoolError> {
+        let _span = nvtx::range!("Touch Blocks Request");
         self._touch_blocks(sequence_hashes)?
             .await
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
@@ -471,18 +478,21 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> BlockPool<S, L, M>
         &self,
         sequence_hashes: &[SequenceHash],
     ) -> Result<(), BlockPoolError> {
+        let _span = nvtx::range!("Touch Blocks Request");
         self._touch_blocks(sequence_hashes)?
             .blocking_recv()
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
     }
 
     async fn try_return_block(&self, block: OwnedBlock<S, L, M>) -> BlockPoolResult<()> {
+        let _span = nvtx::range!("Try Return Block Request");
         self._try_return_block(block)?
             .await
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
     }
 
     fn try_return_block_blocking(&self, block: OwnedBlock<S, L, M>) -> BlockPoolResult<()> {
+        let _span = nvtx::range!("Try Return Block Request");
         self._try_return_block(block)?
             .blocking_recv()
             .map_err(|_| BlockPoolError::ProgressEngineShutdown)?
