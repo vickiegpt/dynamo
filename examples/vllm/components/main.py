@@ -181,26 +181,32 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
     if enable_lmcache and enable_lmcache_disag:
         # NIXL configuration for KV cache transfer
         # enable_nixl: True
-        # nixl_role: "sender"          # Prefiller acts as KV cache sender
-        # nixl_receiver_host: "localhost"  # Host where decoder is running
-        # nixl_receiver_port: 55555        # Port where decoder is listening
-        # nixl_buffer_size: 1073741824  # 1GB buffer for KV cache transfer
-        # nixl_buffer_device: "cuda"   # Use GPU memory for buffer
-        # nixl_enable_gc: True         # Enable garbage collection
+        # enable_xpyd: True
+        # nixl_role: "sender"
+        # nixl_proxy_host: "localhost"
+        # nixl_proxy_port: 7500
+        # nixl_buffer_size: 1073741824 # 1GB
+        # nixl_buffer_device: "cuda"
         lmcache_prefill_config = {
             "enable_nixl": "True",
+            "enable_xpyd": "True",
             "nixl_role": "sender",
-            "nixl_receiver_host": "localhost",
-            "nixl_receiver_port": "55555",
+            "nixl_proxy_host": "localhost",
+            "nixl_proxy_port": "7500",
             "nixl_buffer_size": "1073741824",
             "nixl_buffer_device": "cuda",
-            "nixl_enable_gc": "True",
         }
         # set the environment variables
         for key, value in lmcache_prefill_config.items():
             if key not in os.environ:  # Only set if not already configured
                 os.environ[key] = value
                 logging.info(f"Set LMCache environment variable: {key}={value}")
+        
+        # Force local cpu is true
+        os.environ["LMCACHE_CHUNK_SIZE"] = "256"
+        os.environ["LMCACHE_LOCAL_CPU"] = "True"
+        os.environ["LMCACHE_MAX_LOCAL_CPU_SIZE"] = "30"
+
 
     component = runtime.namespace(config.namespace).component(config.component)
     await component.create_service()
@@ -236,26 +242,31 @@ async def init(runtime: DistributedRuntime, config: Config):
     if enable_lmcache and enable_lmcache_disag:
         # NIXL configuration for KV cache transfer
         # enable_nixl: True
-        # nixl_role: "receiver"        # Decoder acts as KV cache receiver
-        # nixl_receiver_host: "localhost"  # Host where decoder is listening
-        # nixl_receiver_port: 55555        # Port where decoder is listening
-        # nixl_buffer_size: 1073741824  # 1GB buffer for KV cache transfer
-        # nixl_buffer_device: "cuda"   # Use GPU memory for buffer
-        # nixl_enable_gc: True         # Enable garbage collection
+        # enable_xpyd: True
+        # nixl_role: "receiver"
+        # nixl_peer_host: "localhost"
+        # nixl_peer_init_port: 7300
+        # nixl_peer_alloc_port: 7400
+        # nixl_buffer_size: 2147483648 # 2GB
+        # nixl_buffer_device: "cuda"
         lmcache_decode_config = {
-            "enable_nixl": "True",
+            "enable_xpyd": "True",
             "nixl_role": "receiver",
-            "nixl_receiver_host": "localhost",
-            "nixl_receiver_port": "55555",
-            "nixl_buffer_size": "1073741824",
+            "nixl_peer_host": "localhost",
+            "nixl_peer_init_port": "7300",
+            "nixl_peer_alloc_port": "7400",
+            "nixl_buffer_size": "2147483648",
             "nixl_buffer_device": "cuda",
-            "nixl_enable_gc": "True",
         }
         # set the environment variables
         for key, value in lmcache_decode_config.items():
             if key not in os.environ:  # Only set if not already configured
                 os.environ[key] = value
                 logging.info(f"Set LMCache environment variable: {key}={value}")
+                # Force local cpu is false
+
+        os.environ["LMCACHE_LOCAL_CPU"] = "False"
+        os.environ["LMCACHE_MAX_LOCAL_CPU_SIZE"] = "0"
 
 
 
