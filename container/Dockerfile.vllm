@@ -42,10 +42,11 @@ ARG ARCH_ALT=x86_64
 
 FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS base
 
-# Redeclare ARCH, ARCH_ALT, TORCH_BACKEND so they're available in this stage
+# Redeclare ARCH, ARCH_ALT, TORCH_BACKEND, VLLM_VERSION so they're available in this stage
 ARG ARCH
 ARG ARCH_ALT
 ARG TORCH_BACKEND
+ARG VLLM_VERSION
 
 USER root
 ARG PYTHON_VERSION=3.12
@@ -464,7 +465,10 @@ COPY --from=wheel_builder $NIXL_PREFIX $NIXL_PREFIX
 COPY --from=wheel_builder /workspace/dist/*.whl wheelhouse/
 
 # Copies vllm, DeepEP, DeepGEMM, PPLX repos (all editable installs) and nvshmem binaries
-COPY --from=base /opt/vllm /opt/vllm
+RUN if [ "$ARCH" = "arm64" ]; then \
+        COPY --from=base /opt/vllm /opt/vllm; \
+    fi
+
 ENV LD_LIBRARY_PATH=\
 /opt/vllm/tools/ep_kernels/ep_kernels_workspace/nvshmem_install/lib:\
 $NIXL_LIB_DIR:\
