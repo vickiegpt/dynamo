@@ -42,5 +42,5 @@ export ENABLE_LMCACHE=1
 
 echo "🔧 Starting dynamo worker with LMCache enabled..."
 
-dynamo run in=http out=dyn &
-python3 components/main.py --model $MODEL_URL --enforce-eager
+python -m dynamo.frontend &
+python3 -m dynamo.vllm --model $MODEL_URL --enforce-eager --no-enable-prefix-caching
