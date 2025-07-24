@@ -38,7 +38,7 @@ sleep 2
 
 # Enable LMCache
 export ENABLE_LMCACHE=1
-export LMCACHE_ENABLE_DISAG=1
+export ENABLE_LMCACHE_DISAG=1
 
 # Set LMCache configuration environment variables
 export LMCACHE_CHUNK_SIZE=256
