@@ -10,6 +10,8 @@ from dynamo.runtime import DistributedRuntime
 from dynamo.runtime.logging import configure_dynamo_logging
 
 configure_dynamo_logging()
+# TODO: remove this
+logging.getLogger().setLevel(logging.WARNING)
 
 class DynamoAPIDrafter(APIDrafter):
     """
@@ -18,9 +20,9 @@ class DynamoAPIDrafter(APIDrafter):
     def __init__(self, spec_config, runtime: DistributedRuntime):
         super().__init__(spec_config)
         self.client = None
+        self.max_draft_len = spec_config.max_draft_len
         # TODO: allow custom etcd connection info to be set in the spec_config
         self.connection_info = {}
-        self.max_draft_len = spec_config.max_draft_len
     
     async def _create_client(self):
         try:
@@ -63,12 +65,16 @@ class DynamoAPIDrafter(APIDrafter):
             
             if self.client is None:
                 await self._create_client()
+                pid = os.getpid()
+                print(f"[VERIFIER, PID: {pid}]    Created client to endpoint: {self.endpoint}")
             
             draft_tokens = []
             try:
+                pid = os.getpid()
+                print(f"[VERIFIER, PID: {pid}]    Sending request to drafter: {request_data['token_ids']}")
+                print("-"*100)
                 response = await self.client.round_robin(request_data)
-                logging.info(f"TensorRT-LLM Debug Drafter reached the client. Response: {response}")
-            
+                
                 async for chunk in response:
                     chunk_data = chunk.data()
                     if chunk_data.get("finish_reason"):
@@ -76,7 +82,11 @@ class DynamoAPIDrafter(APIDrafter):
                     draft_tokens.extend(chunk_data.get("token_ids", []))
                     if len(draft_tokens) >= self.max_draft_len:
                         break
-                print("[SPECDEC] [VERIFIER]   Received tokens from drafter: ", draft_tokens)
+                pid = os.getpid()
+                print(f"[VERIFIER, PID: {pid}]    Received tokens from drafter: {draft_tokens}")
+                print("-"*100)
+                print("*"*100)
+                print("-"*100)
                 return draft_tokens[:self.max_draft_len]
             except Exception as e:
                 logging.error(f"Failed to get draft tokens for Dynamo endpoint: {self.endpoint} with error: {e}")

@@ -5,6 +5,7 @@ import asyncio
 import logging
 import signal
 import sys
+import os
 
 import uvloop
 from tensorrt_llm import SamplingParams
@@ -36,12 +37,18 @@ from dynamo.verifier.utils.api_drafter import DynamoAPIDrafter
 DEFAULT_KV_EVENT_BUFFER_MAX_SIZE = 1024
 
 configure_dynamo_logging()
+# TODO: remove this
+logging.getLogger().setLevel(logging.WARNING)
 
 
 async def graceful_shutdown(runtime):
     logging.info("Received shutdown signal, shutting down DistributedRuntime")
+    pid = os.getpid()
+    print(f"[VERIFIER, PID: {pid}]    Received shutdown signal, shutting down DistributedRuntime")
     runtime.shutdown()
     logging.info("DistributedRuntime shutdown complete")
+    pid = os.getpid()
+    print(f"[VERIFIER, PID: {pid}]    DistributedRuntime shutdown complete")
 
 
 @dynamo_worker(static=False)
@@ -55,7 +62,7 @@ async def worker(runtime: DistributedRuntime):
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, signal_handler)
-
+    
     logging.info("Signal handlers set up for graceful shutdown")
 
     config = cmd_line_args()
@@ -67,6 +74,8 @@ async def init(runtime: DistributedRuntime, config: Config):
     Instantiate and serve
     """
     logging.info(f"Initializing the worker with config: {config}")
+    pid = os.getpid()
+    print(f"\n[VERIFIER, PID: {pid}]    Initializing the worker\n")
 
     next_client = None
     if config.next_endpoint:
@@ -147,6 +156,8 @@ async def init(runtime: DistributedRuntime, config: Config):
 
     logging.info(f"TensorRT-LLM engine args: {arg_map}")
     engine_args = arg_map
+    pid = os.getpid()
+    print(f"\n[VERIFIER, PID: {pid}]    TensorRT-LLM engine args: {engine_args}\n")
 
     # Populate default sampling params from the model
     tokenizer = tokenizer_factory(arg_map["model"])
@@ -158,9 +169,7 @@ async def init(runtime: DistributedRuntime, config: Config):
     default_sampling_params.detokenize = False
 
     async with get_tensorrtllm_engine(engine_args) as engine:
-        logging.info(f"TensorRT-LLM Debug Verifier 1")
         endpoint = component.endpoint(config.endpoint)
-        logging.info(f"TensorRT-LLM Debug Verifier 2")
         if is_first_worker(config):
             # Register the model with the endpoint if only the worker is first in the disaggregation chain.
             await register_llm(
@@ -170,7 +179,6 @@ async def init(runtime: DistributedRuntime, config: Config):
                 config.served_model_name,
                 kv_cache_block_size=config.kv_block_size,
             )
-        logging.info(f"TensorRT-LLM Debug Verifier 3")
         # publisher will be set later if publishing is enabled.
         handler_config = RequestHandlerConfig(
             component=component,
@@ -181,9 +189,7 @@ async def init(runtime: DistributedRuntime, config: Config):
             disaggregation_strategy=config.disaggregation_strategy,
             next_client=next_client,
         )
-        logging.info(f"TensorRT-LLM Debug Verifier 4")
         if config.publish_events_and_metrics and is_first_worker(config):
-            logging.info(f"TensorRT-LLM Debug Verifier 5")
             # Initialize and pass in the publisher to the request handler to
             # publish events and metrics.
             kv_listener = runtime.namespace(config.namespace).component(
@@ -198,12 +204,11 @@ async def init(runtime: DistributedRuntime, config: Config):
             ) as publisher:
                 handler_config.publisher = publisher
                 handler = RequestHandlerFactory().get_request_handler(handler_config)
-                await endpoint.serve_endpoint(handler.generate)
+                 
+                await endpoint.serve_endpoint(lambda req : handler.generate(req, True))
         else:
-            logging.info(f"TensorRT-LLM Debug Verifier 6")
             handler = RequestHandlerFactory().get_request_handler(handler_config)
-            logging.error(f"DEBUG VERIFIER ENDPOINT: {config.namespace}.{config.component}.{config.endpoint}")
-            await endpoint.serve_endpoint(handler.generate)
+            await endpoint.serve_endpoint(lambda req : handler.generate(req, True))
 
 
 def main():

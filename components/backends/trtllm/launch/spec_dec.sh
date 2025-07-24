@@ -12,10 +12,6 @@ export DRAFTER_ENGINE_ARGS=${DRAFTER_ENGINE_ARGS:-"engine_configs/drafter.yaml"}
 export VERIFIER_CUDA_VISIBLE_DEVICES=${VERIFIER_CUDA_VISIBLE_DEVICES:-"0"}
 export DRAFTER_CUDA_VISIBLE_DEVICES=${DRAFTER_CUDA_VISIBLE_DEVICES:-"1"}
 
-# TODO: remove these
-#export TLLM_LOG_LEVEL=${TLLM_LOG_LEVEL:-"debug"}
-#export DYN_LOG=${DYN_LOG:-"debug"}
-
 # Setup cleanup trap
 cleanup() {
     echo "Cleaning up background processes..."
@@ -25,8 +21,20 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+echo -e "\n"
+echo "----------------------------------------------------------------------------------------------------"
+echo "STARTING SET UP"
+echo "----------------------------------------------------------------------------------------------------"
+echo -e "Clearing namespace..."
+
 # run clear_namespace
 python3 utils/clear_namespace.py --namespace dynamo
+
+echo -e "----------------------------------------------------------------------------------------------------"
+echo -e "Running frontend..."
+echo -e "Running verifier worker..."
+echo -e "Running drafter worker..."
+echo -e "\n\n" 
 
 # run frontend
 python3 -m dynamo.frontend --http-port 8000 &

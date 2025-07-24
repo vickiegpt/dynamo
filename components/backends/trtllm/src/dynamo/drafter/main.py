@@ -5,9 +5,7 @@ import asyncio
 import logging
 import signal
 import sys
-from fastapi import FastAPI
-import uvicorn
-
+import os
 
 import uvloop
 from tensorrt_llm import SamplingParams
@@ -37,12 +35,18 @@ from dynamo.trtllm.utils.trtllm_utils import (
 DEFAULT_KV_EVENT_BUFFER_MAX_SIZE = 1024
 
 configure_dynamo_logging()
+# TODO: remove this
+logging.getLogger().setLevel(logging.WARNING)
 
 
 async def graceful_shutdown(runtime):
     logging.info("Received shutdown signal, shutting down DistributedRuntime")
+    pid = os.getpid()
+    print(f"[DRAFTER, PID: {pid}]     Received shutdown signal, shutting down DistributedRuntime")
     runtime.shutdown()
     logging.info("DistributedRuntime shutdown complete")
+    pid = os.getpid()
+    print(f"[DRAFTER, PID: {pid}]     DistributedRuntime shutdown complete")
 
 
 @dynamo_worker(static=False)
@@ -68,6 +72,8 @@ async def init(runtime: DistributedRuntime, config: Config):
     Instantiate and serve
     """
     logging.info(f"Initializing the worker with config: {config}")
+    pid = os.getpid()
+    print(f"\n[DRAFTER, PID: {pid}]     Initializing the worker\n")
 
     next_client = None
     if config.next_endpoint:
@@ -122,6 +128,8 @@ async def init(runtime: DistributedRuntime, config: Config):
 
     logging.info(f"TensorRT-LLM engine args: {arg_map}")
     engine_args = arg_map
+    pid = os.getpid()
+    print(f"\n[DRAFTER, PID: {pid}]     TensorRT-LLM engine args: {engine_args}\n")
 
     # Populate default sampling params from the model
     tokenizer = tokenizer_factory(arg_map["model"])
@@ -133,10 +141,7 @@ async def init(runtime: DistributedRuntime, config: Config):
     default_sampling_params.detokenize = False
 
     async with get_tensorrtllm_engine(engine_args) as engine:
-        logging.info(f"TensorRT-LLM Debug Drafter 1")
         endpoint = component.endpoint(config.endpoint)
-
-        logging.info(f"TensorRT-LLM Debug Drafter 2")
         # publisher will be set later if publishing is enabled.
         handler_config = RequestHandlerConfig(
             component=component,
@@ -147,9 +152,7 @@ async def init(runtime: DistributedRuntime, config: Config):
             disaggregation_strategy=config.disaggregation_strategy,
             next_client=next_client,
         )
-        logging.info(f"TensorRT-LLM Debug Drafter 3")
         if config.publish_events_and_metrics and is_first_worker(config):
-            logging.info(f"TensorRT-LLM Debug Drafter 4")
             # Initialize and pass in the publisher to the request handler to
             # publish events and metrics.
             kv_listener = runtime.namespace(config.namespace).component(
@@ -166,98 +169,8 @@ async def init(runtime: DistributedRuntime, config: Config):
                 handler = RequestHandlerFactory().get_request_handler(handler_config)
                 await endpoint.serve_endpoint(handler.generate)
         else:
-            logging.info(f"TensorRT-LLM Debug Drafter 5")
             handler = RequestHandlerFactory().get_request_handler(handler_config)
-            logging.error(f"DEBUG DRAFTER ENDPOINT: {config.namespace}.{config.component}.{config.endpoint}")
             await endpoint.serve_endpoint(handler.generate)
-
-
-async def start_http_server(runtime: DistributedRuntime, config: Config, tokenizer):
-    app = FastAPI(title="Drafter HTTP Gateway")
-    
-    # Create client to internal endpoint
-    client = await runtime.namespace(config.namespace)\
-                     .component(config.component)\
-                     .endpoint(config.endpoint)\
-                     .client()
-    
-    def convert_http_to_dynamo(request: dict):
-        """Convert HTTP request to Dynamo internal format"""
-        # Extract text from request
-        if "prompt" in request:
-            text = request["prompt"]
-        elif "messages" in request:
-            text = request["messages"][-1]["content"]  # Last message
-        else:
-            text = str(request)
-        
-        # Tokenize
-        token_ids = tokenizer.encode(text)
-        
-        return {
-            "token_ids": token_ids,
-            "sampling_options": {
-                "temperature": request.get("temperature", 0.7),
-                "top_p": request.get("top_p", 1.0),
-            },
-            "stop_conditions": {
-                "max_tokens": request.get("max_tokens", 100),
-            }
-        }
-    
-    def convert_dynamo_to_http(tokens: list):
-        """Convert token list back to HTTP response"""
-        # Detokenize
-        text = tokenizer.decode(tokens)
-        return {
-            "choices": [{
-                "message": {"content": text},
-                "finish_reason": "stop"
-            }]
-        }
-    
-    @app.post("/draft/chat/completions")
-    async def generate_draft(request: dict):
-        try:
-            print(f"🔵 Received request: {request}")
-            
-            # Convert HTTP request to Dynamo format
-            dynamo_request = convert_http_to_dynamo(request)
-            print(f"🔵 Converted to Dynamo: {dynamo_request}")
-            
-            # Call internal endpoint and collect tokens
-            response_tokens = []
-            print(f"🔵 Calling client.round_robin...")
-            response = await client.round_robin(dynamo_request)
-            print(f"🔵 Got response object: {response}")
-            
-            async for chunk in response:
-                print(f"🔵 Got chunk: {chunk}")
-
-                # Extract data from Annotated object
-                chunk_data = chunk.data()
-                print(f"🔵 Chunk data: {chunk_data}")
-                
-                if chunk_data.get("finish_reason"):
-                    break
-                response_tokens.extend(chunk_data.get("token_ids", []))
-            
-            print(f"🔵 Collected tokens: {response_tokens}")
-            
-            # Convert back to HTTP format
-            result = convert_dynamo_to_http(response_tokens)
-            print(f"🔵 Final result: {result}")
-            return result
-            
-        except Exception as e:
-            print(f"❌ Error in generate_draft: {e}")
-            import traceback
-            traceback.print_exc()
-            return {"error": str(e)}
-    
-    # Start HTTP server
-    server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=8001))
-    await server.serve()
 
 
 def main():
