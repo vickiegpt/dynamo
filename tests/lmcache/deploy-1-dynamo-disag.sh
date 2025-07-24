@@ -40,13 +40,12 @@ sleep 2
 export ENABLE_LMCACHE=0
 echo "🔧 Starting dynamo disaggregated serving without LMCache..."
 
-dynamo run in=http out=dyn &
+python -m dynamo.frontend &
 
-CUDA_VISIBLE_DEVICES=0 python3 components/main.py --model $MODEL_URL --enforce-eager &
+CUDA_VISIBLE_DEVICES=0 python3 -m dynamo.vllm --model $MODEL_URL --enforce-eager --no-enable-prefix-caching &
 
-CUDA_VISIBLE_DEVICES=1 python3 components/main.py \
+CUDA_VISIBLE_DEVICES=1 python3 dynamo.vllm \
     --model $MODEL_URL \
     --enforce-eager \
     --is-prefill-worker
-
 
