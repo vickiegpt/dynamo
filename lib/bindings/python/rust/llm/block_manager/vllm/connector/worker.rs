@@ -3,7 +3,10 @@
 
 use std::collections::{HashMap, HashSet};
 
+use pyo3::types::PyDict;
+
 use super::*;
+use crate::{llm::block_manager::distributed::VllmTensor, to_pyerr};
 
 #[derive(Debug, Clone)]
 pub struct WorkerAction {
@@ -17,11 +20,40 @@ impl WorkerAction {
     }
 }
 
+#[pyclass]
 pub struct KvConnectorWorker {
     slots: HashMap<String, WorkerSlot>,
 
     /// Map of actions per layer, per slot
     forward_pass_actions: HashMap<String, HashMap<String, WorkerAction>>,
+
+    /// Map of layer name to vllm tensor
+    kv_caches: HashMap<String, VllmTensor>,
+}
+
+#[pymethods]
+impl KvConnectorWorker {
+    #[new]
+    fn new(worker_id: String) -> Self {
+        tracing::info!(
+            "KvConnectorWorker initialized with worker_id: {}",
+            worker_id
+        );
+        Self {
+            slots: HashMap::new(),
+            forward_pass_actions: HashMap::new(),
+            kv_caches: HashMap::new(),
+        }
+    }
+
+    pub fn register_kv_caches(&mut self, kv_caches: HashMap<String, Py<PyAny>>) -> PyResult<()> {
+        for (layer_name, torch_tensor) in kv_caches {
+            let vllm_tensor = VllmTensor::new(torch_tensor).map_err(to_pyerr)?;
+            tracing::debug!("Registering KV cache layer: {layer_name}, tensor: {vllm_tensor:?}");
+            self.kv_caches.insert(layer_name, vllm_tensor);
+        }
+        Ok(())
+    }
 }
 
 impl KvConnectorWorker {

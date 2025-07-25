@@ -7,6 +7,7 @@ pub mod worker;
 use std::collections::HashMap;
 
 use dynamo_llm::block_manager::block::BlockId;
+use pyo3::{prelude::*, wrap_pymodule};
 use serde::{Deserialize, Serialize};
 
 pub struct KvConnectorMetadata {}

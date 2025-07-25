@@ -46,6 +46,9 @@ fn _vllm_integration(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<BlockState>()?;
     m.add_class::<BlockStates>()?;
     m.add_class::<SlotUpdate>()?;
+
+    m.add_class::<connector::worker::KvConnectorWorker>()?;
+    m.add_class::<connector::leader::KvConnectorLeader>()?;
     Ok(())
 }
 

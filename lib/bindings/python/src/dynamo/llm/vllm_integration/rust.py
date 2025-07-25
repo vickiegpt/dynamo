@@ -16,6 +16,9 @@ try:
     BlockStates = getattr(_vllm_integration, "BlockStates")
     SlotUpdate = getattr(_vllm_integration, "SlotUpdate")
 
+    KvConnectorWorker = getattr(_vllm_integration, "KvConnectorWorker")
+    KvConnectorLeader = getattr(_vllm_integration, "KvConnectorLeader")
+
     from dynamo.llm import BlockManager
 
 except ImportError:
@@ -27,6 +30,8 @@ except ImportError:
     BlockStates = None
     SlotUpdate = None
     BlockManager = None
+    KvConnectorWorker = None
+    KvConnectorLeader = None
 
 __all__ = [
     "KvbmCacheManager",
@@ -36,4 +41,6 @@ __all__ = [
     "BlockStates",
     "SlotUpdate",
     "BlockManager",
+    "KvConnectorWorker",
+    "KvConnectorLeader",
 ]

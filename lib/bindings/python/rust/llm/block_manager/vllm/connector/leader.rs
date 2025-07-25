@@ -1,9 +1,18 @@
 use super::*;
 
+#[pyclass]
 pub struct KvConnectorLeader {}
 
+#[pymethods]
 impl KvConnectorLeader {
-    // Connector API
+    #[new]
+    pub fn new(worker_id: String) -> Self {
+        tracing::info!(
+            "KvConnectorLeader initialized with worker_id: {}",
+            worker_id
+        );
+        Self {}
+    }
 
     pub fn get_num_new_matched_tokens(
         &self,
@@ -19,12 +28,12 @@ impl KvConnectorLeader {
         unimplemented!()
     }
 
-    pub fn build_connector_metadata(
-        &self,
-        scheduler_output: SchedulerOutput,
-    ) -> KvConnectorMetadata {
-        unimplemented!()
-    }
+    // pub fn build_connector_metadata(
+    //     &self,
+    //     scheduler_output: SchedulerOutput,
+    // ) -> KvConnectorMetadata {
+    //     unimplemented!()
+    // }
 
     pub fn request_finished(&mut self, request_id: String, block_ids: Vec<BlockId>) -> bool {
         unimplemented!()

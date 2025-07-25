@@ -10,33 +10,32 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 import torch
-from typing_extensions import override
-from vllm.distributed.kv_transfer.kv_connector.v1.base import (
-    KVConnectorBase_V1,
-    KVConnectorMetadata,
-)
+from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorMetadata
+from vllm.config import VllmConfig
 
 if TYPE_CHECKING:
     from vllm.attention.backends.abstract import AttentionMetadata
+    from vllm.config import VllmConfig
     from vllm.forward_context import ForwardContext
+    from vllm.v1.request import Request
 
 
 # from dynamo.llm.vllm_integration.kv_cache_utils import KvbmCacheBlocks
-from dynamo.llm.vllm_integration.rust import BlockManager
-from dynamo.llm.vllm_integration.rust import (
-    KvConnectorMetadata as RustKvConnectorMetadata,
-)
+# from dynamo.llm.vllm_integration.rust import BlockManager
+# from dynamo.llm.vllm_integration.rust import (
+#     KvConnectorMetadata as RustKvConnectorMetadata,
+#     KvConnectorWorker as RustKvConnectorWorker,
+# )
+
 from dynamo.llm.vllm_integration.rust import KvConnectorWorker as RustKvConnectorWorker
 
 
-class DynamoConnectorMetadata(KVConnectorMetadata):
-    def __init__(self, metadata: RustKvConnectorMetadata):
-        self.metadata = metadata
+class KvConnectorWorker:
+    def __init__(self, vllm_config: "VllmConfig", engine_id: str):
+        self.vllm_config = vllm_config
+        self._connector = RustKvConnectorWorker(engine_id)
 
-
-class KvConnectorWorker(KVConnectorBase_V1):
-    def __init__(self, block_manager: BlockManager):
-        self.connector = RustKvConnectorWorker(block_manager)
+    # Worker
 
     def register_kv_caches(self, kv_caches: dict[str, torch.Tensor]):
         """
@@ -46,9 +45,10 @@ class KvConnectorWorker(KVConnectorBase_V1):
         Args: kv_caches:
             dictionary of layer names, kv cache
         """
-        # translate to our TorchDeviceTensor
-        layer_tensors = {}
-        self.connector.register_kv_caches(layer_tensors)
+        print(
+            f"KvConnectorWorker.register_kv_caches called with {len(kv_caches)} kv_caches"
+        )
+        self._connector.register_kv_caches(kv_caches)
 
     def bind_connector_metadata(self, connector_metadata: KVConnectorMetadata) -> None:
         """Set the connector metadata from the scheduler.
@@ -60,7 +60,7 @@ class KvConnectorWorker(KVConnectorBase_V1):
         Args:
             connector_metadata (dict): the connector metadata.
         """
-        self.connector.bind_connector_metadata(connector_metadata.metadata)
+        self._connector.bind_connector_metadata(connector_metadata.metadata)
 
     def clear_connector_metadata(self) -> None:
         """Clear the connector metadata.
@@ -68,9 +68,8 @@ class KvConnectorWorker(KVConnectorBase_V1):
         This function should be called by the model runner every time
         after the model execution.
         """
-        self.connector.clear_connector_metadata()
+        self._connector.clear_connector_metadata()
 
-    @override
     def start_load_kv(self, forward_context: "ForwardContext", **kwargs) -> None:
         """
         Start loading the KV cache from the connector to vLLM's paged
@@ -89,7 +88,6 @@ class KvConnectorWorker(KVConnectorBase_V1):
         # trigger the slot to enter a load state and start the async load
         pass
 
-    @override
     def save_kv_layer(
         self,
         layer_name: str,
@@ -129,18 +127,29 @@ class KvConnectorWorker(KVConnectorBase_V1):
             call to this method (this call or a prior one).
         """
         finished_ids = [id for id in finished_req_ids]
-        (sending_ids, receiving_ids) = self.connector.get_finished(finished_ids)
+        (sending_ids, receiving_ids) = self._connector.get_finished(finished_ids)
         return set(sending_ids), set(receiving_ids)
 
-    def _get_connector_metadata(self) -> KVConnectorMetadata:
-        """Get the connector metadata.
+    # Utility functions
 
-        This function should only be called inside the connector.
+    def _create_slot(self, request: Request) -> None:
+        """Create a slot for the request"""
 
-        Returns:
-            ConnectorMetadata: the connector metadata.
-        """
+        if self.connector.has_slot(request.request_id):
+            return None
 
-        # Should only be called while set to valid metadata.
-        assert self._connector_metadata is not None
-        return self._connector_metadata
+        if bool(request.mm_positions):
+            raise ValueError("Unsupported request - requires mm extra keys")
+
+        all_token_ids = request.all_token_ids
+
+        # extract the critial aspects of the request that effect how the tokens are hashed
+        request = KvbmRequest(
+            request_id=request.request_id,
+            lora_name=request.lora_request.lora_name()
+            if request.lora_request
+            else None,
+            salt_hash=request.cache_salt,
+        )
+
+        self.connector.create_slot(request, all_token_ids)

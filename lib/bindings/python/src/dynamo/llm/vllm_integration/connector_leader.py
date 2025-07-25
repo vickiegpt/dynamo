@@ -9,13 +9,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
-from vllm.distributed.kv_transfer.kv_connector.v1.base import (
-    KVConnectorBase_V1,
-    KVConnectorMetadata,
-)
+from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorMetadata
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.request import Request
+
+from vllm.config import VllmConfig
 
 if TYPE_CHECKING:
     from vllm.v1.core.kv_cache_manager import KVCacheBlocks
@@ -23,20 +22,17 @@ if TYPE_CHECKING:
 
 
 # from dynamo.llm.vllm_integration.kv_cache_utils import KvbmCacheBlocks
-from dynamo.llm.vllm_integration.rust import BlockManager, KvbmRequest
+# from dynamo.llm.vllm_integration.rust import BlockManager, KvbmRequest
+# from dynamo.llm.vllm_integration.rust import KvConnectorLeader as RustKvConnectorLeader
+# from dynamo.llm.vllm_integration.rust import (
+#     KvConnectorMetadata as RustKvConnectorMetadata,
+# )
+# from dynamo.llm.vllm_integration.rust import SchedulerOutput as RustSchedulerOutput
+
 from dynamo.llm.vllm_integration.rust import KvConnectorLeader as RustKvConnectorLeader
-from dynamo.llm.vllm_integration.rust import (
-    KvConnectorMetadata as RustKvConnectorMetadata,
-)
-from dynamo.llm.vllm_integration.rust import SchedulerOutput as RustSchedulerOutput
 
 
-class DynamoConnectorMetadata(KVConnectorMetadata):
-    def __init__(self, metadata: RustKvConnectorMetadata):
-        self.metadata = metadata
-
-
-class KvConnectorLeader(KVConnectorBase_V1):
+class KvConnectorLeader:
     """
     Implements the vLLM KV cache manager protocol.
 
@@ -45,42 +41,10 @@ class KvConnectorLeader(KVConnectorBase_V1):
     that can be used in the vLLM KV cache manager protocol.
     """
 
-    def __init__(
-        self,
-        block_manager: BlockManager,
-    ) -> None:
-        """
-        Initializes the KvbmCacheManager.
-
-        Args:
-            block_manager: Python bound Dynamo KV Block Manager (KVBM).
-        """
-        # pass the python bound KVBM to the Rust KVBM cache manager
-        # the rust cache manager will take ownership of the kvbm
-        self.connector = RustKvConnectorLeader(block_manager)
-        self.block_size = block_manager.block_size()
-
-    def _create_slot(self, request: Request) -> None:
-        """Create a slot for the request"""
-
-        if self.connector.has_slot(request.request_id):
-            return None
-
-        if bool(request.mm_positions):
-            raise ValueError("Unsupported request - requires mm extra keys")
-
-        all_token_ids = request.all_token_ids
-
-        # extract the critial aspects of the request that effect how the tokens are hashed
-        request = KvbmRequest(
-            request_id=request.request_id,
-            lora_name=request.lora_request.lora_name()
-            if request.lora_request
-            else None,
-            salt_hash=request.cache_salt,
-        )
-
-        self.connector.create_slot(request, all_token_ids)
+    def __init__(self, vllm_config: "VllmConfig", engine_id: str):
+        self.vllm_config = vllm_config
+        print(f"KvConnectorLeader initialized with engine_id: {engine_id}")
+        self._connector = RustKvConnectorLeader(engine_id)
 
     # KV Connector
 
@@ -106,7 +70,7 @@ class KvConnectorLeader(KVConnectorBase_V1):
                   asynchronously (between scheduler steps).
         """
         self._create_slot(request)
-        return self.connector.get_num_new_matched_tokens(
+        return self._connector.get_num_new_matched_tokens(
             request.request_id,
             request.num_tokens,
             num_computed_tokens,
@@ -115,7 +79,7 @@ class KvConnectorLeader(KVConnectorBase_V1):
     def update_state_after_alloc(
         self, request: "Request", blocks: "KVCacheBlocks", num_external_tokens: int
     ):
-        self.connector.update_state_after_alloc(request.request_id)
+        self._connector.update_state_after_alloc(request.request_id)
 
     def build_connector_meta(
         self, scheduler_output: SchedulerOutput
@@ -178,5 +142,29 @@ class KvConnectorLeader(KVConnectorBase_V1):
         """
         # note our working can communication with us oob and we can use that to know
         # ahead of time if the request is finished.
-        status = self.connector.request_finished(request.request_id, block_ids)
+        status = self._connector.request_finished(request.request_id, block_ids)
         return status, None
+
+    # Utility functions
+
+    def _create_slot(self, request: Request) -> None:
+        """Create a slot for the request"""
+
+        if self.connector.has_slot(request.request_id):
+            return None
+
+        if bool(request.mm_positions):
+            raise ValueError("Unsupported request - requires mm extra keys")
+
+        all_token_ids = request.all_token_ids
+
+        # extract the critial aspects of the request that effect how the tokens are hashed
+        request = KvbmRequest(
+            request_id=request.request_id,
+            lora_name=request.lora_request.lora_name()
+            if request.lora_request
+            else None,
+            salt_hash=request.cache_salt,
+        )
+
+        self._connector.create_slot(request, all_token_ids)
