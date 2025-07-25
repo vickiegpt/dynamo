@@ -13,3 +13,33 @@ limitations under the License.
 -->
 
 [../../examples/llm/benchmarks/README.md](../../examples/llm/benchmarks/README.md)
+
+Install genai-perf:
+
+```bash
+uv pip install genai-perf
+```
+
+```bash
+docker pull nvcr.io/nvidia/tritonserver:25.06-py3-sdk
+docker run \
+  --gpus all \
+  --rm -it \
+  --net host \
+  -v $PWD:/workspace/benchmarks \
+  nvcr.io/nvidia/tritonserver:25.06-py3-sdk
+```
+
+```bash
+cargo run --bin dynamo-run in=http out=vllm deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+```
+
+```bash
+bash llm/perf.sh --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B \
+                 --url http://localhost:8000 \
+                 --mode aggregated \
+                 --tp 2 \
+                 --dp 2 \
+                 --concurrency 1,2,4,8,16,32 \
+                 --artifacts-root-dir artifacts_root
+```
