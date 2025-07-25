@@ -18,6 +18,7 @@ try:
 
     KvConnectorWorker = getattr(_vllm_integration, "KvConnectorWorker")
     KvConnectorLeader = getattr(_vllm_integration, "KvConnectorLeader")
+    SchedulerOutput = getattr(_vllm_integration, "SchedulerOutput")
 
     from dynamo.llm import BlockManager
 
@@ -32,6 +33,7 @@ except ImportError:
     BlockManager = None
     KvConnectorWorker = None
     KvConnectorLeader = None
+    SchedulerOutput = None
 
 __all__ = [
     "KvbmCacheManager",
@@ -43,4 +45,5 @@ __all__ = [
     "BlockManager",
     "KvConnectorWorker",
     "KvConnectorLeader",
+    "SchedulerOutput",
 ]

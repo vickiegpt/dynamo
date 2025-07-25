@@ -49,6 +49,7 @@ fn _vllm_integration(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_class::<connector::worker::KvConnectorWorker>()?;
     m.add_class::<connector::leader::KvConnectorLeader>()?;
+    m.add_class::<connector::SchedulerOutput>()?;
     Ok(())
 }
 

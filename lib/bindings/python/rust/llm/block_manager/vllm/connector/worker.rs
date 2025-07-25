@@ -54,75 +54,107 @@ impl KvConnectorWorker {
         }
         Ok(())
     }
-}
 
-impl KvConnectorWorker {
     /// Loads the metadata from the leader.
     /// This action translates the metadata into a set of actions that the worker will perform.
     /// All actions much be assigned to a slot before [`KvConnectorWorker::clear_metadata`] is called.
-    pub fn bind_metadata(&mut self, metadata: KvConnectorMetadata) {
-        // build forward pass actions
-        unimplemented!()
+    pub fn bind_connector_metadata(&mut self, metadata: Vec<u8>) -> PyResult<()> {
+        let scheduler_output: SchedulerOutput =
+            serde_json::from_slice(&metadata).map_err(to_pyerr)?;
+        tracing::debug!("Bound metadata: {scheduler_output:#?}");
+        Ok(())
     }
 
-    pub fn clear_metadata(&mut self) {
+    pub fn clear_connector_metadata(&mut self) {
+        tracing::debug!("Clearing connector metadata");
         assert!(
             self.forward_pass_actions.is_empty(),
             "All actions must be assigned to a slot before clearing metadata"
         );
     }
 
-    /// This function serves two purposes:
-    /// 1. To mark the slots as leader finished.
-    /// 2. To report which slots have fully completed all their outstanding actions.
-    ///
-    /// The leader finish event can potentially trigger cancellation of best effort actions; however,
-    /// all outstanding actions must be completed before the slot can report it has finished.
-    ///
-    /// If the implementation chooses to do so, it can trigger a cancellation token on a when provided
-    /// a finished event, but this is not required.
-    ///
-    /// However, failure to cancel increases memory pressure on the GPU pool as there are no coarse grain
-    /// API calls to release specific GPU blocks. Currently it appears it's an all or nothing approach
-    /// with respect to GPU block ownership by the slot.
-    pub fn get_finished(&mut self, finished_requests: &mut HashSet<String>) -> CompletedSlots {
-        let mut completed_slots = CompletedSlots::default();
-        let mut slots_to_remove = Vec::new();
-
-        finished_requests.iter().for_each(|request| {
-            if let Some(slot) = self.slots.get_mut(request) {
-                slot.leader_finished = true;
-            } else {
-                panic!("Request not found in slots: {}", request);
-            }
-        });
-
-        for (slot_id, slot) in self.slots.iter_mut() {
-            if let Some(action_type) = slot.is_finished() {
-                match action_type {
-                    WorkerActionType::Loading => {
-                        completed_slots
-                            .recv_loading_requests
-                            .insert(slot_id.clone());
-                    }
-                    WorkerActionType::Saving | WorkerActionType::Idle => {
-                        // The leader must have already informed the worker that it is finished
-                        // per the vllm protocol/policies.
-                        assert!(slot.leader_finished);
-                        completed_slots.send_saving_requests.insert(slot_id.clone());
-                        slots_to_remove.push(slot_id.clone());
-                    }
-                }
-            }
-        }
-
-        // Remove completed slots
-        for slot_id in slots_to_remove {
-            self.slots.remove(&slot_id);
-        }
-
-        completed_slots
+    pub fn save_kv_layer(&mut self, layer_name: String, kv_layer: Py<PyAny>) -> PyResult<()> {
+        let tensor = VllmTensor::new(kv_layer).map_err(to_pyerr)?;
+        tracing::debug!("Saving KV layer: {layer_name}; kv_layer: {tensor:?}");
+        Ok(())
     }
+
+    pub fn get_finished(
+        &mut self,
+        finished_requests: HashSet<String>,
+    ) -> (HashSet<String>, HashSet<String>) {
+        tracing::debug!("Getting finished requests: {finished_requests:?}");
+        (finished_requests, HashSet::new())
+    }
+}
+
+impl KvConnectorWorker {
+    // /// Loads the metadata from the leader.
+    // /// This action translates the metadata into a set of actions that the worker will perform.
+    // /// All actions much be assigned to a slot before [`KvConnectorWorker::clear_metadata`] is called.
+    // pub fn bind_metadata(&mut self, metadata: KvConnectorMetadata) {
+    //     // build forward pass actions
+    //     unimplemented!()
+    // }
+
+    // pub fn clear_metadata(&mut self) {
+    //     assert!(
+    //         self.forward_pass_actions.is_empty(),
+    //         "All actions must be assigned to a slot before clearing metadata"
+    //     );
+    // }
+
+    // / This function serves two purposes:
+    // / 1. To mark the slots as leader finished.
+    // / 2. To report which slots have fully completed all their outstanding actions.
+    // /
+    // / The leader finish event can potentially trigger cancellation of best effort actions; however,
+    // / all outstanding actions must be completed before the slot can report it has finished.
+    // /
+    // / If the implementation chooses to do so, it can trigger a cancellation token on a when provided
+    // / a finished event, but this is not required.
+    // /
+    // / However, failure to cancel increases memory pressure on the GPU pool as there are no coarse grain
+    // / API calls to release specific GPU blocks. Currently it appears it's an all or nothing approach
+    // / with respect to GPU block ownership by the slot.
+    //     pub fn get_finished(&mut self, finished_requests: &mut HashSet<String>) -> CompletedSlots {
+    //         let mut completed_slots = CompletedSlots::default();
+    //         let mut slots_to_remove = Vec::new();
+
+    //         finished_requests.iter().for_each(|request| {
+    //             if let Some(slot) = self.slots.get_mut(request) {
+    //                 slot.leader_finished = true;
+    //             } else {
+    //                 panic!("Request not found in slots: {}", request);
+    //             }
+    //         });
+
+    //         for (slot_id, slot) in self.slots.iter_mut() {
+    //             if let Some(action_type) = slot.is_finished() {
+    //                 match action_type {
+    //                     WorkerActionType::Loading => {
+    //                         completed_slots
+    //                             .recv_loading_requests
+    //                             .insert(slot_id.clone());
+    //                     }
+    //                     WorkerActionType::Saving | WorkerActionType::Idle => {
+    //                         // The leader must have already informed the worker that it is finished
+    //                         // per the vllm protocol/policies.
+    //                         assert!(slot.leader_finished);
+    //                         completed_slots.send_saving_requests.insert(slot_id.clone());
+    //                         slots_to_remove.push(slot_id.clone());
+    //                     }
+    //                 }
+    //             }
+    //         }
+
+    //         // Remove completed slots
+    //         for slot_id in slots_to_remove {
+    //             self.slots.remove(&slot_id);
+    //         }
+
+    //         completed_slots
+    //     }
 }
 
 /// Workers can only be in one of these states.

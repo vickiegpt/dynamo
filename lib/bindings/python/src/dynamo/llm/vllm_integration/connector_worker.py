@@ -10,14 +10,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 
 import torch
-from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorMetadata
 from vllm.config import VllmConfig
+from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorMetadata
 
 if TYPE_CHECKING:
     from vllm.attention.backends.abstract import AttentionMetadata
     from vllm.config import VllmConfig
     from vllm.forward_context import ForwardContext
-    from vllm.v1.request import Request
 
 
 # from dynamo.llm.vllm_integration.kv_cache_utils import KvbmCacheBlocks
@@ -28,6 +27,12 @@ if TYPE_CHECKING:
 # )
 
 from dynamo.llm.vllm_integration.rust import KvConnectorWorker as RustKvConnectorWorker
+
+
+class DynamoConnectorMetadata(KVConnectorMetadata):
+    def __init__(self, metadata: bytes):
+        assert isinstance(metadata, bytes)
+        self.metadata = metadata
 
 
 class KvConnectorWorker:
@@ -50,7 +55,7 @@ class KvConnectorWorker:
         )
         self._connector.register_kv_caches(kv_caches)
 
-    def bind_connector_metadata(self, connector_metadata: KVConnectorMetadata) -> None:
+    def bind_connector_metadata(self, data: bytes) -> None:
         """Set the connector metadata from the scheduler.
 
         This function should be called by the model runner every time
@@ -60,7 +65,7 @@ class KvConnectorWorker:
         Args:
             connector_metadata (dict): the connector metadata.
         """
-        self._connector.bind_connector_metadata(connector_metadata.metadata)
+        self._connector.bind_connector_metadata(data)
 
     def clear_connector_metadata(self) -> None:
         """Clear the connector metadata.
@@ -85,7 +90,6 @@ class KvConnectorWorker:
             the same.
 
         """
-        # trigger the slot to enter a load state and start the async load
         pass
 
     def save_kv_layer(
@@ -107,8 +111,7 @@ class KvConnectorWorker:
             attn_metadata (AttentionMetadata): the attention metadata.
             **kwargs: additional arguments for the save operation.
         """
-        # trigger the slot to enter a save state and start the async save
-        pass
+        self._connector.save_kv_layer(layer_name, kv_layer)
 
     def get_finished(
         self, finished_req_ids: set[str]
@@ -126,30 +129,6 @@ class KvConnectorWorker:
             The finished saves/sends req ids must belong to a set provided in a
             call to this method (this call or a prior one).
         """
-        finished_ids = [id for id in finished_req_ids]
-        (sending_ids, receiving_ids) = self._connector.get_finished(finished_ids)
-        return set(sending_ids), set(receiving_ids)
-
-    # Utility functions
-
-    def _create_slot(self, request: Request) -> None:
-        """Create a slot for the request"""
-
-        if self.connector.has_slot(request.request_id):
-            return None
-
-        if bool(request.mm_positions):
-            raise ValueError("Unsupported request - requires mm extra keys")
-
-        all_token_ids = request.all_token_ids
-
-        # extract the critial aspects of the request that effect how the tokens are hashed
-        request = KvbmRequest(
-            request_id=request.request_id,
-            lora_name=request.lora_request.lora_name()
-            if request.lora_request
-            else None,
-            salt_hash=request.cache_salt,
-        )
-
-        self.connector.create_slot(request, all_token_ids)
+        # finished_ids = [id for id in finished_req_ids]
+        # return set(sending_ids), set(receiving_ids)
+        return self._connector.get_finished(finished_req_ids)

@@ -9,12 +9,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
+from vllm.config import VllmConfig
 from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorMetadata
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.request import Request
-
-from vllm.config import VllmConfig
 
 if TYPE_CHECKING:
     from vllm.v1.core.kv_cache_manager import KVCacheBlocks
@@ -29,7 +28,15 @@ if TYPE_CHECKING:
 # )
 # from dynamo.llm.vllm_integration.rust import SchedulerOutput as RustSchedulerOutput
 
+from dynamo.llm.vllm_integration.rust import KvbmRequest
 from dynamo.llm.vllm_integration.rust import KvConnectorLeader as RustKvConnectorLeader
+from dynamo.llm.vllm_integration.rust import SchedulerOutput as RustSchedulerOutput
+
+
+class DynamoConnectorMetadata(KVConnectorMetadata):
+    def __init__(self, metadata: bytes):
+        assert isinstance(metadata, bytes)
+        self.metadata = metadata
 
 
 class KvConnectorLeader:
@@ -79,11 +86,12 @@ class KvConnectorLeader:
     def update_state_after_alloc(
         self, request: "Request", blocks: "KVCacheBlocks", num_external_tokens: int
     ):
-        self._connector.update_state_after_alloc(request.request_id)
+        block_ids = blocks.get_block_ids()[0]
+        self._connector.update_state_after_alloc(
+            request.request_id, block_ids, num_external_tokens
+        )
 
-    def build_connector_meta(
-        self, scheduler_output: SchedulerOutput
-    ) -> KVConnectorMetadata:
+    def build_connector_meta(self, scheduler_output: SchedulerOutput) -> bytes:
         """
         Build the connector metadata for this step.
 
@@ -95,35 +103,43 @@ class KvConnectorLeader:
         """
         output = RustSchedulerOutput()
 
-        for req in scheduler_output.new_requests:
+        for req in scheduler_output.scheduled_new_reqs:
             output.add_new_request(
-                request_id=req.request_id,
-                prompt_token_ids=req.prompt_token_ids,
-                block_ids=req.block_ids,
-                num_computed_tokens=req.num_computed_tokens,
+                req.req_id,
+                req.prompt_token_ids,
+                req.block_ids[0],
+                req.num_computed_tokens,
             )
 
-        for req in scheduler_output.cached_requests:
+        for (
+            req_id,
+            resumed_from_preemption,
+            new_token_ids,
+            new_block_ids,
+            num_computed_tokens,
+        ) in zip(
+            scheduler_output.scheduled_cached_reqs.req_ids,
+            scheduler_output.scheduled_cached_reqs.resumed_from_preemption,
+            scheduler_output.scheduled_cached_reqs.new_token_ids,
+            scheduler_output.scheduled_cached_reqs.new_block_ids,
+            scheduler_output.scheduled_cached_reqs.num_computed_tokens,
+        ):
             output.add_cached_request(
-                request_id=req.request_id,
-                resumed_from_preemption=req.resumed_from_preemption,
-                new_token_ids=req.new_token_ids,
-                new_block_ids=req.new_block_ids,
-                num_computed_tokens=req.num_computed_tokens,
+                request_id=req_id,
+                resumed_from_preemption=resumed_from_preemption,
+                new_token_ids=new_token_ids,
+                new_block_ids=new_block_ids[0],
+                num_computed_tokens=num_computed_tokens,
             )
 
-        for req in scheduler_output.num_scheduled_tokens:
-            output.add_num_scheduled_tokens(
-                request_id=req.request_id,
-                num_scheduled_tokens=req.num_scheduled_tokens,
-            )
+        output.add_num_scheduled_tokens(scheduler_output.num_scheduled_tokens)
 
         assert (
             scheduler_output.total_num_scheduled_tokens
             == output.get_num_scheduled_tokens()
         ), "Total number of scheduled tokens does not match"
 
-        return DynamoConnectorMetadata(self.connector.build_connector_metadata(output))
+        return self._connector.build_connector_metadata(output)
 
     def request_finished(
         self,
@@ -150,7 +166,7 @@ class KvConnectorLeader:
     def _create_slot(self, request: Request) -> None:
         """Create a slot for the request"""
 
-        if self.connector.has_slot(request.request_id):
+        if self._connector.has_slot(request.request_id):
             return None
 
         if bool(request.mm_positions):
