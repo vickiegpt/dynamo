@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{HashMap, HashSet};
-
-use pyo3::types::PyDict;
+use std::sync::Arc;
 
 use super::*;
 use crate::{llm::block_manager::distributed::VllmTensor, to_pyerr};
+use dynamo_llm::block_manager::distributed::load_and_validate_tensors;
+use dynamo_llm::block_manager::storage::torch::{TorchDevice, TorchTensor};
 
 #[derive(Debug, Clone)]
 pub struct WorkerAction {
@@ -28,7 +29,7 @@ pub struct KvConnectorWorker {
     forward_pass_actions: HashMap<String, HashMap<String, WorkerAction>>,
 
     /// Map of layer name to vllm tensor
-    kv_caches: HashMap<String, VllmTensor>,
+    kv_caches: HashMap<String, Arc<VllmTensor>>,
 }
 
 #[pymethods]
@@ -48,10 +49,51 @@ impl KvConnectorWorker {
 
     pub fn register_kv_caches(&mut self, kv_caches: HashMap<String, Py<PyAny>>) -> PyResult<()> {
         for (layer_name, torch_tensor) in kv_caches {
-            let vllm_tensor = VllmTensor::new(torch_tensor).map_err(to_pyerr)?;
+            let vllm_tensor = Arc::new(VllmTensor::new(torch_tensor).map_err(to_pyerr)?);
             tracing::debug!("Registering KV cache layer: {layer_name}, tensor: {vllm_tensor:?}");
             self.kv_caches.insert(layer_name, vllm_tensor);
         }
+
+        let tensors: Vec<Arc<dyn TorchTensor>> = self
+            .kv_caches
+            .values()
+            .map(|tensor| tensor.clone() as Arc<dyn TorchTensor>)
+            .collect();
+
+        let first_tensor = tensors.first().unwrap();
+
+        let device_id = match first_tensor.device() {
+            TorchDevice::Cuda(id) => id,
+            TorchDevice::Other(_) => 0, // Default to 0 for non-CUDA devices
+        };
+
+        // validate all tensors are on the same device
+        for tensor in &tensors {
+            if tensor.device() != first_tensor.device() {
+                return Err(to_pyerr(anyhow::anyhow!(
+                    "All tensors must be on the same device! Got {:?} and {:?}",
+                    tensor.device(),
+                    first_tensor.device()
+                )));
+            }
+        }
+
+        load_and_validate_tensors(&tensors, device_id).map_err(to_pyerr)?;
+
+        // refactor john's kvbm worker into just pieces
+        // - build a block layout from tensors, inferring the layout dims and dtype
+        // - initialize nixl agent with uxc default, if g3 enabled add gds to the agent - do this in the constructor
+        // - allocate blocks for g2 and/or g3, register them with nixl
+        // - construct an transfer manager (offload manager)
+        // - wait for worker to send a plan - a simply map of {request_id, [(src_block_id, dst_block_id]}
+        //   - count layers, when all layers are counted, enqueue block-wise transfers and hold per request the notification handles
+        //   - i think we have oneshot return notificatoin channel that is optional offloads/writes, if so use t.
+        //
+        // - currently leader and worker are not connected
+        //   - rework the zmq bits or just use nats to perform completion events on leadera
+        //   - this will allow the leader to free cpu/disk blocks when partial xfers are complete.
+        //   - once wired up, the host will keep a list of transfer ids associated with each action it puts in the metdata
+        //   - trigger the worker -> leader notification when the transfer is complete using the transfer id
         Ok(())
     }
 
@@ -75,7 +117,7 @@ impl KvConnectorWorker {
 
     pub fn save_kv_layer(&mut self, layer_name: String, kv_layer: Py<PyAny>) -> PyResult<()> {
         let tensor = VllmTensor::new(kv_layer).map_err(to_pyerr)?;
-        tracing::debug!("Saving KV layer: {layer_name}; kv_layer: {tensor:?}");
+        // tracing::debug!("Saving KV layer: {layer_name}; kv_layer: {tensor:?}");
         Ok(())
     }
 

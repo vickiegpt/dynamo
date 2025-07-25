@@ -36,7 +36,7 @@ pub struct KvbmWorkerData {
     pub num_device_blocks: usize,
 }
 
-fn load_and_validate_tensors(
+pub fn load_and_validate_tensors(
     tensors: &[Arc<dyn TorchTensor>],
     device_id: usize,
 ) -> anyhow::Result<(Vec<DeviceStorage>, Vec<usize>)> {
