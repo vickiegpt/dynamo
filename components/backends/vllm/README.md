@@ -15,10 +15,10 @@ See [deployment architectures](../llm/README.md#deployment-architectures) to lea
 
 ### Prerequisites
 
-Start required services (etcd and NATS) using [Docker Compose](../../deploy/metrics/docker-compose.yml):
+Start required services (etcd and NATS) using [Docker Compose](../../../deploy/docker-compose.yml):
 
 ```bash
-docker compose -f deploy/metrics/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml up -d
 ```
 
 ### Build and Run docker
@@ -115,7 +115,7 @@ For Kubernetes deployment, YAML manifests are provided in the `deploy/` director
 
 #### Prerequisites
 
-- **Dynamo Cloud**: Follow the [Quickstart Guide](../../docs/guides/dynamo_deploy/quickstart.md) to deploy Dynamo Cloud first.
+- **Dynamo Cloud**: Follow the [Quickstart Guide](../../../docs/guides/dynamo_deploy/quickstart.md) to deploy Dynamo Cloud first.
 
 - **Container Images**: The deployment files currently require access to `nvcr.io/nvidian/nim-llm-dev/vllm-runtime`. If you don't have access, build and push your own image:
   ```bash
@@ -132,10 +132,12 @@ For Kubernetes deployment, YAML manifests are provided in the `deploy/` director
 #### Deploy to Kubernetes
 
 Example with disagg:
+Export the NAMESPACE  you used in your Dynamo Cloud Installation.
 
 ```bash
-cd ~/dynamo/components/backends/vllm/deploy
-kubectl apply -f disagg.yaml
+cd dynamo
+cd components/backends/vllm/deploy
+kubectl apply -f disagg.yaml -n $NAMESPACE
 ```
 
 To change `DYN_LOG` level, edit the yaml file by adding
