@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+echo "Starting trtllm worker on $(hostname): $(hostname -i)"
+
 if [[ -z ${MODEL_PATH} ]]; then
     echo "ERROR: MODEL_PATH was not set."
     echo "ERROR: MODEL_PATH must be set to either the HuggingFace ID or locally " \

@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+echo "Starting frontend services on $(hostname): $(hostname -i)"
+
 # Start NATS
 nats-server -js &
 
