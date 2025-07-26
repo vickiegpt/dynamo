@@ -339,4 +339,77 @@ bash launch/disagg_router.sh
 
 https://huggingface.co/neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic
 https://github.com/ai-dynamo/dynamo/issues/402
+
+vllm serve neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic \
+    --tensor-parallel-size 4
+
+genai-perf profile -m neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic \
+    --tokenizer neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic \
+    --endpoint-type chat \
+    --endpoint v1/chat/completions \
+    --url 127.0.0.1:8000 \
+    --streaming --concurrency 32 \
+    --num-dataset-entries 128 \
+    --warmup-request-count 128 \
+    --request-count 128 \
+    --synthetic-input-tokens-mean 3000 \
+    --synthetic-input-tokens-stddev 0 \
+    --output-tokens-mean 150 \
+    --output-tokens-stddev 0 \
+    --extra-inputs min_tokens:150 \
+    --extra-inputs max_tokens:150 \
+    --extra-inputs ignore_eos:true \
+    --random-seed 0 \
+    --artifact-dir concurrency_32 \
+    --profile-export-file profile_export_concurrency_32.json \
+    -- --max-threads 32
+
+
+bash container/build.sh --framework VLLM
+bash container/run.sh --framework VLLM -it
+
+
+etcd &
+nats-server --js &
+
+dynamo serve graphs.disagg:Frontend -f <your_configuration>.yaml
+
+```
+
+```yaml
+Frontend:
+  served_model_name: neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic
+  endpoint: dynamo.Processor.chat/completions
+  port: 8000
+
+Processor:
+  model: neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic
+  router: round-robin
+
+VllmWorker:
+  model: neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic
+  kv-transfer-config: '{"kv_connector":"DynamoNixlConnector"}'
+  max-model-len: 3500
+  remote-prefill: true
+  block-size: 128
+  disable-log-requests: true
+  tensor-parallel-size: 4
+  ServiceArgs:
+    workers: 1
+    resources:
+      gpu: 4
+
+PrefillWorker:
+  model: neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic
+  kv-transfer-config: '{"kv_connector":"DynamoNixlConnector"}'
+  max-model-len: 3500
+  block-size: 128
+  max-num-batched-tokens: 3500
+  gpu-memory-utilization: 0.95
+  disable-log-requests: true
+  tensor-parallel-size: 1
+  ServiceArgs:
+    workers: 4
+    resources:
+      gpu: 1
 ```
