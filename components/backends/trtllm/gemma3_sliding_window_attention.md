@@ -24,7 +24,7 @@ VSWA is a mechanism in which a model’s layers alternate between multiple slidi
 * To run Gemma 3 with VSWA, ensure that the container has TensorRT-LLM v1.0.0rc4 installed.
 
 ## Limitation
-* The current KV event-based KV routing does not work well with VSWA. The Dynamo team is actively working on adding support to distinguish between events from different layer groups. As a workaround, Dynamo can perform KV routing without relying on KV events by instead leveraging the prompt prefix of previous requests. Dynamo team refers to as Approximate KV Routing. If a request is routed to a worker and another request with the same prefix arrives shortly afterward, it can be routed to the same worker due to the high probability of a large cache hit.
+* The current KV event-based KV routing does not work well with VSWA. The Dynamo team is actively working on adding support to distinguish between events from different layer groups. As a workaround, Dynamo can perform KV routing without relying on KV events by instead leveraging the prompt prefix of previous requests, refers to Approximate KV Routing. If a request is routed to a worker and another request with the same prefix arrives shortly afterward, it can be routed to the same worker due to the high probability of a large cache hit.
 * The Approximate KV indexer uses a TTL (Time to Live) of 120 seconds.
 
 ### Aggregated Serving
