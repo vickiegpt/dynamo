@@ -258,6 +258,15 @@ docker run \
   -p 8080:8080 \
   nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.2 \
   bash
+
+./container/build.sh --framework VLLM
+
+docker run \
+  -it --rm \
+  --gpus all \
+  -p 8080:8080 \
+  dynamo:latest-vllm \
+  bash
 ```
 
 ```
@@ -281,7 +290,6 @@ apt install curl jq
 
 curl -X GET localhost:8080/v1/models
 
-dynamo run in=http out=vllm Qwen/Qwen2.5-3B-Instruct
 
 curl localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -325,4 +333,10 @@ python -m vllm.entrypoints.openai.api_server \
   --max-model-len 8192 \
   --tensor-parallel-size 1
 
+cd components/backends/vllm
+bash launch/disagg_router.sh
+
+
+https://huggingface.co/neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic
+https://github.com/ai-dynamo/dynamo/issues/402
 ```
