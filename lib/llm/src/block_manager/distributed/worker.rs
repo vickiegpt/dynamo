@@ -20,7 +20,7 @@ use crate::block_manager::{
 use derive_builder::Builder;
 use nixl_sys::Agent as NixlAgent;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tokio::runtime::Handle;
@@ -31,6 +31,14 @@ use dynamo_runtime::{
     utils::{leader_worker_barrier::WorkerBarrier, task::CriticalTaskExecutionHandle},
     DistributedRuntime, Runtime,
 };
+
+pub type SharedState = Arc<TokioMutex<KvbmWorkerTriggers>>;
+
+#[derive(Debug, Default)]
+pub struct KvbmWorkerTriggers {
+    pub pending_stores_requests: HashMap<u64, oneshot::Sender<()>>,
+    pub unexpected_store_triggers: HashSet<u64>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KvbmWorkerData {
@@ -193,10 +201,10 @@ impl KvbmWorker {
 
         let layout_builder_clone = layout_builder.clone();
 
-        let enqueued_tasks = Arc::new(TokioMutex::new(HashMap::new()));
-        let enqueued_tasks_clone = enqueued_tasks.clone();
+        let shared_state = Arc::new(TokioMutex::new(KvbmWorkerTriggers::default()));
 
         let cancel_token = config.cancel_token.clone();
+        let state = shared_state.clone();
 
         let task = CriticalTaskExecutionHandle::new(
             move |cancel_token| {
@@ -206,7 +214,7 @@ impl KvbmWorker {
                     layout_type,
                     config,
                     cancel_token,
-                    enqueued_tasks_clone,
+                    state,
                 )
             },
             cancel_token.clone(),
@@ -214,8 +222,10 @@ impl KvbmWorker {
         )?;
 
         let (trigger_tx, trigger_rx) = tokio::sync::mpsc::unbounded_channel();
+        let state = shared_state.clone();
+
         let trigger_task = CriticalTaskExecutionHandle::new(
-            move |cancel_token| KvbmWorker::trigger_task(enqueued_tasks, cancel_token, trigger_rx),
+            move |cancel_token| KvbmWorker::trigger_task(state, cancel_token, trigger_rx),
             cancel_token,
             "kvbm-trigger-task",
         )?;
@@ -256,7 +266,7 @@ impl KvbmWorker {
         layout_type: LayoutType,
         config: KvbmWorkerConfig,
         cancel_token: CancellationToken,
-        enqueued_tasks: Arc<TokioMutex<HashMap<u64, oneshot::Sender<()>>>>,
+        shared_state: SharedState,
     ) -> anyhow::Result<()> {
         let runtime = Runtime::from_current()?;
         let drt = DistributedRuntime::from_settings(runtime).await?;
@@ -352,7 +362,7 @@ impl KvbmWorker {
             host_blocks,
             disk_blocks,
             transfer_context,
-            enqueued_tasks,
+            shared_state,
         )?;
 
         let handlers = HashMap::from([(
@@ -375,22 +385,27 @@ impl KvbmWorker {
     }
 
     async fn trigger_task(
-        enqueued_tasks: Arc<TokioMutex<HashMap<u64, oneshot::Sender<()>>>>,
+        shard_state: SharedState,
         _cancel_token: CancellationToken,
         mut trigger_rx: tokio::sync::mpsc::UnboundedReceiver<u64>,
     ) -> anyhow::Result<()> {
         while let Some(trigger_id) = trigger_rx.recv().await {
-            match enqueued_tasks.lock().await.remove(&trigger_id) {
-                Some(tx) => {
-                    tracing::debug!(trigger_id, "starting transfer");
-                    if let Err(_) = tx.send(()) {
-                        tracing::warn!(trigger_id, "failed to send trigger - channel closed");
-                    }
-                }
-                None => {
-                    tracing::warn!(trigger_id, "transfer not found");
-                }
-            }
+            // let mut state = shard_state.lock().await;
+            // match state.pending_leader_ams.remove(&trigger_id) {
+            //     Some(tx) => {
+            //         tracing::debug!(trigger_id, "starting transfer");
+            //         if let Err(_) = tx.send(()) {
+            //             tracing::warn!(trigger_id, "failed to send trigger - channel closed");
+            //         }
+            //     }
+            //     None => {
+            //         tracing::debug!(
+            //             trigger_id,
+            //             "transfer not found; adding to unexpected trigger IDs"
+            //         );
+            //         state.unexpected_trigger_ids.insert(trigger_id);
+            //     }
+            // }
         }
 
         Ok(())

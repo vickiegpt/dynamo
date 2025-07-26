@@ -173,7 +173,7 @@ class KvConnectorLeader:
             Optional KVTransferParams to be included in the request outputs
             returned by the engine.
         """
-        # note our working can communication with us oob and we can use that to know
+        # note our worker can communication with us oob and we can use that to know
         # ahead of time if the request is finished.
         status = self._connector.request_finished(request.request_id, block_ids)
         return status, None

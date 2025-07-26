@@ -16,6 +16,7 @@ use crate::block_manager::{
         transfer::{TransferContext, WriteTo, WriteToStrategy},
         Block, BlockDataProvider, BlockDataProviderMut, ReadableBlock, WritableBlock,
     },
+    distributed::worker::SharedState,
     storage::{DeviceStorage, DiskStorage, Local, PinnedStorage},
     BasicMetadata, Storage,
 };
@@ -34,7 +35,7 @@ pub struct BlockTransferHandler {
     host: Option<LocalBlockDataList<PinnedStorage>>,
     disk: Option<LocalBlockDataList<DiskStorage>>,
     context: Arc<TransferContext>,
-    pending_requests: Arc<TokioMutex<HashMap<u64, oneshot::Sender<()>>>>,
+    pending_requests: SharedState,
 }
 
 impl BlockTransferHandler {
@@ -43,7 +44,7 @@ impl BlockTransferHandler {
         host_blocks: Option<Vec<LocalBlock<PinnedStorage, BasicMetadata>>>,
         disk_blocks: Option<Vec<LocalBlock<DiskStorage, BasicMetadata>>>,
         context: Arc<TransferContext>,
-        pending_requests: Arc<TokioMutex<HashMap<u64, oneshot::Sender<()>>>>,
+        pending_requests: SharedState,
     ) -> Result<Self> {
         Ok(Self {
             device: Self::get_local_data(device_blocks),
@@ -97,12 +98,6 @@ impl BlockTransferHandler {
             return Err(anyhow::anyhow!("Target pool manager not initialized"));
         };
 
-        if let Some(trigger_id) = request.trigger_id() {
-            let (tx, rx) = oneshot::channel();
-            self.pending_requests.lock().await.insert(*trigger_id, tx);
-            rx.await?;
-        }
-
         // Extract the `from` and `to` indices from the request.
         let source_idxs = request.blocks().iter().map(|(from, _)| *from);
         let target_idxs = request.blocks().iter().map(|(_, to)| *to);
@@ -138,6 +133,25 @@ impl Handler for BlockTransferHandler {
         }
 
         let request: BlockTransferRequest = serde_json::from_slice(&message.data[0])?;
+
+        // if let Some(connector_req) = request.connector_request {
+        //     let state = self.shared_state.lock().await;
+
+        //     // check if the trigger ID is in the unexpected trigger IDs
+        //     // if so, we have been triggered before we could insert the trigger ID into the pending leader AMs
+        //     // we can break and go on
+        //     if state.unexpected_trigger_ids.remove(&trigger_id).is_some() {
+        //         tracing::debug!(
+        //             trigger_id,
+        //             "transfer not found; adding to unexpected trigger IDs"
+        //         );
+        //     } else {
+        //         // otherwise, we can add the trigger ID to the pending leader AMs
+        //         let (tx, rx) = oneshot::channel();
+        //         state.pending_leader_ams.insert(trigger_id, tx);
+        //         rx.await?;
+        //     }
+        // }
 
         tracing::debug!(
             "Performing transfer of {} blocks from {:?} to {:?}",

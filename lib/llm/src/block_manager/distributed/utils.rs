@@ -14,14 +14,27 @@ pub enum BlockTransferPool {
     Disk,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum ConnectorTransferType {
+    Store,
+    Load,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ConnectorRequestLeader {
+    pub req_id: String,
+    pub txn_id: u64,
+    pub transfer_type: ConnectorTransferType,
+}
+
 #[derive(Serialize, Deserialize, Debug, Getters, Clone)]
 pub struct BlockTransferRequest {
-    from_pool: BlockTransferPool,
-    to_pool: BlockTransferPool,
-    blocks: Vec<(usize, usize)>,
+    pub from_pool: BlockTransferPool,
+    pub to_pool: BlockTransferPool,
+    pub blocks: Vec<(usize, usize)>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    trigger_id: Option<u64>,
+    pub connector_req: Option<ConnectorRequestLeader>,
 }
 
 impl BlockTransferRequest {
@@ -35,7 +48,7 @@ impl BlockTransferRequest {
             from_pool,
             to_pool,
             blocks,
-            trigger_id: None,
+            connector_req: None,
         }
     }
 
@@ -43,13 +56,13 @@ impl BlockTransferRequest {
         from_pool: BlockTransferPool,
         to_pool: BlockTransferPool,
         blocks: Vec<(usize, usize)>,
-        trigger_id: u64,
+        connector_req: ConnectorRequestLeader,
     ) -> Self {
         Self {
             from_pool,
             to_pool,
             blocks,
-            trigger_id: Some(trigger_id),
+            connector_req: Some(connector_req),
         }
     }
 }

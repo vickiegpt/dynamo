@@ -6,8 +6,11 @@ use std::sync::Arc;
 
 use super::*;
 use crate::{llm::block_manager::distributed::VllmTensor, to_pyerr};
-use dynamo_llm::block_manager::distributed::load_and_validate_tensors;
+use dynamo_llm::block_manager::distributed::{
+    BlockTransferRequest, ConnectorRequestLeader, ConnectorTransferType,
+};
 use dynamo_llm::block_manager::storage::torch::{TorchDevice, TorchTensor};
+use dynamo_runtime::CancellationToken;
 
 #[derive(Debug, Clone)]
 pub struct WorkerAction {
@@ -50,7 +53,7 @@ impl KvConnectorWorker {
     pub fn register_kv_caches(&mut self, kv_caches: HashMap<String, Py<PyAny>>) -> PyResult<()> {
         for (layer_name, torch_tensor) in kv_caches {
             let vllm_tensor = Arc::new(VllmTensor::new(torch_tensor).map_err(to_pyerr)?);
-            tracing::debug!("Registering KV cache layer: {layer_name}, tensor: {vllm_tensor:?}");
+            tracing::trace!("Registering KV cache layer: {layer_name}, tensor: {vllm_tensor:?}");
             self.kv_caches.insert(layer_name, vllm_tensor);
         }
 
@@ -61,11 +64,7 @@ impl KvConnectorWorker {
             .collect();
 
         let first_tensor = tensors.first().unwrap();
-
-        let device_id = match first_tensor.device() {
-            TorchDevice::Cuda(id) => id,
-            TorchDevice::Other(_) => 0, // Default to 0 for non-CUDA devices
-        };
+        tracing::debug!("kv tensor: {first_tensor:#?}");
 
         // validate all tensors are on the same device
         for tensor in &tensors {
@@ -77,8 +76,6 @@ impl KvConnectorWorker {
                 )));
             }
         }
-
-        load_and_validate_tensors(&tensors, device_id).map_err(to_pyerr)?;
 
         // refactor john's kvbm worker into just pieces
         // - build a block layout from tensors, inferring the layout dims and dtype
@@ -239,3 +236,60 @@ pub struct CompletedSlots {
     send_saving_requests: HashSet<String>,
     recv_loading_requests: HashSet<String>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KvRequestState {
+    Idle,
+    Loading,
+    LoadingFinished,
+    Storing,
+    Complete,
+    RequestFinished,
+}
+
+pub enum KvWorkerMessage {
+    LayerTrigger(String),
+}
+
+/// State of a given request instance.
+/// This is the worker's handle to an async progress engine managing the state of a given request.
+pub struct KvRequestInstance {
+    // state: tokio::sync::watch::Receiver<KvWorkerState>,
+    // msg_tx: tokio::sync::mpsc::Sender<KvWorkerMessage>,
+    // cancel_token: CancellationToken,
+}
+
+pub enum VllmConnectorMessage {
+    ConnectorMetadata(ConnectorMetadata),
+}
+/// Handles messages from the connector api
+pub struct KvWorkerHandler {
+    msg_rx: tokio::sync::mpsc::Receiver<VllmConnectorMessage>,
+    cancel_token: CancellationToken,
+}
+
+pub struct KvRequestHandler {
+    msg_rx: tokio::sync::mpsc::Receiver<KvWorkerMessage>,
+}
+
+// impl KvWorkerHandler {
+//     pub async fn step(&mut self) {
+//         while let Some(msg) = self.msg_rx.recv().await {
+//             match msg {
+//                 VllmConnectorMessage::ConnectorMetadata(metadata) => {
+//                     self.handle_connector_metadata(metadata).await;
+//                 }
+//             }
+//         }
+//     }
+
+//     pub async fn handle_connector_metadata(&mut self, metadata: ConnectorMetadata) {
+//         for txn in metadata.txn_list {
+//             match txn.transfer_type {
+//                 ConnectorTransferType::Store => {
+//                     self.handle_store_request(txn).await;
+//                 }
+//             }
+//         }
+//     }
+// }

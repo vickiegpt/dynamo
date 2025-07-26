@@ -1,14 +1,26 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use dynamo_llm::{
+    block_manager::{
+        block::{
+            data::logical::distributed_leader_worker::DistributedLeaderWorkerResources,
+            locality::{LocalityProvider, Logical},
+            BlockId, ImmutableBlock, MutableBlock,
+        },
+        distributed::{ConnectorRequestLeader, ConnectorTransferType},
+        pool::{BlockPool, BlockPoolError},
+        BasicMetadata, DeviceStorage, Storage,
+    },
+    tokens::{SaltHash, SequenceHash, TokenBlockSequence, Tokens},
+};
+
 pub mod leader;
 pub mod worker;
 
-use std::collections::HashMap;
-
-use dynamo_llm::block_manager::block::BlockId;
 use pyo3::{prelude::*, wrap_pymodule};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::to_pyerr;
 
@@ -105,4 +117,8 @@ pub struct CachedRequestData {
     pub new_token_ids: Vec<u32>,
     pub new_block_ids: Vec<BlockId>,
     pub num_computed_tokens: u32,
+}
+
+pub struct ConnectorMetadata {
+    pub txn_list: Vec<ConnectorRequestLeader>,
 }
