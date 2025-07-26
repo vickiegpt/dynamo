@@ -208,7 +208,8 @@ bash llm/perf.sh --model bartowski/Llama-3.2-3B-Instruct-Q4_K_M.gguf \
                  --tp 2 \
                  --dp 2 \
                  --concurrency 1,2,4,8,16,32 \
-                 --artifacts-root-dir artifacts_root
+                 --artifacts-root-dir artifacts_root \
+                 --deployment-kind vllm
 
 ```
 
@@ -282,7 +283,7 @@ curl -X GET localhost:8080/v1/models
 
 dynamo run in=http out=vllm Qwen/Qwen2.5-3B-Instruct
 
-curl localhost:8080/v1/chat/completions \
+curl localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "Qwen/Qwen2.5-3B-Instruct",
@@ -303,5 +304,25 @@ bash llm/perf.sh --model Qwen/Qwen2.5-3B-Instruct \
                  --dp 2 \
                  --concurrency 1,2,4,8,16,32 \
                  --artifacts-root-dir artifacts_root
+
+bash llm/perf.sh --model Qwen/Qwen2.5-3B-Instruct \
+                 --url http://localhost:8000 \
+                 --mode aggregated \
+                 --tp 1 \
+                 --dp 1 \
+                 --concurrency 1,2,4,8,16,32 \
+                 --artifacts-root-dir artifacts_root \
+                 --deployment-kind vllm
+
+
+uv pip install matplotlib seaborn
+python llm/plot_pareto.py --artifacts-root-dir artifacts_root --title "Dynamo vs. vLLM"
+
+uv pip install vllm==0.7.3
+python -m vllm.entrypoints.openai.api_server \
+  --model Qwen/Qwen2.5-3B-Instruct \
+  --tokenizer Qwen/Qwen2.5-3B-Instruct \
+  --max-model-len 8192 \
+  --tensor-parallel-size 1
 
 ```
