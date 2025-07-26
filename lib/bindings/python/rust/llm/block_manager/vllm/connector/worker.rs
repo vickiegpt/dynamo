@@ -33,6 +33,9 @@ pub struct KvConnectorWorker {
 
     /// Map of layer name to vllm tensor
     kv_caches: HashMap<String, Arc<VllmTensor>>,
+
+    bound: bool,
+    first: bool,
 }
 
 #[pymethods]
@@ -47,6 +50,8 @@ impl KvConnectorWorker {
             slots: HashMap::new(),
             forward_pass_actions: HashMap::new(),
             kv_caches: HashMap::new(),
+            bound: false,
+            first: false,
         }
     }
 
@@ -101,6 +106,8 @@ impl KvConnectorWorker {
         let scheduler_output: SchedulerOutput =
             serde_json::from_slice(&metadata).map_err(to_pyerr)?;
         tracing::debug!("Bound metadata: {scheduler_output:#?}");
+        self.bound = true;
+        self.first = true;
         Ok(())
     }
 
@@ -110,11 +117,16 @@ impl KvConnectorWorker {
             self.forward_pass_actions.is_empty(),
             "All actions must be assigned to a slot before clearing metadata"
         );
+        self.bound = false;
+        self.first = false;
     }
 
     pub fn save_kv_layer(&mut self, layer_name: String, kv_layer: Py<PyAny>) -> PyResult<()> {
-        let tensor = VllmTensor::new(kv_layer).map_err(to_pyerr)?;
-        // tracing::debug!("Saving KV layer: {layer_name}; kv_layer: {tensor:?}");
+        if self.first {
+            let tensor = VllmTensor::new(kv_layer).map_err(to_pyerr)?;
+            tracing::debug!("first layer kv tensor: {layer_name}; kv_layer: {tensor:?}");
+            self.first = false;
+        }
         Ok(())
     }
 

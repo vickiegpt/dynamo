@@ -102,7 +102,7 @@ impl SchedulerOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct NewRequestData {
     pub request_id: String,
     pub prompt_token_ids: Vec<u32>,
@@ -110,13 +110,36 @@ pub struct NewRequestData {
     pub num_computed_tokens: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl std::fmt::Debug for NewRequestData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NewRequestData")
+            .field("request_id", &self.request_id)
+            .field("num_tokens", &self.prompt_token_ids.len())
+            .field("num_blocks", &self.block_ids.len())
+            .field("num_computed_tokens", &self.num_computed_tokens)
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CachedRequestData {
     pub request_id: String,
     pub resumed_from_preemption: bool,
     pub new_token_ids: Vec<u32>,
     pub new_block_ids: Vec<BlockId>,
     pub num_computed_tokens: u32,
+}
+
+impl std::fmt::Debug for CachedRequestData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedRequestData")
+            .field("request_id", &self.request_id)
+            .field("resumed_from_preemption", &self.resumed_from_preemption)
+            .field("num_new_tokens", &self.new_token_ids.len())
+            .field("num_new_blocks", &self.new_block_ids.len())
+            .field("num_computed_tokens", &self.num_computed_tokens)
+            .finish()
+    }
 }
 
 pub struct ConnectorMetadata {

@@ -60,12 +60,17 @@ impl KvConnectorLeader {
     ///
     /// To align with the connector interface, we must ensure that if no blocks are matched, we return (0, false).
     /// In our implementation, if we match any block, we return (num_matched_tokens, true).
+    #[tracing::instrument(level = "debug", skip_all, fields(request_id))]
     pub fn get_num_new_matched_tokens(
         &self,
         request_id: String,
         request_num_tokens: usize,
         num_computed_tokens: usize,
     ) -> PyResult<(usize, bool)> {
+        tracing::debug!(
+            "request_num_tokens: {request_num_tokens}; num_computed_tokens: {num_computed_tokens}"
+        );
+
         // the number of device matched tokens should be less than or equal to the number of tokens in the request
         debug_assert!(num_computed_tokens % self.block_size == 0);
 
@@ -129,12 +134,12 @@ impl KvConnectorLeader {
         // grab the slot
         let shared_slot = self.slot_manager.get_slot(&request_id).map_err(to_pyerr)?;
 
-        // remove it from the manager as we will never use it again
-        self.slot_manager.remove_slot(&request_id)?;
-
         // mark the slot as finished
         let mut slot = shared_slot.lock().map_err(to_pyerr)?;
         slot.mark_as_finished()?;
+
+        // remove it from the manager as we will never use it again
+        self.slot_manager.remove_slot(&request_id)?;
 
         // if the slot has finished, we can return false to vllm, indicating all gpu blocks are free to be reused
         // otherwise, we return false, which means there are still outstanding operations on gpu blocks which
