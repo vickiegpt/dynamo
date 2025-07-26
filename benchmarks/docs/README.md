@@ -137,8 +137,15 @@ python minrex_prompt_to_hash_ids.py
 {"prompt": "Translate the sentence into French: 'Hello world'"}
 ```
 
+```jsonl
+{"prompt": "The solar system is composed of the sun, eight planets, moons, asteroids, and comets. Explain how gravity holds them together."}
+{"prompt": "The solar system is composed of the sun, eight planets, moons, asteroids, and comets. Describe how they formed over time."}
+{"prompt": "Write a haiku about a GPU that dreams of more VRAM."}
+```
+
 ```bash
-python generate_trace_from_prompts.py prompts.jsonl output.jsonl 4
+touch data/prompts.jsonl ## add above to here
+python ./scripts/generate_trace_from_prompts.py ./data/prompts.jsonl ./data/output.jsonl 4
 ```
 
 
@@ -159,16 +166,47 @@ docker run \
 ```
 
 ```bash
-cargo run --bin dynamo-run in=http out=vllm deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+cargo run --bin dynamo-run in=http out=mistralrs deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+
+curl -L -o Llama-3.2-3B-Instruct-Q4_K_M.gguf "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf?download=true"
+
+cargo run --bin dynamo-run in=http out=mistralrs Llama-3.2-3B-Instruct-Q4_K_M.gguf
+cargo run --features cuda --bin dynamo-run in=http out=mistralrs Llama-3.2-3B-Instruct-Q4_K_M.gguf
+
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is the weather like in San Francisco today?"
+      }
+    ]
+    }' | jq
+
 ```
 
+
 ```bash
+export HF_TOKEN=...
+huggingface-cli login
+
 bash llm/perf.sh --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B \
-                 --url http://localhost:8000 \
+                 --url http://localhost:8080 \
                  --mode aggregated \
                  --tp 2 \
                  --dp 2 \
                  --concurrency 1,2,4,8,16,32 \
                  --artifacts-root-dir artifacts_root
+
+bash llm/perf.sh --model bartowski/Llama-3.2-3B-Instruct-Q4_K_M.gguf \
+                 --url http://localhost:8080 \
+                 --mode aggregated \
+                 --tp 2 \
+                 --dp 2 \
+                 --concurrency 1,2,4,8,16,32 \
+                 --artifacts-root-dir artifacts_root
+
 ```
 
