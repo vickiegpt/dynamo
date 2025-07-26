@@ -246,3 +246,62 @@ curl localhost:8000/v1/chat/completions \
     "max_tokens": 300
   }' | jq
 ```
+
+
+```bash
+docker pull nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.2
+
+docker run \
+  -it --rm \
+  --gpus all \
+  -p 8080:8080 \
+  nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.2 \
+  bash
+```
+
+```
+Try the following to begin interacting with a model:
+> dynamo --help
+> dynamo run Qwen/Qwen2.5-3B-Instruct
+
+To run more complete deployment examples, instances of etcd and nats need to be
+accessible within the container. This is generally done by connecting to
+existing etcd/nats services from the host or other containers. For simple
+cases, you can start them in the container as well:
+> nats-server -js &
+> etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://0.0.0.0:2379 --data-dir /tmp/etcd &
+
+With etcd/nats accessible, run the examples:
+> cd examples/hello_world
+> dynamo serve hello_world:Frontend
+
+apt update
+apt install curl jq
+
+curl -X GET localhost:8080/v1/models
+
+dynamo run in=http out=vllm Qwen/Qwen2.5-3B-Instruct
+
+curl localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen2.5-3B-Instruct",
+    "messages": [
+    {
+        "role": "user",
+        "content": "Hello, how are you?"
+    }
+    ],
+    "stream":false,
+    "max_tokens": 300
+  }' | jq
+
+bash llm/perf.sh --model Qwen/Qwen2.5-3B-Instruct \
+                 --url http://localhost:8080 \
+                 --mode aggregated \
+                 --tp 2 \
+                 --dp 2 \
+                 --concurrency 1,2,4,8,16,32 \
+                 --artifacts-root-dir artifacts_root
+
+```
