@@ -173,6 +173,8 @@ curl -L -o Llama-3.2-3B-Instruct-Q4_K_M.gguf "https://huggingface.co/bartowski/L
 cargo run --bin dynamo-run in=http out=mistralrs Llama-3.2-3B-Instruct-Q4_K_M.gguf
 cargo run --features cuda --bin dynamo-run in=http out=mistralrs Llama-3.2-3B-Instruct-Q4_K_M.gguf
 
+uv pip install "ai-dynamo[vllm]"
+
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
@@ -210,3 +212,37 @@ bash llm/perf.sh --model bartowski/Llama-3.2-3B-Instruct-Q4_K_M.gguf \
 
 ```
 
+```bash
+
+uv pip install "ai-dynamo[vllm]"
+docker compose -f deploy/docker-compose.yml up -d
+
+sudo apt install libstdc++-12-dev
+sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+sudo apt update
+sudo apt install libstdc++6
+
+export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+strings /usr/lib/x86_64-linux-gnu/libstdc++.so.6 | grep GLIBCXX_3.4.32
+echo 'set -x LD_LIBRARY_PATH /usr/lib/x86_64-linux-gnu $LD_LIBRARY_PATH' >> ~/.config/fish/config.fish
+
+cd components/backends/vllm
+dynamo serve graphs.agg:Frontend -f configs/agg.yaml
+
+### still did not work
+
+
+curl localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "messages": [
+    {
+        "role": "user",
+        "content": "Hello, how are you?"
+    }
+    ],
+    "stream":false,
+    "max_tokens": 300
+  }' | jq
+```
