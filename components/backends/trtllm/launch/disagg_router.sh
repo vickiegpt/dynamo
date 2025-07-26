@@ -37,7 +37,7 @@ DYNAMO_PID=$!
 
 EXTRA_PREFILL_ARGS=()
 EXTRA_DECODE_ARGS=()
-if [[ "${ENABLE_KV_EVENTS,,}" == "true" ]]; then
+if [[ "${ENABLE_KV_EVENTS,,}" != "false" ]]; then
   if [ "$DISAGGREGATION_STRATEGY" == "prefill_first" ]; then
     EXTRA_PREFILL_ARGS+=(--publish-events-and-metrics)
   else
