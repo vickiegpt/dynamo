@@ -249,24 +249,31 @@ def overwrite_args(config):
                         }
                     )
             else:
-                # LMCache with disaggregated serving (MultiConnector)
-                kv_transfer_config = KVTransferConfig(
-                    kv_connector="MultiConnector",
-                    kv_role="kv_both",
-                    kv_connector_extra_config={
-                        "connectors": [
-                            {
-                                "kv_connector": "LMCacheConnectorV1",
-                                "kv_role": "kv_both"
-                            },
-                            {
-                                "kv_connector": "NixlConnector",
-                                "kv_role": "kv_both",
-                            }
-                        ]
-                    }
-                )
-                logger.info("Using LMCache with disaggregated serving (MultiConnector)")
+                if config.is_prefill_worker:
+                    # Decode worker use LMCache with disaggregated serving (MultiConnector)
+                    kv_transfer_config = KVTransferConfig(
+                        kv_connector="MultiConnector",
+                        kv_role="kv_both",
+                        kv_connector_extra_config={
+                            "connectors": [
+                                {
+                                    "kv_connector": "LMCacheConnectorV1",
+                                    "kv_role": "kv_both"
+                                },
+                                {
+                                    "kv_connector": "NixlConnector",
+                                    "kv_role": "kv_both",
+                                }
+                            ]
+                        }
+                    )
+                    logger.info("Using LMCache with disaggregated serving (MultiConnector)")
+                else:
+                    # Decode worker with LMCache use NixlConnector only (SingleConnector)
+                    kv_transfer_config = KVTransferConfig(
+                        kv_connector="NixlConnector", kv_role="kv_both"
+                    )
+                    logger.info("Using NixlConnector configuration")
 
     else:
         kv_transfer_config = KVTransferConfig(
