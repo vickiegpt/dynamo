@@ -1,7 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+mod slot;
+use slot::{CreateEngineSlotRequest, EngineSlot, WorkerSlot};
+
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use super::*;
@@ -10,49 +14,98 @@ use dynamo_llm::block_manager::distributed::{
     BlockTransferRequest, ConnectorRequestLeader, ConnectorTransferType,
 };
 use dynamo_llm::block_manager::storage::torch::{TorchDevice, TorchTensor};
+use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
 use dynamo_runtime::CancellationToken;
+use tokio::task::JoinHandle;
 
-#[derive(Debug, Clone)]
-pub struct WorkerAction {
-    pub action_type: WorkerActionType,
-    // Add other fields as needed
-}
+enum EngineMessage {
+    UpdateIteration(u64),
 
-impl WorkerAction {
-    pub fn action_type(&self) -> WorkerActionType {
-        self.action_type
-    }
+    /// Create a request slot with request id, counter and cancel token
+    CreateEngineSlot(CreateEngineSlotRequest),
+
+    /// Issue a request to the engine to complete a request and remove it
+    RemoveEngineSlot(String),
+
+    /// Trigger a layer to be completed
+    UpdateLayersCompleted(String, u32),
+    // /// Create a task with request id and the operation/task name
+    // CreateTask(String, String),
 }
 
 #[pyclass]
 pub struct KvConnectorWorker {
-    slots: HashMap<String, WorkerSlot>,
+    request_slots: HashMap<String, WorkerSlot>,
 
-    /// Map of actions per layer, per slot
-    forward_pass_actions: HashMap<String, HashMap<String, WorkerAction>>,
+    kv_caches: HashMap<String, Arc<VllmTensor>>,
+    cancel_token: CancellationToken,
+
+    /// Channel to send messages to the background engine
+    /// We keep the touch points on the worker as small as possible to minimize impact on vllm
+    engine_tx: tokio::sync::mpsc::UnboundedSender<EngineMessage>,
 
     /// Map of layer name to vllm tensor
-    kv_caches: HashMap<String, Arc<VllmTensor>>,
+    engine_task: CriticalTaskExecutionHandle,
+
+    /// Map of request id to inflight load requests
+    maybe_loading_finished: HashSet<String>,
+
+    /// Map of request id to inflight finished requests
+    maybe_storing_finished: HashSet<String>,
+
+    /// Runtime for the engine task - update to DRT
+    runtime: tokio::runtime::Runtime,
 
     bound: bool,
-    first: bool,
+    iteration: u64,
+    layers_complete: u32,
 }
 
 #[pymethods]
 impl KvConnectorWorker {
     #[new]
-    fn new(worker_id: String) -> Self {
+    fn new(worker_id: String) -> PyResult<Self> {
+        // ideally we initialize the DRT here, and pass it through
+        // instead we'll create a cancellation token, but in the future get the token from
+        // the DRT's primary lease
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .map_err(to_pyerr)?;
+
+        let cancel_token = CancellationToken::new();
+        let cancel_token_clone = cancel_token.clone();
+
+        let (engine_tx, engine_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let engine_task = CriticalTaskExecutionHandle::new_with_runtime(
+            move |cancel_token| KvConnectorWorker::engine_task(cancel_token, engine_rx),
+            cancel_token_clone,
+            "kv-connector-engine-task",
+            runtime.handle(),
+        )
+        .map_err(to_pyerr)?;
+
         tracing::info!(
             "KvConnectorWorker initialized with worker_id: {}",
             worker_id
         );
-        Self {
-            slots: HashMap::new(),
-            forward_pass_actions: HashMap::new(),
+
+        Ok(Self {
+            request_slots: HashMap::new(),
             kv_caches: HashMap::new(),
+            cancel_token,
+            engine_tx,
+            engine_task,
+
+            maybe_loading_finished: HashSet::new(),
+            maybe_storing_finished: HashSet::new(),
+            runtime,
             bound: false,
-            first: false,
-        }
+            iteration: 0,
+            layers_complete: 0,
+        })
     }
 
     pub fn register_kv_caches(&mut self, kv_caches: HashMap<String, Py<PyAny>>) -> PyResult<()> {
@@ -103,30 +156,54 @@ impl KvConnectorWorker {
     /// This action translates the metadata into a set of actions that the worker will perform.
     /// All actions much be assigned to a slot before [`KvConnectorWorker::clear_metadata`] is called.
     pub fn bind_connector_metadata(&mut self, metadata: Vec<u8>) -> PyResult<()> {
-        let scheduler_output: SchedulerOutput =
-            serde_json::from_slice(&metadata).map_err(to_pyerr)?;
-        tracing::debug!("Bound metadata: {scheduler_output:#?}");
+        debug_assert!(!self.bound, "connector metadata already bound");
+        let metadata: ConnectorMetadata = serde_json::from_slice(&metadata).map_err(to_pyerr)?;
         self.bound = true;
-        self.first = true;
+        self.iteration = metadata.iteration;
+        self.layers_complete = 0;
+        tracing::debug!(
+            iteration = self.iteration,
+            "bound new metadata: {metadata:#?}"
+        );
+
+        self.engine_tx
+            .send(EngineMessage::UpdateIteration(self.iteration))
+            .map_err(to_pyerr)?;
+
+        // local actions
+        // - create a request slot for each new request
+        // - for each action in the metadata, add the action to the request slot
+        // - send the list of actions to the engine to track completion
+
+        for slot in metadata.new_slots {
+            debug_assert!(
+                !self.request_slots.contains_key(&slot),
+                "slot already exists"
+            );
+            self.create_worker_slot(slot)?;
+        }
+
         Ok(())
     }
 
     pub fn clear_connector_metadata(&mut self) {
-        tracing::debug!("Clearing connector metadata");
-        assert!(
-            self.forward_pass_actions.is_empty(),
-            "All actions must be assigned to a slot before clearing metadata"
-        );
+        tracing::debug!(iteration = self.iteration, "clearing connector metadata");
+        debug_assert!(self.bound, "connector metadata not bound");
         self.bound = false;
-        self.first = false;
+        self.iteration = 0; // always reset; leader drives the counter
+        self.layers_complete = 0;
     }
 
-    pub fn save_kv_layer(&mut self, layer_name: String, kv_layer: Py<PyAny>) -> PyResult<()> {
-        if self.first {
-            let tensor = VllmTensor::new(kv_layer).map_err(to_pyerr)?;
-            tracing::debug!("first layer kv tensor: {layer_name}; kv_layer: {tensor:?}");
-            self.first = false;
-        }
+    pub fn save_kv_layer(&mut self, layer_name: String, _kv_layer: Py<PyAny>) -> PyResult<()> {
+        self.layers_complete += 1;
+
+        self.engine_tx
+            .send(EngineMessage::UpdateLayersCompleted(
+                layer_name,
+                self.layers_complete,
+            ))
+            .map_err(to_pyerr)?;
+
         Ok(())
     }
 
@@ -134,174 +211,182 @@ impl KvConnectorWorker {
         &mut self,
         finished_requests: HashSet<String>,
     ) -> (HashSet<String>, HashSet<String>) {
-        tracing::debug!("Getting finished requests: {finished_requests:?}");
-        (finished_requests, HashSet::new())
+        tracing::debug!(
+            iteration = self.iteration,
+            "Getting finished requests: {finished_requests:?}"
+        );
+
+        // we do not have to visit every slot on every pass, just slots we are waiting on
+        //
+        // there are two conditions where we would be waiting:
+        // 1. if we have requested a load, we need to wait for it to complete
+        //    - the load request would come in via the metadata this is processsed in the bind
+        // 2. if we have requested a finished event, then we need to await for all outstanding
+        //    operations to complete -- either by finishing or being cancelled
+        //    - the finish request is triggered by this function, it is not seen in the metadata
+        //
+        // under each scenario, we mark the `maybe_loading_finished` and `maybe_storing_finished` hashsets with
+        // the request id
+        //
+        // on each forward pass we visit the maybe slots to see if they are finished
+
+        let mut is_finished_storing = HashSet::new();
+        let mut is_finished_loading = HashSet::new();
+
+        for request_id in finished_requests {
+            tracing::debug!(request_id, "marking request as finished");
+
+            debug_assert!(
+                self.request_slots.contains_key(&request_id),
+                "request slot not found"
+            );
+
+            debug_assert!(
+                !self.maybe_storing_finished.contains(&request_id),
+                "request already in maybe storing finished"
+            );
+
+            // insert request into the maybe finished set
+            self.maybe_storing_finished.insert(request_id.clone());
+        }
+
+        // visit each request slot in the maybe finished set
+        for request_id in self.maybe_storing_finished.iter() {
+            let slot = self.request_slots.get(request_id).unwrap();
+            if slot.is_finished_storing() {
+                tracing::debug!(request_id, "request slot is finished");
+                is_finished_storing.insert(request_id.clone());
+            } else {
+                tracing::debug!(request_id, "request slot is not finished");
+            }
+        }
+
+        // remove the finished requests from the maybe finished set
+        // note: when storing is finished we also remove the request from the engine state
+        for request_id in &is_finished_storing {
+            self.maybe_storing_finished.remove(request_id);
+
+            // currently chomping the error as the engine is closed and we are shutting down
+            let _ = self
+                .engine_tx
+                .send(EngineMessage::RemoveEngineSlot(request_id.clone()));
+        }
+
+        // visit each request slot in the maybe loading finished set to see if it is finished
+        for request_id in self.maybe_loading_finished.iter() {
+            let slot = self.request_slots.get(request_id).unwrap();
+            if slot.is_finished_loading() {
+                tracing::debug!(request_id, "request slot is finished");
+                is_finished_loading.insert(request_id.clone());
+            } else {
+                tracing::debug!(request_id, "request slot is not finished");
+            }
+        }
+
+        // remove the finished requests from the maybe finished set
+        for request_id in &is_finished_loading {
+            self.maybe_loading_finished.remove(request_id);
+        }
+
+        (is_finished_storing, is_finished_loading)
     }
 }
 
 impl KvConnectorWorker {
-    // /// Loads the metadata from the leader.
-    // /// This action translates the metadata into a set of actions that the worker will perform.
-    // /// All actions much be assigned to a slot before [`KvConnectorWorker::clear_metadata`] is called.
-    // pub fn bind_metadata(&mut self, metadata: KvConnectorMetadata) {
-    //     // build forward pass actions
-    //     unimplemented!()
-    // }
+    fn create_worker_slot(&mut self, request_id: String) -> PyResult<()> {
+        // create a child token which will cancel on the parent but can be cancelled individually
+        // with out effecting the parent
+        let token = self.cancel_token.child_token();
 
-    // pub fn clear_metadata(&mut self) {
-    //     assert!(
-    //         self.forward_pass_actions.is_empty(),
-    //         "All actions must be assigned to a slot before clearing metadata"
-    //     );
-    // }
+        // create a request slot with the child token
+        // this will be the local worker slot
+        let slot = WorkerSlot::new(token);
+        let request = slot.make_engine_slot_request(request_id.clone());
 
-    // / This function serves two purposes:
-    // / 1. To mark the slots as leader finished.
-    // / 2. To report which slots have fully completed all their outstanding actions.
-    // /
-    // / The leader finish event can potentially trigger cancellation of best effort actions; however,
-    // / all outstanding actions must be completed before the slot can report it has finished.
-    // /
-    // / If the implementation chooses to do so, it can trigger a cancellation token on a when provided
-    // / a finished event, but this is not required.
-    // /
-    // / However, failure to cancel increases memory pressure on the GPU pool as there are no coarse grain
-    // / API calls to release specific GPU blocks. Currently it appears it's an all or nothing approach
-    // / with respect to GPU block ownership by the slot.
-    //     pub fn get_finished(&mut self, finished_requests: &mut HashSet<String>) -> CompletedSlots {
-    //         let mut completed_slots = CompletedSlots::default();
-    //         let mut slots_to_remove = Vec::new();
+        // insert the slot into the local worker slots map
+        self.request_slots.insert(request_id, slot);
 
-    //         finished_requests.iter().for_each(|request| {
-    //             if let Some(slot) = self.slots.get_mut(request) {
-    //                 slot.leader_finished = true;
-    //             } else {
-    //                 panic!("Request not found in slots: {}", request);
-    //             }
-    //         });
+        // send a request to insert the slot into the engine state
+        self.engine_tx
+            .send(EngineMessage::CreateEngineSlot(request))
+            .map_err(to_pyerr)?;
+        Ok(())
+    }
 
-    //         for (slot_id, slot) in self.slots.iter_mut() {
-    //             if let Some(action_type) = slot.is_finished() {
-    //                 match action_type {
-    //                     WorkerActionType::Loading => {
-    //                         completed_slots
-    //                             .recv_loading_requests
-    //                             .insert(slot_id.clone());
-    //                     }
-    //                     WorkerActionType::Saving | WorkerActionType::Idle => {
-    //                         // The leader must have already informed the worker that it is finished
-    //                         // per the vllm protocol/policies.
-    //                         assert!(slot.leader_finished);
-    //                         completed_slots.send_saving_requests.insert(slot_id.clone());
-    //                         slots_to_remove.push(slot_id.clone());
-    //                     }
-    //                 }
-    //             }
-    //         }
-
-    //         // Remove completed slots
-    //         for slot_id in slots_to_remove {
-    //             self.slots.remove(&slot_id);
-    //         }
-
-    //         completed_slots
-    //     }
-}
-
-/// Workers can only be in one of these states.
-///
-/// If the worker is active loading, it can only accept [`WorkerActionType::Loading`] actions,
-/// and if the worker is active saving, it can only accept [`WorkerActionType::Saving`] actions.
-///
-/// After all actions of a given type are completed the slot should transition to [`WorkerActionType::Idle`]
-/// on during the next [`KvConnectorWorker::get_finished`] during a visit to the [`WorkerSlot::is_finished`]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkerActionType {
-    Idle,
-    Loading,
-    Saving,
-}
-
-impl Default for WorkerActionType {
-    fn default() -> Self {
-        Self::Idle
+    async fn engine_task(
+        _cancel_token: CancellationToken,
+        mut engine_rx: tokio::sync::mpsc::UnboundedReceiver<EngineMessage>,
+    ) -> anyhow::Result<()> {
+        let mut state = EngineState::default();
+        while let Some(message) = engine_rx.recv().await {
+            match message {
+                EngineMessage::UpdateIteration(new_iteration) => {
+                    state.update_iteration(new_iteration);
+                }
+                EngineMessage::CreateEngineSlot(request) => {
+                    state.add_slot(request, state.iteration);
+                }
+                EngineMessage::RemoveEngineSlot(request_id) => {
+                    state.remove_slot(request_id);
+                }
+                EngineMessage::UpdateLayersCompleted(last_layer_name, layers_completed) => {
+                    state.update_layers_completed(last_layer_name, layers_completed);
+                }
+            }
+        }
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct WorkerSlot {
-    state: WorkerActionType,
-    inflight_actions: Vec<WorkerAction>,
-    pending_actions: HashMap<String, Vec<WorkerAction>>,
-    leader_finished: bool,
+async fn task_monitor() {}
+
+#[derive(Default)]
+struct EngineState {
+    slots: HashMap<String, EngineSlot>,
+    iteration: u64,
+    layers_complete: u32,
 }
 
-impl WorkerSlot {
-    pub fn is_finished(&self) -> Option<WorkerActionType> {
-        // all pending actions must be triggered
-        unimplemented!()
+impl EngineState {
+    fn add_slot(&mut self, req: CreateEngineSlotRequest, created_at: u64) {
+        let request_id = req.request_id.clone();
+        debug_assert!(!self.slots.contains_key(&request_id), "slot already exists");
+        tracing::debug!(request_id, "engine state adding slot");
+        self.slots
+            .insert(request_id, EngineSlot::new(req, created_at));
+    }
+
+    fn remove_slot(&mut self, request_id: String) {
+        debug_assert!(self.slots.contains_key(&request_id), "slot not found");
+        self.slots.remove(&request_id);
+        tracing::debug!(request_id, "engine state removing slot");
+    }
+
+    fn update_iteration(&mut self, iteration: u64) {
+        self.iteration = iteration;
+        tracing::debug!(iteration, "engine state updating iteration");
+    }
+
+    fn update_layers_completed(&mut self, last_layer_name: String, layers_completed: u32) {
+        self.layers_complete = layers_completed;
+        tracing::debug!(
+            iteration = self.iteration,
+            layers_completed,
+            "layer {last_layer_name} is complete"
+        );
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct CompletedSlots {
-    send_saving_requests: HashSet<String>,
-    recv_loading_requests: HashSet<String>,
+pub struct IncrementOnDrop(Arc<AtomicU64>);
+
+impl IncrementOnDrop {
+    fn new(counter: Arc<AtomicU64>) -> Self {
+        Self(counter)
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KvRequestState {
-    Idle,
-    Loading,
-    LoadingFinished,
-    Storing,
-    Complete,
-    RequestFinished,
+impl Drop for IncrementOnDrop {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
-
-pub enum KvWorkerMessage {
-    LayerTrigger(String),
-}
-
-/// State of a given request instance.
-/// This is the worker's handle to an async progress engine managing the state of a given request.
-pub struct KvRequestInstance {
-    // state: tokio::sync::watch::Receiver<KvWorkerState>,
-    // msg_tx: tokio::sync::mpsc::Sender<KvWorkerMessage>,
-    // cancel_token: CancellationToken,
-}
-
-pub enum VllmConnectorMessage {
-    ConnectorMetadata(ConnectorMetadata),
-}
-/// Handles messages from the connector api
-pub struct KvWorkerHandler {
-    msg_rx: tokio::sync::mpsc::Receiver<VllmConnectorMessage>,
-    cancel_token: CancellationToken,
-}
-
-pub struct KvRequestHandler {
-    msg_rx: tokio::sync::mpsc::Receiver<KvWorkerMessage>,
-}
-
-// impl KvWorkerHandler {
-//     pub async fn step(&mut self) {
-//         while let Some(msg) = self.msg_rx.recv().await {
-//             match msg {
-//                 VllmConnectorMessage::ConnectorMetadata(metadata) => {
-//                     self.handle_connector_metadata(metadata).await;
-//                 }
-//             }
-//         }
-//     }
-
-//     pub async fn handle_connector_metadata(&mut self, metadata: ConnectorMetadata) {
-//         for txn in metadata.txn_list {
-//             match txn.transfer_type {
-//                 ConnectorTransferType::Store => {
-//                     self.handle_store_request(txn).await;
-//                 }
-//             }
-//         }
-//     }
-// }

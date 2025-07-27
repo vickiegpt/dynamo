@@ -32,12 +32,47 @@ use dynamo_runtime::{
     DistributedRuntime, Runtime,
 };
 
-pub type SharedState = Arc<TokioMutex<KvbmWorkerTriggers>>;
+pub type SharedState = KvbmWorkerScheduler;
+pub type ScheduleRequest = u64;
 
-#[derive(Debug, Default)]
-pub struct KvbmWorkerTriggers {
-    pub pending_stores_requests: HashMap<u64, oneshot::Sender<()>>,
-    pub unexpected_store_triggers: HashSet<u64>,
+pub struct KvbmWorkerScheduler {
+    scheduler_tx: Option<tokio::sync::mpsc::UnboundedSender<ScheduleRequest>>,
+}
+
+impl KvbmWorkerScheduler {
+    pub fn new(scheduler_tx: Option<tokio::sync::mpsc::UnboundedSender<ScheduleRequest>>) -> Self {
+        Self { scheduler_tx }
+    }
+
+    pub fn schedule_task(&self, task: ScheduleRequest) -> Box<dyn ScheduledTaskHandle> {
+        if let Some(scheduler_tx) = self.scheduler_tx.as_ref() {
+            match scheduler_tx.send(task) {
+                Ok(_) => {
+                    unreachable!()
+                }
+                Err(_) => AlwaysReadyScheduledTaskHandle::new(TaskReady::Cancel),
+            }
+        } else {
+            AlwaysReadyScheduledTaskHandle::new(TaskReady::Continue)
+        }
+    }
+}
+
+struct AlwaysReadyScheduledTaskHandle(TaskReady);
+
+impl AlwaysReadyScheduledTaskHandle {
+    pub fn new(ready: TaskReady) -> Box<dyn ScheduledTaskHandle> {
+        Box::new(Self(ready))
+    }
+}
+
+#[async_trait::async_trait]
+impl ScheduledTaskHandle for AlwaysReadyScheduledTaskHandle {
+    async fn ready(&self) -> TaskReady {
+        self.0
+    }
+
+    fn mark_complete(&self) {}
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +150,7 @@ pub struct KvbmWorkerConfig {
 
     #[builder(default = "CancellationToken::new()")]
     cancel_token: CancellationToken,
+    // add worker-connector scheduler here
 }
 
 impl KvbmWorkerConfig {
@@ -137,8 +173,6 @@ fn build_agent(worker_id: usize, use_gds: bool) -> anyhow::Result<NixlAgent> {
 
 pub struct KvbmWorker {
     task: Option<CriticalTaskExecutionHandle>,
-    trigger_task: Option<CriticalTaskExecutionHandle>,
-    trigger_tx: tokio::sync::mpsc::UnboundedSender<u64>,
 }
 
 impl KvbmWorker {
@@ -201,10 +235,9 @@ impl KvbmWorker {
 
         let layout_builder_clone = layout_builder.clone();
 
-        let shared_state = Arc::new(TokioMutex::new(KvbmWorkerTriggers::default()));
-
+        // add worker-connector scheduler here
+        // let scheduler = KvbmWorkerScheduler::new(config.scheduler.clone());
         let cancel_token = config.cancel_token.clone();
-        let state = shared_state.clone();
 
         let task = CriticalTaskExecutionHandle::new(
             move |cancel_token| {
@@ -214,33 +247,13 @@ impl KvbmWorker {
                     layout_type,
                     config,
                     cancel_token,
-                    state,
                 )
             },
             cancel_token.clone(),
             "kvbm-worker-task",
         )?;
 
-        let (trigger_tx, trigger_rx) = tokio::sync::mpsc::unbounded_channel();
-        let state = shared_state.clone();
-
-        let trigger_task = CriticalTaskExecutionHandle::new(
-            move |cancel_token| KvbmWorker::trigger_task(state, cancel_token, trigger_rx),
-            cancel_token,
-            "kvbm-trigger-task",
-        )?;
-
-        Ok(Self {
-            task: Some(task),
-            trigger_task: Some(trigger_task),
-            trigger_tx,
-        })
-    }
-
-    pub fn trigger_transfer(&self, trigger_id: u64) {
-        if let Err(_) = self.trigger_tx.send(trigger_id) {
-            tracing::warn!(trigger_id, "failed to send trigger - channel closed");
-        }
+        Ok(Self { task: Some(task) })
     }
 
     fn make_layout<S: Storage, M: BlockMetadata>(
@@ -266,7 +279,7 @@ impl KvbmWorker {
         layout_type: LayoutType,
         config: KvbmWorkerConfig,
         cancel_token: CancellationToken,
-        shared_state: SharedState,
+        // add worker-connector scheduler here
     ) -> anyhow::Result<()> {
         let runtime = Runtime::from_current()?;
         let drt = DistributedRuntime::from_settings(runtime).await?;
@@ -362,7 +375,7 @@ impl KvbmWorker {
             host_blocks,
             disk_blocks,
             transfer_context,
-            shared_state,
+            // add woker-connector scheduler client here
         )?;
 
         let handlers = HashMap::from([(
@@ -385,7 +398,7 @@ impl KvbmWorker {
     }
 
     async fn trigger_task(
-        shard_state: SharedState,
+        shared_state: SharedState,
         _cancel_token: CancellationToken,
         mut trigger_rx: tokio::sync::mpsc::UnboundedReceiver<u64>,
     ) -> anyhow::Result<()> {
@@ -417,11 +430,6 @@ impl Drop for KvbmWorker {
         if let Some(task) = self.task.take() {
             task.cancel();
             task.detach();
-        }
-
-        if let Some(trigger_task) = self.trigger_task.take() {
-            trigger_task.cancel();
-            trigger_task.detach();
         }
     }
 }

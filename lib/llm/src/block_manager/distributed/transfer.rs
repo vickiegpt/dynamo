@@ -35,7 +35,7 @@ pub struct BlockTransferHandler {
     host: Option<LocalBlockDataList<PinnedStorage>>,
     disk: Option<LocalBlockDataList<DiskStorage>>,
     context: Arc<TransferContext>,
-    pending_requests: SharedState,
+    // add worker-connector scheduler client here
 }
 
 impl BlockTransferHandler {
@@ -44,14 +44,14 @@ impl BlockTransferHandler {
         host_blocks: Option<Vec<LocalBlock<PinnedStorage, BasicMetadata>>>,
         disk_blocks: Option<Vec<LocalBlock<DiskStorage, BasicMetadata>>>,
         context: Arc<TransferContext>,
-        pending_requests: SharedState,
+        // add worker-connector scheduler client here
     ) -> Result<Self> {
         Ok(Self {
             device: Self::get_local_data(device_blocks),
             host: Self::get_local_data(host_blocks),
             disk: Self::get_local_data(disk_blocks),
             context,
-            pending_requests,
+            // add worker-connector scheduler client here
         })
     }
 
@@ -133,6 +133,11 @@ impl Handler for BlockTransferHandler {
         }
 
         let request: BlockTransferRequest = serde_json::from_slice(&message.data[0])?;
+
+        // if the request has a connector request, then we need to get a scheduled task handle.
+        // when that scheduled task handle await method returns, we can check if we should
+        // continue with out task or cancel. if we can continue, then we will issue a completion
+        // ack when the task is complete.
 
         // if let Some(connector_req) = request.connector_request {
         //     let state = self.shared_state.lock().await;

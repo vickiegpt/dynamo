@@ -19,7 +19,7 @@ pub mod leader;
 pub mod worker;
 
 use pyo3::{prelude::*, wrap_pymodule};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::to_pyerr;
@@ -36,7 +36,7 @@ pub struct SchedulerOutput {
     pub cached_requests: Vec<CachedRequestData>,
 
     // scheduled tokens per request
-    pub num_scheduled_tokens: HashMap<String, u64>,
+    pub num_scheduled_tokens: HashMap<String, usize>,
 }
 
 #[pymethods]
@@ -57,7 +57,7 @@ impl SchedulerOutput {
         request_id: String,
         prompt_token_ids: Vec<u32>,
         block_ids: Vec<BlockId>,
-        num_computed_tokens: u32,
+        num_computed_tokens: usize,
     ) {
         self.new_requests.push(NewRequestData {
             request_id,
@@ -74,7 +74,7 @@ impl SchedulerOutput {
         resumed_from_preemption: bool,
         new_token_ids: Vec<u32>,
         new_block_ids: Vec<BlockId>,
-        num_computed_tokens: u32,
+        num_computed_tokens: usize,
     ) {
         self.cached_requests.push(CachedRequestData {
             request_id,
@@ -86,13 +86,14 @@ impl SchedulerOutput {
     }
 
     /// This is called by the leader to update the number of scheduled tokens for a request
-    pub fn add_num_scheduled_tokens(&mut self, num_scheduled_tokens: HashMap<String, u64>) {
+    pub fn add_num_scheduled_tokens(&mut self, num_scheduled_tokens: HashMap<String, usize>) {
+        self.num_scheduled_tokens.clear();
         self.num_scheduled_tokens.extend(num_scheduled_tokens)
     }
 
     /// Use this to assert that the total number of scheduled tokens is correct
     /// Compare this to the value in in the vLLM SchedulerOutput
-    pub fn get_num_scheduled_tokens(&self) -> u64 {
+    pub fn get_num_scheduled_tokens(&self) -> usize {
         self.num_scheduled_tokens.values().sum()
     }
 
@@ -107,7 +108,7 @@ pub struct NewRequestData {
     pub request_id: String,
     pub prompt_token_ids: Vec<u32>,
     pub block_ids: Vec<BlockId>,
-    pub num_computed_tokens: u32,
+    pub num_computed_tokens: usize,
 }
 
 impl std::fmt::Debug for NewRequestData {
@@ -127,7 +128,7 @@ pub struct CachedRequestData {
     pub resumed_from_preemption: bool,
     pub new_token_ids: Vec<u32>,
     pub new_block_ids: Vec<BlockId>,
-    pub num_computed_tokens: u32,
+    pub num_computed_tokens: usize,
 }
 
 impl std::fmt::Debug for CachedRequestData {
@@ -142,6 +143,50 @@ impl std::fmt::Debug for CachedRequestData {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectorMetadata {
-    pub txn_list: Vec<ConnectorRequestLeader>,
+    /// The iteration at which the metadata was built.
+    pub iteration: u64,
+
+    /// The new slots that were created in this iteration.
+    pub new_slots: Vec<String>,
+
+    /// The operations that were initialized in this iteration.
+    pub operations: Vec<ConnectorOperation>,
+}
+
+impl ConnectorMetadata {
+    pub fn new(iteration: u64) -> Self {
+        Self {
+            iteration,
+            new_slots: Vec::new(),
+            operations: Vec::new(),
+        }
+    }
+
+    pub fn create_slot(&mut self, request_id: String) {
+        self.new_slots.push(request_id);
+    }
+
+    pub fn add_operations(&mut self, request_id: String, iteration: u64, operations: Vec<String>) {
+        for operation in operations {
+            tracing::debug!(
+                request_id,
+                iteration,
+                "adding operation to connector metadata: {operation}"
+            );
+            self.operations.push(ConnectorOperation {
+                req_id: request_id.clone(),
+                iteration,
+                description: operation,
+            });
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectorOperation {
+    pub req_id: String,
+    pub iteration: u64,
+    pub description: String,
 }

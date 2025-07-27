@@ -1,4 +1,4 @@
-mod slot;
+pub mod slot;
 
 use super::*;
 use slot::{ConnectorSlotManager, SlotError, SlotManager, SlotState};
@@ -15,6 +15,7 @@ use dynamo_llm::block_manager::{
 };
 use dynamo_llm::tokens::{SaltHash, TokenBlockSequence, Tokens};
 
+use std::collections::HashSet;
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
@@ -33,6 +34,8 @@ pub struct KvConnectorLeader {
     slot_manager: ConnectorSlotManager<String>,
     block_manager: PyBlockManager,
     block_size: usize,
+    inflight_requests: HashSet<String>,
+    iteration_counter: u64,
 }
 
 #[pymethods]
@@ -51,6 +54,8 @@ impl KvConnectorLeader {
             slot_manager: ConnectorSlotManager::new(block_manager.get_block_manager().clone()),
             block_manager,
             block_size,
+            inflight_requests: HashSet::new(),
+            iteration_counter: 0,
         }
     }
 
@@ -60,7 +65,7 @@ impl KvConnectorLeader {
     ///
     /// To align with the connector interface, we must ensure that if no blocks are matched, we return (0, false).
     /// In our implementation, if we match any block, we return (num_matched_tokens, true).
-    #[tracing::instrument(level = "debug", skip_all, fields(request_id))]
+    #[tracing::instrument(level = "debug", skip(self, request_num_tokens, num_computed_tokens))]
     pub fn get_num_new_matched_tokens(
         &self,
         request_id: String,
@@ -102,27 +107,116 @@ impl KvConnectorLeader {
 
     /// We drop the need to pass in the KvCacheBlocks and the num_external_tokens as they are captured
     /// statefully in the [`VllmLeaderKvCacheManagerAndConnector::get_num_new_matched_tokens`] function.
+    #[tracing::instrument(level = "debug", skip_all, fields(request_id))]
     pub fn update_state_after_alloc(
         &mut self,
         request_id: String,
         block_ids: Vec<BlockId>,
         num_external_tokens: u64,
-    ) {
+    ) -> PyResult<()> {
         tracing::debug!(
             request_id,
-            "block_ids: {block_ids:?}; num_external_tokens: {num_external_tokens}"
+            "num_device_blocks: {}; num_external_tokens: {}",
+            block_ids.len(),
+            num_external_tokens
         );
 
-        // assert!(
-        //     self.slots.contains_key(&request_id),
-        //     "Slot not found for request_id: {request_id}"
-        // );
+        let shared_slot = self.slot_manager.get_slot(&request_id).map_err(to_pyerr)?;
+        let mut slot = shared_slot.lock().map_err(to_pyerr)?;
+
+        slot.append_mutable_device_blocks(block_ids)?;
+
+        Ok(())
     }
 
-    pub fn build_connector_metadata(&self, scheduler_output: SchedulerOutput) -> PyResult<Vec<u8>> {
-        tracing::debug!("Building connector metadata");
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn build_connector_metadata(
+        &mut self,
+        scheduler_output: SchedulerOutput,
+    ) -> PyResult<Vec<u8>> {
+        // the iteration counter is used to track the number of times we have built the connector metadata
+        // all connetor operations have the iteration counter at which they were issued.
+        // this allows operations to be lazily enqueued to the transfer engine
+        // the worker side of the connector will track all operations for completion before the request is
+        // allowed to be marked as finished.
+        self.iteration_counter += 1;
+        let iteration = self.iteration_counter;
+
+        tracing::debug!("Building connector metadata; iteration {iteration}");
+        tracing::trace!("{scheduler_output:#?}");
+
+        let mut inflight_requests = self.inflight_requests.clone();
+        let mut md = ConnectorMetadata::new(iteration);
+
+        for new_req in &scheduler_output.new_requests {
+            let request_id = &new_req.request_id;
+            assert!(
+                inflight_requests.remove(request_id),
+                "request_id {request_id} not found in inflight_requests: "
+            );
+
+            let shared_slot = self.slot_manager.get_slot(request_id).map_err(to_pyerr)?;
+            let mut slot = shared_slot.lock().map_err(to_pyerr)?;
+
+            md.create_slot(new_req.request_id.clone());
+            slot.mark_as_scheduled(iteration)?;
+
+            debug_assert!(
+                matches!(
+                    slot.state(),
+                    SlotState::Initialized | SlotState::OnboardStaged(_)
+                ),
+                "current slot state: {:?}",
+                slot.state()
+            );
+
+            if let SlotState::OnboardStaged(num_external_tokens) = slot.state() {
+                tracing::debug!(
+                    request_id,
+                    iteration,
+                    "initializing onboarding of {num_external_tokens} tokens"
+                );
+                slot.mark_as_onboarding(iteration)?;
+                continue;
+            }
+
+            let scheduled_tokens = *scheduler_output
+                .num_scheduled_tokens
+                .get(request_id)
+                .unwrap_or(&0);
+
+            if scheduled_tokens == 0 {
+                tracing::debug!(
+                    request_id,
+                    iteration,
+                    "no tokens scheduled; mark as not scheduled"
+                );
+                slot.mark_as_not_scheduled(iteration)?;
+            } else if new_req.num_computed_tokens < slot.sequence().total_tokens() {
+                tracing::debug!(request_id, iteration, "mark as prefilling");
+                slot.mark_as_prefilling(iteration)?;
+            } else {
+                tracing::debug!(request_id, iteration, "mark as decoding");
+                slot.mark_as_decoding(iteration)?;
+            }
+
+            md.add_operations(
+                request_id.clone(),
+                iteration,
+                slot.take_pending_operations(),
+            );
+        }
+
+        for cached_req in &scheduler_output.cached_requests {
+            let request_id = &cached_req.request_id;
+            assert!(
+                inflight_requests.remove(request_id),
+                "request_id {request_id} not found in inflight_requests: "
+            );
+        }
+
         tracing::debug!("scheduler_output: {scheduler_output:#?}");
-        scheduler_output.serialize()
+        serde_json::to_vec(&md).map_err(to_pyerr)
     }
 
     pub fn request_finished(
@@ -136,7 +230,7 @@ impl KvConnectorLeader {
 
         // mark the slot as finished
         let mut slot = shared_slot.lock().map_err(to_pyerr)?;
-        slot.mark_as_finished()?;
+        slot.mark_as_finished(self.iteration_counter)?;
 
         // remove it from the manager as we will never use it again
         self.slot_manager.remove_slot(&request_id)?;
@@ -159,10 +253,13 @@ impl KvConnectorLeader {
 
     /// Create a new slot for the given request ID.
     /// This is used to create a new slot for the request.
-    pub fn create_slot(&self, request: KvbmRequest, tokens: Vec<u32>) -> PyResult<()> {
-        Ok(self
-            .slot_manager
-            .create_slot(&request.request_id, tokens.into(), request.salt_hash)?)
+    pub fn create_slot(&mut self, request: KvbmRequest, tokens: Vec<u32>) -> PyResult<()> {
+        self.slot_manager
+            .create_slot(&request.request_id, tokens.into(), request.salt_hash)?;
+
+        self.inflight_requests.insert(request.request_id);
+
+        Ok(())
     }
 }
 
