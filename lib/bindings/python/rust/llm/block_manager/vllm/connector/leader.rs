@@ -11,6 +11,7 @@ use dynamo_llm::block_manager::{
         data::logical::distributed_leader_worker::DistributedLeaderWorkerResources,
         locality::Logical,
     },
+    connector::*,
     BasicMetadata, DiskStorage, ImmutableBlock, PinnedStorage,
 };
 use dynamo_llm::tokens::{SaltHash, TokenBlockSequence, Tokens};
@@ -255,7 +256,7 @@ impl KvConnectorLeader {
     /// This is used to create a new slot for the request.
     pub fn create_slot(&mut self, request: KvbmRequest, tokens: Vec<u32>) -> PyResult<()> {
         self.slot_manager
-            .create_slot(&request.request_id, tokens.into(), request.salt_hash)?;
+            .create_slot(&request.request_id, tokens, request.salt_hash)?;
 
         self.inflight_requests.insert(request.request_id);
 

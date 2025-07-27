@@ -3,9 +3,6 @@
 
 use super::*;
 
-use crate::llm::block_manager::vllm::RequestKey;
-use dynamo_llm::block_manager::pool::BlockPoolError;
-
 #[derive(Debug, thiserror::Error)]
 pub enum SlotError {
     #[error("slot not found")]
