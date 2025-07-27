@@ -10,6 +10,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod protocol;
+pub mod scheduler;
 
 use super::*;
 

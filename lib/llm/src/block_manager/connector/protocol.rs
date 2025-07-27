@@ -53,4 +53,63 @@
 //!
 //! [`SchedulerOutput`] is transform
 
+use super::scheduler::SchedulingDecision;
 use super::*;
+
+use tokio::sync::oneshot;
+
+pub type LayerName = String;
+pub type LayerIndex = u32;
+pub type Iteration = u64;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+pub enum TransferType {
+    Load,
+    Store,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SchedulerRequirement {
+    IterationComplete(Iteration),
+
+    /// The layer with the provided name and iteration counter must be complete.
+    LayerNameComplete(LayerName, Iteration),
+
+    /// The layer index and iteration counter must be complete.
+    LayerComplete(LayerIndex, Iteration),
+}
+
+/// Issued by the leader, received by the TransferEngine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeaderTransferRequest {
+    pub request_id: String,
+    pub uuid: uuid::Uuid,
+    pub requirement: SchedulerRequirement,
+    pub transfer_type: TransferType,
+}
+
+/// Issued by the TransferEngine, received by the Scheduler.
+/// Note: In order to be considered for scheduling, the [`TransferScheduleRequest`] and the [`WorkerTransferRequest`]
+/// for the same operation (uuid) must be present on the scheduler.
+pub struct TransferScheduleRequest {
+    pub leader_request: LeaderTransferRequest,
+    pub response_tx: oneshot::Sender<SchedulingDecision>,
+}
+
+/// Recived by the Worker, forward to the Scheduler.
+/// In ordered to be considered for scheduling, both the [`TransferScheduleRequest`] and the [`WorkerTransferRequest`]
+/// must be present on the scheduler.
+///
+/// Note: No response is required. The Worker holds an atomic counter for each oepration type. The expected count (local/non-atomic)
+/// is incremented on receiving a request. The Worker knows all operations are complete when the shared atomic counter matches the
+/// expected count.
+///
+/// Workers can not handle errors, they only deal with counters. All operations (which can be cancelled) must completed for a Worker
+/// to mark the request_id as complete.
+///
+/// Scheduler requirements are only provided by the leader initiated transfer request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerTransferRequest {
+    pub request_id: String,
+    pub uuid: uuid::Uuid,
+}
