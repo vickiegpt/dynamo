@@ -255,6 +255,7 @@ docker pull nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.2
 docker run \
   -it --rm \
   --gpus all \
+  -p 8000:8000 \
   -p 8080:8080 \
   nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.2 \
   bash
@@ -369,10 +370,15 @@ bash container/build.sh --framework VLLM
 bash container/run.sh --framework VLLM -it
 
 
-etcd &
+# etcd &
 nats-server --js &
+etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://0.0.0.0:2379 --data-dir /tmp/etcd &
 
 dynamo serve graphs.disagg:Frontend -f <your_configuration>.yaml
+dynamo serve graphs.disagg:Frontend -f agg.yaml
+
+# container version 0.3.2
+dynamo run in=http out=vllm neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic
 
 ```
 
