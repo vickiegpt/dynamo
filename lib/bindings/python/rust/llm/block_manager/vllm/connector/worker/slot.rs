@@ -46,10 +46,6 @@ impl WorkerSlot {
         self.store_operations.len()
     }
 
-    pub fn num_inflight_operations(&self) -> usize {
-        self.num_inflight_loads() + self.num_inflight_stores()
-    }
-
     pub fn num_completed_loads(&self) -> usize {
         self.load_completed
             .load(std::sync::atomic::Ordering::Relaxed) as usize
@@ -60,20 +56,12 @@ impl WorkerSlot {
             .load(std::sync::atomic::Ordering::Relaxed) as usize
     }
 
-    pub fn num_completed_operations(&self) -> usize {
-        self.num_completed_loads() + self.num_completed_stores()
-    }
-
     pub fn is_finished_storing(&self) -> bool {
         self.num_inflight_stores() == self.num_completed_stores()
     }
 
     pub fn is_finished_loading(&self) -> bool {
         self.num_inflight_loads() == self.num_completed_loads()
-    }
-
-    pub fn is_finished(&self) -> bool {
-        self.is_finished_storing() && self.is_finished_loading()
     }
 
     pub fn make_engine_slot_request(&self, request_id: String) -> CreateEngineSlotRequest {

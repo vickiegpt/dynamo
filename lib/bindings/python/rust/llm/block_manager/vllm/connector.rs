@@ -1,30 +1,19 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_llm::{
-    block_manager::{
-        block::{
-            data::logical::distributed_leader_worker::DistributedLeaderWorkerResources,
-            locality::{LocalityProvider, Logical},
-            BlockId, ImmutableBlock, MutableBlock,
-        },
-        distributed::{ConnectorRequestLeader, ConnectorTransferType},
-        pool::{BlockPool, BlockPoolError},
-        BasicMetadata, DeviceStorage, Storage,
-    },
-    tokens::{SaltHash, SequenceHash, TokenBlockSequence, Tokens},
+use dynamo_llm::block_manager::{
+    block::{BlockId, MutableBlock},
+    pool::BlockPoolError,
 };
 
 pub mod leader;
 pub mod worker;
 
-use pyo3::{prelude::*, wrap_pymodule};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::to_pyerr;
-
-pub struct KvConnectorMetadata {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[pyclass]
