@@ -21,7 +21,7 @@ impl PyContext {
 impl PyContext {
     // sync method of `await async_is_stopped()`
     fn is_stopped(&self) -> bool {
-        self.inner.is_stopped();
+        self.inner.is_stopped()
     }
 
     // sync method of `await async_is_killed()`
