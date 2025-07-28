@@ -21,15 +21,6 @@ echo "🚀 Starting dynamo setup without LMCache:"
 echo "   Model: $MODEL_URL"
 echo "   Port: 8080"
 
-# Get script directory and navigate there
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd $SCRIPT_DIR
-
-# Navigate back to dynamo directory
-DYNAMO_DIR="$SCRIPT_DIR/../../components/backends/vllm"
-cd $DYNAMO_DIR
-
-
 # Kill any existing dynamo processes
 echo "🧹 Cleaning up any existing dynamo processes..."
 pkill -f "dynamo-run" || true
