@@ -15,9 +15,10 @@
 
 
 import asyncio
+import inspect
 from functools import wraps
 from typing import Any, AsyncGenerator, Callable, Type, Union
-import inspect
+
 from pydantic import BaseModel, ValidationError
 
 # List all the classes in the _core module for re-export
@@ -30,6 +31,7 @@ from dynamo._core import EtcdKvCache as EtcdKvCache
 from dynamo._core import ModelDeploymentCard as ModelDeploymentCard
 from dynamo._core import OAIChatPreprocessor as OAIChatPreprocessor
 from dynamo._core import PyContext as Context
+
 
 def dynamo_worker(static=False):
     def decorator(func):
@@ -67,7 +69,7 @@ def dynamo_endpoint(
         func: Callable[..., AsyncGenerator[Any, None]],
     ) -> Callable[..., AsyncGenerator[Any, None]]:
         has_context_kwarg = "context" in inspect.signature(func).parameters
-        
+
         @wraps(func)
         async def wrapper(*args, **kwargs) -> AsyncGenerator[Any, None]:
             # Validate the request
@@ -77,7 +79,7 @@ def dynamo_endpoint(
                     if has_context_kwarg:
                         kwargs["context"] = context
                 args_list = list(args)
-                
+
                 if len(args) in [1, 2] and issubclass(request_model, BaseModel):
                     if isinstance(args[-1], str):
                         args_list[-1] = request_model.parse_raw(args[-1])
