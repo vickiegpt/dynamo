@@ -417,6 +417,8 @@ dynamo serve graphs.disagg:Frontend -f agg.yaml
 # container version 0.3.2
 dynamo run in=http out=vllm neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic
 
+dynamo run in=http out=vllm neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic --tensor-parallel-size=4
+
 ```
 
 ```yaml
@@ -466,6 +468,11 @@ docker run \
   --gpus all \
   -p 8000:8000 \
   -p 8080:8080 \
+  -v /home/nvidia/.cache:/root/.cache \
+  --ipc=host \
+  --shm-size=2g \
+  --ulimit memlock=-1 --ulimit stack=67108864 \
+  --cap-add=SYS_ADMIN \
   nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.2 \
   bash
 
@@ -530,4 +537,30 @@ bash llm/perf.sh --model Qwen/Qwen2.5-3B-Instruct \
 
 
 python llm/plot_pareto.py --artifacts-root-dir artifacts_root --title "Dynamo vs. vLLM"
+
+dynamo run in=http out=vllm neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic --tensor-parallel-size=4
+
+bash llm/perf.sh --model neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic \
+                 --url http://localhost:8080 \
+                 --mode aggregated \
+                 --tp 4 \
+                 --dp 1 \
+                 --concurrency 1,2,4,8,16,32 \
+                 --artifacts-root-dir artifacts_root
+
+vllm serve neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic \
+    --tensor-parallel-size 4
+
+
+bash llm/perf.sh --model neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic \
+                 --url http://localhost:8000 \
+                 --mode aggregated \
+                 --tp 4 \
+                 --dp 1 \
+                 --concurrency 1,2,4,8,16,32 \
+                 --artifacts-root-dir artifacts_root \
+                 --deployment-kind vllm
+
+python llm/plot_pareto.py --artifacts-root-dir artifacts_root --title "Dynamo vs. vLLM Llama 70B FP8"
+
 ```
