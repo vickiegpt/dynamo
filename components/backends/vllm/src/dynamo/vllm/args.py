@@ -232,7 +232,7 @@ def overwrite_args(config):
                     ]
                 }
             )
-            logger.info("Using LMCache with disaggregated serving (MultiConnector)")
+            logger.info("Using LMCache with MultiConnector servingå")
         else:
             # If enable lmcache, single node in default uses single connector serving
             kv_transfer_config = KVTransferConfig(
@@ -275,7 +275,7 @@ def overwrite_args(config):
     logger.debug("Setting Dynamo defaults for vLLM")
     for key, value in defaults.items():
         if hasattr(config.engine_args, key):
-            setattr(config.engine_args, key, value)
+            setattr(config.engine_args, key, value)å
             logger.debug(f" engine_args.{key} = {value}")
         else:
             raise ValueError(f"{key} not found in AsyncEngineArgs from vLLM.")
