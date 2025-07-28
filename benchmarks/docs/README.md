@@ -270,7 +270,7 @@ docker run \
   bash
 ```
 
-```
+```bash
 Try the following to begin interacting with a model:
 > dynamo --help
 > dynamo run Qwen/Qwen2.5-3B-Instruct
@@ -292,6 +292,11 @@ apt install curl jq
 curl -X GET localhost:8080/v1/models
 
 
+nats-server -js &
+etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://0.0.0.0:2379 --data-dir /tmp/etcd &
+dynamo run in=http out=vllm Qwen/Qwen2.5-3B-Instruct
+
+
 curl localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
@@ -306,6 +311,21 @@ curl localhost:8000/v1/chat/completions \
     "max_tokens": 300
   }' | jq
 
+curl localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen2.5-3B-Instruct",
+    "messages": [
+    {
+        "role": "user",
+        "content": "Hello, how are you?"
+    }
+    ],
+    "stream":false,
+    "max_tokens": 300
+  }' | jq
+
+
 bash llm/perf.sh --model Qwen/Qwen2.5-3B-Instruct \
                  --url http://localhost:8080 \
                  --mode aggregated \
@@ -313,6 +333,23 @@ bash llm/perf.sh --model Qwen/Qwen2.5-3B-Instruct \
                  --dp 2 \
                  --concurrency 1,2,4,8,16,32 \
                  --artifacts-root-dir artifacts_root
+
+python llm/perf.py --model Qwen/Qwen2.5-3B-Instruct \
+                   --url http://localhost:8000 \
+                   --mode aggregated \
+                   --tp 1 \
+                   --dp 1 \
+                   --concurrency 1,2,4,8,16,32 \
+                   --artifacts-root-dir artifacts_root
+
+python llm/perf.py --model Qwen/Qwen2.5-3B-Instruct \
+                   --url http://localhost:8080 \
+                   --mode aggregated \
+                   --tp 1 \
+                   --dp 1 \
+                   --concurrency 1,2,4,8,16,32 \
+                   --artifacts-root-dir artifacts_root
+
 
 bash llm/perf.sh --model Qwen/Qwen2.5-3B-Instruct \
                  --url http://localhost:8000 \
@@ -418,4 +455,79 @@ PrefillWorker:
     workers: 4
     resources:
       gpu: 1
+```
+
+
+Final workstream:
+
+```bash
+docker run \
+  -it --rm \
+  --gpus all \
+  -p 8000:8000 \
+  -p 8080:8080 \
+  nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.2 \
+  bash
+
+nats-server --js &
+etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://0.0.0.0:2379 --data-dir /tmp/etcd &
+
+dynamo run in=http out=vllm Qwen/Qwen2.5-3B-Instruct
+
+sudo rm -rf artifacts_root
+
+docker run \
+  --gpus all \
+  --rm -it \
+  --net host \
+  -v $PWD:/workspace/benchmarks \
+  nvcr.io/nvidia/tritonserver:25.06-py3-sdk
+
+python llm/perf.py --model Qwen/Qwen2.5-3B-Instruct \
+                   --url http://localhost:8000 \
+                   --mode aggregated \
+                   --tp 1 \
+                   --dp 1 \
+                   --concurrency 1,2,4,8,16,32 \
+                   --artifacts-root-dir artifacts_root
+
+bash llm/perf.sh --model Qwen/Qwen2.5-3B-Instruct \
+                 --url http://localhost:8080 \
+                 --mode aggregated \
+                 --tp 1 \
+                 --dp 1 \
+                 --concurrency 1,2,4,8,16,32 \
+                 --artifacts-root-dir artifacts_root
+
+rm -rf .venv
+uv venv .venv --python 3.12 --seed
+uv pip install matplotlib seaborn
+
+uv pip install vllm==0.7.3
+python -m vllm.entrypoints.openai.api_server \
+  --model Qwen/Qwen2.5-3B-Instruct \
+  --tokenizer Qwen/Qwen2.5-3B-Instruct \
+  --max-model-len 8192 \
+  --tensor-parallel-size 1
+
+python llm/perf.py --model Qwen/Qwen2.5-3B-Instruct \
+                   --url http://localhost:8000 \
+                   --mode aggregated \
+                   --tp 1 \
+                   --dp 1 \
+                   --concurrency 1,2,4,8,16,32 \
+                   --artifacts-root-dir artifacts_root \
+                   --deployment-kind vllm
+
+bash llm/perf.sh --model Qwen/Qwen2.5-3B-Instruct \
+                 --url http://localhost:8000 \
+                 --mode aggregated \
+                 --tp 1 \
+                 --dp 1 \
+                 --concurrency 1,2,4,8,16,32 \
+                 --artifacts-root-dir artifacts_root \
+                 --deployment-kind vllm
+
+
+python llm/plot_pareto.py --artifacts-root-dir artifacts_root --title "Dynamo vs. vLLM"
 ```
