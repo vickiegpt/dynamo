@@ -66,7 +66,7 @@ def dynamo_endpoint(
     def decorator(
         func: Callable[..., AsyncGenerator[Any, None]],
     ) -> Callable[..., AsyncGenerator[Any, None]]:
-        has_context_kwarg = 'context' in inspect.signature(func).parameters
+        has_context_kwarg = "context" in inspect.signature(func).parameters
         
         @wraps(func)
         async def wrapper(*args, **kwargs) -> AsyncGenerator[Any, None]:
@@ -75,7 +75,7 @@ def dynamo_endpoint(
                 if isinstance(args[-1], Context):
                     args, context = args[:-1], args[-1]
                     if has_context_kwarg:
-                        kwargs['context'] = context
+                        kwargs["context"] = context
                 args_list = list(args)
                 
                 if len(args) in [1, 2] and issubclass(request_model, BaseModel):
