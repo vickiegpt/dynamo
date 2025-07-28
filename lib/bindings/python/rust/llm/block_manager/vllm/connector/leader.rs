@@ -33,7 +33,7 @@ impl From<SlotError> for PyErr {
 #[pyclass]
 pub struct KvConnectorLeader {
     slot_manager: ConnectorSlotManager<String>,
-    block_manager: PyBlockManager,
+    block_manager: VllmBlockManager,
     block_size: usize,
     inflight_requests: HashSet<String>,
     iteration_counter: u64,
@@ -49,10 +49,12 @@ impl KvConnectorLeader {
             worker_id
         );
 
-        let block_size = block_manager.get_block_manager().block_size();
+        // if drt is none, then we must construct a runtime and distributed runtime
+        let block_manager = block_manager.get_block_manager().clone();
+        let block_size = block_manager.block_size();
 
         Self {
-            slot_manager: ConnectorSlotManager::new(block_manager.get_block_manager().clone()),
+            slot_manager: ConnectorSlotManager::new(block_manager.clone()),
             block_manager,
             block_size,
             inflight_requests: HashSet::new(),

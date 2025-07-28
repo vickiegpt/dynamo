@@ -53,6 +53,8 @@
 //!
 //! [`SchedulerOutput`] is transform
 
+use std::sync::atomic::AtomicU64;
+
 use super::scheduler::SchedulingDecision;
 use super::*;
 
@@ -93,7 +95,16 @@ pub struct LeaderTransferRequest {
 /// for the same operation (uuid) must be present on the scheduler.
 pub struct TransferScheduleRequest {
     pub leader_request: LeaderTransferRequest,
-    pub response_tx: oneshot::Sender<SchedulingDecision>,
+    pub response_tx: oneshot::Sender<ScheduledTaskHandle>,
+}
+
+pub struct ScheduledTaskHandle {
+    pub request_id: String,
+    pub uuid: uuid::Uuid,
+    pub transfer_type: TransferType,
+    pub decision_rx: oneshot::Receiver<SchedulingDecision>,
+    pub completion_handle: TransferCompletionHandle,
+    pub cancel_token: CancellationToken,
 }
 
 /// Recived by the Worker, forward to the Scheduler.
@@ -112,4 +123,105 @@ pub struct TransferScheduleRequest {
 pub struct WorkerTransferRequest {
     pub request_id: String,
     pub uuid: uuid::Uuid,
+    pub transfer_type: TransferType,
+}
+
+/// Sent by Worker to Scheduler.
+/// Combines [`WorkerTransferRequest`] and [`WorkerRequestState`] and issues a [`WorkerSchedulerRequest`]
+///
+/// This object has all the links to the worker to track completion and observe any cancellation signals.
+pub struct WorkerSchedulerRequest {
+    pub request_id: String,
+    pub uuid: uuid::Uuid,
+    pub transfer_type: TransferType,
+    pub cancel_token: CancellationToken,
+    pub completion_handle: TransferCompletionHandle,
+}
+
+// /// One-time use completion handle. Should only be triggered once after the operation is complete and the memory
+// /// being targetting can be reused elsewhere.
+// pub struct TransferCompletionHandle(Option<Arc<AtomicU64>>);
+
+// impl TransferCompletionHandle {
+//     pub(crate) fn new(counter: Arc<AtomicU64>) -> Self {
+//         Self(Some(counter))
+//     }
+
+//     pub fn mark_as_complete(&mut self) {
+//         if let Some(counter) = self.0.take() {
+//             counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+//         }
+//     }
+// }
+
+// impl Drop for TransferCompletionHandle {
+//     fn drop(&mut self) {
+//         if let Some(counter) = self.0.take() {
+//             tracing::error!("increment on drop dropped without being marked as complete - this could lead silent data corruption");
+//             counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+//         }
+//     }
+// }
+
+pub enum CompletionStatus {
+    Ok,
+    Err(String),
+    Cancelled,
+}
+
+pub struct TransferCompletionHandle(Option<oneshot::Sender<CompletionStatus>>);
+
+impl TransferCompletionHandle {
+    pub(crate) fn new(status_tx: oneshot::Sender<CompletionStatus>) -> Self {
+        Self(Some(status_tx))
+    }
+
+    pub fn mark_as_success(mut self) {
+        if let Some(status_tx) = self.0.take() {
+            if status_tx.send(CompletionStatus::Ok).is_err() {
+                tracing::error!(
+                    "failed to send completion status; this could lead to silent data corruption"
+                );
+            }
+        }
+    }
+
+    pub fn mark_as_error(mut self, error: String) {
+        if let Some(status_tx) = self.0.take() {
+            if status_tx.send(CompletionStatus::Err(error)).is_err() {
+                tracing::error!(
+                    "failed to send completion status; this could lead to silent data corruption"
+                );
+            }
+        }
+    }
+
+    pub fn mark_as_cancelled(mut self) {
+        if let Some(status_tx) = self.0.take() {
+            if status_tx.send(CompletionStatus::Cancelled).is_err() {
+                tracing::error!(
+                    "failed to send completion status; this could lead to silent data corruption"
+                );
+            }
+        }
+    }
+}
+
+impl Drop for TransferCompletionHandle {
+    fn drop(&mut self) {
+        if let Some(status_tx) = self.0.take() {
+            if status_tx
+                .send(CompletionStatus::Err(
+                    "transfer dropped without being explicitly marked as complete, error or cancelled".to_string(),
+                ))
+                .is_err()
+            {
+                tracing::error!(concat!(
+                    "logic error: implementation failed to respect the [TransferCompletionHandle] policy; ",
+                    "handle dropped with being explicitly marked; this may lead to data corruption of the ",
+                    "handle was dropped while a transfer was still in progress; please report immediately."
+                ));
+            }
+        }
+    }
 }

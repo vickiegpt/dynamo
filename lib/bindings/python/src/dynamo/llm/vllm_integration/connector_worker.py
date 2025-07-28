@@ -38,7 +38,11 @@ class DynamoConnectorMetadata(KVConnectorMetadata):
 
 
 class KvConnectorWorker:
-    def __init__(self, vllm_config: "VllmConfig", engine_id: str):
+    def __init__(self, vllm_config: "VllmConfig", engine_id: str, **kwargs):
+        # determine if we received a DistributedRuntime in the kwargs, if not, pass forward to
+        # RustKvConnectorWorker a None for drt.
+        # note: wire this up after we have abstracted the KvbmWorker object to accept a drt.
+
         self.vllm_config = vllm_config
         self._connector = RustKvConnectorWorker(engine_id)
 

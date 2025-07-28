@@ -13,7 +13,10 @@ use crate::{llm::block_manager::distributed::VllmTensor, to_pyerr};
 use dynamo_llm::block_manager::distributed::{
     BlockTransferRequest, ConnectorRequestLeader, ConnectorTransferType,
 };
-use dynamo_llm::block_manager::storage::torch::{TorchDevice, TorchTensor};
+use dynamo_llm::block_manager::{
+    connector::scheduler::{Scheduler, SchedulerMessage},
+    storage::torch::{TorchDevice, TorchTensor},
+};
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
 use dynamo_runtime::CancellationToken;
 use tokio::task::JoinHandle;
