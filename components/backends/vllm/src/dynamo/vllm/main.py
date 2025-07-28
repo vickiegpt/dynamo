@@ -28,7 +28,7 @@ configure_dynamo_logging()
 logger = logging.getLogger(__name__)
 
 def setup_lmcache_environment():
-    """Setup LMCache environment variables for KV cache offloading"""ß
+    """Setup LMCache environment variables for KV cache offloading"""
     # LMCache configuration for matching logic
     lmcache_config = {
         "LMCACHE_CHUNK_SIZE": "256",  # Token chunk size
