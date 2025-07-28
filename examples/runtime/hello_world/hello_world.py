@@ -18,9 +18,8 @@ import logging
 
 import uvloop
 
-from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
+from dynamo.runtime import Context, DistributedRuntime, dynamo_endpoint, dynamo_worker
 from dynamo.runtime.logging import configure_dynamo_logging
-from dynamo.runtime import Context
 
 logger = logging.getLogger(__name__)
 configure_dynamo_logging(service_name="backend")
