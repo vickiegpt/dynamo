@@ -34,7 +34,7 @@ python -m dynamo.frontend &
 
 CUDA_VISIBLE_DEVICES=0 python3 -m dynamo.vllm --model $MODEL_URL --enforce-eager --no-enable-prefix-caching &
 
-sleep 10
+sleep 20
 
 # Enable LMCache
 export ENABLE_LMCACHE=1
