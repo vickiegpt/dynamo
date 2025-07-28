@@ -15,7 +15,6 @@
 
 tensor_parallel_size: 1
 backend: pytorch
-disable_overlap_scheduler: False
 
 kv_cache_config:
   max_attention_window:
