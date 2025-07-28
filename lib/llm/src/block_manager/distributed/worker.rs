@@ -20,60 +20,16 @@ use crate::block_manager::{
 use derive_builder::Builder;
 use nixl_sys::Agent as NixlAgent;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::runtime::Handle;
-use tokio::sync::Mutex as TokioMutex;
 use tokio_util::sync::CancellationToken;
 
 use dynamo_runtime::{
     utils::{leader_worker_barrier::WorkerBarrier, task::CriticalTaskExecutionHandle},
     DistributedRuntime, Runtime,
 };
-
-pub type SharedState = KvbmWorkerScheduler;
-pub type ScheduleRequest = u64;
-
-pub struct KvbmWorkerScheduler {
-    scheduler_tx: Option<tokio::sync::mpsc::UnboundedSender<ScheduleRequest>>,
-}
-
-impl KvbmWorkerScheduler {
-    pub fn new(scheduler_tx: Option<tokio::sync::mpsc::UnboundedSender<ScheduleRequest>>) -> Self {
-        Self { scheduler_tx }
-    }
-
-    pub fn schedule_task(&self, task: ScheduleRequest) -> Box<dyn ScheduledTaskHandle> {
-        if let Some(scheduler_tx) = self.scheduler_tx.as_ref() {
-            match scheduler_tx.send(task) {
-                Ok(_) => {
-                    unreachable!()
-                }
-                Err(_) => AlwaysReadyScheduledTaskHandle::new(TaskReady::Cancel),
-            }
-        } else {
-            AlwaysReadyScheduledTaskHandle::new(TaskReady::Continue)
-        }
-    }
-}
-
-struct AlwaysReadyScheduledTaskHandle(TaskReady);
-
-impl AlwaysReadyScheduledTaskHandle {
-    pub fn new(ready: TaskReady) -> Box<dyn ScheduledTaskHandle> {
-        Box::new(Self(ready))
-    }
-}
-
-#[async_trait::async_trait]
-impl ScheduledTaskHandle for AlwaysReadyScheduledTaskHandle {
-    async fn ready(&self) -> TaskReady {
-        self.0
-    }
-
-    fn mark_complete(&self) {}
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KvbmWorkerData {
@@ -150,7 +106,6 @@ pub struct KvbmWorkerConfig {
 
     #[builder(default = "CancellationToken::new()")]
     cancel_token: CancellationToken,
-    // add worker-connector scheduler here
 }
 
 impl KvbmWorkerConfig {
@@ -173,6 +128,7 @@ fn build_agent(worker_id: usize, use_gds: bool) -> anyhow::Result<NixlAgent> {
 
 pub struct KvbmWorker {
     task: Option<CriticalTaskExecutionHandle>,
+    block_transfer_handler: BlockTransferHandler,
 }
 
 impl KvbmWorker {
@@ -239,6 +195,9 @@ impl KvbmWorker {
         // let scheduler = KvbmWorkerScheduler::new(config.scheduler.clone());
         let cancel_token = config.cancel_token.clone();
 
+        // establish a oneshot channel to get back the raw BlockTransferHandler
+        let (handler_tx, handler_rx) = oneshot::channel();
+
         let task = CriticalTaskExecutionHandle::new(
             move |cancel_token| {
                 KvbmWorker::worker_task(
@@ -247,13 +206,23 @@ impl KvbmWorker {
                     layout_type,
                     config,
                     cancel_token,
+                    handler_tx,
                 )
             },
             cancel_token.clone(),
             "kvbm-worker-task",
         )?;
 
-        Ok(Self { task: Some(task) })
+        let block_transfer_handler = handler_rx.await?;
+
+        Ok(Self {
+            task: Some(task),
+            block_transfer_handler,
+        })
+    }
+
+    pub fn block_transfer_handler(&self) -> &BlockTransferHandler {
+        &self.block_transfer_handler
     }
 
     fn make_layout<S: Storage, M: BlockMetadata>(
@@ -279,6 +248,7 @@ impl KvbmWorker {
         layout_type: LayoutType,
         config: KvbmWorkerConfig,
         cancel_token: CancellationToken,
+        handler_tx: oneshot::Sender<BlockTransferHandler>,
         // add worker-connector scheduler here
     ) -> anyhow::Result<()> {
         let runtime = Runtime::from_current()?;
@@ -378,6 +348,8 @@ impl KvbmWorker {
             // add woker-connector scheduler client here
         )?;
 
+        handler_tx.send(block_transfer_handler.clone())?;
+
         let handlers = HashMap::from([(
             ZMQ_TRANSFER_BLOCKS_MESSAGE.to_string(),
             Arc::new(block_transfer_handler) as Arc<dyn Handler>,
@@ -393,33 +365,6 @@ impl KvbmWorker {
         // TODO: Some sort of fancy loop here.
         // For now, just wait for cancellation.
         cancel_token.cancelled().await;
-
-        Ok(())
-    }
-
-    async fn trigger_task(
-        shared_state: SharedState,
-        _cancel_token: CancellationToken,
-        mut trigger_rx: tokio::sync::mpsc::UnboundedReceiver<u64>,
-    ) -> anyhow::Result<()> {
-        while let Some(trigger_id) = trigger_rx.recv().await {
-            // let mut state = shard_state.lock().await;
-            // match state.pending_leader_ams.remove(&trigger_id) {
-            //     Some(tx) => {
-            //         tracing::debug!(trigger_id, "starting transfer");
-            //         if let Err(_) = tx.send(()) {
-            //             tracing::warn!(trigger_id, "failed to send trigger - channel closed");
-            //         }
-            //     }
-            //     None => {
-            //         tracing::debug!(
-            //             trigger_id,
-            //             "transfer not found; adding to unexpected trigger IDs"
-            //         );
-            //         state.unexpected_trigger_ids.insert(trigger_id);
-            //     }
-            // }
-        }
 
         Ok(())
     }

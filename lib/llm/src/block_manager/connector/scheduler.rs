@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicU64;
 use super::protocol::*;
 use super::*;
 
+use either::Either;
 use tokio::sync::mpsc;
 
 const DISCONNECTED_WARNING: &str =
@@ -93,9 +94,65 @@ pub struct WorkerSchedulerClient {
     slots: HashMap<String, WorkerSchedulerClientSlot>,
     scheduler_tx: mpsc::UnboundedSender<SchedulerMessage>,
     cancel_token: CancellationToken,
+    iteration: u64,
+    iteration_complete: bool,
+    layers_complete: u32,
 }
 
-#[derive(Debug, Clone)]
+impl WorkerSchedulerClient {
+    pub fn new(
+        scheduler_tx: mpsc::UnboundedSender<SchedulerMessage>,
+        cancel_token: CancellationToken,
+    ) -> Self {
+        Self {
+            slots: HashMap::new(),
+            scheduler_tx,
+            cancel_token: CancellationToken::new(),
+            iteration: 0,
+            iteration_complete: true,
+            layers_complete: 0,
+        }
+    }
+
+    pub fn start_next_iteration(&mut self) -> Result<(), SchedulerError> {
+        debug_assert!(
+            self.iteration_complete,
+            "previous iteration must be complete before starting a new iteration"
+        );
+        self.iteration += 1;
+        self.iteration_complete = false;
+        self.layers_complete = 0;
+        self.scheduler_tx
+            .send(SchedulerMessage::StartIteration(self.iteration))
+            .map_err(|_| SchedulerError::Disconnected)
+    }
+
+    pub fn mark_layer_complete(&mut self, layer_name: String) -> Result<(), SchedulerError> {
+        debug_assert!(
+            !self.iteration_complete,
+            "iteration must be complete before marking a layer as complete"
+        );
+        self.layers_complete += 1;
+        self.scheduler_tx
+            .send(SchedulerMessage::UpdateLayersCompleted(
+                layer_name,
+                self.layers_complete,
+            ))
+            .map_err(|_| SchedulerError::Disconnected)
+    }
+
+    pub fn mark_iteration_complete(&mut self) -> Result<(), SchedulerError> {
+        debug_assert!(
+            !self.iteration_complete,
+            "iteration must be complete before marking it as complete"
+        );
+        self.iteration_complete = true;
+        self.scheduler_tx
+            .send(SchedulerMessage::EndIteration(self.iteration))
+            .map_err(|_| SchedulerError::Disconnected)
+    }
+}
+
 pub struct WorkerSchedulerClientSlot {
     load_operations: HashSet<uuid::Uuid>,
     load_completed: Arc<AtomicU64>,
@@ -208,12 +265,34 @@ pub enum SchedulerMessage {
 pub struct Scheduler {
     slots: HashMap<String, SchedulerSlot>,
     worker_rx: mpsc::UnboundedReceiver<SchedulerMessage>,
-    transfer_rx: mpsc::UnboundedReceiver<TransferScheduleRequest>,
+    transfer_rx: mpsc::Receiver<TransferScheduleRequest>,
     iteration: u64,
     layers_complete: u32,
+    iteration_complete: bool,
 }
 
 impl Scheduler {
+    pub fn new(
+        cancel_token: CancellationToken,
+    ) -> (Self, WorkerSchedulerClient, TransferSchedulerClient) {
+        let (scheduler_tx, scheduler_rx) = mpsc::unbounded_channel();
+        let (transfer_tx, transfer_rx) = mpsc::channel(128);
+        let worker_client = WorkerSchedulerClient::new(scheduler_tx, cancel_token);
+        let transfer_client = TransferSchedulerClient::new(transfer_tx);
+        (
+            Scheduler {
+                slots: HashMap::new(),
+                worker_rx: scheduler_rx,
+                transfer_rx,
+                iteration: 0,
+                layers_complete: 0,
+                iteration_complete: true,
+            },
+            worker_client,
+            transfer_client,
+        )
+    }
+
     async fn step(&mut self) -> bool {
         tokio::select! {
             maybe_worker_msg = self.worker_rx.recv(), if !self.worker_rx.is_closed() => {
@@ -224,15 +303,16 @@ impl Scheduler {
                     Some(SchedulerMessage::EndIteration(iteration)) => {
                         self.end_iteration(iteration);
                     }
+                    Some(SchedulerMessage::UpdateLayersCompleted(last_layer_name, layers_completed)) => {
+                        self.update_layers_completed(last_layer_name, layers_completed);
+                    }
                     Some(SchedulerMessage::CreateSlot(request)) => {
                         self.add_slot(request, self.iteration);
                     }
                     // Some(SchedulerMessage::RemoveRequestSlot(request_id)) => {
                     //     self.remove_slot(request_id);
                     // }
-                    Some(SchedulerMessage::UpdateLayersCompleted(last_layer_name, layers_completed)) => {
-                        self.update_layers_completed(last_layer_name, layers_completed);
-                    }
+
                 // Some(SchedulerMessage::EnqueueRequest(request)) => {
                 //         self.enqueue_request(request);
                 //     }
@@ -277,12 +357,23 @@ impl Scheduler {
 
     fn start_iteration(&mut self, iteration: u64) {
         tracing::debug!(iteration, "engine state updating iteration");
+        debug_assert!(
+            self.iteration_complete,
+            "previous iteration must be complete before starting a new iteration"
+        );
+        debug_assert_eq!(
+            self.iteration,
+            iteration - 1,
+            "iteration must be incremented by 1"
+        );
         self.iteration = iteration;
         self.layers_complete = 0;
+        self.iteration_complete = false;
     }
 
     fn end_iteration(&mut self, iteration: u64) {
         tracing::debug!(iteration, "engine state updating iteration");
+        self.iteration_complete = true;
     }
 
     fn update_layers_completed(&mut self, last_layer_name: String, layers_completed: u32) {
@@ -302,8 +393,12 @@ pub struct SchedulerCreateSlotDetails {
     pub cancel_token: CancellationToken,
 }
 
+struct WorkerArrivedFirst;
+struct TransferArrivedFirst;
+
 pub struct SchedulerSlot {
     request_id: String,
+    operations: HashMap<uuid::Uuid, Either<WorkerArrivedFirst, TransferArrivedFirst>>,
     cancel_token: CancellationToken,
     load_completed: Arc<AtomicU64>,
     store_completed: Arc<AtomicU64>,
@@ -314,10 +409,45 @@ impl SchedulerSlot {
     fn new(req: SchedulerCreateSlotDetails, created_at: u64) -> Self {
         Self {
             request_id: req.request_id,
+            operations: HashMap::new(),
             load_completed: req.load_completed,
             store_completed: req.store_completed,
             cancel_token: req.cancel_token,
             created_at,
         }
+    }
+}
+
+pub trait TaskScheduler {
+    fn start_iteration(&mut self, iteration: u64) -> Result<(), SchedulerError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_scheduler_lifecycle() {
+        let cancel_token = CancellationToken::new();
+        let (mut scheduler, mut worker_client, transfer_client) = Scheduler::new(cancel_token);
+
+        // create a slot
+        worker_client.create_slot("test".to_string()).unwrap();
+
+        // enqueue a request
+        assert!(!scheduler.slots.contains_key("test"));
+        scheduler.step().await;
+        assert!(scheduler.slots.contains_key("test"));
+
+        // test iteration triggers
+        worker_client.start_next_iteration().unwrap();
+        scheduler.step().await;
+        assert_eq!(scheduler.iteration, 1);
+
+        // test iteration end triggers
+        worker_client.mark_iteration_complete().unwrap();
+        scheduler.step().await;
+        assert_eq!(scheduler.iteration, 1);
+        assert!(scheduler.iteration_complete);
     }
 }

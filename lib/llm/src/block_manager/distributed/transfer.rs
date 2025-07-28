@@ -16,20 +16,19 @@ use crate::block_manager::{
         transfer::{TransferContext, WriteTo, WriteToStrategy},
         Block, BlockDataProvider, BlockDataProviderMut, ReadableBlock, WritableBlock,
     },
-    distributed::worker::SharedState,
     storage::{DeviceStorage, DiskStorage, Local, PinnedStorage},
     BasicMetadata, Storage,
 };
 
 use anyhow::Result;
 use async_trait::async_trait;
-use std::{any::Any, collections::HashMap, sync::Arc};
-use tokio::sync::Mutex as TokioMutex;
+use std::{any::Any, sync::Arc};
 
 type LocalBlock<S, M> = Block<S, locality::Local, M>;
 type LocalBlockDataList<S> = Vec<LocalBlockData<S>>;
 
 /// A handler for all block transfers. Wraps a group of [`BlockTransferPoolManager`]s.
+#[derive(Clone)]
 pub struct BlockTransferHandler {
     device: Option<LocalBlockDataList<DeviceStorage>>,
     host: Option<LocalBlockDataList<PinnedStorage>>,

@@ -265,10 +265,3 @@ impl KvConnectorLeader {
         Ok(())
     }
 }
-
-impl KvConnectorLeader {
-    #[inline(always)]
-    pub fn block_manager(&self) -> &VllmBlockManager {
-        self.block_manager.get_block_manager()
-    }
-}
