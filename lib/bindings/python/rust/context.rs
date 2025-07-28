@@ -45,7 +45,7 @@ impl PyContext {
     fn async_is_stopped<'a>(&self, py: Python<'a>, wait_for: u16) -> PyResult<Bound<'a, PyAny>> {
         let inner = self.inner.clone();
         // allow wait_for to be 360 seconds max
-        if wait_for > 360 || wait_for < 1 {
+        if !(1..=360).contains(&wait_for) {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "wait_for must be between 1 and 360 seconds to allow for async task to cycle.",
             ));
