@@ -253,6 +253,8 @@ impl Slot for VllmConnectorSlot {
     fn mark_as_prefilling(&mut self, iteration: u64) -> Result<(), SlotError> {
         self.state = SlotState::Prefilling;
 
+        // we can now aggress
+
         Ok(())
     }
 

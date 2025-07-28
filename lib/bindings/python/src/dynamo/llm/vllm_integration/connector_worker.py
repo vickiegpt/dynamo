@@ -27,8 +27,8 @@ if TYPE_CHECKING:
 #     KvConnectorWorker as RustKvConnectorWorker,
 # )
 
-from dynamo.llm import KvbmWorker
 from dynamo.llm.vllm_integration.rust import KvConnectorWorker as RustKvConnectorWorker
+from dynamo.runtime import DistributedRuntime
 
 
 class DynamoConnectorMetadata(KVConnectorMetadata):
@@ -39,12 +39,14 @@ class DynamoConnectorMetadata(KVConnectorMetadata):
 
 class KvConnectorWorker:
     def __init__(self, vllm_config: "VllmConfig", engine_id: str, **kwargs):
-        # determine if we received a DistributedRuntime in the kwargs, if not, pass forward to
-        # RustKvConnectorWorker a None for drt.
-        # note: wire this up after we have abstracted the KvbmWorker object to accept a drt.
+        drt = kwargs.get("drt", None)
+        if drt is None:
+            self.drt = DistributedRuntime(event_loop=None, is_static=False)
+        else:
+            self.drt = drt
 
         self.vllm_config = vllm_config
-        self._connector = RustKvConnectorWorker(engine_id)
+        self._connector = RustKvConnectorWorker(self.drt, engine_id)
 
     # Worker
 
@@ -80,15 +82,10 @@ class KvConnectorWorker:
 
         device_id = tensors[0].device.index
 
-        self.worker = KvbmWorker(
-            num_device_blocks,
-            page_size,
-            tensors,
-            device_id=device_id,
-            worker_id=device_id,
-            dtype_width_bytes=kv_cache_dtype.itemsize,
+        # extract necessary bits to construct a KvbmWorker
+        self._connector.register_kv_caches(
+            num_device_blocks, page_size, device_id, kv_cache_dtype.itemsize, kv_caches
         )
-        self._connector.register_kv_caches(kv_caches)
 
     def bind_connector_metadata(self, data: bytes) -> None:
         """Set the connector metadata from the scheduler.

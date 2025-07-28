@@ -6,19 +6,25 @@ use slot::{CreateEngineSlotRequest, EngineSlot, WorkerSlot};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use super::*;
-use crate::{llm::block_manager::distributed::VllmTensor, to_pyerr};
+use crate::llm::block_manager::distributed::get_barrier_id;
+use crate::{
+    llm::block_manager::distributed::VllmTensor, to_pyerr,
+    DistributedRuntime as PyDistributedRuntime,
+};
+
 use dynamo_llm::block_manager::distributed::{
-    BlockTransferRequest, ConnectorRequestLeader, ConnectorTransferType,
+    BlockTransferRequest, ConnectorRequestLeader, ConnectorTransferType, KvbmWorker,
+    KvbmWorkerConfig,
 };
 use dynamo_llm::block_manager::{
     connector::scheduler::{Scheduler, SchedulerMessage},
     storage::torch::{TorchDevice, TorchTensor},
 };
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
-use dynamo_runtime::CancellationToken;
+use dynamo_runtime::{CancellationToken, DistributedRuntime};
 use tokio::task::JoinHandle;
 
 enum EngineMessage {
@@ -38,10 +44,12 @@ enum EngineMessage {
 
 #[pyclass]
 pub struct KvConnectorWorker {
+    drt: DistributedRuntime,
+    kvbm_worker: OnceLock<KvbmWorker>,
+
     request_slots: HashMap<String, WorkerSlot>,
 
     kv_caches: HashMap<String, Arc<VllmTensor>>,
-    cancel_token: CancellationToken,
 
     /// Channel to send messages to the background engine
     /// We keep the touch points on the worker as small as possible to minimize impact on vllm
@@ -56,9 +64,6 @@ pub struct KvConnectorWorker {
     /// Map of request id to inflight finished requests
     maybe_storing_finished: HashSet<String>,
 
-    /// Runtime for the engine task - update to DRT
-    runtime: tokio::runtime::Runtime,
-
     bound: bool,
     iteration: u64,
     layers_complete: u32,
@@ -67,91 +72,93 @@ pub struct KvConnectorWorker {
 #[pymethods]
 impl KvConnectorWorker {
     #[new]
-    fn new(worker_id: String) -> PyResult<Self> {
-        // ideally we initialize the DRT here, and pass it through
-        // instead we'll create a cancellation token, but in the future get the token from
-        // the DRT's primary lease
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .map_err(to_pyerr)?;
-
-        let cancel_token = CancellationToken::new();
-        let cancel_token_clone = cancel_token.clone();
+    fn new(py_drt: PyDistributedRuntime, vllm_worker_id: String) -> PyResult<Self> {
+        let drt = py_drt.inner.clone();
+        let runtime = drt.runtime().primary();
 
         let (engine_tx, engine_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let engine_task = CriticalTaskExecutionHandle::new_with_runtime(
             move |cancel_token| KvConnectorWorker::engine_task(cancel_token, engine_rx),
-            cancel_token_clone,
+            drt.primary_token(),
             "kv-connector-engine-task",
-            runtime.handle(),
+            &runtime,
         )
         .map_err(to_pyerr)?;
 
         tracing::info!(
             "KvConnectorWorker initialized with worker_id: {}",
-            worker_id
+            vllm_worker_id
         );
 
         Ok(Self {
+            drt,
+            kvbm_worker: OnceLock::new(),
             request_slots: HashMap::new(),
             kv_caches: HashMap::new(),
-            cancel_token,
             engine_tx,
             engine_task,
-
             maybe_loading_finished: HashSet::new(),
             maybe_storing_finished: HashSet::new(),
-            runtime,
             bound: false,
             iteration: 0,
             layers_complete: 0,
         })
     }
 
-    pub fn register_kv_caches(&mut self, kv_caches: HashMap<String, Py<PyAny>>) -> PyResult<()> {
+    /// Registers the KV caches with the KVBM worker.
+    ///
+    /// The Dynamo KVBM worker is lazily initialized when the first KV cache is registered.
+    pub fn register_kv_caches(
+        &mut self,
+        num_device_blocks: usize,
+        page_size: usize,
+        device_id: usize,
+        dtype_width_bytes: usize,
+        kv_caches: HashMap<String, Py<PyAny>>,
+    ) -> PyResult<()> {
+        if self.kvbm_worker.get().is_some() {
+            tracing::warn!("kvbm worker already registered");
+            return Ok(());
+        }
+
         for (layer_name, torch_tensor) in kv_caches {
             let vllm_tensor = Arc::new(VllmTensor::new(torch_tensor).map_err(to_pyerr)?);
             tracing::trace!("Registering KV cache layer: {layer_name}, tensor: {vllm_tensor:?}");
             self.kv_caches.insert(layer_name, vllm_tensor);
         }
 
-        let tensors: Vec<Arc<dyn TorchTensor>> = self
+        let vllm_tensors: Vec<Arc<dyn TorchTensor>> = self
             .kv_caches
             .values()
             .map(|tensor| tensor.clone() as Arc<dyn TorchTensor>)
             .collect();
 
-        let first_tensor = tensors.first().unwrap();
-        tracing::debug!("kv tensor: {first_tensor:#?}");
+        let config = KvbmWorkerConfig::builder()
+            .drt(self.drt.clone())
+            .num_device_blocks(num_device_blocks)
+            .page_size(page_size)
+            .tensors(vllm_tensors)
+            .device_id(device_id)
+            .dtype_width_bytes(dtype_width_bytes)
+            .barrier_id(get_barrier_id())
+            .build()
+            .map_err(to_pyerr)?;
 
-        // validate all tensors are on the same device
-        for tensor in &tensors {
-            if tensor.device() != first_tensor.device() {
-                return Err(to_pyerr(anyhow::anyhow!(
-                    "All tensors must be on the same device! Got {:?} and {:?}",
-                    tensor.device(),
-                    first_tensor.device()
-                )));
-            }
-        }
+        let worker = self
+            .drt
+            .runtime()
+            .primary()
+            .block_on(async move {
+                let worker = KvbmWorker::new(config).await?;
+                anyhow::Ok(worker)
+            })
+            .map_err(to_pyerr)?;
 
-        // refactor john's kvbm worker into just pieces
-        // - build a block layout from tensors, inferring the layout dims and dtype
-        // - initialize nixl agent with uxc default, if g3 enabled add gds to the agent - do this in the constructor
-        // - allocate blocks for g2 and/or g3, register them with nixl
-        // - construct an transfer manager (offload manager)
-        // - wait for worker to send a plan - a simply map of {request_id, [(src_block_id, dst_block_id]}
-        //   - count layers, when all layers are counted, enqueue block-wise transfers and hold per request the notification handles
-        //   - i think we have oneshot return notificatoin channel that is optional offloads/writes, if so use t.
-        //
-        // - currently leader and worker are not connected
-        //   - rework the zmq bits or just use nats to perform completion events on leadera
-        //   - this will allow the leader to free cpu/disk blocks when partial xfers are complete.
-        //   - once wired up, the host will keep a list of transfer ids associated with each action it puts in the metdata
-        //   - trigger the worker -> leader notification when the transfer is complete using the transfer id
+        self.kvbm_worker
+            .set(worker)
+            .map_err(|_| to_pyerr(anyhow::anyhow!("failed to set kvbm worker")))?;
+
         Ok(())
     }
 
@@ -299,7 +306,7 @@ impl KvConnectorWorker {
     fn create_worker_slot(&mut self, request_id: String) -> PyResult<()> {
         // create a child token which will cancel on the parent but can be cancelled individually
         // with out effecting the parent
-        let token = self.cancel_token.child_token();
+        let token = self.drt.primary_token().child_token();
 
         // create a request slot with the child token
         // this will be the local worker slot
