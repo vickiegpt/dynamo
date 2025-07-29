@@ -495,7 +495,28 @@ impl Scheduler {
         // let slot = SchedulerSlot::new(request, self.iteration);
         // self.slots.insert(request_id, slot);
 
-        @unimplemented!("@ziqi")
+        // capture a clone of the atomic counter, and pass it through with the request
+
+        unimplemented!("@ziqi")
+    }
+
+    // this function will be a scheduler and will dispatch requests to be executed
+    fn schedule_request(&mut self, xfer_req: TransferScheduleRequest) {
+        // tokio spawn execute_scheduled_transfer for first impl.  add fanciness later.
+        unimplemented!("@ziqi")
+    }
+
+    // this function will execute a transfer request, monitor its completion, and increment its
+    // atomic completion counter when finished.
+    //
+    // this must tokio spawn and an indpendent task
+    fn execute_scheduled_transfer(&mut self, xfer_req: TransferScheduleRequest) {
+        // this will issue the signal to the transfer engine to start the transfer
+        // this is oneshot sender with a SchedulingDecision
+        // then this will monitor the oneshot received of a result<()> to monitor completion
+        // when completed, panic if error, otherwise increment the atomic counter
+
+        unimplemented!("@ziqi")
     }
 }
 
@@ -507,7 +528,6 @@ pub struct SchedulerCreateSlotDetails {
 
 pub struct SchedulerSlot {
     request_id: String,
-    operations: HashMap<uuid::Uuid, Either<WorkerArrivedFirst, TransferArrivedFirst>>,
     cancel_token: CancellationToken,
     completed: Arc<AtomicU64>,
     created_at: u64,
@@ -517,7 +537,6 @@ impl SchedulerSlot {
     fn new(req: SchedulerCreateSlotDetails, created_at: u64) -> Self {
         Self {
             request_id: req.request_id,
-            operations: HashMap::new(),
             completed: req.completed,
             cancel_token: req.cancel_token,
             created_at,
@@ -749,7 +768,35 @@ mod tests {
             request_type: RequestType::Scheduled,
         };
 
-        let mut handle = tokio::spawn(transfer_client.clone().schedule_transfer(request));
+        // let (tx_1, rx_1) = tokio::sync::oneshot::channel();
+
+        let mut handle = tokio::spawn(async move {
+            let handle = transfer_client
+                .clone()
+                .schedule_transfer(request)
+                .await
+                .unwrap();
+            //let _ = rx_1.await;
+
+            handle.mark_complete(Ok(())).await;
+        });
+
+        // test state of scheduler before first message arrives.
+
+        // scheudler.step().await;
+
+        // trigger task
+
+        // task is running
+
+        // advance transfer tx_1 - this will mark the end of the task and trigger the completion handle
+        drop(tx_1);
+
+        // sleep for a bit
+
+        // check atomic counter
+
+        // test the first arrival state.
 
         // the transfer engine will immediately return a completion handle
     }
