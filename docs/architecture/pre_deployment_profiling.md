@@ -84,6 +84,7 @@ kubectl create secret docker-registry nvcr-imagepullsecret \
 # Tag and push to your container registry
 export DOCKER_IMAGE=nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.2 # or your own dynamoimage
 # NOTE: DGD_CONFIG_FILE is pointing to the location of the config file inside DOCKER_IMAGE
+# Modify this yaml to profile different models
 export DGD_CONFIG_FILE=/workspace/components/backends/vllm/deploy/disagg.yaml # or your own disagg config file
 ```
 
@@ -150,13 +151,14 @@ The profiling results are stored in a PVC named `profiling-pvc`. To access the r
 
 1. **Create a temporary pod to access the PVC:**
    ```bash
-   kubectl run temp-access --image=alpine:latest --rm -it --restart=Never \
-     --overrides='{"spec":{"containers":[{"name":"temp-access","image":"alpine:latest","command":["sh"],"volumeMounts":[{"name":"results","mountPath":"/workspace/profiling_results"}]}],"volumes":[{"name":"results","persistentVolumeClaim":{"claimName":"profiling-pvc"}}]}}' \
+   kubectl run temp-access --image=alpine:latest --restart=Never \
+     --overrides='{"spec":{"containers":[{"name":"temp-access","image":"alpine:latest","command":["tail","-f","/dev/null"],"volumeMounts":[{"name":"results","mountPath":"/workspace/profiling_results"}]}],"volumes":[{"name":"results","persistentVolumeClaim":{"claimName":"profiling-pvc"}}]}}' \
      -n $NAMESPACE
    ```
 
 2. **Inside the temporary pod, navigate to the results directory:**
    ```bash
+   kubectl exec -it temp-access -n $NAMESPACE -- sh
    cd /workspace/profiling_results
    ls -la
    ```
