@@ -101,13 +101,13 @@ spec:
         - name: profile-sla
           args:
             - --isl
-            - 3000 # average ISL is 3000 tokens
+            - "3000" # average ISL is 3000 tokens
             - --osl
-            - 150 # average OSL is 150 tokens
+            - "150" # average OSL is 150 tokens
             - --ttft
-            - 200 # target TTFT is 200ms
+            - "200" # target TTFT is 200ms
             - --itl
-            - 20 # target ITL is 20ms
+            - "20" # target ITL is 20ms
 ```
 
 **Step 3: Run profiling (required)**
