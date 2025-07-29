@@ -294,9 +294,14 @@ pub enum SchedulerMessage {
     RequestFinished(String),
 }
 
+struct WorkerArrivedFirst;
+struct TransferArrivedFirst(TransferScheduleRequest);
+
 pub struct Scheduler {
     slots: HashMap<String, SchedulerSlot>,
     unprocessed_immediate_results: HashMap<String, HashSet<uuid::Uuid>>,
+    enqueued_requests:
+        HashMap<String, HashMap<uuid::Uuid, Either<WorkerArrivedFirst, TransferArrivedFirst>>>,
     worker_rx: mpsc::UnboundedReceiver<SchedulerMessage>,
     transfer_rx: mpsc::Receiver<TransferToSchedulerMessage>,
     iteration: u64,
@@ -316,6 +321,7 @@ impl Scheduler {
             Scheduler {
                 slots: HashMap::new(),
                 unprocessed_immediate_results: HashMap::new(),
+                enqueued_requests: HashMap::new(),
                 worker_rx: scheduler_rx,
                 transfer_rx,
                 iteration: 0,
@@ -374,7 +380,7 @@ impl Scheduler {
             maybe_transfer_msg = self.transfer_rx.recv(), if !self.transfer_rx.is_closed() => {
                 match maybe_transfer_msg {
                     Some(TransferToSchedulerMessage::ScheduleRequest(request)) => {
-                        unimplemented!()
+                        self.handle_schedule_request(request);
                     }
                     Some(TransferToSchedulerMessage::ImmediateResult(result)) => {
                         self.handle_immediate_result(result);
@@ -475,6 +481,18 @@ impl Scheduler {
             }
         }
     }
+
+    #[tracing::instrument(level = "debug", skip_all, fields(request_id = %request.leader_request.request_id))]
+    fn handle_schedule_request(&mut self, request: TransferScheduleRequest) {
+        let request_id = request.leader_request.request_id.clone();
+
+        // the slot may or may not exist
+        // if it exists, the worker side may or may not have arrived first
+
+        // tracing::debug!("engine state adding slot");
+        // let slot = SchedulerSlot::new(request, self.iteration);
+        // self.slots.insert(request_id, slot);
+    }
 }
 
 pub struct SchedulerCreateSlotDetails {
@@ -482,9 +500,6 @@ pub struct SchedulerCreateSlotDetails {
     pub completed: Arc<AtomicU64>,
     pub cancel_token: CancellationToken,
 }
-
-struct WorkerArrivedFirst;
-struct TransferArrivedFirst;
 
 pub struct SchedulerSlot {
     request_id: String,
@@ -689,4 +704,51 @@ mod tests {
         // the worker has not issued any operations yet
         assert_eq!(worker_client.slots.get("test").unwrap().operations.len(), 1);
     }
+
+    #[tokio::test]
+    async fn test_transfer_scheduled_arrives_first() {
+        dynamo_runtime::logging::init();
+
+        let cancel_token = CancellationToken::new();
+        let (mut scheduler, mut worker_client, transfer_client) = Scheduler::new(cancel_token);
+
+        let operation_id = uuid::Uuid::new_v4();
+
+        // on the transfer engine, a request arrives with a request type of scheduled
+        let request = LeaderTransferRequest {
+            request_id: "test".to_string(),
+            uuid: operation_id,
+            requirement: None,
+            request_type: RequestType::Scheduled,
+        };
+
+        let mut handle = tokio::spawn(transfer_client.clone().schedule_transfer(request));
+
+        // the transfer engine will immediately return a completion handle
+    }
+
+
+    /// in this case, the request arrives first via the worker client, meaning it traverse
+    #[tokio::test]
+    async fn test_transfer_scheduled_arrives_last() {
+        dynamo_runtime::logging::init();
+
+        let cancel_token = CancellationToken::new();
+        let (mut scheduler, mut worker_client, transfer_client) = Scheduler::new(cancel_token);
+
+        let operation_id = uuid::Uuid::new_v4();
+
+        // on the transfer engine, a request arrives with a request type of scheduled
+        let request = LeaderTransferRequest {
+            request_id: "test".to_string(),
+            uuid: operation_id,
+            requirement: None,
+            request_type: RequestType::Scheduled,
+        };
+
+        let mut handle = tokio::spawn(transfer_client.clone().schedule_transfer(request));
+
+        // the transfer engine will immediately return a completion handle
+    }
+
 }
