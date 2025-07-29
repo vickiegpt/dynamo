@@ -279,8 +279,9 @@ To run more complete deployment examples, instances of etcd and nats need to be
 accessible within the container. This is generally done by connecting to
 existing etcd/nats services from the host or other containers. For simple
 cases, you can start them in the container as well:
-> nats-server -js &
-> etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://0.0.0.0:2379 --data-dir /tmp/etcd &
+
+nats-server -js &
+etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://0.0.0.0:2379 --data-dir /tmp/etcd &
 
 With etcd/nats accessible, run the examples:
 > cd examples/hello_world
@@ -295,6 +296,37 @@ curl -X GET localhost:8080/v1/models
 nats-server -js &
 etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://0.0.0.0:2379 --data-dir /tmp/etcd &
 dynamo run in=http out=vllm Qwen/Qwen2.5-3B-Instruct
+
+time curl localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-0.6B",
+    "messages": [
+    {
+        "role": "user",
+        "content": "Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?Hello, how are you?"
+    }
+    ],
+    "stream":false,
+    "max_tokens": 300
+  }'
+
+
+time curl localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-0.6B",
+    "messages": [
+    {
+        "role": "user",
+        "content": "Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?Can you write the alphabet?"
+    }
+    ],
+    "stream":false,
+    "max_tokens": 300
+  }'
+
+
 
 
 curl localhost:8000/v1/chat/completions \
