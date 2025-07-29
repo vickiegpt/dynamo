@@ -94,6 +94,7 @@ if [ "$mode" = "prefill" ]; then
             --disaggregation-mode prefill \
             --dist-init-addr "$HOST_IP:$PORT" \
             --disaggregation-bootstrap-port 30001 \
+            --disaggregation-transfer-backend nixl \
             --nnodes "$TOTAL_NODES" \
             --node-rank "$RANK" \
             --tp-size "$TOTAL_GPUS" \
