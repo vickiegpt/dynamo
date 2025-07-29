@@ -37,7 +37,7 @@ spec:
           - /workspace/profiling_results
           - --namespace
           - ${NAMESPACE}
-          - --min-num-gpus-per-engine 
+          - --min-num-gpus-per-engine
           - "1"
           - --max-num-gpus-per-engine
           - "8"
