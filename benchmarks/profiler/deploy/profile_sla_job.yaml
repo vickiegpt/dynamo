@@ -14,11 +14,8 @@ spec:
         image: ${DOCKER_IMAGE}
         resources:
           requests:
-            cpu: "1"
-            memory: "2Gi"
-          limits:
-            cpu: "2"
-            memory: "4Gi"
+            cpu: "16"
+            memory: "10Gi"
         env:
           - name: HUGGING_FACE_HUB_TOKEN
             valueFrom:
