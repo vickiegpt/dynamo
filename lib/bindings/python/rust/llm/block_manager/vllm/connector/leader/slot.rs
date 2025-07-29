@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use dynamo_llm::block_manager::{
+    connector::protocol::{LeaderTransferRequest, RequestType, TransferType},
+    distributed::{BlockTransferPool, BlockTransferRequest, KvbmLeader},
+};
+
 use super::*;
 
 #[derive(Debug, thiserror::Error)]
@@ -66,6 +71,8 @@ pub enum SlotState {
 }
 
 pub trait Slot: std::fmt::Debug {
+    fn request_id(&self) -> &str;
+
     fn state(&self) -> SlotState;
 
     fn sequence(&self) -> &TokenBlockSequence;
@@ -91,7 +98,7 @@ pub trait Slot: std::fmt::Debug {
     fn acquire_all_local_matches(&mut self) -> Result<(), SlotError>;
 
     /// Take all pending operations for the slot.
-    fn take_pending_operations(&mut self) -> Vec<BlockTransferRequest>;
+    fn take_pending_operations(&mut self) -> Vec<WorkerTransferRequest>;
 }
 
 pub trait ExternallyManagedDeviceSlot: Slot {
@@ -108,10 +115,11 @@ pub trait ExternallyManagedDeviceSlot: Slot {
 pub struct ConnectorSlotManager<R: RequestKey> {
     slots: Mutex<HashMap<R, Arc<Mutex<VllmConnectorSlot>>>>,
     block_manager: VllmBlockManager,
+    leader: Arc<KvbmLeader>,
 }
 
 impl<R: RequestKey> ConnectorSlotManager<R> {
-    pub fn new(block_manager: VllmBlockManager) -> Self {
+    pub fn new(block_manager: VllmBlockManager, leader: Arc<KvbmLeader>) -> Self {
         tracing::debug!(
             "creating slot manager with block size: {}",
             block_manager.block_size()
@@ -119,6 +127,7 @@ impl<R: RequestKey> ConnectorSlotManager<R> {
         Self {
             slots: Mutex::new(HashMap::new()),
             block_manager,
+            leader,
         }
     }
 }
@@ -136,7 +145,13 @@ impl<R: RequestKey> SlotManager<R> for ConnectorSlotManager<R> {
         tokens: Vec<u32>,
         salt_hash: SaltHash,
     ) -> Result<(), SlotError> {
-        let slot = VllmConnectorSlot::new(tokens.into(), salt_hash, self.block_manager.clone());
+        let slot = VllmConnectorSlot::new(
+            request_id.to_string(),
+            tokens.into(),
+            salt_hash,
+            self.block_manager.clone(),
+            self.leader.clone(),
+        );
         self.slots
             .lock()
             .unwrap()
@@ -157,6 +172,8 @@ impl<R: RequestKey> SlotManager<R> for ConnectorSlotManager<R> {
 }
 
 pub struct VllmConnectorSlot {
+    request_id: String,
+
     /// The state of the slot.
     state: SlotState,
 
@@ -202,24 +219,34 @@ pub struct VllmConnectorSlot {
     /// Phantom data to ensure the storage type is correct.
     block_manager: VllmBlockManager,
 
+    leader: Arc<KvbmLeader>,
+
     block_size: usize,
 
     iteration_first_scheduled: Option<u64>,
 
-    pending_operations: Vec<BlockTransferRequest>,
+    pending_operations: Vec<WorkerTransferRequest>,
 }
 
 impl VllmConnectorSlot {
-    pub fn new(tokens: Tokens, salt_hash: SaltHash, block_manager: VllmBlockManager) -> Self {
+    pub fn new(
+        request_id: String,
+        tokens: Tokens,
+        salt_hash: SaltHash,
+        block_manager: VllmBlockManager,
+        leader: Arc<KvbmLeader>,
+    ) -> Self {
         assert!(!tokens.is_empty(), "tokens must be non-empty");
         let block_size = block_manager.block_size();
         debug_assert!(block_size.is_power_of_two() && block_size <= 1024);
         let sequence = TokenBlockSequence::new(tokens, block_size as u32, Some(salt_hash));
 
         Self {
+            request_id,
             sequence,
             block_manager,
             block_size,
+            leader,
 
             // default values
             state: SlotState::Initialized,
@@ -250,6 +277,10 @@ impl std::fmt::Debug for VllmConnectorSlot {
 }
 
 impl Slot for VllmConnectorSlot {
+    fn request_id(&self) -> &str {
+        &self.request_id
+    }
+
     fn state(&self) -> SlotState {
         self.state
     }
@@ -299,7 +330,7 @@ impl Slot for VllmConnectorSlot {
         self.immutable.len() + self.mutable.len()
     }
 
-    fn take_pending_operations(&mut self) -> Vec<BlockTransferRequest> {
+    fn take_pending_operations(&mut self) -> Vec<WorkerTransferRequest> {
         std::mem::take(&mut self.pending_operations)
     }
 
@@ -363,7 +394,7 @@ impl Slot for VllmConnectorSlot {
 
         let num_matched_disk_blocks = disk_blocks.len();
 
-        let num_matched_blocks = num_matched_host_blocks + num_matched_disk_blocks;
+        let mut num_matched_blocks = num_matched_host_blocks + num_matched_disk_blocks;
 
         tracing::debug!(
             "matched {} host blocks and {} disk blocks; {} total blocks",
@@ -371,6 +402,11 @@ impl Slot for VllmConnectorSlot {
             num_matched_disk_blocks,
             num_matched_blocks
         );
+
+        if self.sequence.total_tokens() == 95 && self.state() == SlotState::Initialized {
+            tracing::warn!("EXPERIMENTAL OVERRIDE: MATCHING FIRST BLOCK");
+            num_matched_blocks = 1;
+        }
 
         // early exit if we did not match any blocks
         if num_matched_blocks == 0 {
@@ -397,8 +433,17 @@ impl Slot for VllmConnectorSlot {
             num_new_matched_tokens -= block_size;
         }
 
-        self.staging_from_host = Some(host_blocks);
-        self.staging_from_disk = Some(disk_blocks);
+        self.staging_from_host = if !host_blocks.is_empty() {
+            Some(host_blocks)
+        } else {
+            None
+        };
+        self.staging_from_disk = if !disk_blocks.is_empty() {
+            Some(disk_blocks)
+        } else {
+            None
+        };
+
         self.state = SlotState::OnboardStaged(num_new_matched_tokens);
 
         Ok(())
@@ -426,6 +471,71 @@ impl ExternallyManagedDeviceSlot for VllmConnectorSlot {
             count,
             self.num_device_blocks_allocated()
         );
+
+        if self.sequence.total_tokens() == 95
+            && self.staging_from_disk.is_none()
+            && self.staging_from_host.is_none()
+            && self.state() == SlotState::OnboardStaged(16)
+        {
+            tracing::warn!("EXPERIMENTAL OVERRIDE: APPENDING MUTABLE BLOCKS");
+            assert!(!self.mutable.is_empty());
+
+            tracing::warn!("EXPERIMENTAL OVERRIDE: TRIGGING JUNK H2D XFER");
+
+            let device_block_id = *self.mutable.front().unwrap();
+            let host_block_id: usize = 10;
+
+            tracing::warn!("EXPERIMENTAL OVERRIDE: TRIGGING JUNK H2D XFER -1 ");
+            let uuid = uuid::Uuid::new_v4();
+
+            let sched_req = WorkerTransferRequest {
+                request_id: self.request_id().to_string(),
+                uuid,
+                request_type: RequestType::Immediate,
+                transfer_type: TransferType::Load,
+            };
+
+            tracing::warn!("EXPERIMENTAL OVERRIDE: TRIGGING JUNK H2D XFER -2");
+            self.pending_operations.push(sched_req);
+
+            let block_xfer_req = BlockTransferRequest {
+                from_pool: BlockTransferPool::Host,
+                to_pool: BlockTransferPool::Device,
+                blocks: vec![(host_block_id, device_block_id)],
+                connector_req: Some(LeaderTransferRequest {
+                    request_id: self.request_id().to_string(),
+                    uuid,
+                    requirement: None,
+                    request_type: RequestType::Immediate,
+                }),
+            };
+
+            tracing::warn!("EXPERIMENTAL OVERRIDE: build tmp tokio runtime");
+
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .unwrap();
+
+            let result: anyhow::Result<()> = rt.block_on(async {
+                tracing::warn!("EXPERIMENTAL OVERRIDE: trigger transfer");
+                let notify = self.leader.transfer_blocks_request(block_xfer_req).await?;
+                // tracing::warn!("EXPERIMENTAL OVERRIDE: await notify");
+                // notify
+                //     .await
+                //     .map_err(|e| anyhow::anyhow!("Notify await failed: {:?}", e))?;
+                // tracing::warn!("EXPERIMENTAL OVERRIDE: notify received");
+                Ok(())
+            });
+
+            tracing::warn!("EXPERIMENTAL OVERRIDE: result: {:?}", result);
+
+            result
+                .map_err(|e| anyhow::anyhow!("Transfer blocks request failed: {:?}", e))
+                .unwrap();
+        }
+
         Ok(())
     }
 }

@@ -68,7 +68,7 @@ class KvConnectorLeader:
         )
 
         print(f"KvConnectorLeader initialized with engine_id: {engine_id}")
-        self._connector = RustKvConnectorLeader(engine_id, block_manager)
+        self._connector = RustKvConnectorLeader(engine_id, block_manager, leader)
 
     # KV Connector
 

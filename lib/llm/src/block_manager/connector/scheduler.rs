@@ -118,7 +118,7 @@ pub struct WorkerSchedulerClient {
 impl WorkerSchedulerClient {
     pub fn new(
         scheduler_tx: mpsc::UnboundedSender<SchedulerMessage>,
-        cancel_token: CancellationToken,
+        _cancel_token: CancellationToken,
     ) -> Self {
         Self {
             slots: HashMap::new(),
@@ -128,6 +128,10 @@ impl WorkerSchedulerClient {
             iteration_complete: true,
             layers_complete: 0,
         }
+    }
+
+    pub fn iteration(&self) -> u64 {
+        self.iteration
     }
 
     pub fn start_next_iteration(&mut self) -> Result<(), SchedulerError> {
@@ -191,6 +195,10 @@ impl WorkerSchedulerClientSlot {
             cancel_token: self.cancel_token.clone(),
         }
     }
+
+    pub fn is_complete(&self) -> bool {
+        self.completed.load(Ordering::Relaxed) == self.operations.len() as u64
+    }
 }
 
 impl WorkerSchedulerClient {
@@ -214,6 +222,14 @@ impl WorkerSchedulerClient {
         Ok(())
     }
 
+    pub fn remove_slot(&mut self, request_id: &String) {
+        let slot = self.slots.remove(request_id).expect("slot does not exist");
+        assert!(slot.is_complete());
+        self.scheduler_tx
+            .send(SchedulerMessage::RequestFinished(request_id.clone()))
+            .expect("failed to send request finished message; disconnected");
+    }
+
     /// Enqueues a request to the scheduler.
     ///
     /// Both the worker client and the scheduler keep track of outstanding requests.
@@ -224,23 +240,30 @@ impl WorkerSchedulerClient {
             "slot does not exist"
         );
 
-        let slot = self.slots.get_mut(&request.request_id).unwrap();
+        let slot = self
+            .slots
+            .get_mut(&request.request_id)
+            .expect("slot does not exist");
 
         slot.operations.push(request.uuid);
 
         match request.request_type {
             RequestType::Immediate => {}
             RequestType::Scheduled => {
-                if self
-                    .scheduler_tx
+                self.scheduler_tx
                     .send(SchedulerMessage::EnqueueRequest(request))
-                    .is_err()
-                {
-                    tracing::error!("connection to scheduler dropped; cancelling all transfers");
-                    slot.cancel_token.cancel();
-                }
+                    .expect("failed to enqueue request; disconnected");
             }
         }
+    }
+
+    pub fn has_slot(&self, request_id: &str) -> bool {
+        self.slots.contains_key(request_id)
+    }
+
+    pub fn is_complete(&self, request_id: &str) -> bool {
+        let slot = self.slots.get(request_id).expect("slot does not exist");
+        slot.completed.load(Ordering::Relaxed) == slot.operations.len() as u64
     }
 }
 
@@ -304,9 +327,19 @@ impl Scheduler {
         )
     }
 
+    pub async fn run(&mut self) -> anyhow::Result<()> {
+        loop {
+            if !self.step().await {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     async fn step(&mut self) -> bool {
-        assert!(!self.worker_rx.is_closed(), "worker rx is closed");
-        assert!(!self.transfer_rx.is_closed(), "transfer rx is closed");
+        if self.worker_rx.is_closed() || self.transfer_rx.is_closed() {
+            return false;
+        }
 
         tokio::select! {
             maybe_worker_msg = self.worker_rx.recv(), if !self.worker_rx.is_closed() => {
@@ -323,6 +356,9 @@ impl Scheduler {
                     Some(SchedulerMessage::CreateSlot(request)) => {
                         self.add_slot(request, self.iteration);
                     }
+                    Some(SchedulerMessage::RequestFinished(request_id)) => {
+                        self.remove_slot(request_id);
+                    }
                     Some(SchedulerMessage::EnqueueRequest(request)) => {
                         self.handle_enqueue_request(request);
                     }
@@ -338,6 +374,7 @@ impl Scheduler {
             maybe_transfer_msg = self.transfer_rx.recv(), if !self.transfer_rx.is_closed() => {
                 match maybe_transfer_msg {
                     Some(TransferToSchedulerMessage::ScheduleRequest(request)) => {
+                        unimplemented!()
                     }
                     Some(TransferToSchedulerMessage::ImmediateResult(result)) => {
                         self.handle_immediate_result(result);

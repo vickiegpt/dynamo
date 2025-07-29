@@ -42,6 +42,12 @@ pub struct KvbmLeader {
     rt: Arc<tokio::runtime::Runtime>,
 }
 
+impl KvbmLeader {
+    pub fn get_inner(&self) -> Arc<KvbmLeaderImpl> {
+        self.leader.clone()
+    }
+}
+
 #[pymethods]
 impl KvbmLeader {
     #[new]

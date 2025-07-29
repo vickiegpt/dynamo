@@ -4,7 +4,9 @@ use super::*;
 use slot::{ConnectorSlotManager, SlotError, SlotManager, SlotState};
 
 use crate::llm::block_manager::BlockManager as PyBlockManager;
-use crate::llm::block_manager::{vllm::KvbmRequest, VllmBlockManager};
+use crate::llm::block_manager::{
+    distributed::KvbmLeader as PyKvbmLeader, vllm::KvbmRequest, VllmBlockManager,
+};
 
 use dynamo_llm::block_manager::{
     block::{
@@ -36,14 +38,15 @@ pub struct KvConnectorLeader {
     block_manager: VllmBlockManager,
     block_size: usize,
     inflight_requests: HashSet<String>,
+    onboarding_slots: HashSet<String>,
     iteration_counter: u64,
 }
 
 #[pymethods]
 impl KvConnectorLeader {
     #[new]
-    #[pyo3(signature = (worker_id, block_manager))]
-    pub fn new(worker_id: String, block_manager: PyBlockManager) -> Self {
+    #[pyo3(signature = (worker_id, block_manager, leader))]
+    pub fn new(worker_id: String, block_manager: PyBlockManager, leader: PyKvbmLeader) -> Self {
         tracing::info!(
             "KvConnectorLeader initialized with worker_id: {}",
             worker_id
@@ -54,10 +57,11 @@ impl KvConnectorLeader {
         let block_size = block_manager.block_size();
 
         Self {
-            slot_manager: ConnectorSlotManager::new(block_manager.clone()),
+            slot_manager: ConnectorSlotManager::new(block_manager.clone(), leader.get_inner()),
             block_manager,
             block_size,
             inflight_requests: HashSet::new(),
+            onboarding_slots: HashSet::new(),
             iteration_counter: 0,
         }
     }
@@ -110,6 +114,9 @@ impl KvConnectorLeader {
 
     /// We drop the need to pass in the KvCacheBlocks and the num_external_tokens as they are captured
     /// statefully in the [`VllmLeaderKvCacheManagerAndConnector::get_num_new_matched_tokens`] function.
+    ///
+    /// Note: vLLM will not provide any scheduler output data for requests that are onboarding. it is entirely
+    /// on the connector's implementation to handle this case.
     #[tracing::instrument(level = "debug", skip_all, fields(request_id))]
     pub fn update_state_after_alloc(
         &mut self,
@@ -128,6 +135,12 @@ impl KvConnectorLeader {
         let mut slot = shared_slot.lock().map_err(to_pyerr)?;
 
         slot.append_mutable_device_blocks(block_ids)?;
+
+        // the second call will show num_external_tokens == 0
+        // this call is just letting us know the other blocks that are being used for the remainder of the prefill
+        if num_external_tokens > 0 {
+            self.onboarding_slots.insert(request_id);
+        }
 
         Ok(())
     }
@@ -151,6 +164,30 @@ impl KvConnectorLeader {
         let mut inflight_requests = self.inflight_requests.clone();
         let mut md = ConnectorMetadata::new(iteration);
 
+        let onboarding_slots = std::mem::take(&mut self.onboarding_slots);
+
+        // Worker-side - we create a request slot for onboarding, then delete it when onboarding is finished, then
+        // recreate it again when we start the prefill/decode phase.
+        //
+        // This is kind of a nice abstraction as it keeps the events simplier; however, we now create the request-slot
+        // once for onboarding (this loop), then again for prefill/decode (new_requests loop).
+        tracing::debug!("evalatuing {} onboarding slots", onboarding_slots.len());
+        for request_id in onboarding_slots.iter() {
+            let shared_slot = self.slot_manager.get_slot(request_id).map_err(to_pyerr)?;
+            let mut slot = shared_slot.lock().map_err(to_pyerr)?;
+
+            tracing::debug!("marking slot as onboarding: {request_id}");
+            md.create_slot(request_id.clone());
+            slot.mark_as_onboarding(iteration)?;
+            let pending_ops = slot.take_pending_operations();
+            tracing::debug!("adding {} pending operations", pending_ops.len());
+            md.add_operations(pending_ops);
+        }
+
+        // vLLM provides us with "new_requests" which are "new" after onboarding, but not before or during.
+        // this makes the lifecyle a potentially two-phase lifecycle.
+        //
+        // todo: update the code and abstraction to account for this two-phase lifecycle.
         for new_req in &scheduler_output.new_requests {
             let request_id = &new_req.request_id;
             assert!(
@@ -167,21 +204,22 @@ impl KvConnectorLeader {
             debug_assert!(
                 matches!(
                     slot.state(),
-                    SlotState::Initialized | SlotState::OnboardStaged(_)
+                    SlotState::Initialized | SlotState::Onboarding(_)
                 ),
                 "current slot state: {:?}",
                 slot.state()
             );
 
-            if let SlotState::OnboardStaged(num_external_tokens) = slot.state() {
-                tracing::debug!(
-                    request_id,
-                    iteration,
-                    "initializing onboarding of {num_external_tokens} tokens"
-                );
-                slot.mark_as_onboarding(iteration)?;
-                continue;
-            }
+            // if let SlotState::OnboardStaged(num_external_tokens) = slot.state() {
+            //     tracing::debug!(
+            //         request_id,
+            //         iteration,
+            //         "initializing onboarding of {num_external_tokens} tokens"
+            //     );
+            //     slot.mark_as_onboarding(iteration)?;
+            //     md.add_operations(slot.take_pending_operations());
+            //     continue;
+            // }
 
             let scheduled_tokens = *scheduler_output
                 .num_scheduled_tokens
@@ -203,11 +241,13 @@ impl KvConnectorLeader {
                 slot.mark_as_decoding(iteration)?;
             }
 
-            md.add_operations(
-                request_id.clone(),
-                iteration,
-                slot.take_pending_operations(),
+            let pending_ops = slot.take_pending_operations();
+            tracing::debug!(
+                request_id,
+                "adding {} pending operations",
+                pending_ops.len()
             );
+            md.add_operations(pending_ops);
         }
 
         for cached_req in &scheduler_output.cached_requests {
@@ -217,6 +257,8 @@ impl KvConnectorLeader {
                 "request_id {request_id} not found in inflight_requests: "
             );
         }
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
 
         tracing::debug!("scheduler_output: {scheduler_output:#?}");
         serde_json::to_vec(&md).map_err(to_pyerr)
