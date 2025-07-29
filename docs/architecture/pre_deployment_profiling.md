@@ -82,25 +82,46 @@ kubectl create secret docker-registry nvcr-imagepullsecret \
 # in the project's root folder
 ./container/build.sh --framework VLLM
 # Tag and push to your container registry
+export DOCKER_IMAGE=nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.2 # or your own dynamoimage
+# NOTE: DGD_CONFIG_FILE is pointing to the location of the config file inside DOCKER_IMAGE
+export DGD_CONFIG_FILE=/workspace/components/backends/vllm/deploy/disagg.yaml # or your own disagg config file
 ```
 
 Replace the `image` within `profile_sla_job.yaml` with the tag of the image you pushed.
 
-**Step 2: Run profiling (required)**
+**Step 2: Set SLA target**
+
+Edit `$DYNAMO_HOME/benchmarks/profiler/deploy/profile_sla_job.yaml` to set the target ISL, OSL, TTFT, and ITL.
+
+```yaml
+spec:
+  template:
+    spec:
+      containers:
+        - name: profile-sla
+          args:
+            - --isl
+            - 3000 # average ISL is 3000 tokens
+            - --osl
+            - 150 # average OSL is 150 tokens
+            - --ttft
+            - 200 # target TTFT is 200ms
+            - --itl
+            - 20 # target ITL is 20ms
+```
+
+**Step 3: Run profiling (required)**
+
 ```bash
 cd $DYNAMO_HOME/benchmarks/profiler/deploy
 envsubst < profiling_pvc.yaml | kubectl apply -f -
 envsubst < profile_sla_sa.yaml | kubectl apply -f -
 envsubst < profile_sla_rbac.yaml | kubectl apply -f -
 envsubst < profile_sla_binding.yaml | kubectl apply -f -
-
-export DOCKER_IMAGE=nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.3.2 # or your own image
-# NOTE: DGD_CONFIG_FILE is pointing to the location of the config file inside DOCKER_IMAGE
-export DGD_CONFIG_FILE=/workspace/components/backends/vllm/deploy/disagg.yaml # or your own disagg config file
 envsubst < profile_sla_job.yaml | kubectl apply -f -
 ```
 
-**Step 3: Wait for profiling to complete**
+**Step 4: Wait for profiling to complete**
 ```bash
 kubectl get jobs -n $NAMESPACE
 kubectl logs job/profile-sla -n $NAMESPACE

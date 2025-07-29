@@ -37,6 +37,18 @@ spec:
           - /workspace/profiling_results
           - --namespace
           - ${NAMESPACE}
+          - --min-num-gpus-per-engine
+          - "1"
+          - --max-num-gpus-per-engine
+          - "8"
+          - --isl
+          - 3000
+          - --osl
+          - 150
+          - --ttft
+          - 200
+          - --itl
+          - 20
         volumeMounts:
           - name: output-volume
             mountPath: /workspace/profiling_results
