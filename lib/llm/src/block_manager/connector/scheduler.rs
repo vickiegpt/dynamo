@@ -430,6 +430,8 @@ impl Scheduler {
             .slots
             .get_mut(&request.request_id)
             .expect("slot does not exist");
+
+        unimplemented!("@ziqi")
     }
 
     fn start_iteration(&mut self, iteration: u64) {
@@ -492,6 +494,8 @@ impl Scheduler {
         // tracing::debug!("engine state adding slot");
         // let slot = SchedulerSlot::new(request, self.iteration);
         // self.slots.insert(request_id, slot);
+
+        @unimplemented!("@ziqi")
     }
 }
 
@@ -727,7 +731,6 @@ mod tests {
         // the transfer engine will immediately return a completion handle
     }
 
-
     /// in this case, the request arrives first via the worker client, meaning it traverse
     #[tokio::test]
     async fn test_transfer_scheduled_arrives_last() {
@@ -750,5 +753,4 @@ mod tests {
 
         // the transfer engine will immediately return a completion handle
     }
-
 }
