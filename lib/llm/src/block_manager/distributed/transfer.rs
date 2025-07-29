@@ -16,6 +16,7 @@ use crate::block_manager::{
         transfer::{TransferContext, WriteTo, WriteToStrategy},
         Block, BlockDataProvider, BlockDataProviderMut, ReadableBlock, WritableBlock,
     },
+    connector::scheduler::{SchedulingDecision, TransferSchedulerClient},
     storage::{DeviceStorage, DiskStorage, Local, PinnedStorage},
     BasicMetadata, Storage,
 };
@@ -34,6 +35,7 @@ pub struct BlockTransferHandler {
     host: Option<LocalBlockDataList<PinnedStorage>>,
     disk: Option<LocalBlockDataList<DiskStorage>>,
     context: Arc<TransferContext>,
+    scheduler_client: Option<TransferSchedulerClient>,
     // add worker-connector scheduler client here
 }
 
@@ -43,6 +45,7 @@ impl BlockTransferHandler {
         host_blocks: Option<Vec<LocalBlock<PinnedStorage, BasicMetadata>>>,
         disk_blocks: Option<Vec<LocalBlock<DiskStorage, BasicMetadata>>>,
         context: Arc<TransferContext>,
+        scheduler_client: Option<TransferSchedulerClient>,
         // add worker-connector scheduler client here
     ) -> Result<Self> {
         Ok(Self {
@@ -50,7 +53,7 @@ impl BlockTransferHandler {
             host: Self::get_local_data(host_blocks),
             disk: Self::get_local_data(disk_blocks),
             context,
-            // add worker-connector scheduler client here
+            scheduler_client,
         })
     }
 
@@ -120,43 +123,8 @@ impl BlockTransferHandler {
 
         channel
     }
-}
 
-#[async_trait]
-impl Handler for BlockTransferHandler {
-    async fn handle(&self, mut message: MessageHandle) -> Result<()> {
-        if message.data.len() != 1 {
-            return Err(anyhow::anyhow!(
-                "Block transfer request must have exactly one data element"
-            ));
-        }
-
-        let request: BlockTransferRequest = serde_json::from_slice(&message.data[0])?;
-
-        // if the request has a connector request, then we need to get a scheduled task handle.
-        // when that scheduled task handle await method returns, we can check if we should
-        // continue with out task or cancel. if we can continue, then we will issue a completion
-        // ack when the task is complete.
-
-        // if let Some(connector_req) = request.connector_request {
-        //     let state = self.shared_state.lock().await;
-
-        //     // check if the trigger ID is in the unexpected trigger IDs
-        //     // if so, we have been triggered before we could insert the trigger ID into the pending leader AMs
-        //     // we can break and go on
-        //     if state.unexpected_trigger_ids.remove(&trigger_id).is_some() {
-        //         tracing::debug!(
-        //             trigger_id,
-        //             "transfer not found; adding to unexpected trigger IDs"
-        //         );
-        //     } else {
-        //         // otherwise, we can add the trigger ID to the pending leader AMs
-        //         let (tx, rx) = oneshot::channel();
-        //         state.pending_leader_ams.insert(trigger_id, tx);
-        //         rx.await?;
-        //     }
-        // }
-
+    pub async fn execute_transfer(&self, request: BlockTransferRequest) -> Result<()> {
         tracing::debug!(
             "Performing transfer of {} blocks from {:?} to {:?}",
             request.blocks().len(),
@@ -175,8 +143,43 @@ impl Handler for BlockTransferHandler {
         }?;
 
         notify.await?;
-        message.ack().await?;
-
         Ok(())
+    }
+}
+
+#[async_trait]
+impl Handler for BlockTransferHandler {
+    async fn handle(&self, mut message: MessageHandle) -> Result<()> {
+        if message.data.len() != 1 {
+            return Err(anyhow::anyhow!(
+                "Block transfer request must have exactly one data element"
+            ));
+        }
+
+        let mut request: BlockTransferRequest = serde_json::from_slice(&message.data[0])?;
+
+        if let Some(req) = request.connector_req.take() {
+            tracing::debug!(
+                request_id = req.request_id,
+                operation = %req.uuid,
+                "scheduling transfer"
+            );
+            let client = self
+                .scheduler_client
+                .as_ref()
+                .expect("scheduler client is required")
+                .clone();
+            let mut handle = client.schedule_transfer(req).await?;
+
+            // we don't support cancellation yet
+            assert_eq!(handle.scheduler_decision(), SchedulingDecision::Execute);
+
+            let result = self.execute_transfer(request).await;
+            handle.mark_complete(result).await;
+        } else {
+            self.execute_transfer(request).await?;
+        }
+
+        message.ack().await
     }
 }

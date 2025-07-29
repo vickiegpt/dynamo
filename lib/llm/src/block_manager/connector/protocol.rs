@@ -53,9 +53,7 @@
 //!
 //! [`SchedulerOutput`] is transform
 
-use std::sync::atomic::AtomicU64;
-
-use super::scheduler::SchedulingDecision;
+use super::scheduler::{SchedulingDecision, DISCONNECTED_WARNING};
 use super::*;
 
 use tokio::sync::oneshot;
@@ -63,6 +61,17 @@ use tokio::sync::oneshot;
 pub type LayerName = String;
 pub type LayerIndex = u32;
 pub type Iteration = u64;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+pub enum RequestType {
+    /// If Scheduled, then the [`super::scheduler::TransferSchedulerClient`] will commuicate with the scheudler
+    /// to await a boxed [`ScheduledTransferCompletionHandle`].
+    Scheduled,
+
+    /// If Immediate, then the [`super::scheduler::TransferSchedulerClient`] will immediately return a
+    /// [`ImmediateTransferCompletionHandle`].
+    Immediate,
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TransferType {
@@ -86,8 +95,13 @@ pub enum SchedulerRequirement {
 pub struct LeaderTransferRequest {
     pub request_id: String,
     pub uuid: uuid::Uuid,
-    pub requirement: SchedulerRequirement,
-    pub transfer_type: TransferType,
+    pub requirement: Option<SchedulerRequirement>,
+    pub request_type: RequestType,
+}
+
+pub enum TransferToSchedulerMessage {
+    ScheduleRequest(TransferScheduleRequest),
+    ImmediateResult(ImmediateTransferResult),
 }
 
 /// Issued by the TransferEngine, received by the Scheduler.
@@ -102,12 +116,25 @@ pub struct ScheduledTaskHandle {
     pub request_id: String,
     pub uuid: uuid::Uuid,
     pub transfer_type: TransferType,
-    pub decision_rx: oneshot::Receiver<SchedulingDecision>,
-    pub completion_handle: TransferCompletionHandle,
+    pub decision_rx: oneshot::Receiver<(SchedulingDecision, oneshot::Sender<anyhow::Result<()>>)>,
     pub cancel_token: CancellationToken,
 }
 
+impl ScheduledTaskHandle {
+    pub async fn wait_for_decision(self) -> Box<dyn TransferCompletionHandle> {
+        tokio::select! {
+            Ok((decision, completion_tx)) = self.decision_rx => {
+                Box::new(ScheduledTransferCompletionHandle::new(decision, completion_tx))
+            }
+            _ = self.cancel_token.cancelled() => {
+                Box::new(CancelledTransferCompletionHandle)
+            }
+        }
+    }
+}
+
 /// Recived by the Worker, forward to the Scheduler.
+///
 /// In ordered to be considered for scheduling, both the [`TransferScheduleRequest`] and the [`WorkerTransferRequest`]
 /// must be present on the scheduler.
 ///
@@ -124,6 +151,7 @@ pub struct WorkerTransferRequest {
     pub request_id: String,
     pub uuid: uuid::Uuid,
     pub transfer_type: TransferType,
+    pub request_type: RequestType,
 }
 
 /// Sent by Worker to Scheduler.
@@ -135,7 +163,6 @@ pub struct WorkerSchedulerRequest {
     pub uuid: uuid::Uuid,
     pub transfer_type: TransferType,
     pub cancel_token: CancellationToken,
-    pub completion_handle: TransferCompletionHandle,
 }
 
 // /// One-time use completion handle. Should only be triggered once after the operation is complete and the memory
@@ -169,36 +196,38 @@ pub enum CompletionStatus {
     Cancelled,
 }
 
-pub struct TransferCompletionHandle(Option<oneshot::Sender<CompletionStatus>>);
+#[async_trait::async_trait]
+pub trait TransferCompletionHandle: Send {
+    fn scheduler_decision(&self) -> SchedulingDecision;
+    async fn mark_complete(&mut self, result: anyhow::Result<()>);
+}
 
-impl TransferCompletionHandle {
-    pub(crate) fn new(status_tx: oneshot::Sender<CompletionStatus>) -> Self {
-        Self(Some(status_tx))
-    }
+pub struct ScheduledTransferCompletionHandle {
+    scheduler_decision: SchedulingDecision,
+    completion_tx: Option<oneshot::Sender<anyhow::Result<()>>>,
+}
 
-    pub fn mark_as_success(mut self) {
-        if let Some(status_tx) = self.0.take() {
-            if status_tx.send(CompletionStatus::Ok).is_err() {
-                tracing::error!(
-                    "failed to send completion status; this could lead to silent data corruption"
-                );
-            }
+impl ScheduledTransferCompletionHandle {
+    pub(crate) fn new(
+        scheduler_decision: SchedulingDecision,
+        completion_tx: oneshot::Sender<anyhow::Result<()>>,
+    ) -> Self {
+        Self {
+            scheduler_decision,
+            completion_tx: Some(completion_tx),
         }
     }
+}
 
-    pub fn mark_as_error(mut self, error: String) {
-        if let Some(status_tx) = self.0.take() {
-            if status_tx.send(CompletionStatus::Err(error)).is_err() {
-                tracing::error!(
-                    "failed to send completion status; this could lead to silent data corruption"
-                );
-            }
-        }
+#[async_trait::async_trait]
+impl TransferCompletionHandle for ScheduledTransferCompletionHandle {
+    fn scheduler_decision(&self) -> SchedulingDecision {
+        self.scheduler_decision
     }
 
-    pub fn mark_as_cancelled(mut self) {
-        if let Some(status_tx) = self.0.take() {
-            if status_tx.send(CompletionStatus::Cancelled).is_err() {
+    async fn mark_complete(&mut self, result: anyhow::Result<()>) {
+        if let Some(completion_tx) = self.completion_tx.take() {
+            if completion_tx.send(result).is_err() {
                 tracing::error!(
                     "failed to send completion status; this could lead to silent data corruption"
                 );
@@ -207,21 +236,94 @@ impl TransferCompletionHandle {
     }
 }
 
-impl Drop for TransferCompletionHandle {
+impl Drop for ScheduledTransferCompletionHandle {
     fn drop(&mut self) {
-        if let Some(status_tx) = self.0.take() {
-            if status_tx
-                .send(CompletionStatus::Err(
-                    "transfer dropped without being explicitly marked as complete, error or cancelled".to_string(),
+        if self.completion_tx.is_some() {
+            // This is a fundamental logic error. The results of the application are undefined.
+            // We must abort.
+            panic!(concat!(
+                "logic error: implementation failed to respect the [TransferCompletionHandle] policy; ",
+                "handle dropped without being explicitly marked; this may lead to data corruption if ",
+                "the handle was dropped while a transfer was still in progress; please report immediately.",
+            ));
+        }
+    }
+}
+
+pub struct ImmediateTransferResult {
+    pub request_id: String,
+    pub uuid: uuid::Uuid,
+    pub status: anyhow::Result<()>,
+}
+
+pub struct ImmediateTransferCompletionHandle {
+    request_id: String,
+    uuid: uuid::Uuid,
+    completion_tx: Option<tokio::sync::mpsc::Sender<TransferToSchedulerMessage>>,
+}
+
+impl ImmediateTransferCompletionHandle {
+    pub(crate) fn new(
+        request_id: String,
+        uuid: uuid::Uuid,
+        completion_tx: tokio::sync::mpsc::Sender<TransferToSchedulerMessage>,
+    ) -> Self {
+        Self {
+            request_id,
+            uuid,
+            completion_tx: Some(completion_tx),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl TransferCompletionHandle for ImmediateTransferCompletionHandle {
+    fn scheduler_decision(&self) -> SchedulingDecision {
+        SchedulingDecision::Execute
+    }
+
+    async fn mark_complete(&mut self, result: anyhow::Result<()>) {
+        if let Some(completion_tx) = self.completion_tx.take() {
+            if completion_tx
+                .send(TransferToSchedulerMessage::ImmediateResult(
+                    ImmediateTransferResult {
+                        request_id: self.request_id.clone(),
+                        uuid: self.uuid,
+                        status: result,
+                    },
                 ))
+                .await
                 .is_err()
             {
-                tracing::error!(concat!(
-                    "logic error: implementation failed to respect the [TransferCompletionHandle] policy; ",
-                    "handle dropped with being explicitly marked; this may lead to data corruption of the ",
-                    "handle was dropped while a transfer was still in progress; please report immediately."
-                ));
+                tracing::error!(DISCONNECTED_WARNING);
             }
         }
+    }
+}
+
+impl Drop for ImmediateTransferCompletionHandle {
+    fn drop(&mut self) {
+        if self.completion_tx.is_some() {
+            // This is a fundamental logic error. The results of the application are undefined.
+            // We must abort.
+            panic!(concat!(
+                "logic error: implementation failed to respect the [TransferCompletionHandle] policy; ",
+                "handle dropped without being explicitly marked; this may lead to data corruption if ",
+                "the handle was dropped while a transfer was still in progress; please report immediately.",
+            ));
+        }
+    }
+}
+
+pub struct CancelledTransferCompletionHandle;
+
+#[async_trait::async_trait]
+impl TransferCompletionHandle for CancelledTransferCompletionHandle {
+    fn scheduler_decision(&self) -> SchedulingDecision {
+        SchedulingDecision::Cancel
+    }
+
+    async fn mark_complete(&mut self, _result: anyhow::Result<()>) {
+        // Do nothing
     }
 }

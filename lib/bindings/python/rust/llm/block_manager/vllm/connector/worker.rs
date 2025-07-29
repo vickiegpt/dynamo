@@ -10,25 +10,25 @@ use std::sync::{Arc, OnceLock};
 
 use super::*;
 use crate::llm::block_manager::distributed::get_barrier_id;
+use crate::llm::block_manager::vllm::connector::worker::slot::WorkerSlotState;
 use crate::{
     llm::block_manager::distributed::VllmTensor, to_pyerr,
     DistributedRuntime as PyDistributedRuntime,
 };
 
 use dynamo_llm::block_manager::distributed::{
-    BlockTransferRequest, ConnectorRequestLeader, ConnectorTransferType, KvbmWorker,
-    KvbmWorkerConfig,
+    BlockTransferHandler, BlockTransferPool, BlockTransferRequest, KvbmWorker, KvbmWorkerConfig,
 };
-use dynamo_llm::block_manager::{
-    connector::scheduler::{Scheduler, SchedulerMessage},
-    storage::torch::{TorchDevice, TorchTensor},
-};
+use dynamo_llm::block_manager::storage::torch::TorchTensor;
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
 use dynamo_runtime::{CancellationToken, DistributedRuntime};
-use tokio::task::JoinHandle;
 
 enum EngineMessage {
+    /// Update the iteration count
     UpdateIteration(u64),
+
+    /// Trigger a layer to be completed
+    UpdateLayersCompleted(String, u32),
 
     /// Create a request slot with request id, counter and cancel token
     CreateEngineSlot(CreateEngineSlotRequest),
@@ -36,10 +36,11 @@ enum EngineMessage {
     /// Issue a request to the engine to complete a request and remove it
     RemoveEngineSlot(String),
 
-    /// Trigger a layer to be completed
-    UpdateLayersCompleted(String, u32),
-    // /// Create a task with request id and the operation/task name
-    // CreateTask(String, String),
+    /// Register the transfer engine with the worker
+    RegisterTransferEngine(tokio::sync::oneshot::Receiver<BlockTransferHandler>),
+
+    /// Enqueue a block transfer request
+    EnqueueBlockTransfer(ConnectorOperation),
 }
 
 #[pyclass]
@@ -59,14 +60,17 @@ pub struct KvConnectorWorker {
     engine_task: CriticalTaskExecutionHandle,
 
     /// Map of request id to inflight load requests
-    maybe_loading_finished: HashSet<String>,
+    maybe_finished_onboarding: HashSet<String>,
 
     /// Map of request id to inflight finished requests
-    maybe_storing_finished: HashSet<String>,
+    maybe_finished_offloading: HashSet<String>,
+
+    /// For now, offloading operations will be enqueued at the end of the forward pass
+    offloading_operations: Vec<ConnectorOperation>,
 
     bound: bool,
     iteration: u64,
-    layers_complete: u32,
+    layers_complete: usize,
 }
 
 #[pymethods]
@@ -98,8 +102,9 @@ impl KvConnectorWorker {
             kv_caches: HashMap::new(),
             engine_tx,
             engine_task,
-            maybe_loading_finished: HashSet::new(),
-            maybe_storing_finished: HashSet::new(),
+            maybe_finished_onboarding: HashSet::new(),
+            maybe_finished_offloading: HashSet::new(),
+            offloading_operations: Vec::new(),
             bound: false,
             iteration: 0,
             layers_complete: 0,
@@ -109,6 +114,7 @@ impl KvConnectorWorker {
     /// Registers the KV caches with the KVBM worker.
     ///
     /// The Dynamo KVBM worker is lazily initialized when the first KV cache is registered.
+    /// This process establishes a connection between all KVBM workers and the leader.
     pub fn register_kv_caches(
         &mut self,
         num_device_blocks: usize,
@@ -122,6 +128,7 @@ impl KvConnectorWorker {
             return Ok(());
         }
 
+        // TODO: pass in the sorted (layer_name, tensor) such that the order of the list matches the order of layer execution in the model
         for (layer_name, torch_tensor) in kv_caches {
             let vllm_tensor = Arc::new(VllmTensor::new(torch_tensor).map_err(to_pyerr)?);
             tracing::trace!("Registering KV cache layer: {layer_name}, tensor: {vllm_tensor:?}");
@@ -145,7 +152,7 @@ impl KvConnectorWorker {
             .build()
             .map_err(to_pyerr)?;
 
-        let worker = self
+        let mut worker = self
             .drt
             .runtime()
             .primary()
@@ -153,6 +160,19 @@ impl KvConnectorWorker {
                 let worker = KvbmWorker::new(config).await?;
                 anyhow::Ok(worker)
             })
+            .map_err(to_pyerr)?;
+
+        // the block transfer handler is being initialized in the background
+        let block_transfer_handler = worker
+            .block_transfer_handler_rx()
+            .ok_or(anyhow::anyhow!("block transfer handler not available"))
+            .map_err(to_pyerr)?;
+
+        // pass this oneshot receiver to the engine task which can await on its completion
+        self.engine_tx
+            .send(EngineMessage::RegisterTransferEngine(
+                block_transfer_handler,
+            ))
             .map_err(to_pyerr)?;
 
         self.kvbm_worker
@@ -193,6 +213,45 @@ impl KvConnectorWorker {
             self.create_worker_slot(slot)?;
         }
 
+        let mut onboarding_operations = Vec::new();
+        let mut offloading_operations = Vec::new();
+
+        for operation in metadata.operations {
+            tracing::debug!(
+                request_id = operation.req_id, operation_id = %operation.uuid,
+                "adding operation to slot: {operation:#?}"
+            );
+
+            if operation.xfer_req.to_pool == BlockTransferPool::Device {
+                onboarding_operations.push(operation);
+            } else if operation.xfer_req.from_pool == BlockTransferPool::Device {
+                offloading_operations.push(operation);
+            }
+        }
+
+        // immediately enqueue the onboarding operations
+        for operation in onboarding_operations {
+            let request_id = operation.req_id.clone();
+            let slot = self.request_slots.get_mut(&request_id).unwrap();
+            debug_assert!(matches!(
+                slot.get_state(),
+                WorkerSlotState::Initialized | WorkerSlotState::Onboarding
+            ));
+            slot.set_state(WorkerSlotState::Onboarding);
+            slot.add_operation(&operation);
+            self.engine_tx
+                .send(EngineMessage::EnqueueBlockTransfer(operation))
+                .map_err(to_pyerr)?;
+            self.maybe_finished_onboarding.insert(request_id);
+        }
+
+        // delay offloading operations until the end of the forward pass
+        debug_assert!(
+            self.offloading_operations.is_empty(),
+            "offloading operations already enqueued"
+        );
+        self.offloading_operations = offloading_operations;
+
         Ok(())
     }
 
@@ -204,15 +263,33 @@ impl KvConnectorWorker {
         self.layers_complete = 0;
     }
 
-    pub fn save_kv_layer(&mut self, layer_name: String, _kv_layer: Py<PyAny>) -> PyResult<()> {
+    pub fn save_kv_layer(&mut self, _layer_name: String, _kv_layer: Py<PyAny>) -> PyResult<()> {
         self.layers_complete += 1;
 
-        self.engine_tx
-            .send(EngineMessage::UpdateLayersCompleted(
-                layer_name,
-                self.layers_complete,
-            ))
-            .map_err(to_pyerr)?;
+        // self.engine_tx
+        //     .send(EngineMessage::UpdateLayersCompleted(
+        //         layer_name,
+        //         self.layers_complete,
+        //     ))
+        //     .map_err(to_pyerr)?;
+
+        if self.layers_complete == self.kv_caches.len() {
+            let offloading_operations = std::mem::take(&mut self.offloading_operations);
+            for operation in offloading_operations {
+                let request_id = operation.req_id.clone();
+                let slot = self.request_slots.get_mut(&request_id).unwrap();
+                debug_assert!(matches!(
+                    slot.get_state(),
+                    WorkerSlotState::Initialized | WorkerSlotState::Offloading
+                ));
+                slot.set_state(WorkerSlotState::Offloading);
+                slot.add_operation(&operation);
+                self.engine_tx
+                    .send(EngineMessage::EnqueueBlockTransfer(operation))
+                    .map_err(to_pyerr)?;
+                self.maybe_finished_offloading.insert(request_id);
+            }
+        }
 
         Ok(())
     }
@@ -235,7 +312,7 @@ impl KvConnectorWorker {
         //    operations to complete -- either by finishing or being cancelled
         //    - the finish request is triggered by this function, it is not seen in the metadata
         //
-        // under each scenario, we mark the `maybe_loading_finished` and `maybe_storing_finished` hashsets with
+        // under each scenario, we mark the `maybe_loading_finished` and `maybe_finished_offloading` hashsets with
         // the request id
         //
         // on each forward pass we visit the maybe slots to see if they are finished
@@ -252,18 +329,22 @@ impl KvConnectorWorker {
             );
 
             debug_assert!(
-                !self.maybe_storing_finished.contains(&request_id),
+                !self.maybe_finished_offloading.contains(&request_id),
                 "request already in maybe storing finished"
             );
 
             // insert request into the maybe finished set
-            self.maybe_storing_finished.insert(request_id.clone());
+            self.maybe_finished_offloading.insert(request_id.clone());
         }
 
         // visit each request slot in the maybe finished set
-        for request_id in self.maybe_storing_finished.iter() {
+        for request_id in self.maybe_finished_offloading.iter() {
             let slot = self.request_slots.get(request_id).unwrap();
-            if slot.is_finished_storing() {
+            debug_assert!(matches!(
+                slot.get_state(),
+                WorkerSlotState::Initialized | WorkerSlotState::Offloading
+            ));
+            if slot.all_tasks_completed() {
                 tracing::debug!(request_id, "request slot is finished");
                 is_finished_storing.insert(request_id.clone());
             } else {
@@ -274,7 +355,7 @@ impl KvConnectorWorker {
         // remove the finished requests from the maybe finished set
         // note: when storing is finished we also remove the request from the engine state
         for request_id in &is_finished_storing {
-            self.maybe_storing_finished.remove(request_id);
+            self.maybe_finished_offloading.remove(request_id);
 
             // currently chomping the error as the engine is closed and we are shutting down
             let _ = self
@@ -282,12 +363,14 @@ impl KvConnectorWorker {
                 .send(EngineMessage::RemoveEngineSlot(request_id.clone()));
         }
 
-        // visit each request slot in the maybe loading finished set to see if it is finished
-        for request_id in self.maybe_loading_finished.iter() {
-            let slot = self.request_slots.get(request_id).unwrap();
-            if slot.is_finished_loading() {
+        // visit each request slot in the maybe finished set to see if it is finished
+        for request_id in self.maybe_finished_onboarding.iter() {
+            let slot = self.request_slots.get_mut(request_id).unwrap();
+            debug_assert!(slot.get_state() == &WorkerSlotState::Onboarding);
+            if slot.all_tasks_completed() {
                 tracing::debug!(request_id, "request slot is finished");
                 is_finished_loading.insert(request_id.clone());
+                slot.set_state(WorkerSlotState::Initialized);
             } else {
                 tracing::debug!(request_id, "request slot is not finished");
             }
@@ -295,7 +378,7 @@ impl KvConnectorWorker {
 
         // remove the finished requests from the maybe finished set
         for request_id in &is_finished_loading {
-            self.maybe_loading_finished.remove(request_id);
+            self.maybe_finished_onboarding.remove(request_id);
         }
 
         (is_finished_storing, is_finished_loading)
@@ -342,19 +425,26 @@ impl KvConnectorWorker {
                 EngineMessage::UpdateLayersCompleted(last_layer_name, layers_completed) => {
                     state.update_layers_completed(last_layer_name, layers_completed);
                 }
+                EngineMessage::RegisterTransferEngine(block_transfer_handler_rx) => {
+                    tracing::debug!("awaiting block transfer handler");
+                    let block_transfer_handler = block_transfer_handler_rx.await?;
+                    state.block_transfer_handler = Some(Arc::new(block_transfer_handler));
+                }
+                EngineMessage::EnqueueBlockTransfer(operation) => {
+                    state.enqueue_block_transfer(operation);
+                }
             }
         }
         Ok(())
     }
 }
 
-async fn task_monitor() {}
-
 #[derive(Default)]
 struct EngineState {
     slots: HashMap<String, EngineSlot>,
     iteration: u64,
     layers_complete: u32,
+    block_transfer_handler: Option<Arc<BlockTransferHandler>>,
 }
 
 impl EngineState {
@@ -379,11 +469,47 @@ impl EngineState {
 
     fn update_layers_completed(&mut self, last_layer_name: String, layers_completed: u32) {
         self.layers_complete = layers_completed;
-        tracing::debug!(
+        tracing::trace!(
             iteration = self.iteration,
             layers_completed,
             "layer {last_layer_name} is complete"
         );
+    }
+
+    fn enqueue_block_transfer(&mut self, operation: ConnectorOperation) {
+        debug_assert!(
+            self.block_transfer_handler.is_some(),
+            "block transfer handler not registered"
+        );
+        let slot = self.slots.get(&operation.req_id).unwrap();
+        let completed_counter = IncrementOnDrop::new(slot.completed.clone());
+
+        let block_transfer_handler = self.block_transfer_handler.as_ref().unwrap().clone();
+
+        // add in a scheduler and concurency limiter
+
+        tokio::spawn(async move {
+            tracing::debug!(
+                request_id = operation.req_id,
+                "executing block transfer for request_id"
+            );
+            if let Err(e) = block_transfer_handler
+                .execute_transfer(operation.xfer_req)
+                .await
+            {
+                panic!(
+                    "failed to execute block transfer for request_id {}: {e:#?}",
+                    operation.req_id
+                );
+            }
+
+            tracing::debug!(
+                request_id = operation.req_id,
+                "block transfer for request_id completed"
+            );
+
+            drop(completed_counter);
+        });
     }
 }
 

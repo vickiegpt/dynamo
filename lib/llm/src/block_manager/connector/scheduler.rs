@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::protocol::*;
 use super::*;
@@ -7,7 +7,7 @@ use super::*;
 use either::Either;
 use tokio::sync::mpsc;
 
-const DISCONNECTED_WARNING: &str =
+pub const DISCONNECTED_WARNING: &str =
     "runtime error: connections between components were lost; likely tearing down";
 
 #[derive(Debug, thiserror::Error)]
@@ -16,6 +16,7 @@ pub enum SchedulerError {
     Disconnected,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SchedulingDecision {
     Execute,
     Cancel,
@@ -24,11 +25,11 @@ pub enum SchedulingDecision {
 /// A client for the scheduler. One-time use. Capture a clone per task.
 #[derive(Clone)]
 pub struct TransferSchedulerClient {
-    scheduler_tx: mpsc::Sender<TransferScheduleRequest>,
+    scheduler_tx: mpsc::Sender<TransferToSchedulerMessage>,
 }
 
 impl TransferSchedulerClient {
-    pub fn new(scheduler_tx: mpsc::Sender<TransferScheduleRequest>) -> Self {
+    pub fn new(scheduler_tx: mpsc::Sender<TransferToSchedulerMessage>) -> Self {
         Self { scheduler_tx }
     }
 
@@ -41,52 +42,67 @@ impl TransferSchedulerClient {
     pub async fn schedule_transfer(
         self,
         request: LeaderTransferRequest,
-    ) -> Option<TransferCompletionHandle> {
-        let (response_tx, response_rx) = oneshot::channel();
-        let tx = self.scheduler_tx.clone();
-
-        let request = TransferScheduleRequest {
-            leader_request: request,
-            response_tx,
-        };
-
-        if tx.send(request).await.is_err() {
-            tracing::warn!(DISCONNECTED_WARNING);
-            return None;
-        }
-
-        let handle = match response_rx.await {
-            Ok(response) => response,
-            Err(_) => {
-                tracing::warn!(DISCONNECTED_WARNING);
-                return None;
-            }
-        };
-
-        tokio::select! {
-            maybe_decision = handle.decision_rx =>  {
-                match maybe_decision {
-                    Ok(SchedulingDecision::Execute) => {
-                        Some(handle.completion_handle)
-                    }
-                    Ok(SchedulingDecision::Cancel) => {
-                        None
-                    }
-                    Err(_) => {
-                        tracing::warn!(DISCONNECTED_WARNING);
-                        handle.completion_handle.mark_as_error("connection to scheduler dropped".to_string());
-                        None
-                    }
-                }
-            }
-            _ = handle.cancel_token.cancelled() => {
-                tracing::debug!(
-                    "transfer was explicitly cancelled via the cancel token"
+    ) -> anyhow::Result<Box<dyn TransferCompletionHandle>> {
+        let scheduler_tx = self.scheduler_tx.clone();
+        match request.request_type {
+            RequestType::Immediate => {
+                let handle = ImmediateTransferCompletionHandle::new(
+                    request.request_id,
+                    request.uuid,
+                    scheduler_tx.clone(),
                 );
-                handle.completion_handle.mark_as_cancelled();
-                None
+                Ok(Box::new(handle))
+            }
+            RequestType::Scheduled => {
+                let (response_tx, response_rx) = oneshot::channel();
+                let request = TransferScheduleRequest {
+                    leader_request: request,
+                    response_tx,
+                };
+                scheduler_tx
+                    .send(TransferToSchedulerMessage::ScheduleRequest(request))
+                    .await?;
+                Ok(response_rx.await?.wait_for_decision().await)
             }
         }
+
+        // if tx.send(request).await.is_err() {
+        //     tracing::warn!(DISCONNECTED_WARNING);
+        //     return None;
+        // }
+
+        // let handle = match response_rx.await {
+        //     Ok(response) => response,
+        //     Err(_) => {
+        //         tracing::warn!(DISCONNECTED_WARNING);
+        //         return None;
+        //     }
+        // };
+
+        // tokio::select! {
+        //     maybe_decision = handle.decision_rx =>  {
+        //         match maybe_decision {
+        //             Ok(SchedulingDecision::Execute) => {
+        //                 Some(handle.completion_handle)
+        //             }
+        //             Ok(SchedulingDecision::Cancel) => {
+        //                 None
+        //             }
+        //             Err(_) => {
+        //                 tracing::warn!(DISCONNECTED_WARNING);
+        //                 handle.completion_handle.mark_as_error("connection to scheduler dropped".to_string());
+        //                 None
+        //             }
+        //         }
+        //     }
+        //     _ = handle.cancel_token.cancelled() => {
+        //         tracing::debug!(
+        //             "transfer was explicitly cancelled via the cancel token"
+        //         );
+        //         handle.completion_handle.mark_as_cancelled();
+        //         None
+        //     }
+        // }
     }
 }
 
@@ -154,20 +170,16 @@ impl WorkerSchedulerClient {
 }
 
 pub struct WorkerSchedulerClientSlot {
-    load_operations: HashSet<uuid::Uuid>,
-    load_completed: Arc<AtomicU64>,
-    store_operations: HashSet<uuid::Uuid>,
-    store_completed: Arc<AtomicU64>,
+    operations: Vec<uuid::Uuid>,
+    completed: Arc<AtomicU64>,
     cancel_token: CancellationToken,
 }
 
 impl WorkerSchedulerClientSlot {
     pub fn new(cancel_token: CancellationToken) -> Self {
         Self {
-            load_operations: HashSet::new(),
-            load_completed: Arc::new(AtomicU64::new(0)),
-            store_operations: HashSet::new(),
-            store_completed: Arc::new(AtomicU64::new(0)),
+            operations: Vec::new(),
+            completed: Arc::new(AtomicU64::new(0)),
             cancel_token,
         }
     }
@@ -175,8 +187,7 @@ impl WorkerSchedulerClientSlot {
     fn make_scheduler_slot_request(&self, request_id: String) -> SchedulerCreateSlotDetails {
         SchedulerCreateSlotDetails {
             request_id,
-            load_completed: self.load_completed.clone(),
-            store_completed: self.store_completed.clone(),
+            completed: self.completed.clone(),
             cancel_token: self.cancel_token.clone(),
         }
     }
@@ -215,22 +226,20 @@ impl WorkerSchedulerClient {
 
         let slot = self.slots.get_mut(&request.request_id).unwrap();
 
-        match request.transfer_type {
-            TransferType::Load => {
-                slot.load_operations.insert(request.uuid);
-            }
-            TransferType::Store => {
-                slot.store_operations.insert(request.uuid);
-            }
-        };
+        slot.operations.push(request.uuid);
 
-        if self
-            .scheduler_tx
-            .send(SchedulerMessage::EnqueueRequest(request))
-            .is_err()
-        {
-            tracing::error!("connection to scheduler dropped; cancelling all transfers");
-            slot.cancel_token.cancel();
+        match request.request_type {
+            RequestType::Immediate => {}
+            RequestType::Scheduled => {
+                if self
+                    .scheduler_tx
+                    .send(SchedulerMessage::EnqueueRequest(request))
+                    .is_err()
+                {
+                    tracing::error!("connection to scheduler dropped; cancelling all transfers");
+                    slot.cancel_token.cancel();
+                }
+            }
         }
     }
 }
@@ -264,8 +273,9 @@ pub enum SchedulerMessage {
 
 pub struct Scheduler {
     slots: HashMap<String, SchedulerSlot>,
+    unprocessed_immediate_results: HashMap<String, HashSet<uuid::Uuid>>,
     worker_rx: mpsc::UnboundedReceiver<SchedulerMessage>,
-    transfer_rx: mpsc::Receiver<TransferScheduleRequest>,
+    transfer_rx: mpsc::Receiver<TransferToSchedulerMessage>,
     iteration: u64,
     layers_complete: u32,
     iteration_complete: bool,
@@ -282,6 +292,7 @@ impl Scheduler {
         (
             Scheduler {
                 slots: HashMap::new(),
+                unprocessed_immediate_results: HashMap::new(),
                 worker_rx: scheduler_rx,
                 transfer_rx,
                 iteration: 0,
@@ -294,6 +305,9 @@ impl Scheduler {
     }
 
     async fn step(&mut self) -> bool {
+        assert!(!self.worker_rx.is_closed(), "worker rx is closed");
+        assert!(!self.transfer_rx.is_closed(), "transfer rx is closed");
+
         tokio::select! {
             maybe_worker_msg = self.worker_rx.recv(), if !self.worker_rx.is_closed() => {
                 match maybe_worker_msg {
@@ -309,40 +323,49 @@ impl Scheduler {
                     Some(SchedulerMessage::CreateSlot(request)) => {
                         self.add_slot(request, self.iteration);
                     }
-                    // Some(SchedulerMessage::RemoveRequestSlot(request_id)) => {
-                    //     self.remove_slot(request_id);
-                    // }
-
-                // Some(SchedulerMessage::EnqueueRequest(request)) => {
-                //         self.enqueue_request(request);
-                //     }
-                //     Some(SchedulerMessage::RequestFinished(request_id)) => {
-                //         self.request_finished(request_id);
-                //     }
+                    Some(SchedulerMessage::EnqueueRequest(request)) => {
+                        self.handle_enqueue_request(request);
+                    }
+                    None => {
+                        return false;
+                    }
                     _ => {
                         panic!("received unexpected message from worker");
+                    }
+
+                }
+            }
+            maybe_transfer_msg = self.transfer_rx.recv(), if !self.transfer_rx.is_closed() => {
+                match maybe_transfer_msg {
+                    Some(TransferToSchedulerMessage::ScheduleRequest(request)) => {
+                    }
+                    Some(TransferToSchedulerMessage::ImmediateResult(result)) => {
+                        self.handle_immediate_result(result);
                     }
                     None => {
                         return false;
                     }
                 }
-
              }
-            maybe_transfer_msg = self.transfer_rx.recv() => { }
         }
         true
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(request_id = %req.request_id))]
     fn add_slot(&mut self, req: SchedulerCreateSlotDetails, created_at: u64) {
         let request_id = req.request_id.clone();
         debug_assert!(!self.slots.contains_key(&request_id), "slot already exists");
-        tracing::debug!(
-            request_id,
-            iteration = self.iteration,
-            "engine state adding slot"
-        );
-        self.slots
-            .insert(request_id, SchedulerSlot::new(req, created_at));
+        tracing::debug!("engine state adding slot");
+        let slot = SchedulerSlot::new(req, created_at);
+        if let Some(unprocessed_results) = self.unprocessed_immediate_results.remove(&request_id) {
+            tracing::debug!(
+                "found {} unprocessed immediate results; adding to slot",
+                unprocessed_results.len()
+            );
+            slot.completed
+                .fetch_add(unprocessed_results.len() as u64, Ordering::Relaxed);
+        }
+        self.slots.insert(request_id, slot);
     }
 
     fn remove_slot(&mut self, request_id: String) {
@@ -353,6 +376,17 @@ impl Scheduler {
             iteration = self.iteration,
             "engine state removing slot"
         );
+    }
+
+    fn handle_enqueue_request(&mut self, request: WorkerTransferRequest) {
+        debug_assert!(
+            self.slots.contains_key(&request.request_id),
+            "slot does not exist"
+        );
+        let slot = self
+            .slots
+            .get_mut(&request.request_id)
+            .expect("slot does not exist");
     }
 
     fn start_iteration(&mut self, iteration: u64) {
@@ -384,12 +418,31 @@ impl Scheduler {
             "layer {last_layer_name} is complete"
         );
     }
+
+    #[tracing::instrument(level = "debug", skip_all, fields(request_id = %result.request_id, operation_id = %result.uuid))]
+    fn handle_immediate_result(&mut self, result: ImmediateTransferResult) {
+        match self.slots.get_mut(&result.request_id) {
+            Some(slot) => {
+                slot.completed.fetch_add(1, Ordering::Relaxed);
+                tracing::debug!(
+                    "matched slot; incrementing completed counter to {}",
+                    slot.completed.load(Ordering::Relaxed)
+                );
+            }
+            None => {
+                tracing::debug!("no slot found; adding to unprocessed immediate results");
+                self.unprocessed_immediate_results
+                    .entry(result.request_id)
+                    .or_default()
+                    .insert(result.uuid);
+            }
+        }
+    }
 }
 
 pub struct SchedulerCreateSlotDetails {
     pub request_id: String,
-    pub load_completed: Arc<AtomicU64>,
-    pub store_completed: Arc<AtomicU64>,
+    pub completed: Arc<AtomicU64>,
     pub cancel_token: CancellationToken,
 }
 
@@ -400,8 +453,7 @@ pub struct SchedulerSlot {
     request_id: String,
     operations: HashMap<uuid::Uuid, Either<WorkerArrivedFirst, TransferArrivedFirst>>,
     cancel_token: CancellationToken,
-    load_completed: Arc<AtomicU64>,
-    store_completed: Arc<AtomicU64>,
+    completed: Arc<AtomicU64>,
     created_at: u64,
 }
 
@@ -410,8 +462,7 @@ impl SchedulerSlot {
         Self {
             request_id: req.request_id,
             operations: HashMap::new(),
-            load_completed: req.load_completed,
-            store_completed: req.store_completed,
+            completed: req.completed,
             cancel_token: req.cancel_token,
             created_at,
         }
@@ -449,5 +500,156 @@ mod tests {
         scheduler.step().await;
         assert_eq!(scheduler.iteration, 1);
         assert!(scheduler.iteration_complete);
+    }
+
+    #[tokio::test]
+    async fn test_transfer_immediate_arrives_first() {
+        dynamo_runtime::logging::init();
+
+        let cancel_token = CancellationToken::new();
+        let (mut scheduler, mut worker_client, transfer_client) = Scheduler::new(cancel_token);
+
+        let operation_id = uuid::Uuid::new_v4();
+
+        // on the transfer engine, a request arrives with a request type of immediate
+        let request = LeaderTransferRequest {
+            request_id: "test".to_string(),
+            uuid: operation_id,
+            requirement: None,
+            request_type: RequestType::Immediate,
+        };
+
+        let mut handle = transfer_client
+            .clone()
+            .schedule_transfer(request)
+            .await
+            .unwrap();
+
+        // the transfer engine will immediately return a completion handle
+        assert_eq!(handle.scheduler_decision(), SchedulingDecision::Execute);
+
+        // the completion handle will be marked as complete
+        handle.mark_complete(Ok(())).await;
+
+        assert_eq!(scheduler.unprocessed_immediate_results.len(), 0);
+        scheduler.step().await;
+        assert_eq!(scheduler.unprocessed_immediate_results.len(), 1);
+
+        // the request is completed
+        worker_client.create_slot("test".to_string()).unwrap();
+
+        assert!(!scheduler.slots.contains_key("test"));
+        scheduler.step().await;
+        assert!(scheduler.slots.contains_key("test"));
+
+        // the unprocessed results should now be processed
+        assert_eq!(scheduler.unprocessed_immediate_results.len(), 0);
+
+        // neither the worker nor the scheduler should have observed the completion yet
+        // this is because the worker has not yet requested it
+        assert_eq!(
+            scheduler
+                .slots
+                .get("test")
+                .unwrap()
+                .completed
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            worker_client
+                .slots
+                .get("test")
+                .unwrap()
+                .completed
+                .load(Ordering::Relaxed),
+            1
+        );
+
+        // the worker has not issued any operations yet
+        assert_eq!(worker_client.slots.get("test").unwrap().operations.len(), 0);
+    }
+
+    /// This test verifies that the scheduler can handle the case where the transfer engine's
+    /// immediate result arrives after the worker has scheduled the operation.
+    #[tokio::test]
+    async fn test_transfer_immediate_arrives_last() {
+        dynamo_runtime::logging::init();
+
+        let cancel_token = CancellationToken::new();
+        let (mut scheduler, mut worker_client, transfer_client) = Scheduler::new(cancel_token);
+
+        let operation_id = uuid::Uuid::new_v4();
+
+        // on the transfer engine, a request arrives with a request type of immediate
+        let request = LeaderTransferRequest {
+            request_id: "test".to_string(),
+            uuid: operation_id,
+            requirement: None,
+            request_type: RequestType::Immediate,
+        };
+
+        let mut handle = transfer_client
+            .clone()
+            .schedule_transfer(request)
+            .await
+            .unwrap();
+
+        // the transfer engine will immediately return a completion handle
+        assert_eq!(handle.scheduler_decision(), SchedulingDecision::Execute);
+
+        // assume this is a long running operation so our worker can enqueue the operation worker-side before the transfer-side completes
+        worker_client.create_slot("test".to_string()).unwrap();
+        assert!(!scheduler.slots.contains_key("test"));
+        scheduler.step().await;
+        assert!(scheduler.slots.contains_key("test"));
+        assert_eq!(scheduler.unprocessed_immediate_results.len(), 0);
+
+        // the worker enqueues the operation
+        let request = WorkerTransferRequest {
+            request_id: "test".to_string(),
+            uuid: operation_id,
+            transfer_type: TransferType::Load,
+            request_type: RequestType::Immediate,
+        };
+
+        // immediate requests are not passed to the scheduler, but the completion will be automatically
+        // visible on the client via the shared atomic counter
+        worker_client.enqueue_request(request);
+
+        let worker_slot = worker_client.slots.get("test").unwrap();
+        assert_eq!(worker_slot.operations.len(), 1);
+        assert_eq!(worker_slot.completed.load(Ordering::Relaxed), 0);
+
+        // the completion handle will be marked as complete
+        handle.mark_complete(Ok(())).await;
+
+        assert_eq!(scheduler.unprocessed_immediate_results.len(), 0);
+        scheduler.step().await;
+        assert_eq!(scheduler.unprocessed_immediate_results.len(), 0);
+
+        // neither the worker nor the scheduler should have observed the completion yet
+        // this is because the worker has not yet requested it
+        assert_eq!(
+            scheduler
+                .slots
+                .get("test")
+                .unwrap()
+                .completed
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            worker_client
+                .slots
+                .get("test")
+                .unwrap()
+                .completed
+                .load(Ordering::Relaxed),
+            1
+        );
+
+        // the worker has not issued any operations yet
+        assert_eq!(worker_client.slots.get("test").unwrap().operations.len(), 1);
     }
 }

@@ -91,7 +91,7 @@ pub trait Slot: std::fmt::Debug {
     fn acquire_all_local_matches(&mut self) -> Result<(), SlotError>;
 
     /// Take all pending operations for the slot.
-    fn take_pending_operations(&mut self) -> Vec<String>;
+    fn take_pending_operations(&mut self) -> Vec<BlockTransferRequest>;
 }
 
 pub trait ExternallyManagedDeviceSlot: Slot {
@@ -187,6 +187,9 @@ pub struct VllmConnectorSlot {
     /// We must hold these blocks in the slot state until the scheduler trigger the offloading.
     offload_to_host: Vec<MutableBlock<PinnedStorage, VllmLocality, BasicMetadata>>,
 
+    /// The host block ids
+    offloaded_to_host_blocks: Vec<usize>,
+
     /// The number of blocks cached from the device
     blocks_cached_from_device: usize,
 
@@ -203,7 +206,7 @@ pub struct VllmConnectorSlot {
 
     iteration_first_scheduled: Option<u64>,
 
-    pending_operations: Vec<String>,
+    pending_operations: Vec<BlockTransferRequest>,
 }
 
 impl VllmConnectorSlot {
@@ -227,6 +230,7 @@ impl VllmConnectorSlot {
             staging_from_host: None,
             staging_from_disk: None,
             offload_to_host: Vec::new(),
+            offloaded_to_host_blocks: Vec::new(),
             pending_operations: Vec::new(),
             blocks_cached_from_device: 0,
             blocks_cached_from_host: 0,
@@ -252,8 +256,6 @@ impl Slot for VllmConnectorSlot {
 
     fn mark_as_prefilling(&mut self, iteration: u64) -> Result<(), SlotError> {
         self.state = SlotState::Prefilling;
-
-        // we can now aggress
 
         Ok(())
     }
@@ -297,7 +299,7 @@ impl Slot for VllmConnectorSlot {
         self.immutable.len() + self.mutable.len()
     }
 
-    fn take_pending_operations(&mut self) -> Vec<String> {
+    fn take_pending_operations(&mut self) -> Vec<BlockTransferRequest> {
         std::mem::take(&mut self.pending_operations)
     }
 
@@ -417,12 +419,13 @@ impl ExternallyManagedDeviceSlot for VllmConnectorSlot {
     }
 
     fn append_mutable_device_blocks(&mut self, block_ids: Vec<BlockId>) -> Result<(), SlotError> {
+        let count = block_ids.len();
+        self.mutable.extend(block_ids);
         tracing::debug!(
-            "appending {} mutable device blocks to slot; total device blocks: {}",
-            block_ids.len(),
+            "appended {} mutable device blocks to slot; total device blocks: {}",
+            count,
             self.num_device_blocks_allocated()
         );
-        self.mutable.extend(block_ids);
         Ok(())
     }
 }

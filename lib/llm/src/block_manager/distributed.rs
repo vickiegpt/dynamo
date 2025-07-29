@@ -14,6 +14,7 @@ pub use utils::{
     BlockTransferPool, BlockTransferRequest, ConnectorRequestLeader, ConnectorTransferType,
 };
 pub use worker::{KvbmWorker, KvbmWorkerConfig};
+pub use zmq::Handler;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskReady {

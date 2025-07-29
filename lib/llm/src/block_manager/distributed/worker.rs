@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
@@ -12,6 +11,7 @@ use zmq::*;
 
 use crate::block_manager::{
     block::{layout_to_blocks, locality, transfer::TransferContext, Block},
+    connector::scheduler::TransferSchedulerClient,
     layout::LayoutType,
     storage::{torch::TorchTensor, DeviceAllocator, DeviceStorage, DiskAllocator, PinnedAllocator},
     BasicMetadata, BlockMetadata, LayoutConfigBuilder, NixlLayout, Storage,
@@ -103,6 +103,9 @@ pub struct KvbmWorkerConfig {
 
     #[builder(default = "String::from(\"kvbm\")")]
     barrier_id: String,
+
+    #[builder(default = "None")]
+    scheduler_client: Option<TransferSchedulerClient>,
 }
 
 impl KvbmWorkerConfig {
@@ -126,7 +129,6 @@ fn build_agent(worker_id: usize, use_gds: bool) -> anyhow::Result<NixlAgent> {
 pub struct KvbmWorker {
     task: Option<CriticalTaskExecutionHandle>,
     block_transfer_handler_rx: Option<oneshot::Receiver<transfer::BlockTransferHandler>>,
-    block_transfer_handler: Option<transfer::BlockTransferHandler>,
 }
 
 impl KvbmWorker {
@@ -196,6 +198,8 @@ impl KvbmWorker {
         // establish a oneshot channel to get back the raw BlockTransferHandler
         let (handler_tx, handler_rx) = oneshot::channel();
 
+        let scheduler_client = config.scheduler_client.clone();
+
         let task = CriticalTaskExecutionHandle::new(
             move |cancel_token| {
                 KvbmWorker::worker_task(
@@ -205,6 +209,7 @@ impl KvbmWorker {
                     config,
                     cancel_token,
                     handler_tx,
+                    scheduler_client,
                 )
             },
             cancel_token.clone(),
@@ -214,24 +219,16 @@ impl KvbmWorker {
         Ok(Self {
             task: Some(task),
             block_transfer_handler_rx: Some(handler_rx),
-            block_transfer_handler: None,
         })
     }
 
-    pub async fn block_transfer_handler(
+    /// One-time use method to extract the block transfer handler from the worker.
+    ///
+    /// This is a bit of a hack. Improve the API design around this in the future.
+    pub fn block_transfer_handler_rx(
         &mut self,
-    ) -> anyhow::Result<&transfer::BlockTransferHandler> {
-        if let Some(rx) = self.block_transfer_handler_rx.take() {
-            let handler = rx
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to receive handler: {}", e))?;
-            self.block_transfer_handler = Some(handler);
-            Ok(self.block_transfer_handler.as_ref().unwrap())
-        } else if let Some(handler) = self.block_transfer_handler.as_ref() {
-            Ok(handler)
-        } else {
-            Err(anyhow::anyhow!("block transfer handler not available"))
-        }
+    ) -> Option<tokio::sync::oneshot::Receiver<BlockTransferHandler>> {
+        self.block_transfer_handler_rx.take()
     }
 
     fn make_layout<S: Storage, M: BlockMetadata>(
@@ -258,6 +255,7 @@ impl KvbmWorker {
         config: KvbmWorkerConfig,
         cancel_token: CancellationToken,
         handler_tx: oneshot::Sender<BlockTransferHandler>,
+        scheduler_client: Option<TransferSchedulerClient>,
     ) -> anyhow::Result<()> {
         let drt = config.drt.clone();
 
@@ -359,7 +357,7 @@ impl KvbmWorker {
             host_blocks,
             disk_blocks,
             transfer_context,
-            // add woker-connector scheduler client here
+            scheduler_client,
         )?;
 
         tracing::debug!("sending block transfer handler to worker");

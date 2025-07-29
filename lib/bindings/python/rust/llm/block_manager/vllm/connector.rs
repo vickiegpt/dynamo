@@ -3,6 +3,7 @@
 
 use dynamo_llm::block_manager::{
     block::{BlockId, MutableBlock},
+    distributed::BlockTransferRequest,
     pool::BlockPoolError,
 };
 
@@ -157,17 +158,22 @@ impl ConnectorMetadata {
         self.new_slots.push(request_id);
     }
 
-    pub fn add_operations(&mut self, request_id: String, iteration: u64, operations: Vec<String>) {
-        for operation in operations {
+    pub fn add_operations(
+        &mut self,
+        request_id: String,
+        iteration: u64,
+        xfer_reqs: Vec<BlockTransferRequest>,
+    ) {
+        for xfer_req in xfer_reqs {
             tracing::debug!(
                 request_id,
-                iteration,
-                "adding operation to connector metadata: {operation}"
+                "adding operation to connector metadata: {xfer_req:#?}"
             );
             self.operations.push(ConnectorOperation {
                 req_id: request_id.clone(),
                 iteration,
-                description: operation,
+                uuid: uuid::Uuid::new_v4(),
+                xfer_req,
             });
         }
     }
@@ -177,5 +183,6 @@ impl ConnectorMetadata {
 pub struct ConnectorOperation {
     pub req_id: String,
     pub iteration: u64,
-    pub description: String,
+    pub uuid: uuid::Uuid,
+    pub xfer_req: BlockTransferRequest,
 }

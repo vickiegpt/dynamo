@@ -4,10 +4,12 @@
 use derive_getters::Getters;
 use serde::{Deserialize, Serialize};
 
+use crate::block_manager::connector::protocol::LeaderTransferRequest;
+
 pub const ZMQ_PING_MESSAGE: &str = "ping";
 pub const ZMQ_TRANSFER_BLOCKS_MESSAGE: &str = "transfer_blocks";
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum BlockTransferPool {
     Device,
     Host,
@@ -34,7 +36,7 @@ pub struct BlockTransferRequest {
     pub blocks: Vec<(usize, usize)>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub connector_req: Option<ConnectorRequestLeader>,
+    pub connector_req: Option<LeaderTransferRequest>,
 }
 
 impl BlockTransferRequest {
@@ -56,7 +58,7 @@ impl BlockTransferRequest {
         from_pool: BlockTransferPool,
         to_pool: BlockTransferPool,
         blocks: Vec<(usize, usize)>,
-        connector_req: ConnectorRequestLeader,
+        connector_req: LeaderTransferRequest,
     ) -> Self {
         Self {
             from_pool,

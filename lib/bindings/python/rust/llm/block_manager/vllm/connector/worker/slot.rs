@@ -1,74 +1,81 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use dynamo_llm::block_manager::distributed::BlockTransferPool;
+
 use super::*;
 
 pub struct CreateEngineSlotRequest {
     pub request_id: String,
-    pub load_completed: Arc<AtomicU64>,
-    pub store_completed: Arc<AtomicU64>,
+    pub completed: Arc<AtomicU64>,
     pub cancel_token: CancellationToken,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkerSlotState {
+    Initialized,
+    Onboarding,
+    Offloading,
 }
 
 #[derive(Debug, Clone)]
 pub struct WorkerSlot {
-    load_operations: Vec<String>,
-    load_completed: Arc<AtomicU64>,
-    store_operations: Vec<String>,
-    store_completed: Arc<AtomicU64>,
+    operations: Vec<uuid::Uuid>,
+    completed: Arc<AtomicU64>,
     cancel_token: CancellationToken,
+    state: WorkerSlotState,
 }
 
 impl WorkerSlot {
     pub fn new(cancel_token: CancellationToken) -> Self {
         Self {
-            load_operations: vec![],
-            load_completed: Arc::new(AtomicU64::new(0)),
-            store_operations: vec![],
-            store_completed: Arc::new(AtomicU64::new(0)),
+            operations: vec![],
+            completed: Arc::new(AtomicU64::new(0)),
             cancel_token,
+            state: WorkerSlotState::Initialized,
         }
     }
 
-    pub fn add_load_operation(&mut self, operation: String) {
-        self.load_operations.push(operation);
+    pub fn get_state(&self) -> &WorkerSlotState {
+        &self.state
     }
 
-    pub fn add_store_operation(&mut self, operation: String) {
-        self.store_operations.push(operation);
+    pub fn set_state(&mut self, state: WorkerSlotState) {
+        self.state = state;
     }
 
-    pub fn num_inflight_loads(&self) -> usize {
-        self.load_operations.len()
+    pub fn add_operation(&mut self, operation: &ConnectorOperation) {
+        // if operation.xfer_req.to_pool == BlockTransferPool::Device {
+        //     debug_assert!(self.state == WorkerSlotState::Onboarding);
+        // } else if operation.xfer_req.from_pool == BlockTransferPool::Device {
+        //     debug_assert!(self.state == WorkerSlotState::Offloading);
+        // }
+        self.operations.push(operation.uuid);
+        tracing::debug!(
+            request_id = operation.req_id,
+            operation_id = %operation.uuid,
+            "adding operation to slot: total operations: {}; completed: {}",
+            self.operations.len(),
+            self.num_completed()
+        );
     }
 
-    pub fn num_inflight_stores(&self) -> usize {
-        self.store_operations.len()
+    pub fn num_inflight(&self) -> usize {
+        self.operations.len()
     }
 
-    pub fn num_completed_loads(&self) -> usize {
-        self.load_completed
-            .load(std::sync::atomic::Ordering::Relaxed) as usize
+    pub fn num_completed(&self) -> usize {
+        self.completed.load(std::sync::atomic::Ordering::Relaxed) as usize
     }
 
-    pub fn num_completed_stores(&self) -> usize {
-        self.store_completed
-            .load(std::sync::atomic::Ordering::Relaxed) as usize
-    }
-
-    pub fn is_finished_storing(&self) -> bool {
-        self.num_inflight_stores() == self.num_completed_stores()
-    }
-
-    pub fn is_finished_loading(&self) -> bool {
-        self.num_inflight_loads() == self.num_completed_loads()
+    pub fn all_tasks_completed(&self) -> bool {
+        self.num_inflight() == self.num_completed()
     }
 
     pub fn make_engine_slot_request(&self, request_id: String) -> CreateEngineSlotRequest {
         CreateEngineSlotRequest {
             request_id,
-            load_completed: self.load_completed.clone(),
-            store_completed: self.store_completed.clone(),
+            completed: self.completed.clone(),
             cancel_token: self.cancel_token.clone(),
         }
     }
@@ -76,9 +83,8 @@ impl WorkerSlot {
 
 pub struct EngineSlot {
     request_id: String,
-    cancel_token: CancellationToken,
-    load_completed: Arc<AtomicU64>,
-    store_completed: Arc<AtomicU64>,
+    pub cancel_token: CancellationToken,
+    pub completed: Arc<AtomicU64>,
     created_at: u64,
 }
 
@@ -92,8 +98,7 @@ impl EngineSlot {
         Self {
             request_id: req.request_id,
             cancel_token: req.cancel_token,
-            load_completed: req.load_completed,
-            store_completed: req.store_completed,
+            completed: req.completed,
             created_at,
         }
     }
