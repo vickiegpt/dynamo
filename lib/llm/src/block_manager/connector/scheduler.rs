@@ -790,7 +790,7 @@ mod tests {
         // task is running
 
         // advance transfer tx_1 - this will mark the end of the task and trigger the completion handle
-        drop(tx_1);
+        // drop(tx_1);
 
         // sleep for a bit
 
