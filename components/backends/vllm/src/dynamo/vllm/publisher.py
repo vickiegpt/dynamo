@@ -3,10 +3,6 @@
 
 from typing import Optional
 
-from vllm.config import VllmConfig
-from vllm.v1.metrics.loggers import StatLoggerBase
-from vllm.v1.metrics.stats import IterationStats, SchedulerStats
-
 from dynamo.llm import (
     ForwardPassMetrics,
     KvStats,
@@ -15,6 +11,9 @@ from dynamo.llm import (
     WorkerStats,
 )
 from dynamo.runtime import Component
+from vllm.config import VllmConfig
+from vllm.v1.metrics.loggers import StatLoggerBase
+from vllm.v1.metrics.stats import IterationStats, SchedulerStats
 
 
 class NullStatLogger(StatLoggerBase):

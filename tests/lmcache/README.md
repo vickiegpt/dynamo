@@ -38,7 +38,7 @@ python3 1-mmlu-dynamo.py --model Qwen/Qwen3-0.6B --number-of-subjects 15
 # Stop services with Ctrl+C in the deploy script terminal
 
 # 2. LMCache test (with LMCache enabled)
-./deploy-2-dynamo.sh Qwen/Qwen3-0.6B  
+./deploy-2-dynamo.sh Qwen/Qwen3-0.6B
 # Wait for model to load, then run test in another terminal:
 python3 2-mmlu-dynamo.py --model Qwen/Qwen3-0.6B --number-of-subjects 15
 # Stop services with Ctrl+C in the deploy script terminal
@@ -53,7 +53,7 @@ python3 summarize_scores_dynamo.py
 - **`deploy-1-dynamo.sh`**: Deploy Dynamo without LMCache (baseline)
 - **`deploy-2-dynamo.sh`**: Deploy Dynamo with LMCache enabled (test)
 
-### Test Scripts  
+### Test Scripts
 - **`1-mmlu-dynamo.py`**: Run MMLU test on baseline Dynamo
 - **`2-mmlu-dynamo.py`**: Run MMLU test on Dynamo with LMCache
 - **`summarize_scores_dynamo.py`**: Compare and analyze test results
@@ -66,7 +66,7 @@ HTTP Request → Dynamo Ingress(8080) → Dynamo Worker → Direct Inference
 Environment: ENABLE_LMCACHE=0
 ```
 
-### LMCache Architecture (deploy-2-dynamo.sh)  
+### LMCache Architecture (deploy-2-dynamo.sh)
 ```
 HTTP Request → Dynamo Ingress(8080) → Dynamo Worker → LMCache-enabled Inference
 Environment: ENABLE_LMCACHE=1

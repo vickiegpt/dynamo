@@ -28,12 +28,13 @@ import argparse
 import json
 import os
 
-# Third Party
-from tqdm import tqdm
-from transformers import AutoTokenizer, set_seed
 import numpy as np
 import pandas as pd
 import requests
+
+# Third Party
+from tqdm import tqdm
+from transformers import AutoTokenizer, set_seed
 
 global tokenizer
 choices = ["A", "B", "C", "D"]
@@ -180,4 +181,4 @@ if __name__ == "__main__":
         model_name = args.model.split("/")[-1]
         args.result_file = f"dynamo-baseline-{model_name}.jsonl"
 
-    main(args) 
+    main(args)

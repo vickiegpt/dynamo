@@ -16,14 +16,14 @@ echo ""
 # Function to cleanup processes
 cleanup() {
     echo "🧹 Cleaning up running processes..."
-    
+
     # Kill any remaining dynamo processes
     pkill -f "dynamo-run" || true
     pkill -f "components/main.py" || true
-    
+
     # Stop docker services
     docker compose -f ../../deploy/metrics/docker-compose.yml down 2>/dev/null || true
-    
+
     # Wait a moment for cleanup
     sleep 2
 }
@@ -34,15 +34,15 @@ trap cleanup EXIT
 # Check if data exists
 if [ ! -d "data/test" ] || [ ! -d "data/dev" ]; then
     echo "📚 MMLU dataset not found, starting download..."
-    
+
     # Check if Python dependencies are installed
     if ! python3 -c "import datasets, pandas" 2>/dev/null; then
         echo "📦 Installing Python dependencies..."
         pip install datasets pandas
     fi
-    
+
     python3 download_mmlu.py
-    
+
     if [ $? -ne 0 ]; then
         echo "❌ Data download failed, exiting"
         exit 1
@@ -158,4 +158,4 @@ fi
 
 echo ""
 echo "🔧 To re-run:"
-echo "   ./run_test.sh \"$MODEL_URL\" $NUM_SUBJECTS" 
+echo "   ./run_test.sh \"$MODEL_URL\" $NUM_SUBJECTS"

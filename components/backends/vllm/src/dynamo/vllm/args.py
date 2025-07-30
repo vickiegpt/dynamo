@@ -221,16 +221,13 @@ def overwrite_args(config):
                 kv_role="kv_both",
                 kv_connector_extra_config={
                     "connectors": [
-                        {
-                            "kv_connector": "LMCacheConnectorV1",
-                            "kv_role": "kv_both"
-                        },
+                        {"kv_connector": "LMCacheConnectorV1", "kv_role": "kv_both"},
                         {
                             "kv_connector": "NixlConnector",
                             "kv_role": "kv_both",
-                        }
+                        },
                     ]
-                }
+                },
             )
             logger.info("Using LMCache with MultiConnector serving")
         else:

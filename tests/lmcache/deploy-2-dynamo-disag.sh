@@ -45,9 +45,9 @@ export ENABLE_LMCACHE=1
 # Set LMCache configuration environment variables
 export LMCACHE_CHUNK_SIZE=256
 export LMCACHE_LOCAL_CPU=True
-export LMCACHE_MAX_LOCAL_CPU_SIZE=20    
+export LMCACHE_MAX_LOCAL_CPU_SIZE=20
 
 CUDA_VISIBLE_DEVICES=1 python3 -m dynamo.vllm \
     --model $MODEL_URL \
     --enforce-eager \
-    --is-prefill-worker 
+    --is-prefill-worker
