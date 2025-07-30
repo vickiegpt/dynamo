@@ -73,6 +73,10 @@ class KvConnectorWorker:
         # TODO: Assume the block dimension is within the first 2. This will break if you're doing something weird like having 1 or 2 device blocks.
         num_device_blocks = max(shape[0], shape[1])
         page_size = cache_config.block_size
+        # index2name = defaultdict(list)
+        # for layer_name in kv_caches:
+        #    index2name[extract_layer_index(layer_name)].append(layer_name)
+        # tensors = list(index2name.values())
         tensors = list(kv_caches.values())
 
         if cache_config.cache_dtype == "auto":

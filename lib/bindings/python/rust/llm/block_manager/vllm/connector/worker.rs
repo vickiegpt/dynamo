@@ -256,6 +256,7 @@ impl KvConnectorWorker {
     pub fn save_kv_layer(&mut self, _layer_name: String, _kv_layer: Py<PyAny>) -> PyResult<()> {
         self.layers_complete += 1;
         if self.layers_complete == self.kv_caches.len() {
+            tracing::debug!("save_kv_layer: offloading operations: {:?}", self.offloading_operations);
             let offloading_operations = std::mem::take(&mut self.offloading_operations);
             for operation in offloading_operations {
                 let request_id = operation.request_id.clone();
@@ -317,7 +318,7 @@ impl KvConnectorWorker {
                 tracing::debug!(request_id, "request slot is finished");
                 is_finished_offloading.insert(request_id.clone());
             } else {
-                tracing::debug!(request_id, "request slot is not finished");
+                tracing::debug!(request_id, "request slot is not finished offloading");
             }
         }
 

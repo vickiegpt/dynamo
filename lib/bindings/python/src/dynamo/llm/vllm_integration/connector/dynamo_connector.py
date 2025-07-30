@@ -75,6 +75,7 @@ class DynamoConnector(KVConnectorBase_V1):
     def build_connector_meta(
         self, scheduler_output: SchedulerOutput
     ) -> KVConnectorMetadata:
+        print(f"DynamoConnector.build_connector_meta called with {scheduler_output}")
         data = self._scheduler.build_connector_meta(scheduler_output)
         return DynamoConnectorMetadata(data)
 

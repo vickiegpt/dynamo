@@ -99,6 +99,9 @@ pub trait Slot: std::fmt::Debug {
 
     /// Take all pending operations for the slot.
     fn take_pending_operations(&mut self) -> Vec<WorkerTransferRequest>;
+
+    /// Handle the prefilling transfer.
+    fn handle_prefilling_transfer(&mut self) -> Result<(), SlotError>;
 }
 
 pub trait ExternallyManagedDeviceSlot: Slot {
@@ -285,9 +288,96 @@ impl Slot for VllmConnectorSlot {
         self.state
     }
 
+    fn handle_prefilling_transfer(&mut self) -> Result<(), SlotError> {
+        // Calculate how many tokens we'll have after prefilling
+        let total_tokens = self.sequence().total_tokens();
+        let current_computed = self.computed_tokens();
+        let tokens_to_compute = total_tokens - current_computed;
+
+        // How many blocks will be complete after prefilling?
+        let blocks_after_prefill = total_tokens / self.block_size; // Complete blocks after prefill
+
+        tracing::debug!(
+            "total_tokens: {}, current_computed: {}, tokens_to_compute: {}, blocks_after_prefill: {}",
+            total_tokens,
+            current_computed,
+            tokens_to_compute,
+            blocks_after_prefill
+        );
+        tracing::debug!("mark_as_prefilling: mutable blocks:");
+        for (i, block_id) in self.mutable.iter().enumerate() {
+            tracing::debug!("  mutable[{}] = {}", i, block_id);
+        }
+
+        tracing::debug!("mark_as_prefilling: immutable blocks:");
+        for (i, block_id) in self.immutable.iter().enumerate() {
+            tracing::debug!("  immutable[{}] = {}", i, block_id);
+        }
+        // TODO[oandreeva]: ALLOCATE host blocks from the host block pool
+        let host_blocks = self.block_manager.host().unwrap().allocate_blocks_blocking(blocks_after_prefill)?;
+        // STORE the blocks in slot state to keep them allocated
+
+        // Create (device_block, allocated_host_block) pairs
+        let host_block_ids: Vec<usize> = host_blocks.into_iter()
+            .map(|block| block.block_id())
+            .collect();
+
+        // Create (device_block, host_block) pairs
+        let block_pairs: Vec<(usize, usize)> = self.mutable.clone()
+            .into_iter()
+            .zip(host_block_ids.into_iter())
+            .collect();
+
+        tracing::debug!("D2H transfer pairs (device->host): {:?}", block_pairs);
+        let uuid = uuid::Uuid::new_v4();
+
+        // Create WorkerTransferRequest
+        let sched_req = WorkerTransferRequest {
+            request_id: self.request_id().to_string(),
+            uuid,
+            request_type: RequestType::Scheduled,
+            transfer_type: TransferType::Store,
+        };
+        self.pending_operations.push(sched_req);
+
+        // Create BlockTransferRequest
+        let block_xfer_req = BlockTransferRequest {
+            from_pool: BlockTransferPool::Device, // From Device
+            to_pool: BlockTransferPool::Host,     // To Host
+            blocks: block_pairs,
+            connector_req: Some(LeaderTransferRequest {
+                request_id: self.request_id().to_string(),
+                uuid,
+                requirement: None,
+                request_type: RequestType::Scheduled,
+            }),
+        };
+        tracing::debug!("block_xfer_req: {block_xfer_req:#?}");
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .unwrap();
+        let leader = self.leader.clone();
+        // Spawn the transfer task - runs independently in background
+        //rt.spawn(async move {
+         //   tracing::debug!("Starting D2H transfer execution");
+        //    match leader.transfer_blocks_request(block_xfer_req).await {
+        //        Ok(_) => {
+        //            tracing::debug!("D2H transfer completed successfully");
+        //        }
+        //        Err(e) => {
+        //            tracing::error!("D2H transfer failed: {:?}", e);
+        //        }
+        //    }
+        //});
+
+        Ok(())
+    }
+
     fn mark_as_prefilling(&mut self, iteration: u64) -> Result<(), SlotError> {
         self.state = SlotState::Prefilling;
-
         Ok(())
     }
 

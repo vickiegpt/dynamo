@@ -173,12 +173,12 @@ impl<S: Storage, L: LocalityProvider> Slot<S, L> {
         debug_assert!(num_blocks_to_register <= self.mutable.len());
 
         if num_blocks_to_register == 0 {
-            tracing::trace!("no blocks to register");
+            tracing::debug!("no blocks to register");
             return Ok(());
         }
 
         let mut blocks_to_register = Vec::new();
-        tracing::trace!("registering {} blocks", num_blocks_to_register);
+        tracing::debug!("registering {} blocks", num_blocks_to_register);
         assert!(self.mutable.len() >= num_blocks_to_register);
 
         // create an iterator over the mutable blocks zipped with the token blocks

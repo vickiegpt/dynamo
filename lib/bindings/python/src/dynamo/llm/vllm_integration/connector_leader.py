@@ -128,6 +128,9 @@ class KvConnectorLeader:
                 req.num_computed_tokens,
             )
 
+        print(f"scheduled_new_reqs: {scheduler_output.scheduled_new_reqs}")
+        print(f"scheduled_cached_reqs: {scheduler_output.scheduled_cached_reqs}")
+
         for (
             req_id,
             resumed_from_preemption,

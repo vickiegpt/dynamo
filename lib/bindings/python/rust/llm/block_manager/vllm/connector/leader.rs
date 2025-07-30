@@ -240,6 +240,14 @@ impl KvConnectorLeader {
                 tracing::debug!(request_id, iteration, "mark as decoding");
                 slot.mark_as_decoding(iteration)?;
             }
+            tracing::debug!("slot: {slot:#?}");
+
+            match slot.state() {
+                SlotState::Prefilling => {
+                    slot.handle_prefilling_transfer()?;
+                }
+                _ => {}
+            }
 
             let pending_ops = slot.take_pending_operations();
             tracing::debug!(
