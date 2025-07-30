@@ -107,6 +107,9 @@ echo "  TORCH_BACKEND: $TORCH_BACKEND"
 # Install common dependencies
 uv pip install pip cuda-python
 
+# Install LMCache
+uv pip install lmcache
+
 # Create vllm directory and clone
 mkdir -p $INSTALLATION_DIR
 cd $INSTALLATION_DIR
