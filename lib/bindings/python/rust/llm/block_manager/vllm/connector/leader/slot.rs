@@ -1,9 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_llm::block_manager::{
-    connector::protocol::{LeaderTransferRequest, RequestType, TransferType},
-    distributed::{BlockTransferPool, BlockTransferRequest, KvbmLeader},
+use dynamo_llm::{
+    block_manager::{
+        connector::protocol::{
+            LeaderTransferRequest, RequestType, TransferScheduleRequest, TransferType,
+        },
+        distributed::{BlockTransferPool, BlockTransferRequest, KvbmLeader},
+    },
+    tokens::TokenBlock,
 };
 
 use super::*;
@@ -226,6 +231,13 @@ pub struct VllmConnectorSlot {
     iteration_first_scheduled: Option<u64>,
 
     pending_operations: Vec<WorkerTransferRequest>,
+
+    /// use this to issue [`LocalTransferRequest`]s to the transfer engine
+    xfer_tx: mpsc::UnboundedSender<LocalTransferRequest>,
+
+    /// this is a background task which will automatically shutdown after the slot is dropped
+    /// should be created in a detached state
+    xfer_engine: LocalTransferEngine,
 }
 
 impl VllmConnectorSlot {
@@ -241,12 +253,21 @@ impl VllmConnectorSlot {
         debug_assert!(block_size.is_power_of_two() && block_size <= 1024);
         let sequence = TokenBlockSequence::new(tokens, block_size as u32, Some(salt_hash));
 
+        let (xfer_tx, xfer_rx) = mpsc::unbounded_channel();
+
+        let xfer_engine = LocalTransferEngine::new(block_manager.clone(), leader.clone(), xfer_rx);
+
+        // spawn a task to handle the transfer requests
+        // use critical task pattern
+
         Self {
             request_id,
             sequence,
             block_manager,
             block_size,
             leader,
+            xfer_tx,
+            xfer_engine,
 
             // default values
             state: SlotState::Initialized,
@@ -536,6 +557,74 @@ impl ExternallyManagedDeviceSlot for VllmConnectorSlot {
                 .unwrap();
         }
 
+        Ok(())
+    }
+}
+
+enum LocalTransferRequest {
+    Offload(LocalOffloadRequest),
+}
+
+struct LocalOffloadRequest {
+    block_ids: Vec<BlockId>,
+    token_blocks: Vec<TokenBlock>,
+    operation_id: uuid::Uuid,
+}
+
+impl LocalOffloadRequest {
+    pub fn new(
+        block_ids: Vec<BlockId>,
+        token_blocks: Vec<TokenBlock>,
+        operation_id: uuid::Uuid,
+    ) -> Self {
+        debug_assert!(block_ids.len() == token_blocks.len());
+        Self {
+            block_ids,
+            token_blocks,
+            operation_id,
+        }
+    }
+}
+
+struct LocalTransferEngine {
+    block_manager: VllmBlockManager,
+    leader: Arc<KvbmLeader>,
+    xfer_rx: mpsc::UnboundedReceiver<LocalTransferRequest>,
+}
+
+impl LocalTransferEngine {
+    pub fn new(
+        block_manager: VllmBlockManager,
+        leader: Arc<KvbmLeader>,
+        xfer_rx: mpsc::UnboundedReceiver<LocalTransferRequest>,
+    ) -> Self {
+        Self {
+            block_manager,
+            leader,
+            xfer_rx,
+        }
+    }
+
+    async fn execute(&mut self) -> anyhow::Result<()> {
+        while let Some(req) = self.xfer_rx.recv().await {
+            match req {
+                LocalTransferRequest::Offload(offload_req) => {
+                    panic!("@olga - impl here");
+
+                    // acquire mutable host blocks
+
+                    // apply token blocks
+
+                    // issue the offload request using `leader`
+
+                    // wait for the offload request to complete
+
+                    // register the mutable blocks
+                }
+            }
+        }
+
+        tracing::debug!("LocalTransferEngine: shutting down");
         Ok(())
     }
 }
