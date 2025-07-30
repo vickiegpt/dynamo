@@ -7,6 +7,9 @@ import os
 import signal
 
 import uvloop
+from vllm.distributed.kv_events import ZmqEventPublisher
+from vllm.usage.usage_lib import UsageContext
+from vllm.v1.engine.async_llm import AsyncLLM
 
 from dynamo.llm import (
     ModelType,
@@ -16,9 +19,6 @@ from dynamo.llm import (
 )
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 from dynamo.runtime.logging import configure_dynamo_logging
-from vllm.distributed.kv_events import ZmqEventPublisher
-from vllm.usage.usage_lib import UsageContext
-from vllm.v1.engine.async_llm import AsyncLLM
 
 from .args import Config, configure_ports_with_etcd, overwrite_args, parse_args
 from .handlers import DecodeWorkerHandler, PrefillWorkerHandler

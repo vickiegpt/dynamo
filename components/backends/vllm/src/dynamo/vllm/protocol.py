@@ -4,7 +4,6 @@
 from typing import Any, List, Optional
 
 from pydantic import BaseModel, ConfigDict
-
 from vllm.outputs import CompletionOutput
 from vllm.sequence import PromptLogprobs, RequestMetrics
 

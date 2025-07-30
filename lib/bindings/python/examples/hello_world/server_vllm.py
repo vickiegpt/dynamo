@@ -32,15 +32,15 @@ import asyncio
 import sys
 
 import uvloop
-
-from dynamo.llm import ModelType, register_llm
-from dynamo.runtime import DistributedRuntime, dynamo_worker
 from vllm import SamplingParams
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.entrypoints.openai.api_server import (
     build_async_engine_client_from_engine_args,
 )
 from vllm.inputs import TokensPrompt
+
+from dynamo.llm import ModelType, register_llm
+from dynamo.runtime import DistributedRuntime, dynamo_worker
 
 DEFAULT_ENDPOINT = "dyn://dynamo.backend.generate"
 DEFAULT_MODEL = "Qwen/Qwen3-0.6B"

@@ -9,10 +9,10 @@ from copy import deepcopy
 from typing import AsyncGenerator
 
 import msgspec
-
-from dynamo.runtime.logging import configure_dynamo_logging
 from vllm.inputs import TokensPrompt
 from vllm.sampling_params import SamplingParams
+
+from dynamo.runtime.logging import configure_dynamo_logging
 
 from .protocol import MyRequestOutput
 
