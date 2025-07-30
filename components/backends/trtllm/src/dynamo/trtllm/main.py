@@ -10,6 +10,7 @@ import uvloop
 from tensorrt_llm import SamplingParams
 from tensorrt_llm.llmapi.llm_utils import update_llm_args_with_extra_options
 from tensorrt_llm.llmapi.tokenizer import tokenizer_factory
+from transformers import AutoConfig
 
 from dynamo.llm import ModelType, register_llm
 from dynamo.runtime import DistributedRuntime, dynamo_worker
@@ -20,6 +21,7 @@ from dynamo.trtllm.request_handlers.handlers import (
     RequestHandlerConfig,
     RequestHandlerFactory,
 )
+from dynamo.trtllm.utils.multimodal_processor import MultimodalRequestProcessor
 from dynamo.trtllm.utils.trtllm_utils import (
     Config,
     cmd_line_args,
@@ -83,7 +85,7 @@ async def init(runtime: DistributedRuntime, config: Config):
 
     # Convert model path to Path object if it's a local path, otherwise keep as string
     model_path = str(config.model_path)
-
+    modality = getattr(config, "modality", None) or "text"
     arg_map = {
         "model": model_path,
         "tensor_parallel_size": config.tensor_parallel_size,
@@ -122,9 +124,22 @@ async def init(runtime: DistributedRuntime, config: Config):
     default_sampling_params = SamplingParams()
     default_sampling_params._setup(tokenizer)
     default_sampling_params.stop = None
+    modelType = ModelType.Backend
+    multimodal_processor = None
 
-    # We already detokenize inside HandlerBase. No need to also do it in TRTLLM.
-    default_sampling_params.detokenize = False
+    if modality == "multimodal":
+        engine_args["skip_tokenizer_init"] = False
+        modelType = ModelType.Chat
+        model_config = AutoConfig.from_pretrained(
+            config.model_path, trust_remote_code=True
+        )
+        multimodal_processor = MultimodalRequestProcessor(
+            model_type=model_config.model_type, model_dir=config.model_path
+        )
+
+    else:
+        # We already detokenize inside HandlerBase. No need to also do it in TRTLLM.
+        default_sampling_params.detokenize = False
 
     async with get_llm_engine(engine_args) as engine:
         endpoint = component.endpoint(config.endpoint)
@@ -132,14 +147,13 @@ async def init(runtime: DistributedRuntime, config: Config):
         if is_first_worker(config):
             # Register the model with the endpoint if only the worker is first in the disaggregation chain.
             await register_llm(
-                ModelType.Backend,
+                modelType,
                 endpoint,
                 config.model_path,
                 config.served_model_name,
                 kv_cache_block_size=config.kv_block_size,
                 migration_limit=config.migration_limit,
             )
-
         # publisher will be set later if publishing is enabled.
         handler_config = RequestHandlerConfig(
             component=component,
@@ -149,6 +163,8 @@ async def init(runtime: DistributedRuntime, config: Config):
             disaggregation_mode=config.disaggregation_mode,
             disaggregation_strategy=config.disaggregation_strategy,
             next_client=next_client,
+            multimodal_processor=multimodal_processor,
+            tokenizer=tokenizer,
         )
 
         if config.publish_events_and_metrics and is_first_worker(config):

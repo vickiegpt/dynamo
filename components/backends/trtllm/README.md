@@ -184,6 +184,48 @@ For comprehensive instructions on multinode serving, see the [multinode-examples
 
 ### Speculative Decoding
 - **[Llama 4 Maverick Instruct + Eagle Speculative Decoding](./llama4_plus_eagle.md)**
+### Client
+
+Below is an example of image being sent to `Llama-4-Maverick-17B-128E-Instruct` model
+
+Request :
+```bash
+curl localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '{
+    "model": "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Describe the image"
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/inpaint.png"
+                    }
+                }
+            ]
+        }
+    ],
+    "stream": false,
+    "max_tokens": 160
+}'
+```
+Response :
+
+```
+{"id":"unknown-id","choices":[{"index":0,"message":{"content":"The image depicts a serene landscape featuring a large rock formation, likely El Capitan in Yosemite National Park, California. The scene is characterized by a winding road that curves from the bottom-right corner towards the center-left of the image, with a few rocks and trees lining its edge.\n\n**Key Features:**\n\n* **Rock Formation:** A prominent, tall, and flat-topped rock formation dominates the center of the image.\n* **Road:** A paved road winds its way through the landscape, curving from the bottom-right corner towards the center-left.\n* **Trees and Rocks:** Trees are visible on both sides of the road, with rocks scattered along the left side.\n* **Sky:** The sky above is blue, dotted with white clouds.\n* **Atmosphere:** The overall atmosphere of the","refusal":null,"tool_calls":null,"role":"assistant","function_call":null,"audio":null},"finish_reason":"stop","logprobs":null}],"created":1753322607,"model":"meta-llama/Llama-4-Maverick-17B-128E-Instruct","service_tier":null,"system_fingerprint":null,"object":"chat.completion","usage":null}
+```
+
+NOTE: To send a request to a multi-node deployment, target the node which is running `dynamo-run in=http`.
+
+### Benchmarking
+
+To benchmark your deployment with GenAI-Perf, see this utility script, configuring the
+`model` name and `host` based on your deployment: [perf.sh](../../benchmarks/llm/perf.sh)
+
 
 ## Disaggregation Strategy
 
@@ -201,6 +243,120 @@ DISAGGREGATION_STRATEGY="prefill_first" ./launch/disagg.sh
 ## KV Cache Transfer in Disaggregated Serving
 
 Dynamo with TensorRT-LLM supports two methods for transferring KV cache in disaggregated serving: UCX (default) and NIXL (experimental). For detailed information and configuration instructions for each method, see the [KV cache transfer guide](./kv-cache-tranfer.md).
+
+## Using Pre-computed Embeddings (Experimental)
+
+Dynamo with TensorRT-LLM supports providing pre-computed embeddings directly in an inference request. This bypasses the need for the model to process an image and generate embeddings itself, which is useful for performance optimization or when working with custom, pre-generated embeddings.
+
+### Enabling the Feature
+
+This is an experimental feature that requires a small patch to your local TensorRT-LLM installation.
+
+1.  **Apply Patches:** You will need to apply two patches to the TensorRT-LLM Python files. These patches enable the `default_multimodal_input_loader` to accept pre-computed embeddings.
+    *   Patch 1: [`302b73b`](https://github.com/chang-l/TensorRT-LLM/commit/302b73be5108f58a6795075e5231a31872e42ddd)
+    *   Patch 2: [`5b7613b`](https://github.com/chang-l/TensorRT-LLM/commit/5b7613bbc78d830efb7c320a3090c3ef862aa0ab)
+
+    > **Note:** These changes are to Python files only and **do not** require you to recompile TensorRT-LLM. You can apply them by simply replacing the relevant files in your installation.
+
+### How to Use
+
+Once the patches are applied, you can send requests with paths to local embedding files.
+
+-   **Format:** Provide the embedding as part of the `messages` array, using the `image_url` content type.
+-   **URL:** The `url` field should contain the absolute or relative path to your embedding file on the local filesystem.
+-   **File Types:** Supported embedding file extensions are `.pt`, `.pth`, and `.bin`. Dynamo will automatically detect these extensions.
+
+When a request with a supported embedding file is received, Dynamo will load the tensor from the file and pass it directly to the model for inference, skipping the image-to-embedding pipeline.
+
+### Example Request
+
+Here is an example of how to send a request with a pre-computed embedding file.
+
+```bash
+curl localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '{
+    "model": "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Describe the content represented by the embeddings"
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "/path/to/your/embedding.pt"
+                    }
+                }
+            ]
+        }
+    ],
+    "stream": false,
+    "max_tokens": 160
+}'
+```
+
+## Supported Multimodal Models
+
+Multimodel models listed [here](https://github.com/NVIDIA/TensorRT-LLM/blob/v1.0.0rc0/examples/pytorch/README.md) are supported by dynamo.
+
+## Using Pre-computed Embeddings (Experimental)
+
+Dynamo with TensorRT-LLM supports providing pre-computed embeddings directly in an inference request. This bypasses the need for the model to process an image and generate embeddings itself, which is useful for performance optimization or when working with custom, pre-generated embeddings.
+
+### Enabling the Feature
+
+This is an experimental feature that requires a small patch to your local TensorRT-LLM installation.
+
+1.  **Apply Patches:** You will need to apply two patches to the TensorRT-LLM Python files. These patches enable the `default_multimodal_input_loader` to accept pre-computed embeddings.
+    *   Patch 1: [`302b73b`](https://github.com/chang-l/TensorRT-LLM/commit/302b73be5108f58a6795075e5231a31872e42ddd)
+    *   Patch 2: [`5b7613b`](https://github.com/chang-l/TensorRT-LLM/commit/5b7613bbc78d830efb7c320a3090c3ef862aa0ab)
+
+    > **Note:** These changes are to Python files only and **do not** require you to recompile TensorRT-LLM. You can apply them by simply replacing the relevant files in your installation.
+
+### How to Use
+
+Once the patches are applied, you can send requests with paths to local embedding files.
+
+-   **Format:** Provide the embedding as part of the `messages` array, using the `image_url` content type.
+-   **URL:** The `url` field should contain the absolute or relative path to your embedding file on the local filesystem.
+-   **File Types:** Supported embedding file extensions are `.pt`, `.pth`, and `.bin`. Dynamo will automatically detect these extensions.
+
+When a request with a supported embedding file is received, Dynamo will load the tensor from the file and pass it directly to the model for inference, skipping the image-to-embedding pipeline.
+
+### Example Request
+
+Here is an example of how to send a request with a pre-computed embedding file.
+
+```bash
+curl localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '{
+    "model": "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Describe the content represented by the embeddings"
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "/path/to/your/embedding.pt"
+                    }
+                }
+            ]
+        }
+    ],
+    "stream": false,
+    "max_tokens": 160
+}'
+```
+
+## Supported Multimodal Models
+
+Multimodel models listed [here](https://github.com/NVIDIA/TensorRT-LLM/blob/v1.0.0rc0/examples/pytorch/README.md) are supported by dynamo.
 
 ## Request Migration
 

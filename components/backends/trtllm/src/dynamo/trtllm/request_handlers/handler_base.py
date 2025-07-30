@@ -14,8 +14,10 @@
 # limitations under the License.
 
 import logging
+import time
 from dataclasses import asdict, dataclass
 from enum import Enum
+from typing import Optional
 
 from tensorrt_llm import SamplingParams
 from tensorrt_llm.llmapi import DisaggregatedParams as LlmDisaggregatedParams
@@ -27,6 +29,7 @@ from dynamo.trtllm.utils.disagg_utils import (
     DisaggregatedParams,
     DisaggregatedParamsCodec,
 )
+from dynamo.trtllm.utils.multimodal_processor import MultimodalRequestProcessor
 
 configure_dynamo_logging()
 
@@ -55,6 +58,10 @@ class RequestHandlerConfig:
     disaggregation_mode: DisaggregationMode
     disaggregation_strategy: DisaggregationStrategy
     next_client: object
+    multimodal_processor: Optional[
+        MultimodalRequestProcessor
+    ] = None  # for multimodal support
+    tokenizer: Optional[object] = None  # for decoding tokens in multimodal mode
 
 
 class HandlerBase:
@@ -70,6 +77,8 @@ class HandlerBase:
         self.disaggregation_mode = config.disaggregation_mode
         self.disaggregation_strategy = config.disaggregation_strategy
         self.next_client = config.next_client
+        self.multimodal_processor = config.multimodal_processor
+        self.tokenizer = config.tokenizer  # store tokenizer for multimodal mode
         self.first_generation = True
 
     def check_error(self, result: dict):
@@ -87,8 +96,41 @@ class HandlerBase:
         """
         Generate responses based on the disaggregation mode in the request.
         """
-
         logging.debug(f"Request: {request}")
+
+        # Default to text-based input. This will be overwritten if multimodal
+        # content is found and processed.
+        processed_input = None
+
+        # Check for multimodal request and process it
+        if self.multimodal_processor:
+            # Normalize the request to handle OpenAI format
+            if "stop_conditions" not in request:
+                request["stop_conditions"] = {}
+            if (
+                "max_tokens" in request
+                and "max_tokens" not in request["stop_conditions"]
+            ):
+                request["stop_conditions"]["max_tokens"] = request.pop("max_tokens")
+
+            if "sampling_options" not in request:
+                request["sampling_options"] = {}
+            if (
+                "temperature" in request
+                and "temperature" not in request["sampling_options"]
+            ):
+                request["sampling_options"]["temperature"] = request.pop("temperature")
+
+            processed_inputs = await self.multimodal_processor.process_openai_request(
+                request
+            )
+
+            if "processed_inputs" in processed_inputs:
+                processed_input = processed_inputs["processed_inputs"][0]
+
+        else:
+            # text-only flow
+            processed_input = request.get("token_ids")
 
         # Check if there is an error in the publisher error queue
         publishers_error = (
@@ -97,10 +139,9 @@ class HandlerBase:
         if publishers_error:
             raise publishers_error
 
-        inputs = request["token_ids"]
-
         # Decode the disaggregated params from the request
         disaggregated_params = None
+
         if self.disaggregation_mode == DisaggregationMode.PREFILL:
             request["stop_conditions"]["max_tokens"] = 1
             disaggregated_params = LlmDisaggregatedParams(request_type="context_only")
@@ -108,9 +149,10 @@ class HandlerBase:
         if "disaggregated_params" in request:
             if self.disaggregation_mode == DisaggregationMode.PREFILL:
                 raise ValueError("Cannot provide disaggregated_params in prefill mode")
-            disaggregated_params = DisaggregatedParamsCodec.decode(
-                DisaggregatedParams(**request["disaggregated_params"])
-            )
+
+            received_params = DisaggregatedParams(**request["disaggregated_params"])
+
+            disaggregated_params = DisaggregatedParamsCodec.decode(received_params)
             disaggregated_params.request_type = "generation_only"
 
         if (
@@ -122,6 +164,7 @@ class HandlerBase:
         num_output_tokens_so_far = 0
 
         sampling_params = self.default_sampling_params
+
         for key, value in request["sampling_options"].items():
             if not value:
                 continue
@@ -132,11 +175,11 @@ class HandlerBase:
         if max_tokens:
             sampling_params.max_tokens = max_tokens
 
-        ignore_eos = request["stop_conditions"]["ignore_eos"]
+        ignore_eos = request["stop_conditions"].get("ignore_eos")
         if ignore_eos:
             sampling_params.ignore_eos = ignore_eos
 
-        min_tokens = request["stop_conditions"]["min_tokens"]
+        min_tokens = request["stop_conditions"].get("min_tokens")
         if min_tokens:
             sampling_params.min_tokens = min_tokens
 
@@ -146,8 +189,12 @@ class HandlerBase:
             False if self.disaggregation_mode == DisaggregationMode.PREFILL else True
         )
 
+        request_id = request.get("id") or request.get("request_id", "unknown-id")
+        model_name = request.get("model", "unknown_model")
+
+        # NEW: Updated engine call to include multimodal data
         async for res in self.engine.llm.generate_async(
-            inputs=inputs,
+            inputs=processed_input,  # Use the correctly extracted inputs
             sampling_params=sampling_params,
             disaggregated_params=disaggregated_params,
             streaming=streaming,
@@ -158,8 +205,26 @@ class HandlerBase:
                 self.publisher.start()
                 self.first_generation = False
 
+            # Upon completion, send a final chunk with "stop" as the finish reason.
+            # This signals to the client that the stream has ended.
             if res.finished and self.disaggregation_mode != DisaggregationMode.PREFILL:
-                yield {"finish_reason": "stop", "token_ids": []}
+                if self.multimodal_processor:
+                    final_choice = {
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": "stop",
+                    }
+                    final_out = {
+                        "id": request_id,
+                        "model": model_name,
+                        "created": int(time.time()),
+                        "object": "chat.completion.chunk",
+                        "choices": [final_choice],
+                        "finish_reason": "stop",
+                    }
+                    yield final_out
+                else:
+                    yield {"finish_reason": "stop", "token_ids": []}
                 break
 
             if not res.outputs:
@@ -167,8 +232,36 @@ class HandlerBase:
                 break
 
             output = res.outputs[0]
+            # The engine returns all tokens generated so far. We must calculate the new
+            # tokens generated in this iteration to create the "delta".
             next_total_toks = len(output.token_ids)
-            out = {"token_ids": output.token_ids[num_output_tokens_so_far:]}
+            if self.multimodal_processor:
+                new_tokens = output.token_ids[num_output_tokens_so_far:]
+                # Decode the new token IDs into a string. This is the incremental piece
+                # of text to be sent to the client.
+                delta_text = self.tokenizer.decode(new_tokens)
+                # Assemble the delta payload for the response chunk.
+                delta = {"content": delta_text if delta_text else ""}
+                if self.first_generation:
+                    # The first chunk must include the "assistant" role.
+                    delta["role"] = "assistant"
+                    self.first_generation = False
+                choice = {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": output.finish_reason,
+                }
+                # Wrap the choice in the final response chunk following the OpenAI
+                # streaming format.
+                out = {
+                    "id": request_id,
+                    "model": model_name,
+                    "created": int(time.time()),
+                    "object": "chat.completion.chunk",
+                    "choices": [choice],
+                }
+            else:
+                out = {"token_ids": output.token_ids[num_output_tokens_so_far:]}
             if output.finish_reason:
                 out["finish_reason"] = output.finish_reason
             if output.stop_reason:
@@ -178,5 +271,6 @@ class HandlerBase:
                 out["disaggregated_params"] = asdict(
                     DisaggregatedParamsCodec.encode(output.disaggregated_params)
                 )
+            # Yield the chunk to the client and update the token count for the next iteration.
             yield out
             num_output_tokens_so_far = next_total_toks
