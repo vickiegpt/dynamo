@@ -107,6 +107,7 @@ pub enum TransferToSchedulerMessage {
 /// Issued by the TransferEngine, received by the Scheduler.
 /// Note: In order to be considered for scheduling, the [`TransferScheduleRequest`] and the [`WorkerTransferRequest`]
 /// for the same operation (uuid) must be present on the scheduler.
+#[derive(Clone)]
 pub struct TransferScheduleRequest {
     pub leader_request: LeaderTransferRequest,
     pub response_tx: oneshot::Sender<ScheduledTaskHandle>,

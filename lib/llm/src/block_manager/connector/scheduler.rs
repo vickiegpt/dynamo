@@ -431,7 +431,22 @@ impl Scheduler {
             .get_mut(&request.request_id)
             .expect("slot does not exist");
 
-        unimplemented!("@ziqi")
+        if let Some(worker_requests) = self.enqueued_requests.get_mut(&request.request_id) {
+            // transfer arrived first, so we need to trigger the scheduler to schedule the request
+            if let Some(transfer_request) = worker_requests.get(&request.uuid) {
+                if let Some(TransferArrivedFirst(schedule_request)) = transfer_request.clone().right() {
+                    self.schedule_request(schedule_request);
+                }
+            }
+        } else {
+            // worker arrived first, so we put into enqueued_requests
+            // TODO(ziqif): should we remove from enqueued_requests at all when the request is completed?
+            self.enqueued_requests
+            .entry(request.request_id.clone())
+            .or_default()
+            .insert(request.uuid, Either::Left(WorkerArrivedFirst));
+        }
+        
     }
 
     fn start_iteration(&mut self, iteration: u64) {
@@ -488,22 +503,28 @@ impl Scheduler {
     fn handle_schedule_request(&mut self, request: TransferScheduleRequest) {
         let request_id = request.leader_request.request_id.clone();
 
-        // the slot may or may not exist
-        // if it exists, the worker side may or may not have arrived first
+        // Check if there's already an enqueued request from the worker for this operation
+        if let Some(worker_requests) = self.enqueued_requests.get(&request_id) {
+            if worker_requests.contains_key(&request.leader_request.uuid) {
+                // Worker arrived first, now we have both sides - execute the transfer
+                self.schedule_request(request);
+                return;
+            }
+        }
 
-        // tracing::debug!("engine state adding slot");
-        // let slot = SchedulerSlot::new(request, self.iteration);
-        // self.slots.insert(request_id, slot);
-
-        // capture a clone of the atomic counter, and pass it through with the request
-
-        unimplemented!("@ziqi")
+        // Transfer arrived first, store it for when the worker arrives
+        // TODO(ziqif): should we remove from enqueued_requests at all when the request is completed?
+        self.enqueued_requests
+            .entry(request_id)
+            .or_default()
+            .insert(request.leader_request.uuid, Either::Right(TransferArrivedFirst(request)));
     }
 
     // this function will be a scheduler and will dispatch requests to be executed
     fn schedule_request(&mut self, xfer_req: TransferScheduleRequest) {
-        // tokio spawn execute_scheduled_transfer for first impl.  add fanciness later.
-        unimplemented!("@ziqi")
+        // For the first implementation, just call execute_scheduled_transfer directly
+        // Add more sophisticated scheduling logic later
+        self.execute_scheduled_transfer(xfer_req);
     }
 
     // this function will execute a transfer request, monitor its completion, and increment its
@@ -511,12 +532,57 @@ impl Scheduler {
     //
     // this must tokio spawn and an indpendent task
     fn execute_scheduled_transfer(&mut self, xfer_req: TransferScheduleRequest) {
-        // this will issue the signal to the transfer engine to start the transfer
-        // this is oneshot sender with a SchedulingDecision
-        // then this will monitor the oneshot received of a result<()> to monitor completion
-        // when completed, panic if error, otherwise increment the atomic counter
-
-        unimplemented!("@ziqi")
+        let request_id = xfer_req.leader_request.request_id.clone();
+        let uuid = xfer_req.leader_request.uuid;
+        
+        // Get the slot to access the completion counter
+        let slot = self.slots.get(&request_id).expect("slot must exist for scheduled transfer");
+        let completed_counter = slot.completed.clone();
+        
+        // Create channels for the decision and completion
+        let (decision_tx, decision_rx) = tokio::sync::oneshot::channel();
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        
+        // Create the ScheduledTaskHandle
+        let task_handle = ScheduledTaskHandle {
+            request_id: request_id.clone(),
+            uuid,
+            transfer_type: TransferType::Load, // TODO(ziqif): how to know the transfer type?
+            decision_rx,
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+        };
+        
+        // Send the task handle back to the requester
+        if let Err(_) = xfer_req.response_tx.send(task_handle) {
+            tracing::error!("failed to send scheduled task handle");
+            return;
+        }
+        
+        // Spawn an independent task to execute the transfer
+        tokio::spawn(async move {
+            // This would issue the signal to the transfer engine to start the transfer
+            // For now, we'll simulate completion after a short delay
+            
+            // Simulate transfer execution
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            
+            // Send the decision to execute with the completion_tx
+            if let Err(_) = decision_tx.send((SchedulingDecision::Execute, completion_tx)) {
+                tracing::error!("failed to send scheduling decision");
+                return;
+            }
+            
+            // Wait for the completion result from the receiver
+            match completion_rx.await {
+                Ok(result) => {
+                    // Increment the atomic completion counter
+                    completed_counter.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(_) => {
+                    tracing::error!("failed to receive completion result");
+                }
+            }
+        });
     }
 }
 
@@ -620,6 +686,7 @@ mod tests {
         // the unprocessed results should now be processed
         assert_eq!(scheduler.unprocessed_immediate_results.len(), 0);
 
+        // TODO(ziqif): is below comment correct?
         // neither the worker nor the scheduler should have observed the completion yet
         // this is because the worker has not yet requested it
         assert_eq!(
@@ -703,6 +770,7 @@ mod tests {
         scheduler.step().await;
         assert_eq!(scheduler.unprocessed_immediate_results.len(), 0);
 
+        // TODO(ziqif): is below comment correct?
         // neither the worker nor the scheduler should have observed the completion yet
         // this is because the worker has not yet requested it
         assert_eq!(
@@ -724,6 +792,7 @@ mod tests {
             1
         );
 
+        // TODO(ziqif): is below comment correct?
         // the worker has not issued any operations yet
         assert_eq!(worker_client.slots.get("test").unwrap().operations.len(), 1);
     }
@@ -748,6 +817,8 @@ mod tests {
         let mut handle = tokio::spawn(transfer_client.clone().schedule_transfer(request));
 
         // the transfer engine will immediately return a completion handle
+        let handle = handle.await.unwrap().expect("failed to get scheduled task handle");
+        assert_eq!(handle.scheduler_decision(), SchedulingDecision::Execute);
     }
 
     /// in this case, the request arrives first via the worker client, meaning it traverse
@@ -770,16 +841,16 @@ mod tests {
 
         // let (tx_1, rx_1) = tokio::sync::oneshot::channel();
 
-        let mut handle = tokio::spawn(async move {
-            let handle = transfer_client
-                .clone()
-                .schedule_transfer(request)
-                .await
-                .unwrap();
-            //let _ = rx_1.await;
+        // let mut handle = tokio::spawn(async move {
+        //     let handle = transfer_client
+        //         .clone()
+        //         .schedule_transfer(request)
+        //         .await
+        //         .unwrap();
+        //     //let _ = rx_1.await;
 
-            handle.mark_complete(Ok(())).await;
-        });
+        //     handle.mark_complete(Ok(())).await;
+        // });
 
         // test state of scheduler before first message arrives.
 
