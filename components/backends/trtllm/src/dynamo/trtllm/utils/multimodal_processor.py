@@ -62,15 +62,12 @@ class MultimodalRequestProcessor:
             # No multimodal content, return original request
             return request
 
-        mm_embeds = None
+        loader_kwargs = {}
         if embedding_paths:
             mm_embeds = [torch.load(path) for path in embedding_paths]
-            if not image_urls:
-                image_urls = ["empty_url"]
-
-        kwargs = {}
-        if mm_embeds is not None:
-            kwargs["mm_embeddings"] = mm_embeds
+            loader_kwargs["mm_embeddings"] = mm_embeds
+        elif image_urls:
+            loader_kwargs["media"] = [image_urls]
 
         # Process with default_multimodal_input_loader
         processed_inputs = default_multimodal_input_loader(
@@ -79,10 +76,9 @@ class MultimodalRequestProcessor:
             model_type=self.model_type,
             modality=self.modality,
             prompts=[text_prompt],
-            media=[image_urls],
             image_data_format="pt",
             device="cuda",
-            **kwargs,
+            **loader_kwargs,
         )
 
         # Return modified request
