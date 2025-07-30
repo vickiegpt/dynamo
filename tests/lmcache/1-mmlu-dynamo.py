@@ -27,6 +27,7 @@
 import argparse
 import json
 import os
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -36,7 +37,7 @@ import requests
 from tqdm import tqdm
 from transformers import AutoTokenizer, set_seed
 
-global tokenizer
+tokenizer: Optional[AutoTokenizer] = None
 choices = ["A", "B", "C", "D"]
 
 
@@ -88,7 +89,8 @@ def evaluate(args, subject, dev_df, test_df):
         shared_multi_shot_prefix.append(prompt_string(dev_df, i))
 
         # Use plain list of token IDs, no torch tensors
-        token_ids = tokenizer(shared_multi_shot_prefix[-1], add_special_tokens=True)[
+        assert tokenizer is not None, "Tokenizer must be initialized"
+        token_ids = tokenizer(shared_multi_shot_prefix[-1], add_special_tokens=True)[  # type: ignore
             "input_ids"
         ]
         shared_multi_shot_prefix_length += len(token_ids)
@@ -97,12 +99,12 @@ def evaluate(args, subject, dev_df, test_df):
             break
 
     # all already have double newlines at the end
-    shared_multi_shot_prefix = "".join(shared_multi_shot_prefix)
+    shared_multi_shot_prefix_str = "".join(shared_multi_shot_prefix)
 
     for i in range(test_df.shape[0]):
         # do NOT include the answer for the actual question we want the LLM to answer
         query_prompt = prompt_string(test_df, i, include_answer=False)
-        prompt = f"{shared_multi_shot_prefix}\n\n{query_prompt}"
+        prompt = f"{shared_multi_shot_prefix_str}\n\n{query_prompt}"
         prompts.append(prompt)
         label = test_df.iloc[i, test_df.shape[1] - 1]
         labels.append(label)

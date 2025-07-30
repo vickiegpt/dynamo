@@ -44,12 +44,12 @@ def download_mmlu():
         print(f"  - Test set: {len(dataset['test'])} samples")
 
         # Get all subjects
-        subjects = set()
+        subjects_set = set()
         for split in ["validation", "test"]:
             for item in dataset[split]:
-                subjects.add(item["subject"])
+                subjects_set.add(item["subject"])
 
-        subjects = sorted(list(subjects))
+        subjects = sorted(list(subjects_set))
         print(f"Contains {len(subjects)} subjects")
 
         # Process each subject
