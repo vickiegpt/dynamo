@@ -453,45 +453,6 @@ dynamo run in=http out=vllm neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynami
 
 ```
 
-```yaml
-Frontend:
-  served_model_name: neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic
-  endpoint: dynamo.Processor.chat/completions
-  port: 8000
-
-Processor:
-  model: neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic
-  router: round-robin
-
-VllmWorker:
-  model: neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic
-  kv-transfer-config: '{"kv_connector":"DynamoNixlConnector"}'
-  max-model-len: 3500
-  remote-prefill: true
-  block-size: 128
-  disable-log-requests: true
-  tensor-parallel-size: 4
-  ServiceArgs:
-    workers: 1
-    resources:
-      gpu: 4
-
-PrefillWorker:
-  model: neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic
-  kv-transfer-config: '{"kv_connector":"DynamoNixlConnector"}'
-  max-model-len: 3500
-  block-size: 128
-  max-num-batched-tokens: 3500
-  gpu-memory-utilization: 0.95
-  disable-log-requests: true
-  tensor-parallel-size: 1
-  ServiceArgs:
-    workers: 4
-    resources:
-      gpu: 1
-```
-
-
 Final workstream:
 
 ```bash
@@ -540,9 +501,11 @@ bash llm/perf.sh --model Qwen/Qwen2.5-3B-Instruct \
 
 rm -rf .venv
 uv venv .venv --python 3.12 --seed
+source .venv/bin/activate.fish
 uv pip install matplotlib seaborn
 
 uv pip install vllm==0.7.3
+uv pip install vllm==0.10.0
 python -m vllm.entrypoints.openai.api_server \
   --model Qwen/Qwen2.5-3B-Instruct \
   --tokenizer Qwen/Qwen2.5-3B-Instruct \
@@ -580,6 +543,7 @@ bash llm/perf.sh --model neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic \
                  --concurrency 1,2,4,8,16,32 \
                  --artifacts-root-dir artifacts_root
 
+# TODO deploy on 0,1,2,3 and 4,5,6,7 and Nginx round robin
 vllm serve neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic \
     --tensor-parallel-size 4
 
@@ -589,10 +553,87 @@ bash llm/perf.sh --model neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic \
                  --mode aggregated \
                  --tp 4 \
                  --dp 1 \
-                 --concurrency 1,2,4,8,16,32 \
+                 --concurrency 1,2,4,8,16,32,64,128,256 \
                  --artifacts-root-dir artifacts_root \
                  --deployment-kind vllm
 
 python llm/plot_pareto.py --artifacts-root-dir artifacts_root --title "Dynamo vs. vLLM Llama 70B FP8"
+
+bash container/build.sh --framework VLLM
+bash container/run.sh --framework VLLM -it
+
+
+# etcd &
+nats-server --js &
+etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://0.0.0.0:2379 --data-dir /tmp/etcd &
+
+cd components/backends/vllm
+bash launch/disagg_router.sh
+
+curl localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic",
+    "messages": [
+    {
+        "role": "user",
+        "content": "Hello, how are you?"
+    }
+    ],
+    "stream":false,
+    "max_tokens": 300
+  }' | jq
+```
+
+```bash
+#!/bin/bash
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -e
+
+trap 'echo Cleaning up...; kill 0' EXIT
+
+# run ingress
+python -m dynamo.frontend --router-mode kv &
+
+# routing will happen between the two decode workers
+CUDA_VISIBLE_DEVICES=0,1,2,3 python3 -m dynamo.vllm \
+    --model neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic \
+    --enforce-eager \
+    --tensor-parallel-size 4 &
+
+CUDA_VISIBLE_DEVICES=4,5 python3 -m dynamo.vllm \
+    --model neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic \
+    --enforce-eager \
+    --is-prefill-worker \
+    --tensor-parallel-size 2 &
+
+CUDA_VISIBLE_DEVICES=6,7 python3 -m dynamo.vllm \
+    --model neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic \
+    --enforce-eager \
+    --is-prefill-worker \
+    --tensor-parallel-size 2 &
+
+sudo rm -rf artifacts_root
+
+docker run \
+  --gpus all \
+  --rm -it \
+  --net host \
+  -v $PWD:/workspace/benchmarks \
+  nvcr.io/nvidia/tritonserver:25.06-py3-sdk
+
+cd benchmarks
+bash llm/perf.sh --model neuralmagic/DeepSeek-R1-Distill-Llama-70B-FP8-dynamic \
+                 --url http://localhost:8080 \
+                 --mode disaggregated \
+                 --prefill-tensor-parallelism 4 \
+                 --prefill-data-parallelism 2 \
+                 --decode-tensor-parallelism 4 \
+                 --decode-data-parallelism 1 \
+                 --concurrency 1,2,4,8,16,32,64,128,256 \
+                 --artifacts-root-dir artifacts_root \
+                 --deployment-kind dynamo
+
 
 ```
