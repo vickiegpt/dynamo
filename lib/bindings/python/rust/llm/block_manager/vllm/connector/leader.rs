@@ -26,6 +26,7 @@ use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
 };
+use tokio::sync::{mpsc, oneshot};
 
 type VllmLocality = Logical<DistributedLeaderWorkerResources>;
 
