@@ -34,7 +34,7 @@ use crate::{
             compute_block_hash_for_seq, KvIndexer, KvIndexerInterface, KvRouterError,
             OverlapScores, RouterEvent,
         },
-        metrics_aggregator::EndpointCollector,
+        // metrics_aggregator::EndpointCollector,
         protocols::{LocalBlockHash, RouterRequest, RouterResponse, WorkerSelectionResult},
         scheduler::{KvScheduler, KvSchedulerError, SchedulingRequest},
         scoring::ProcessedEndpoints,
@@ -43,6 +43,7 @@ use crate::{
     protocols::common::llm_backend::LLMEngineOutput,
 };
 
+use dynamo_runtime::component::Instance;
 use dynamo_runtime::traits::events::EventSubscriber;
 
 // [gluo TODO] shouldn't need to be public
@@ -55,7 +56,7 @@ pub const KV_METRICS_ENDPOINT: &str = "load_metrics";
 pub trait WorkerSelector {
     fn select_worker(
         &self,
-        workers: &ProcessedEndpoints,
+        workers: &[Instance],
         request: &SchedulingRequest,
         block_size: u32,
     ) -> Result<WorkerSelectionResult, KvSchedulerError>;
@@ -151,8 +152,16 @@ impl KvRouter {
             .primary_lease()
             .expect("Cannot KV route static workers")
             .primary_token();
-        let metrics_aggregator =
-            EndpointCollector::new(component.clone(), cancellation_token.clone()).await;
+
+        let generate_endpoint = component.endpoint("generate");
+        let client = generate_endpoint.client().await?;
+
+        let instances_rx = match client.instance_source.as_ref() {
+            InstanceSource::Dynamic(rx) => rx.clone(),
+            InstanceSource::Static => {
+                panic!("Expected dynamic instance source for KV routing");
+            }
+        };
 
         let indexer = if use_kv_events {
             Indexer::KvIndexer(KvIndexer::new(cancellation_token.clone(), block_size))
@@ -168,7 +177,7 @@ impl KvRouter {
         let scheduler = KvScheduler::start(
             component.namespace().clone(),
             block_size,
-            metrics_aggregator.endpoints_watcher(),
+            instances_rx,
             selector,
         )
         .await?;
@@ -191,7 +200,7 @@ impl KvRouter {
                         }
                     };
                     if let Err(e) = kv_events_tx.send(event).await {
-                        tracing::debug!(
+                        tracing::warn!(
                             "failed to send kv event to indexer; shutting down: {:?}",
                             e
                         );
@@ -313,17 +322,29 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
             InstanceSource::Dynamic(_) => {
                 // Extract context ID for request tracking
                 let context_id = request.context().id().to_string();
-
                 let (instance_id, overlap_amount) = self
                     .chooser
                     .find_best_match(&context_id, &request.token_ids)
                     .await?;
+                let query_instance_id = request.has_annotation("query_instance_id");
+                // Extract context information before moving the request
+                let stream_context = request.context().clone();
                 // Update the request with the estimated prefix hit blocks
                 let (mut backend_input, context) = request.into_parts();
                 let isl = backend_input.token_ids.len();
                 backend_input.estimated_prefix_hit_num_blocks = Some(overlap_amount);
                 let updated_request = context.map(|_| backend_input);
 
+                // if request has the annotation "query_instance_id", for example
+                // curl -d '{... ,"nvext": { "annotations": ["query_instance_id"]}}'
+                // request will not be routed to worker immediately
+                if query_instance_id {
+                    let instance_id_str = instance_id.to_string();
+                    let response =
+                        Annotated::from_annotation("worker_instance_id", &instance_id_str)?;
+                    let stream = stream::iter(vec![response]);
+                    return Ok(ResponseStream::new(Box::pin(stream), stream_context));
+                }
                 // Get the response stream from the worker
                 let mut response_stream = self.inner.direct(updated_request, instance_id).await?;
 
@@ -358,7 +379,7 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
                         // or when we've moved to a new block
                         let current_block_index = (isl + total_output_length).saturating_sub(1) / block_size;
                         let should_push = (!first_push_done && total_output_length >= 1) ||
-                                      (first_push_done && current_block_index > last_block_index);
+                                    (first_push_done && current_block_index > last_block_index);
 
                         if should_push {
                             chooser.push(&request_id, &accumulated_tokens).await;
@@ -374,7 +395,6 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
 
                     chooser.free(&request_id).await;
                 });
-
                 Ok(ResponseStream::new(wrapped_stream, stream_context))
             }
         }
