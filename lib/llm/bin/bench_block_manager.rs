@@ -17,10 +17,11 @@ use anyhow::Result;
 use clap::Parser;
 use dynamo_llm::{
     block_manager::{
-        block::{BlockExt, ImmutableBlock},
+        block::{ImmutableBlock},
         storage::{DeviceAllocator, DeviceStorage, DiskAllocator, PinnedAllocator, Storage},
         BasicMetadata, BlockMetadata, BlockPool, KvBlockManager, KvBlockManagerConfig,
         KvManagerLayoutConfig, KvManagerModelConfig, KvManagerRuntimeConfig,
+        locality
     },
     tokens::{TokenBlockSequence, Tokens},
 };
@@ -79,7 +80,7 @@ struct Args {
     itl_ms: usize,
 }
 
-fn build_manager(args: &Args) -> Result<KvBlockManager<BasicMetadata>> {
+async fn build_manager(args: &Args) -> Result<KvBlockManager<locality::Local, BasicMetadata>> {
     let runtime_config = KvManagerRuntimeConfig::builder().worker_id(0).build()?;
 
     let model_config = KvManagerModelConfig::builder()
@@ -119,14 +120,14 @@ fn build_manager(args: &Args) -> Result<KvBlockManager<BasicMetadata>> {
 
     let config = config_build.build()?;
 
-    KvBlockManager::<BasicMetadata>::new(config)
+    KvBlockManager::<locality::Local, BasicMetadata>::new(config).await
 }
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let manager = build_manager(&args)?;
+    let manager = build_manager(&args).await?;
 
     println!("Starting benchmark...");
     benchmark(manager, args).await?;
@@ -263,12 +264,12 @@ async fn scatter(
 }
 
 async fn match_and_onboard<S: Storage, M: BlockMetadata>(
-    manager: &KvBlockManager<M>,
-    pool: &BlockPool<S, M>,
+    manager: &KvBlockManager<locality::Local, M>,
+    pool: &dyn BlockPool<S, locality::Local, M>,
     sequence_hashes: &[u64],
     match_stats: Arc<Mutex<Vec<EventStats>>>,
     onboard_stats: Arc<Mutex<Vec<EventStats>>>,
-) -> Result<Vec<ImmutableBlock<DeviceStorage, M>>> {
+) -> Result<Vec<ImmutableBlock<DeviceStorage, locality::Local, M>>> {
     let (blocks, match_latency) = time(pool.match_sequence_hashes(sequence_hashes)).await;
 
     match_stats
@@ -278,7 +279,9 @@ async fn match_and_onboard<S: Storage, M: BlockMetadata>(
 
     // For any host blocks we found, onboard them to the device.
     if !blocks.is_empty() {
-        let (onboard_blocks, onboard_latency) = time(manager.onboard_blocks(blocks)).await;
+        let (onboard_blocks, onboard_latency) = time(manager.onboard_blocks(blocks, None)).await;
+
+        let onboard_blocks = onboard_blocks?;
 
         onboard_stats
             .lock()
@@ -325,7 +328,7 @@ fn load_trace(args: &Args) -> Result<Vec<Request>> {
             .flat_map(|h| vec![*h; args.block_size])
             .collect::<Vec<_>>();
 
-        let seq = TokenBlockSequence::new(Tokens::from(tokens), args.block_size, None);
+        let seq = TokenBlockSequence::new(Tokens::from(tokens), args.block_size as u32, None);
         assert_eq!(seq.blocks().len(), hash_ids.len());
 
         requests.push(Request {
@@ -352,7 +355,7 @@ fn load_trace(args: &Args) -> Result<Vec<Request>> {
     Ok(requests)
 }
 
-async fn benchmark(manager: KvBlockManager<BasicMetadata>, args: Args) -> Result<()> {
+async fn benchmark(manager: KvBlockManager<locality::Local, BasicMetadata>, args: Args) -> Result<()> {
     let (req_tx, mut req_rx) = mpsc::unbounded_channel();
     let manager = Arc::new(manager);
 
