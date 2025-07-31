@@ -57,7 +57,7 @@ In each container, you should be in the `/sgl-workspace/dynamo/components/backen
 
 ```bash
 # run ingress
-dynamo run in=http out=dyn &
+python3 -m dynamo.frontend --http-port=8000 &
 # optionally run the http server that allows you to flush the kv cache for all workers (see benchmarking section below)
 python3 utils/sgl_http_server.py --ns dynamo &
 # run prefill worker

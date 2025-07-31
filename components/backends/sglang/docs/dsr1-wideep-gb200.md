@@ -17,34 +17,54 @@ limitations under the License.
 
 # Running DeepSeek-R1 Disaggregated with WideEP on GB200s
 
-Dynamo supports SGLang's GB200 implementation of wide expert parallelism and large scale P/D for DeepSeek-R1! You can read their blog post [here](https://lmsys.org/blog/2025-06-16-gb200-part-1/) for more details. Full end to end optimization is still a work in progress but you can get this up and running with the following steps.
+Dynamo supports SGLang's GB200 implementation of wide expert parallelism and large scale P/D for DeepSeek-R1! You can read their blog post [here](https://lmsys.org/blog/2025-06-16-gb200-part-1/) for more details. Full end to end optimization is still a work in progress but you can get this up and running with the following steps. In ths example, we will run 1 prefill worker on 2 GB200 nodes (4 GPUs each) and 1 decode worker on 12 GB200 nodes (total 56 GPUs).
 
 ## Instructions
 
-1. Build the SGLang DeepEP container on an ARM64 machine.
 
-> [!NOTE]
-> This sglang side branch is based on an open [PR](https://github.com/sgl-project/sglang/pull/7721/files) to SGLang that allows their main dockerfile to be built for aarch64. Once that PR is merged in, we can add the gb200 dockerfile to the main sglang repo.
-
-```bash
-git clone https://github.com/kyleliang-nv/sglang.git
-cd sglang
-git checkout sglang_gb200_wideep_docker
-docker build -f docker/Dockerfile -t sgl-blackwell-wideep --build-arg BUILD_TYPE=blackwell --build-arg CUDA_VERSION=12.8.1 .
-```
-
-2. Build the Dynamo container
-
-> [!NOTE]
-> This is a side branch that contains all of the scripts to run on GB200s. Once the PR is merged in, we can switch to the main branch.
+1. Build the Dynamo container
 
 ```bash
 cd $DYNAMO_ROOT
-git checkout ishan/more-slurm-targets # temporary
-docker build -f container/Dockerfile.sglang-gb200 . -t dynamo-wideep-gb200 --no-cache
+docker build \
+  -f container/Dockerfile.sglang-wideep \
+  -t dynamo-wideep-gb200 \
+  --build-arg MODE=blackwell \
+  --build-arg SGLANG_IMAGE_TAG=v0.4.9.post6-cu128-gb200 \
+  --build-arg ARCH=arm64 \
+  --build-arg ARCH_ALT=aarch64 \
+  . \
+  --no-cache
 ```
 
-3. In your SLURM cluster, clone dynamo and switch to this side branch.
+2. You can run this container on each 4xGB200 node using the following command.
+
+> [!IMPORTANT]
+> We recommend downloading DeepSeek-R1 and then mounting it to the container. You can find the model [here](https://huggingface.co/deepseek-ai/DeepSeek-R1)
+
+```bash
+docker run \
+    --gpus all \
+    -it \
+    --rm \
+    --network host \
+    --volume /PATH_TO_DSR1_MODEL/:/model/ \
+    --shm-size=10G \
+    --ulimit memlock=-1 \
+    --ulimit stack=67108864 \
+    --ulimit nofile=65536:65536 \
+    --cap-add CAP_SYS_PTRACE \
+    --ipc host \
+    dynamo-wideep-gb200:latest
+```
+
+4. On the head prefill node, run the helper script provided to generate commands to start the `nats-server`, `etcd`. This script will also tell you which environment variables to export on each node to make deployment easier.
+
+```bash
+./utils/gen_env_vars.sh
+```
+
+In each container, you should be in the `/sgl-workspace/dynamo/components/backends/sglang` directory.
 
 ```bash
 git clone https://github.com/ai-dynamo/dynamo.git
