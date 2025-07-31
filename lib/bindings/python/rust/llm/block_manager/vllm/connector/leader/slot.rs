@@ -252,6 +252,10 @@ pub struct VllmConnectorSlot {
     /// On application, then we decide what actions we take.
     /// This the point that we will call our generic policy object.
     current_position: usize,
+
+    /// The number of blocks that have been evaluated by the policy.
+    /// Each policy evaluation will skip the already evaluated blocks.
+    evaluated_blocks: usize,
 }
 
 impl VllmConnectorSlot {
@@ -306,6 +310,7 @@ impl VllmConnectorSlot {
             iteration_first_scheduled: None,
             computed_position: 0,
             current_position: 0,
+            evaluated_blocks: 0,
             device_blocks: Vec::new(),
             staging_from_host: None,
             staging_from_disk: None,
@@ -351,6 +356,8 @@ impl Slot for VllmConnectorSlot {
             tracing::debug!("appending {} newly decodedtokens to sequence", tokens.len());
             self.state = SlotState::Decoding;
             self.sequence.extend(tokens.into()).unwrap();
+        } else {
+            self.state = SlotState::Prefilling;
         }
 
         // apply new block_ids
@@ -360,10 +367,23 @@ impl Slot for VllmConnectorSlot {
         }
 
         // we should have enough device blocks to cover the newly scheduled tokens
+        let next_position = self.current_position + num_scheduled_tokens;
         assert!(
-            self.current_position + num_scheduled_tokens
-                <= self.device_blocks.len() * self.block_size
+            next_position <= self.device_blocks.len() * self.block_size,
+            "next_position: {} > device_blocks.len() {} * block_size {}",
+            next_position,
+            self.device_blocks.len(),
+            self.block_size
         );
+
+        if next_position >= self.sequence.total_tokens() {
+            // vllm stopped providing tokens, so we are done
+            self.state = SlotState::Decoding;
+            tracing::debug!(
+                "connector source stopped providing tokens; no further evaluation possible"
+            );
+            return Ok(());
+        }
 
         // now we decide what we should do from the current position to the num_scheduled_tokens
         tracing::debug!(
@@ -373,6 +393,32 @@ impl Slot for VllmConnectorSlot {
         );
 
         // TODO(ryan) - apply policy
+        let next_position = self.current_position + num_scheduled_tokens;
+        let num_candidate_blocks = (next_position / self.block_size) - self.evaluated_blocks;
+
+        tracing::debug!(
+            "evaluating policy with the following parameters: state: {:?}; current_position: {}; num_candidate_blocks: {}; num_scheduled_tokens: {}",
+            self.state,
+            self.current_position,
+            num_candidate_blocks,
+            num_scheduled_tokens
+        );
+
+        // do we have a mechanism for skipping gpu cache hit blocks?  not sure yet.
+        // for now, offload all the blocks to the host
+        let offload_block_ids = self
+            .device_blocks
+            .iter()
+            .skip(self.evaluated_blocks)
+            .take(num_candidate_blocks)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            offload_block_ids.len(),
+            num_candidate_blocks,
+            "device block overflow - candidate blocks exceed block count at offset {}",
+            self.evaluated_blocks
+        );
 
         // done applying policy
         tracing::debug!(
