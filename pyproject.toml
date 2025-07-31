@@ -93,7 +93,8 @@ packages = [
     "components/backends/mocker/src/dynamo",
     "components/backends/trtllm/src/dynamo",
     "components/backends/sglang/src/dynamo",
-    "components/backends/vllm/src/dynamo"
+    "components/backends/vllm/src/dynamo",
+    "components/companion/src/dynamo"
 ]
 
 [tool.hatch.metadata]
