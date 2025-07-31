@@ -93,7 +93,7 @@ python3 -m dynamo.sglang.worker \
 
 On the other prefill node (since this example has 4 total prefill nodes), run the same command but change `--node-rank` to 1,2, and 3
 
-7. Run the decode worker on the head decode node
+6. Run the decode worker on the head decode node
 
 ```bash
 python3 -m dynamo.sglang.decode_worker \

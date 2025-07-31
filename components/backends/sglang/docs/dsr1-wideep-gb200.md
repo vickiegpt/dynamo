@@ -21,7 +21,6 @@ Dynamo supports SGLang's GB200 implementation of wide expert parallelism and lar
 
 ## Instructions
 
-
 1. Build the Dynamo container
 
 ```bash
@@ -58,41 +57,116 @@ docker run \
     dynamo-wideep-gb200:latest
 ```
 
-4. On the head prefill node, run the helper script provided to generate commands to start the `nats-server`, `etcd`. This script will also tell you which environment variables to export on each node to make deployment easier.
+3. On the head prefill node, run the helper script provided to generate commands to start the `nats-server`, `etcd`. This script will also tell you which environment variables to export on each node to make deployment easier.
 
 ```bash
 ./utils/gen_env_vars.sh
 ```
 
-In each container, you should be in the `/sgl-workspace/dynamo/components/backends/sglang` directory.
+4. Run the ingress and prefill worker
 
 ```bash
-git clone https://github.com/ai-dynamo/dynamo.git
-git checkout ishan/more-slurm-targets
-cd examples/sglang/slurm_jobs
+# run ingress
+python3 -m dynamo.frontend --http-port=8000 &
+# optionally run the http server that allows you to flush the kv cache for all workers (see benchmarking section below)
+python3 utils/sgl_http_server.py --ns dynamo &
+# run prefill worker
+SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=2048 \
+MC_TE_METRIC=true \
+SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE=100000 \
+SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=100000 \
+SGLANG_DISAGGREGATION_WAITING_TIMEOUT=100000 \
+SGLANG_MOONCAKE_CUSTOM_MEM_POOL=True \
+MC_FORCE_MNNVL=1 \
+NCCL_MNNVL_ENABLE=1 \
+NCCL_CUMEM_ENABLE=1 \
+SGLANG_USE_MESSAGE_QUEUE_BROADCASTER=0 \
+SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK=1 \
+PYTHONUNBUFFERED=1 \
+python3 components/worker.py \
+  --served-model-name deepseek-ai/DeepSeek-R1 \
+  --model-path /model/ \
+  --skip-tokenizer-init \
+  --trust-remote-code \
+  --disaggregation-mode prefill \
+  --dist-init-addr ${HEAD_PREFILL_NODE_IP}:29500 \
+  --disaggregation-bootstrap-port 30001 \
+  --disaggregation-transfer-backend nixl \
+  --nnodes 2 \
+  --node-rank 0 \
+  --tp-size 8 \
+  --dp-size 8 \
+  --enable-dp-attention \
+  --host 0.0.0.0 \
+  --decode-log-interval 1 \
+  --max-running-requests 6144 \
+  --context-length 2716 \
+  --disable-radix-cache \
+  --enable-deepep-moe \
+  --deepep-mode low_latency \
+  --moe-dense-tp-size 1 \
+  --enable-dp-lm-head \
+  --disable-shared-experts-fusion \
+  --ep-num-redundant-experts 32 \
+  --ep-dispatch-algorithm static \
+  --eplb-algorithm deepseek \
+  --attention-backend cutlass_mla \
+  --watchdog-timeout 1000000 \
+  --disable-cuda-graph \
+  --chunked-prefill-size 16384 \
+  --max-total-tokens 32768 \
+  --mem-fraction-static 0.8 \
+  --log-level debug
 ```
 
-4. Ensure you have the proper paths that you can use to mount things to the container
-
-- The path to the DSR1 model which should be mounted to the `--model-dir` flag and `--config-dir` flag 
-
-5. Run the following command to submit the job
+5. Run the decode worker on the head decode node
 
 ```bash
-python3 submit_job_script.py \
-  --template job_script_template.j2 \
-  --model-dir <path-to-dsr1-model> \
-  --container-image <image-from-step-2> \
-  --account <your-account> \
-  --gpus-per-node 4 \
-  --config-dir <path-to-dsr1-model> \
-  --network-interface enp138s0f0np0 \
-  --gpu-type gb200 \
-  --use-sglang-commands \
-  --prefill-nodes 2 \
-  --decode-nodes 12
+SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=768 \
+MC_TE_METRIC=true \
+SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE=100000 \
+SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=100000 \
+SGLANG_DISAGGREGATION_WAITING_TIMEOUT=100000 \
+SGLANG_HACK_SEQ_BOOTSTRAP_ROOM=1 \
+SGLANG_MOONCAKE_CUSTOM_MEM_POOL=True \
+NCCL_MNNVL_ENABLE=1 \
+MC_FORCE_MNNVL=1 \
+NCCL_CUMEM_ENABLE=1 \
+SGLANG_USE_MESSAGE_QUEUE_BROADCASTER=0 \
+SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK=1 \
+PYTHONUNBUFFERED=1 \
+python3 components/decode_worker.py \
+  --served-model-name deepseek-ai/DeepSeek-R1 \
+  --model-path /model/ \
+  --skip-tokenizer-init \
+  --trust-remote-code \
+  --disaggregation-mode decode \
+  --dist-init-addr ${HEAD_DECODE_NODE_IP}:29500 \
+  --disaggregation-bootstrap-port 30001 \
+  --nnodes 12 \
+  --node-rank 0 \
+  --tp-size 48 \
+  --dp-size 48 \
+  --enable-dp-attention \
+  --host 0.0.0.0 \
+  --decode-log-interval 1 \
+  --max-running-requests 36864 \
+  --context-length 2716 \
+  --disable-radix-cache \
+  --enable-deepep-moe \
+  --deepep-mode low_latency \
+  --moe-dense-tp-size 1 \
+  --enable-dp-lm-head \
+  --cuda-graph-bs 768 \
+  --disable-shared-experts-fusion \
+  --ep-num-redundant-experts 32 \
+  --ep-dispatch-algorithm static \
+  --eplb-algorithm deepseek \
+  --attention-backend cutlass_mla \
+  --watchdog-timeout 1000000 \
+  --chunked-prefill-size 36864 \
+  --mem-fraction-static 0.82 \
+  --log-level debug
 ```
 
-**Note**: if you want to spin up dynamo, you can remove the `--use-sglang-commands` flag.
-
-6. This will create a logs directory in the `examples/sglang/slurm_jobs` directory. You can `cd` into the directory, cd into your job id, and then run `tail -f *_prefill.err *_decode.err` or `tail -f *_prefill.out *_decode.out` to see the logs.
+On the other decode nodes (this example has 12 total decode nodes), run the same command but change `--node-rank` to 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
