@@ -16,12 +16,12 @@ from dynamo.llm import ModelType, register_llm
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 from dynamo.runtime.logging import configure_dynamo_logging
 from dynamo.trtllm.engine import get_llm_engine
+from dynamo.trtllm.multimodal_processor import MultimodalRequestProcessor
 from dynamo.trtllm.publisher import get_publisher
 from dynamo.trtllm.request_handlers.handlers import (
     RequestHandlerConfig,
     RequestHandlerFactory,
 )
-from dynamo.trtllm.utils.multimodal_processor import MultimodalRequestProcessor
 from dynamo.trtllm.utils.trtllm_utils import (
     Config,
     cmd_line_args,
@@ -134,7 +134,9 @@ async def init(runtime: DistributedRuntime, config: Config):
             config.model_path, trust_remote_code=True
         )
         multimodal_processor = MultimodalRequestProcessor(
-            model_type=model_config.model_type, model_dir=config.model_path
+            model_type=model_config.model_type,
+            model_dir=config.model_path,
+            tokenizer=tokenizer,
         )
 
     else:
@@ -164,7 +166,6 @@ async def init(runtime: DistributedRuntime, config: Config):
             disaggregation_strategy=config.disaggregation_strategy,
             next_client=next_client,
             multimodal_processor=multimodal_processor,
-            tokenizer=tokenizer,
         )
 
         if config.publish_events_and_metrics and is_first_worker(config):

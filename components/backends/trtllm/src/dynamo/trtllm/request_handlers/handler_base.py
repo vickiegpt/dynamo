@@ -14,22 +14,21 @@
 # limitations under the License.
 
 import logging
-import time
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import List, Optional, Protocol
+from typing import Optional
 
 from tensorrt_llm import SamplingParams
 from tensorrt_llm.llmapi import DisaggregatedParams as LlmDisaggregatedParams
 
 from dynamo.runtime.logging import configure_dynamo_logging
 from dynamo.trtllm.engine import TensorRTLLMEngine
+from dynamo.trtllm.multimodal_processor import MultimodalRequestProcessor
 from dynamo.trtllm.publisher import Publisher
 from dynamo.trtllm.utils.disagg_utils import (
     DisaggregatedParams,
     DisaggregatedParamsCodec,
 )
-from dynamo.trtllm.utils.multimodal_processor import MultimodalRequestProcessor
 
 configure_dynamo_logging()
 
@@ -43,18 +42,6 @@ class DisaggregationMode(Enum):
 class DisaggregationStrategy(Enum):
     PREFILL_FIRST = "prefill_first"
     DECODE_FIRST = "decode_first"
-
-
-class TokenizerProtocol(Protocol):
-    """
-    A protocol for tokenizers that defines a decode method.
-
-    This is used for type hinting to resolve mypy errors related to
-    the tokenizer's decode method not being found on a generic 'object' type.
-    """
-
-    def decode(self, token_ids: List[int]) -> str:
-        ...
 
 
 @dataclass
@@ -73,9 +60,6 @@ class RequestHandlerConfig:
     multimodal_processor: Optional[
         MultimodalRequestProcessor
     ] = None  # for multimodal support
-    tokenizer: Optional[
-        TokenizerProtocol
-    ] = None  # for decoding tokens in multimodal mode
 
 
 class HandlerBase:
@@ -92,7 +76,6 @@ class HandlerBase:
         self.disaggregation_strategy = config.disaggregation_strategy
         self.next_client = config.next_client
         self.multimodal_processor = config.multimodal_processor
-        self.tokenizer = config.tokenizer  # store tokenizer for multimodal mode
         self.first_generation = True
 
     def check_error(self, result: dict):
@@ -118,29 +101,9 @@ class HandlerBase:
 
         # Check for multimodal request and process it
         if self.multimodal_processor:
-            # Normalize the request to handle OpenAI format
-            if "stop_conditions" not in request:
-                request["stop_conditions"] = {}
-            if (
-                "max_tokens" in request
-                and "max_tokens" not in request["stop_conditions"]
-            ):
-                request["stop_conditions"]["max_tokens"] = request.pop("max_tokens")
-
-            if "sampling_options" not in request:
-                request["sampling_options"] = {}
-            if (
-                "temperature" in request
-                and "temperature" not in request["sampling_options"]
-            ):
-                request["sampling_options"]["temperature"] = request.pop("temperature")
-
-            processed_inputs = await self.multimodal_processor.process_openai_request(
+            processed_input = await self.multimodal_processor.process_openai_request(
                 request
             )
-
-            if "processed_inputs" in processed_inputs:
-                processed_input = processed_inputs["processed_inputs"][0]
 
         else:
             # text-only flow
@@ -163,10 +126,9 @@ class HandlerBase:
         if "disaggregated_params" in request:
             if self.disaggregation_mode == DisaggregationMode.PREFILL:
                 raise ValueError("Cannot provide disaggregated_params in prefill mode")
-
-            received_params = DisaggregatedParams(**request["disaggregated_params"])
-
-            disaggregated_params = DisaggregatedParamsCodec.decode(received_params)
+            disaggregated_params = DisaggregatedParamsCodec.decode(
+                DisaggregatedParams(**request["disaggregated_params"])
+            )
             disaggregated_params.request_type = "generation_only"
 
         if (
@@ -223,19 +185,9 @@ class HandlerBase:
             # This signals to the client that the stream has ended.
             if res.finished and self.disaggregation_mode != DisaggregationMode.PREFILL:
                 if self.multimodal_processor:
-                    final_choice = {
-                        "index": 0,
-                        "delta": {},
-                        "finish_reason": "stop",
-                    }
-                    final_out = {
-                        "id": request_id,
-                        "model": model_name,
-                        "created": int(time.time()),
-                        "object": "chat.completion.chunk",
-                        "choices": [final_choice],
-                        "finish_reason": "stop",
-                    }
+                    final_out = self.multimodal_processor.get_stop_response(
+                        request_id, model_name
+                    )
                     yield final_out
                 else:
                     yield {"finish_reason": "stop", "token_ids": []}
@@ -249,31 +201,10 @@ class HandlerBase:
             # The engine returns all tokens generated so far. We must calculate the new
             # tokens generated in this iteration to create the "delta".
             next_total_toks = len(output.token_ids)
-            if self.multimodal_processor and self.tokenizer:
-                new_tokens = output.token_ids[num_output_tokens_so_far:]
-                # Decode the new token IDs into a string. This is the incremental piece
-                # of text to be sent to the client.
-                delta_text = self.tokenizer.decode(new_tokens)
-                # Assemble the delta payload for the response chunk.
-                delta = {"content": delta_text if delta_text else ""}
-                if self.first_generation:
-                    # The first chunk must include the "assistant" role.
-                    delta["role"] = "assistant"
-                    self.first_generation = False
-                choice = {
-                    "index": 0,
-                    "delta": delta,
-                    "finish_reason": output.finish_reason,
-                }
-                # Wrap the choice in the final response chunk following the OpenAI
-                # streaming format.
-                out = {
-                    "id": request_id,
-                    "model": model_name,
-                    "created": int(time.time()),
-                    "object": "chat.completion.chunk",
-                    "choices": [choice],
-                }
+            if self.multimodal_processor:
+                out = self.multimodal_processor.create_response_chunk(
+                    output, num_output_tokens_so_far, request_id, model_name
+                )
             else:
                 out = {"token_ids": output.token_ids[num_output_tokens_so_far:]}
             if output.finish_reason:

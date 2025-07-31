@@ -52,7 +52,8 @@ class Config:
             f"publish_events_and_metrics={self.publish_events_and_metrics}, "
             f"disaggregation_mode={self.disaggregation_mode}, "
             f"disaggregation_strategy={self.disaggregation_strategy}, "
-            f"next_endpoint={self.next_endpoint})"
+            f"next_endpoint={self.next_endpoint}, "
+            f"modality={self.modality})"
         )
 
 

@@ -185,8 +185,6 @@ For comprehensive instructions on multinode serving, see the [multinode-examples
 ### Speculative Decoding
 - **[Llama 4 Maverick Instruct + Eagle Speculative Decoding](./llama4_plus_eagle.md)**
 
-NOTE: To send a request to a multi-node deployment, target the node which is running `dynamo-run in=http`.
-
 ### Benchmarking
 
 To benchmark your deployment with GenAI-Perf, see this utility script, configuring the
@@ -253,9 +251,7 @@ export SERVED_MODEL_NAME="meta-llama/Llama-4-Maverick-17B-128E-Instruct"
 export MODEL_PATH="meta-llama/Llama-4-Maverick-17B-128E-Instruct"
 ./launch/agg.sh
 ```
-### Example Client
-
-Below are examples for sending requests with image URLs and pre-computed embeddings.
+### Example Requests
 
 #### With Image URL
 
@@ -347,4 +343,4 @@ curl localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '
 
 ### Supported Multimodal Models
 
-Multimodel models listed [here](https://github.com/NVIDIA/TensorRT-LLM/blob/v1.0.0rc0/examples/pytorch/README.md) are supported by dynamo.
+Multimodel models listed [here](https://github.com/NVIDIA/TensorRT-LLM/blob/main/tensorrt_llm/inputs/utils.py#L221) are supported by dynamo.
