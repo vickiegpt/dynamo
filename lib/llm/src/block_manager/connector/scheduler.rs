@@ -137,26 +137,17 @@ impl WorkerSchedulerClient {
     }
 }
 
+#[derive(Debug, Default)]
 pub struct WorkerSchedulerClientSlot {
     operations: Vec<uuid::Uuid>,
     completed: Arc<AtomicU64>,
-    cancel_token: CancellationToken,
 }
 
 impl WorkerSchedulerClientSlot {
-    pub fn new(cancel_token: CancellationToken) -> Self {
-        Self {
-            operations: Vec::new(),
-            completed: Arc::new(AtomicU64::new(0)),
-            cancel_token,
-        }
-    }
-
     fn make_scheduler_slot_request(&self, request_id: String) -> SchedulerCreateSlotDetails {
         SchedulerCreateSlotDetails {
             request_id,
             completed: self.completed.clone(),
-            cancel_token: self.cancel_token.clone(),
         }
     }
 
@@ -173,7 +164,7 @@ impl WorkerSchedulerClient {
 
         // create a request slot with the child token
         // this will be the local worker slot
-        let slot = WorkerSchedulerClientSlot::new(token);
+        let slot = WorkerSchedulerClientSlot::default();
         let request = slot.make_scheduler_slot_request(request_id.clone());
 
         // insert the slot into the local worker slots map
@@ -338,7 +329,7 @@ impl Scheduler {
                         self.update_layers_completed(last_layer_name, layers_completed);
                     }
                     Some(SchedulerMessage::CreateSlot(request)) => {
-                        self.add_slot(request, self.iteration);
+                        self.add_slot(request);
                     }
                     Some(SchedulerMessage::RequestFinished(request_id)) => {
                         self.remove_slot(request_id);
@@ -349,10 +340,6 @@ impl Scheduler {
                     None => {
                         return false;
                     }
-                    _ => {
-                        panic!("received unexpected message from worker");
-                    }
-
                 }
             }
             maybe_transfer_msg = self.transfer_rx.recv(), if !self.transfer_rx.is_closed() => {
@@ -373,11 +360,11 @@ impl Scheduler {
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(request_id = %req.request_id))]
-    fn add_slot(&mut self, req: SchedulerCreateSlotDetails, created_at: u64) {
+    fn add_slot(&mut self, req: SchedulerCreateSlotDetails) {
         let request_id = req.request_id.clone();
         debug_assert!(!self.slots.contains_key(&request_id), "slot already exists");
         tracing::debug!("engine state adding slot");
-        let slot = SchedulerSlot::new(req, created_at);
+        let slot = SchedulerSlot::new(req);
         if let Some(unprocessed_results) = self.unprocessed_immediate_results.remove(&request_id) {
             tracing::debug!(
                 "found {} unprocessed immediate results; adding to slot",
@@ -655,23 +642,16 @@ impl ScheduledTaskAsyncResult {
 pub struct SchedulerCreateSlotDetails {
     pub request_id: String,
     pub completed: Arc<AtomicU64>,
-    pub cancel_token: CancellationToken,
 }
 
 pub struct SchedulerSlot {
-    request_id: String,
-    cancel_token: CancellationToken,
     completed: Arc<AtomicU64>,
-    created_at: u64,
 }
 
 impl SchedulerSlot {
-    fn new(req: SchedulerCreateSlotDetails, created_at: u64) -> Self {
+    fn new(req: SchedulerCreateSlotDetails) -> Self {
         Self {
-            request_id: req.request_id,
             completed: req.completed,
-            cancel_token: req.cancel_token,
-            created_at,
         }
     }
 }
@@ -796,7 +776,7 @@ mod tests {
             request_type: RequestType::Immediate,
         };
 
-        let mut handle = transfer_client
+        let handle = transfer_client
             .clone()
             .schedule_transfer(request)
             .await
@@ -916,7 +896,7 @@ mod tests {
         worker_client.enqueue_request(request.clone());
         scheduler.step().await;
 
-        let mut handle = handle.await.unwrap().unwrap();
+        let handle = handle.await.unwrap().unwrap();
         handle.mark_complete(Ok(())).await;
 
         // after worker arrives, <uuid, and Some(controller)> inserted by transfer should be removed from enqueued_requests

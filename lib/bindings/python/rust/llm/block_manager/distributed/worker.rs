@@ -146,7 +146,7 @@ impl KvbmWorker {
 
         let worker = rt
             .block_on(async move {
-                let mut kvbm_worker = KvbmWorkerImpl::new(config).await?;
+                let kvbm_worker = KvbmWorkerImpl::new(config).await?;
                 anyhow::Ok(kvbm_worker)
             })
             .map_err(to_pyerr)?;

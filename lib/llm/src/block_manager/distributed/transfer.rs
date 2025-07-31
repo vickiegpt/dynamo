@@ -169,7 +169,7 @@ impl Handler for BlockTransferHandler {
                 .as_ref()
                 .expect("scheduler client is required")
                 .clone();
-            let mut handle = client.schedule_transfer(req).await?;
+            let handle = client.schedule_transfer(req).await?;
 
             // we don't support cancellation yet
             assert_eq!(handle.scheduler_decision(), SchedulingDecision::Execute);

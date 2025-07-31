@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dynamo_llm::block_manager::distributed::BlockTransferPool;
-
 use super::*;
 
 pub struct CreateEngineSlotRequest {

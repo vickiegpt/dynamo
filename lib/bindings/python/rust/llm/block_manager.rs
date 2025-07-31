@@ -97,9 +97,9 @@ impl BlockManager {
                     dynamo_llm::block_manager::KvManagerLayoutConfig::builder()
                         .num_blocks(leader.num_device_blocks())
                         .logical(Some(BlockParallelismStrategy::LeaderWorkerSharded))
-                            .build()
-                            .map_err(to_pyerr)?,
-                    );
+                        .build()
+                        .map_err(to_pyerr)?,
+                );
             }
 
             if leader.num_host_blocks() > 0 {

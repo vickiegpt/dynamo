@@ -6,7 +6,7 @@ use dynamo_llm::block_manager::connector::protocol::TransferType;
 use dynamo_llm::block_manager::connector::scheduler::{
     Scheduler, TransferSchedulerClient, WorkerSchedulerClient,
 };
-use slot::{CreateEngineSlotRequest, EngineSlot, WorkerSlot};
+use slot::{CreateEngineSlotRequest, EngineSlot};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicU64;
@@ -14,15 +14,12 @@ use std::sync::{Arc, OnceLock};
 
 use super::*;
 use crate::llm::block_manager::distributed::get_barrier_id;
-use crate::llm::block_manager::vllm::connector::worker::slot::WorkerSlotState;
 use crate::{
     llm::block_manager::distributed::VllmTensor, to_pyerr,
     DistributedRuntime as PyDistributedRuntime,
 };
 
-use dynamo_llm::block_manager::distributed::{
-    BlockTransferHandler, BlockTransferPool, KvbmWorker, KvbmWorkerConfig,
-};
+use dynamo_llm::block_manager::distributed::{BlockTransferHandler, KvbmWorker, KvbmWorkerConfig};
 use dynamo_llm::block_manager::storage::torch::TorchTensor;
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
 use dynamo_runtime::{CancellationToken, DistributedRuntime};
