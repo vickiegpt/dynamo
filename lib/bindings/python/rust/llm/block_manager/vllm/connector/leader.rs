@@ -138,7 +138,7 @@ impl KvConnectorLeader {
         let shared_slot = self.slot_manager.get_slot(&request_id).map_err(to_pyerr)?;
         let mut slot = shared_slot.lock().map_err(to_pyerr)?;
 
-        slot.append_mutable_device_blocks(block_ids)?;
+        slot.append_mutable_device_blocks(&block_ids)?;
 
         // the second call will show num_external_tokens == 0
         // this call is just letting us know the other blocks that are being used for the remainder of the prefill
@@ -163,7 +163,7 @@ impl KvConnectorLeader {
         let iteration = self.iteration_counter;
 
         tracing::debug!("Building connector metadata; iteration {iteration}");
-        tracing::trace!("{scheduler_output:#?}");
+        tracing::debug!("scheduler_output: {scheduler_output:#?}");
 
         let mut inflight_requests = self.inflight_requests.clone();
         let mut md = ConnectorMetadata::new(iteration);
@@ -183,9 +183,11 @@ impl KvConnectorLeader {
             tracing::debug!("marking slot as onboarding: {request_id}");
             md.create_slot(request_id.clone());
             slot.mark_as_onboarding(iteration)?;
-            let pending_ops = slot.take_pending_operations();
-            tracing::debug!("adding {} pending operations", pending_ops.len());
-            md.add_operations(pending_ops);
+
+            if let Some(pending_ops) = slot.take_pending_operations() {
+                tracing::debug!("adding {} pending onboarding operations", pending_ops.len());
+                md.add_operations(pending_ops);
+            }
         }
 
         // vLLM provides us with "new_requests" which are "new" after onboarding, but not before or during.
@@ -221,16 +223,16 @@ impl KvConnectorLeader {
                 .get(request_id)
                 .unwrap_or(&0);
 
-            slot.apply_scheduler_output(
-                &vec![],
-                &new_req.block_ids,
-                *scheduler_output
-                    .num_scheduled_tokens
-                    .get(request_id)
-                    .unwrap_or(&0),
-            )?;
+            slot.apply_scheduler_output(&[], &[], new_req.num_computed_tokens, scheduled_tokens)?;
 
-            // md.add_operations(pending_ops);
+            if let Some(pending_ops) = slot.take_pending_operations() {
+                tracing::debug!(
+                    "adding {} pending operations for slot {}",
+                    pending_ops.len(),
+                    new_req.request_id
+                );
+                md.add_operations(pending_ops);
+            }
         }
 
         for cached_req in &scheduler_output.cached_requests {
@@ -239,6 +241,30 @@ impl KvConnectorLeader {
                 inflight_requests.remove(request_id),
                 "request_id {request_id} not found in inflight_requests: "
             );
+
+            let shared_slot = self.slot_manager.get_slot(request_id).map_err(to_pyerr)?;
+            let mut slot = shared_slot.lock().map_err(to_pyerr)?;
+
+            let scheduled_tokens = *scheduler_output
+                .num_scheduled_tokens
+                .get(request_id)
+                .unwrap_or(&0);
+
+            slot.apply_scheduler_output(
+                &cached_req.new_token_ids,
+                &cached_req.new_block_ids,
+                cached_req.num_computed_tokens,
+                scheduled_tokens,
+            )?;
+
+            if let Some(pending_ops) = slot.take_pending_operations() {
+                tracing::debug!(
+                    "adding {} pending operations for slot {}",
+                    pending_ops.len(),
+                    request_id
+                );
+                md.add_operations(pending_ops);
+            }
         }
 
         std::thread::sleep(std::time::Duration::from_secs(1));

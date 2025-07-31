@@ -10,8 +10,8 @@ use dynamo_llm::{
     },
     tokens::TokenBlock,
 };
-use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
 use dynamo_runtime::traits::{DistributedRuntimeProvider, RuntimeProvider};
+use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
@@ -93,7 +93,8 @@ pub trait Slot: std::fmt::Debug {
     fn apply_scheduler_output(
         &mut self,
         tokens: &[u32],
-        block_ids: &[u64],
+        block_ids: &[usize],
+        num_computed_tokens: usize,
         num_scheduled_tokens: usize,
     ) -> Result<(), SlotError>;
 
@@ -114,7 +115,7 @@ pub trait Slot: std::fmt::Debug {
     fn acquire_all_local_matches(&mut self) -> Result<(), SlotError>;
 
     /// Take all pending operations for the slot.
-    fn take_pending_operations(&mut self) -> Vec<WorkerTransferRequest>;
+    fn take_pending_operations(&mut self) -> Option<Vec<WorkerTransferRequest>>;
 }
 
 pub trait ExternallyManagedDeviceSlot: Slot {
@@ -125,7 +126,7 @@ pub trait ExternallyManagedDeviceSlot: Slot {
     /// Append the given block ids to the slot.
     ///
     /// The external device block manager has provided a set of mutable blocks to the slot.
-    fn append_mutable_device_blocks(&mut self, block_ids: Vec<BlockId>) -> Result<(), SlotError>;
+    fn append_mutable_device_blocks(&mut self, block_ids: &[BlockId]) -> Result<(), SlotError>;
 }
 
 pub struct ConnectorSlotManager<R: RequestKey> {
@@ -202,11 +203,8 @@ pub struct VllmConnectorSlot {
     /// The sequence of token blocks
     sequence: TokenBlockSequence,
 
-    /// The immutable blocks id (device)
-    immutable: Vec<usize>,
-
     /// The mutable blocks id (device)
-    mutable: VecDeque<usize>,
+    device_blocks: Vec<BlockId>,
 
     /// Blocks to be onboarded from the host
     /// We must hold these blocks in the slot state until the scheduler trigger the onboarding.
@@ -246,7 +244,14 @@ pub struct VllmConnectorSlot {
     /// use this to issue [`LocalTransferRequest`]s to the transfer engine
     xfer_tx: mpsc::UnboundedSender<LocalTransferRequest>,
 
+    // todo - revert this to a handle.
+    // todo - move the offload engine to the slot manager and only provide a clone of the xfer_tx to the slot
     rt: tokio::runtime::Runtime,
+
+    /// This is the current position for which we are applying some number of active/scheduled tokens.
+    /// On application, then we decide what actions we take.
+    /// This the point that we will call our generic policy object.
+    current_position: usize,
 }
 
 impl VllmConnectorSlot {
@@ -264,25 +269,25 @@ impl VllmConnectorSlot {
 
         let (xfer_tx, xfer_rx) = mpsc::unbounded_channel();
 
-        let mut xfer_engine = LocalTransferEngine::new(block_manager.clone(), leader.clone(), xfer_rx);
+        let mut xfer_engine =
+            LocalTransferEngine::new(block_manager.clone(), leader.clone(), xfer_rx);
         let system_cancellation_token = CancellationToken::new();
 
         // spawn a task to handle the transfer requests
         // use critical task pattern
         let rt = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(1)
-                .enable_all()
-                .build()
-                .unwrap();
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
 
         let xfer_engine_task = CriticalTaskExecutionHandle::new_with_runtime(
-            |cancellation_token| async move {
-                xfer_engine.execute(cancellation_token).await
-            },
+            |cancellation_token| async move { xfer_engine.execute(cancellation_token).await },
             system_cancellation_token,
             "LocalTransferEngine",
             &rt.handle(),
-        ).unwrap();
+        )
+        .unwrap();
         xfer_engine_task.detach();
 
         tracing::info!("LocalTransferEngine task detached successfully");
@@ -300,13 +305,13 @@ impl VllmConnectorSlot {
             state: SlotState::Initialized,
             iteration_first_scheduled: None,
             computed_position: 0,
-            immutable: Vec::new(),
-            mutable: VecDeque::new(),
+            current_position: 0,
+            device_blocks: Vec::new(),
             staging_from_host: None,
             staging_from_disk: None,
             offload_to_host: Vec::new(),
             offloaded_to_host_blocks: Vec::new(),
-            pending_operations: Vec::new(),
+            pending_operations: None,
             blocks_cached_from_device: 0,
             blocks_cached_from_host: 0,
             blocks_cached_from_disk: 0,
@@ -336,10 +341,51 @@ impl Slot for VllmConnectorSlot {
     fn apply_scheduler_output(
         &mut self,
         tokens: &[u32],
-        block_ids: &[u64],
+        block_ids: &[BlockId],
+        num_computed_tokens: usize,
         num_scheduled_tokens: usize,
     ) -> Result<(), SlotError> {
-        unimplemented!()
+        debug_assert!(num_computed_tokens == self.computed_tokens());
+
+        if !tokens.is_empty() {
+            tracing::debug!("appending {} newly decodedtokens to sequence", tokens.len());
+            self.state = SlotState::Decoding;
+            self.sequence.extend(tokens.into()).unwrap();
+        }
+
+        // apply new block_ids
+        if !block_ids.is_empty() {
+            tracing::debug!("assigning {} new device blocks slot", block_ids.len());
+            self.device_blocks.extend(block_ids);
+        }
+
+        // we should have enough device blocks to cover the newly scheduled tokens
+        assert!(
+            self.current_position + num_scheduled_tokens
+                <= self.device_blocks.len() * self.block_size
+        );
+
+        // now we decide what we should do from the current position to the num_scheduled_tokens
+        tracing::debug!(
+            "applying kv cache policy at current_position: {}; num_scheduled_tokens: {}",
+            self.current_position,
+            num_scheduled_tokens
+        );
+
+        // TODO(ryan) - apply policy
+
+        // done applying policy
+        tracing::debug!(
+            "done applying kv cache policy at current_position: {}; num_scheduled_tokens: {}",
+            self.current_position,
+            num_scheduled_tokens
+        );
+
+        // advance current and computed position
+        self.current_position += num_scheduled_tokens;
+        self.computed_position += num_scheduled_tokens;
+
+        Ok(())
     }
 
     fn mark_as_prefilling(&mut self, iteration: u64) -> Result<(), SlotError> {
@@ -361,7 +407,10 @@ impl Slot for VllmConnectorSlot {
 
         if let Err(e) = self.xfer_tx.send(xfer_req) {
             tracing::error!("Failed to send transfer request: {:?}", e);
-            return Err(SlotError::InvalidOperation(format!("Transfer engine unavailable: {}", e)));
+            return Err(SlotError::InvalidOperation(format!(
+                "Transfer engine unavailable: {}",
+                e
+            )));
         }
 
         Ok(())
@@ -403,11 +452,11 @@ impl Slot for VllmConnectorSlot {
     }
 
     fn num_device_blocks_allocated(&self) -> usize {
-        self.immutable.len() + self.mutable.len()
+        self.device_blocks.len()
     }
 
-    fn take_pending_operations(&mut self) -> Vec<WorkerTransferRequest> {
-        std::mem::take(&mut self.pending_operations)
+    fn take_pending_operations(&mut self) -> Option<Vec<WorkerTransferRequest>> {
+        self.pending_operations.take()
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -534,9 +583,9 @@ impl ExternallyManagedDeviceSlot for VllmConnectorSlot {
         Ok(())
     }
 
-    fn append_mutable_device_blocks(&mut self, block_ids: Vec<BlockId>) -> Result<(), SlotError> {
+    fn append_mutable_device_blocks(&mut self, block_ids: &[BlockId]) -> Result<(), SlotError> {
         let count = block_ids.len();
-        self.mutable.extend(block_ids);
+        self.device_blocks.extend(block_ids);
         tracing::debug!(
             "appended {} mutable device blocks to slot; total device blocks: {}",
             count,
@@ -626,15 +675,24 @@ impl LocalTransferEngine {
     async fn process_request(&mut self, req: LocalTransferRequest) -> anyhow::Result<()> {
         match req {
             LocalTransferRequest::Offload(offload_req) => {
-                tracing::debug!("Processing offload request for {} blocks", offload_req.block_ids.len());
+                tracing::debug!(
+                    "Processing offload request for {} blocks",
+                    offload_req.block_ids.len()
+                );
 
                 // TODO: Implement actual offload logic
                 // 1. Acquire mutable host blocks
-                let mut host_blocks = self.block_manager.host().unwrap().allocate_blocks(offload_req.block_ids.len()).await?;
+                let mut host_blocks = self
+                    .block_manager
+                    .host()
+                    .unwrap()
+                    .allocate_blocks(offload_req.block_ids.len())
+                    .await?;
                 let token_blocks = offload_req.token_blocks;
 
                 let host_block_ids: Vec<usize> = host_blocks.iter().map(|b| b.block_id()).collect();
-                let block_pairs: Vec<(usize, usize)> = offload_req.block_ids
+                let block_pairs: Vec<(usize, usize)> = offload_req
+                    .block_ids
                     .into_iter()
                     .zip(host_block_ids.into_iter())
                     .collect();
@@ -679,7 +737,11 @@ impl LocalTransferEngine {
                     }
                 }
                 // 5. Register the mutable blocks
-                self.block_manager.host().unwrap().register_blocks(blocks_to_register).await?;
+                self.block_manager
+                    .host()
+                    .unwrap()
+                    .register_blocks(blocks_to_register)
+                    .await?;
 
                 Ok(())
             }
