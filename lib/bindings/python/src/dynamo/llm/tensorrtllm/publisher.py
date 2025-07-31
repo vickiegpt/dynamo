@@ -110,6 +110,7 @@ class Publisher:
         self.kv_listener = kv_listener
         self.worker_id = worker_id
         self.kv_block_size = kv_block_size
+        self.max_window_size = None
 
         # Needed by the events and metrics publishers
         self.metrics_publisher = None
@@ -283,6 +284,12 @@ class Publisher:
         async for event in events:
             logging.debug(f"KV cache event received: {event}")
             event_id = event["event_id"]
+            window_size = event["window_size"]
+            self.update_max_window_size(window_size)
+
+            if window_size != self.max_window_size:
+                continue
+
             data = event["data"]
             if data["type"] == "stored":
                 parent_hash = _to_signed_i64(data["parent_hash"])
@@ -386,6 +393,10 @@ class Publisher:
             self.publish_kv_cache_events_thread.join(timeout=cleanup_timeout)
             if self.publish_kv_cache_events_thread.is_alive():
                 logging.warning("KV cache events thread did not stop within timeout")
+
+    def update_max_window_size(self, window_size):
+        if self.max_window_size is None or window_size > self.max_window_size:
+            self.max_window_size = window_size
 
 
 @asynccontextmanager
