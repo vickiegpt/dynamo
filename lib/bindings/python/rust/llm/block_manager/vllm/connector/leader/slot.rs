@@ -10,6 +10,9 @@ use dynamo_llm::{
     },
     tokens::TokenBlock,
 };
+use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
+use dynamo_runtime::traits::{DistributedRuntimeProvider, RuntimeProvider};
+use tokio_util::sync::CancellationToken;
 
 use super::*;
 
@@ -235,9 +238,6 @@ pub struct VllmConnectorSlot {
     /// use this to issue [`LocalTransferRequest`]s to the transfer engine
     xfer_tx: mpsc::UnboundedSender<LocalTransferRequest>,
 
-    /// this is a background task which will automatically shutdown after the slot is dropped
-    /// should be created in a detached state
-    xfer_engine: LocalTransferEngine,
 }
 
 impl VllmConnectorSlot {
@@ -255,10 +255,21 @@ impl VllmConnectorSlot {
 
         let (xfer_tx, xfer_rx) = mpsc::unbounded_channel();
 
-        let xfer_engine = LocalTransferEngine::new(block_manager.clone(), leader.clone(), xfer_rx);
+        let mut xfer_engine = LocalTransferEngine::new(block_manager.clone(), leader.clone(), xfer_rx);
+        let system_cancellation_token = CancellationToken::new();
 
         // spawn a task to handle the transfer requests
         // use critical task pattern
+
+        let xfer_engine_task = CriticalTaskExecutionHandle::new_with_runtime(
+            |cancellation_token| async move {
+                xfer_engine.execute(cancellation_token).await
+            },
+            system_cancellation_token,
+            "LocalTransferEngine",
+            &leader.drt().rt().primary(),
+        ).unwrap();
+        xfer_engine_task.detach();
 
         Self {
             request_id,
@@ -267,7 +278,6 @@ impl VllmConnectorSlot {
             block_size,
             leader,
             xfer_tx,
-            xfer_engine,
 
             // default values
             state: SlotState::Initialized,
@@ -566,6 +576,7 @@ enum LocalTransferRequest {
 }
 
 struct LocalOffloadRequest {
+    request_id: String,
     block_ids: Vec<BlockId>,
     token_blocks: Vec<TokenBlock>,
     operation_id: uuid::Uuid,
@@ -573,12 +584,14 @@ struct LocalOffloadRequest {
 
 impl LocalOffloadRequest {
     pub fn new(
+        request_id: String,
         block_ids: Vec<BlockId>,
         token_blocks: Vec<TokenBlock>,
         operation_id: uuid::Uuid,
     ) -> Self {
         debug_assert!(block_ids.len() == token_blocks.len());
         Self {
+            request_id,
             block_ids,
             token_blocks,
             operation_id,
@@ -605,26 +618,93 @@ impl LocalTransferEngine {
         }
     }
 
-    async fn execute(&mut self) -> anyhow::Result<()> {
-        while let Some(req) = self.xfer_rx.recv().await {
-            match req {
-                LocalTransferRequest::Offload(offload_req) => {
-                    panic!("@olga - impl here");
-
-                    // acquire mutable host blocks
-
-                    // apply token blocks
-
-                    // issue the offload request using `leader`
-
-                    // wait for the offload request to complete
-
-                    // register the mutable blocks
+    async fn execute(&mut self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
+        loop {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    tracing::debug!("LocalTransferEngine: received cancellation signal");
+                    break;
+                }
+                req = self.xfer_rx.recv() => {
+                    match req {
+                        Some(req) => {
+                            if let Err(e) = self.process_request(req).await {
+                                tracing::error!("LocalTransferEngine: error processing request: {:?}", e);
+                            }
+                        }
+                        None => {
+                            tracing::debug!("LocalTransferEngine: channel closed");
+                            break;
+                        }
+                    }
                 }
             }
         }
 
         tracing::debug!("LocalTransferEngine: shutting down");
         Ok(())
+    }
+
+    async fn process_request(&mut self, req: LocalTransferRequest) -> anyhow::Result<()> {
+        match req {
+            LocalTransferRequest::Offload(offload_req) => {
+                tracing::debug!("Processing offload request for {} blocks", offload_req.block_ids.len());
+
+                // TODO: Implement actual offload logic
+                // 1. Acquire mutable host blocks
+                let mut host_blocks = self.block_manager.host().unwrap().allocate_blocks(offload_req.block_ids.len()).await?;
+                let token_blocks = offload_req.token_blocks;
+
+                let host_block_ids: Vec<usize> = host_blocks.iter().map(|b| b.block_id()).collect();
+                let block_pairs: Vec<(usize, usize)> = offload_req.block_ids
+                    .into_iter()
+                    .zip(host_block_ids.into_iter())
+                    .collect();
+
+                // 2. Apply token blocks
+
+                // create an iterator over the mutable blocks zipped with the token blocks
+                let mut blocks_to_register = Vec::new();
+                let zipped_blocks = host_blocks.into_iter().zip(token_blocks.into_iter());
+
+                // apply the token blocks to the mutable blocks
+                for (mut mutable_block, token_block) in zipped_blocks {
+                    mutable_block
+                        .apply_token_block(token_block.clone())
+                        .map_err(|e| anyhow::anyhow!("failed to apply token block: {:?}", e))?;
+
+                    blocks_to_register.push(mutable_block);
+                }
+
+                // 3. Issue the offload request using `leader`
+
+                let block_xfer_req = BlockTransferRequest {
+                    from_pool: BlockTransferPool::Device,
+                    to_pool: BlockTransferPool::Host,
+                    blocks: block_pairs,
+                    connector_req: Some(LeaderTransferRequest {
+                        request_id: offload_req.request_id,
+                        uuid: offload_req.operation_id,
+                        requirement: None,
+                        request_type: RequestType::Scheduled,
+                    }),
+                };
+                let notify_receiver = self.leader.transfer_blocks_request(block_xfer_req).await?;
+
+                // 4. Wait for the offload request to complete
+                match notify_receiver.await {
+                    Ok(_) => {
+                        tracing::debug!("Transfer completed successfully");
+                    }
+                    Err(_) => {
+                        return Err(anyhow::anyhow!("Transfer completion notification failed"));
+                    }
+                }
+                // 5. Register the mutable blocks
+                self.block_manager.host().unwrap().register_blocks(blocks_to_register).await?;
+
+                Ok(())
+            }
+        }
     }
 }

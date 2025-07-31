@@ -8,6 +8,7 @@ use zmq::*;
 
 use dynamo_runtime::utils::leader_worker_barrier::LeaderBarrier;
 use dynamo_runtime::{DistributedRuntime, Runtime};
+use dynamo_runtime::traits::DistributedRuntimeProvider;
 
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
@@ -62,6 +63,7 @@ pub struct KvbmLeader {
     num_device_blocks: usize,
     zmq_leader: ZmqActiveMessageLeader,
     config: KvbmLeaderConfig,
+    drt: DistributedRuntime,
 }
 
 impl KvbmLeader {
@@ -123,6 +125,7 @@ impl KvbmLeader {
             num_device_blocks,
             zmq_leader,
             config,
+            drt,
         })
     }
 
@@ -146,5 +149,11 @@ impl KvbmLeader {
 
     pub fn num_disk_blocks(&self) -> usize {
         self.config.num_disk_blocks
+    }
+}
+
+impl DistributedRuntimeProvider for KvbmLeader {
+    fn drt(&self) -> &DistributedRuntime {
+        &self.drt
     }
 }
