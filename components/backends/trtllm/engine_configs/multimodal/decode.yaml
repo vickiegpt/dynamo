@@ -21,7 +21,9 @@ trust_remote_code: true
 backend: pytorch
 enable_chunked_prefill: true
 disable_overlap_scheduler: false
-use_cuda_graph: true
 kv_cache_config:
   free_gpu_memory_fraction: 0.30
   enable_block_reuse: false
+
+cache_transceiver_config:
+  backend: default

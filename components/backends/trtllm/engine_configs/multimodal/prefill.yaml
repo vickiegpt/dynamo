@@ -22,8 +22,10 @@ backend: pytorch
 enable_chunked_prefill: true
 # Overlap scheduler not currently supported in prefill only workers.
 disable_overlap_scheduler: true
-use_cuda_graph: false
 
 kv_cache_config:
   free_gpu_memory_fraction: 0.30
   enable_block_reuse: false
+
+cache_transceiver_config:
+  backend: default

@@ -128,7 +128,7 @@ class MultimodalRequestProcessor:
         model_name: str,
     ) -> Dict[str, Any]:
         """Creates a response chunk for multimodal streaming."""
-        if not self.tokenizer:
+        if self.tokenizer is None:
             raise ValueError("Tokenizer must be provided for creating response chunks.")
 
         new_tokens = output.token_ids[num_output_tokens_so_far:]
