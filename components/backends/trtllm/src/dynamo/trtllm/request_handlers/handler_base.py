@@ -17,7 +17,7 @@ import logging
 import time
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Optional
+from typing import List, Optional, Protocol
 
 from tensorrt_llm import SamplingParams
 from tensorrt_llm.llmapi import DisaggregatedParams as LlmDisaggregatedParams
@@ -45,6 +45,18 @@ class DisaggregationStrategy(Enum):
     DECODE_FIRST = "decode_first"
 
 
+class TokenizerProtocol(Protocol):
+    """
+    A protocol for tokenizers that defines a decode method.
+
+    This is used for type hinting to resolve mypy errors related to
+    the tokenizer's decode method not being found on a generic 'object' type.
+    """
+
+    def decode(self, token_ids: List[int]) -> str:
+        ...
+
+
 @dataclass
 class RequestHandlerConfig:
     """
@@ -61,7 +73,9 @@ class RequestHandlerConfig:
     multimodal_processor: Optional[
         MultimodalRequestProcessor
     ] = None  # for multimodal support
-    tokenizer: Optional[object] = None  # for decoding tokens in multimodal mode
+    tokenizer: Optional[
+        TokenizerProtocol
+    ] = None  # for decoding tokens in multimodal mode
 
 
 class HandlerBase:
@@ -235,7 +249,7 @@ class HandlerBase:
             # The engine returns all tokens generated so far. We must calculate the new
             # tokens generated in this iteration to create the "delta".
             next_total_toks = len(output.token_ids)
-            if self.multimodal_processor:
+            if self.multimodal_processor and self.tokenizer:
                 new_tokens = output.token_ids[num_output_tokens_so_far:]
                 # Decode the new token IDs into a string. This is the incremental piece
                 # of text to be sent to the client.
