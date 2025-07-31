@@ -7,7 +7,7 @@ use utils::*;
 use zmq::*;
 
 use dynamo_runtime::utils::leader_worker_barrier::LeaderBarrier;
-use dynamo_runtime::{DistributedRuntime, Runtime};
+use dynamo_runtime::traits::DistributedRuntimeProvider;
 
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
