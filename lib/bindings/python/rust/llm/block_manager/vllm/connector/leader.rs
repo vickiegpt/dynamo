@@ -201,7 +201,9 @@ impl KvConnectorLeader {
             let shared_slot = self.slot_manager.get_slot(request_id).map_err(to_pyerr)?;
             let mut slot = shared_slot.lock().map_err(to_pyerr)?;
 
+            // inform the worker that a new request-slot should be created
             md.create_slot(new_req.request_id.clone());
+
             slot.mark_as_scheduled(iteration)?;
 
             debug_assert!(
@@ -213,44 +215,21 @@ impl KvConnectorLeader {
                 slot.state()
             );
 
-            // if let SlotState::OnboardStaged(num_external_tokens) = slot.state() {
-            //     tracing::debug!(
-            //         request_id,
-            //         iteration,
-            //         "initializing onboarding of {num_external_tokens} tokens"
-            //     );
-            //     slot.mark_as_onboarding(iteration)?;
-            //     md.add_operations(slot.take_pending_operations());
-            //     continue;
-            // }
-
             let scheduled_tokens = *scheduler_output
                 .num_scheduled_tokens
                 .get(request_id)
                 .unwrap_or(&0);
 
-            if scheduled_tokens == 0 {
-                tracing::debug!(
-                    request_id,
-                    iteration,
-                    "no tokens scheduled; mark as not scheduled"
-                );
-                slot.mark_as_not_scheduled(iteration)?;
-            } else if new_req.num_computed_tokens < slot.sequence().total_tokens() {
-                tracing::debug!(request_id, iteration, "mark as prefilling");
-                slot.mark_as_prefilling(iteration)?;
-            } else {
-                tracing::debug!(request_id, iteration, "mark as decoding");
-                slot.mark_as_decoding(iteration)?;
-            }
+            slot.apply_scheduler_output(
+                &vec![],
+                &new_req.block_ids,
+                *scheduler_output
+                    .num_scheduled_tokens
+                    .get(request_id)
+                    .unwrap_or(&0),
+            )?;
 
-            let pending_ops = slot.take_pending_operations();
-            tracing::debug!(
-                request_id,
-                "adding {} pending operations",
-                pending_ops.len()
-            );
-            md.add_operations(pending_ops);
+            // md.add_operations(pending_ops);
         }
 
         for cached_req in &scheduler_output.cached_requests {

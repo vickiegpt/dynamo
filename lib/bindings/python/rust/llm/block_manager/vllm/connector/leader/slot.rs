@@ -54,6 +54,7 @@ pub enum SlotState {
 
     /// The slot is actively copying blocks to device storage from some external storage(s).
     /// The u64 is the iteration at which the onboarding operation was triggered.
+    // TODO(ryan) - reset to usize for num tokens so we can advance the computed position
     Onboarding(u64),
 
     /// The slot is actively prefilling the sequence.
@@ -80,6 +81,13 @@ pub trait Slot: std::fmt::Debug {
     /// The number of tokens that have been computed on the device, i.e. the number of tokens for which we have ownership
     /// of computed kv blocks in the device storage.
     fn computed_tokens(&self) -> usize;
+
+    fn apply_scheduler_output(
+        &mut self,
+        tokens: &[u32],
+        block_ids: &[u64],
+        num_scheduled_tokens: usize,
+    ) -> Result<(), SlotError>;
 
     fn mark_as_scheduled(&mut self, iteration: u64) -> Result<(), SlotError>;
     fn mark_as_prefilling(&mut self, iteration: u64) -> Result<(), SlotError>;
@@ -283,6 +291,15 @@ impl Slot for VllmConnectorSlot {
 
     fn state(&self) -> SlotState {
         self.state
+    }
+
+    fn apply_scheduler_output(
+        &mut self,
+        tokens: &[u32],
+        block_ids: &[u64],
+        num_scheduled_tokens: usize,
+    ) -> Result<(), SlotError> {
+        unimplemented!()
     }
 
     fn mark_as_prefilling(&mut self, iteration: u64) -> Result<(), SlotError> {
