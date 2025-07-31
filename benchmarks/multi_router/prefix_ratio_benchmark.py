@@ -79,7 +79,7 @@ def get_genai_perf_cmd(
         "--artifact-dir",
         artifact_dir,
         "--",
-        "-v",
+        "-vv",
         "--max-threads",
         "256",
         "-H",
@@ -150,6 +150,40 @@ def run_benchmark_single_url(
     except subprocess.CalledProcessError as e:
         logger.error(f"Genai-perf failed for URL {url} with error code: {e.returncode}")
         logger.error(f"stderr: {e.stderr}")
+        logger.error(f"stdout: {e.stdout}")
+
+        # Try to preserve partial results even on failure
+        logger.info(f"Checking for partial results in {artifact_dir}")
+
+        # Look for profile_export.json files in subdirectories
+        profile_files = []
+        for root, dirs, files in os.walk(artifact_dir):
+            for file in files:
+                if file == "profile_export.json":
+                    profile_file_path = os.path.join(root, file)
+                    profile_files.append(profile_file_path)
+                    logger.info(f"Found profile export file: {profile_file_path}")
+
+                    # Copy to a safe location with descriptive name
+                    safe_name = (
+                        f"profile_export_FAILED_prefix_{prefix_ratio}_seed_{seed}.json"
+                    )
+                    safe_path = os.path.join(artifact_dir, safe_name)
+                    try:
+                        import shutil
+
+                        shutil.copy2(profile_file_path, safe_path)
+                        logger.info(f"Copied profile export to: {safe_path}")
+                    except Exception as copy_err:
+                        logger.error(f"Failed to copy profile export: {copy_err}")
+
+        if profile_files:
+            logger.info(
+                f"Preserved {len(profile_files)} profile export files despite genai-perf failure"
+            )
+        else:
+            logger.warning("No profile export files found after failure")
+
         return None
 
 
