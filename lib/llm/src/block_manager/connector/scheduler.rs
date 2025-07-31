@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::protocol::*;
 use super::*;
 
-use either::Either;
 use tokio::sync::mpsc;
 
 pub const DISCONNECTED_WARNING: &str =
@@ -259,9 +258,6 @@ pub enum SchedulerMessage {
     RequestFinished(String),
 }
 
-struct WorkerArrivedFirst;
-struct TransferArrivedFirst(TransferScheduleRequest);
-
 pub struct Scheduler {
     // Created by Worker
     slots: HashMap<String, SchedulerSlot>,
@@ -275,17 +271,10 @@ pub struct Scheduler {
     // Note: this does not require a slot to exist yet
     unprocessed_immediate_results: HashMap<String, HashSet<uuid::Uuid>>,
 
-    // This object coordinates the two-stage execution of a scheduled transfer request
-    // Because we require signals from both leader and worker, this object holds the first
-    // signal to arrive while waiting for the other.
-    #[deprecated(note = "use scheduled_requests instead")]
-    enqueued_requests:
-        HashMap<String, HashMap<uuid::Uuid, Either<WorkerArrivedFirst, TransferArrivedFirst>>>,
-
     // This object coordinates the two-stage execution of a scheduled transfer request.
     // If the scheduled request arrives first, the controller object will be Some; otherwise,
     // the worker-side request arrived first and it will be None.
-    scheduled_requests: HashMap<String, HashMap<uuid::Uuid, Option<ScheduledTaskController>>>,
+    enqueued_requests: HashMap<String, HashMap<uuid::Uuid, TransferRequestSource>>,
 
     // Messages from the worker arrive on this channel
     worker_rx: mpsc::UnboundedReceiver<SchedulerMessage>,
@@ -311,7 +300,6 @@ impl Scheduler {
                 cancel_tokens: HashMap::new(),
                 unprocessed_immediate_results: HashMap::new(),
                 enqueued_requests: HashMap::new(),
-                scheduled_requests: HashMap::new(),
                 worker_rx: scheduler_rx,
                 transfer_rx,
                 iteration: 0,
@@ -406,7 +394,7 @@ impl Scheduler {
         self.cancel_tokens.remove(&request_id);
         self.slots.remove(&request_id);
 
-        let maybe_controller = self.scheduled_requests.remove(&request_id);
+        let maybe_controller = self.enqueued_requests.remove(&request_id);
         debug_assert!(
             maybe_controller.is_none() || maybe_controller.unwrap().is_empty(),
             "any scheduled request should be removed and enqueued/scheduled before the slot is removed"
@@ -431,7 +419,12 @@ impl Scheduler {
             "slot does not exist"
         );
 
-        let maybe_controller = self.handle_request(request.request_id.clone(), request.uuid.clone(), None);
+        let maybe_controller = self.try_prepare_controller(
+            request.request_id,
+            request.uuid,
+            TransferRequestSource::Worker,
+        );
+
         if let Some(controller) = maybe_controller {
             self.schedule_request(controller);
         }
@@ -487,40 +480,44 @@ impl Scheduler {
         }
     }
 
-    // This function is used to handle the request from worker or transfer based on their arrival order.
-    // It returns Some(ScheduledTaskController) if both worker and transfer have arrived, or None if any of them has not arrived yet.
-    //
-    // More details:
-    // If no uuid is found in scheduled_requests, it means neither worker nor transfer has arrived yet.
-    // Then, we will insert controller into scheduled_requests (for transfer) or None (for worker) and return None.
-    //
-    // If uuid is found in scheduled_requests, it means either worker or transfer has arrived.
-    // Then, we check the incoming controller. If it is Some, it means worker has arrived first and we can return it.
-    // If it is None, it means the transfer has arrived first and we can return the existing controller.
-    fn handle_request(&mut self, request_id: String, uuid: uuid::Uuid, controller: Option<ScheduledTaskController>) -> Option<ScheduledTaskController> {
-        let mut entry = self.scheduled_requests.entry(request_id).or_default();
-        match entry.remove(&uuid) {
-            Some(existing_controller) => {
-                match controller {
-                    Some(controller) => {
-                        Some(controller)
-                    }
-                    None => {
-                        existing_controller
-                    }
-                }
+    /// This function is used to handle the request from worker or transfer based on their arrival order.
+    /// It returns Some(ScheduledTaskController) if both worker and transfer have arrived, or None if any of them has not arrived yet.
+    ///
+    /// More details:
+    /// If no uuid is found in enqueued_requests, it means neither worker nor transfer has arrived yet.
+    /// Then, we will insert controller into enqueued_requests (for transfer) or None (for worker) and return None.
+    ///
+    /// If uuid is found in enqueued_requests, it means either worker or transfer has arrived.
+    /// Then, we check the incoming controller. If it is Some, it means worker has arrived first and we can return it.
+    /// If it is None, it means the transfer has arrived first and we can return the existing controller.
+    fn try_prepare_controller(
+        &mut self,
+        request_id: String,
+        uuid: uuid::Uuid,
+        incoming: TransferRequestSource,
+    ) -> Option<ScheduledTaskController> {
+        let entry = self.enqueued_requests.entry(request_id).or_default();
+        match (entry.remove(&uuid), incoming) {
+            (Some(TransferRequestSource::Worker), TransferRequestSource::Transfer(controller)) => {
+                tracing::debug!("worker arrived first, then transfer ==> scheduling transfer");
+                Some(controller)
             }
-            None => {
-                match controller {
-                    Some(controller) => {
-                        entry.insert(uuid, Some(controller));
-                        None
-                    }
-                    None => {
-                        entry.insert(uuid, None);
-                        None
-                    }
-                }
+            (Some(TransferRequestSource::Transfer(controller)), TransferRequestSource::Worker) => {
+                tracing::debug!("transfer arrived first, then worker ==> scheduling transfer");
+                Some(controller)
+            }
+            (None, TransferRequestSource::Worker) => {
+                tracing::debug!("worker arrived first; must wait for transfer");
+                entry.insert(uuid, TransferRequestSource::Worker);
+                None
+            }
+            (None, TransferRequestSource::Transfer(controller)) => {
+                tracing::debug!("transfer arrived first; must wait for worker");
+                entry.insert(uuid, TransferRequestSource::Transfer(controller));
+                None
+            }
+            _ => {
+                panic!("invalid combination of request sources");
             }
         }
     }
@@ -529,10 +526,15 @@ impl Scheduler {
     fn handle_scheduled_transfer_request(&mut self, request: TransferScheduleRequest) {
         let controller = self.process_scheduled_transfer_request(request).unwrap();
 
-        let maybe_controller = self.handle_request(controller.request.request_id.clone(), controller.request.uuid.clone(), Some(controller));
+        let maybe_controller = self.try_prepare_controller(
+            controller.request.request_id.clone(),
+            controller.request.uuid,
+            TransferRequestSource::Transfer(controller),
+        );
 
         if let Some(controller) = maybe_controller {
-           self.schedule_request(controller);
+            tracing::debug!("scheduling transfer");
+            self.schedule_request(controller);
         }
     }
 
@@ -547,15 +549,7 @@ impl Scheduler {
     //
     // this must tokio spawn and an indpendent task
     fn execute_scheduled_transfer(&mut self, xfer_req: ScheduledTaskController) {
-        // this will issue the signal to the transfer engine to start the transfer
-        // this is oneshot sender with a SchedulingDecision
-        // then this will monitor the oneshot received of a result<()> to monitor completion
-        // when completed, panic if error, otherwise increment the atomic counter
-
-        let (result_tx, result_rx) = oneshot::channel();
-        xfer_req.decision_tx.send((SchedulingDecision::Execute, result_tx)).unwrap();
-
-        // TBD: do real transfer here
+        tokio::spawn(xfer_req.execute(SchedulingDecision::Execute));
     }
 
     /// Translate the [`TransferScheduleRequest`] into a local [`ScheduledTaskController`]
@@ -632,13 +626,20 @@ pub struct ScheduledTaskController {
 }
 
 impl ScheduledTaskController {
-    pub fn trigger(self, decision: SchedulingDecision) -> anyhow::Result<ScheduledTaskAsyncResult> {
+    pub async fn execute(self, decision: SchedulingDecision) -> anyhow::Result<()> {
         let (completion_tx, completion_rx) = oneshot::channel();
         self.decision_tx
             .send((decision, completion_tx))
             .map_err(|_| anyhow::anyhow!(DISCONNECTED_WARNING))?;
-        Ok(ScheduledTaskAsyncResult { completion_rx })
+        completion_rx
+            .await
+            .map_err(|_| anyhow::anyhow!(DISCONNECTED_WARNING))?
     }
+}
+
+enum TransferRequestSource {
+    Worker,
+    Transfer(ScheduledTaskController),
 }
 
 pub struct ScheduledTaskAsyncResult {
@@ -686,7 +687,7 @@ mod tests {
     #[tokio::test]
     async fn test_scheduler_lifecycle() {
         let cancel_token = CancellationToken::new();
-        let (mut scheduler, mut worker_client, transfer_client) = Scheduler::new(cancel_token);
+        let (mut scheduler, mut worker_client, _transfer_client) = Scheduler::new(cancel_token);
 
         // create a slot
         worker_client.create_slot("test".to_string()).unwrap();
@@ -725,7 +726,7 @@ mod tests {
             request_type: RequestType::Immediate,
         };
 
-        let mut handle = transfer_client
+        let handle = transfer_client
             .clone()
             .schedule_transfer(request)
             .await
@@ -881,9 +882,23 @@ mod tests {
         let handle = tokio::spawn(transfer_client.schedule_transfer(request.clone()));
         scheduler.step().await;
 
-        // scheduled_requests should contain <request id, <uuid, and Some(controller)>> since transfer arrived first
-        assert_eq!(scheduler.scheduled_requests.get(&request.request_id).unwrap().len(), 1);
-        assert!(scheduler.scheduled_requests.get(&request.request_id).unwrap().get(&operation_id).unwrap().is_some());
+        // enqueued_requests should contain <request id, <uuid, and Some(controller)>> since transfer arrived first
+        assert_eq!(
+            scheduler
+                .enqueued_requests
+                .get(&request.request_id)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(matches!(
+            scheduler
+                .enqueued_requests
+                .get(&request.request_id)
+                .unwrap()
+                .get(&operation_id),
+            Some(TransferRequestSource::Transfer(_))
+        ));
 
         worker_client.create_slot("test".to_string()).unwrap();
         assert!(!scheduler.slots.contains_key("test"));
@@ -904,8 +919,15 @@ mod tests {
         let mut handle = handle.await.unwrap().unwrap();
         handle.mark_complete(Ok(())).await;
 
-        // after worker arrives, <uuid, and Some(controller)> inserted by transfer should be removed from scheduled_requests
-        assert_eq!(scheduler.scheduled_requests.get(&request.request_id).unwrap().len(), 0);
+        // after worker arrives, <uuid, and Some(controller)> inserted by transfer should be removed from enqueued_requests
+        assert_eq!(
+            scheduler
+                .enqueued_requests
+                .get(&request.request_id)
+                .unwrap()
+                .len(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -933,9 +955,23 @@ mod tests {
         worker_client.enqueue_request(request.clone());
         scheduler.step().await;
 
-        // scheduled_requests should contain <request id, <uuid, and None>> since worker arrived first
-        assert_eq!(scheduler.scheduled_requests.get(&request.request_id).unwrap().len(), 1);
-        assert!(scheduler.scheduled_requests.get(&request.request_id).unwrap().get(&operation_id).unwrap().is_none());
+        // enqueued_requests should contain <request id, <uuid, and None>> since worker arrived first
+        assert_eq!(
+            scheduler
+                .enqueued_requests
+                .get(&request.request_id)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(matches!(
+            scheduler
+                .enqueued_requests
+                .get(&request.request_id)
+                .unwrap()
+                .get(&operation_id),
+            Some(TransferRequestSource::Worker)
+        ));
 
         let request = LeaderTransferRequest {
             request_id: "test".to_string(),
@@ -947,12 +983,19 @@ mod tests {
         // transfer arrives last
         let handle = tokio::spawn(transfer_client.schedule_transfer(request.clone()));
         scheduler.step().await;
-        let mut handle = handle.await.unwrap().unwrap();
+        let handle = handle.await.unwrap().unwrap();
         assert_eq!(handle.scheduler_decision(), SchedulingDecision::Execute);
         handle.mark_complete(Ok(())).await;
-        
-        // after transfer arrives, <uuid, and None> inserted by worker should be removed from scheduled_requests
-        assert_eq!(scheduler.scheduled_requests.get(&request.request_id).unwrap().len(), 0);
+
+        // after transfer arrives, <uuid, and None> inserted by worker should be removed from enqueued_requests
+        assert_eq!(
+            scheduler
+                .enqueued_requests
+                .get(&request.request_id)
+                .unwrap()
+                .len(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -1016,9 +1059,8 @@ mod tests {
         assert!(got_handle_rx.is_empty());
 
         // Simulate some work being done - wait until the test releases us
-        let scheduler_result = scheduler_controller
-            .trigger(SchedulingDecision::Execute)
-            .unwrap();
+        let scheduler_result =
+            tokio::spawn(scheduler_controller.execute(SchedulingDecision::Execute));
 
         // simulate the transfer engine receiving the decision
         let transfer_handle = got_handle_rx.await.unwrap();
@@ -1032,6 +1074,6 @@ mod tests {
         transfer_handle.mark_complete(Ok(())).await;
 
         // wait for the scheduler to complete
-        scheduler_result.await_completion().await.unwrap();
+        scheduler_result.await.unwrap().unwrap();
     }
 }
