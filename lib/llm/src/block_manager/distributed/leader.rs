@@ -3,11 +3,12 @@
 
 use super::*;
 
+use dynamo_runtime::DistributedRuntime;
 use utils::*;
 use zmq::*;
 
-use dynamo_runtime::utils::leader_worker_barrier::LeaderBarrier;
 use dynamo_runtime::traits::DistributedRuntimeProvider;
+use dynamo_runtime::utils::leader_worker_barrier::LeaderBarrier;
 
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
@@ -44,6 +45,10 @@ pub struct KvbmLeaderConfig {
     /// The leader-worker init connection timeout seconds.
     #[builder(default = "120")]
     leader_init_timeout_secs: u64,
+
+    /// The DRT to use for the leader.
+    #[builder(default = "None")]
+    dtr: Option<DistributedRuntime>,
 }
 
 impl KvbmLeaderConfig {
@@ -65,10 +70,14 @@ pub struct KvbmLeader {
 }
 
 impl KvbmLeader {
-    pub async fn new(config: KvbmLeaderConfig) -> anyhow::Result<Self> {
-        let runtime = Runtime::from_current()?;
-
-        let drt = DistributedRuntime::from_settings(runtime.clone()).await?;
+    pub async fn new(mut config: KvbmLeaderConfig) -> anyhow::Result<Self> {
+        let drt = match config.dtr.take() {
+            Some(dtr) => dtr,
+            None => {
+                let runtime = dynamo_runtime::Runtime::from_current()?;
+                DistributedRuntime::from_settings(runtime).await?
+            }
+        };
 
         tracing::info!(
             "Syncing leader barrier with {} workers on barrier id {}",

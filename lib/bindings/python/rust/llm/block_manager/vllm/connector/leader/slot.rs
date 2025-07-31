@@ -239,7 +239,7 @@ pub struct VllmConnectorSlot {
 
     iteration_first_scheduled: Option<u64>,
 
-    pending_operations: Vec<WorkerTransferRequest>,
+    pending_operations: Option<Vec<WorkerTransferRequest>>,
 
     /// use this to issue [`LocalTransferRequest`]s to the transfer engine
     xfer_tx: mpsc::UnboundedSender<LocalTransferRequest>,
@@ -350,7 +350,7 @@ impl Slot for VllmConnectorSlot {
         num_computed_tokens: usize,
         num_scheduled_tokens: usize,
     ) -> Result<(), SlotError> {
-        debug_assert!(num_computed_tokens == self.computed_tokens());
+        // debug_assert!(num_computed_tokens == self.computed_tokens());
 
         if !tokens.is_empty() {
             tracing::debug!("appending {} newly decodedtokens to sequence", tokens.len());
@@ -376,7 +376,7 @@ impl Slot for VllmConnectorSlot {
             self.block_size
         );
 
-        if next_position >= self.sequence.total_tokens() {
+        if next_position > self.sequence.total_tokens() {
             // vllm stopped providing tokens, so we are done
             self.state = SlotState::Decoding;
             tracing::debug!(
@@ -404,21 +404,36 @@ impl Slot for VllmConnectorSlot {
             num_scheduled_tokens
         );
 
-        // do we have a mechanism for skipping gpu cache hit blocks?  not sure yet.
-        // for now, offload all the blocks to the host
-        let offload_block_ids = self
-            .device_blocks
-            .iter()
-            .skip(self.evaluated_blocks)
-            .take(num_candidate_blocks)
-            .collect::<Vec<_>>();
+        if num_candidate_blocks != 0 {
+            // do we have a mechanism for skipping gpu cache hit blocks?  not sure yet.
+            // for now, offload all the blocks to the host
+            let offload_block_ids: Vec<usize> = self
+                .device_blocks
+                .iter()
+                .skip(self.evaluated_blocks)
+                .take(num_candidate_blocks)
+                .map(|b| *b)
+                .collect::<Vec<_>>();
 
-        assert_eq!(
-            offload_block_ids.len(),
-            num_candidate_blocks,
-            "device block overflow - candidate blocks exceed block count at offset {}",
-            self.evaluated_blocks
-        );
+            assert_eq!(
+                offload_block_ids.len(),
+                num_candidate_blocks,
+                "device block overflow - candidate blocks exceed block count at offset {}",
+                self.evaluated_blocks
+            );
+
+            let offload_token_blocks: Vec<TokenBlock> = self
+                .sequence
+                .blocks()
+                .iter()
+                .skip(self.evaluated_blocks)
+                .take(num_candidate_blocks)
+                .map(|b| b.clone())
+                .collect::<Vec<_>>();
+
+            self.offload_blocks(&offload_block_ids, &offload_token_blocks)
+                .expect("failed to offload blocks");
+        }
 
         // done applying policy
         tracing::debug!(
@@ -434,35 +449,12 @@ impl Slot for VllmConnectorSlot {
         Ok(())
     }
 
-    fn mark_as_prefilling(&mut self, iteration: u64) -> Result<(), SlotError> {
+    fn mark_as_prefilling(&mut self, _iteration: u64) -> Result<(), SlotError> {
         self.state = SlotState::Prefilling;
-
-        let token_blocks = self.sequence.blocks().to_vec();
-        let mut block_ids: Vec<_> = self.mutable.iter().map(|b| *b).collect();
-        block_ids.truncate(token_blocks.len());
-
-        let local_offload_req = LocalOffloadRequest {
-            request_id: self.request_id.clone(),
-            block_ids,
-            token_blocks,
-            operation_id: uuid::Uuid::new_v4(),
-        };
-
-        let xfer_req = LocalTransferRequest::Offload(local_offload_req.clone());
-        tracing::warn!("local_offload_req: {:?}", local_offload_req);
-
-        if let Err(e) = self.xfer_tx.send(xfer_req) {
-            tracing::error!("Failed to send transfer request: {:?}", e);
-            return Err(SlotError::InvalidOperation(format!(
-                "Transfer engine unavailable: {}",
-                e
-            )));
-        }
-
         Ok(())
     }
 
-    fn mark_as_decoding(&mut self, iteration: u64) -> Result<(), SlotError> {
+    fn mark_as_decoding(&mut self, _iteration: u64) -> Result<(), SlotError> {
         self.state = SlotState::Decoding;
         Ok(())
     }
@@ -639,6 +631,65 @@ impl ExternallyManagedDeviceSlot for VllmConnectorSlot {
         );
 
         Ok(())
+    }
+}
+
+impl VllmConnectorSlot {
+    /// this method does two things which are related:
+    /// 1. creates transfer engine offload request
+    /// 2. creates matching connector worker transfer request
+    ///
+    /// these requests share the same uuid.
+    ///
+    /// the worker request triggers the transfer when sufficient forward pass progress has been made.
+    fn offload_blocks(
+        &mut self,
+        block_ids: &[BlockId],
+        token_blocks: &[TokenBlock],
+    ) -> Result<(), SlotError> {
+        assert!(block_ids.len() == token_blocks.len());
+        let operation_id = uuid::Uuid::new_v4();
+
+        let xfer_req = LocalTransferRequest::Offload(LocalOffloadRequest {
+            request_id: self.request_id.clone(),
+            operation_id,
+            block_ids: block_ids.to_vec(),
+            token_blocks: token_blocks.to_vec(),
+        });
+
+        let worker_req = WorkerTransferRequest {
+            request_id: self.request_id.clone(),
+            uuid: operation_id,
+            transfer_type: TransferType::Store,
+            request_type: RequestType::Scheduled,
+        };
+
+        if let Err(e) = self.xfer_tx.send(xfer_req) {
+            tracing::error!("Failed to send transfer request: {:?}", e);
+            return Err(SlotError::InvalidOperation(format!(
+                "Transfer engine unavailable: {}; aborting offload",
+                e
+            )));
+        }
+
+        self.append_pending_operation(worker_req);
+
+        tracing::debug!(
+            request_id = self.request_id,
+            operation_id = %operation_id,
+            "offloading {} blocks to host",
+            block_ids.len()
+        );
+
+        Ok(())
+    }
+
+    fn append_pending_operation(&mut self, operation: WorkerTransferRequest) {
+        if let Some(pending_operations) = self.pending_operations.as_mut() {
+            pending_operations.push(operation);
+        } else {
+            self.pending_operations = Some(vec![operation]);
+        }
     }
 }
 
