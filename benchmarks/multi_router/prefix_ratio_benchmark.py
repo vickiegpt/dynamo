@@ -164,19 +164,6 @@ def run_benchmark_single_url(
                     profile_files.append(profile_file_path)
                     logger.info(f"Found profile export file: {profile_file_path}")
 
-                    # Copy to a safe location with descriptive name
-                    safe_name = (
-                        f"profile_export_FAILED_prefix_{prefix_ratio}_seed_{seed}.json"
-                    )
-                    safe_path = os.path.join(artifact_dir, safe_name)
-                    try:
-                        import shutil
-
-                        shutil.copy2(profile_file_path, safe_path)
-                        logger.info(f"Copied profile export to: {safe_path}")
-                    except Exception as copy_err:
-                        logger.error(f"Failed to copy profile export: {copy_err}")
-
         if profile_files:
             logger.info(
                 f"Preserved {len(profile_files)} profile export files despite genai-perf failure"
