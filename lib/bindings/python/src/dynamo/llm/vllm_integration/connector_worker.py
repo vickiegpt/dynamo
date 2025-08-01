@@ -16,8 +16,16 @@ from vllm.utils import STR_DTYPE_TO_TORCH_DTYPE
 
 if TYPE_CHECKING:
     from vllm.attention.backends.abstract import AttentionMetadata
+    from vllm.config import VllmConfig
     from vllm.forward_context import ForwardContext
 
+
+# from dynamo.llm.vllm_integration.kv_cache_utils import KvbmCacheBlocks
+# from dynamo.llm.vllm_integration.rust import BlockManager
+# from dynamo.llm.vllm_integration.rust import (
+#     KvConnectorMetadata as RustKvConnectorMetadata,
+#     KvConnectorWorker as RustKvConnectorWorker,
+# )
 
 from dynamo.llm.vllm_integration.rust import KvConnectorWorker as RustKvConnectorWorker
 from dynamo.runtime import DistributedRuntime
@@ -33,7 +41,6 @@ class KvConnectorWorker:
     def __init__(self, vllm_config: "VllmConfig", engine_id: str, **kwargs):
         drt = kwargs.get("drt", None)
         if drt is None:
-            # Create DistributedRuntime directly - Rust singleton prevents "Worker already initialized" errors
             self.drt = DistributedRuntime(event_loop=None, is_static=False)
         else:
             self.drt = drt

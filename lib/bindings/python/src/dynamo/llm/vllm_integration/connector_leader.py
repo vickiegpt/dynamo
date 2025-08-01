@@ -54,7 +54,6 @@ class KvConnectorLeader:
     def __init__(self, vllm_config: "VllmConfig", engine_id: str, **kwargs):
         drt = kwargs.get("drt", None)
         if drt is None:
-            # Create DistributedRuntime directly - Rust singleton prevents "Worker already initialized" errors
             self.drt = DistributedRuntime(event_loop=None, is_static=False)
         else:
             self.drt = drt
