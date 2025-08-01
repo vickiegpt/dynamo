@@ -11,7 +11,7 @@ use pyo3::{exceptions::PyException, prelude::*};
 use rs::pipeline::network::Ingress;
 use std::path::PathBuf;
 use std::{fmt::Display, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OnceCell as AsyncOnceCell};
 
 use dynamo_runtime::{
     self as rs, logging,
@@ -20,6 +20,8 @@ use dynamo_runtime::{
     },
     protocols::annotated::Annotated as RsAnnotated,
     traits::DistributedRuntimeProvider,
+    Worker,
+    DistributedRuntime as RsDistributedRuntime,
 };
 
 use dynamo_llm::{self as llm_rs};
@@ -50,6 +52,9 @@ mod llm;
 type JsonServerStreamingIngress =
     Ingress<SingleIn<serde_json::Value>, ManyOut<RsAnnotated<serde_json::Value>>>;
 
+// Global singletons for Python bindings (similar to C bindings)
+static WORKER: OnceCell<Worker> = OnceCell::new();
+static DISTRIBUTED_RUNTIME: AsyncOnceCell<rs::DistributedRuntime> = AsyncOnceCell::const_new();
 static INIT: OnceCell<()> = OnceCell::new();
 
 const DEFAULT_ANNOTATED_SETTING: Option<bool> = Some(true);
@@ -249,30 +254,46 @@ enum ModelType {
 impl DistributedRuntime {
     #[new]
     fn new(event_loop: PyObject, is_static: bool) -> PyResult<Self> {
-        let worker = rs::Worker::from_settings().map_err(to_pyerr)?;
-        INIT.get_or_try_init(|| {
-            let primary = worker.tokio_runtime()?;
+        // Use singleton pattern similar to C bindings to prevent "Worker already initialized" errors
+        let worker = match WORKER.get_or_try_init(Worker::from_settings) {
+            Ok(worker) => worker.clone(),
+            Err(e) => {
+                return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    format!("Failed to initialize Worker: {:?}", e)
+                ));
+            }
+        };
+
+        INIT.get_or_try_init(|| -> Result<(), PyErr> {
+            let primary = worker.tokio_runtime().map_err(to_pyerr)?;
             pyo3_async_runtimes::tokio::init_with_runtime(primary)
-                .map_err(|e| rs::error!("failed to initialize pyo3 static runtime: {:?}", e))?;
-            rs::OK(())
-        })
-        .map_err(to_pyerr)?;
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    format!("failed to initialize pyo3 static runtime: {:?}", e)
+                ))?;
+            Ok(())
+        })?;
 
         let runtime = worker.runtime().clone();
 
-        let inner =
-            if is_static {
-                runtime.secondary().block_on(
-                    rs::DistributedRuntime::from_settings_without_discovery(runtime),
-                )
-            } else {
-                runtime
-                    .secondary()
-                    .block_on(rs::DistributedRuntime::from_settings(runtime))
-            };
+        // Use singleton pattern for DistributedRuntime as well
+        let secondary = runtime.secondary();
+        let inner = secondary.block_on(async {
+            DISTRIBUTED_RUNTIME
+                .get_or_try_init(|| async {
+                    if is_static {
+                        RsDistributedRuntime::from_settings_without_discovery(runtime).await
+                    } else {
+                        RsDistributedRuntime::from_settings(runtime).await
+                    }
+                })
+                .await
+        });
         let inner = inner.map_err(to_pyerr)?;
 
-        Ok(DistributedRuntime { inner, event_loop })
+        Ok(DistributedRuntime {
+            inner: inner.clone(),
+            event_loop
+        })
     }
 
     fn namespace(&self, name: String) -> PyResult<Namespace> {

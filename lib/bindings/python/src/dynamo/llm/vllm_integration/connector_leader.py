@@ -30,12 +30,10 @@ if TYPE_CHECKING:
 # from dynamo.llm.vllm_integration.rust import SchedulerOutput as RustSchedulerOutput
 
 from dynamo.llm import BlockManager, KvbmLeader
-from dynamo.llm.vllm_integration.runtime_singleton import (
-    get_or_create_distributed_runtime,
-)
 from dynamo.llm.vllm_integration.rust import KvbmRequest
 from dynamo.llm.vllm_integration.rust import KvConnectorLeader as RustKvConnectorLeader
 from dynamo.llm.vllm_integration.rust import SchedulerOutput as RustSchedulerOutput
+from dynamo.runtime import DistributedRuntime
 
 
 class DynamoConnectorMetadata(KVConnectorMetadata):
@@ -56,9 +54,8 @@ class KvConnectorLeader:
     def __init__(self, vllm_config: "VllmConfig", engine_id: str, **kwargs):
         drt = kwargs.get("drt", None)
         if drt is None:
-            self.drt = get_or_create_distributed_runtime(
-                event_loop=None, is_static=False
-            )
+            # Create DistributedRuntime directly - Rust singleton prevents "Worker already initialized" errors
+            self.drt = DistributedRuntime(event_loop=None, is_static=False)
         else:
             self.drt = drt
 

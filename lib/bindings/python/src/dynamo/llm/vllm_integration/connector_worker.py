@@ -18,10 +18,9 @@ if TYPE_CHECKING:
     from vllm.attention.backends.abstract import AttentionMetadata
     from vllm.forward_context import ForwardContext
 
-from dynamo.llm.vllm_integration.runtime_singleton import (
-    get_or_create_distributed_runtime,
-)
+
 from dynamo.llm.vllm_integration.rust import KvConnectorWorker as RustKvConnectorWorker
+from dynamo.runtime import DistributedRuntime
 
 
 class DynamoConnectorMetadata(KVConnectorMetadata):
@@ -34,9 +33,8 @@ class KvConnectorWorker:
     def __init__(self, vllm_config: "VllmConfig", engine_id: str, **kwargs):
         drt = kwargs.get("drt", None)
         if drt is None:
-            self.drt = get_or_create_distributed_runtime(
-                event_loop=None, is_static=False
-            )
+            # Create DistributedRuntime directly - Rust singleton prevents "Worker already initialized" errors
+            self.drt = DistributedRuntime(event_loop=None, is_static=False)
         else:
             self.drt = drt
 
