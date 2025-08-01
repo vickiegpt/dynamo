@@ -29,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 use dynamo_runtime::{
     utils::{leader_worker_barrier::WorkerBarrier, task::CriticalTaskExecutionHandle},
-    DistributedRuntime, Runtime,
+    DistributedRuntime,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

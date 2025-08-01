@@ -61,10 +61,20 @@ impl TransferSchedulerClient {
                     leader_request: request,
                     response_tx,
                 };
+
+                tracing::debug!("sending schedule request to scheduler");
                 scheduler_tx
                     .send(TransferToSchedulerMessage::ScheduleRequest(request))
                     .await?;
-                Ok(response_rx.await?.wait_for_decision().await)
+
+                tracing::debug!("awaiting response from scheduler");
+                let handle = response_rx.await?.wait_for_decision().await;
+
+                tracing::debug!(
+                    "received scheduler decision: {:?}",
+                    handle.scheduler_decision()
+                );
+                Ok(handle)
             }
         }
     }
@@ -137,26 +147,17 @@ impl WorkerSchedulerClient {
     }
 }
 
+#[derive(Debug, Default)]
 pub struct WorkerSchedulerClientSlot {
     operations: Vec<uuid::Uuid>,
     completed: Arc<AtomicU64>,
-    cancel_token: CancellationToken,
 }
 
 impl WorkerSchedulerClientSlot {
-    pub fn new(cancel_token: CancellationToken) -> Self {
-        Self {
-            operations: Vec::new(),
-            completed: Arc::new(AtomicU64::new(0)),
-            cancel_token,
-        }
-    }
-
     fn make_scheduler_slot_request(&self, request_id: String) -> SchedulerCreateSlotDetails {
         SchedulerCreateSlotDetails {
             request_id,
             completed: self.completed.clone(),
-            cancel_token: self.cancel_token.clone(),
         }
     }
 
@@ -167,13 +168,9 @@ impl WorkerSchedulerClientSlot {
 
 impl WorkerSchedulerClient {
     pub fn create_slot(&mut self, request_id: String) -> Result<(), SchedulerError> {
-        // create a child token which will cancel on the parent but can be cancelled individually
-        // with out effecting the parent
-        let token = self.cancel_token.child_token();
-
         // create a request slot with the child token
         // this will be the local worker slot
-        let slot = WorkerSchedulerClientSlot::new(token);
+        let slot = WorkerSchedulerClientSlot::default();
         let request = slot.make_scheduler_slot_request(request_id.clone());
 
         // insert the slot into the local worker slots map
@@ -254,7 +251,6 @@ pub enum SchedulerMessage {
     UpdateLayersCompleted(LayerName, LayerIndex),
 
     /// Worker received a notification that the given request id has been completed.
-    ///
     RequestFinished(String),
 }
 
@@ -338,7 +334,7 @@ impl Scheduler {
                         self.update_layers_completed(last_layer_name, layers_completed);
                     }
                     Some(SchedulerMessage::CreateSlot(request)) => {
-                        self.add_slot(request, self.iteration);
+                        self.add_slot(request);
                     }
                     Some(SchedulerMessage::RequestFinished(request_id)) => {
                         self.remove_slot(request_id);
@@ -349,10 +345,6 @@ impl Scheduler {
                     None => {
                         return false;
                     }
-                    _ => {
-                        panic!("received unexpected message from worker");
-                    }
-
                 }
             }
             maybe_transfer_msg = self.transfer_rx.recv(), if !self.transfer_rx.is_closed() => {
@@ -373,11 +365,11 @@ impl Scheduler {
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(request_id = %req.request_id))]
-    fn add_slot(&mut self, req: SchedulerCreateSlotDetails, created_at: u64) {
+    fn add_slot(&mut self, req: SchedulerCreateSlotDetails) {
         let request_id = req.request_id.clone();
         debug_assert!(!self.slots.contains_key(&request_id), "slot already exists");
         tracing::debug!("engine state adding slot");
-        let slot = SchedulerSlot::new(req, created_at);
+        let slot = SchedulerSlot::new(req);
         if let Some(unprocessed_results) = self.unprocessed_immediate_results.remove(&request_id) {
             tracing::debug!(
                 "found {} unprocessed immediate results; adding to slot",
@@ -549,7 +541,17 @@ impl Scheduler {
     //
     // this must tokio spawn and an indpendent task
     fn execute_scheduled_transfer(&mut self, xfer_req: ScheduledTaskController) {
-        tokio::spawn(xfer_req.execute(SchedulingDecision::Execute));
+        debug_assert!(
+            self.slots.contains_key(&xfer_req.request.request_id),
+            "slot not found"
+        );
+        let completed = self
+            .slots
+            .get(&xfer_req.request.request_id)
+            .unwrap()
+            .completed
+            .clone();
+        tokio::spawn(xfer_req.execute(SchedulingDecision::Execute, completed));
     }
 
     /// Translate the [`TransferScheduleRequest`] into a local [`ScheduledTaskController`]
@@ -626,14 +628,20 @@ pub struct ScheduledTaskController {
 }
 
 impl ScheduledTaskController {
-    pub async fn execute(self, decision: SchedulingDecision) -> anyhow::Result<()> {
+    pub async fn execute(
+        self,
+        decision: SchedulingDecision,
+        completed: Arc<AtomicU64>,
+    ) -> anyhow::Result<()> {
         let (completion_tx, completion_rx) = oneshot::channel();
         self.decision_tx
             .send((decision, completion_tx))
             .map_err(|_| anyhow::anyhow!(DISCONNECTED_WARNING))?;
-        completion_rx
+        let _ = completion_rx
             .await
-            .map_err(|_| anyhow::anyhow!(DISCONNECTED_WARNING))?
+            .map_err(|_| anyhow::anyhow!(DISCONNECTED_WARNING))?;
+        completed.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
 }
 
@@ -655,23 +663,16 @@ impl ScheduledTaskAsyncResult {
 pub struct SchedulerCreateSlotDetails {
     pub request_id: String,
     pub completed: Arc<AtomicU64>,
-    pub cancel_token: CancellationToken,
 }
 
 pub struct SchedulerSlot {
-    request_id: String,
-    cancel_token: CancellationToken,
     completed: Arc<AtomicU64>,
-    created_at: u64,
 }
 
 impl SchedulerSlot {
-    fn new(req: SchedulerCreateSlotDetails, created_at: u64) -> Self {
+    fn new(req: SchedulerCreateSlotDetails) -> Self {
         Self {
-            request_id: req.request_id,
             completed: req.completed,
-            cancel_token: req.cancel_token,
-            created_at,
         }
     }
 }
@@ -796,7 +797,7 @@ mod tests {
             request_type: RequestType::Immediate,
         };
 
-        let mut handle = transfer_client
+        let handle = transfer_client
             .clone()
             .schedule_transfer(request)
             .await
@@ -879,22 +880,15 @@ mod tests {
         };
 
         // transfer arrives first
-        let handle = tokio::spawn(transfer_client.schedule_transfer(request.clone()));
+        let handle = tokio::spawn(transfer_client.schedule_transfer(request));
         scheduler.step().await;
 
         // enqueued_requests should contain <request id, <uuid, and Some(controller)>> since transfer arrived first
-        assert_eq!(
-            scheduler
-                .enqueued_requests
-                .get(&request.request_id)
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(scheduler.enqueued_requests.get("test").unwrap().len(), 1);
         assert!(matches!(
             scheduler
                 .enqueued_requests
-                .get(&request.request_id)
+                .get("test")
                 .unwrap()
                 .get(&operation_id),
             Some(TransferRequestSource::Transfer(_))
@@ -913,21 +907,38 @@ mod tests {
         };
 
         // worker arrives last
-        worker_client.enqueue_request(request.clone());
+        worker_client.enqueue_request(request);
         scheduler.step().await;
 
-        let mut handle = handle.await.unwrap().unwrap();
+        let handle = handle.await.unwrap().unwrap();
         handle.mark_complete(Ok(())).await;
 
         // after worker arrives, <uuid, and Some(controller)> inserted by transfer should be removed from enqueued_requests
+        assert_eq!(scheduler.enqueued_requests.get("test").unwrap().len(), 0);
+
+        // wait a bit to make sure the scheduled transfer to complete
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        assert_eq!(
+            worker_client
+                .slots
+                .get("test")
+                .unwrap()
+                .completed
+                .load(Ordering::Relaxed),
+            1
+        );
         assert_eq!(
             scheduler
-                .enqueued_requests
-                .get(&request.request_id)
+                .slots
+                .get("test")
                 .unwrap()
-                .len(),
-            0
+                .completed
+                .load(Ordering::Relaxed),
+            1
         );
+
+        // make sure all operations are complete
+        assert!(worker_client.slots.get("test").unwrap().is_complete());
     }
 
     #[tokio::test]
@@ -952,22 +963,15 @@ mod tests {
         };
 
         // worker arrives first
-        worker_client.enqueue_request(request.clone());
+        worker_client.enqueue_request(request);
         scheduler.step().await;
 
         // enqueued_requests should contain <request id, <uuid, and None>> since worker arrived first
-        assert_eq!(
-            scheduler
-                .enqueued_requests
-                .get(&request.request_id)
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(scheduler.enqueued_requests.get("test").unwrap().len(), 1);
         assert!(matches!(
             scheduler
                 .enqueued_requests
-                .get(&request.request_id)
+                .get("test")
                 .unwrap()
                 .get(&operation_id),
             Some(TransferRequestSource::Worker)
@@ -981,21 +985,38 @@ mod tests {
         };
 
         // transfer arrives last
-        let handle = tokio::spawn(transfer_client.schedule_transfer(request.clone()));
+        let handle = tokio::spawn(transfer_client.schedule_transfer(request));
         scheduler.step().await;
         let handle = handle.await.unwrap().unwrap();
         assert_eq!(handle.scheduler_decision(), SchedulingDecision::Execute);
         handle.mark_complete(Ok(())).await;
 
         // after transfer arrives, <uuid, and None> inserted by worker should be removed from enqueued_requests
+        assert_eq!(scheduler.enqueued_requests.get("test").unwrap().len(), 0);
+
+        // wait a bit to make sure the scheduled transfer to complete
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        assert_eq!(
+            worker_client
+                .slots
+                .get("test")
+                .unwrap()
+                .completed
+                .load(Ordering::Relaxed),
+            1
+        );
         assert_eq!(
             scheduler
-                .enqueued_requests
-                .get(&request.request_id)
+                .slots
+                .get("test")
                 .unwrap()
-                .len(),
-            0
+                .completed
+                .load(Ordering::Relaxed),
+            1
         );
+
+        // make sure all operations are complete
+        assert!(worker_client.slots.get("test").unwrap().is_complete());
     }
 
     #[tokio::test]
@@ -1059,8 +1080,10 @@ mod tests {
         assert!(got_handle_rx.is_empty());
 
         // Simulate some work being done - wait until the test releases us
-        let scheduler_result =
-            tokio::spawn(scheduler_controller.execute(SchedulingDecision::Execute));
+        let completed = Arc::new(AtomicU64::new(0));
+        let scheduler_result = tokio::spawn(
+            scheduler_controller.execute(SchedulingDecision::Execute, completed.clone()),
+        );
 
         // simulate the transfer engine receiving the decision
         let transfer_handle = got_handle_rx.await.unwrap();
@@ -1075,5 +1098,7 @@ mod tests {
 
         // wait for the scheduler to complete
         scheduler_result.await.unwrap().unwrap();
+        // after the scheduler completes, the completed counter should be 1
+        assert_eq!(completed.load(Ordering::Relaxed), 1);
     }
 }

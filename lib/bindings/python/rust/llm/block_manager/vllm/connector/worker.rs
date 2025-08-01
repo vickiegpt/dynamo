@@ -1,51 +1,25 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-mod slot;
 use dynamo_llm::block_manager::connector::protocol::TransferType;
 use dynamo_llm::block_manager::connector::scheduler::{
     Scheduler, TransferSchedulerClient, WorkerSchedulerClient,
 };
-use slot::{CreateEngineSlotRequest, EngineSlot, WorkerSlot};
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, OnceLock};
 
 use super::*;
 use crate::llm::block_manager::distributed::get_barrier_id;
-use crate::llm::block_manager::vllm::connector::worker::slot::WorkerSlotState;
 use crate::{
     llm::block_manager::distributed::VllmTensor, to_pyerr,
     DistributedRuntime as PyDistributedRuntime,
 };
 
-use dynamo_llm::block_manager::distributed::{
-    BlockTransferHandler, BlockTransferPool, KvbmWorker, KvbmWorkerConfig,
-};
+use dynamo_llm::block_manager::distributed::{KvbmWorker, KvbmWorkerConfig};
 use dynamo_llm::block_manager::storage::torch::TorchTensor;
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
-use dynamo_runtime::{CancellationToken, DistributedRuntime};
-
-enum EngineMessage {
-    /// Update the iteration count
-    UpdateIteration(u64),
-
-    /// Trigger a layer to be completed
-    UpdateLayersCompleted(String, u32),
-
-    /// Create a request slot with request id, counter and cancel token
-    CreateEngineSlot(CreateEngineSlotRequest),
-
-    /// Issue a request to the engine to complete a request and remove it
-    RemoveEngineSlot(String),
-
-    /// Register the transfer engine with the worker
-    RegisterTransferEngine(tokio::sync::oneshot::Receiver<BlockTransferHandler>),
-
-    /// Enqueue a block transfer request
-    EnqueueBlockTransfer(ConnectorOperation),
-}
+use dynamo_runtime::DistributedRuntime;
 
 #[pyclass]
 pub struct KvConnectorWorker {
@@ -258,9 +232,7 @@ impl KvConnectorWorker {
         if self.layers_complete == self.kv_caches.len() {
             let offloading_operations = std::mem::take(&mut self.offloading_operations);
             for operation in offloading_operations {
-                let request_id = operation.request_id.clone();
                 self.connector.enqueue_request(operation);
-                self.maybe_finished_offloading.insert(request_id);
             }
         }
         Ok(())
@@ -347,93 +319,5 @@ impl KvConnectorWorker {
         }
 
         (is_finished_offloading, is_finished_onboarding)
-    }
-}
-
-#[derive(Default)]
-struct EngineState {
-    slots: HashMap<String, EngineSlot>,
-    iteration: u64,
-    layers_complete: u32,
-    block_transfer_handler: Option<Arc<BlockTransferHandler>>,
-}
-
-impl EngineState {
-    fn add_slot(&mut self, req: CreateEngineSlotRequest, created_at: u64) {
-        let request_id = req.request_id.clone();
-        debug_assert!(!self.slots.contains_key(&request_id), "slot already exists");
-        tracing::debug!(request_id, "engine state adding slot");
-        self.slots
-            .insert(request_id, EngineSlot::new(req, created_at));
-    }
-
-    fn remove_slot(&mut self, request_id: String) {
-        debug_assert!(self.slots.contains_key(&request_id), "slot not found");
-        self.slots.remove(&request_id);
-        tracing::debug!(request_id, "engine state removing slot");
-    }
-
-    fn update_iteration(&mut self, iteration: u64) {
-        self.iteration = iteration;
-        tracing::debug!(iteration, "engine state updating iteration");
-    }
-
-    fn update_layers_completed(&mut self, last_layer_name: String, layers_completed: u32) {
-        self.layers_complete = layers_completed;
-        tracing::trace!(
-            iteration = self.iteration,
-            layers_completed,
-            "layer {last_layer_name} is complete"
-        );
-    }
-
-    fn enqueue_block_transfer(&mut self, operation: ConnectorOperation) {
-        debug_assert!(
-            self.block_transfer_handler.is_some(),
-            "block transfer handler not registered"
-        );
-        let slot = self.slots.get(&operation.req_id).unwrap();
-        let completed_counter = IncrementOnDrop::new(slot.completed.clone());
-
-        let block_transfer_handler = self.block_transfer_handler.as_ref().unwrap().clone();
-
-        // add in a scheduler and concurency limiter
-
-        tokio::spawn(async move {
-            tracing::debug!(
-                request_id = operation.req_id,
-                "executing block transfer for request_id"
-            );
-            if let Err(e) = block_transfer_handler
-                .execute_transfer(operation.xfer_req)
-                .await
-            {
-                panic!(
-                    "failed to execute block transfer for request_id {}: {e:#?}",
-                    operation.req_id
-                );
-            }
-
-            tracing::debug!(
-                request_id = operation.req_id,
-                "block transfer for request_id completed"
-            );
-
-            drop(completed_counter);
-        });
-    }
-}
-
-pub struct IncrementOnDrop(Arc<AtomicU64>);
-
-impl IncrementOnDrop {
-    fn new(counter: Arc<AtomicU64>) -> Self {
-        Self(counter)
-    }
-}
-
-impl Drop for IncrementOnDrop {
-    fn drop(&mut self) {
-        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }

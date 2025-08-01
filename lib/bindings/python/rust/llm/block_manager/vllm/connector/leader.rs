@@ -4,12 +4,14 @@
 pub mod slot;
 
 use super::*;
+use dynamo_runtime::DistributedRuntime;
 use slot::{ConnectorSlotManager, SlotError, SlotManager, SlotState};
 
 use crate::llm::block_manager::BlockManager as PyBlockManager;
 use crate::llm::block_manager::{
     distributed::KvbmLeader as PyKvbmLeader, vllm::KvbmRequest, VllmBlockManager,
 };
+use crate::DistributedRuntime as PyDistributedRuntime;
 
 use dynamo_llm::block_manager::{
     block::{
@@ -21,12 +23,11 @@ use dynamo_llm::block_manager::{
 };
 use dynamo_llm::tokens::{SaltHash, TokenBlockSequence, Tokens};
 
-use std::collections::HashSet;
 use std::{
-    collections::VecDeque,
+    collections::HashSet,
     sync::{Arc, Mutex},
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 type VllmLocality = Logical<DistributedLeaderWorkerResources>;
 
@@ -39,7 +40,6 @@ impl From<SlotError> for PyErr {
 #[pyclass]
 pub struct KvConnectorLeader {
     slot_manager: ConnectorSlotManager<String>,
-    block_manager: VllmBlockManager,
     block_size: usize,
     inflight_requests: HashSet<String>,
     onboarding_slots: HashSet<String>,
@@ -49,8 +49,13 @@ pub struct KvConnectorLeader {
 #[pymethods]
 impl KvConnectorLeader {
     #[new]
-    #[pyo3(signature = (worker_id, block_manager, leader))]
-    pub fn new(worker_id: String, block_manager: PyBlockManager, leader: PyKvbmLeader) -> Self {
+    #[pyo3(signature = (worker_id, drt, block_manager, leader))]
+    pub fn new(
+        worker_id: String,
+        drt: PyDistributedRuntime,
+        block_manager: PyBlockManager,
+        leader: PyKvbmLeader,
+    ) -> Self {
         tracing::info!(
             "KvConnectorLeader initialized with worker_id: {}",
             worker_id
@@ -60,9 +65,13 @@ impl KvConnectorLeader {
         let block_manager = block_manager.get_block_manager().clone();
         let block_size = block_manager.block_size();
 
+        let leader = leader.get_inner();
+
+        // if we need a drt, get it from here
+        let drt = drt.inner().clone();
+
         Self {
-            slot_manager: ConnectorSlotManager::new(block_manager.clone(), leader.get_inner()),
-            block_manager,
+            slot_manager: ConnectorSlotManager::new(block_manager.clone(), leader, drt.clone()),
             block_size,
             inflight_requests: HashSet::new(),
             onboarding_slots: HashSet::new(),
@@ -96,6 +105,7 @@ impl KvConnectorLeader {
         // vllm is telling us that the tokens have been computed, since we do not have insight into the device pool
         // we accept this and advance the computed position
         slot.advance_computed_position(num_computed_tokens)?;
+        slot.record_cached_device_tokens(num_computed_tokens);
 
         // early exit if we cannot match full block
         if (slot.sequence().total_tokens() - num_computed_tokens) < self.block_size {
@@ -110,6 +120,11 @@ impl KvConnectorLeader {
         // we always return true here as we always asynchronously onboard matched blocks
         if let SlotState::OnboardStaged(num_external_tokens) = slot.state() {
             debug_assert!((num_computed_tokens + num_external_tokens) % self.block_size == 0);
+            tracing::debug!(
+                request_id = request_id,
+                "scheduling onboarding for {} external tokens",
+                num_external_tokens
+            );
             Ok((num_external_tokens, true))
         } else {
             Ok((0, false))
@@ -126,7 +141,7 @@ impl KvConnectorLeader {
         &mut self,
         request_id: String,
         block_ids: Vec<BlockId>,
-        num_external_tokens: u64,
+        num_external_tokens: usize,
     ) -> PyResult<()> {
         tracing::debug!(
             request_id,
@@ -138,11 +153,17 @@ impl KvConnectorLeader {
         let shared_slot = self.slot_manager.get_slot(&request_id).map_err(to_pyerr)?;
         let mut slot = shared_slot.lock().map_err(to_pyerr)?;
 
-        slot.append_mutable_device_blocks(block_ids)?;
+        slot.append_mutable_device_blocks(&block_ids)?;
 
         // the second call will show num_external_tokens == 0
         // this call is just letting us know the other blocks that are being used for the remainder of the prefill
         if num_external_tokens > 0 {
+            tracing::debug!(
+                request_id = request_id,
+                "triggering onboarding for {} external tokens",
+                num_external_tokens
+            );
+            slot.trigger_onboarding(num_external_tokens)?;
             self.onboarding_slots.insert(request_id);
         }
 
@@ -163,7 +184,7 @@ impl KvConnectorLeader {
         let iteration = self.iteration_counter;
 
         tracing::debug!("Building connector metadata; iteration {iteration}");
-        tracing::trace!("{scheduler_output:#?}");
+        tracing::debug!("scheduler_output: {scheduler_output:#?}");
 
         let mut inflight_requests = self.inflight_requests.clone();
         let mut md = ConnectorMetadata::new(iteration);
@@ -175,17 +196,16 @@ impl KvConnectorLeader {
         //
         // This is kind of a nice abstraction as it keeps the events simplier; however, we now create the request-slot
         // once for onboarding (this loop), then again for prefill/decode (new_requests loop).
-        tracing::debug!("evalatuing {} onboarding slots", onboarding_slots.len());
         for request_id in onboarding_slots.iter() {
             let shared_slot = self.slot_manager.get_slot(request_id).map_err(to_pyerr)?;
             let mut slot = shared_slot.lock().map_err(to_pyerr)?;
 
-            tracing::debug!("marking slot as onboarding: {request_id}");
             md.create_slot(request_id.clone());
-            slot.mark_as_onboarding(iteration)?;
-            let pending_ops = slot.take_pending_operations();
-            tracing::debug!("adding {} pending operations", pending_ops.len());
-            md.add_operations(pending_ops);
+
+            if let Some(pending_ops) = slot.take_pending_operations() {
+                tracing::debug!("adding {} pending onboarding operations", pending_ops.len());
+                md.add_operations(pending_ops);
+            }
         }
 
         // vLLM provides us with "new_requests" which are "new" after onboarding, but not before or during.
@@ -202,8 +222,10 @@ impl KvConnectorLeader {
             let shared_slot = self.slot_manager.get_slot(request_id).map_err(to_pyerr)?;
             let mut slot = shared_slot.lock().map_err(to_pyerr)?;
 
+            // inform the worker that a new request-slot should be created
             md.create_slot(new_req.request_id.clone());
-            slot.mark_as_scheduled(iteration)?;
+
+            slot.record_start_iteration(iteration)?;
 
             debug_assert!(
                 matches!(
@@ -214,44 +236,21 @@ impl KvConnectorLeader {
                 slot.state()
             );
 
-            // if let SlotState::OnboardStaged(num_external_tokens) = slot.state() {
-            //     tracing::debug!(
-            //         request_id,
-            //         iteration,
-            //         "initializing onboarding of {num_external_tokens} tokens"
-            //     );
-            //     slot.mark_as_onboarding(iteration)?;
-            //     md.add_operations(slot.take_pending_operations());
-            //     continue;
-            // }
-
             let scheduled_tokens = *scheduler_output
                 .num_scheduled_tokens
                 .get(request_id)
                 .unwrap_or(&0);
 
-            if scheduled_tokens == 0 {
-                tracing::debug!(
-                    request_id,
-                    iteration,
-                    "no tokens scheduled; mark as not scheduled"
-                );
-                slot.mark_as_not_scheduled(iteration)?;
-            } else if new_req.num_computed_tokens < slot.sequence().total_tokens() {
-                tracing::debug!(request_id, iteration, "mark as prefilling");
-                slot.mark_as_prefilling(iteration)?;
-            } else {
-                tracing::debug!(request_id, iteration, "mark as decoding");
-                slot.mark_as_decoding(iteration)?;
-            }
+            slot.apply_scheduler_output(&[], &[], new_req.num_computed_tokens, scheduled_tokens)?;
 
-            let pending_ops = slot.take_pending_operations();
-            tracing::debug!(
-                request_id,
-                "adding {} pending operations",
-                pending_ops.len()
-            );
-            md.add_operations(pending_ops);
+            if let Some(pending_ops) = slot.take_pending_operations() {
+                tracing::debug!(
+                    "adding {} pending operations for slot {}",
+                    pending_ops.len(),
+                    new_req.request_id
+                );
+                md.add_operations(pending_ops);
+            }
         }
 
         for cached_req in &scheduler_output.cached_requests {
@@ -260,19 +259,37 @@ impl KvConnectorLeader {
                 inflight_requests.remove(request_id),
                 "request_id {request_id} not found in inflight_requests: "
             );
-        }
 
-        std::thread::sleep(std::time::Duration::from_secs(1));
+            let shared_slot = self.slot_manager.get_slot(request_id).map_err(to_pyerr)?;
+            let mut slot = shared_slot.lock().map_err(to_pyerr)?;
+
+            let scheduled_tokens = *scheduler_output
+                .num_scheduled_tokens
+                .get(request_id)
+                .unwrap_or(&0);
+
+            slot.apply_scheduler_output(
+                &cached_req.new_token_ids,
+                &cached_req.new_block_ids,
+                cached_req.num_computed_tokens,
+                scheduled_tokens,
+            )?;
+
+            if let Some(pending_ops) = slot.take_pending_operations() {
+                tracing::debug!(
+                    "adding {} pending operations for slot {}",
+                    pending_ops.len(),
+                    request_id
+                );
+                md.add_operations(pending_ops);
+            }
+        }
 
         tracing::debug!("scheduler_output: {scheduler_output:#?}");
         serde_json::to_vec(&md).map_err(to_pyerr)
     }
 
-    pub fn request_finished(
-        &mut self,
-        request_id: String,
-        block_ids: Vec<BlockId>,
-    ) -> PyResult<bool> {
+    fn request_finished(&mut self, request_id: String, block_ids: Vec<BlockId>) -> PyResult<bool> {
         tracing::debug!("Request finished: {request_id}; block_ids: {block_ids:?}");
         // grab the slot
         let shared_slot = self.slot_manager.get_slot(&request_id).map_err(to_pyerr)?;
@@ -280,6 +297,11 @@ impl KvConnectorLeader {
         // mark the slot as finished
         let mut slot = shared_slot.lock().map_err(to_pyerr)?;
         slot.mark_as_finished(self.iteration_counter)?;
+
+        // todo: allow the request to resolve when it should exit
+        // the request may have some outstanding operations
+        // we would like to inform it to shutdown, then have it signal to the work that is officially gone,
+        // then we can remove the slot and trigger the worker to clean up as well.
 
         // remove it from the manager as we will never use it again
         self.slot_manager.remove_slot(&request_id)?;
