@@ -52,12 +52,13 @@ class DynamoModelClient:
         self.logical_device = torch.cuda.current_device()
         self.physical_device = get_physical_device_index(self.logical_device)
         
-        # Determine which server component to connect to based on physical device
-        self.server_component = f"model_server_gpu_{self.physical_device}"
-        
-        # Extract rank information from environment or use defaults
-        self.local_rank = int(os.environ.get("RANK", "0"))
-        self.global_rank = int(os.environ.get("RANK", "0")) 
+        # Build a unique component name based on model + rank identifiers.
+        # NOTE: we avoid colon or slash since those are not valid in NATS subjects.
+        self.local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", "0")))
+        self.global_rank = int(os.environ.get("RANK", "0"))
+        self.server_component = (
+            f"model_server_g{self.global_rank}_l{self.local_rank}"
+        )
         self.world_size = int(os.environ.get("WORLD_SIZE", "1"))
         
         logger.info(
@@ -133,8 +134,7 @@ class DynamoModelClient:
         status_stream = await status_client.round_robin(json.dumps({}))
         
         # First, try to get model parameters which will trigger loading
-        # NOTE: Disabled for now as it may interfere with status stream
-        # asyncio.create_task(self._trigger_model_loading())
+        asyncio.create_task(self._trigger_model_loading())
         
         # Monitor status updates
         start_time = asyncio.get_event_loop().time()

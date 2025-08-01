@@ -191,20 +191,49 @@ class DynamoModelServer:
             model_params = self.model_parameters
             loaded_config = self.loaded_vllm_config
             
-        # Case 1: No model loaded yet
+        # Case 1: No model loaded yet - load it!
         if loaded_model is None:
-            # We need to create a VllmConfig from the request data
-            # For now, return an error asking client to trigger loading differently
-            yield ModelParametersResponse(
-                model_parameters=None,
-                model_name="",
-                device_id=self.device_id,
-                local_rank=request.local_rank,
-                global_rank=request.global_rank,
-                world_size=request.world_size,
-                error=f"Model {request.model_name} not loaded. Server needs to be initialized with model first.",
+            logger.info(
+                "No model loaded yet. Loading model %s as requested by client...",
+                request.model_name
             )
-            return
+            
+            # Create a minimal VllmConfig from the request
+            from vllm.engine.arg_utils import AsyncEngineArgs
+            try:
+                engine_args = AsyncEngineArgs(
+                    model=request.model_name,
+                    tensor_parallel_size=request.tensor_parallel_size,
+                    pipeline_parallel_size=request.pipeline_parallel_size,
+                    # Let vLLM handle other defaults
+                )
+                vllm_config = engine_args.create_engine_config()
+                
+                # Load the model asynchronously
+                await self._load_model_async(
+                    vllm_config,
+                    request.local_rank,
+                    request.global_rank,
+                    request.world_size,
+                )
+                
+                # Re-read the loaded state
+                with self.load_lock:
+                    loaded_model = self.loaded_model_name
+                    model_params = self.model_parameters
+                    
+            except Exception as e:
+                logger.error("Failed to load model %s: %s", request.model_name, str(e))
+                yield ModelParametersResponse(
+                    model_parameters=None,
+                    model_name="",
+                    device_id=self.device_id,
+                    local_rank=request.local_rank,
+                    global_rank=request.global_rank,
+                    world_size=request.world_size,
+                    error=f"Failed to load model: {str(e)}",
+                )
+                return
         
         # Case 2: Different model loaded
         if loaded_model != request.model_name:
@@ -367,24 +396,17 @@ async def companion_server(runtime: DistributedRuntime):
         default="companion",
         help="Dynamo namespace for service discovery",
     )
-    parser.add_argument(
-        "--model",
-        type=str,
-        help="Model to load on startup (e.g., facebook/opt-125m)",
-    )
-    parser.add_argument(
-        "--tensor-parallel-size",
-        type=int,
-        default=1,
-        help="Tensor parallel size",
-    )
     args = parser.parse_args()
     
     # Create server instance
     server = DynamoModelServer(device_id=args.device, namespace=args.namespace)
     
-    # Create Dynamo component
-    component_name = f"model_server_gpu_{args.device}"
+    # Build unique component name
+    # Use env ranks if available (defaults to 0)
+    local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", "0")))
+    global_rank = int(os.environ.get("RANK", "0"))
+    component_name = f"model_server_g{global_rank}_l{local_rank}"
+
     component = runtime.namespace(args.namespace).component(component_name)
     await component.create_service()
     
@@ -403,21 +425,6 @@ async def companion_server(runtime: DistributedRuntime):
         params_endpoint.serve_endpoint(server.get_model_parameters),
         status_endpoint.serve_endpoint(server.status_updates),
     )
-    
-    # If model specified, load it on startup after a short delay
-    if args.model:
-        async def load_model_after_delay():
-            await asyncio.sleep(2)  # Give endpoints time to start
-            logger.info("Loading model %s on startup...", args.model)
-            from vllm.engine.arg_utils import AsyncEngineArgs
-            engine_args = AsyncEngineArgs(
-                model=args.model,
-                tensor_parallel_size=args.tensor_parallel_size,
-            )
-            vllm_config = engine_args.create_engine_config()
-            await server._load_model_async(vllm_config, 0, 0, 1)
-        
-        asyncio.create_task(load_model_after_delay())
     
     # Wait for endpoints to be served
     await serve_task
