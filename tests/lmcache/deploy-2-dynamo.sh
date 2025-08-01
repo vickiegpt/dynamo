@@ -29,12 +29,8 @@ echo "🧹 Cleaning up any existing dynamo processes..."
 pkill -f "dynamo-run" || true
 sleep 2
 
-# Enable LMCache
-export ENABLE_LMCACHE=1
-
-# Set LMCache configuration environment variables
-
 echo "🔧 Starting dynamo worker with LMCache enabled..."
 
 python -m dynamo.frontend &
-python3 -m dynamo.vllm --model $MODEL_URL --enforce-eager --no-enable-prefix-caching
+ENABLE_LMCACHE=1 \
+  python3 -m dynamo.vllm --model $MODEL_URL --enforce-eager --no-enable-prefix-caching
