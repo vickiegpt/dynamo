@@ -59,8 +59,10 @@ impl KvConnectorLeader {
         let block_manager = block_manager.get_block_manager().clone();
         let block_size = block_manager.block_size();
 
+        let leader = leader.get_inner();
+
         Self {
-            slot_manager: ConnectorSlotManager::new(block_manager.clone(), leader.get_inner()),
+            slot_manager: ConnectorSlotManager::new(block_manager.clone(), leader),
             block_manager,
             block_size,
             inflight_requests: HashSet::new(),
