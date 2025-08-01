@@ -294,17 +294,22 @@ Dynamo with TensorRT-LLM supports providing pre-computed embeddings directly in 
 
 #### Enabling the Feature
 
-This is an experimental feature that requires a small patch to your local TensorRT-LLM installation.
+This is an experimental feature that requires using a specific TensorRT-LLM commit.
+To enable it, open `container/build.sh` and update `DEFAULT_EXPERIMENTAL_TRTLLM_COMMIT` to the following value:
 
-1.  **Apply Patches:** You will need to apply two patches to the TensorRT-LLM Python files. These patches enable the `default_multimodal_input_loader` to accept pre-computed embeddings.
-    *   Patch 1: [`302b73b`](https://github.com/chang-l/TensorRT-LLM/commit/302b73be5108f58a6795075e5231a31872e42ddd)
-    *   Patch 2: [`5b7613b`](https://github.com/chang-l/TensorRT-LLM/commit/5b7613bbc78d830efb7c320a3090c3ef862aa0ab)
+```bash
+DEFAULT_EXPERIMENTAL_TRTLLM_COMMIT="b4065d8ca64a64eee9fdc64b39cb66d73d4be47c"
+```
 
-    > **Note:** These changes are to Python files only and **do not** require you to recompile TensorRT-LLM. You can apply them by simply replacing the relevant files in your installation.
+Then, build the container with the `--use-default-experimental-tensorrtllm-commit` flag:
+
+```bash
+./container/build.sh --framework tensorrtllm --use-default-experimental-tensorrtllm-commit
+```
 
 #### How to Use
 
-Once the patches are applied, you can send requests with paths to local embedding files.
+Once the container is built, you can send requests with paths to local embedding files.
 
 -   **Format:** Provide the embedding as part of the `messages` array, using the `image_url` content type.
 -   **URL:** The `url` field should contain the absolute or relative path to your embedding file on the local filesystem.
