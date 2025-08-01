@@ -32,15 +32,15 @@ Change model name in the script to test other models.
 cd ./tests/lmcache
 
 # 1. Baseline test (without LMCache)
-./deploy-1-dynamo.sh Qwen/Qwen3-0.6B
+./deploy-baseline-dynamo.sh Qwen/Qwen3-0.6B
 # Wait for model to load, then run test in another terminal:
-python3 1-mmlu-dynamo.py --model Qwen/Qwen3-0.6B --number-of-subjects 15
+python3 mmlu-baseline-dynamo.py --model Qwen/Qwen3-0.6B --number-of-subjects 15
 # Stop services with Ctrl+C in the deploy script terminal
 
 # 2. LMCache test (with LMCache enabled)
-./deploy-2-dynamo.sh Qwen/Qwen3-0.6B
+./deploy-lmcache_enabled-dynamo.sh Qwen/Qwen3-0.6B
 # Wait for model to load, then run test in another terminal:
-python3 2-mmlu-dynamo.py --model Qwen/Qwen3-0.6B --number-of-subjects 15
+python3 mmlu-lmcache_enabled-dynamo.py --model Qwen/Qwen3-0.6B --number-of-subjects 15
 # Stop services with Ctrl+C in the deploy script terminal
 
 # 3. Compare results
@@ -50,23 +50,23 @@ python3 summarize_scores_dynamo.py
 ## File Description
 
 ### Deployment Scripts
-- **`deploy-1-dynamo.sh`**: Deploy Dynamo without LMCache (baseline)
-- **`deploy-2-dynamo.sh`**: Deploy Dynamo with LMCache enabled (test)
+- **`deploy-baseline-dynamo.sh`**: Deploy Dynamo without LMCache (baseline)
+- **`deploy-lmcache_enabled-dynamo.sh`**: Deploy Dynamo with LMCache enabled (test)
 
 ### Test Scripts
-- **`1-mmlu-dynamo.py`**: Run MMLU test on baseline Dynamo
-- **`2-mmlu-dynamo.py`**: Run MMLU test on Dynamo with LMCache
+- **`mmlu-baseline-dynamo.py`**: Run MMLU test on baseline Dynamo
+- **`mmlu-lmcache_enabled-dynamo.py`**: Run MMLU test on Dynamo with LMCache
 - **`summarize_scores_dynamo.py`**: Compare and analyze test results
 
 ## Architecture Differences
 
-### Baseline Architecture (deploy-1-dynamo.sh)
+### Baseline Architecture (deploy-baseline-dynamo.sh)
 ```
 HTTP Request → Dynamo Ingress(8080) → Dynamo Worker → Direct Inference
 Environment: ENABLE_LMCACHE=0
 ```
 
-### LMCache Architecture (deploy-2-dynamo.sh)
+### LMCache Architecture (deploy-lmcache_enabled-dynamo.sh)
 ```
 HTTP Request → Dynamo Ingress(8080) → Dynamo Worker → LMCache-enabled Inference
 Environment: ENABLE_LMCACHE=1

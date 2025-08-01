@@ -6,11 +6,10 @@
 # i.e. nats and etcd are running
 
 # Overview:
-# This script deploys dynamo disaggregated serving without LMCache on port 8080
+# This script deploys dynamo without LMCache on port 8080
 # Used as baseline for correctness testing
 set -e
 trap 'echo Cleaning up...; kill 0' EXIT
-
 # Arguments:
 MODEL_URL=$1
 
@@ -20,10 +19,9 @@ if [ -z "$MODEL_URL" ]; then
     exit 1
 fi
 
-echo "🚀 Starting dynamo disaggregated serving setup without LMCache:"
+echo "🚀 Starting dynamo setup without LMCache:"
 echo "   Model: $MODEL_URL"
 echo "   Port: 8080"
-echo "   Mode: Disaggregated (prefill + decode workers)"
 
 # Kill any existing dynamo processes
 echo "🧹 Cleaning up any existing dynamo processes..."
@@ -32,14 +30,8 @@ sleep 2
 
 # Disable LMCache
 export ENABLE_LMCACHE=0
-echo "🔧 Starting dynamo disaggregated serving without LMCache..."
+echo "🔧 Starting dynamo worker without LMCache..."
+
 
 python -m dynamo.frontend &
-
-CUDA_VISIBLE_DEVICES=0 python3 -m dynamo.vllm --model $MODEL_URL --enforce-eager --no-enable-prefix-caching &
-
-CUDA_VISIBLE_DEVICES=1 python3 -m dynamo.vllm \
-    --model $MODEL_URL \
-    --enforce-eager \
-    --is-prefill-worker
-
+python3 -m dynamo.vllm --model $MODEL_URL --enforce-eager --no-enable-prefix-caching

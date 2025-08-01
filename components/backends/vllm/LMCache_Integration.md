@@ -25,7 +25,7 @@ export ENABLE_LMCACHE=1
 Additional LMCache configuration can be customized via environment variables:
 - `LMCACHE_CHUNK_SIZE=256` - Token chunk size for cache granularity (default: 256)
 - `LMCACHE_LOCAL_CPU=True` - Enable CPU memory backend for offloading
-- `LMCACHE_MAX_LOCAL_CPU_SIZE=20` - CPU memory limit in GB (adjust based on available RAM)
+- `LMCACHE_MAX_LOCAL_CPU_SIZE=20` - CPU memory limit in GB (user can adjust based on available RAM to a fixed value)
 
 For advanced configurations, LMCache supports multiple [storage backends](https://docs.lmcache.ai/index.html):
 - **CPU RAM**: Fast local memory offloading
