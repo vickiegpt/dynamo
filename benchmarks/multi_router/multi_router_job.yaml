@@ -1,17 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: multi-router
-  namespace: hzhou-dynamo
+  namespace: ${NAMESPACE}
 spec:
   template:
     spec:
       serviceAccountName: profile-sla-sa
       containers:
       - name: multi-router
-        image: nvcr.io/nvidian/nim-llm-dev/vllm-runtime:dep-290.0
+        image: ${DOCKER_IMAGE}
         resources:
           requests:
             cpu: "16"
@@ -23,9 +24,9 @@ spec:
                 name: hf-token-secret
                 key: HF_TOKEN
           - name: NATS_SERVER
-            value: nats://hzhou-dynamo-nats:4222
+            value: nats://${NAMESPACE}-nats:4222
           - name: ETCD_ENDPOINTS
-            value: hzhou-dynamo-etcd:2379
+            value: ${NAMESPACE}-etcd:2379
         command: ["python", "/workspace/benchmarks/multi_router/prefix_ratio_benchmark.py"]
         args:
           - --model
@@ -33,7 +34,7 @@ spec:
           - --tokenizer
           - deepseek-ai/DeepSeek-R1-Distill-Llama-8B
           - --url
-          - http://vllm-agg-router-frontend:8000
+          - http://nginx-optimized-service
           - --output-dir
           - /workspace/multi_router_results
         volumeMounts:

@@ -1,0 +1,32 @@
+{
+  "prefix_ratios": [
+    0.1,
+    0.3,
+    0.5,
+    0.7,
+    0.9
+  ],
+  "ttft_values": [
+    1476.55108625,
+    1342.06448224,
+    1184.905620605,
+    934.6810571599999,
+    696.363376065
+  ],
+  "throughput_values": [
+    585.5488298806101,
+    643.7405688416588,
+    659.9250262097572,
+    715.9385675351864,
+    817.023807115953
+  ],
+  "config": {
+    "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "tokenizer": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "isl": 14000,
+    "osl": 200,
+    "requests": 200,
+    "concurrency": 20,
+    "initial_seed": 420
+  }
+}
