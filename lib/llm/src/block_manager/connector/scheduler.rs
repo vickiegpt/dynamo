@@ -588,33 +588,6 @@ impl Scheduler {
 
         Ok(controller)
     }
-
-    /// Coordinates the two-stage execution: sends a scheduling decision to a ScheduledTaskHandle
-    /// and awaits the completion result from the TransferCompletionHandle.mark_complete() call.
-    ///
-    /// This function runs on the Scheduler side and bridges the decision-making with completion tracking.
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn coordinate_scheduled_transfer_execution(
-        controller: ScheduledTaskController,
-        decision: SchedulingDecision,
-    ) -> anyhow::Result<()> {
-        let (completion_tx, completion_rx) = oneshot::channel();
-
-        // Send the scheduling decision along with the completion channel to the task handle
-        if controller
-            .decision_tx
-            .send((decision, completion_tx))
-            .is_err()
-        {
-            anyhow::bail!("Failed to send scheduling decision to task handle");
-        }
-
-        // Await the completion result from the TransferCompletionHandle.mark_complete() call
-        match completion_rx.await {
-            Ok(result) => result,
-            Err(_) => anyhow::bail!("Failed to receive completion result from transfer handle"),
-        }
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
