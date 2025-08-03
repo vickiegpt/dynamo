@@ -16,7 +16,7 @@
 use crate::kv_router::{
     indexer::{compute_block_hash_for_seq, RouterEvent},
     protocols::*,
-    KV_EVENT_SUBJECT, KV_METRICS_ENDPOINT,
+    KV_EVENT_SUBJECT, KV_METRICS_ENDPOINT, KV_METRICS_SUBJECT,
 };
 use async_trait::async_trait;
 use dynamo_runtime::traits::{events::EventPublisher, DistributedRuntimeProvider};
@@ -499,8 +499,10 @@ impl WorkerMetricsPublisher {
 
     pub async fn create_endpoint(&self, component: Component) -> Result<()> {
         let mut metrics_rx = self.rx.clone();
-        let handler = Arc::new(KvLoadEndpoingHander::new(metrics_rx.clone()));
+        let handler = Arc::new(KvLoadEndpointHandler::new(metrics_rx.clone()));
         let handler = Ingress::for_engine(handler)?;
+
+        self.start_nats_metrics_publishing(component.clone());
 
         component
             .endpoint(KV_METRICS_ENDPOINT)
@@ -513,13 +515,82 @@ impl WorkerMetricsPublisher {
             .start()
             .await
     }
+
+    /// Starts a background task to publish metrics over NATS
+    ///
+    /// This task monitors metric changes (specifically kv_active_blocks and num_requests_waiting)
+    /// and publishes stable metrics to NATS after they've been unchanged for 1ms.
+    fn start_nats_metrics_publishing(&self, component: Component) {
+        let nats_rx = self.rx.clone();
+
+        tokio::spawn(async move {
+            let mut rx = nats_rx;
+            let mut last_kv_active_blocks: Option<u64> = None;
+            let mut last_num_requests_waiting: Option<u64> = None;
+            let mut stable_metrics: Option<Arc<ForwardPassMetrics>> = None;
+            let mut stable_since: Option<tokio::time::Instant> = None;
+
+            loop {
+                match rx.changed().await {
+                    Ok(_) => {
+                        let metrics = rx.borrow_and_update().clone();
+
+                        // Extract the values we care about
+                        let current_kv_active_blocks = metrics.kv_stats.kv_active_blocks;
+                        let current_num_requests_waiting =
+                            metrics.worker_stats.num_requests_waiting;
+
+                        // Check if these specific metrics have changed
+                        let has_changed = match (last_kv_active_blocks, last_num_requests_waiting) {
+                            (Some(last_kv), Some(last_requests)) => {
+                                last_kv != current_kv_active_blocks
+                                    || last_requests != current_num_requests_waiting
+                            }
+                            _ => true, // First time, consider it changed
+                        };
+
+                        // Metrics changed, reset stability tracking
+                        if has_changed {
+                            stable_metrics = Some(metrics.clone());
+                            stable_since = Some(tokio::time::Instant::now());
+                            last_kv_active_blocks = Some(current_kv_active_blocks);
+                            last_num_requests_waiting = Some(current_num_requests_waiting);
+                        }
+
+                        // Check if metrics have been stable for 1ms (independent of whether they just changed)
+                        if let (Some(stable_start), Some(ref stable_m)) =
+                            (stable_since, &stable_metrics)
+                        {
+                            // Stable for 1ms, publish
+                            if stable_start.elapsed() >= tokio::time::Duration::from_millis(1) {
+                                if let Err(e) =
+                                    component.publish(KV_METRICS_SUBJECT, &**stable_m).await
+                                {
+                                    tracing::warn!("Failed to publish metrics over NATS: {}", e);
+                                }
+                                // Reset stability tracking after publishing
+                                stable_metrics = None;
+                                stable_since = None;
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        tracing::debug!(
+                            "Metrics publisher sender dropped, stopping NATS background task"
+                        );
+                        break;
+                    }
+                }
+            }
+        });
+    }
 }
 
-struct KvLoadEndpoingHander {
+struct KvLoadEndpointHandler {
     metrics_rx: tokio::sync::watch::Receiver<Arc<ForwardPassMetrics>>,
 }
 
-impl KvLoadEndpoingHander {
+impl KvLoadEndpointHandler {
     pub fn new(metrics_rx: tokio::sync::watch::Receiver<Arc<ForwardPassMetrics>>) -> Self {
         Self { metrics_rx }
     }
@@ -527,7 +598,7 @@ impl KvLoadEndpoingHander {
 
 #[async_trait]
 impl AsyncEngine<SingleIn<()>, ManyOut<Annotated<ForwardPassMetrics>>, Error>
-    for KvLoadEndpoingHander
+    for KvLoadEndpointHandler
 {
     async fn generate(
         &self,

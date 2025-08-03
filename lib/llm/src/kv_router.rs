@@ -51,6 +51,7 @@ use dynamo_runtime::traits::events::EventSubscriber;
 pub const KV_EVENT_SUBJECT: &str = "kv_events";
 pub const KV_HIT_RATE_SUBJECT: &str = "kv-hit-rate";
 pub const KV_METRICS_ENDPOINT: &str = "load_metrics";
+pub const KV_METRICS_SUBJECT: &str = "kv_metrics";
 
 /// A trait that users can implement to define custom selection logic
 pub trait WorkerSelector {
