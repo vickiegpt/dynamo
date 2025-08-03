@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 pub mod approx;
 pub mod indexer;
 pub mod metrics_aggregator;
+pub mod prefill_counter;
 pub mod protocols;
 pub mod publisher;
 pub mod recorder;
@@ -52,6 +53,7 @@ pub const KV_EVENT_SUBJECT: &str = "kv_events";
 pub const KV_HIT_RATE_SUBJECT: &str = "kv-hit-rate";
 pub const KV_METRICS_ENDPOINT: &str = "load_metrics";
 pub const KV_METRICS_SUBJECT: &str = "kv_metrics";
+pub const PREFILL_SUBJECT: &str = "prefill_events";
 
 /// A trait that users can implement to define custom selection logic
 pub trait WorkerSelector {
