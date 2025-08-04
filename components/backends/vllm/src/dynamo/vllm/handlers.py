@@ -101,8 +101,9 @@ class DecodeWorkerHandler(BaseWorkerHandler):
         self._prefill_check_task = None
 
         # Proxy server configuration
-        self.proxy_host = proxy_host or get_host_ip()
-        self.proxy_port = proxy_port or 8899  # default port
+        print(f"proxy_host: {proxy_host}, proxy_port: {proxy_port}")
+        self.proxy_host = proxy_host or "localhost"
+        self.proxy_port = proxy_port or 7500  # default port
         self.finished_reqs: Set[str] = set()
         self._zmq_context = None
         self._proxy_task = None
