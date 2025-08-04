@@ -30,6 +30,7 @@ use dashmap::DashMap;
 use derive_getters::Getters;
 use dynamo_runtime::component::Component;
 use dynamo_runtime::traits::events::{EventPublisher, EventSubscriber};
+use dynamo_runtime::traits::DistributedRuntimeProvider;
 use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -37,6 +38,7 @@ use uuid::Uuid;
 
 use super::protocols::{ActiveSequenceEvent, ActiveSequenceEventData};
 use crate::kv_router::ACTIVE_SEQUENCES_SUBJECT;
+use dynamo_runtime::CancellationToken;
 
 // TODO: use the common request_id if it exists in the repo
 pub type RequestId = String;
@@ -239,7 +241,9 @@ impl ActiveSequencesMultiWorker {
         let router_id = Uuid::new_v4();
 
         for worker_id in worker_ids {
-            let (sender, handle) = Self::start_worker(block_size);
+            // Create a child cancellation token from the component's runtime
+            let cancel_token = component.drt().runtime().child_token();
+            let (sender, handle) = Self::start_worker(block_size, cancel_token);
             senders.insert(worker_id, sender);
             handles.insert(worker_id, handle);
         }
@@ -278,6 +282,7 @@ impl ActiveSequencesMultiWorker {
     /// Helper method to start a worker task
     fn start_worker(
         block_size: usize,
+        cancel_token: CancellationToken, // Add cancellation token parameter
     ) -> (
         tokio::sync::mpsc::UnboundedSender<UpdateSequences>,
         tokio::task::JoinHandle<()>,
@@ -287,58 +292,76 @@ impl ActiveSequencesMultiWorker {
         let handle = tokio::spawn(async move {
             let mut active_sequences = ActiveSequences::new(block_size);
 
-            while let Some(command) = request_rx.recv().await {
-                match command {
-                    UpdateSequences::AddRequest {
-                        request_id,
-                        token_sequence,
-                        isl,
-                        overlap,
-                    } => {
-                        active_sequences.add_request(request_id, token_sequence, isl, overlap);
+            loop {
+                tokio::select! {
+                    // Handle incoming commands
+                    command = request_rx.recv() => {
+                        match command {
+                            Some(command) => {
+                                match command {
+                                    UpdateSequences::AddRequest {
+                                        request_id,
+                                        token_sequence,
+                                        isl,
+                                        overlap,
+                                    } => {
+                                        active_sequences.add_request(request_id, token_sequence, isl, overlap);
+                                    }
+                                    UpdateSequences::Free { request_id } => {
+                                        active_sequences.free(&request_id);
+                                    }
+                                    UpdateSequences::MarkPrefillCompleted { request_id } => {
+                                        active_sequences.mark_prefill_completed(&request_id);
+                                    }
+                                    UpdateSequences::NewBlocks {
+                                        token_sequence,
+                                        resp_tx,
+                                    } => {
+                                        let new_blocks = active_sequences.new_blocks(&token_sequence);
+                                        let _ = resp_tx.send(new_blocks);
+                                    }
+                                    UpdateSequences::PotentialBlocks {
+                                        token_sequence,
+                                        resp_tx,
+                                    } => {
+                                        let potential_blocks = active_sequences.potential_blocks(&token_sequence);
+                                        let _ = resp_tx.send(potential_blocks);
+                                    }
+                                    UpdateSequences::PotentialBlocksAndTokens {
+                                        token_sequence,
+                                        isl,
+                                        overlap,
+                                        resp_tx,
+                                    } => {
+                                        let potential_tokens = active_sequences.potential_blocks_and_tokens(
+                                            &token_sequence,
+                                            isl,
+                                            overlap,
+                                        );
+                                        let _ = resp_tx.send(potential_tokens);
+                                    }
+                                    UpdateSequences::ActiveBlocks { resp_tx } => {
+                                        let active_blocks = active_sequences.active_blocks();
+                                        let _ = resp_tx.send(active_blocks);
+                                    }
+                                    UpdateSequences::ActiveTokens { resp_tx } => {
+                                        let active_tokens = active_sequences.active_tokens();
+                                        let _ = resp_tx.send(active_tokens);
+                                    }
+                                    UpdateSequences::Shutdown => {
+                                        break;
+                                    }
+                                }
+                            }
+                            None => {
+                                // Channel closed, exit
+                                break;
+                            }
+                        }
                     }
-                    UpdateSequences::Free { request_id } => {
-                        active_sequences.free(&request_id);
-                    }
-                    UpdateSequences::MarkPrefillCompleted { request_id } => {
-                        active_sequences.mark_prefill_completed(&request_id);
-                    }
-                    UpdateSequences::NewBlocks {
-                        token_sequence,
-                        resp_tx,
-                    } => {
-                        let new_blocks = active_sequences.new_blocks(&token_sequence);
-                        let _ = resp_tx.send(new_blocks);
-                    }
-                    UpdateSequences::PotentialBlocks {
-                        token_sequence,
-                        resp_tx,
-                    } => {
-                        let potential_blocks = active_sequences.potential_blocks(&token_sequence);
-                        let _ = resp_tx.send(potential_blocks);
-                    }
-                    UpdateSequences::PotentialBlocksAndTokens {
-                        token_sequence,
-                        isl,
-                        overlap,
-                        resp_tx,
-                    } => {
-                        let potential_tokens = active_sequences.potential_blocks_and_tokens(
-                            &token_sequence,
-                            isl,
-                            overlap,
-                        );
-                        let _ = resp_tx.send(potential_tokens);
-                    }
-                    UpdateSequences::ActiveBlocks { resp_tx } => {
-                        let active_blocks = active_sequences.active_blocks();
-                        let _ = resp_tx.send(active_blocks);
-                    }
-                    UpdateSequences::ActiveTokens { resp_tx } => {
-                        let active_tokens = active_sequences.active_tokens();
-                        let _ = resp_tx.send(active_tokens);
-                    }
-                    UpdateSequences::Shutdown => {
+                    // Handle cancellation
+                    _ = cancel_token.cancelled() => {
+                        tracing::debug!("Worker task cancelled");
                         break;
                     }
                 }
@@ -447,7 +470,10 @@ impl ActiveSequencesMultiWorker {
         for worker_id in &workers_to_add {
             tracing::warn!("Adding worker {}", worker_id);
 
-            let (sender, handle) = Self::start_worker(self.block_size);
+            let (sender, handle) = Self::start_worker(
+                self.block_size,
+                self.component.drt().runtime().child_token(),
+            );
             self.senders.insert(*worker_id, sender);
             self.handles.insert(*worker_id, handle);
         }

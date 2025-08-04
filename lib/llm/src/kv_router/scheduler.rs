@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use dashmap::DashMap;
 use dynamo_runtime::component::{Component, Instance};
-use dynamo_runtime::traits::events::{EventPublisher, EventSubscriber};
-use futures::StreamExt;
+use dynamo_runtime::traits::events::EventPublisher;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -13,12 +11,13 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 use super::indexer::OverlapScores;
-use super::prefill_counter::{get_snapshot, PrefillCountersMultiWorker};
 use super::protocols::WorkerSelectionResult;
-use super::scoring::LoadEvent;
+use super::sequence::ActiveSequencesMultiWorker;
 use super::KvRouterConfig;
 use super::WorkerSelector;
-use super::{KV_HIT_RATE_SUBJECT, KV_METRICS_SUBJECT};
+use super::KV_HIT_RATE_SUBJECT;
+
+use crate::tokens::SequenceHash;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KVHitRateEvent {
@@ -42,28 +41,36 @@ pub enum KvSchedulerError {
 #[derive(Debug)]
 pub struct SchedulingResponse {
     pub best_worker_id: i64,
-    pub new_tokens: usize,
+    pub overlap_blocks: u32,
 }
 
 pub struct SchedulingRequest {
+    pub request_id: String,
+    pub token_seq: Vec<SequenceHash>,
     pub isl_tokens: usize,
     pub overlaps: OverlapScores,
     pub decode_blocks: HashMap<i64, usize>,
     pub prefill_tokens: HashMap<i64, usize>,
-    resp_tx: tokio::sync::oneshot::Sender<SchedulingResponse>,
+    resp_tx: Option<tokio::sync::oneshot::Sender<SchedulingResponse>>, // Changed to Option
 }
 
 impl SchedulingRequest {
-    pub fn respond(self, response: SchedulingResponse) {
-        if self.resp_tx.send(response).is_err() {
-            tracing::error!("failed to send response to requestor");
+    pub fn respond(&mut self, response: SchedulingResponse) {
+        // Changed to &mut self
+        if let Some(tx) = self.resp_tx.take() {
+            // Use take() to extract the sender
+            if tx.send(response).is_err() {
+                tracing::error!("failed to send response to requestor");
+            }
+        } else {
+            tracing::error!("respond called multiple times on same request");
         }
     }
 }
 
 pub struct KvScheduler {
     request_tx: tokio::sync::mpsc::Sender<SchedulingRequest>,
-    prefill_tokens: Arc<PrefillCountersMultiWorker>,
+    slots: Arc<ActiveSequencesMultiWorker>,
     barrier: Mutex<()>,
 }
 
@@ -88,33 +95,17 @@ impl KvScheduler {
             }
         });
 
-        // token and block states
-        let active_blocks = Arc::new(DashMap::<i64, usize>::new()); // Create dashmap for worker_id -> active_blocks
-        let prefill_tokens = Arc::new(PrefillCountersMultiWorker::new(component.clone()));
+        let worker_ids: Vec<i64> = instances
+            .iter()
+            .map(|instance| instance.instance_id)
+            .collect();
+        let slots = Arc::new(ActiveSequencesMultiWorker::new(
+            component,
+            block_size as usize,
+            worker_ids,
+        ));
 
-        // listen on load metrics from backends to update active block states
-        let active_blocks_clone = active_blocks.clone();
-        let ns_clone = component.namespace().clone();
-        tokio::spawn(async move {
-            let mut load_subscriber = ns_clone
-                .subscribe_with_type::<LoadEvent>(KV_METRICS_SUBJECT)
-                .await
-                .expect("Cannot launch load subscriber");
-
-            while let Some(event_result) = load_subscriber.next().await {
-                let Ok(load_event) = event_result else {
-                    tracing::warn!("Error receiving load event: {}", event_result.unwrap_err());
-                    continue;
-                };
-
-                active_blocks_clone.insert(
-                    load_event.worker_id,
-                    load_event.data.kv_stats.kv_active_blocks as usize,
-                );
-            }
-        });
-
-        let prefill_tokens_clone = prefill_tokens.clone();
+        let slots_clone = slots.clone();
         let (request_tx, request_rx) = tokio::sync::mpsc::channel::<SchedulingRequest>(1024);
         // Background task to handle scheduling requests
         tokio::spawn(async move {
@@ -125,6 +116,11 @@ impl KvScheduler {
                 // First, check for instance updates (non-blocking)
                 if instances_rx.has_changed().unwrap_or(false) {
                     instances = instances_rx.borrow_and_update().clone();
+                    let worker_ids: Vec<i64> = instances
+                        .iter()
+                        .map(|instance| instance.instance_id)
+                        .collect();
+                    slots_clone.update_workers(worker_ids);
                 }
 
                 // Then, wait for a new request
@@ -134,8 +130,15 @@ impl KvScheduler {
                 };
                 tracing::trace!("received request to be scheduled");
 
-                request.prefill_tokens = prefill_tokens_clone.running_sums().await;
-                request.decode_blocks = get_snapshot(active_blocks.as_ref());
+                let (decode_blocks, prefill_tokens) = slots_clone
+                    .potential_blocks_and_tokens(
+                        request.token_seq.clone(),
+                        request.isl_tokens,
+                        request.overlaps.clone(),
+                    )
+                    .await;
+                request.decode_blocks = decode_blocks;
+                request.prefill_tokens = prefill_tokens;
 
                 match selector.select_worker(&instances, &request, block_size) {
                     Ok(selection) => {
@@ -149,10 +152,20 @@ impl KvScheduler {
 
                         let response = SchedulingResponse {
                             best_worker_id: selection.worker_id,
-                            new_tokens: request.isl_tokens
-                                - (selection.overlap_blocks * block_size) as usize,
+                            overlap_blocks: selection.overlap_blocks,
                         };
                         request.respond(response);
+
+                        let _ = slots_clone
+                            .add_request(
+                                request.request_id,
+                                request.token_seq,
+                                request.isl_tokens,
+                                selection.overlap_blocks,
+                                selection.worker_id,
+                            )
+                            .await;
+
                         continue;
                     }
                     Err(KvSchedulerError::NoEndpoints) => {
@@ -178,7 +191,7 @@ impl KvScheduler {
 
         Ok(KvScheduler {
             request_tx,
-            prefill_tokens,
+            slots,
             barrier: Mutex::new(()),
         })
     }
@@ -187,6 +200,7 @@ impl KvScheduler {
         &self,
         request_id: String,
         isl_tokens: usize,
+        token_seq: Vec<SequenceHash>,
         overlaps: OverlapScores,
     ) -> Result<i64, KvSchedulerError> {
         // TODO: this is temporary needed for now to ensure blocking of scheduling and updating
@@ -195,11 +209,13 @@ impl KvScheduler {
 
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
         let request = SchedulingRequest {
+            request_id,
+            token_seq,
             isl_tokens,
             overlaps,
             decode_blocks: HashMap::new(),
             prefill_tokens: HashMap::new(),
-            resp_tx,
+            resp_tx: Some(resp_tx), // Wrap in Some()
         };
 
         self.request_tx
@@ -211,15 +227,14 @@ impl KvScheduler {
             .map_err(|_| KvSchedulerError::SubscriberShutdown)?;
 
         let best_worker_id = response.best_worker_id;
-        let _ = self
-            .prefill_tokens
-            .add_prefill(best_worker_id, request_id, response.new_tokens)
-            .await;
         Ok(best_worker_id)
     }
 
     pub async fn mark_prefill_completed(&self, request_id: &str) {
-        let _ = self.prefill_tokens.remove_prefill(request_id).await;
+        let _ = self
+            .slots
+            .mark_prefill_completed(&request_id.to_string())
+            .await;
     }
 }
 
@@ -335,16 +350,17 @@ impl WorkerSelector for DefaultWorkerSelector {
         // Calculate logits for each worker
         for instance in workers.iter() {
             let worker_id = instance.instance_id;
+            let overlap = *overlaps.get(&worker_id).unwrap_or(&0);
 
             // this is the number of prefill tokens the worker would have if the request were scheduled there
-            let prefill_token = *prefill_tokens.get(&worker_id).unwrap_or(&0);
-            let overlap = *overlaps.get(&worker_id).unwrap_or(&0);
-            let new_token = isl - (overlap * block_size) as usize;
-            let potential_prefill_token = prefill_token + new_token;
-            let potential_prefill_block = (potential_prefill_token as f64) / (block_size as f64);
+            let prefill_token = *prefill_tokens.get(&worker_id).unwrap_or(&isl);
+            let potential_prefill_block = (prefill_token as f64) / (block_size as f64);
 
-            // this is the number of decode blocks currently on the worker
-            let decode_block = *decode_blocks.get(&worker_id).unwrap_or(&0) as f64;
+            // this is the number of decode blocks the worker would have if the request were scheduled there
+            let decode_block = *decode_blocks
+                .get(&worker_id)
+                .unwrap_or(&(potential_prefill_block.floor() as usize))
+                as f64;
 
             // Calculate logit (lower is better)
             let logit =

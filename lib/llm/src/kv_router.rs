@@ -229,16 +229,21 @@ impl KvRouter {
         let isl_tokens = tokens.len();
 
         let block_hashes = compute_block_hash_for_seq(tokens, self.block_size);
+        let seq_hashes = compute_seq_hash_for_block(&block_hashes);
 
         let overlap_scores = self.indexer.find_matches(block_hashes.clone()).await?;
 
         let best_worker_id = self
             .scheduler
-            .schedule(context_id.to_string(), isl_tokens, overlap_scores.clone())
+            .schedule(
+                context_id.to_string(),
+                isl_tokens,
+                seq_hashes.clone(),
+                overlap_scores.clone(),
+            )
             .await?;
 
         if let Indexer::ApproxKvIndexer(ref indexer) = self.indexer {
-            let seq_hashes = compute_seq_hash_for_block(&block_hashes);
             indexer
                 .process_routing_decision(best_worker_id, block_hashes, seq_hashes)
                 .await
