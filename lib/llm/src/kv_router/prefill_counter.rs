@@ -81,6 +81,7 @@ impl PrefillCounter {
         self.state.remove(request_id)
     }
 
+    #[allow(dead_code)]
     fn update_direct(&self, request_id: String, new_tokens: usize) {
         if let Some(old_tokens_ref) = self.state.tokens_map.get(&request_id) {
             let old_tokens = *old_tokens_ref;
@@ -123,6 +124,72 @@ pub struct PrefillCountersMultiWorker {
 }
 
 impl PrefillCountersMultiWorker {
+    // Helper function to handle new prefill logic
+    fn handle_new_prefill(
+        counters: &Arc<DashMap<i64, PrefillCounter>>,
+        request_to_workers: &Arc<DashMap<String, i64>>,
+        request_id: &str,
+        worker_id: i64,
+        tokens: usize,
+    ) {
+        // Check if request already exists
+        if let Some(existing_worker_id) = request_to_workers.get(request_id) {
+            tracing::warn!(
+                "Request {} already exists for worker {}, but trying to add to worker {}",
+                request_id,
+                *existing_worker_id,
+                worker_id
+            );
+        }
+
+        // Update mapping
+        request_to_workers.insert(request_id.to_string(), worker_id);
+
+        // Get or create counter and insert
+        let Some(counter) = counters.get(&worker_id) else {
+            tracing::warn!(
+                "Worker {} does not exist, creating new PrefillCounter",
+                worker_id
+            );
+            let new_counter = PrefillCounter::default();
+            new_counter.insert_direct(request_id.to_string(), tokens);
+            counters.insert(worker_id, new_counter);
+            return;
+        };
+
+        counter.insert_direct(request_id.to_string(), tokens);
+    }
+
+    // Helper function to handle complete prefill logic
+    fn handle_complete_prefill(
+        counters: &Arc<DashMap<i64, PrefillCounter>>,
+        request_to_workers: &Arc<DashMap<String, i64>>,
+        request_id: &str,
+    ) -> Option<usize> {
+        // Remove from request_to_workers and get the worker_id
+        let Some((_, worker_id)) = request_to_workers.remove(request_id) else {
+            tracing::warn!("Request {} not found in request_to_workers", request_id);
+            return None;
+        };
+
+        // Use the worker_id from request_to_workers
+        let Some(counter) = counters.get(&worker_id) else {
+            tracing::warn!(
+                "No counter found for worker {} for request {}",
+                worker_id,
+                request_id
+            );
+            return None;
+        };
+
+        let removed_tokens = counter.remove_direct(request_id);
+        if removed_tokens.is_none() {
+            tracing::warn!("Attempted to remove non-existent request: {}", request_id);
+        }
+
+        removed_tokens
+    }
+
     pub fn new(component: Component) -> Self {
         let counters = Arc::new(DashMap::new());
         let request_to_workers = Arc::new(DashMap::new());
@@ -181,59 +248,24 @@ impl PrefillCountersMultiWorker {
 
             match event.data {
                 PrefillEventData::NewPrefill(tokens) => {
-                    let Some(worker_id_ref) = request_to_workers.get(&event.request_id) else {
-                        continue;
-                    };
-
-                    let worker_id = *worker_id_ref;
-                    let Some(counter) = counters.get(&worker_id) else {
-                        tracing::warn!(
-                            "No counter found for worker {} when handling NewPrefill for request {}",
-                            worker_id,
-                            event.request_id
-                        );
-                        continue;
-                    };
-
-                    counter.insert_direct(event.request_id.clone(), tokens);
+                    Self::handle_new_prefill(
+                        &counters,
+                        &request_to_workers,
+                        &event.request_id,
+                        event.worker_id,
+                        tokens,
+                    );
                 }
-                PrefillEventData::UpdatePrefill(new_tokens) => {
-                    let Some(worker_id_ref) = request_to_workers.get(&event.request_id) else {
-                        continue;
-                    };
-
-                    let worker_id = *worker_id_ref;
-                    let Some(counter) = counters.get(&worker_id) else {
-                        tracing::warn!(
-                            "No counter found for worker {} when handling UpdatePrefill for request {}",
-                            worker_id,
-                            event.request_id
-                        );
-                        continue;
-                    };
-
-                    counter.update_direct(event.request_id.clone(), new_tokens);
+                PrefillEventData::UpdatePrefill(_) => {
+                    // Do nothing for now
+                    continue;
                 }
                 PrefillEventData::CompletePrefill => {
-                    let Some((_, worker_id)) = request_to_workers.remove(&event.request_id) else {
-                        continue;
-                    };
-
-                    let Some(counter) = counters.get(&worker_id) else {
-                        tracing::warn!(
-                            "No counter found for worker {} when handling CompletePrefill for request {}",
-                            worker_id,
-                            event.request_id
-                        );
-                        continue;
-                    };
-
-                    if counter.remove_direct(&event.request_id).is_none() {
-                        tracing::warn!(
-                            "Attempted to remove non-existent request: {}",
-                            event.request_id
-                        );
-                    }
+                    Self::handle_complete_prefill(
+                        &counters,
+                        &request_to_workers,
+                        &event.request_id,
+                    );
                 }
             }
         }
@@ -247,73 +279,42 @@ impl PrefillCountersMultiWorker {
         request_id: String,
         new_tokens: usize,
     ) -> Result<()> {
-        if let Some(existing_worker_id) = self.request_to_workers.get(&request_id) {
-            tracing::warn!(
-                "Request {} already exists for worker {}, but trying to add to worker {}",
-                request_id,
-                *existing_worker_id,
-                worker_id
-            );
-        }
-        self.request_to_workers
-            .insert(request_id.clone(), worker_id);
-
-        let counter = if let Some(counter) = self.counters.get(&worker_id) {
-            counter.clone()
-        } else {
-            tracing::warn!(
-                "Worker {} does not exist, creating new PrefillCounter",
-                worker_id
-            );
-            let new_counter = PrefillCounter::default();
-            self.counters.insert(worker_id, new_counter.clone());
-            new_counter
-        };
-
-        let old_value = counter.insert_direct(request_id.clone(), new_tokens);
-
-        // Publish the event
         let event = PrefillEvent {
-            request_id,
-            data: if old_value.is_some() {
-                PrefillEventData::UpdatePrefill(new_tokens)
-            } else {
-                PrefillEventData::NewPrefill(new_tokens)
-            },
+            request_id: request_id.clone(),
+            worker_id,
+            data: PrefillEventData::NewPrefill(new_tokens),
             router_id: self.router_id,
         };
         self.component.publish(PREFILL_SUBJECT, &event).await?;
+
+        // Use the helper function
+        Self::handle_new_prefill(
+            &self.counters,
+            &self.request_to_workers,
+            &request_id,
+            worker_id,
+            new_tokens,
+        );
 
         Ok(())
     }
 
     pub async fn remove_prefill(&self, request_id: &str) -> Result<Option<usize>> {
-        let Some((_request_id, worker_id)) = self.request_to_workers.remove(request_id) else {
-            tracing::warn!("Request {} not found", request_id);
-            return Ok(None);
+        // Send the event first with dummy worker_id
+        let event = PrefillEvent {
+            request_id: request_id.to_string(),
+            worker_id: 0, // Dummy worker_id
+            data: PrefillEventData::CompletePrefill,
+            router_id: self.router_id,
         };
+        self.component.publish(PREFILL_SUBJECT, &event).await?;
 
-        if let Some(counter) = self.counters.get(&worker_id) {
-            let removed_tokens = counter.remove_direct(request_id);
-
-            if removed_tokens.is_some() {
-                let event = PrefillEvent {
-                    request_id: request_id.to_string(),
-                    data: PrefillEventData::CompletePrefill,
-                    router_id: self.router_id,
-                };
-                self.component.publish(PREFILL_SUBJECT, &event).await?;
-            }
-
-            Ok(removed_tokens)
-        } else {
-            tracing::warn!(
-                "Worker {} not found in counters for request {}",
-                worker_id,
-                request_id
-            );
-            Ok(None)
-        }
+        // Use the helper function
+        Ok(Self::handle_complete_prefill(
+            &self.counters,
+            &self.request_to_workers,
+            request_id,
+        ))
     }
 
     /// Get the running sums for all workers as a HashMap<i64, usize>

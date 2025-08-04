@@ -120,6 +120,7 @@ impl From<i64> for ExternalSequenceBlockHash {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PrefillEvent {
     pub request_id: String,
+    pub worker_id: i64,
     pub data: PrefillEventData,
     pub router_id: Uuid,
 }
