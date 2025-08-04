@@ -9,6 +9,7 @@ use futures::StreamExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 // Remove the Mutex import since we're using DashMap
 
 use super::protocols::{PrefillEvent, PrefillEventData};
@@ -37,6 +38,7 @@ where
 pub struct PrefillCounter {
     state: Arc<RwLock<PrefillCounterState>>,
     component: Component,
+    router_id: Uuid,
 }
 
 struct PrefillCounterState {
@@ -50,10 +52,6 @@ impl PrefillCounterState {
             tokens_map: DashMap::new(),
             running_sum: AtomicUsize::new(0),
         }
-    }
-
-    fn contains_key(&self, key: &str) -> bool {
-        self.tokens_map.contains_key(key)
     }
 
     fn insert(&self, key: String, value: usize) -> Option<usize> {
@@ -91,17 +89,22 @@ impl PrefillCounter {
     /// and updates the internal state based on received events.
     pub fn new(component: Component) -> Self {
         let state = Arc::new(RwLock::new(PrefillCounterState::new()));
+        let router_id = Uuid::new_v4();
 
         let counter = Self {
             state: state.clone(),
             component: component.clone(),
+            router_id,
         };
 
         let state_clone = state.clone();
         let component_clone = component.clone();
+        let router_id_clone = router_id;
 
         tokio::spawn(async move {
-            if let Err(e) = Self::subscribe_to_events(state_clone, component_clone).await {
+            if let Err(e) =
+                Self::subscribe_to_events(state_clone, component_clone, router_id_clone).await
+            {
                 tracing::error!("Error in prefill events subscription: {}", e);
             }
         });
@@ -110,10 +113,10 @@ impl PrefillCounter {
     }
 
     /// Background task to subscribe to prefill events and update internal state
-    /// TODO: somehow try to block events that are sent by itself
     async fn subscribe_to_events(
         state: Arc<RwLock<PrefillCounterState>>,
         component: Component,
+        router_id: Uuid,
     ) -> Result<()> {
         let mut subscriber = component
             .subscribe_with_type::<PrefillEvent>(PREFILL_SUBJECT)
@@ -125,14 +128,13 @@ impl PrefillCounter {
                 continue;
             };
 
+            // Skip events emitted by itself
+            if event.router_id == router_id {
+                continue;
+            }
+
             match event.data {
                 PrefillEventData::NewPrefill(tokens) => {
-                    let state_read = state.read().await;
-                    if state_read.contains_key(&event.request_id) {
-                        continue;
-                    }
-                    drop(state_read);
-
                     let state_write = state.write().await;
                     state_write.insert(event.request_id.clone(), tokens);
                 }
@@ -152,14 +154,13 @@ impl PrefillCounter {
                         .insert(event.request_id.clone(), new_tokens);
                 }
                 PrefillEventData::CompletePrefill => {
-                    let state_read = state.read().await;
-                    if !state_read.contains_key(&event.request_id) {
-                        continue;
-                    }
-                    drop(state_read);
-
                     let state_write = state.write().await;
-                    state_write.remove(&event.request_id);
+                    if state_write.remove(&event.request_id).is_none() {
+                        tracing::warn!(
+                            "Attempted to remove non-existent request: {}",
+                            event.request_id
+                        );
+                    }
                 }
             }
         }
@@ -179,6 +180,7 @@ impl PrefillCounter {
             } else {
                 PrefillEventData::NewPrefill(tokens)
             },
+            router_id: self.router_id,
         };
         self.component.publish(PREFILL_SUBJECT, &event).await?;
 
@@ -193,6 +195,7 @@ impl PrefillCounter {
             let event = PrefillEvent {
                 request_id: request_id.to_string(),
                 data: PrefillEventData::CompletePrefill,
+                router_id: self.router_id,
             };
             self.component.publish(PREFILL_SUBJECT, &event).await?;
         }

@@ -3,6 +3,7 @@
 
 use crate::tokens::{SequenceHash, Token};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RouterRequest {
@@ -120,6 +121,7 @@ impl From<i64> for ExternalSequenceBlockHash {
 pub struct PrefillEvent {
     pub request_id: String,
     pub data: PrefillEventData,
+    pub router_id: Uuid,
 }
 
 /// Represents the different stages of prefilling tokens for a request.
