@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Web framework for OpenAI API frontend
+fastapi>=0.104.0
+
+# gRPC for inter-service communication
+grpcio>=1.50.0
+grpcio-tools>=1.50.0
+pydantic>=2.0.0
+
+# Dynamo core/transport for inter-component communication
+# (torch already includes dynamo)
+
+# ZeroMQ for high-performance message queues
+pyzmq>=25.0.0
+torch>=2.4.0
+transformers>=4.45.0
+uvicorn[standard]>=0.24.0
+# vLLM V1 and dependencies
+vllm>=0.10.0
