@@ -2,5 +2,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub fn get_barrier_id() -> String {
-    std::env::var("DYNAMO_KVBM_BARRIER_ID").unwrap_or("kvbm".to_string())
+    std::env::var("DYN_KVBM_BARRIER_ID").unwrap_or("kvbm".to_string())
 }

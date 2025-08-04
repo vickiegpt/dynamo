@@ -36,15 +36,15 @@ docker compose -f deploy/metrics/docker-compose.yml up -d
 ./container/run.sh --framework kvbm -it --mount-workspace --use-nixl-gds
 
 # enable using kvbm instead of vllm's own kv cache manager
-export DYNAMO_KVBM_MANAGER=kvbm
+export DYN_KVBM_MANAGER=kvbm
 
 # enable kv offloading to CPU memory
 # 4 means 4GB of CPU memory would be used
-export DYNAMO_KVBM_CPU_CACHE_GB=4
+export DYN_KVBM_CPU_CACHE_GB=4
 
 # enable kv offloading to disk
 # 8 means 8GB of disk would be used
-export DYNAMO_KVBM_DISK_CACHE_GB=8
+export DYN_KVBM_DISK_CACHE_GB=8
 
 # serve an example LLM model
 vllm serve deepseek-ai/DeepSeek-R1-Distill-Llama-8B

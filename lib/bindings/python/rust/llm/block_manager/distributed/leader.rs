@@ -7,13 +7,13 @@ use utils::get_barrier_id;
 use derive_getters::Dissolve;
 use llm_rs::block_manager::distributed::{KvbmLeader as KvbmLeaderImpl, KvbmLeaderConfig};
 
-const CPU_CACHE: &str = "DYNAMO_KVBM_CPU_CACHE_GB";
-const CPU_CACHE_OVERRIDE: &str = "DYNAMO_KVBM_CPU_CACHE_OVERRIDE_NUM_BLOCKS";
+const CPU_CACHE: &str = "DYN_KVBM_CPU_CACHE_GB";
+const CPU_CACHE_OVERRIDE: &str = "DYN_KVBM_CPU_CACHE_OVERRIDE_NUM_BLOCKS";
 
-const DISK_CACHE: &str = "DYNAMO_KVBM_DISK_CACHE_GB";
-const DISK_CACHE_OVERRIDE: &str = "DYNAMO_KVBM_DISK_CACHE_OVERRIDE_NUM_BLOCKS";
+const DISK_CACHE: &str = "DYN_KVBM_DISK_CACHE_GB";
+const DISK_CACHE_OVERRIDE: &str = "DYN_KVBM_DISK_CACHE_OVERRIDE_NUM_BLOCKS";
 
-const LEADER_WORKER_INIT_TIMEOUT_SECS: &str = "DYNAMO_KVBM_LEADER_WORKER_INIT_TIMEOUT_SECS";
+const LEADER_WORKER_INIT_TIMEOUT_SECS: &str = "DYN_KVBM_LEADER_WORKER_INIT_TIMEOUT_SECS";
 const DEFAULT_INIT_TIMEOUT_SECS: u64 = 120;
 
 fn compute_num_blocks(cache_size_key: &str, override_key: &str, bytes_per_block: usize) -> usize {

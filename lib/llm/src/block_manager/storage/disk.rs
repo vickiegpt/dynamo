@@ -22,7 +22,7 @@ use std::ffi::CStr;
 use std::ffi::CString;
 use std::path::Path;
 
-const DISK_CACHE_KEY: &str = "DYNAMO_KVBM_DISK_CACHE_DIR";
+const DISK_CACHE_KEY: &str = "DYN_KVBM_DISK_CACHE_DIR";
 const DEFAULT_DISK_CACHE_DIR: &str = "/tmp/";
 
 #[derive(Debug)]
