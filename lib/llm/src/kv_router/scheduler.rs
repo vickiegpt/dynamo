@@ -71,7 +71,6 @@ impl SchedulingRequest {
 pub struct KvScheduler {
     request_tx: tokio::sync::mpsc::Sender<SchedulingRequest>,
     slots: Arc<ActiveSequencesMultiWorker>,
-    barrier: Mutex<()>,
 }
 
 impl KvScheduler {
@@ -192,7 +191,6 @@ impl KvScheduler {
         Ok(KvScheduler {
             request_tx,
             slots,
-            barrier: Mutex::new(()),
         })
     }
 
@@ -203,10 +201,6 @@ impl KvScheduler {
         token_seq: Vec<SequenceHash>,
         overlaps: OverlapScores,
     ) -> Result<i64, KvSchedulerError> {
-        // TODO: this is temporary needed for now to ensure blocking of scheduling and updating
-        // Need to remove in future if we have better algo to truly enable async processing
-        let _guard = self.barrier.lock().await;
-
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
         let request = SchedulingRequest {
             request_id,
