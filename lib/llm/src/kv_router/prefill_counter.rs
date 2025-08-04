@@ -5,10 +5,8 @@ use anyhow::Result;
 use dynamo_runtime::component::Component;
 use dynamo_runtime::traits::events::{EventPublisher, EventSubscriber};
 use futures::StreamExt;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use uuid::Uuid;
-// Remove the Mutex import since we're using DashMap
 
 use super::protocols::{PrefillEvent, PrefillEventData};
 use crate::kv_router::PREFILL_SUBJECT;
@@ -29,36 +27,38 @@ where
 
 #[derive(Default)]
 struct PrefillCounterState {
-    tokens_map: DashMap<String, usize>,
-    running_sum: AtomicUsize,
+    tokens_map: HashMap<String, usize>, // Plain HashMap
+    running_sum: usize,                 // Plain usize
 }
 
 impl PrefillCounterState {
-    fn insert(&self, key: String, value: usize) -> Option<usize> {
+    fn insert(&mut self, key: String, value: usize) -> Option<usize> {
+        // Takes &mut self
         let old_value = self.tokens_map.insert(key, value);
 
         if let Some(old) = old_value {
-            self.running_sum.fetch_sub(old, Ordering::SeqCst);
-            self.running_sum.fetch_add(value, Ordering::SeqCst);
+            self.running_sum -= old;
+            self.running_sum += value;
         } else {
-            self.running_sum.fetch_add(value, Ordering::SeqCst);
+            self.running_sum += value;
         }
 
         old_value
     }
 
-    fn remove(&self, key: &str) -> Option<usize> {
-        let removed = self.tokens_map.remove(key).map(|(_, v)| v);
+    fn remove(&mut self, key: &str) -> Option<usize> {
+        // Takes &mut self
+        let removed = self.tokens_map.remove(key);
 
         if let Some(value) = removed {
-            self.running_sum.fetch_sub(value, Ordering::SeqCst);
+            self.running_sum -= value;
         }
 
         removed
     }
 
     fn running_sum(&self) -> usize {
-        self.running_sum.load(Ordering::SeqCst)
+        self.running_sum
     }
 }
 
@@ -66,35 +66,35 @@ impl PrefillCounterState {
 ///
 /// This struct maintains a local hashmap of request_id to token count,
 /// and a running sum of all tokens. It no longer handles its own subscriptions.
-#[derive(Clone, Default)]
+#[derive(Default)] // Removed Clone
 pub struct PrefillCounter {
-    state: Arc<PrefillCounterState>,
+    state: PrefillCounterState, // No Arc, direct ownership
 }
 
 impl PrefillCounter {
     // Internal methods for direct state manipulation (no publishing)
-    fn insert_direct(&self, request_id: String, tokens: usize) -> Option<usize> {
+    fn insert_direct(&mut self, request_id: String, tokens: usize) -> Option<usize> {
+        // Takes &mut self
         self.state.insert(request_id, tokens)
     }
 
-    fn remove_direct(&self, request_id: &str) -> Option<usize> {
+    fn remove_direct(&mut self, request_id: &str) -> Option<usize> {
+        // Takes &mut self
         self.state.remove(request_id)
     }
 
     #[allow(dead_code)]
-    fn update_direct(&self, request_id: String, new_tokens: usize) {
-        if let Some(old_tokens_ref) = self.state.tokens_map.get(&request_id) {
-            let old_tokens = *old_tokens_ref;
+    fn update_direct(&mut self, request_id: String, new_tokens: usize) {
+        // Takes &mut self
+        if let Some(old_tokens) = self.state.tokens_map.get(&request_id).copied() {
             let delta = new_tokens as isize - old_tokens as isize;
-            self.state
-                .running_sum
-                .fetch_add(delta as usize, Ordering::SeqCst);
+            self.state.running_sum = (self.state.running_sum as isize + delta) as usize;
             self.state.tokens_map.insert(request_id, new_tokens);
         }
     }
 
     pub fn get(&self, request_id: &str) -> Option<usize> {
-        self.state.tokens_map.get(request_id).map(|entry| *entry)
+        self.state.tokens_map.get(request_id).copied()
     }
 
     pub fn running_sum(&self) -> usize {
@@ -107,11 +107,6 @@ impl PrefillCounter {
 
     pub fn is_empty(&self) -> bool {
         self.state.tokens_map.is_empty()
-    }
-
-    /// Returns a snapshot of the current state as a HashMap
-    pub fn snapshot(&self) -> HashMap<String, usize> {
-        get_snapshot(&self.state.tokens_map)
     }
 }
 
@@ -145,19 +140,18 @@ impl PrefillCountersMultiWorker {
         // Update mapping
         request_to_workers.insert(request_id.to_string(), worker_id);
 
-        // Get or create counter and insert
-        let Some(counter) = counters.get(&worker_id) else {
+        // Get or create counter and insert using get_mut
+        if let Some(mut counter) = counters.get_mut(&worker_id) {
+            counter.insert_direct(request_id.to_string(), tokens);
+        } else {
             tracing::warn!(
                 "Worker {} does not exist, creating new PrefillCounter",
                 worker_id
             );
-            let new_counter = PrefillCounter::default();
+            let mut new_counter = PrefillCounter::default();
             new_counter.insert_direct(request_id.to_string(), tokens);
             counters.insert(worker_id, new_counter);
-            return;
         };
-
-        counter.insert_direct(request_id.to_string(), tokens);
     }
 
     // Helper function to handle complete prefill logic
@@ -172,8 +166,8 @@ impl PrefillCountersMultiWorker {
             return None;
         };
 
-        // Use the worker_id from request_to_workers
-        let Some(counter) = counters.get(&worker_id) else {
+        // Use the worker_id from request_to_workers with get_mut
+        let Some(mut counter) = counters.get_mut(&worker_id) else {
             tracing::warn!(
                 "No counter found for worker {} for request {}",
                 worker_id,
@@ -335,62 +329,174 @@ impl PrefillCountersMultiWorker {
 mod integration_tests {
     use super::*;
     use dynamo_runtime::{DistributedRuntime, Runtime};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
     use tokio::time::Duration;
 
-    #[tokio::test]
+    #[test]
     #[ignore]
-    async fn test_prefill_counter_multiworker_synchronization() -> Result<()> {
-        // Initialize logging
+    fn test_prefill_counter_multiworker_synchronization() -> Result<()> {
+        // Initialize logging once
         dynamo_runtime::logging::init();
-
-        // Create runtime and distributed runtime
-        let runtime = Runtime::from_current()?;
-        let distributed = DistributedRuntime::from_settings(runtime.clone()).await?;
-
-        // Create namespace and components
-        let namespace = distributed.namespace("test_prefill_multiworker")?;
-        let component = namespace
-            .component("counters")?
-            .service_builder()
-            .create()
-            .await?;
-
-        // Create two PrefillCountersMultiWorker instances
-        let multi_worker1 = PrefillCountersMultiWorker::new(component.clone());
-        let multi_worker2 = PrefillCountersMultiWorker::new(component.clone());
-
-        // Give some time for subscribers to initialize
-        tokio::time::sleep(Duration::from_millis(2000)).await;
 
         let worker_id_1 = 1;
         let worker_id_2 = 2;
         let tokens_per_request = 100;
         let requests_per_worker = 10;
 
-        // Send requests to multi_worker1's worker
-        for i in 0..requests_per_worker {
-            let request_id = format!("mw1_request_{}", i);
-            multi_worker1
-                .add_prefill(worker_id_1, request_id, tokens_per_request)
-                .await?;
-        }
+        // Shared state for collecting results from both threads
+        let results1 = Arc::new(Mutex::new(None));
+        let results2 = Arc::new(Mutex::new(None));
+        let final_results1 = Arc::new(Mutex::new(None));
+        let final_results2 = Arc::new(Mutex::new(None));
 
-        // Send requests to multi_worker2's worker
-        for i in 0..requests_per_worker {
-            let request_id = format!("mw2_request_{}", i);
-            multi_worker2
-                .add_prefill(worker_id_2, request_id, tokens_per_request)
-                .await?;
-        }
+        let results1_clone = results1.clone();
+        let results2_clone = results2.clone();
+        let final_results1_clone = final_results1.clone();
+        let final_results2_clone = final_results2.clone();
 
-        // Wait for synchronization
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Thread 1: First distributed runtime with multi_worker1
+        let handle1 = thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+
+            rt.block_on(async {
+                // Create runtime and distributed runtime
+                let runtime = Runtime::from_current()?;
+                let distributed = DistributedRuntime::from_settings(runtime.clone()).await?;
+
+                // Create namespace and components with same names
+                let namespace = distributed.namespace("test_prefill_multiworker")?;
+                let component = namespace
+                    .component("counters")?
+                    .service_builder()
+                    .create()
+                    .await?;
+
+                // Create first PrefillCountersMultiWorker instance
+                let multi_worker1 = PrefillCountersMultiWorker::new(component);
+
+                // Give some time for subscribers to initialize
+                tokio::time::sleep(Duration::from_millis(3000)).await;
+
+                // Send requests to multi_worker1's worker
+                for i in 0..requests_per_worker {
+                    let request_id = format!("mw1_request_{}", i);
+                    multi_worker1
+                        .add_prefill(worker_id_1, request_id, tokens_per_request)
+                        .await?;
+                }
+
+                // Wait for synchronization
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+
+                // Get running sums after additions
+                let sums1 = multi_worker1.running_sums().await;
+                *results1_clone.lock().unwrap() = Some(sums1);
+
+                // Wait for other thread to add its requests
+                tokio::time::sleep(Duration::from_millis(2000)).await;
+
+                // Remove all requests from multi_worker1
+                for i in 0..requests_per_worker {
+                    let request_id = format!("mw1_request_{}", i);
+                    multi_worker1.remove_prefill(&request_id).await?;
+                }
+
+                // Wait for removal synchronization
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+
+                // Get final running sums
+                let final_sums1 = multi_worker1.running_sums().await;
+                *final_results1_clone.lock().unwrap() = Some(final_sums1);
+
+                // Keep runtime alive a bit longer for synchronization
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+
+                // Shutdown runtime
+                runtime.shutdown();
+
+                Ok::<(), anyhow::Error>(())
+            })
+        });
+
+        // Thread 2: Second distributed runtime with multi_worker2
+        let handle2 = thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+
+            rt.block_on(async {
+                // Create runtime and distributed runtime
+                let runtime = Runtime::from_current()?;
+                let distributed = DistributedRuntime::from_settings(runtime.clone()).await?;
+
+                // Create namespace and components with same names
+                let namespace = distributed.namespace("test_prefill_multiworker")?;
+                let component = namespace
+                    .component("counters")?
+                    .service_builder()
+                    .create()
+                    .await?;
+
+                // Create second PrefillCountersMultiWorker instance
+                let multi_worker2 = PrefillCountersMultiWorker::new(component);
+
+                // Give some time for subscribers to initialize
+                tokio::time::sleep(Duration::from_millis(3000)).await;
+
+                // Wait a bit to ensure multi_worker1 has started
+                tokio::time::sleep(Duration::from_millis(500)).await;
+
+                // Send requests to multi_worker2's worker
+                for i in 0..requests_per_worker {
+                    let request_id = format!("mw2_request_{}", i);
+                    multi_worker2
+                        .add_prefill(worker_id_2, request_id, tokens_per_request)
+                        .await?;
+                }
+
+                // Wait for synchronization
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+
+                // Get running sums after additions
+                let sums2 = multi_worker2.running_sums().await;
+                *results2_clone.lock().unwrap() = Some(sums2);
+
+                // Wait for other thread to remove its requests
+                tokio::time::sleep(Duration::from_millis(2000)).await;
+
+                // Remove all requests from multi_worker2
+                for i in 0..requests_per_worker {
+                    let request_id = format!("mw2_request_{}", i);
+                    multi_worker2.remove_prefill(&request_id).await?;
+                }
+
+                // Wait for removal synchronization
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+
+                // Get final running sums
+                let final_sums2 = multi_worker2.running_sums().await;
+                *final_results2_clone.lock().unwrap() = Some(final_sums2);
+
+                // Keep runtime alive a bit longer for synchronization
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+
+                // Shutdown runtime
+                runtime.shutdown();
+
+                Ok::<(), anyhow::Error>(())
+            })
+        });
+
+        // Wait for both threads to complete
+        handle1.join().unwrap()?;
+        handle2.join().unwrap()?;
+
+        // Extract results
+        let sums1 = results1.lock().unwrap().take().unwrap();
+        let sums2 = results2.lock().unwrap().take().unwrap();
+        let final_sums1 = final_results1.lock().unwrap().take().unwrap();
+        let final_sums2 = final_results2.lock().unwrap().take().unwrap();
 
         // Verify both multi-workers see all requests
-        let sums1 = multi_worker1.running_sums().await;
-        let sums2 = multi_worker2.running_sums().await;
-
-        // Each multi-worker should see both workers
         assert_eq!(
             sums1.get(&worker_id_1),
             Some(&(requests_per_worker * tokens_per_request)),
@@ -412,25 +518,7 @@ mod integration_tests {
             "MultiWorker2 should see worker 2's requests"
         );
 
-        // Remove all requests from multi_worker1
-        for i in 0..requests_per_worker {
-            let request_id = format!("mw1_request_{}", i);
-            multi_worker1.remove_prefill(&request_id).await?;
-        }
-
-        // Remove all requests from multi_worker2
-        for i in 0..requests_per_worker {
-            let request_id = format!("mw2_request_{}", i);
-            multi_worker2.remove_prefill(&request_id).await?;
-        }
-
-        // Wait for removal synchronization
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        // Verify both multi-workers show zero sums
-        let final_sums1 = multi_worker1.running_sums().await;
-        let final_sums2 = multi_worker2.running_sums().await;
-
+        // Verify both multi-workers show zero sums after removal
         assert_eq!(
             final_sums1.get(&worker_id_1).copied().unwrap_or(0),
             0,
@@ -451,9 +539,6 @@ mod integration_tests {
             0,
             "MultiWorker2 should show zero for worker 2"
         );
-
-        // Shutdown runtime
-        runtime.shutdown();
 
         Ok(())
     }
