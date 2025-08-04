@@ -42,6 +42,7 @@ git checkout $(git describe --tags $(git rev-list --tags --max-count=1))
 - [KV Cache Transfer](#kv-cache-transfer-in-disaggregated-serving)
 - [Client](#client)
 - [Benchmarking](#benchmarking)
+- [Multimodal Support](#multimodal-support)
 
 ## Feature Support Matrix
 
@@ -291,11 +292,61 @@ To benchmark your deployment with GenAI-Perf, see this utility script, configuri
 
 ## Multimodal support
 
-TRTLLM supports multimodal models with dynamo. You can provide multimodal inputs in two ways: by sending image URLs or by providing paths to pre-computed embedding files.
+TRTLLM supports multimodal models with dynamo. You can provide multimodal inputs in the following ways:
+
+- By sending image URLs
+- By providing paths to pre-computed embedding files
 
 Please note that you should provide **either image URLs or embedding file paths** in a single request.
 
-Here are quick steps to launch Llama-4 Maverick BF16
+Here are quick steps to launch Llama-4 Maverick BF16 in aggregated mode
+```bash
+cd $DYNAMO_HOME/components/backends/trtllm
+
+export AGG_ENGINE_ARGS=./engine_configs/multinode/agg.yaml
+export SERVED_MODEL_NAME="meta-llama/Llama-4-Maverick-17B-128E-Instruct"
+export MODEL_PATH="meta-llama/Llama-4-Maverick-17B-128E-Instruct"
+./launch/agg.sh
+```
+### Example Requests
+
+#### With Image URL
+
+Below is an example of an image being sent to `Llama-4-Maverick-17B-128E-Instruct` model
+
+Request :
+```bash
+curl localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '{
+    "model": "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Describe the image"
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/inpaint.png"
+                    }
+                }
+            ]
+        }
+    ],
+    "stream": false,
+    "max_tokens": 160
+}'
+```
+Response :
+
+```
+{"id":"unknown-id","choices":[{"index":0,"message":{"content":"The image depicts a serene landscape featuring a large rock formation, likely El Capitan in Yosemite National Park, California. The scene is characterized by a winding road that curves from the bottom-right corner towards the center-left of the image, with a few rocks and trees lining its edge.\n\n**Key Features:**\n\n* **Rock Formation:** A prominent, tall, and flat-topped rock formation dominates the center of the image.\n* **Road:** A paved road winds its way through the landscape, curving from the bottom-right corner towards the center-left.\n* **Trees and Rocks:** Trees are visible on both sides of the road, with rocks scattered along the left side.\n* **Sky:** The sky above is blue, dotted with white clouds.\n* **Atmosphere:** The overall atmosphere of the","refusal":null,"tool_calls":null,"role":"assistant","function_call":null,"audio":null},"finish_reason":"stop","logprobs":null}],"created":1753322607,"model":"meta-llama/Llama-4-Maverick-17B-128E-Instruct","service_tier":null,"system_fingerprint":null,"object":"chat.completion","usage":null}
+```
+
+Here are quick steps to launch Llama-4 Maverick BF16 in disaggregated mode.
+To enable disagg with Llama-4-Maverick-17B-128E-Instruct you need to deploy in multinode mode follow steps [here](multinode/multinode-multimodal-example.md)
 ```bash
 cd $DYNAMO_HOME/components/backends/trtllm
 
@@ -348,16 +399,10 @@ Dynamo with TensorRT-LLM supports providing pre-computed embeddings directly in 
 #### Enabling the Feature
 
 This is an experimental feature that requires using a specific TensorRT-LLM commit.
-To enable it, open `container/build.sh` and update `DEFAULT_EXPERIMENTAL_TRTLLM_COMMIT` to the following value:
+To enable it build the dynamo container with the `--tensorrtllm-commit` flag, followed by the commit hash:
 
 ```bash
-DEFAULT_EXPERIMENTAL_TRTLLM_COMMIT="b4065d8ca64a64eee9fdc64b39cb66d73d4be47c"
-```
-
-Then, build the container with the `--use-default-experimental-tensorrtllm-commit` flag:
-
-```bash
-./container/build.sh --framework tensorrtllm --use-default-experimental-tensorrtllm-commit
+./container/build.sh --framework tensorrtllm --tensorrtllm-commit b4065d8ca64a64eee9fdc64b39cb66d73d4be47c
 ```
 
 #### How to Use

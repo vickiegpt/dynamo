@@ -222,7 +222,7 @@ def cmd_line_args():
         type=str,
         default="text",
         choices=["text", "multimodal"],
-        help="Modality to use for the model. Default: text",
+        help="Modality to use for the model. Default: text. Current supported modalities are image.",
     )
     parser.add_argument(
         "--next-endpoint",
