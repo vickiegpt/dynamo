@@ -74,7 +74,12 @@ pub async fn run(
                 .link(frontend)?;
             let ingress = Ingress::for_pipeline(pipeline)?;
 
-            model.attach(&endpoint, ModelType::Backend, ModelInput::Tokens).await?;
+            // [oandreeva] Converting ModelType::Backend to ModelType::Chat | ModelType::Completion
+            let model_type = ModelType::Chat | ModelType::Completion;
+            tracing::info!("model_type: {:?}", model_type);
+            tracing::info!("model_type supports_chat: {:?}", model_type.supports_chat());
+            tracing::info!("model_type supports_completion: {:?}", model_type.supports_completion());
+            model.attach(&endpoint, model_type, ModelInput::Tokens).await?;
             let fut = endpoint.endpoint_builder().handler(ingress).start();
 
             (Box::pin(fut), Some(model.card().clone()))

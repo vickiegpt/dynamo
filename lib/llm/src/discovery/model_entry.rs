@@ -42,7 +42,7 @@ impl ModelEntry {
     }
 
     pub fn requires_preprocessing(&self) -> bool {
-        matches!(self.model_type, ModelType::Backend)
+        matches!(self.model_input, ModelInput::Tokens)
     }
 
     /// Fetch the ModelDeploymentCard from NATS.

@@ -98,7 +98,7 @@ impl PushEndpoint {
                             tracing::trace!(worker_id, "request handled successfully");
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to handle request: {:?}", e);
+                            tracing::error!("Failed to handle request: {:?}", e);
                         }
                     }
 
