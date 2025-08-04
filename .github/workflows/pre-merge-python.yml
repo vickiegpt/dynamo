@@ -23,8 +23,7 @@ on:
 
 jobs:
   build-test:
-    runs-on:
-        group: Fastchecker
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         framework:
@@ -63,10 +62,10 @@ jobs:
           echo "Fetching Docker image size for tag: ${{ env.IMAGE_TAG }}"
           IMAGE_SIZE=$(docker images --format "{{.Size}}" ${{ env.IMAGE_TAG }})
           echo "Docker Image Size: $IMAGE_SIZE"
-          echo "::set-output name=image_size::$IMAGE_SIZE"
+          echo "image_size=$IMAGE_SIZE" >> $GITHUB_ENV
       - name: Display Docker Image Size
         run: |
-          echo "Docker Image Size: ${{ steps.get-image-size.outputs.image_size }}"
+          echo "Docker Image Size: ${{ env.IMAGE_SIZE }}"
       - name: Copy test report from test Container
         if: always()
         run: |
