@@ -23,7 +23,8 @@ on:
 
 jobs:
   build-test:
-    runs-on: ubuntu-latest
+    runs-on:
+        group: Fastchecker
     strategy:
       matrix:
         framework:
