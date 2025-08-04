@@ -2,25 +2,41 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use dynamo_runtime::component::{Component, Namespace};
+use dynamo_runtime::component::Component;
 use dynamo_runtime::traits::events::{EventPublisher, EventSubscriber};
+use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+// Remove the Mutex import since we're using DashMap
 
 use super::protocols::{PrefillEvent, PrefillEventData};
 use crate::kv_router::PREFILL_SUBJECT;
 use dashmap::DashMap;
+use std::collections::HashMap;
+use std::hash::Hash;
+
+pub fn get_snapshot<K, V>(state: &DashMap<K, V>) -> HashMap<K, V>
+where
+    K: Clone + Hash + Eq,
+    V: Copy,
+{
+    state
+        .iter()
+        .map(|entry| (entry.key().clone(), *entry.value()))
+        .collect()
+}
 
 /// A counter that tracks pending prefill tokens for each request.
 ///
 /// This struct maintains a local hashmap of request_id to token count,
 /// a running sum of all tokens, and subscribes to prefill events over NATS
 /// to keep the counts synchronized across components.
+#[derive(Clone)]
 pub struct PrefillCounter {
     state: Arc<RwLock<PrefillCounterState>>,
-    namespace: Namespace,
+    component: Component,
 }
 
 struct PrefillCounterState {
@@ -78,14 +94,14 @@ impl PrefillCounter {
 
         let counter = Self {
             state: state.clone(),
-            namespace: component.namespace().clone(),
+            component: component.clone(),
         };
 
         let state_clone = state.clone();
-        let namespace_clone = counter.namespace.clone();
+        let component_clone = component.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = Self::subscribe_to_events(state_clone, namespace_clone).await {
+            if let Err(e) = Self::subscribe_to_events(state_clone, component_clone).await {
                 tracing::error!("Error in prefill events subscription: {}", e);
             }
         });
@@ -97,9 +113,9 @@ impl PrefillCounter {
     /// TODO: somehow try to block events that are sent by itself
     async fn subscribe_to_events(
         state: Arc<RwLock<PrefillCounterState>>,
-        namespace: Namespace,
+        component: Component,
     ) -> Result<()> {
-        let mut subscriber = namespace
+        let mut subscriber = component
             .subscribe_with_type::<PrefillEvent>(PREFILL_SUBJECT)
             .await?;
 
@@ -135,7 +151,7 @@ impl PrefillCounter {
                         .tokens_map
                         .insert(event.request_id.clone(), new_tokens);
                 }
-                PrefillEventData::CompletePrefill(_) => {
+                PrefillEventData::CompletePrefill => {
                     let state_read = state.read().await;
                     if !state_read.contains_key(&event.request_id) {
                         continue;
@@ -164,7 +180,7 @@ impl PrefillCounter {
                 PrefillEventData::NewPrefill(tokens)
             },
         };
-        self.namespace.publish(PREFILL_SUBJECT, &event).await?;
+        self.component.publish(PREFILL_SUBJECT, &event).await?;
 
         Ok(old_value)
     }
@@ -173,12 +189,12 @@ impl PrefillCounter {
         let state = self.state.write().await;
         let removed_tokens = state.remove(request_id);
 
-        if let Some(tokens) = removed_tokens {
+        if removed_tokens.is_some() {
             let event = PrefillEvent {
                 request_id: request_id.to_string(),
-                data: PrefillEventData::CompletePrefill(tokens),
+                data: PrefillEventData::CompletePrefill,
             };
-            self.namespace.publish(PREFILL_SUBJECT, &event).await?;
+            self.component.publish(PREFILL_SUBJECT, &event).await?;
         }
 
         Ok(removed_tokens)
@@ -203,6 +219,92 @@ impl PrefillCounter {
         let state = self.state.read().await;
         state.tokens_map.is_empty()
     }
+
+    /// Returns a snapshot of the current state as a HashMap
+    pub async fn snapshot(&self) -> HashMap<String, usize> {
+        let state = self.state.read().await;
+        get_snapshot(&state.tokens_map)
+    }
+}
+
+/// A collection of PrefillCounters for multiple workers
+pub struct PrefillCountersMultiWorker {
+    pub counters: DashMap<i64, PrefillCounter>,
+    pub request_to_workers: DashMap<String, i64>,
+    component: Component,
+}
+
+impl PrefillCountersMultiWorker {
+    pub fn new(component: Component) -> Self {
+        Self {
+            counters: DashMap::new(),
+            request_to_workers: DashMap::new(),
+            component,
+        }
+    }
+
+    pub async fn add_prefill(
+        &self,
+        worker_id: i64,
+        request_id: String,
+        new_tokens: usize,
+    ) -> Result<()> {
+        if let Some(existing_worker_id) = self.request_to_workers.get(&request_id) {
+            tracing::warn!(
+                "Request {} already exists for worker {}, but trying to add to worker {}",
+                request_id,
+                *existing_worker_id,
+                worker_id
+            );
+        }
+        self.request_to_workers
+            .insert(request_id.clone(), worker_id);
+
+        if let Some(counter) = self.counters.get(&worker_id) {
+            counter.insert(request_id, new_tokens).await?;
+        } else {
+            tracing::warn!(
+                "Worker {} does not exist, creating new PrefillCounter",
+                worker_id
+            );
+            let new_counter = PrefillCounter::new(self.component.clone());
+            new_counter.insert(request_id, new_tokens).await?;
+            self.counters.insert(worker_id, new_counter);
+        }
+
+        Ok(())
+    }
+
+    pub async fn remove_prefill(&self, request_id: &str) -> Result<Option<usize>> {
+        let Some((_request_id, worker_id)) = self.request_to_workers.remove(request_id) else {
+            tracing::warn!("Request {} not found", request_id);
+            return Ok(None);
+        };
+
+        if let Some(counter) = self.counters.get(&worker_id) {
+            counter.remove(request_id).await
+        } else {
+            tracing::warn!(
+                "Worker {} not found in counters for request {}",
+                worker_id,
+                request_id
+            );
+            Ok(None)
+        }
+    }
+
+    /// Get the running sums for all workers as a HashMap<i64, usize>
+    pub async fn running_sums(&self) -> HashMap<i64, usize> {
+        let futures = FuturesUnordered::new();
+
+        for entry in self.counters.iter() {
+            let worker_id = *entry.key();
+            let counter = entry.value().clone();
+            futures.push(async move { (worker_id, counter.running_sum().await) });
+        }
+
+        futures.collect::<HashMap<_, _>>().await
+    }
 }
 
 #[cfg(test)]
@@ -222,22 +324,17 @@ mod integration_tests {
         let runtime = Runtime::from_current()?;
         let distributed = DistributedRuntime::from_settings(runtime.clone()).await?;
 
-        // Create namespace and components for two counters
+        // Create namespace and a single component
         let namespace = distributed.namespace("test_prefill_counter")?;
-        let component1 = namespace
-            .component("counter1")?
-            .service_builder()
-            .create()
-            .await?;
-        let component2 = namespace
-            .component("counter2")?
+        let component = namespace
+            .component("shared_counter")?
             .service_builder()
             .create()
             .await?;
 
-        // Create two PrefillCounter instances
-        let counter1 = PrefillCounter::new(component1);
-        let counter2 = PrefillCounter::new(component2);
+        // Create two PrefillCounter instances using the same component (cloned)
+        let counter1 = PrefillCounter::new(component.clone());
+        let counter2 = PrefillCounter::new(component.clone());
 
         // Give some time for subscribers to initialize
         tokio::time::sleep(Duration::from_millis(2000)).await;

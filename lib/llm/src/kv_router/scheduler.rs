@@ -13,8 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use dynamo_runtime::component::Namespace;
-use dynamo_runtime::traits::events::EventPublisher;
+use dashmap::DashMap;
+use dynamo_runtime::component::{Component, Instance};
+use dynamo_runtime::traits::events::{EventPublisher, EventSubscriber};
+use futures::StreamExt;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -22,15 +24,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
+use super::indexer::OverlapScores;
+use super::prefill_counter::{get_snapshot, PrefillCountersMultiWorker};
 use super::protocols::WorkerSelectionResult;
+use super::scoring::LoadEvent;
+use super::KvRouterConfig;
 use super::WorkerSelector;
-use crate::kv_router::indexer::OverlapScores;
-use crate::kv_router::protocols::LoadMetrics;
-use crate::kv_router::sequence::ActiveSequencesMultiWorker;
-use crate::kv_router::KvRouterConfig;
-use crate::kv_router::KV_HIT_RATE_SUBJECT;
-use crate::tokens::SequenceHash;
-use dynamo_runtime::component::Instance;
+use super::{KV_HIT_RATE_SUBJECT, KV_METRICS_SUBJECT};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KVHitRateEvent {
@@ -51,42 +51,17 @@ pub enum KvSchedulerError {
     SubscriberShutdown,
 }
 
-/// [gluo FIXME] exactly the same as EndpointInfo except that 'data'
-/// is cleaned (not optional)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Endpoint {
-    pub name: String,
-    pub subject: String,
-    pub data: LoadMetrics,
-}
-
-impl Endpoint {
-    pub fn worker_id(&self) -> i64 {
-        i64::from_str_radix(
-            self.subject
-                .split("-")
-                .last()
-                .expect("invalid subject")
-                .to_string()
-                .as_str(),
-            16,
-        )
-        .expect("invalid worker id")
-    }
-}
-
 #[derive(Debug)]
 pub struct SchedulingResponse {
     pub best_worker_id: i64,
-    pub overlap_blocks: u32, // Add this field
-    pub endpoints_changed: Option<Vec<i64>>,
+    pub new_tokens: usize,
 }
 
 pub struct SchedulingRequest {
     pub isl_tokens: usize,
     pub overlaps: OverlapScores,
-    pub potential_blocks: HashMap<i64, usize>,
-    pub potential_tokens: HashMap<i64, usize>,
+    pub decode_blocks: HashMap<i64, usize>,
+    pub prefill_tokens: HashMap<i64, usize>,
     resp_tx: tokio::sync::oneshot::Sender<SchedulingResponse>,
 }
 
@@ -100,12 +75,13 @@ impl SchedulingRequest {
 
 pub struct KvScheduler {
     request_tx: tokio::sync::mpsc::Sender<SchedulingRequest>,
-    sequences: Arc<Mutex<ActiveSequencesMultiWorker>>,
+    prefill_tokens: Arc<PrefillCountersMultiWorker>,
+    barrier: Mutex<()>,
 }
 
 impl KvScheduler {
     pub async fn start(
-        ns: Namespace,
+        component: Component,
         block_size: u32,
         mut instances_rx: tokio::sync::watch::Receiver<Vec<Instance>>, // Changed from ProcessedEndpoints
         selector: Option<Box<dyn WorkerSelector + Send + Sync>>,
@@ -113,93 +89,98 @@ impl KvScheduler {
         let selector = selector.unwrap_or(Box::new(DefaultWorkerSelector::default()));
         let mut instances: Vec<Instance> = instances_rx.borrow_and_update().clone();
 
-        // Get worker IDs from instances
-        let worker_ids: Vec<i64> = instances.iter().map(|i| i.instance_id).collect();
-
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<KVHitRateEvent>();
+        let ns_clone = component.namespace().clone();
         tokio::spawn(async move {
             let mut event_rx = event_rx;
             while let Some(event) = event_rx.recv().await {
-                if let Err(e) = ns.publish(KV_HIT_RATE_SUBJECT, &event).await {
+                if let Err(e) = ns_clone.publish(KV_HIT_RATE_SUBJECT, &event).await {
                     tracing::warn!("Failed to publish KV hit rate event: {:?}", e);
                 }
             }
         });
 
-        let sequences = Arc::new(Mutex::new(ActiveSequencesMultiWorker::new(
-            block_size as usize,
-            worker_ids,
-        )));
+        // token and block states
+        let active_blocks = Arc::new(DashMap::<i64, usize>::new()); // Create dashmap for worker_id -> active_blocks
+        let prefill_tokens = Arc::new(PrefillCountersMultiWorker::new(component.clone()));
 
-        // Channel to accept new scheduling requests
+        // listen on load metrics from backends to update active block states
+        let active_blocks_clone = active_blocks.clone();
+        let ns_clone = component.namespace().clone();
+        tokio::spawn(async move {
+            let mut load_subscriber = ns_clone
+                .subscribe_with_type::<LoadEvent>(KV_METRICS_SUBJECT)
+                .await
+                .expect("Cannot launch load subscriber");
+
+            while let Some(event_result) = load_subscriber.next().await {
+                let Ok(load_event) = event_result else {
+                    tracing::warn!("Error receiving load event: {}", event_result.unwrap_err());
+                    continue;
+                };
+
+                active_blocks_clone.insert(
+                    load_event.worker_id,
+                    load_event.data.kv_stats.kv_active_blocks as usize,
+                );
+            }
+        });
+
+        let prefill_tokens_clone = prefill_tokens.clone();
         let (request_tx, request_rx) = tokio::sync::mpsc::channel::<SchedulingRequest>(1024);
         // Background task to handle scheduling requests
         tokio::spawn(async move {
-            let mut request: SchedulingRequest;
             let mut request_rx = request_rx;
-            let mut pending_endpoint_update: Option<Vec<i64>> = None;
             tracing::trace!("scheduler background task started");
 
-            'outer: loop {
-                request = tokio::select! {
-                    biased;
+            loop {
+                // First, check for instance updates (non-blocking)
+                if instances_rx.has_changed().unwrap_or(false) {
+                    instances = instances_rx.borrow_and_update().clone();
+                }
 
-                    _ = instances_rx.changed() => {
-                        instances = instances_rx.borrow_and_update().clone();
-                        let worker_ids: Vec<i64> = instances.iter().map(|i| i.instance_id).collect();
-                        pending_endpoint_update = Some(worker_ids);
-                        continue 'outer;
-                    }
-
-                    maybe_new_request = request_rx.recv() => {
-                        let Some(new_request) = maybe_new_request else {
-                            tracing::warn!("scheduler shutdown");
-                            break 'outer;
-                        };
-                        tracing::trace!("received request to be scheduled");
-                        new_request
-                    }
+                // Then, wait for a new request
+                let Some(mut request) = request_rx.recv().await else {
+                    tracing::warn!("scheduler shutdown");
+                    break;
                 };
+                tracing::trace!("received request to be scheduled");
 
-                loop {
-                    // When calling selector.select_worker, we need to adapt
-                    match selector.select_worker(&instances, &request, block_size) {
-                        Ok(selection) => {
-                            if let Err(e) = event_tx.send(KVHitRateEvent {
-                                worker_id: selection.worker_id,
-                                isl_blocks: selection.required_blocks as usize,
-                                overlap_blocks: selection.overlap_blocks,
-                            }) {
-                                tracing::warn!("Failed to send KV hit rate event: {:?}", e);
-                            }
+                request.prefill_tokens = prefill_tokens_clone.running_sums().await;
+                request.decode_blocks = get_snapshot(active_blocks.as_ref());
 
-                            let response = SchedulingResponse {
-                                best_worker_id: selection.worker_id,
-                                overlap_blocks: selection.overlap_blocks,
-                                endpoints_changed: pending_endpoint_update.take(),
-                            };
-                            request.respond(response);
-                            continue 'outer;
+                match selector.select_worker(&instances, &request, block_size) {
+                    Ok(selection) => {
+                        if let Err(e) = event_tx.send(KVHitRateEvent {
+                            worker_id: selection.worker_id,
+                            isl_blocks: selection.required_blocks as usize,
+                            overlap_blocks: selection.overlap_blocks,
+                        }) {
+                            tracing::warn!("Failed to send KV hit rate event: {:?}", e);
                         }
-                        Err(KvSchedulerError::NoEndpoints) => {
-                            tracing::trace!("no endpoints available; waiting for endpoints update");
-                            instances_rx.changed().await.ok();
-                            instances = instances_rx.borrow_and_update().clone();
-                            let worker_ids: Vec<i64> =
-                                instances.iter().map(|i| i.instance_id).collect();
-                            pending_endpoint_update = Some(worker_ids);
-                            continue;
-                        }
-                        // TODO: this is not actually hooked up
-                        Err(KvSchedulerError::AllWorkersBusy) => {
-                            tracing::trace!("all workers busy; waiting for more capacity");
-                            tokio::time::sleep(Duration::from_millis(5)).await;
-                            continue;
-                        }
-                        Err(e) => {
-                            tracing::error!("error scheduling request: {:?}", e);
-                            break 'outer;
-                        }
+
+                        let response = SchedulingResponse {
+                            best_worker_id: selection.worker_id,
+                            new_tokens: request.isl_tokens
+                                - (selection.overlap_blocks * block_size) as usize,
+                        };
+                        request.respond(response);
+                        continue;
+                    }
+                    Err(KvSchedulerError::NoEndpoints) => {
+                        tracing::trace!("no endpoints available; waiting for endpoints update");
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                        continue;
+                    }
+                    // TODO: this is not actually hooked up
+                    Err(KvSchedulerError::AllWorkersBusy) => {
+                        tracing::trace!("all workers busy; waiting for more capacity");
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::error!("error scheduling request: {:?}", e);
+                        break;
                     }
                 }
             }
@@ -209,7 +190,8 @@ impl KvScheduler {
 
         Ok(KvScheduler {
             request_tx,
-            sequences,
+            prefill_tokens,
+            barrier: Mutex::new(()),
         })
     }
 
@@ -217,22 +199,21 @@ impl KvScheduler {
         &self,
         request_id: String,
         isl_tokens: usize,
-        token_seq: Vec<SequenceHash>,
         overlaps: OverlapScores,
     ) -> Result<i64, KvSchedulerError> {
-        let mut sequences = self.sequences.lock().await;
-
-        let (potential_blocks, potential_tokens) =
-            sequences.potential_blocks_and_tokens(token_seq.clone(), isl_tokens, overlaps.clone());
+        // TODO: this is temporary needed for now to ensure blocking of scheduling and updating
+        // Need to remove in future if we have better algo to truly enable async processing
+        let _guard = self.barrier.lock().await;
 
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
         let request = SchedulingRequest {
             isl_tokens,
             overlaps,
-            potential_blocks,
-            potential_tokens,
+            decode_blocks: HashMap::new(),
+            prefill_tokens: HashMap::new(),
             resp_tx,
         };
+
         self.request_tx
             .send(request)
             .await
@@ -241,30 +222,16 @@ impl KvScheduler {
             .await
             .map_err(|_| KvSchedulerError::SubscriberShutdown)?;
 
-        if let Some(new_worker_ids) = response.endpoints_changed {
-            sequences.update_workers(new_worker_ids);
-        }
-
-        sequences.add_request(
-            request_id,
-            token_seq,
-            isl_tokens,
-            response.overlap_blocks,
-            response.best_worker_id,
-        );
-
-        Ok(response.best_worker_id)
+        let best_worker_id = response.best_worker_id;
+        let _ = self
+            .prefill_tokens
+            .add_prefill(best_worker_id, request_id, response.new_tokens)
+            .await;
+        Ok(best_worker_id)
     }
 
-    pub async fn mark_prefill_completed(&self, request_id: &String) {
-        let mut sequences = self.sequences.lock().await;
-        sequences.mark_prefill_completed(request_id)
-    }
-
-    /// Free all blocks associated with a request
-    pub async fn free(&self, request_id: &String) {
-        let mut sequences = self.sequences.lock().await;
-        sequences.free(request_id)
+    pub async fn mark_prefill_completed(&self, request_id: &str) {
+        let _ = self.prefill_tokens.remove_prefill(request_id).await;
     }
 }
 
@@ -307,8 +274,9 @@ fn softmax_sample(logits: &HashMap<i64, f64>, temperature: f64) -> i64 {
         let normalized: Vec<_> = values
             .iter()
             .map(|&v| {
-                let norm = v / (max_val - min_val);
                 // Lower is better, so negate
+                // Note we don't need to do actual min-max norm here, just off by an offset
+                let norm = v / (max_val - min_val);
                 -norm
             })
             .collect();
@@ -370,10 +338,8 @@ impl WorkerSelector for DefaultWorkerSelector {
         let request_blocks = isl.div_ceil(block_size as usize);
         let overlaps = &request.overlaps.scores;
 
-        // active blocks for decoding
-        let potential_active_blocks = &request.potential_blocks;
-        // active tokens in the batch (processed by the linear layers), mostly prefill tokens
-        let potential_active_tokens = &request.potential_tokens;
+        let decode_blocks = &request.decode_blocks;
+        let prefill_tokens = &request.prefill_tokens;
 
         let mut worker_logits = HashMap::new();
         let mut max_logit = f64::NEG_INFINITY;
@@ -381,52 +347,38 @@ impl WorkerSelector for DefaultWorkerSelector {
         // Calculate logits for each worker
         for instance in workers.iter() {
             let worker_id = instance.instance_id;
-            // this is the number of tokens each worker would have if the request were scheduled there
-            let potential_tokens = *potential_active_tokens.get(&worker_id).unwrap_or_else(|| {
-                tracing::warn!(
-                    "assuming {isl} tokens for {worker_id}, as the endpoint does not exist yet"
-                );
-                &isl
-            }) as f64;
 
-            // this is the number of blocks each worker would have if the request were scheduled there
-            let potential_blocks = *potential_active_blocks.get(&worker_id).unwrap_or_else(||
-                {tracing::warn!("assuming {request_blocks} decoding blocks for {worker_id}, as the endpoint does not exist yet");
-                &request_blocks
-            }) as f64;
+            // this is the number of prefill tokens the worker would have if the request were scheduled there
+            let prefill_token = *prefill_tokens.get(&worker_id).unwrap_or(&0);
+            let overlap = *overlaps.get(&worker_id).unwrap_or(&0);
+            let new_token = isl - (overlap * block_size) as usize;
+            let potential_prefill_token = prefill_token + new_token;
+            let potential_prefill_block = (potential_prefill_token as f64) / (block_size as f64);
 
-            let potential_prefill_blocks = potential_tokens / (block_size as f64);
+            // this is the number of decode blocks currently on the worker
+            let decode_block = *decode_blocks.get(&worker_id).unwrap_or(&0) as f64;
 
             // Calculate logit (lower is better)
-            let logit = self.kv_router_config.overlap_score_weight * potential_prefill_blocks
-                + potential_blocks;
+            let logit =
+                self.kv_router_config.overlap_score_weight * potential_prefill_block + decode_block;
             max_logit = max_logit.max(logit);
 
             worker_logits.insert(worker_id, logit);
 
             tracing::info!(
-                "Formula for {worker_id}: {logit:.3} = {:.1} * {potential_prefill_blocks:.3} + {potential_blocks:.3}  (cached_blocks: {})",
+                "Formula for {worker_id}: {logit:.3} = {:.1} * {potential_prefill_block:.3} + {decode_block:.3}  (cached_blocks: {})",
                 self.kv_router_config.overlap_score_weight,
-                overlaps.get(&worker_id).unwrap_or(&0),
+                overlap,
             );
-        }
-
-        // Normalize by dividing by max value
-        if max_logit > 0.0 {
-            for logit in worker_logits.values_mut() {
-                *logit /= max_logit;
-            }
         }
 
         // Use softmax sampling to select worker
         let temperature = self.kv_router_config.router_temperature;
         let best_worker_id = softmax_sample(&worker_logits, temperature);
-
-        let overlap_blocks = overlaps.get(&best_worker_id).copied().unwrap_or(0);
         let best_logit = worker_logits[&best_worker_id];
 
         tracing::info!(
-            "Selected worker: {}, normalized logit: {:.3}",
+            "Selected worker: {}, logit: {:.3}",
             best_worker_id,
             best_logit
         );
@@ -434,7 +386,7 @@ impl WorkerSelector for DefaultWorkerSelector {
         Ok(WorkerSelectionResult {
             worker_id: best_worker_id,
             required_blocks: request_blocks as u64,
-            overlap_blocks,
+            overlap_blocks: overlaps.get(&best_worker_id).copied().unwrap_or(0),
         })
     }
 }

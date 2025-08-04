@@ -15,7 +15,6 @@ use dynamo_runtime::{
     protocols::annotated::Annotated,
 };
 use futures::stream::{self, StreamExt};
-use tokio::sync::Mutex;
 
 pub mod approx;
 pub mod indexer;
@@ -138,10 +137,6 @@ pub struct KvRouter {
     scheduler: KvScheduler,
 
     block_size: u32,
-
-    // To ensure blocking reads / writes
-    // TODO: benchmark tradeoffs
-    find_best_match_mutex: Mutex<()>,
 }
 
 impl KvRouter {
@@ -178,13 +173,8 @@ impl KvRouter {
             ))
         };
 
-        let scheduler = KvScheduler::start(
-            component.namespace().clone(),
-            block_size,
-            instances_rx,
-            selector,
-        )
-        .await?;
+        let scheduler =
+            KvScheduler::start(component.clone(), block_size, instances_rx, selector).await?;
 
         // [gluo TODO] try subscribe_with_type::<RouterEvent>,
         // error checking below will be different.
@@ -218,7 +208,6 @@ impl KvRouter {
             indexer,
             scheduler,
             block_size,
-            find_best_match_mutex: Mutex::new(()), // Add this
         })
     }
 
@@ -230,28 +219,19 @@ impl KvRouter {
         context_id: &str,
         tokens: &[u32],
     ) -> anyhow::Result<(i64, u32)> {
-        // Acquire mutex to serialize access
-        // TODO: may as well make all the subroutines synchronous if benchmarking favors this
-        let _guard = self.find_best_match_mutex.lock().await;
-
         let isl_tokens = tokens.len();
 
         let block_hashes = compute_block_hash_for_seq(tokens, self.block_size);
-        let seq_hashes = compute_seq_hash_for_block(&block_hashes);
 
         let overlap_scores = self.indexer.find_matches(block_hashes.clone()).await?;
 
         let best_worker_id = self
             .scheduler
-            .schedule(
-                context_id.to_string(),
-                isl_tokens,
-                seq_hashes.clone(),
-                overlap_scores.clone(),
-            )
+            .schedule(context_id.to_string(), isl_tokens, overlap_scores.clone())
             .await?;
 
         if let Indexer::ApproxKvIndexer(ref indexer) = self.indexer {
+            let seq_hashes = compute_seq_hash_for_block(&block_hashes);
             indexer
                 .process_routing_decision(best_worker_id, block_hashes, seq_hashes)
                 .await
@@ -267,13 +247,8 @@ impl KvRouter {
     }
 
     /// Free all blocks associated with a request
-    pub async fn mark_prefill_completed(&self, request_id: &String) {
+    pub async fn mark_prefill_completed(&self, request_id: &str) {
         self.scheduler.mark_prefill_completed(request_id).await
-    }
-
-    /// Free all blocks associated with a request
-    pub async fn free(&self, request_id: &String) {
-        self.scheduler.free(request_id).await
     }
 
     /// Get the block size this router was configured with
@@ -362,8 +337,6 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
                     while let Some(item) = response_stream.next().await {
                         yield item;
                     }
-
-                    chooser.free(&context_id).await;
                 });
                 Ok(ResponseStream::new(wrapped_stream, stream_context))
             }

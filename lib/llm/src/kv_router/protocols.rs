@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::tokens::Token;
+use crate::tokens::{SequenceHash, Token};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -130,7 +130,19 @@ pub struct PrefillEvent {
 pub enum PrefillEventData {
     NewPrefill(usize),
     UpdatePrefill(usize),
-    CompletePrefill(usize),
+    CompletePrefill,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ActiveBlockEvent {
+    pub request_id: String,
+    pub data: ActiveBlockEventData,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum ActiveBlockEventData {
+    NewBlock(Vec<SequenceHash>),
+    FreeBlock,
 }
 
 /// Represents a collection of cache events and a shutdown flag.
