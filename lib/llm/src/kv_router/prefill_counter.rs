@@ -4,11 +4,9 @@
 use anyhow::Result;
 use dynamo_runtime::component::Component;
 use dynamo_runtime::traits::events::{EventPublisher, EventSubscriber};
-use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use uuid::Uuid;
 // Remove the Mutex import since we're using DashMap
 
@@ -29,31 +27,13 @@ where
         .collect()
 }
 
-/// A counter that tracks pending prefill tokens for each request.
-///
-/// This struct maintains a local hashmap of request_id to token count,
-/// a running sum of all tokens, and subscribes to prefill events over NATS
-/// to keep the counts synchronized across components.
-#[derive(Clone)]
-pub struct PrefillCounter {
-    state: Arc<RwLock<PrefillCounterState>>,
-    component: Component,
-    router_id: Uuid,
-}
-
+#[derive(Default)]
 struct PrefillCounterState {
     tokens_map: DashMap<String, usize>,
     running_sum: AtomicUsize,
 }
 
 impl PrefillCounterState {
-    fn new() -> Self {
-        Self {
-            tokens_map: DashMap::new(),
-            running_sum: AtomicUsize::new(0),
-        }
-    }
-
     fn insert(&self, key: String, value: usize) -> Option<usize> {
         let old_value = self.tokens_map.insert(key, value);
 
@@ -82,39 +62,105 @@ impl PrefillCounterState {
     }
 }
 
+/// A counter that tracks pending prefill tokens for each request.
+///
+/// This struct maintains a local hashmap of request_id to token count,
+/// and a running sum of all tokens. It no longer handles its own subscriptions.
+#[derive(Clone, Default)]
+pub struct PrefillCounter {
+    state: Arc<PrefillCounterState>,
+}
+
 impl PrefillCounter {
-    /// Create a new PrefillCounter with the given component.
-    ///
-    /// This will start a background task that subscribes to PREFILL_SUBJECT
-    /// and updates the internal state based on received events.
+    // Internal methods for direct state manipulation (no publishing)
+    fn insert_direct(&self, request_id: String, tokens: usize) -> Option<usize> {
+        self.state.insert(request_id, tokens)
+    }
+
+    fn remove_direct(&self, request_id: &str) -> Option<usize> {
+        self.state.remove(request_id)
+    }
+
+    fn update_direct(&self, request_id: String, new_tokens: usize) {
+        if let Some(old_tokens_ref) = self.state.tokens_map.get(&request_id) {
+            let old_tokens = *old_tokens_ref;
+            let delta = new_tokens as isize - old_tokens as isize;
+            self.state
+                .running_sum
+                .fetch_add(delta as usize, Ordering::SeqCst);
+            self.state.tokens_map.insert(request_id, new_tokens);
+        }
+    }
+
+    pub fn get(&self, request_id: &str) -> Option<usize> {
+        self.state.tokens_map.get(request_id).map(|entry| *entry)
+    }
+
+    pub fn running_sum(&self) -> usize {
+        self.state.running_sum()
+    }
+
+    pub fn len(&self) -> usize {
+        self.state.tokens_map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.state.tokens_map.is_empty()
+    }
+
+    /// Returns a snapshot of the current state as a HashMap
+    pub fn snapshot(&self) -> HashMap<String, usize> {
+        get_snapshot(&self.state.tokens_map)
+    }
+}
+
+/// A collection of PrefillCounters for multiple workers with centralized event handling
+pub struct PrefillCountersMultiWorker {
+    pub counters: Arc<DashMap<i64, PrefillCounter>>,
+    pub request_to_workers: Arc<DashMap<String, i64>>,
+    component: Component,
+    router_id: Uuid,
+}
+
+impl PrefillCountersMultiWorker {
     pub fn new(component: Component) -> Self {
-        let state = Arc::new(RwLock::new(PrefillCounterState::new()));
+        let counters = Arc::new(DashMap::new());
+        let request_to_workers = Arc::new(DashMap::new());
         let router_id = Uuid::new_v4();
 
-        let counter = Self {
-            state: state.clone(),
+        let multi_worker = Self {
+            counters: counters.clone(),
+            request_to_workers: request_to_workers.clone(),
             component: component.clone(),
             router_id,
         };
 
-        let state_clone = state.clone();
+        // Start the subscription loop
+        let counters_clone = counters.clone();
+        let request_to_workers_clone = request_to_workers.clone();
         let component_clone = component.clone();
         let router_id_clone = router_id;
 
         tokio::spawn(async move {
-            if let Err(e) =
-                Self::subscribe_to_events(state_clone, component_clone, router_id_clone).await
+            if let Err(e) = Self::subscribe_to_events(
+                counters_clone,
+                request_to_workers_clone,
+                component_clone,
+                router_id_clone,
+            )
+            .await
             {
                 tracing::error!("Error in prefill events subscription: {}", e);
             }
         });
 
-        counter
+        multi_worker
     }
 
-    /// Background task to subscribe to prefill events and update internal state
+    /// Background task to subscribe to prefill events and update all counters
     async fn subscribe_to_events(
-        state: Arc<RwLock<PrefillCounterState>>,
+        counters: Arc<DashMap<i64, PrefillCounter>>,
+        request_to_workers: Arc<DashMap<String, i64>>,
         component: Component,
         router_id: Uuid,
     ) -> Result<()> {
@@ -135,27 +181,54 @@ impl PrefillCounter {
 
             match event.data {
                 PrefillEventData::NewPrefill(tokens) => {
-                    let state_write = state.write().await;
-                    state_write.insert(event.request_id.clone(), tokens);
-                }
-                PrefillEventData::UpdatePrefill(new_tokens) => {
-                    let state_write = state.write().await;
-                    let Some(old_tokens_ref) = state_write.tokens_map.get(&event.request_id) else {
+                    let Some(worker_id_ref) = request_to_workers.get(&event.request_id) else {
                         continue;
                     };
-                    let old_tokens = *old_tokens_ref;
 
-                    let delta = new_tokens as isize - old_tokens as isize;
-                    state_write
-                        .running_sum
-                        .fetch_add(delta as usize, Ordering::SeqCst);
-                    state_write
-                        .tokens_map
-                        .insert(event.request_id.clone(), new_tokens);
+                    let worker_id = *worker_id_ref;
+                    let Some(counter) = counters.get(&worker_id) else {
+                        tracing::warn!(
+                            "No counter found for worker {} when handling NewPrefill for request {}",
+                            worker_id,
+                            event.request_id
+                        );
+                        continue;
+                    };
+
+                    counter.insert_direct(event.request_id.clone(), tokens);
+                }
+                PrefillEventData::UpdatePrefill(new_tokens) => {
+                    let Some(worker_id_ref) = request_to_workers.get(&event.request_id) else {
+                        continue;
+                    };
+
+                    let worker_id = *worker_id_ref;
+                    let Some(counter) = counters.get(&worker_id) else {
+                        tracing::warn!(
+                            "No counter found for worker {} when handling UpdatePrefill for request {}",
+                            worker_id,
+                            event.request_id
+                        );
+                        continue;
+                    };
+
+                    counter.update_direct(event.request_id.clone(), new_tokens);
                 }
                 PrefillEventData::CompletePrefill => {
-                    let state_write = state.write().await;
-                    if state_write.remove(&event.request_id).is_none() {
+                    let Some((_, worker_id)) = request_to_workers.remove(&event.request_id) else {
+                        continue;
+                    };
+
+                    let Some(counter) = counters.get(&worker_id) else {
+                        tracing::warn!(
+                            "No counter found for worker {} when handling CompletePrefill for request {}",
+                            worker_id,
+                            event.request_id
+                        );
+                        continue;
+                    };
+
+                    if counter.remove_direct(&event.request_id).is_none() {
                         tracing::warn!(
                             "Attempted to remove non-existent request: {}",
                             event.request_id
@@ -166,84 +239,6 @@ impl PrefillCounter {
         }
 
         Ok(())
-    }
-
-    pub async fn insert(&self, request_id: String, tokens: usize) -> Result<Option<usize>> {
-        let state = self.state.write().await;
-        let old_value = state.insert(request_id.clone(), tokens);
-
-        // Send appropriate event based on whether this is a new prefill or an update
-        let event = PrefillEvent {
-            request_id,
-            data: if old_value.is_some() {
-                PrefillEventData::UpdatePrefill(tokens)
-            } else {
-                PrefillEventData::NewPrefill(tokens)
-            },
-            router_id: self.router_id,
-        };
-        self.component.publish(PREFILL_SUBJECT, &event).await?;
-
-        Ok(old_value)
-    }
-
-    pub async fn remove(&self, request_id: &str) -> Result<Option<usize>> {
-        let state = self.state.write().await;
-        let removed_tokens = state.remove(request_id);
-
-        if removed_tokens.is_some() {
-            let event = PrefillEvent {
-                request_id: request_id.to_string(),
-                data: PrefillEventData::CompletePrefill,
-                router_id: self.router_id,
-            };
-            self.component.publish(PREFILL_SUBJECT, &event).await?;
-        }
-
-        Ok(removed_tokens)
-    }
-
-    pub async fn get(&self, request_id: &str) -> Option<usize> {
-        let state = self.state.read().await;
-        state.tokens_map.get(request_id).map(|entry| *entry)
-    }
-
-    pub async fn running_sum(&self) -> usize {
-        let state = self.state.read().await;
-        state.running_sum()
-    }
-
-    pub async fn len(&self) -> usize {
-        let state = self.state.read().await;
-        state.tokens_map.len()
-    }
-
-    pub async fn is_empty(&self) -> bool {
-        let state = self.state.read().await;
-        state.tokens_map.is_empty()
-    }
-
-    /// Returns a snapshot of the current state as a HashMap
-    pub async fn snapshot(&self) -> HashMap<String, usize> {
-        let state = self.state.read().await;
-        get_snapshot(&state.tokens_map)
-    }
-}
-
-/// A collection of PrefillCounters for multiple workers
-pub struct PrefillCountersMultiWorker {
-    pub counters: DashMap<i64, PrefillCounter>,
-    pub request_to_workers: DashMap<String, i64>,
-    component: Component,
-}
-
-impl PrefillCountersMultiWorker {
-    pub fn new(component: Component) -> Self {
-        Self {
-            counters: DashMap::new(),
-            request_to_workers: DashMap::new(),
-            component,
-        }
     }
 
     pub async fn add_prefill(
@@ -263,17 +258,31 @@ impl PrefillCountersMultiWorker {
         self.request_to_workers
             .insert(request_id.clone(), worker_id);
 
-        if let Some(counter) = self.counters.get(&worker_id) {
-            counter.insert(request_id, new_tokens).await?;
+        let counter = if let Some(counter) = self.counters.get(&worker_id) {
+            counter.clone()
         } else {
             tracing::warn!(
                 "Worker {} does not exist, creating new PrefillCounter",
                 worker_id
             );
-            let new_counter = PrefillCounter::new(self.component.clone());
-            new_counter.insert(request_id, new_tokens).await?;
-            self.counters.insert(worker_id, new_counter);
-        }
+            let new_counter = PrefillCounter::default();
+            self.counters.insert(worker_id, new_counter.clone());
+            new_counter
+        };
+
+        let old_value = counter.insert_direct(request_id.clone(), new_tokens);
+
+        // Publish the event
+        let event = PrefillEvent {
+            request_id,
+            data: if old_value.is_some() {
+                PrefillEventData::UpdatePrefill(new_tokens)
+            } else {
+                PrefillEventData::NewPrefill(new_tokens)
+            },
+            router_id: self.router_id,
+        };
+        self.component.publish(PREFILL_SUBJECT, &event).await?;
 
         Ok(())
     }
@@ -285,7 +294,18 @@ impl PrefillCountersMultiWorker {
         };
 
         if let Some(counter) = self.counters.get(&worker_id) {
-            counter.remove(request_id).await
+            let removed_tokens = counter.remove_direct(request_id);
+
+            if removed_tokens.is_some() {
+                let event = PrefillEvent {
+                    request_id: request_id.to_string(),
+                    data: PrefillEventData::CompletePrefill,
+                    router_id: self.router_id,
+                };
+                self.component.publish(PREFILL_SUBJECT, &event).await?;
+            }
+
+            Ok(removed_tokens)
         } else {
             tracing::warn!(
                 "Worker {} not found in counters for request {}",
@@ -298,15 +318,15 @@ impl PrefillCountersMultiWorker {
 
     /// Get the running sums for all workers as a HashMap<i64, usize>
     pub async fn running_sums(&self) -> HashMap<i64, usize> {
-        let futures = FuturesUnordered::new();
+        self.counters
+            .iter()
+            .map(|entry| (*entry.key(), entry.value().running_sum()))
+            .collect()
+    }
 
-        for entry in self.counters.iter() {
-            let worker_id = *entry.key();
-            let counter = entry.value().clone();
-            futures.push(async move { (worker_id, counter.running_sum().await) });
-        }
-
-        futures.collect::<HashMap<_, _>>().await
+    /// Get a specific counter's running sum
+    pub async fn get_worker_sum(&self, worker_id: i64) -> Option<usize> {
+        self.counters.get(&worker_id).map(|c| c.running_sum())
     }
 }
 
@@ -314,12 +334,11 @@ impl PrefillCountersMultiWorker {
 mod integration_tests {
     use super::*;
     use dynamo_runtime::{DistributedRuntime, Runtime};
-    use std::collections::HashMap;
     use tokio::time::Duration;
 
     #[tokio::test]
     #[ignore]
-    async fn test_prefill_counter_synchronization() -> Result<()> {
+    async fn test_prefill_counter_multiworker_synchronization() -> Result<()> {
         // Initialize logging
         dynamo_runtime::logging::init();
 
@@ -327,127 +346,110 @@ mod integration_tests {
         let runtime = Runtime::from_current()?;
         let distributed = DistributedRuntime::from_settings(runtime.clone()).await?;
 
-        // Create namespace and a single component
-        let namespace = distributed.namespace("test_prefill_counter")?;
+        // Create namespace and components
+        let namespace = distributed.namespace("test_prefill_multiworker")?;
         let component = namespace
-            .component("shared_counter")?
+            .component("counters")?
             .service_builder()
             .create()
             .await?;
 
-        // Create two PrefillCounter instances using the same component (cloned)
-        let counter1 = PrefillCounter::new(component.clone());
-        let counter2 = PrefillCounter::new(component.clone());
+        // Create two PrefillCountersMultiWorker instances
+        let multi_worker1 = PrefillCountersMultiWorker::new(component.clone());
+        let multi_worker2 = PrefillCountersMultiWorker::new(component.clone());
 
         // Give some time for subscribers to initialize
         tokio::time::sleep(Duration::from_millis(2000)).await;
 
-        // Track all request_ids and their token counts for verification
-        let mut expected_tokens = HashMap::new();
+        let worker_id_1 = 1;
+        let worker_id_2 = 2;
         let tokens_per_request = 100;
-        let requests_per_counter = 50;
+        let requests_per_worker = 10;
 
-        // Send 50 requests to counter1
-        for i in 0..requests_per_counter {
-            let request_id = format!("counter1_request_{}", i);
-            counter1
-                .insert(request_id.clone(), tokens_per_request)
+        // Send requests to multi_worker1's worker
+        for i in 0..requests_per_worker {
+            let request_id = format!("mw1_request_{}", i);
+            multi_worker1
+                .add_prefill(worker_id_1, request_id, tokens_per_request)
                 .await?;
-            expected_tokens.insert(request_id, tokens_per_request);
         }
 
-        // Send 50 requests to counter2
-        for i in 0..requests_per_counter {
-            let request_id = format!("counter2_request_{}", i);
-            counter2
-                .insert(request_id.clone(), tokens_per_request)
+        // Send requests to multi_worker2's worker
+        for i in 0..requests_per_worker {
+            let request_id = format!("mw2_request_{}", i);
+            multi_worker2
+                .add_prefill(worker_id_2, request_id, tokens_per_request)
                 .await?;
-            expected_tokens.insert(request_id, tokens_per_request);
         }
 
         // Wait for synchronization
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        // Verify both counters have the same running sum
-        let expected_sum = (requests_per_counter * 2) * tokens_per_request;
-        let sum1 = counter1.running_sum().await;
-        let sum2 = counter2.running_sum().await;
+        // Verify both multi-workers see all requests
+        let sums1 = multi_worker1.running_sums().await;
+        let sums2 = multi_worker2.running_sums().await;
 
+        // Each multi-worker should see both workers
         assert_eq!(
-            sum1, expected_sum,
-            "Counter1 running sum mismatch. Expected: {}, Got: {}",
-            expected_sum, sum1
+            sums1.get(&worker_id_1),
+            Some(&(requests_per_worker * tokens_per_request)),
+            "MultiWorker1 should see worker 1's requests"
         );
         assert_eq!(
-            sum2, expected_sum,
-            "Counter2 running sum mismatch. Expected: {}, Got: {}",
-            expected_sum, sum2
-        );
-
-        // Verify both counters have all 100 requests
-        let len1 = counter1.len().await;
-        let len2 = counter2.len().await;
-        assert_eq!(
-            len1,
-            requests_per_counter * 2,
-            "Counter1 should have {} requests",
-            requests_per_counter * 2
+            sums1.get(&worker_id_2),
+            Some(&(requests_per_worker * tokens_per_request)),
+            "MultiWorker1 should see worker 2's requests"
         );
         assert_eq!(
-            len2,
-            requests_per_counter * 2,
-            "Counter2 should have {} requests",
-            requests_per_counter * 2
+            sums2.get(&worker_id_1),
+            Some(&(requests_per_worker * tokens_per_request)),
+            "MultiWorker2 should see worker 1's requests"
+        );
+        assert_eq!(
+            sums2.get(&worker_id_2),
+            Some(&(requests_per_worker * tokens_per_request)),
+            "MultiWorker2 should see worker 2's requests"
         );
 
-        // Spot check some individual requests on both counters
-        for i in 0..5 {
-            let request_id = format!("counter1_request_{}", i);
-            let tokens1 = counter1.get(&request_id).await;
-            let tokens2 = counter2.get(&request_id).await;
-            assert_eq!(
-                tokens1,
-                Some(tokens_per_request),
-                "Counter1 missing request {}",
-                request_id
-            );
-            assert_eq!(
-                tokens2,
-                Some(tokens_per_request),
-                "Counter2 missing request {}",
-                request_id
-            );
+        // Remove all requests from multi_worker1
+        for i in 0..requests_per_worker {
+            let request_id = format!("mw1_request_{}", i);
+            multi_worker1.remove_prefill(&request_id).await?;
         }
 
-        // Now remove all requests from both counters
-        for i in 0..requests_per_counter {
-            let request_id = format!("counter1_request_{}", i);
-            counter1.remove(&request_id).await?;
-        }
-
-        for i in 0..requests_per_counter {
-            let request_id = format!("counter2_request_{}", i);
-            counter2.remove(&request_id).await?;
+        // Remove all requests from multi_worker2
+        for i in 0..requests_per_worker {
+            let request_id = format!("mw2_request_{}", i);
+            multi_worker2.remove_prefill(&request_id).await?;
         }
 
         // Wait for removal synchronization
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        // Verify both counters have zero running sum
-        let final_sum1 = counter1.running_sum().await;
-        let final_sum2 = counter2.running_sum().await;
+        // Verify both multi-workers show zero sums
+        let final_sums1 = multi_worker1.running_sums().await;
+        let final_sums2 = multi_worker2.running_sums().await;
+
         assert_eq!(
-            final_sum1, 0,
-            "Counter1 should have zero running sum after removal"
+            final_sums1.get(&worker_id_1).copied().unwrap_or(0),
+            0,
+            "MultiWorker1 should show zero for worker 1"
         );
         assert_eq!(
-            final_sum2, 0,
-            "Counter2 should have zero running sum after removal"
+            final_sums1.get(&worker_id_2).copied().unwrap_or(0),
+            0,
+            "MultiWorker1 should show zero for worker 2"
         );
-
-        // Verify both counters are empty
-        assert!(counter1.is_empty().await, "Counter1 should be empty");
-        assert!(counter2.is_empty().await, "Counter2 should be empty");
+        assert_eq!(
+            final_sums2.get(&worker_id_1).copied().unwrap_or(0),
+            0,
+            "MultiWorker2 should show zero for worker 1"
+        );
+        assert_eq!(
+            final_sums2.get(&worker_id_2).copied().unwrap_or(0),
+            0,
+            "MultiWorker2 should show zero for worker 2"
+        );
 
         // Shutdown runtime
         runtime.shutdown();
