@@ -347,50 +347,6 @@ Response :
 
 Here are quick steps to launch Llama-4 Maverick BF16 in disaggregated mode.
 To enable disagg with Llama-4-Maverick-17B-128E-Instruct you need to deploy in multinode mode follow steps [here](multinode/multinode-multimodal-example.md)
-```bash
-cd $DYNAMO_HOME/components/backends/trtllm
-
-export AGG_ENGINE_ARGS=./engine_configs/multinode/agg.yaml
-export SERVED_MODEL_NAME="meta-llama/Llama-4-Maverick-17B-128E-Instruct"
-export MODEL_PATH="meta-llama/Llama-4-Maverick-17B-128E-Instruct"
-./launch/agg.sh
-```
-### Example Requests
-
-#### With Image URL
-
-Below is an example of an image being sent to `Llama-4-Maverick-17B-128E-Instruct` model
-
-Request :
-```bash
-curl localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '{
-    "model": "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
-    "messages": [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Describe the image"
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/inpaint.png"
-                    }
-                }
-            ]
-        }
-    ],
-    "stream": false,
-    "max_tokens": 160
-}'
-```
-Response :
-
-```
-{"id":"unknown-id","choices":[{"index":0,"message":{"content":"The image depicts a serene landscape featuring a large rock formation, likely El Capitan in Yosemite National Park, California. The scene is characterized by a winding road that curves from the bottom-right corner towards the center-left of the image, with a few rocks and trees lining its edge.\n\n**Key Features:**\n\n* **Rock Formation:** A prominent, tall, and flat-topped rock formation dominates the center of the image.\n* **Road:** A paved road winds its way through the landscape, curving from the bottom-right corner towards the center-left.\n* **Trees and Rocks:** Trees are visible on both sides of the road, with rocks scattered along the left side.\n* **Sky:** The sky above is blue, dotted with white clouds.\n* **Atmosphere:** The overall atmosphere of the","refusal":null,"tool_calls":null,"role":"assistant","function_call":null,"audio":null},"finish_reason":"stop","logprobs":null}],"created":1753322607,"model":"meta-llama/Llama-4-Maverick-17B-128E-Instruct","service_tier":null,"system_fingerprint":null,"object":"chat.completion","usage":null}
-```
 
 ### Using Pre-computed Embeddings (Experimental)
 
