@@ -7,9 +7,6 @@ import os
 import signal
 
 import uvloop
-from vllm.distributed.kv_events import ZmqEventPublisher
-from vllm.usage.usage_lib import UsageContext
-from vllm.v1.engine.async_llm import AsyncLLM
 
 from dynamo.llm import (
     ModelType,
@@ -19,6 +16,9 @@ from dynamo.llm import (
 )
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 from dynamo.runtime.logging import configure_dynamo_logging
+from vllm.distributed.kv_events import ZmqEventPublisher
+from vllm.usage.usage_lib import UsageContext
+from vllm.v1.engine.async_llm import AsyncLLM
 
 from .args import Config, configure_ports_with_etcd, overwrite_args, parse_args
 from .handlers import DecodeWorkerHandler, PrefillWorkerHandler
@@ -92,7 +92,7 @@ def setup_vllm_engine(config, stat_logger=None):
     enable_lmcache = os.getenv("ENABLE_LMCACHE", "0").lower() in ("1", "true", "yes")
 
     if enable_lmcache:
-        setup_lmcache_environment()
+        # setup_lmcache_environment()
         logger.info("LMCache enabled for VllmWorker")
     else:
         logger.info("LMCache is disabled")
@@ -128,6 +128,31 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
     """
     Instantiate and serve
     """
+    # setup_lmcache_environment with hardcoded values if LMCache is enabled
+    enable_lmcache = os.getenv("ENABLE_LMCACHE", "0").lower() in ("1", "true", "yes")
+    # local_cpu: True
+    # max_local_cpu_size: 5
+    # max_local_disk_size: 0
+
+    # enable_nixl: True
+    # enable_xpyd: True
+    # nixl_role: "sender"
+    # nixl_proxy_host: "localhost"
+    # nixl_proxy_port: 7500
+    # nixl_buffer_size: 1073741824 # 1GB
+    # nixl_buffer_device: "cuda"
+    if enable_lmcache:
+        os.environ["LMCACHE_LOCAL_CPU"] = "True"
+        os.environ["LMCACHE_MAX_LOCAL_CPU_SIZE"] = "5"
+        os.environ["LMCACHE_MAX_LOCAL_DISK_SIZE"] = "0"
+        os.environ["LMCACHE_ENABLE_NIXL"] = "True"
+        os.environ["LMCACHE_ENABLE_XPYD"] = "True"
+        os.environ["LMCACHE_NIXL_ROLE"] = "sender"
+        os.environ["LMCACHE_NIXL_PROXY_HOST"] = "localhost"
+        os.environ["LMCACHE_NIXL_PROXY_PORT"] = "7500"
+        os.environ["LMCACHE_NIXL_BUFFER_SIZE"] = "1073741824"
+        os.environ["LMCACHE_NIXL_BUFFER_DEVICE"] = "cuda"
+
     component = runtime.namespace(config.namespace).component(config.component)
     await component.create_service()
 
@@ -156,6 +181,29 @@ async def init(runtime: DistributedRuntime, config: Config):
     """
     Instantiate and serve
     """
+    # setup_lmcache_environment with hardcoded values if LMCache is enabled
+    enable_lmcache = os.getenv("ENABLE_LMCACHE", "0").lower() in ("1", "true", "yes")
+    # local_cpu: False
+    # max_local_cpu_size: 0
+    # enable_nixl: True
+    # enable_xpyd: True
+    # nixl_role: "receiver"
+    # nixl_peer_host: "localhost"
+    # nixl_peer_init_port: 7300
+    # nixl_peer_alloc_port: 7400
+    # nixl_buffer_size: 2147483648 # 2GB
+    # nixl_buffer_device: "cuda"
+    if enable_lmcache:
+        os.environ["LMCACHE_LOCAL_CPU"] = "False"
+        os.environ["LMCACHE_MAX_LOCAL_CPU_SIZE"] = "0"
+        os.environ["LMCACHE_ENABLE_NIXL"] = "True"
+        os.environ["LMCACHE_ENABLE_XPYD"] = "True"
+        os.environ["LMCACHE_NIXL_ROLE"] = "receiver"
+        os.environ["LMCACHE_NIXL_PEER_HOST"] = "localhost"
+        os.environ["LMCACHE_NIXL_PEER_INIT_PORT"] = "7300"
+        os.environ["LMCACHE_NIXL_PEER_ALLOC_PORT"] = "7400"
+        os.environ["LMCACHE_NIXL_BUFFER_SIZE"] = "2147483648"
+        os.environ["LMCACHE_NIXL_BUFFER_DEVICE"] = "cuda"
 
     component = runtime.namespace(config.namespace).component(config.component)
     await component.create_service()

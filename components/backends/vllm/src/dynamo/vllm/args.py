@@ -215,25 +215,39 @@ def overwrite_args(config):
     # Set kv_transfer_config based on LMCache setting
     if enable_lmcache:
         if config.is_prefill_worker:
-            # Prefill worker use LMCache with disaggregated serving (MultiConnector) for disaggregated serving
             kv_transfer_config = KVTransferConfig(
-                kv_connector="MultiConnector",
-                kv_role="kv_both",
+                kv_connector="LMCacheConnectorV1",
+                kv_role="kv_producer",
                 kv_connector_extra_config={
-                    "connectors": [
-                        {"kv_connector": "LMCacheConnectorV1", "kv_role": "kv_both"},
-                        {
-                            "kv_connector": "NixlConnector",
-                            "kv_role": "kv_both",
-                        },
-                    ]
+                    "discard_partial_chunks": False,
+                    "lmcache_rpc_port": "producer1",
                 },
             )
-            logger.info("Using LMCache with MultiConnector serving")
+        #     # Prefill worker use LMCache with disaggregated serving (MultiConnector) for disaggregated serving
+        #     kv_transfer_config = KVTransferConfig(
+        #         kv_connector="MultiConnector",
+        #         kv_role="kv_both",
+        #         kv_connector_extra_config={
+        #             "connectors": [
+        #                 {"kv_connector": "LMCacheConnectorV1", "kv_role": "kv_both"},
+        #                 {
+        #                     "kv_connector": "NixlConnector",
+        #                     "kv_role": "kv_both",
+        #                 },
+        #             ]
+        #         },
+        #     )
+        #     logger.info("Using LMCache with MultiConnector serving")
         else:
             # If enable lmcache, single node in default uses single connector serving
             kv_transfer_config = KVTransferConfig(
-                kv_connector="LMCacheConnectorV1", kv_role="kv_both"
+                kv_connector="LMCacheConnectorV1",
+                kv_role="kv_consumer",
+                kv_connector_extra_config={
+                    "discard_partial_chunks": False,
+                    "lmcache_rpc_port": "consumer1",
+                    "skip_last_n_tokens": 1,
+                },
             )
             logger.info("Using LMCache with LMCacheConnector serving")
 
