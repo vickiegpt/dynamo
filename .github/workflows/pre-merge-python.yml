@@ -61,9 +61,8 @@ jobs:
         id: get-image-size
         run: |
           echo "Fetching Docker image size for tag: ${{ env.IMAGE_TAG }}"
-          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep "${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.framework }}" > image_size.txt
-          cat image_size.txt
-          IMAGE_SIZE=$(awk '{print $3}' image_size.txt)
+          IMAGE_SIZE=$(docker images --format "{{.Size}}" ${{ env.IMAGE_TAG }})
+          echo "Docker Image Size: $IMAGE_SIZE"
           echo "::set-output name=image_size::$IMAGE_SIZE"
       - name: Display Docker Image Size
         run: |
