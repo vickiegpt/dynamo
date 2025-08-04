@@ -117,6 +117,8 @@ export MODEL_PATH="meta-llama/Llama-4-Maverick-17B-128E-Instruct"
 # By default this is inferred from MODEL_PATH, but when using locally downloaded
 # model weights, it can be nice to have explicit control over the name.
 export SERVED_MODEL_NAME="meta-llama/Llama-4-Maverick-17B-128E-Instruct"
+
+export MODALITY=${MODALITY:-"multimodal"}
 ```
 
 ## Disaggregated Mode
