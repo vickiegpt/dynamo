@@ -137,6 +137,25 @@ pub enum PrefillEventData {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ActiveSequenceEvent {
+    pub request_id: String,
+    pub worker_id: i64,
+    pub data: ActiveSequenceEventData,
+    pub router_id: Uuid,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum ActiveSequenceEventData {
+    AddRequest {
+        token_sequence: Vec<SequenceHash>,
+        isl: usize,
+        overlap: u32,
+    },
+    Free,
+    MarkPrefillCompleted,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ActiveBlockEvent {
     pub request_id: String,
     pub data: ActiveBlockEventData,

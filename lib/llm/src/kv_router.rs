@@ -48,11 +48,18 @@ use dynamo_runtime::traits::events::EventSubscriber;
 
 // [gluo TODO] shouldn't need to be public
 // this should be discovered from the component
+
+// for metric scraping (pull-based)
+pub const KV_METRICS_ENDPOINT: &str = "load_metrics";
+
+// for metric publishing (push-based)
 pub const KV_EVENT_SUBJECT: &str = "kv_events";
 pub const KV_HIT_RATE_SUBJECT: &str = "kv-hit-rate";
-pub const KV_METRICS_ENDPOINT: &str = "load_metrics";
 pub const KV_METRICS_SUBJECT: &str = "kv_metrics";
+
+// for inter-router comms
 pub const PREFILL_SUBJECT: &str = "prefill_events";
+pub const ACTIVE_SEQUENCES_SUBJECT: &str = "active_sequences_events";
 
 /// A trait that users can implement to define custom selection logic
 pub trait WorkerSelector {
