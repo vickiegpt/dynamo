@@ -148,9 +148,9 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
         os.environ["LMCACHE_ENABLE_NIXL"] = "True"
         os.environ["LMCACHE_ENABLE_XPYD"] = "True"
         os.environ["LMCACHE_NIXL_ROLE"] = "sender"
-        os.environ["LMCACHE_NIXL_PROXY_HOST"] = "localhost"
+        os.environ["LMCACHE_NIXL_PROXY_HOST"] = "127.0.1.1"
         os.environ["LMCACHE_NIXL_PROXY_PORT"] = "7500"
-        os.environ["LMCACHE_NIXL_BUFFER_SIZE"] = "293601280"
+        os.environ["LMCACHE_NIXL_BUFFER_SIZE"] = "1027604480"
         os.environ["LMCACHE_NIXL_BUFFER_DEVICE"] = "cuda"
 
     component = runtime.namespace(config.namespace).component(config.component)
@@ -199,10 +199,10 @@ async def init(runtime: DistributedRuntime, config: Config):
         os.environ["LMCACHE_ENABLE_NIXL"] = "True"
         os.environ["LMCACHE_ENABLE_XPYD"] = "True"
         os.environ["LMCACHE_NIXL_ROLE"] = "receiver"
-        os.environ["LMCACHE_NIXL_PEER_HOST"] = "localhost"
+        os.environ["LMCACHE_NIXL_PEER_HOST"] = "127.0.1.1"
         os.environ["LMCACHE_NIXL_PEER_INIT_PORT"] = "7300"
         os.environ["LMCACHE_NIXL_PEER_ALLOC_PORT"] = "7400"
-        os.environ["LMCACHE_NIXL_BUFFER_SIZE"] = "293601280"
+        os.environ["LMCACHE_NIXL_BUFFER_SIZE"] = "2055208960"
         os.environ["LMCACHE_NIXL_BUFFER_DEVICE"] = "cuda"
 
     component = runtime.namespace(config.namespace).component(config.component)
