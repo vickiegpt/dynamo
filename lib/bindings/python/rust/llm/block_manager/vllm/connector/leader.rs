@@ -160,14 +160,11 @@ impl KvConnectorLeader {
         let shared_slot = self.slot_manager.get_slot(&request_id).map_err(to_pyerr)?;
         let mut slot = shared_slot.lock().map_err(to_pyerr)?;
 
-        if slot.has_matched_external_tokens() {
-            tracing::debug!("detected multiple calls to update_state_after_alloc; skipping lookup");
-            return Ok(());
-        }
-
         // the second call will show num_external_tokens == 0
         // this call is just letting us know the other blocks that are being used for the remainder of the prefill
         if num_external_tokens > 0 {
+            slot.append_mutable_device_blocks(&block_ids)?;
+
             tracing::debug!(
                 request_id = request_id,
                 "triggering onboarding for {} external tokens",
