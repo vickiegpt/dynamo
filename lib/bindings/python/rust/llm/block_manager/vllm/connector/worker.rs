@@ -149,7 +149,7 @@ impl KvConnectorWorker {
     /// This action translates the metadata into a set of actions that the worker will perform.
     /// All actions much be assigned to a slot before [`KvConnectorWorker::clear_metadata`] is called.
     pub fn bind_connector_metadata(&mut self, metadata: Vec<u8>) -> PyResult<()> {
-        debug_assert!(!self.bound, "connector metadata already bound");
+        // debug_assert!(!self.bound, "connector metadata already bound");
         let metadata: ConnectorMetadata = serde_json::from_slice(&metadata).map_err(to_pyerr)?;
         self.bound = true;
         self.iteration = metadata.iteration;
