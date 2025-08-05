@@ -343,8 +343,27 @@ Response :
 
 ### Disaggregated
 
-Here are quick steps to launch Llama-4 Maverick BF16 in disaggregated mode.
-To enable disagg with Llama-4-Maverick-17B-128E-Instruct you need to deploy in multinode mode follow steps [here](multinode/multinode-multimodal-example.md)
+Here are quick steps to launch in disaggregated mode.
+
+The following is an example of launching a model in disaggregated mode. While this example uses `Qwen/Qwen2-VL-7B-Instruct`, you can adapt it for other models by modifying the environment variables for the model path and engine configurations.
+```bash
+cd $DYNAMO_HOME/components/backends/trtllm
+
+export MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen2-VL-7B-Instruct"}
+export SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-"Qwen/Qwen2-VL-7B-Instruct"}
+export DISAGGREGATION_STRATEGY=${DISAGGREGATION_STRATEGY:-"decode_first"}
+export PREFILL_ENGINE_ARGS=${PREFILL_ENGINE_ARGS:-"engine_configs/multimodal/prefill.yaml"}
+export DECODE_ENGINE_ARGS=${DECODE_ENGINE_ARGS:-"engine_configs/multimodal/decode.yaml"}
+export MODALITY=${MODALITY:-"multimodal"}
+
+./launch/disagg.sh
+```
+
+For a large model like `meta-llama/Llama-4-Maverick-17B-128E-Instruct`, a multi-node setup is required for disaggregated serving, while aggregated serving can run on a single node. This is because the model with a disaggregated configuration is too large to fit on a single node's GPUs. For instance, running this model in disaggregated mode requires a setup of 2 nodes with 8xH200 GPUs or 4 nodes with 4xGB200 GPUs.
+
+In general, disaggregated serving can run on a single node, provided the model fits on the GPU. The multi-node requirement in this example is specific to the size and configuration of the `meta-llama/Llama-4-Maverick-17B-128E-Instruct` model.
+
+To deploy `Llama-4-Maverick-17B-128E-Instruct` in disaggregated mode, you will need to follow the multi-node setup instructions, which can be found [here](multinode/multinode-multimodal-example.md).
 
 ### Using Pre-computed Embeddings (Experimental)
 

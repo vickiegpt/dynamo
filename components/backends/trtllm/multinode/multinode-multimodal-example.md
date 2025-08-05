@@ -15,69 +15,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Example: Multi-node TRTLLM Workers with Dynamo on Slurm
+# Example: Multi-node TRTLLM Workers with Dynamo on Slurm for multimodal models
 
-To run a single Dynamo+TRTLLM Worker that spans multiple nodes (ex: TP8),
-the set of nodes need to be launched together in the same MPI world, such as
-via `mpirun` or `srun`. This is true regardless of whether the worker is
-aggregated, prefill-only, or decode-only.
+This guide demonstrates how to deploy large multimodal models that require a multi-node setup. It builds on the general multi-node deployment process described in the main [multinode-examples.md](./multinode-examples.md) guide.
 
-In this document we will demonstrate two examples launching multinode workers
-on a slurm cluster with `srun`:
-1. Deploying a disaggregated `meta-llama/Llama-4-Maverick-17B-128E-Instruct` model with a multi-node
-   TP8 (2 nodes) and a multi-node TP8/EP16 decode
-   worker (2 nodes) across a total of 4 GB200 nodes.
+Before you begin, ensure you have completed the initial environment configuration by following the **Setup** section in that guide.
 
-NOTE: Some of the scripts used in this example like `start_frontend_services.sh` and
-`start_trtllm_worker.sh` should be translatable to other environments like Kubernetes, or
-using `mpirun` directly, with relative ease.
-
-## Setup
-
-For simplicity of the example, we will make some assumptions about your slurm cluster:
-1. First, we assume you have access to a slurm cluster with multiple GPU nodes
-   available. For functional testing, most setups should be fine. For performance
-   testing, you should aim to allocate groups of nodes that are performantly
-   inter-connected, such as those in an NVL72 setup.
-2. Second, we assume this slurm cluster has the [Pyxis](https://github.com/NVIDIA/pyxis)
-   SPANK plugin setup. In particular, the `srun_aggregated.sh` script in this
-   example will use `srun` arguments like `--container-image`,
-   `--container-mounts`, and `--container-env` that are added to `srun` by Pyxis.
-   If your cluster supports similar container based plugins, you may be able to
-   modify the script to use that instead.
-3. Third, we assume you have already built a recent Dynamo+TRTLLM container image as
-   described [here](https://github.com/ai-dynamo/dynamo/tree/main/components/backends/trtllm#build-docker).
-   This is the image that can be set to the `IMAGE` environment variable in later steps.
-4. Fourth, we assume you pre-allocate a group of nodes using `salloc`. We
-   will allocate 8 nodes below as a reference command to have enough capacity
-   to run both examples. If you plan to only run the aggregated example, you
-   will only need 4 nodes. If you customize the configurations to require a
-   different number of nodes, you can adjust the number of allocated nodes
-   accordingly. Pre-allocating nodes is technically not a requirement,
-   but it makes iterations of testing/experimenting easier.
-
-   Make sure to set your `PARTITION` and `ACCOUNT` according to your slurm cluster setup:
-    ```bash
-    # Set partition manually based on your slurm cluster's partition names
-    PARTITION=""
-    # Set account manually if this command doesn't work on your cluster
-    ACCOUNT="$(sacctmgr -nP show assoc where user=$(whoami) format=account)"
-    salloc \
-      --partition="${PARTITION}" \
-      --account="${ACCOUNT}" \
-      --job-name="${ACCOUNT}-dynamo.trtllm" \
-      -t 05:00:00 \
-      --nodes 8
-    ```
-5. Lastly, we will assume you are inside an interactive shell on one of your allocated
-   nodes, which may be the default behavior after executing the `salloc` command above
-   depending on the cluster setup. If not, then you should SSH into one of the allocated nodes.
+The following sections provide specific instructions for deploying `meta-llama/Llama-4-Maverick-17B-128E-Instruct`, including environment variable setup and launch commands. These steps can be adapted for other large multimodal models.
 
 ### Environment Variable Setup
-
-This example aims to automate as much of the environment setup as possible,
-but all slurm clusters and environments are different, and you may need to
-dive into the scripts to make modifications based on your specific environment.
 
 Assuming you have already allocated your nodes via `salloc`, and are
 inside an interactive shell on one of the allocated nodes, set the
