@@ -96,11 +96,18 @@ impl KvConnectorLeader {
             "request_num_tokens: {request_num_tokens}; num_computed_tokens: {num_computed_tokens}"
         );
 
-        // the number of device matched tokens should be less than or equal to the number of tokens in the request
-        debug_assert!(num_computed_tokens % self.block_size == 0);
-
         let shared_slot = self.slot_manager.get_slot(&request_id).map_err(to_pyerr)?;
         let mut slot = shared_slot.lock().map_err(to_pyerr)?;
+
+        if slot.has_matched_external_tokens() {
+            tracing::debug!(
+                "detected multiple calls to get_num_new_matched_tokens; skipping lookup"
+            );
+            return Ok((0, false));
+        }
+
+        // the number of device matched tokens should be less than or equal to the number of tokens in the request
+        debug_assert!(num_computed_tokens % self.block_size == 0);
 
         // vllm is telling us that the tokens have been computed, since we do not have insight into the device pool
         // we accept this and advance the computed position
@@ -153,7 +160,10 @@ impl KvConnectorLeader {
         let shared_slot = self.slot_manager.get_slot(&request_id).map_err(to_pyerr)?;
         let mut slot = shared_slot.lock().map_err(to_pyerr)?;
 
-        slot.append_mutable_device_blocks(&block_ids)?;
+        if slot.has_matched_external_tokens() {
+            tracing::debug!("detected multiple calls to update_state_after_alloc; skipping lookup");
+            return Ok(());
+        }
 
         // the second call will show num_external_tokens == 0
         // this call is just letting us know the other blocks that are being used for the remainder of the prefill
@@ -170,7 +180,7 @@ impl KvConnectorLeader {
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip_all, fields(iteration = self.iteration_counter + 1))]
     pub fn build_connector_metadata(
         &mut self,
         scheduler_output: SchedulerOutput,
@@ -183,8 +193,8 @@ impl KvConnectorLeader {
         self.iteration_counter += 1;
         let iteration = self.iteration_counter;
 
-        tracing::debug!("Building connector metadata; iteration {iteration}");
-        tracing::debug!("scheduler_output: {scheduler_output:#?}");
+        tracing::debug!("Building connector metadata");
+        tracing::debug!("SchedulerOutput: {scheduler_output:#?}");
 
         let mut inflight_requests = self.inflight_requests.clone();
         let mut md = ConnectorMetadata::new(iteration);
@@ -285,8 +295,9 @@ impl KvConnectorLeader {
             }
         }
 
-        tracing::debug!("scheduler_output: {scheduler_output:#?}");
-        serde_json::to_vec(&md).map_err(to_pyerr)
+        let metadata = serde_json::to_vec(&md).map_err(to_pyerr)?;
+        tracing::debug!("metadata: {metadata:#?}");
+        Ok(metadata)
     }
 
     fn request_finished(&mut self, request_id: String, block_ids: Vec<BlockId>) -> PyResult<bool> {

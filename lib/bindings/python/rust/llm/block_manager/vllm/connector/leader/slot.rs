@@ -77,6 +77,13 @@ pub enum SlotState {
 pub trait Slot: std::fmt::Debug {
     fn request_id(&self) -> &str;
 
+    /// It appears vLLM can call `get_num_new_matched_tokens` multiple times for the same request, even without an eviction
+    /// event. Generally, we only need to rematch to external tokens one time at the beginning of the request, or after an
+    /// eviction event.
+    ///
+    /// Call this method to determine if the slot holds a match state or if [`Slot::acquire_all_local_matches`] should be called.
+    fn has_matched_external_tokens(&self) -> bool;
+
     fn state(&self) -> SlotState;
 
     fn sequence(&self) -> &TokenBlockSequence;
@@ -277,6 +284,9 @@ pub struct VllmConnectorSlot {
     /// The number of blocks that have been evaluated by the policy.
     /// Each policy evaluation will skip the already evaluated blocks.
     evaluated_blocks: usize,
+
+    /// Whether the slot has already matched to external tokens.
+    has_matched_external_tokens: bool,
 }
 
 impl VllmConnectorSlot {
@@ -310,6 +320,7 @@ impl VllmConnectorSlot {
             tokens_cached_from_device: 0,
             tokens_cached_from_host: 0,
             tokens_cached_from_disk: 0,
+            has_matched_external_tokens: false,
         }
     }
 }
@@ -348,6 +359,7 @@ impl Slot for VllmConnectorSlot {
         tracing::debug!("recording {} cached disk tokens", num_tokens);
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(request_id = self.request_id.as_str()))]
     fn apply_scheduler_output(
         &mut self,
         tokens: &[u32],
@@ -355,10 +367,11 @@ impl Slot for VllmConnectorSlot {
         num_computed_tokens: usize,
         num_scheduled_tokens: usize,
     ) -> Result<(), SlotError> {
-        // debug_assert!(num_computed_tokens == self.computed_tokens());
-
         if !tokens.is_empty() {
-            tracing::debug!("appending {} newly decodedtokens to sequence", tokens.len());
+            tracing::debug!(
+                "appending {} newly decoded tokens to sequence",
+                tokens.len()
+            );
             self.state = SlotState::Decoding;
             self.sequence.extend(tokens.into()).unwrap();
         } else {
@@ -442,6 +455,8 @@ impl Slot for VllmConnectorSlot {
 
             self.offload_blocks(&offload_block_ids, &offload_token_blocks)
                 .expect("failed to offload blocks");
+
+            self.evaluated_blocks += num_candidate_blocks;
         }
 
         // done applying policy
@@ -492,8 +507,15 @@ impl Slot for VllmConnectorSlot {
         self.pending_operations.take()
     }
 
+    fn has_matched_external_tokens(&self) -> bool {
+        self.has_matched_external_tokens
+    }
+
     #[tracing::instrument(level = "debug", skip_all)]
     fn acquire_all_local_matches(&mut self) -> Result<(), SlotError> {
+        assert!(!self.has_matched_external_tokens);
+        self.has_matched_external_tokens = true;
+
         if !matches!(self.state(), SlotState::Initialized) {
             return Err(SlotError::InvalidOperation(format!(
                 "slot must be in the NotScheduled state to acquire local matches; got {:?}",
