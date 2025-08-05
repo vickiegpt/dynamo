@@ -713,6 +713,7 @@ impl ExternallyManagedDeviceSlot for VllmConnectorSlot {
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(request_id = self.request_id))]
     fn append_mutable_device_blocks(&mut self, block_ids: &[BlockId]) -> Result<(), SlotError> {
         let count = block_ids.len();
         self.device_blocks.extend(block_ids);
