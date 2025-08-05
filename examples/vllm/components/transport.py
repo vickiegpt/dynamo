@@ -37,10 +37,17 @@ class ComponentTransport:
             "frontend": f"http://localhost:{config.frontend_port}",
             "router": "http://localhost:8004",
             "scheduler": f"http://localhost:{config.scheduler_port}",
-            "worker": f"http://localhost:{config.get_worker_port(0)}",
+            "worker": f"http://localhost:{config.get_worker_port(0)}",  # Default to worker 0
             "kv_cache": f"http://localhost:{config.kv_cache_port}",
             "sampler": f"http://localhost:{config.sampler_port}",
         }
+
+        # For multi-worker setups, build worker URLs dynamically
+        for worker_id in range(config.num_workers):
+            worker_key = f"worker_{worker_id}" if worker_id > 0 else "worker"
+            self.service_urls[
+                worker_key
+            ] = f"http://localhost:{config.get_worker_port(worker_id)}"
 
     async def send_message(
         self, target: str, endpoint: str, payload: Dict[str, Any]

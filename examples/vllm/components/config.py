@@ -15,7 +15,7 @@ class VLLMConfig:
     # Model configuration
     model: str = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
     tensor_parallel_size: int = 1
-    max_model_len: Optional[int] = None
+    max_model_len: Optional[int] = 8192
     gpu_memory_utilization: float = 0.9
 
     # Component ports
@@ -26,7 +26,7 @@ class VLLMConfig:
     sampler_port: int = 8003
 
     # System
-    num_workers: int = 2
+    num_workers: int = 1
     log_level: str = "INFO"
 
     # vLLM V1 specific

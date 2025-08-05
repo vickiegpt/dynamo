@@ -68,34 +68,28 @@ class KVCacheManagerComponent:
     def _initialize_block_manager(self, config: VLLMConfig):
         """Initialize the vLLM block manager."""
         try:
-            # Create cache config
             cache_config = CacheConfig(
-                block_size=16,  # Standard block size
-                gpu_memory_utilization=config.gpu_memory_utilization,
-                swap_space=0,
-                cache_dtype="auto",
-                num_gpu_blocks=1000,  # Demo value
-                num_cpu_blocks=1000,  # Demo value
-                sliding_window=None,
+                block_size=16,
                 enable_prefix_caching=config.enable_prefix_caching,
-                cpu_offload_gb=0,
             )
 
-            # Initialize block manager
+            # Use fallback values when vLLM sets block counts to None
+            num_gpu_blocks = getattr(cache_config, "num_gpu_blocks", None) or 1000
+            num_cpu_blocks = getattr(cache_config, "num_cpu_blocks", None) or 1000
+
             self.block_manager = SelfAttnBlockSpaceManager(
                 block_size=cache_config.block_size,
-                num_gpu_blocks=cache_config.num_gpu_blocks,
-                num_cpu_blocks=cache_config.num_cpu_blocks,
+                num_gpu_blocks=num_gpu_blocks,
+                num_cpu_blocks=num_cpu_blocks,
                 watermark=0.01,
-                sliding_window=cache_config.sliding_window,
+                sliding_window=getattr(cache_config, "sliding_window", None),
                 enable_caching=cache_config.enable_prefix_caching,
             )
 
             print("[KV Cache] Block manager initialized successfully")
-            print(f"[KV Cache] GPU blocks: {cache_config.num_gpu_blocks}")
-            print(f"[KV Cache] CPU blocks: {cache_config.num_cpu_blocks}")
-            print(f"[KV Cache] Block size: {cache_config.block_size}")
-            print(f"[KV Cache] Prefix caching: {cache_config.enable_prefix_caching}")
+            print(
+                f"[KV Cache] GPU blocks: {num_gpu_blocks}, CPU blocks: {num_cpu_blocks}"
+            )
 
         except Exception as e:
             print(f"[KV Cache] Error initializing block manager: {e}")

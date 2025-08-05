@@ -119,7 +119,7 @@ class WorkerComponent:
                 {
                     "temperature": temperature,
                     "max_tokens": max_tokens,
-                    "worker_id": self.worker_id,
+                    "worker_id": str(self.worker_id),
                 }
             )
 
