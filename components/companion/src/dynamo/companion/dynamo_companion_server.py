@@ -19,7 +19,6 @@ from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 from dynamo.runtime.logging import configure_dynamo_logging
 
 from .companion_messages import (
-    ErrorMessage,
     GetModelParametersRequest,
     ModelParametersResponse,
     StatusUpdateMessage,
@@ -37,8 +36,14 @@ class DynamoModelServer:
         """Initialize model server for a specific GPU.
         
         Args:
-            device_id: Physical GPU device ID to use
+            device_id: Physical GPU device ID to use. This must be the actual
+                      physical device ID on the system, not a logical ID from
+                      CUDA_VISIBLE_DEVICES mapping.
             namespace: Dynamo namespace for service discovery
+        
+        Note:
+            The server MUST run without CUDA_VISIBLE_DEVICES set to ensure
+            correct physical GPU mapping for CUDA IPC between server and client.
         """
         self.device_id = device_id
         self.namespace = namespace
@@ -48,6 +53,7 @@ class DynamoModelServer:
         self.model_parameters: Optional[dict] = None
         self.model_manager: Optional[ModelInstanceManager] = None
         self.loaded_vllm_config: Optional[VllmConfig] = None
+        self.loaded_config_hash: Optional[str] = None
         self.loaded_local_rank: Optional[int] = None
         self.loaded_global_rank: Optional[int] = None
         self.loaded_world_size: Optional[int] = None
@@ -75,7 +81,7 @@ class DynamoModelServer:
             "Dynamo model server initializing:\n"
             "- Device: cuda:%d\n"
             "- Namespace: %s\n"
-            "- Component: model_server_gpu_%d\n"
+            "- Component: model_server_device_%d\n"
             "- Ready to load models on demand",
             self.device_id,
             self.namespace,
@@ -85,6 +91,7 @@ class DynamoModelServer:
     async def _load_model_async(
         self,
         vllm_config: VllmConfig,
+        config_hash: str,
         local_rank: int,
         global_rank: int,
         world_size: int,
@@ -96,11 +103,13 @@ class DynamoModelServer:
             
             logger.info(
                 "Loading model %s with parallel config: TP=%d, PP=%d, DP=%d, "
+                "Expert parallel enabled: %s, "
                 "local_rank=%d, global_rank=%d, world_size=%d",
                 vllm_config.model_config.model,
                 vllm_config.parallel_config.tensor_parallel_size,
                 vllm_config.parallel_config.pipeline_parallel_size,
                 vllm_config.parallel_config.data_parallel_size,
+                vllm_config.parallel_config.enable_expert_parallel,
                 local_rank,
                 global_rank,
                 world_size,
@@ -128,6 +137,7 @@ class DynamoModelServer:
                 self.loaded_model_name = vllm_config.model_config.model
                 self.model_parameters = model_parameters
                 self.loaded_vllm_config = vllm_config
+                self.loaded_config_hash = config_hash
                 self.loaded_local_rank = local_rank
                 self.loaded_global_rank = global_rank
                 self.loaded_world_size = world_size
@@ -155,12 +165,16 @@ class DynamoModelServer:
     @dynamo_endpoint(GetModelParametersRequest, ModelParametersResponse)
     async def get_model_parameters(self, request: GetModelParametersRequest):
         """Handle model parameter requests."""
+        # Extract VllmConfig from request (already unpickled by get_vllm_config)
+        vllm_config = request.get_vllm_config()
+        model_name = vllm_config.model_config.model
+        
         logger.info(
             "Received model parameters request:\n"
             "- Model: %s\n"
             "- Client device: %d\n"
             "- Local rank: %d, Global rank: %d, World size: %d",
-            request.model_name,
+            model_name,
             request.device_id,
             request.local_rank,
             request.global_rank,
@@ -175,7 +189,7 @@ class DynamoModelServer:
                 f"CUDA IPC requires both processes to use the same physical GPU."
             )
             logger.error(error_msg)
-            yield ModelParametersResponse(
+            yield ModelParametersResponse.from_model_parameters(
                 model_parameters=None,
                 model_name="",
                 device_id=self.device_id,
@@ -183,35 +197,24 @@ class DynamoModelServer:
                 global_rank=request.global_rank,
                 world_size=request.world_size,
                 error=error_msg,
-            )
+            ).model_dump()
             return
         
         with self.load_lock:
             loaded_model = self.loaded_model_name
             model_params = self.model_parameters
-            loaded_config = self.loaded_vllm_config
             
         # Case 1: No model loaded yet - load it!
         if loaded_model is None:
             logger.info(
                 "No model loaded yet. Loading model %s as requested by client...",
-                request.model_name
+                model_name
             )
-            
-            # Create a minimal VllmConfig from the request
-            from vllm.engine.arg_utils import AsyncEngineArgs
             try:
-                engine_args = AsyncEngineArgs(
-                    model=request.model_name,
-                    tensor_parallel_size=request.tensor_parallel_size,
-                    pipeline_parallel_size=request.pipeline_parallel_size,
-                    # Let vLLM handle other defaults
-                )
-                vllm_config = engine_args.create_engine_config()
-                
                 # Load the model asynchronously
                 await self._load_model_async(
                     vllm_config,
+                    request.config_hash,
                     request.local_rank,
                     request.global_rank,
                     request.world_size,
@@ -223,8 +226,8 @@ class DynamoModelServer:
                     model_params = self.model_parameters
                     
             except Exception as e:
-                logger.error("Failed to load model %s: %s", request.model_name, str(e))
-                yield ModelParametersResponse(
+                logger.error("Failed to load model %s: %s", model_name, str(e))
+                yield ModelParametersResponse.from_model_parameters(
                     model_parameters=None,
                     model_name="",
                     device_id=self.device_id,
@@ -232,17 +235,17 @@ class DynamoModelServer:
                     global_rank=request.global_rank,
                     world_size=request.world_size,
                     error=f"Failed to load model: {str(e)}",
-                )
+                ).model_dump()
                 return
         
         # Case 2: Different model loaded
-        if loaded_model != request.model_name:
+        if loaded_model != model_name:
             error_msg = (
                 f"Model mismatch. Server has '{loaded_model}' loaded "
-                f"but client requested '{request.model_name}'. "
+                f"but client requested '{model_name}'. "
                 f"Server can only serve one model at a time."
             )
-            yield ModelParametersResponse(
+            yield ModelParametersResponse.from_model_parameters(
                 model_parameters=None,
                 model_name=loaded_model,
                 device_id=self.device_id,
@@ -250,26 +253,18 @@ class DynamoModelServer:
                 global_rank=request.global_rank,
                 world_size=request.world_size,
                 error=error_msg,
-            )
+            ).model_dump()
             return
         
         # Case 3: Same model - verify config matches
-        config_matches = (
-            loaded_config is not None
-            and loaded_config.parallel_config.tensor_parallel_size == request.tensor_parallel_size
-            and loaded_config.parallel_config.pipeline_parallel_size == request.pipeline_parallel_size
-            and loaded_config.parallel_config.data_parallel_size == request.data_parallel_size
-            and self.loaded_local_rank == request.local_rank
-            and self.loaded_global_rank == request.global_rank
-            and self.loaded_world_size == request.world_size
-        )
+        config_matches = self.loaded_config_hash == request.config_hash
         
         if not config_matches:
             error_msg = (
                 f"Parallel configuration mismatch for model '{loaded_model}'. "
                 f"Server loaded with different configuration than requested."
             )
-            yield ModelParametersResponse(
+            yield ModelParametersResponse.from_model_parameters(
                 model_parameters=None,
                 model_name=loaded_model,
                 device_id=self.device_id,
@@ -277,7 +272,34 @@ class DynamoModelServer:
                 global_rank=request.global_rank,
                 world_size=request.world_size,
                 error=error_msg,
+            ).model_dump()
+            return
+        
+        # Case 4: Verify rank information matches
+        rank_matches = (
+            self.loaded_local_rank == request.local_rank and
+            self.loaded_global_rank == request.global_rank and
+            self.loaded_world_size == request.world_size
+        )
+        
+        if not rank_matches:
+            error_msg = (
+                f"Rank mismatch for model '{loaded_model}'. "
+                f"Server loaded with ranks (local={self.loaded_local_rank}, "
+                f"global={self.loaded_global_rank}, world_size={self.loaded_world_size}) "
+                f"but client has ranks (local={request.local_rank}, "
+                f"global={request.global_rank}, world_size={request.world_size}). "
+                f"Server can only serve one rank configuration at a time."
             )
+            yield ModelParametersResponse.from_model_parameters(
+                model_parameters=None,
+                model_name=loaded_model,
+                device_id=self.device_id,
+                local_rank=request.local_rank,
+                global_rank=request.global_rank,
+                world_size=request.world_size,
+                error=error_msg,
+            ).model_dump()
             return
         
         # Everything matches - send parameters
@@ -289,32 +311,9 @@ class DynamoModelServer:
             len(model_params) if model_params else 0,
         )
         
-        # Convert CUDATensorRebuildInfo objects to JSON-serializable dicts
-        model_params_dict = {}
-        if model_params:
-            import base64
-            for name, rebuild_info in model_params.items():
-                # Convert to JSON-serializable format
-                model_params_dict[name] = {
-                    "tensor_type": str(rebuild_info.tensor_type),
-                    "tensor_size": list(rebuild_info.tensor_size),
-                    "tensor_stride": list(rebuild_info.tensor_stride),
-                    "tensor_offset": rebuild_info.tensor_offset,
-                    "storage_type": str(rebuild_info.storage_type),
-                    "tensor_dtype": str(rebuild_info.tensor_dtype),
-                    "device": rebuild_info.device,
-                    "ipc_handle": base64.b64encode(rebuild_info.ipc_handle).decode('utf-8'),
-                    "storage_size_bytes": rebuild_info.storage_size_bytes,
-                    "storage_offset_bytes": rebuild_info.storage_offset_bytes,
-                    "tensor_requires_grad": rebuild_info.tensor_requires_grad,
-                    "ref_counter_handle": base64.b64encode(rebuild_info.ref_counter_handle).decode('utf-8'),
-                    "ref_counter_offset": rebuild_info.ref_counter_offset,
-                    "event_handle": base64.b64encode(rebuild_info.event_handle).decode('utf-8'),
-                    "event_sync_required": rebuild_info.event_sync_required,
-                }
-        
-        response = ModelParametersResponse(
-            model_parameters=model_params_dict,
+        # Create response using the helper method that handles pickling
+        response = ModelParametersResponse.from_model_parameters(
+            model_parameters=model_params,
             model_name=loaded_model,
             device_id=self.device_id,
             local_rank=request.local_rank,
@@ -370,16 +369,6 @@ class DynamoModelServer:
             logger.error("Error in status_updates: %s", str(e), exc_info=True)
             raise
     
-    @dynamo_endpoint(dict, dict)  
-    async def test_stream(self, request: dict):
-        """Simple test stream to debug streaming."""
-        logger.info("Test stream called")
-        yield {"message": "test1"}
-        await asyncio.sleep(1)
-        yield {"message": "test2"}
-        await asyncio.sleep(1)
-        yield {"message": "test3"}
-
 
 @dynamo_worker(static=False)
 async def companion_server(runtime: DistributedRuntime):
@@ -401,11 +390,9 @@ async def companion_server(runtime: DistributedRuntime):
     # Create server instance
     server = DynamoModelServer(device_id=args.device, namespace=args.namespace)
     
-    # Build unique component name
-    # Use env ranks if available (defaults to 0)
-    local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", "0")))
-    global_rank = int(os.environ.get("RANK", "0"))
-    component_name = f"model_server_g{global_rank}_l{local_rank}"
+    # Build component name based on physical device ID
+    # The client will discover the server by device ID and then send rank information
+    component_name = f"model_server_device_{args.device}"
 
     component = runtime.namespace(args.namespace).component(component_name)
     await component.create_service()

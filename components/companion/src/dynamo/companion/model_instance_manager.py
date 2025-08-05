@@ -5,9 +5,9 @@ from vllm.config import LoadConfig, VllmConfig, set_current_vllm_config
 from vllm.distributed import parallel_state
 from vllm.logger import init_logger
 from vllm.model_executor.model_loader.default_loader import DefaultModelLoader
+from vllm.distributed.parallel_state import DRY_RUN_BACKEND
 
-
-from .messages import CUDATensorRebuildInfo
+from .companion_messages import CUDATensorRebuildInfo
 
 
 logger = init_logger(__name__)
@@ -16,9 +16,6 @@ logger = init_logger(__name__)
 def override_vllm_config(
     vllm_config: VllmConfig,
     device_id: int,
-    local_rank: int,
-    global_rank: int,
-    world_size: int,
 ) -> VllmConfig:
     # NOTE: If we deepcopy, there's a bunch of other stuff that gets copied that we don't want
     new_vllm_config = VllmConfig(
@@ -28,13 +25,6 @@ def override_vllm_config(
         device_config=vllm_config.device_config,
         load_config=vllm_config.load_config,
     )
-
-    # Override parallel config for dry run
-    new_vllm_config.parallel_config.dry_run = True
-    new_vllm_config.parallel_config.dry_local_rank = local_rank
-    new_vllm_config.parallel_config.dry_global_rank = global_rank
-    new_vllm_config.parallel_config.dry_world_size = world_size
-
     # Override load config for dry run on SPECIFIED device
     # NOTE: we use device_id and not local_rank because we assume CUDA_VISIBLE_DEVICES is not set
     # local_rank would come from the client view which may not be correct
@@ -55,12 +45,13 @@ class ModelInstanceManager:
         global_rank: int,
         world_size: int,
     ):
+        self.local_rank = local_rank
+        self.global_rank = global_rank
+        self.world_size = world_size
+
         self.vllm_config = override_vllm_config(
             vllm_config,
             device_id,
-            local_rank,
-            global_rank,
-            world_size,
         )
 
         torch.cuda.set_device(self.vllm_config.load_config.device)
@@ -74,20 +65,16 @@ class ModelInstanceManager:
     def _initialize_dry_distributed_environment(self):
         """Initialize distributed environment in dry mode for correct weight loading."""
         # Set environment variables for torch.distributed if not set
-        import os
-        if "MASTER_ADDR" not in os.environ:
-            os.environ["MASTER_ADDR"] = "localhost"
-        if "MASTER_PORT" not in os.environ:
-            os.environ["MASTER_PORT"] = "12355"
-        
+        logger.warning("Initializing dry distributed environment...")
         # Initialize distributed environment in dry mode
         parallel_state.init_distributed_environment(
-            world_size=self.vllm_config.parallel_config.dry_world_size,
-            rank=self.vllm_config.parallel_config.dry_global_rank,
+            world_size=self.world_size,
+            rank=self.global_rank,
             distributed_init_method="env://",
-            local_rank=self.vllm_config.parallel_config.dry_local_rank,
-            backend="nccl",
+            local_rank=self.local_rank,
+            backend=DRY_RUN_BACKEND,
         )
+        logger.warning("Dry distributed environment initialized!")
 
         # Initialize model parallel groups
         parallel_state.initialize_model_parallel(
@@ -98,9 +85,9 @@ class ModelInstanceManager:
         logger.info(
             "Initialized dry distributed environment: local rank=%d, global rank=%d, world_size=%d, "
             "TP=%d, PP=%d, DP=%d",
-            self.vllm_config.parallel_config.dry_local_rank,
-            self.vllm_config.parallel_config.dry_global_rank,
-            self.vllm_config.parallel_config.dry_world_size,
+            self.local_rank,
+            self.global_rank,
+            self.world_size,
             self.vllm_config.parallel_config.tensor_parallel_size,
             self.vllm_config.parallel_config.pipeline_parallel_size,
             self.vllm_config.parallel_config.data_parallel_size,

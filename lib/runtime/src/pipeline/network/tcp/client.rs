@@ -215,9 +215,10 @@ async fn handle_reader(
                            (Some(bytes), None) => {
                                 let msg = match serde_json::from_slice::<ControlMessage>(bytes) {
                                     Ok(msg) => msg,
-                                    Err(_) => {
-                                        // TODO(#171) - address fatal errors
-                                        panic!("fatal error - invalid control message detected");
+                                    Err(e) => {
+                                        // Handle invalid control message gracefully
+                                        tracing::warn!("Failed to parse control message: {:?}. Treating as disconnection.", e);
+                                        break;
                                     }
                                 };
 
@@ -229,20 +230,23 @@ async fn handle_reader(
                                         context.kill();
                                     }
                                     ControlMessage::Sentinel => {
-                                        // TODO(#171) - address fatal errors
-                                        panic!("received a sentinel message; this should never happen");
+                                        // Sentinel messages should not be sent to clients
+                                        tracing::warn!("Received unexpected sentinel message. Treating as protocol error.");
+                                        break;
                                     }
                                 }
                            }
                            _ => {
-                                panic!("received a non-control message; this should never happen");
+                                tracing::warn!("Received unexpected message format. Expected control message header only.");
+                                break;
                            }
                         }
                     }
-                    Some(Err(_)) => {
-                        // TODO(#171) - address fatal errors
-                        // in this case the binary representation of the message is invalid
-                        panic!("fatal error - failed to decode message from stream; invalid line protocol");
+                    Some(Err(e)) => {
+                        // Handle decode errors gracefully - likely due to client disconnection
+                        // or corrupted data during shutdown
+                        tracing::warn!("Failed to decode message from stream: {:?}. Treating as disconnection.", e);
+                        break;
                     }
                     None => {
                         tracing::debug!("tcp stream closed by server");

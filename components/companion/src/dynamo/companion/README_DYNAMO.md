@@ -48,6 +48,58 @@ The Dynamo companion system allows multiple processes to share GPU model weights
 - Typed message definitions for client-server communication
 - Includes request/response types for model parameters and status updates
 
+## Important: Device ID Handling
+
+### CUDA_VISIBLE_DEVICES and Physical Device IDs
+
+The companion system must carefully handle GPU device IDs due to how vLLM manages distributed workers:
+
+1. **Server Side**: 
+   - MUST run **without** `CUDA_VISIBLE_DEVICES` set
+   - Uses physical GPU device IDs directly
+   - Example: `device_id=2` means physical GPU 2 on the system
+
+2. **Client Side**:
+   - Runs within vLLM worker processes that have `CUDA_VISIBLE_DEVICES` set
+   - Sees logical device IDs (after CUDA_VISIBLE_DEVICES remapping)
+   - Translates logical IDs to physical IDs before communicating with server
+   - Example: If `CUDA_VISIBLE_DEVICES=2,3` and worker uses `cuda:0`, this maps to physical GPU 2
+
+3. **Why This Matters**:
+   - CUDA IPC requires both processes to reference the same physical GPU
+   - Mismatched device IDs will cause IPC failures
+   - The companion system handles this translation automatically
+
+### Rank Information
+
+The companion client requires rank information to be passed explicitly:
+
+1. **local_rank**: The rank of the worker within its node (0 to local_world_size-1)
+2. **global_rank**: The global rank across all workers (0 to world_size-1)
+3. **world_size**: The total number of workers (TP × PP × DP)
+
+In vLLM integration, these values should be obtained from the worker initialization:
+- For multiprocessing backend: Passed during `init_worker` call
+- For Ray backend: Available from the actor's initialization parameters
+
+This explicit passing of rank information ensures the companion system works correctly
+regardless of the environment setup and avoids dependency on environment variables.
+
+### Server Discovery and Rank Passing
+
+The companion system uses a two-step process:
+
+1. **Server Discovery by Device ID**: 
+   - Servers are named `model_server_device_<physical_device_id>`
+   - Clients discover servers using the physical GPU device ID
+   - This ensures clients connect to the server on the correct physical GPU
+
+2. **Rank Information Passing**:
+   - Clients send rank information (local_rank, global_rank, world_size) in their first request
+   - The server uses this information to initialize its distributed environment
+   - This determines which model weights to load for the specific rank
+   - Once loaded, the server only serves requests with matching rank information
+
 ## Usage
 
 ### Starting the Server
@@ -57,9 +109,9 @@ The Dynamo companion system allows multiple processes to share GPU model weights
 python -m dynamo.companion.dynamo_companion_server --device 0 --namespace companion
 
 # The server will:
-# 1. Register as component "model_server_gpu_0" in namespace "companion"
+# 1. Register as component "model_server_device_0" in namespace "companion"
 # 2. Create endpoints: "get_parameters" and "status"
-# 3. Wait for model loading requests
+# 3. Wait for model loading requests with rank information from clients
 ```
 
 ### Using the Client
@@ -76,7 +128,14 @@ vllm_config = engine_args.create_engine_config()
 # Create client (inside a dynamo_worker)
 @dynamo_worker(static=False)
 async def my_worker(runtime: DistributedRuntime):
-    client = await create_model_client(runtime, vllm_config, namespace="companion")
+    # In vLLM integration, these values come from the worker initialization
+    local_rank = 0   # Local rank within the node
+    global_rank = 0  # Global rank across all workers
+    world_size = 1   # Total number of workers
+    
+    client = await create_model_client(
+        runtime, vllm_config, local_rank, global_rank, world_size, namespace="companion"
+    )
     
     # Wait for model to be ready
     success, info = await client.wait_for_model_ready()

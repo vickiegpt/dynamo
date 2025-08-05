@@ -27,7 +27,7 @@ configure_dynamo_logging()
 logger = logging.getLogger(__name__)
 
 
-def start_companion_server(device_id: int, namespace: str = "companion", model: str = None):
+def start_companion_server(device_id: int, namespace: str = "companion"):
     """Start a companion server process in the background."""
     cmd = [
         sys.executable,
@@ -38,9 +38,6 @@ def start_companion_server(device_id: int, namespace: str = "companion", model: 
         "--namespace",
         namespace,
     ]
-    
-    if model:
-        cmd.extend(["--model", model])
     
     logger.info("Starting companion server: %s", " ".join(cmd))
     
@@ -133,7 +130,7 @@ async def test_client(runtime: DistributedRuntime):
         
         # Start server if requested
         if args.start_server:
-            server_process = start_companion_server(physical_device, args.namespace, args.model)
+            server_process = start_companion_server(physical_device, args.namespace)
             # Give server more time to initialize
             await asyncio.sleep(2)
         
@@ -146,7 +143,11 @@ async def test_client(runtime: DistributedRuntime):
         
         # Create client
         logger.info("Creating Dynamo model client...")
-        client = await create_model_client(runtime, vllm_config, args.namespace)
+        # For testing, use simple rank values
+        local_rank = 0
+        global_rank = 0
+        world_size = args.tensor_parallel_size  # Assuming single node
+        client = await create_model_client(runtime, vllm_config, local_rank, global_rank, world_size, args.namespace)
         
         # Wait for model to be ready
         logger.info("Waiting for model to be ready...")

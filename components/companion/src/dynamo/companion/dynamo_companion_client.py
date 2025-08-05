@@ -4,11 +4,10 @@
 """Dynamo-based companion client for CUDA IPC weight sharing."""
 
 import asyncio
-import copy
 import json
 import logging
 import os
-from typing import Dict, Optional
+from typing import Dict
 
 import torch
 import uvloop
@@ -19,7 +18,6 @@ from dynamo.runtime.logging import configure_dynamo_logging
 
 from .companion_messages import (
     GetModelParametersRequest,
-    ModelParametersResponse,
     StatusUpdateMessage,
 )
 from .gpu_utils import get_physical_device_index
@@ -35,6 +33,9 @@ class DynamoModelClient:
         self,
         runtime: DistributedRuntime,
         vllm_config: VllmConfig,
+        local_rank: int,
+        global_rank: int,
+        world_size: int,
         namespace: str = "companion",
     ):
         """Initialize client to connect to a model server.
@@ -42,6 +43,9 @@ class DynamoModelClient:
         Args:
             runtime: Dynamo distributed runtime instance
             vllm_config: VllmConfig with model and parallel configuration
+            local_rank: Local rank of this worker
+            global_rank: Global rank of this worker
+            world_size: Total number of workers
             namespace: Dynamo namespace for service discovery
         """
         self.runtime = runtime
@@ -49,17 +53,21 @@ class DynamoModelClient:
         self.namespace = namespace
         
         # Get device information
+        # Note: The client runs within a vLLM worker process that has CUDA_VISIBLE_DEVICES set.
+        # - logical_device: The device ID as seen by this process (after CUDA_VISIBLE_DEVICES mapping)
+        # - physical_device: The actual physical GPU device ID on the system
+        # We send the physical_device to the server since it runs without CUDA_VISIBLE_DEVICES
         self.logical_device = torch.cuda.current_device()
         self.physical_device = get_physical_device_index(self.logical_device)
         
-        # Build a unique component name based on model + rank identifiers.
-        # NOTE: we avoid colon or slash since those are not valid in NATS subjects.
-        self.local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", "0")))
-        self.global_rank = int(os.environ.get("RANK", "0"))
-        self.server_component = (
-            f"model_server_g{self.global_rank}_l{self.local_rank}"
-        )
-        self.world_size = int(os.environ.get("WORLD_SIZE", "1"))
+        # Store rank information
+        self.local_rank = local_rank
+        self.global_rank = global_rank
+        self.world_size = world_size
+        
+        # Build component name based on physical device ID
+        # The server is named by its physical device ID
+        self.server_component = f"model_server_device_{self.physical_device}"
         
         logger.info(
             "Dynamo model client initialized:\n"
@@ -67,9 +75,8 @@ class DynamoModelClient:
             "- Parallel config: TP=%d, PP=%d, DP=%d\n"
             "- Local Rank: %d, Global Rank: %d, World size: %d\n"
             "- Namespace: %s\n"
-            "- Target component: %s\n"
-            "- Logical device: %d\n"
-            "- Physical device: %d\n"
+            "- Target server: %s (physical device %d)\n"
+            "- Logical device: %d (maps to physical device %d)\n"
             "- CUDA_VISIBLE_DEVICES: %s",
             vllm_config.model_config.model,
             vllm_config.parallel_config.tensor_parallel_size,
@@ -80,6 +87,7 @@ class DynamoModelClient:
             self.world_size,
             namespace,
             self.server_component,
+            self.physical_device,
             self.logical_device,
             self.physical_device,
             os.environ.get("CUDA_VISIBLE_DEVICES", "Not set"),
@@ -225,12 +233,9 @@ class DynamoModelClient:
         params_client = await params_endpoint.client()
         await params_client.wait_for_instances()
         
-        # Prepare request with essential config data only
-        request = GetModelParametersRequest(
-            model_name=self.vllm_config.model_config.model,
-            tensor_parallel_size=self.vllm_config.parallel_config.tensor_parallel_size,
-            pipeline_parallel_size=self.vllm_config.parallel_config.pipeline_parallel_size,
-            data_parallel_size=self.vllm_config.parallel_config.data_parallel_size,
+        # Prepare request with full VllmConfig
+        request = GetModelParametersRequest.from_vllm_config(
+            vllm_config=self.vllm_config,
             device_id=self.physical_device,
             local_rank=self.local_rank,
             global_rank=self.global_rank,
@@ -253,11 +258,22 @@ class DynamoModelClient:
         
         # Handle dict or object response
         if isinstance(response, dict):
+            # Response is a dict from model_dump()
             error = response.get("error")
-            model_parameters = response.get("model_parameters")
+            model_parameters_pickled = response.get("model_parameters_pickled")
+            
+            # Deserialize the model parameters if present
+            if model_parameters_pickled:
+                from .companion_messages import ModelParametersResponse
+                # Create a ModelParametersResponse from the dict to use helper method
+                resp_obj = ModelParametersResponse(**response)
+                model_parameters = resp_obj.get_model_parameters()
+            else:
+                model_parameters = None
         else:
+            # Response is already a ModelParametersResponse object
             error = response.error
-            model_parameters = response.model_parameters
+            model_parameters = response.get_model_parameters()
         
         # Check for errors
         if error:
@@ -273,74 +289,50 @@ class DynamoModelClient:
         
         return model_parameters
     
-    def reconstruct_parameter(self, rebuild_info: Dict) -> torch.Tensor:
+    def reconstruct_parameter(self, rebuild_info) -> torch.Tensor:
         """Reconstruct a model parameter tensor from rebuild info using CUDA IPC.
         
         Args:
-            rebuild_info: Dictionary containing CUDA IPC rebuild information
+            rebuild_info: CUDATensorRebuildInfo object containing CUDA IPC rebuild information
             
         Returns:
             Reconstructed tensor on the current device
         """
         from torch.multiprocessing.reductions import rebuild_cuda_tensor
-        import base64
+        from .companion_messages import CUDATensorRebuildInfo
         
-        # Deserialize the rebuild info from JSON format
-        if isinstance(rebuild_info, dict) and "tensor_type" in rebuild_info:
-            # Convert string types back to actual types
-            tensor_type = torch.Tensor  # Default to torch.Tensor
-            storage_type = getattr(torch, rebuild_info["storage_type"].split("'")[1].split('.')[-1])
-            tensor_dtype = getattr(torch, rebuild_info["tensor_dtype"].split('.')[-1])
-            
-            # Decode base64 encoded bytes
-            ipc_handle = base64.b64decode(rebuild_info["ipc_handle"])
-            ref_counter_handle = base64.b64decode(rebuild_info["ref_counter_handle"])
-            event_handle = base64.b64decode(rebuild_info["event_handle"])
-            
-            # Convert lists back to tuples/torch.Size
-            tensor_size = torch.Size(rebuild_info["tensor_size"])
-            tensor_stride = tuple(rebuild_info["tensor_stride"])
-            
-            # Adjust device to logical device
-            server_device = rebuild_info["device"]
-            modified_device = self.logical_device
-            
-            logger.debug(
-                "Reconstructing tensor: server_device=%d → client_logical_device=%d",
-                server_device,
-                modified_device,
-            )
-            
-            # Create rebuild args tuple
-            rebuild_args = (
-                tensor_type,
-                tensor_size,
-                tensor_stride,
-                rebuild_info["tensor_offset"],
-                storage_type,
-                tensor_dtype,
-                modified_device,  # Use logical device instead of server device
-                ipc_handle,
-                rebuild_info["storage_size_bytes"],
-                rebuild_info["storage_offset_bytes"],
-                rebuild_info["tensor_requires_grad"],
-                ref_counter_handle,
-                rebuild_info["ref_counter_offset"],
-                event_handle,
-                rebuild_info["event_sync_required"],
-            )
-            
-            # Reconstruct the tensor
-            tensor = rebuild_cuda_tensor(*rebuild_args)
-            
-            return tensor
-        else:
-            raise ValueError("Invalid rebuild info format")
+        # Ensure we have a CUDATensorRebuildInfo object
+        if not isinstance(rebuild_info, CUDATensorRebuildInfo):
+            raise ValueError(f"Expected CUDATensorRebuildInfo, got {type(rebuild_info)}")
+        
+        # Adjust device to logical device
+        server_device = rebuild_info.device
+        modified_device = self.logical_device
+        
+        logger.debug(
+            "Reconstructing tensor: server_device=%d → client_logical_device=%d",
+            server_device,
+            modified_device,
+        )
+        
+        # Modify the device in the rebuild args
+        rebuild_info.device = modified_device
+        
+        # Get rebuild args from the CUDATensorRebuildInfo object
+        rebuild_args = rebuild_info.to_rebuild_args()
+        
+        # Reconstruct the tensor
+        tensor = rebuild_cuda_tensor(*rebuild_args)
+        
+        return tensor
 
 
 async def create_model_client(
     runtime: DistributedRuntime,
     vllm_config: VllmConfig,
+    local_rank: int,
+    global_rank: int,
+    world_size: int,
     namespace: str = "companion",
 ) -> DynamoModelClient:
     """Factory function to create a DynamoModelClient.
@@ -348,27 +340,34 @@ async def create_model_client(
     Args:
         runtime: Dynamo distributed runtime
         vllm_config: VllmConfig with model configuration
+        local_rank: Local rank of this worker
+        global_rank: Global rank of this worker
+        world_size: Total number of workers
         namespace: Dynamo namespace for service discovery
         
     Returns:
         Initialized DynamoModelClient instance
     """
-    client = DynamoModelClient(runtime, vllm_config, namespace)
+    client = DynamoModelClient(runtime, vllm_config, local_rank, global_rank, world_size, namespace)
     return client
 
 
 @dynamo_worker(static=False)
 async def example_client(runtime: DistributedRuntime):
     """Example client worker for testing."""
-    from vllm.config import ParallelConfig
     from vllm.engine.arg_utils import AsyncEngineArgs
     
     # Example configuration
     engine_args = AsyncEngineArgs(model="meta-llama/Llama-2-7b-hf")
     vllm_config = engine_args.create_engine_config()
     
+    # Example rank configuration (in production, these would be passed from vLLM)
+    local_rank = 0
+    global_rank = 0
+    world_size = 1
+    
     # Create client
-    client = await create_model_client(runtime, vllm_config)
+    client = await create_model_client(runtime, vllm_config, local_rank, global_rank, world_size)
     
     # Wait for model to be ready
     success, info = await client.wait_for_model_ready()

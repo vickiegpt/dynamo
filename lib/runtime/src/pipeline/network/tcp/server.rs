@@ -528,13 +528,16 @@ async fn tcp_listener(
                                 match process_control_message(header) {
                                     Ok(ControlAction::Continue) => {}
                                     Ok(ControlAction::Shutdown) => {
-                                        assert!(data.is_empty(), "received sentinel message with data; this should never happen");
+                                        if !data.is_empty() {
+                                            tracing::warn!("Received sentinel message with unexpected data. Ignoring data.");
+                                        }
                                         tracing::trace!("received sentinel message; shutting down");
                                         break;
                                     }
                                     Err(e) => {
-                                        // TODO(#171) - address fatal errors
-                                        panic!("{:?}", e);
+                                        // Handle control message errors gracefully
+                                        tracing::warn!("Error processing control message: {:?}. Closing connection.", e);
+                                        break;
                                     }
                                 }
                             }
@@ -547,9 +550,10 @@ async fn tcp_listener(
                                 };
                             }
                         }
-                        Some(Err(_)) => {
-                            // TODO(#171) - address fatal errors
-                            panic!("invalid message issued over socket; this should never happen");
+                        Some(Err(e)) => {
+                            // Handle decode errors gracefully - likely due to client sending corrupted data
+                            tracing::warn!("Invalid message received from client: {:?}. Closing connection.", e);
+                            break;
                         }
                         None => {
                             // this is allowed but we try to avoid it
