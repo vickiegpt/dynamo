@@ -96,6 +96,7 @@ nixl-sys = {version = "0.4.1", optional = true }
 cudarc = { version = "0.16.2", features = ["cuda-12020"], optional = true }
 ndarray = { version = "0.16", optional = true }
 nix = { version = "0.26", optional = true }
+aligned-vec = { version = "0.6.4" }
 
 # protocols
 unicode-segmentation = "1.12"

@@ -1374,6 +1374,84 @@ pub mod nixl {
     }
 }
 
+pub mod debug {
+    use super::*;
+
+    use aligned_vec::avec;
+    use cudarc::runtime::sys::{cudaMemcpy, cudaMemcpyKind};
+    use std::mem::ManuallyDrop;
+    use std::fs::File;
+    use std::io::{Read, Seek, SeekFrom};
+    use std::os::unix::io::FromRawFd;
+    use nixl_sys::MemoryRegion;
+    use xxhash_rust::xxh3::xxh3_64;
+
+    use crate::block_manager::{
+        storage::nixl::NixlDescriptor,
+    };
+
+    /// Export each layer of a block to a vector of bytes.
+    pub fn get_block_contents<S: Storage + NixlDescriptor>(
+        block: &impl BlockDataProvider<StorageType = S>,
+    ) -> Result<Vec<Vec<u8>>> {
+        let block_data = block.block_data();
+
+        let mut contents: Vec<Vec<u8>> = Vec::new();
+
+        for layer_idx in 0..block_data.num_layers() {
+            for outer_idx in 0..block_data.num_outer_dims() {
+                let layer_view = block_data.layer_view(layer_idx, outer_idx)?;
+                match block_data.storage_type() {
+                    StorageType::Device(_) => unsafe {
+                        let mut buffer = vec![0_u8; layer_view.size()];
+
+                        cudaMemcpy(
+                            buffer.as_mut_ptr() as *mut std::ffi::c_void,
+                            layer_view.as_ptr() as *const std::ffi::c_void,
+                            layer_view.size(),
+                            cudaMemcpyKind::cudaMemcpyDeviceToHost,
+                        )
+                        .result()?;
+
+                        contents.push(buffer);
+                    },
+                    StorageType::Pinned => unsafe {
+                        contents.push(
+                            std::slice::from_raw_parts(layer_view.as_ptr(), layer_view.size())
+                                .to_vec(),
+                        );
+                    },
+                    StorageType::Disk(_) => {
+                        let nixl_desc = layer_view.as_nixl_descriptor();
+                        let mut file: ManuallyDrop<File>;
+                        let mut aligned = avec![[4096] | 0; layer_view.size()];
+
+                        unsafe {
+                            file =
+                                ManuallyDrop::new(File::from_raw_fd(nixl_desc.device_id() as i32));
+                            file.seek(SeekFrom::Start(nixl_desc.as_ptr() as u64))?;
+                        }
+                        file.read_exact(&mut aligned)?;
+                        contents.push(aligned.to_vec());
+                    }
+                    _ => anyhow::bail!("Unsupported storage type."),
+                }
+            }
+        }
+
+        Ok(contents.to_vec())
+    }
+
+    /// Hash the contents of a block.
+    pub fn hash_block_contents(block: &impl BlockDataProvider<StorageType = impl Storage + NixlDescriptor>) -> Result<(u64, Vec<u64>)> {
+        let contents = get_block_contents(block)?.iter().map(|c| xxh3_64(c.as_slice())).collect::<Vec<_>>();
+
+        let total_hash = contents.iter().fold(0, |acc, h| acc ^ h);
+
+        Ok((total_hash, contents))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

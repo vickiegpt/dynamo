@@ -12,6 +12,8 @@ use BlockTransferPool::*;
 use crate::block_manager::{
     block::{
         data::local::LocalBlockData,
+        data::BlockDataExt,
+        debug::hash_block_contents,
         locality,
         transfer::{TransferContext, WriteTo, WriteToStrategy},
         Block, BlockDataProvider, BlockDataProviderMut, ReadableBlock, WritableBlock,
@@ -101,27 +103,40 @@ impl BlockTransferHandler {
         };
 
         // Extract the `from` and `to` indices from the request.
-        let source_idxs = request.blocks().iter().map(|(from, _)| *from);
-        let target_idxs = request.blocks().iter().map(|(_, to)| *to);
+        let source_idxs = request.blocks().iter().map(|(from, _)| *from).collect::<Vec<_>>();
+        let target_idxs = request.blocks().iter().map(|(_, to)| *to).collect::<Vec<_>>();
 
         // Get the blocks corresponding to the indices.
-        let sources: Vec<LocalBlockData<Source>> = source_idxs
-            .map(|idx| source_pool_list[idx].clone())
+        let sources: Vec<LocalBlockData<Source>> = source_idxs.iter()
+            .map(|idx| source_pool_list[*idx].clone())
             .collect();
-        let mut targets: Vec<LocalBlockData<Target>> = target_idxs
-            .map(|idx| target_pool_list[idx].clone())
+        let mut targets: Vec<LocalBlockData<Target>> = target_idxs.iter()
+            .map(|idx| target_pool_list[*idx].clone())
             .collect();
 
         // Perform the transfer, and return the notifying channel.
-        let channel = match sources.write_to(&mut targets, self.context.clone()) {
-            Ok(channel) => Ok(channel),
-            Err(e) => {
-                tracing::error!("Failed to write to blocks: {:?}", e);
-                Err(e.into())
-            }
-        };
+        let channel = sources.write_to(&mut targets, self.context.clone()).unwrap();
 
-        channel
+        let (new_tx, new_rx) = tokio::sync::oneshot::channel();
+
+        let source_type = sources[0].storage_type().clone();
+        let target_type = targets[0].storage_type().clone();
+
+        tokio::spawn(async move {
+            println!("Transfer {} blocks from {:?} to {:?}", source_idxs.len(), source_type, target_type);
+
+            let source_hashes = sources.iter().map(|b| hash_block_contents(b).unwrap()).collect::<Vec<_>>();
+
+            channel.await.unwrap();
+
+            let target_hashes = targets.iter().map(|b| hash_block_contents(b).unwrap()).collect::<Vec<_>>();
+
+            assert_eq!(source_hashes, target_hashes);
+
+            new_tx.send(()).unwrap();
+        });
+
+        Ok(new_rx)
     }
 
     pub async fn execute_transfer(&self, request: BlockTransferRequest) -> Result<()> {
