@@ -53,8 +53,6 @@ kubectl apply -f components/backends/vllm/deploy/agg.yaml -n ${NAMESPACE}
 You can use `kubectl get dynamoGraphDeployment -n ${NAMESPACE}` to view your deployment.
 You can use `kubectl delete dynamoGraphDeployment <your-dep-name> -n ${NAMESPACE}` to delete the deployment.
 
-We provide a Custom Resource YAML file for many examples under the `deploy/` folder.
-Use [VLLM YAML](../../components/backends/vllm/deploy/agg.yaml) for an example.
 
 **Note 1** Example Image
 
@@ -99,14 +97,3 @@ Additional Resources:
 - [Port Forward Documentation](https://kubernetes.io/docs/tasks/access-application-cluster/port-forward-access-application-cluster/)
 - [Examples Deployment Guide](../../examples/README.md#deploying-a-particular-example)
 
-
-## Manual Deployment with Helm Charts
-
-Users who need more control over their deployments can use the manual deployment path (`deploy/helm/`):
-
-- Used for manually deploying inference graphs to Kubernetes
-- Contains Helm charts and configurations for deploying individual inference pipelines
-- Provides full control over deployment parameters
-- Requires manual management of infrastructure components
-- Documentation:
-  - [Helm Deployment Guide](../../../deploy/helm/README.md): detailed instructions for manual deployment
