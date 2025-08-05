@@ -512,8 +512,6 @@ impl WorkerMetricsPublisher {
                 0
             });
 
-        self.start_nats_metrics_publishing(component.namespace().clone(), worker_id);
-
         component
             .endpoint(KV_METRICS_ENDPOINT)
             .endpoint_builder()
@@ -530,6 +528,7 @@ impl WorkerMetricsPublisher {
     ///
     /// This task monitors metric changes (specifically kv_active_blocks and num_requests_waiting)
     /// and publishes stable metrics to NATS after they've been unchanged for 1ms.
+    #[allow(dead_code)]
     fn start_nats_metrics_publishing(&self, namespace: Namespace, worker_id: i64) {
         let nats_rx = self.rx.clone();
 
