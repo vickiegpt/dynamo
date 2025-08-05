@@ -77,18 +77,6 @@ pub enum SlotState {
 pub trait Slot: std::fmt::Debug {
     fn request_id(&self) -> &str;
 
-    /// It appears vLLM can call `get_num_new_matched_tokens` multiple times for the same request, even without an eviction
-    /// event. Generally, we only need to rematch to external tokens one time at the beginning of the request, or after an
-    /// eviction event.
-    ///
-    /// Call this method to determine if the slot holds a match state or if [`Slot::acquire_all_local_matches`] should be called.
-    ///
-    /// Returns True if the number of visits is greater than 1.
-    fn multiple_matched_external_visits(&self) -> bool;
-
-    /// Call this method to indicate that the slot has visited the matched external tokens.
-    fn visited_matched_external_tokens(&mut self);
-
     fn state(&self) -> SlotState;
 
     fn sequence(&self) -> &TokenBlockSequence;
@@ -116,7 +104,9 @@ pub trait Slot: std::fmt::Debug {
     /// of any kv blocks for tokens in the isl that are not already in memory on the device, but on some local storage.
     ///
     /// If external tokens are matched, then the slot will transition to the [`SlotState::Onboarding`] state.
-    fn acquire_all_local_matches(&mut self) -> Result<(), SlotError>;
+    /// `num_computed_tokens` is the number of tokens that have been computed on the device, this indicated the number of
+    /// blocks in the ISL sequence that we should skip before we start looking for matches.
+    fn acquire_local_matches(&mut self, num_computed_tokens: usize) -> Result<(), SlotError>;
 
     /// Trigger the onboarding operation for the slot.
     fn trigger_onboarding(&mut self, num_external_tokens: usize) -> Result<(), SlotError>;
@@ -289,9 +279,6 @@ pub struct VllmConnectorSlot {
     /// The number of blocks that have been evaluated by the policy.
     /// Each policy evaluation will skip the already evaluated blocks.
     evaluated_blocks: usize,
-
-    /// Whether the slot has already matched to external tokens.
-    visits_to_match_external_tokens: usize,
 }
 
 impl VllmConnectorSlot {
@@ -325,7 +312,6 @@ impl VllmConnectorSlot {
             tokens_cached_from_device: 0,
             tokens_cached_from_host: 0,
             tokens_cached_from_disk: 0,
-            visits_to_match_external_tokens: 0,
         }
     }
 }
@@ -512,17 +498,12 @@ impl Slot for VllmConnectorSlot {
         self.pending_operations.take()
     }
 
-    fn multiple_matched_external_visits(&self) -> bool {
-        self.visits_to_match_external_tokens > 1
-    }
-
-    fn visited_matched_external_tokens(&mut self) {
-        self.visits_to_match_external_tokens += 1;
-    }
-
     #[tracing::instrument(level = "debug", skip_all)]
-    fn acquire_all_local_matches(&mut self) -> Result<(), SlotError> {
-        assert_eq!(!self.visits_to_match_external_tokens, 1);
+    fn acquire_local_matches(&mut self, num_computed_tokens: usize) -> Result<(), SlotError> {
+        if matches!(self.state(), SlotState::OnboardStaged(_)) {
+            tracing::debug!("slot is already in the OnboardStaged state; skipping lookup");
+            return Ok(());
+        }
 
         if !matches!(self.state(), SlotState::Initialized) {
             return Err(SlotError::InvalidOperation(format!(
@@ -532,7 +513,6 @@ impl Slot for VllmConnectorSlot {
         }
 
         let block_size = self.block_manager.block_size();
-        let num_computed_tokens = self.computed_tokens();
         let num_computed_blocks = num_computed_tokens / block_size;
         debug_assert!(num_computed_tokens % block_size == 0);
 
@@ -609,7 +589,7 @@ impl Slot for VllmConnectorSlot {
         let mut num_new_matched_tokens = num_matched_blocks * block_size;
 
         // we are on a block boundary, so we need to throw away the last block
-        if num_computed_tokens + num_new_matched_tokens == self.sequence().total_tokens() {
+        if (num_computed_tokens + num_new_matched_tokens) % self.block_size == 0 {
             tracing::debug!("on a block boundary, throwing away the last block");
 
             // we should have matched at least one block

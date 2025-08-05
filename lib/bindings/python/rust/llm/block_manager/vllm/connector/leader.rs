@@ -96,26 +96,11 @@ impl KvConnectorLeader {
             "request_num_tokens: {request_num_tokens}; num_computed_tokens: {num_computed_tokens}"
         );
 
-        let shared_slot = self.slot_manager.get_slot(&request_id).map_err(to_pyerr)?;
-        let mut slot = shared_slot.lock().map_err(to_pyerr)?;
-
-        // tick the counter on the number of times we have visited the matched external tokens
-        slot.visited_matched_external_tokens();
-
-        if slot.multiple_matched_external_visits() {
-            tracing::warn!(
-                "detected multiple calls to get_num_new_matched_tokens; skipping lookup"
-            );
-            return Ok((0, false));
-        }
-
         // the number of device matched tokens should be less than or equal to the number of tokens in the request
         debug_assert!(num_computed_tokens % self.block_size == 0);
 
-        // vllm is telling us that the tokens have been computed, since we do not have insight into the device pool
-        // we accept this and advance the computed position
-        slot.advance_computed_position(num_computed_tokens)?;
-        slot.record_cached_device_tokens(num_computed_tokens);
+        let shared_slot = self.slot_manager.get_slot(&request_id).map_err(to_pyerr)?;
+        let mut slot = shared_slot.lock().map_err(to_pyerr)?;
 
         // early exit if we cannot match full block
         if (slot.sequence().total_tokens() - num_computed_tokens) < self.block_size {
@@ -124,7 +109,7 @@ impl KvConnectorLeader {
 
         // find matches for any remaining tokens
         // this will advance the computed position and hold any newly matched blocks in the slot
-        slot.acquire_all_local_matches()?;
+        slot.acquire_local_matches(num_computed_tokens)?;
 
         // return the number of external tokens that are ready for onboarding
         // we always return true here as we always asynchronously onboard matched blocks
@@ -141,9 +126,6 @@ impl KvConnectorLeader {
         }
     }
 
-    /// We drop the need to pass in the KvCacheBlocks and the num_external_tokens as they are captured
-    /// statefully in the [`VllmLeaderKvCacheManagerAndConnector::get_num_new_matched_tokens`] function.
-    ///
     /// Note: vLLM will not provide any scheduler output data for requests that are onboarding. it is entirely
     /// on the connector's implementation to handle this case.
     #[tracing::instrument(level = "debug", skip_all, fields(request_id))]
@@ -163,16 +145,18 @@ impl KvConnectorLeader {
         let shared_slot = self.slot_manager.get_slot(&request_id).map_err(to_pyerr)?;
         let mut slot = shared_slot.lock().map_err(to_pyerr)?;
 
-        if slot.multiple_matched_external_visits() {
-            tracing::warn!("detected multiple calls to update_state_after_alloc; skipping lookup");
-            return Ok(());
-        }
+        // we have not yet advanced the computed position, but now we can, since we have an indication that we have
+        // necessary gpu blocks into which we will load the external tokens.
 
         slot.append_mutable_device_blocks(&block_ids)?;
 
         // the second call will show num_external_tokens == 0
         // this call is just letting us know the other blocks that are being used for the remainder of the prefill
         if num_external_tokens > 0 {
+            let num_computed_tokens = block_ids.len() * self.block_size - num_external_tokens;
+            slot.record_cached_device_tokens(num_computed_tokens);
+            slot.advance_computed_position(num_computed_tokens)?;
+
             tracing::debug!(
                 request_id = request_id,
                 "triggering onboarding for {} external tokens",
