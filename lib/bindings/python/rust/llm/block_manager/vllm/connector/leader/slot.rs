@@ -82,7 +82,12 @@ pub trait Slot: std::fmt::Debug {
     /// eviction event.
     ///
     /// Call this method to determine if the slot holds a match state or if [`Slot::acquire_all_local_matches`] should be called.
-    fn has_matched_external_tokens(&self) -> bool;
+    ///
+    /// Returns True if the number of visits is greater than 1.
+    fn multiple_matched_external_visits(&self) -> bool;
+
+    /// Call this method to indicate that the slot has visited the matched external tokens.
+    fn visited_matched_external_tokens(&mut self);
 
     fn state(&self) -> SlotState;
 
@@ -286,7 +291,7 @@ pub struct VllmConnectorSlot {
     evaluated_blocks: usize,
 
     /// Whether the slot has already matched to external tokens.
-    has_matched_external_tokens: bool,
+    visits_to_match_external_tokens: usize,
 }
 
 impl VllmConnectorSlot {
@@ -320,7 +325,7 @@ impl VllmConnectorSlot {
             tokens_cached_from_device: 0,
             tokens_cached_from_host: 0,
             tokens_cached_from_disk: 0,
-            has_matched_external_tokens: false,
+            visits_to_match_external_tokens: 0,
         }
     }
 }
@@ -507,14 +512,17 @@ impl Slot for VllmConnectorSlot {
         self.pending_operations.take()
     }
 
-    fn has_matched_external_tokens(&self) -> bool {
-        self.has_matched_external_tokens
+    fn multiple_matched_external_visits(&self) -> bool {
+        self.visits_to_match_external_tokens > 1
+    }
+
+    fn visited_matched_external_tokens(&mut self) {
+        self.visits_to_match_external_tokens += 1;
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
     fn acquire_all_local_matches(&mut self) -> Result<(), SlotError> {
-        assert!(!self.has_matched_external_tokens);
-        self.has_matched_external_tokens = true;
+        assert_eq!(!self.visits_to_match_external_tokens, 1);
 
         if !matches!(self.state(), SlotState::Initialized) {
             return Err(SlotError::InvalidOperation(format!(
