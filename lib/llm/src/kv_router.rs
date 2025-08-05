@@ -258,12 +258,14 @@ impl KvRouter {
         Ok((best_worker_id, overlap_amount))
     }
 
-    /// Free all blocks associated with a request
     pub async fn mark_prefill_completed(&self, request_id: &str) {
         self.scheduler.mark_prefill_completed(request_id).await
     }
 
-    /// Get the block size this router was configured with
+    pub async fn free(&self, request_id: &str) {
+        self.scheduler.free(request_id).await
+    }
+
     pub fn block_size(&self) -> u32 {
         self.block_size
     }
@@ -349,6 +351,8 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
                     while let Some(item) = response_stream.next().await {
                         yield item;
                     }
+
+                    chooser.free(&context_id).await;
                 });
                 Ok(ResponseStream::new(wrapped_stream, stream_context))
             }

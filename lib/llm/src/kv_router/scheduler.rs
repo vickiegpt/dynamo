@@ -226,6 +226,10 @@ impl KvScheduler {
             .mark_prefill_completed(&request_id.to_string())
             .await;
     }
+
+    pub async fn free(&self, request_id: &str) {
+        let _ = self.slots.free(&request_id.to_string()).await;
+    }
 }
 
 // Helper function for softmax sampling
