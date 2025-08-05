@@ -187,10 +187,7 @@ impl KvScheduler {
             tracing::trace!("background endpoint subscriber shutting down");
         });
 
-        Ok(KvScheduler {
-            request_tx,
-            slots,
-        })
+        Ok(KvScheduler { request_tx, slots })
     }
 
     pub async fn schedule(
