@@ -589,7 +589,7 @@ impl Slot for VllmConnectorSlot {
         let mut num_new_matched_tokens = num_matched_blocks * block_size;
 
         // we are on a block boundary, so we need to throw away the last block
-        if (num_computed_tokens + num_new_matched_tokens) % self.block_size == 0 {
+        if (num_computed_tokens + num_new_matched_tokens) == self.sequence().total_tokens() {
             tracing::debug!("on a block boundary, throwing away the last block");
 
             // we should have matched at least one block

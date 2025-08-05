@@ -284,9 +284,8 @@ impl KvConnectorLeader {
             }
         }
 
-        let metadata = serde_json::to_vec(&md).map_err(to_pyerr)?;
-        tracing::debug!("metadata: {metadata:#?}");
-        Ok(metadata)
+        tracing::debug!("metadata: {md:#?}");
+        serde_json::to_vec(&md).map_err(to_pyerr)
     }
 
     fn request_finished(&mut self, request_id: String, block_ids: Vec<BlockId>) -> PyResult<bool> {
