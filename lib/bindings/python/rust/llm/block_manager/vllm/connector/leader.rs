@@ -103,7 +103,7 @@ impl KvConnectorLeader {
         slot.visited_matched_external_tokens();
 
         if slot.multiple_matched_external_visits() {
-            tracing::debug!(
+            tracing::warn!(
                 "detected multiple calls to get_num_new_matched_tokens; skipping lookup"
             );
             return Ok((0, false));
@@ -164,7 +164,7 @@ impl KvConnectorLeader {
         let mut slot = shared_slot.lock().map_err(to_pyerr)?;
 
         if slot.multiple_matched_external_visits() {
-            tracing::debug!("detected multiple calls to update_state_after_alloc; skipping lookup");
+            tracing::warn!("detected multiple calls to update_state_after_alloc; skipping lookup");
             return Ok(());
         }
 
