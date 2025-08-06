@@ -1201,6 +1201,8 @@ func (r *DynamoComponentDeploymentReconciler) generateHPA(opt generateResourceOp
 	return kubeHpa, false, nil
 }
 
+
+
 //nolint:gocyclo,nakedret
 func (r *DynamoComponentDeploymentReconciler) generatePodTemplateSpec(ctx context.Context, opt generateResourceOption) (podTemplateSpec *corev1.PodTemplateSpec, err error) {
 	podLabels := r.getKubeLabels(opt.dynamoComponentDeployment)
@@ -1245,15 +1247,9 @@ func (r *DynamoComponentDeploymentReconciler) generatePodTemplateSpec(ctx contex
 
 	envs := dynamo.MergeEnvs(opt.dynamoComponentDeployment.Spec.Envs, defaultEnvs)
 
-	var livenessProbe *corev1.Probe
-	if opt.dynamoComponentDeployment.Spec.LivenessProbe != nil {
-		livenessProbe = opt.dynamoComponentDeployment.Spec.LivenessProbe
-	}
-
-	var readinessProbe *corev1.Probe
-	if opt.dynamoComponentDeployment.Spec.ReadinessProbe != nil {
-		readinessProbe = opt.dynamoComponentDeployment.Spec.ReadinessProbe
-	}
+	// Get component type-specific probe defaults and merge with user overrides
+	livenessProbe := r.getEffectiveLivenessProbe(opt.dynamoComponentDeployment)
+	readinessProbe := r.getEffectiveReadinessProbe(opt.dynamoComponentDeployment)
 
 	volumes := make([]corev1.Volume, 0)
 	volumeMounts := make([]corev1.VolumeMount, 0)
@@ -1354,40 +1350,9 @@ func (r *DynamoComponentDeploymentReconciler) generatePodTemplateSpec(ctx contex
 		SecurityContext: mainContainerSecurityContext,
 	}
 
-	// Set default probes if none are provided
-	if livenessProbe == nil {
-		container.LivenessProbe = &corev1.Probe{
-			// TODO: Initial delay and other probe settings should be read off sdk, these are default settings that should cover vllm / hello-world
-			InitialDelaySeconds: 60, // 1 minute
-			PeriodSeconds:       60, // Check every 1 minute
-			TimeoutSeconds:      5,  // 5 second timeout
-			FailureThreshold:    10, // Allow 10 failures before declaring unhealthy
-			SuccessThreshold:    1,  // Need 1 success to be considered healthy
-			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{
-					Path: "/healthz",
-					Port: intstr.FromString(commonconsts.DynamoHealthPortName),
-				},
-			},
-		}
-	}
-
-	if readinessProbe == nil {
-		container.ReadinessProbe = &corev1.Probe{
-			// TODO: Initial delay and other probe settings should be read off sdk, these are default settings that should cover vllm / hello-world
-			InitialDelaySeconds: 60, // 1 minute
-			PeriodSeconds:       60, // Check every 1 minute
-			TimeoutSeconds:      5,  // 5 second timeout
-			FailureThreshold:    10, // Allow 10 failures before declaring not ready
-			SuccessThreshold:    1,  // Need 1 success to be considered ready
-			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{
-					Path: "/readyz",
-					Port: intstr.FromString(commonconsts.DynamoHealthPortName),
-				},
-			},
-		}
-	}
+	// Apply the computed probes (already have defaults merged with user overrides)
+	container.LivenessProbe = livenessProbe
+	container.ReadinessProbe = readinessProbe
 
 	if opt.dynamoComponentDeployment.Spec.EnvFromSecret != nil {
 		container.EnvFrom = []corev1.EnvFromSource{

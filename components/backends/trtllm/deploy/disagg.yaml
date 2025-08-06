@@ -52,16 +52,10 @@ spec:
       componentType: worker
       replicas: 1
       livenessProbe:
-        httpGet:
-          path: /live
-          port: 9090
         periodSeconds: 5
         timeoutSeconds: 3
         failureThreshold: 3
       readinessProbe:
-        httpGet:
-          path: /health
-          port: 9090
         periodSeconds: 10
         timeoutSeconds: 3
         failureThreshold: 60
@@ -103,16 +97,10 @@ spec:
       componentType: worker
       replicas: 1
       livenessProbe:
-        httpGet:
-          path: /live
-          port: 9090
         periodSeconds: 5
         timeoutSeconds: 3
         failureThreshold: 3
       readinessProbe:
-        httpGet:
-          path: /health
-          port: 9090
         periodSeconds: 10
         timeoutSeconds: 3
         failureThreshold: 60

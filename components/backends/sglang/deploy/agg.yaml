@@ -8,20 +8,7 @@ metadata:
 spec:
   services:
     Frontend:
-      livenessProbe:
-        httpGet:
-          path: /health
-          port: 8000
-        initialDelaySeconds: 20
-        periodSeconds: 5
-        timeoutSeconds: 5
-        failureThreshold: 3
       readinessProbe:
-        exec:
-          command:
-            - /bin/sh
-            - -c
-            - 'curl -s http://localhost:8000/health | jq -e ".status == \"healthy\""'
         initialDelaySeconds: 60
         periodSeconds: 60
         timeoutSeconds: 30
@@ -46,17 +33,10 @@ spec:
     SGLangDecodeWorker:
       envFromSecret: hf-token-secret
       livenessProbe:
-        httpGet:
-          path: /live
-          port: 9090
         periodSeconds: 5
         timeoutSeconds: 30
         failureThreshold: 1
       readinessProbe:
-        exec:
-        httpGet:
-          path: /health
-          port: 9090
         periodSeconds: 10
         timeoutSeconds: 30
         failureThreshold: 60

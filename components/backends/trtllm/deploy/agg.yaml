@@ -49,16 +49,10 @@ spec:
     TRTLLMWorker:
       envFromSecret: hf-token-secret
       livenessProbe:
-        httpGet:
-          path: /live
-          port: 9090
         periodSeconds: 5
         timeoutSeconds: 3
         failureThreshold: 3
       readinessProbe:
-        httpGet:
-          path: /health
-          port: 9090
         periodSeconds: 10
         timeoutSeconds: 3
         failureThreshold: 60

@@ -18,20 +18,7 @@ spec:
       dynamoNamespace: vllm-disagg-planner
       componentType: main
       replicas: 1
-      livenessProbe:
-        httpGet:
-          path: /health
-          port: 8000
-        initialDelaySeconds: 20
-        periodSeconds: 5
-        timeoutSeconds: 5
-        failureThreshold: 3
       readinessProbe:
-        exec:
-          command:
-            - /bin/sh
-            - -c
-            - 'curl -s http://localhost:8000/health | jq -e ".status == \"healthy\""'
         initialDelaySeconds: 60
         periodSeconds: 60
         timeoutSeconds: 30
@@ -57,25 +44,8 @@ spec:
       envFromSecret: hf-token-secret
       componentType: planner
       replicas: 1
-      livenessProbe:
-        exec:
-          command:
-            - /bin/sh
-            - -c
-            - "exit 0"
-        periodSeconds: 60
-        timeoutSeconds: 30
-        failureThreshold: 10
       readinessProbe:
-        exec:
-          command:
-            - /bin/sh
-            - -c
-            - "exit 0"
         initialDelaySeconds: 60
-        periodSeconds: 60
-        timeoutSeconds: 30
-        failureThreshold: 10
       resources:
         requests:
           cpu: "2"
@@ -147,16 +117,10 @@ spec:
       componentType: worker
       replicas: 2
       livenessProbe:
-        httpGet:
-          path: /live
-          port: 9090
         periodSeconds: 5
         timeoutSeconds: 30
         failureThreshold: 1
       readinessProbe:
-        httpGet:
-          path: /health
-          port: 9090
         periodSeconds: 10
         timeoutSeconds: 30
         failureThreshold: 60
@@ -197,16 +161,10 @@ spec:
       componentType: worker
       replicas: 2
       livenessProbe:
-        httpGet:
-          path: /health
-          port: 9090
         periodSeconds: 5
         timeoutSeconds: 30
         failureThreshold: 1
       readinessProbe:
-        httpGet:
-          path: /health
-          port: 9090
         periodSeconds: 10
         timeoutSeconds: 30
         failureThreshold: 60
