@@ -8,12 +8,18 @@ metadata:
 spec:
   services:
     Frontend:
+      startupProbe:
+        httpGet:
+          path: /health
+          port: 8000
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
       livenessProbe:
         httpGet:
           path: /health
           port: 8000
-        initialDelaySeconds: 20
-        periodSeconds: 5
+        periodSeconds: 10
         timeoutSeconds: 5
         failureThreshold: 3
       readinessProbe:
@@ -22,10 +28,9 @@ spec:
             - /bin/sh
             - -c
             - 'curl -s http://localhost:8000/health | jq -e ".status == \"healthy\""'
-        initialDelaySeconds: 60
-        periodSeconds: 60
-        timeoutSeconds: 30
-        failureThreshold: 10
+        periodSeconds: 15
+        timeoutSeconds: 5
+        failureThreshold: 3
       dynamoNamespace: sglang-disagg
       componentType: main
       replicas: 1
