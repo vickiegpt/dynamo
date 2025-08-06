@@ -34,12 +34,12 @@ git checkout $(git describe --tags $(git rev-list --tags --max-count=1))
 
 | Feature | SGLang | Notes |
 |---------|--------|-------|
-| [**Disaggregated Serving**](../../../docs/architecture/disagg_serving.md) | ✅ |  |
-| [**Conditional Disaggregation**](../../../docs/architecture/disagg_serving.md#conditional-disaggregation) | 🚧 | WIP [PR](https://github.com/sgl-project/sglang/pull/7730) |
-| [**KV-Aware Routing**](../../../docs/architecture/kv_cache_routing.md) | ✅ |  |
-| [**SLA-Based Planner**](../../../docs/architecture/sla_planner.md) | ❌ | Planned |
-| [**Load Based Planner**](../../../docs/architecture/load_planner.md) | ❌ | Planned |
-| [**KVBM**](../../../docs/architecture/kvbm_architecture.md) | ❌ | Planned |
+| [**Disaggregated Serving**](../../../architecture/disagg_serving.md) | ✅ |  |
+| [**Conditional Disaggregation**](../../../architecture/disagg_serving.md#conditional-disaggregation) | 🚧 | WIP [PR](https://github.com/sgl-project/sglang/pull/7730) |
+| [**KV-Aware Routing**](../../../architecture/kv_cache_routing.md) | ✅ |  |
+| [**SLA-Based Planner**](../../../architecture/sla_planner.md) | ❌ | Planned |
+| [**Load Based Planner**](../../../architecture/load_planner.md) | ❌ | Planned |
+| [**KVBM**](../../../architecture/kvbm_architecture.md) | ❌ | Planned |
 
 ### Large Scale P/D and WideEP Features
 
@@ -55,7 +55,7 @@ git checkout $(git describe --tags $(git rev-list --tags --max-count=1))
 Below we provide a guide that lets you run all of our the common deployment patterns on a single node.
 ### Start NATS and ETCD in the background
 
-Start using [Docker Compose](../../../deploy/docker-compose.yml)
+Start using Docker Compose
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d
@@ -165,20 +165,20 @@ Below we provide a selected list of advanced examples. Please open up an issue i
 - **[Run DeepSeek-R1 on 104+ H100s](docs/dsr1-wideep-h100.md)**
 
 ### Speculative Decoding
-- **[Deploying DeepSeek-R1 with MTP - coming soon!](.)**
+- **Deploying DeepSeek-R1 with MTP - coming soon!**
 
 ### Structured Output and Tool Calling
-- **[Tool calling with Dynamo - coming soon!](.)**
+- **Tool calling with Dynamo - coming soon!**
 
 ### Supporting SGLang's native endpoints via Dynamo
 - **[HTTP Server for native SGLang endpoints](docs/sgl-http-server.md)**
 
 ## Deployment
 
-We currently provide deployment examples for Kubernetes (coming soon!) and SLURM
+We currently provide deployment examples for Kubernetes and SLURM
 
 ## Kubernetes
-- **[Deploying Dynamo with SGLang on Kubernetes - coming soon!](.)**
+- **[Deploying Dynamo with SGLang on Kubernetes](deploy/README.md)**
 
 ## SLURM
 - **[Deploying Dynamo with SGLang on SLURM](slurm_jobs/README.md)**
