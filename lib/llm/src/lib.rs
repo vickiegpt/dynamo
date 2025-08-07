@@ -38,6 +38,9 @@ pub mod types;
 #[cfg(feature = "block-manager")]
 pub mod block_manager;
 
+#[cfg(feature = "block-manager")]
+pub mod integrations;
+
 /// Reads a JSON file, extracts a specific field, and deserializes it into type T.
 ///
 /// # Arguments

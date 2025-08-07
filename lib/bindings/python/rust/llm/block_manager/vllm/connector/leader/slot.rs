@@ -127,7 +127,10 @@ pub trait Slot: std::fmt::Debug {
     fn record_cached_disk_tokens(&mut self, num_tokens: usize);
 
     /// Reset the slot after preemption.
-    fn reset_after_preemption(&mut self) -> Result<(), SlotError>;
+    fn reset_after_preemption(&mut self);
+
+    /// Reset the slot.
+    fn reset(&mut self);
 }
 
 pub trait ExternallyManagedDeviceSlot: Slot {
@@ -347,7 +350,7 @@ impl Slot for VllmConnectorSlot {
         self.state
     }
 
-    fn reset_after_preemption(&mut self) -> Result<(), SlotError> {
+    fn reset_after_preemption(&mut self) {
         assert!(self.staging_from_disk.is_none());
         assert!(self.staging_from_host.is_none());
         assert!(self.pending_operations.is_none());
@@ -360,7 +363,11 @@ impl Slot for VllmConnectorSlot {
         self.tokens_cached_from_device = 0;
         self.tokens_cached_from_host = 0;
         self.tokens_cached_from_disk = 0;
-        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.reset_after_preemption();
+        self.state = SlotState::Initialized;
     }
 
     fn record_cached_device_tokens(&mut self, num_tokens: usize) {

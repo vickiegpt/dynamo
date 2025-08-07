@@ -139,6 +139,11 @@ impl Leader for KvConnectorLeader {
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to lock slot: {}", e))?;
 
+        if slot.state() == SlotState::Prefilling {
+            tracing::warn!("slot is in the Prefilled state; this seems like we need to reset the slot and start over");
+            slot.reset();
+        }
+
         // early exit if we cannot match full block
         if (slot.sequence().total_tokens() - num_computed_tokens) < self.block_size {
             return Ok((0, false));
@@ -319,7 +324,7 @@ impl Leader for KvConnectorLeader {
 
                 // todo: we probably need to reset the slot state and reload it from `cache_req`; however, we do not
                 // know if it will take another pass at `get_num_new_matched_tokens` or `update_state_after_alloc`.
-                slot.reset_after_preemption()?;
+                slot.reset_after_preemption();
 
                 // note, we can not trigger onboarding here -- perhaps we are supposed to or perhaps will get another
                 // pass at `get_num_new_matched_tokens` or `update_state_after_alloc`.
