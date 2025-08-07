@@ -72,6 +72,9 @@ pub enum SlotState {
 
     /// The slot is finished and all resources have been released.
     Finished,
+
+    /// The slot is preempted and is waiting for the next iteration to resume.
+    Preempted,
 }
 
 pub trait Slot: std::fmt::Debug {
@@ -122,6 +125,9 @@ pub trait Slot: std::fmt::Debug {
 
     /// Record the number of tokens that were cached on the disk.
     fn record_cached_disk_tokens(&mut self, num_tokens: usize);
+
+    /// Reset the slot after preemption.
+    fn reset_after_preemption(&mut self) -> Result<(), SlotError>;
 }
 
 pub trait ExternallyManagedDeviceSlot: Slot {
@@ -341,6 +347,22 @@ impl Slot for VllmConnectorSlot {
         self.state
     }
 
+    fn reset_after_preemption(&mut self) -> Result<(), SlotError> {
+        assert!(self.staging_from_disk.is_none());
+        assert!(self.staging_from_host.is_none());
+        assert!(self.pending_operations.is_none());
+
+        self.state = SlotState::Preempted;
+        self.iteration_first_scheduled = None;
+        self.current_position = 0;
+        self.evaluated_blocks = 0;
+        self.device_blocks.clear();
+        self.tokens_cached_from_device = 0;
+        self.tokens_cached_from_host = 0;
+        self.tokens_cached_from_disk = 0;
+        Ok(())
+    }
+
     fn record_cached_device_tokens(&mut self, num_tokens: usize) {
         self.tokens_cached_from_device = num_tokens;
         tracing::debug!("recording {} cached device tokens", num_tokens,);
@@ -511,11 +533,15 @@ impl Slot for VllmConnectorSlot {
             return Ok(());
         }
 
-        if !matches!(self.state(), SlotState::Initialized) {
+        if !matches!(self.state(), SlotState::Initialized | SlotState::Preempted) {
             return Err(SlotError::InvalidOperation(format!(
                 "slot must be in the NotScheduled state to acquire local matches; got {:?}",
                 self.state()
             )));
+        }
+
+        if matches!(self.state(), SlotState::Preempted) {
+            tracing::info!("slot is in the Preempted state; we get another chance to match");
         }
 
         let block_size = self.block_manager.block_size();

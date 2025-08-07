@@ -297,10 +297,39 @@ impl Leader for KvConnectorLeader {
 
         for cached_req in &scheduler_output.cached_requests {
             let request_id = &cached_req.request_id;
-            assert!(
-                inflight_requests.remove(request_id),
-                "request_id {request_id} not found in inflight_requests: "
-            );
+
+            if cached_req.resumed_from_preemption {
+                // we really do not know what to expect here:
+                // first let's try to get the slot, it might fail because maybe preemption put us thru
+                // a finished cycle -- who knows
+                let shared_slot = self.slot_manager.get_slot(request_id);
+                match &shared_slot {
+                    Ok(_) => {
+                        tracing::info!("after preemption, slot is still alive");
+                    }
+                    Err(_) => {
+                        tracing::info!("after preemption, slot is not alive");
+                    }
+                }
+
+                let shared_slot = shared_slot?;
+                let mut slot = shared_slot
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("Failed to lock slot: {}", e))?;
+
+                // todo: we probably need to reset the slot state and reload it from `cache_req`; however, we do not
+                // know if it will take another pass at `get_num_new_matched_tokens` or `update_state_after_alloc`.
+                slot.reset_after_preemption()?;
+
+                // note, we can not trigger onboarding here -- perhaps we are supposed to or perhaps will get another
+                // pass at `get_num_new_matched_tokens` or `update_state_after_alloc`.
+            } else {
+                // note: evicition might trigger this assert
+                assert!(
+                    inflight_requests.remove(request_id),
+                    "request_id {request_id} not found in inflight_requests: "
+                );
+            }
 
             let shared_slot = self.slot_manager.get_slot(request_id)?;
             let mut slot = shared_slot
