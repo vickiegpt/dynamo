@@ -280,9 +280,9 @@ impl DistributedRuntime {
         let rt = rs::Worker::runtime_from_existing().map_err(to_pyerr)?;
         let handle = rt.primary();
 
-        let inner = handle
-            .block_on(rs::DistributedRuntime::from_settings(rt))
-            .map_err(to_pyerr)?;
+        let inner = tokio::task::block_in_place(|| {
+            handle.block_on(rs::DistributedRuntime::from_settings(rt))
+        }).map_err(to_pyerr)?;
 
         Ok(DistributedRuntime {
             inner,
