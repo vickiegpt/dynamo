@@ -22,7 +22,7 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::{collections::HashMap, sync::Arc};
 use tracing;
 
-use crate::model_card::model::{ModelDeploymentCard, ModelInfo, TokenizerKind};
+use crate::model_card::{ModelDeploymentCard, ModelInfo, TokenizerKind};
 use crate::preprocessor::prompt::OAIChatLikeRequest;
 use crate::tokenizers::Encoding;
 
@@ -397,8 +397,8 @@ impl OpenAIPreprocessor {
                         // Only set event if not already set to avoid overriding existing events (like errors)
                         if response.event.is_none() {
                             response.event = metrics_annotated.event;
+                            response.comment = metrics_annotated.comment;
                         }
-                        response.comment = metrics_annotated.comment;
                     }
 
                     tracing::trace!(

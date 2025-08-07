@@ -15,55 +15,87 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Deploying Inference Graphs to Kubernetes (`dynamo deploy`)
+# Deploying Inference Graphs to Kubernetes
 
-This guide explains the deployment options available for Dynamo inference graphs in Kubernetes environments.
+ We expect users to deploy their inference graphs using CRDs or helm charts.
 
-## Deployment Options
+# 1. Install Dynamo Cloud.
 
-Dynamo provides two distinct deployment options that each serve different use cases:
-1. Dynamo Cloud Kubernetes Platform is preferred in cases that support it
-2. Manual Deployment with Helm Charts is suited to users who need more control over their deployments
+Prior to deploying an inference graph the user should deploy the Dynamo Cloud Platform. Reference the [Quickstart Guide](quickstart.md) for steps to install Dynamo Cloud with Helm.
 
+Dynamo Cloud acts as an orchestration layer between the end user and Kubernetes, handling the complexity of deploying your graphs for you. This is a one-time action, only necessary the first time you deploy a DynamoGraph.
 
-### Dynamo Cloud Kubernetes Platform [PREFERRED]
+# 2. Deploy your inference graph.
 
-The Dynamo Cloud Platform (`deploy/cloud/`) provides a managed deployment experience:
+We provide a Custom Resource YAML file for many examples under the components/backends/{engine}/deploy folders. Consult the examples below for the CRs for a specific inference backend.
 
-- Contains the infrastructure components required for the Dynamo cloud platform
-- Used when deploying with the `dynamo deploy` CLI commands
-- Provides a managed deployment experience
+[View SGLang K8s](../../../components/backends/sglang/deploy/README.md)
 
-For detailed instructions on using the Dynamo Cloud Platform, see:
-- [Dynamo Cloud Platform Guide](dynamo_cloud.md): walks through installing and configuring the Dynamo cloud components on your Kubernetes cluster.
-- [Dynamo Operator Guide](dynamo_operator.md)
+[View vLLM K8s](../../../components/backends/vllm/deploy/README.md)
 
+[View TRT-LLM K8s](../../../components/backends/trtllm/deploy/README.md)
 
-### Manual Deployment with Helm Charts
+### Deploying a particular example
 
-Users who need more control over their deployments can use the manual deployment path (`deploy/helm/`):
+```bash
+# Set your dynamo root directory
+cd <root-dynamo-folder>
+export PROJECT_ROOT=$(pwd)
+export NAMESPACE=<your-namespace> # the namespace you used to deploy Dynamo cloud to.
+```
 
-- Used for manually deploying inference graphs to Kubernetes
-- Contains Helm charts and configurations for deploying individual inference pipelines
-- Provides full control over deployment parameters
-- Requires manual management of infrastructure components
-- Documentation:
-  - [Using the Deployment Script](manual_helm_deployment.md#using-the-deployment-script): all-in-one script for manual deployment
-  - [Helm Deployment Guide](manual_helm_deployment.md#helm-deployment-guide): detailed instructions for manual deployment
+Deploying an example consists of the simple `kubectl apply -f ... -n ${NAMESPACE}` command. For example:
 
-## Getting Started with Helm Deploy
+```bash
+kubectl apply -f components/backends/vllm/deploy/agg.yaml -n ${NAMESPACE}
+```
 
-1. **For Dynamo Cloud Platform**:
-   - Follow the [Dynamo Cloud Platform Guide](dynamo_cloud.md)
-   - Deploy a Hello World pipeline using the [Operator Deployment Guide](operator_deployment.md)
-   - Deploy a Dynamo LLM pipeline to Kubernetes [Deploy LLM Guide](../../examples/llm_deployment.md#deploy-to-kubernetes)
-   - Model caching with [Fluid](model_caching_with_fluid.md)
+You can use `kubectl get dynamoGraphDeployment -n ${NAMESPACE}` to view your deployment.
+You can use `kubectl delete dynamoGraphDeployment <your-dep-name> -n ${NAMESPACE}` to delete the deployment.
 
-2. **For Manual Deployment**:
-   - Follow the [Manual Helm Deployment Guide](manual_helm_deployment.md)
+We provide a Custom Resource YAML file for many examples under the `deploy/` folder.
+Use [VLLM YAML](../../components/backends/vllm/deploy/agg.yaml) for an example.
 
-## Example Deployments
+**Note 1** Example Image
 
-See the [Hello World example](../../examples/hello_world.md#deploying-to-and-running-the-example-in-kubernetes) for a complete walkthrough of deploying a simple inference graph.
+The examples use a prebuilt image from the `nvcr.io` registry.
+You can utilize public images from [Dynamo NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/ai-dynamo/collections/ai-dynamo) or build your own image and update the image location in your CR file prior to applying. Either way, you will need to overwrite the image in the example YAML.
 
-See the [LLM example](../../examples/llm_deployment.md#deploy-to-kubernetes) for a complete walkthrough of deploying a production-ready LLM inference pipeline to Kubernetes.
+To build your own image:
+
+```bash
+./container/build.sh --framework <your-inference-framework>
+```
+
+For example for the `sglang` run
+```bash
+./container/build.sh --framework sglang
+```
+
+To overwrite the image in the example:
+
+```bash
+extraPodSpec:
+        mainContainer:
+          image: <image-in-your-$DYNAMO_IMAGE>
+```
+
+**Note 2**
+Setup port forward if needed when deploying to Kubernetes.
+
+List the services in your namespace:
+
+```bash
+kubectl get svc -n ${NAMESPACE}
+```
+Look for one that ends in `-frontend` and use it for port forward.
+
+```bash
+SERVICE_NAME=$(kubectl get svc -n ${NAMESPACE} -o name | grep frontend | sed 's|.*/||' | sed 's|-frontend||' | head -n1)
+kubectl port-forward svc/${SERVICE_NAME}-frontend 8080:8080 -n ${NAMESPACE}
+```
+
+Additional Resources:
+- [Port Forward Documentation](https://kubernetes.io/docs/tasks/access-application-cluster/port-forward-access-application-cluster/)
+- [Examples Deployment Guide](../../examples/README.md#deploying-a-particular-example)
+

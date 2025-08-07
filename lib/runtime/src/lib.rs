@@ -20,7 +20,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Weak},
+    sync::{Arc, OnceLock, Weak},
 };
 use tokio::sync::Mutex;
 
@@ -36,8 +36,11 @@ pub use config::RuntimeConfig;
 pub mod component;
 pub mod discovery;
 pub mod engine;
-pub mod http_server;
+pub mod metrics_server;
+pub use metrics_server::MetricsServerInfo;
+pub mod instances;
 pub mod logging;
+pub mod metrics;
 pub mod pipeline;
 pub mod prelude;
 pub mod protocols;
@@ -58,6 +61,8 @@ pub use worker::Worker;
 
 use component::{Endpoint, InstanceSource};
 
+use config::HealthStatus;
+
 /// Types of Tokio runtimes that can be used to construct a Dynamo [Runtime].
 #[derive(Clone)]
 enum RuntimeType {
@@ -74,6 +79,74 @@ pub struct Runtime {
     cancellation_token: CancellationToken,
 }
 
+/// Current Health Status
+/// If use_endpoint_health_status is set then
+/// initialize the endpoint_health hashmap to the
+/// starting health status
+#[derive(Clone)]
+pub struct SystemHealth {
+    system_health: HealthStatus,
+    endpoint_health: HashMap<String, HealthStatus>,
+    use_endpoint_health_status: Vec<String>,
+    health_path: String,
+    live_path: String,
+}
+
+impl SystemHealth {
+    pub fn new(
+        starting_health_status: HealthStatus,
+        use_endpoint_health_status: Vec<String>,
+        health_path: String,
+        live_path: String,
+    ) -> Self {
+        let mut endpoint_health = HashMap::new();
+        for endpoint in &use_endpoint_health_status {
+            endpoint_health.insert(endpoint.clone(), starting_health_status.clone());
+        }
+        SystemHealth {
+            system_health: starting_health_status,
+            endpoint_health,
+            use_endpoint_health_status,
+            health_path,
+            live_path,
+        }
+    }
+    pub fn set_health_status(&mut self, status: HealthStatus) {
+        self.system_health = status;
+    }
+
+    pub fn set_endpoint_health_status(&mut self, endpoint: &str, status: HealthStatus) {
+        self.endpoint_health.insert(endpoint.to_string(), status);
+    }
+
+    /// Returns the overall health status and endpoint health statuses
+    pub fn get_health_status(&self) -> (bool, HashMap<String, String>) {
+        let mut endpoints: HashMap<String, String> = HashMap::new();
+        for (endpoint, ready) in &self.endpoint_health {
+            endpoints.insert(
+                endpoint.clone(),
+                if *ready == HealthStatus::Ready {
+                    "ready".to_string()
+                } else {
+                    "notready".to_string()
+                },
+            );
+        }
+
+        let healthy = if !self.use_endpoint_health_status.is_empty() {
+            self.use_endpoint_health_status.iter().all(|endpoint| {
+                self.endpoint_health
+                    .get(endpoint)
+                    .is_some_and(|status| *status == HealthStatus::Ready)
+            })
+        } else {
+            self.system_health == HealthStatus::Ready
+        };
+
+        (healthy, endpoints)
+    }
+}
+
 /// Distributed [Runtime] which provides access to shared resources across the cluster, this includes
 /// communication protocols and transports.
 #[derive(Clone)]
@@ -85,6 +158,7 @@ pub struct DistributedRuntime {
     etcd_client: Option<transports::etcd::Client>,
     nats_client: transports::nats::Client,
     tcp_server: Arc<OnceCell<Arc<transports::tcp::server::TcpStreamServer>>>,
+    metrics_server: Arc<OnceLock<Arc<metrics_server::MetricsServerInfo>>>,
 
     // local registry for components
     // the registry allows us to use share runtime resources across instances of the same component object.
@@ -99,6 +173,9 @@ pub struct DistributedRuntime {
 
     instance_sources: Arc<Mutex<HashMap<Endpoint, Weak<InstanceSource>>>>,
 
-    // Start time for tracking uptime
-    start_time: std::time::Instant,
+    // Health Status
+    system_health: Arc<std::sync::Mutex<SystemHealth>>,
+
+    // This map associates metric prefixes with their corresponding Prometheus registries.
+    prometheus_registries_by_prefix: Arc<std::sync::Mutex<HashMap<String, prometheus::Registry>>>,
 }
