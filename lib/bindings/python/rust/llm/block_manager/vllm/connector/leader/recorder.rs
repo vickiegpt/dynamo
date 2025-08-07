@@ -1,7 +1,6 @@
 use super::*;
 use anyhow;
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Action {
     GetNumNewMatchedTokens(GetNumNewMatchedTokensInput, GetNumNewMatchedTokensOutput),
@@ -33,8 +32,7 @@ pub struct UpdateStateAfterAllocInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateStateAfterAllocOutput {
-}
+pub struct UpdateStateAfterAllocOutput {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildConnectorMetaInput {
@@ -43,7 +41,7 @@ pub struct BuildConnectorMetaInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildConnectorMetaOutput {
-    metadata: Vec<u8>,
+    metadata: ConnectorMetadata,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,8 +72,7 @@ pub struct CreateSlotInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateSlotOutput {
-}
+pub struct CreateSlotOutput {}
 
 #[derive(Debug)]
 pub struct KvConnectorLeaderRecorder {
@@ -109,9 +106,11 @@ impl KvConnectorLeaderRecorder {
         let output_path = "/tmp/records.jsonl";
         tracing::info!("recording events to {}", output_path);
 
-        let recorder = drt.runtime().primary().block_on(async {
-            Recorder::new(token, &output_path, None, None, None).await
-        }).unwrap();
+        let recorder = drt
+            .runtime()
+            .primary()
+            .block_on(async { Recorder::new(token, &output_path, None, None, None).await })
+            .unwrap();
 
         let connector_leader = KvConnectorLeader {
             slot_manager: ConnectorSlotManager::new(block_manager.clone(), leader, drt.clone()),
@@ -124,7 +123,10 @@ impl KvConnectorLeaderRecorder {
         let (unbounded_tx, unbounded_rx) = mpsc::unbounded_channel();
         let recorder_tx = recorder.event_sender();
 
-        let _ = drt.runtime().primary().spawn(Self::forward_unbounded_to_sender(unbounded_rx, recorder_tx));
+        // todo(kvbm): make this a critical task
+        drt.runtime()
+            .primary()
+            .spawn(Self::forward_unbounded_to_sender(unbounded_rx, recorder_tx));
 
         Self {
             _recorder: recorder,
@@ -160,16 +162,22 @@ impl Leader for KvConnectorLeaderRecorder {
     ) -> anyhow::Result<(usize, bool)> {
         let input_copy = GetNumNewMatchedTokensInput {
             request_id: request_id.clone(),
-            request_num_tokens: request_num_tokens.clone(),
-            num_computed_tokens: num_computed_tokens.clone(),
+            request_num_tokens,
+            num_computed_tokens,
         };
-        let output = self.connector_leader.get_num_new_matched_tokens(request_id, request_num_tokens, num_computed_tokens);
-        let output_copy = output.as_ref().unwrap().clone();
-        let _ = self.unbounded_tx.send(Action::GetNumNewMatchedTokens(input_copy, GetNumNewMatchedTokensOutput {
-                num_new_matched_tokens: output_copy.0,
-                has_matched: output_copy.1,
-            }));
-        output
+        let output = self.connector_leader.get_num_new_matched_tokens(
+            request_id,
+            request_num_tokens,
+            num_computed_tokens,
+        )?;
+        let _ = self.unbounded_tx.send(Action::GetNumNewMatchedTokens(
+            input_copy,
+            GetNumNewMatchedTokensOutput {
+                num_new_matched_tokens: output.0,
+                has_matched: output.1,
+            },
+        ));
+        Ok(output)
     }
 
     /// We drop the need to pass in the KvCacheBlocks and the num_external_tokens as they are captured
@@ -186,10 +194,17 @@ impl Leader for KvConnectorLeaderRecorder {
         let input_copy = UpdateStateAfterAllocInput {
             request_id: request_id.clone(),
             block_ids: block_ids.clone(),
-            num_external_tokens: num_external_tokens.clone(),
+            num_external_tokens,
         };
-        let _ = self.connector_leader.update_state_after_alloc(request_id, block_ids, num_external_tokens).unwrap();
-        let _ = self.unbounded_tx.send(Action::UpdateStateAfterAlloc(input_copy, UpdateStateAfterAllocOutput {}));
+        self.connector_leader.update_state_after_alloc(
+            request_id,
+            block_ids,
+            num_external_tokens,
+        )?;
+        let _ = self.unbounded_tx.send(Action::UpdateStateAfterAlloc(
+            input_copy,
+            UpdateStateAfterAllocOutput {},
+        ));
         Ok(())
     }
 
@@ -200,27 +215,37 @@ impl Leader for KvConnectorLeaderRecorder {
         let input_copy = BuildConnectorMetaInput {
             scheduler_output: scheduler_output.clone(),
         };
-        let output = self.connector_leader.build_connector_metadata(scheduler_output);
-        let output_copy = output.as_ref().unwrap().clone();
-        let _ = self.unbounded_tx
-                .send(Action::BuildConnectorMeta(input_copy, BuildConnectorMetaOutput {
-                    metadata: output_copy,
-                }));
-        output
+        let output = self
+            .connector_leader
+            .build_connector_metadata(scheduler_output)?;
+        let _ = self.unbounded_tx.send(Action::BuildConnectorMeta(
+            input_copy,
+            BuildConnectorMetaOutput {
+                metadata: serde_json::from_slice(&output)?,
+            },
+        ));
+        Ok(output)
     }
 
-    fn request_finished(&mut self, request_id: String, block_ids: Vec<BlockId>) -> anyhow::Result<bool> {
+    fn request_finished(
+        &mut self,
+        request_id: String,
+        block_ids: Vec<BlockId>,
+    ) -> anyhow::Result<bool> {
         let input_copy = RequestFinishedInput {
             request_id: request_id.clone(),
             block_ids: block_ids.clone(),
         };
-        let output = self.connector_leader.request_finished(request_id, block_ids);
-        let output_copy = output.as_ref().unwrap().clone();
-        let _ = self.unbounded_tx
-                .send(Action::RequestFinished(input_copy, RequestFinishedOutput {
-                    is_finished: output_copy,
-                }));
-        output
+        let output = self
+            .connector_leader
+            .request_finished(request_id, block_ids)?;
+        let _ = self.unbounded_tx.send(Action::RequestFinished(
+            input_copy,
+            RequestFinishedOutput {
+                is_finished: output,
+            },
+        ));
+        Ok(output)
     }
 
     fn has_slot(&self, request_id: String) -> bool {
@@ -228,11 +253,10 @@ impl Leader for KvConnectorLeaderRecorder {
             request_id: request_id.clone(),
         };
         let output = self.connector_leader.has_slot(request_id);
-        let output_copy = output.clone();
-        let _ = self.unbounded_tx
-                .send(Action::HasSlot(input_copy, HasSlotOutput {
-                    result: output_copy,
-                }));
+        let _ = self.unbounded_tx.send(Action::HasSlot(
+            input_copy,
+            HasSlotOutput { result: output },
+        ));
         output
     }
 
@@ -244,7 +268,9 @@ impl Leader for KvConnectorLeaderRecorder {
             tokens: tokens.clone(),
         };
         let _ = self.connector_leader.create_slot(request, tokens);
-        let _ = self.unbounded_tx.send(Action::CreateSlot(input_copy, CreateSlotOutput {}));
+        let _ = self
+            .unbounded_tx
+            .send(Action::CreateSlot(input_copy, CreateSlotOutput {}));
         Ok(())
     }
 }

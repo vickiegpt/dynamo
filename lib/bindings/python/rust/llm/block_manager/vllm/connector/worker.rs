@@ -16,11 +16,11 @@ use crate::{
     DistributedRuntime as PyDistributedRuntime,
 };
 
+use anyhow;
 use dynamo_llm::block_manager::distributed::{KvbmWorker, KvbmWorkerConfig};
 use dynamo_llm::block_manager::storage::torch::TorchTensor;
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
 use dynamo_runtime::DistributedRuntime;
-use anyhow;
 
 pub trait Worker: Send + Sync {
     fn register_kv_caches(
@@ -30,6 +30,7 @@ pub trait Worker: Send + Sync {
         device_id: usize,
         dtype_width_bytes: usize,
         kv_caches: Vec<(String, Arc<VllmTensor>)>,
+        raw_event_handles: Vec<u64>,
     ) -> anyhow::Result<()>;
 
     fn bind_connector_metadata(&mut self, metadata: Vec<u8>) -> anyhow::Result<()>;
@@ -50,7 +51,7 @@ pub struct KvConnectorWorker {
     connector: WorkerSchedulerClient,
     transfer_client: TransferSchedulerClient,
 
-    kv_cache_names: Vec<(String, Arc<VllmTensor>)>,
+    kv_cache_layers: Vec<(String, Arc<VllmTensor>)>,
 
     /// Map of request id to inflight load requests
     maybe_finished_onboarding: HashSet<String>,
@@ -103,7 +104,7 @@ impl KvConnectorWorker {
             bound: false,
             iteration: 0,
             layers_complete: 0,
-            kv_cache_names: Vec::new(),
+            kv_cache_layers: Vec::new(),
             layer_events: Vec::new(),
         })
     }
@@ -128,20 +129,24 @@ impl Worker for KvConnectorWorker {
             return Err(anyhow::anyhow!("kvbm worker already registered"));
         }
 
+        assert_eq!(
+            kv_caches.len(),
+            raw_event_handles.len(),
+            "kv_caches and raw_event_handles must have the same length"
+        );
+
         // Process kv_caches in layer execution order (already sorted by layer index)
         let mut vllm_tensors = Vec::new();
         for (layer_name, vllm_tensor) in kv_caches {
             tracing::trace!("Registering KV cache layer: {layer_name}, tensor: {vllm_tensor:?}");
 
             // Store for later lookup by name
-            self.kv_caches.insert(layer_name, vllm_tensor.clone());
+            self.kv_cache_layers.push((layer_name, vllm_tensor.clone()));
 
             // Build ordered tensor list for worker config
             vllm_tensors.push(vllm_tensor as Arc<dyn TorchTensor>);
         }
 
-        assert_eq!(kv_cache_names.len(), raw_event_handles.len());
-        self.kv_cache_names = kv_cache_names;
         self.layer_events = raw_event_handles;
 
         let config = KvbmWorkerConfig::builder()
@@ -155,14 +160,10 @@ impl Worker for KvConnectorWorker {
             .scheduler_client(Some(self.transfer_client.clone()))
             .build()?;
 
-        let worker = self
-            .drt
-            .runtime()
-            .primary()
-            .block_on(async move {
-                let worker = KvbmWorker::new(config).await?;
-                anyhow::Ok(worker)
-            })?;
+        let worker = self.drt.runtime().primary().block_on(async move {
+            let worker = KvbmWorker::new(config).await?;
+            anyhow::Ok(worker)
+        })?;
 
         self.kvbm_worker
             .set(worker)
@@ -175,7 +176,7 @@ impl Worker for KvConnectorWorker {
     /// This action translates the metadata into a set of actions that the worker will perform.
     /// All actions much be assigned to a slot before [`KvConnectorWorker::clear_metadata`] is called.
     fn bind_connector_metadata(&mut self, metadata: Vec<u8>) -> anyhow::Result<()> {
-        debug_assert!(!self.bound, "connector metadata already bound");
+        // debug_assert!(!self.bound, "connector metadata already bound");
         let metadata: ConnectorMetadata = serde_json::from_slice(&metadata)?;
         self.bound = true;
         self.iteration = metadata.iteration;
@@ -255,7 +256,7 @@ impl Worker for KvConnectorWorker {
     /// Trigger block-wise completion signals afer last layer.
     fn save_kv_layer(&mut self, _layer_name: String) -> anyhow::Result<()> {
         self.layers_complete += 1;
-        if self.layers_complete == self.kv_cache_names.len() {
+        if self.layers_complete == self.kv_cache_layers.len() {
             let offloading_operations = std::mem::take(&mut self.offloading_operations);
 
             // block on the the completion of the last layer
@@ -363,7 +364,8 @@ impl PyKvConnectorWorker {
     #[new]
     #[pyo3(signature = (py_drt, vllm_worker_id))]
     pub fn new(py_drt: PyDistributedRuntime, vllm_worker_id: String) -> PyResult<Self> {
-        let connector_worker: Box<dyn Worker> = Box::new(KvConnectorWorker::new(py_drt, vllm_worker_id).map_err(to_pyerr)?);
+        let connector_worker: Box<dyn Worker> =
+            Box::new(KvConnectorWorker::new(py_drt, vllm_worker_id).map_err(to_pyerr)?);
         Ok(Self { connector_worker })
     }
 
@@ -374,6 +376,7 @@ impl PyKvConnectorWorker {
         device_id: usize,
         dtype_width_bytes: usize,
         kv_caches: Vec<(String, Py<PyAny>)>,
+        raw_event_handles: Vec<u64>,
     ) -> PyResult<()> {
         // Convert Python tensors to Rust VllmTensor objects
         let mut rust_kv_caches = Vec::new();
@@ -381,14 +384,23 @@ impl PyKvConnectorWorker {
             let vllm_tensor = Arc::new(VllmTensor::new(py_tensor).map_err(to_pyerr)?);
             rust_kv_caches.push((layer_name, vllm_tensor));
         }
-        
+
         self.connector_worker
-            .register_kv_caches(num_device_blocks, page_size, device_id, dtype_width_bytes, rust_kv_caches)
+            .register_kv_caches(
+                num_device_blocks,
+                page_size,
+                device_id,
+                dtype_width_bytes,
+                rust_kv_caches,
+                raw_event_handles,
+            )
             .map_err(to_pyerr)
     }
 
     pub fn bind_connector_metadata(&mut self, metadata: Vec<u8>) -> PyResult<()> {
-        self.connector_worker.bind_connector_metadata(metadata).map_err(to_pyerr)
+        self.connector_worker
+            .bind_connector_metadata(metadata)
+            .map_err(to_pyerr)
     }
 
     pub fn clear_connector_metadata(&mut self) {
@@ -397,7 +409,9 @@ impl PyKvConnectorWorker {
 
     pub fn save_kv_layer(&mut self, layer_name: String, _kv_layer: Py<PyAny>) -> PyResult<()> {
         // Note: kv_layer is not used in the current implementation
-        self.connector_worker.save_kv_layer(layer_name).map_err(to_pyerr)
+        self.connector_worker
+            .save_kv_layer(layer_name)
+            .map_err(to_pyerr)
     }
 
     pub fn get_finished(
@@ -406,7 +420,7 @@ impl PyKvConnectorWorker {
     ) -> (HashSet<String>, HashSet<String>) {
         self.connector_worker.get_finished(finished_requests)
     }
-
+}
 
 use cudarc::driver::sys::{
     cuCtxGetCurrent, cuEventSynchronize, cudaError_enum, CUcontext, CUevent,
