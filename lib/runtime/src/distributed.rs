@@ -17,18 +17,30 @@ pub use crate::component::Component;
 use crate::{
     component::{self, ComponentBuilder, Endpoint, InstanceSource, Namespace},
     discovery::DiscoveryClient,
+    metrics::MetricsRegistry,
     service::ServiceClient,
     transports::{etcd, nats, tcp},
     ErrorContext,
 };
 
-use super::{error, Arc, DistributedRuntime, OnceCell, Result, Runtime, Weak, OK};
+use super::{error, Arc, DistributedRuntime, OnceCell, Result, Runtime, SystemHealth, Weak, OK};
+use std::sync::OnceLock;
 
 use derive_getters::Dissolve;
 use figment::error;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+
+impl MetricsRegistry for DistributedRuntime {
+    fn basename(&self) -> String {
+        "".to_string() // drt has no basename. Basename only begins with the Namespace.
+    }
+
+    fn parent_hierarchy(&self) -> Vec<String> {
+        vec![] // drt is the root, so no parent hierarchy
+    }
+}
 
 impl DistributedRuntime {
     pub async fn new(runtime: Runtime, config: DistributedConfig) -> Result<Self> {
@@ -65,40 +77,75 @@ impl DistributedRuntime {
             })
             .await??;
 
+        // Start system metrics server for health and metrics if enabled in configuration
+        let config = crate::config::RuntimeConfig::from_settings().unwrap_or_default();
+        // IMPORTANT: We must extract cancel_token from runtime BEFORE moving runtime into the struct below.
+        // This is because after moving, runtime is no longer accessible in this scope (ownership rules).
+        let cancel_token = if config.system_server_enabled() {
+            Some(runtime.clone().child_token())
+        } else {
+            None
+        };
+        let starting_health_status = config.starting_health_status.clone();
+        let use_endpoint_health_status = config.use_endpoint_health_status.clone();
+        let health_endpoint_path = config.system_health_path.clone();
+        let live_endpoint_path = config.system_live_path.clone();
+        let system_health = Arc::new(std::sync::Mutex::new(SystemHealth::new(
+            starting_health_status,
+            use_endpoint_health_status,
+            health_endpoint_path,
+            live_endpoint_path,
+        )));
+
         let distributed_runtime = Self {
             runtime,
             etcd_client,
             nats_client,
             tcp_server: Arc::new(OnceCell::new()),
+            metrics_server: Arc::new(OnceLock::new()),
             component_registry: component::Registry::new(),
             is_static,
             instance_sources: Arc::new(Mutex::new(HashMap::new())),
-            start_time: std::time::Instant::now(),
+            prometheus_registries_by_prefix: Arc::new(std::sync::Mutex::new(HashMap::<
+                String,
+                prometheus::Registry,
+            >::new())),
+            system_health,
         };
 
-        // Start HTTP server for health and metrics (if enabled)
-        let config = crate::config::RuntimeConfig::from_settings().unwrap_or_default();
-        if config.system_server_enabled() {
-            let drt_arc = Arc::new(distributed_runtime.clone());
-            let runtime_clone = distributed_runtime.runtime.clone();
-            // spawn_http_server spawns its own background task:
-            match crate::http_server::spawn_http_server(
-                &config.system_host,
-                config.system_port,
-                runtime_clone.child_token(),
-                drt_arc,
+        // Start metrics server if enabled
+        if let Some(cancel_token) = cancel_token {
+            let host = config.system_host.clone();
+            let port = config.system_port;
+
+            // Start metrics server (it spawns its own task internally)
+            match crate::metrics_server::spawn_metrics_server(
+                &host,
+                port,
+                cancel_token,
+                Arc::new(distributed_runtime.clone()),
             )
             .await
             {
-                Ok((addr, _handle)) => {
-                    tracing::info!("HTTP server started successfully on {}", addr);
+                Ok((addr, handle)) => {
+                    tracing::info!("Metrics server started successfully on {}", addr);
+
+                    // Store metrics server information
+                    let metrics_server_info =
+                        crate::metrics_server::MetricsServerInfo::new(addr, Some(handle));
+
+                    // Initialize the metrics_server field
+                    distributed_runtime
+                        .metrics_server
+                        .set(Arc::new(metrics_server_info))
+                        .expect("Metrics server info should only be set once");
                 }
                 Err(e) => {
-                    tracing::error!("HTTP server startup failed: {}", e);
+                    tracing::error!("Metrics server startup failed: {}", e);
                 }
             }
         } else {
-            tracing::debug!("Health and metrics HTTP server is disabled via DYN_SYSTEM_ENABLED");
+            tracing::debug!("Health and metrics server is disabled via DYN_SYSTEM_ENABLED");
         }
 
         Ok(distributed_runtime)
@@ -179,6 +226,11 @@ impl DistributedRuntime {
         self.nats_client.clone()
     }
 
+    /// Get metrics server information if available
+    pub fn metrics_server_info(&self) -> Option<Arc<crate::metrics_server::MetricsServerInfo>> {
+        self.metrics_server.get().cloned()
+    }
+
     // todo(ryan): deprecate this as we move to Discovery traits and Component Identifiers
     pub fn etcd_client(&self) -> Option<etcd::Client> {
         self.etcd_client.clone()
@@ -190,11 +242,6 @@ impl DistributedRuntime {
 
     pub fn instance_sources(&self) -> Arc<Mutex<HashMap<Endpoint, Weak<InstanceSource>>>> {
         self.instance_sources.clone()
-    }
-
-    /// Get the uptime of this DistributedRuntime in seconds
-    pub fn uptime(&self) -> std::time::Duration {
-        self.start_time.elapsed()
     }
 }
 
