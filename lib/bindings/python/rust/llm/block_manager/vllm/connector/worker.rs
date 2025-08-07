@@ -6,7 +6,7 @@ use dynamo_llm::block_manager::connector::scheduler::{
     Scheduler, TransferSchedulerClient, WorkerSchedulerClient,
 };
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 use super::*;
@@ -28,8 +28,7 @@ pub struct KvConnectorWorker {
     connector: WorkerSchedulerClient,
     transfer_client: TransferSchedulerClient,
 
-    // request_slots: HashMap<String, WorkerSlot>,
-    kv_caches: HashMap<String, Arc<VllmTensor>>,
+    kv_cache_names: Vec<(String, Arc<VllmTensor>)>,
 
     /// Map of request id to inflight load requests
     maybe_finished_onboarding: HashSet<String>,
@@ -43,6 +42,9 @@ pub struct KvConnectorWorker {
     bound: bool,
     iteration: u64,
     layers_complete: usize,
+
+    /// cuda events created by the python side
+    layer_events: Vec<u64>,
 }
 
 #[pymethods]
@@ -76,13 +78,14 @@ impl KvConnectorWorker {
             kvbm_worker: OnceLock::new(),
             connector: worker_client,
             transfer_client,
-            kv_caches: HashMap::new(),
             maybe_finished_onboarding: HashSet::new(),
             maybe_finished_offloading: HashSet::new(),
             offloading_operations: Vec::new(),
             bound: false,
             iteration: 0,
             layers_complete: 0,
+            kv_cache_names: Vec::new(),
+            layer_events: Vec::new(),
         })
     }
 
@@ -97,6 +100,7 @@ impl KvConnectorWorker {
         device_id: usize,
         dtype_width_bytes: usize,
         kv_caches: Vec<(String, Py<PyAny>)>,
+        raw_event_handles: Vec<u64>,
     ) -> PyResult<()> {
         if self.kvbm_worker.get().is_some() {
             tracing::warn!("kvbm worker already registered");
@@ -105,16 +109,19 @@ impl KvConnectorWorker {
 
         // Process kv_caches in layer execution order (already sorted by layer index)
         let mut vllm_tensors = Vec::new();
+        let mut kv_cache_names = Vec::new();
         for (layer_name, torch_tensor) in kv_caches {
             let vllm_tensor = Arc::new(VllmTensor::new(torch_tensor).map_err(to_pyerr)?);
-            tracing::trace!("Registering KV cache layer: {layer_name}, tensor: {vllm_tensor:?}");
-
-            // Store for later lookup by name
-            self.kv_caches.insert(layer_name, vllm_tensor.clone());
+            tracing::debug!("Registering KV cache layer: {layer_name}, tensor: {vllm_tensor:?}");
 
             // Build ordered tensor list for worker config
+            kv_cache_names.push((layer_name, vllm_tensor.clone()));
             vllm_tensors.push(vllm_tensor as Arc<dyn TorchTensor>);
         }
+
+        assert_eq!(kv_cache_names.len(), raw_event_handles.len());
+        self.kv_cache_names = kv_cache_names;
+        self.layer_events = raw_event_handles;
 
         let config = KvbmWorkerConfig::builder()
             .drt(self.drt.clone())
@@ -149,7 +156,7 @@ impl KvConnectorWorker {
     /// This action translates the metadata into a set of actions that the worker will perform.
     /// All actions much be assigned to a slot before [`KvConnectorWorker::clear_metadata`] is called.
     pub fn bind_connector_metadata(&mut self, metadata: Vec<u8>) -> PyResult<()> {
-        debug_assert!(!self.bound, "connector metadata already bound");
+        // debug_assert!(!self.bound, "connector metadata already bound");
         let metadata: ConnectorMetadata = serde_json::from_slice(&metadata).map_err(to_pyerr)?;
         self.bound = true;
         self.iteration = metadata.iteration;
@@ -229,8 +236,13 @@ impl KvConnectorWorker {
     /// Trigger block-wise completion signals afer last layer.
     pub fn save_kv_layer(&mut self, _layer_name: String, _kv_layer: Py<PyAny>) -> PyResult<()> {
         self.layers_complete += 1;
-        if self.layers_complete == self.kv_caches.len() {
+        if self.layers_complete == self.kv_cache_names.len() {
             let offloading_operations = std::mem::take(&mut self.offloading_operations);
+
+            // block on the the completion of the last layer
+            // todo(ryan): capture the context, pass this to the scheduler to do the await on another thread
+            // or put the event on a stream and use stream waits to keep it all on device.
+            event_sync_blocking(self.layer_events[self.layers_complete - 1]);
             for operation in offloading_operations {
                 self.connector.enqueue_request(operation);
             }
@@ -320,4 +332,31 @@ impl KvConnectorWorker {
 
         (is_finished_offloading, is_finished_onboarding)
     }
+}
+
+use cudarc::driver::sys::{
+    cuCtxGetCurrent, cuEventSynchronize, cudaError_enum, CUcontext, CUevent,
+};
+use std::ptr;
+
+// todo(ryan): we will need this if we farm off the cuEventSynchronize to another thread
+fn _get_current_context() -> CUcontext {
+    let mut ctx: CUcontext = ptr::null_mut();
+    let status = unsafe { cuCtxGetCurrent(&mut ctx) };
+    assert_eq!(
+        status,
+        cudaError_enum::CUDA_SUCCESS,
+        "cuCtxGetCurrent failed"
+    );
+    assert!(!ctx.is_null(), "Torch has not set a CUDA context");
+    ctx
+}
+
+fn event_sync_blocking(event: u64) {
+    let status = unsafe { cuEventSynchronize(event as CUevent) };
+    assert_eq!(
+        status,
+        cudaError_enum::CUDA_SUCCESS,
+        "cuEventSynchronize failed"
+    );
 }
