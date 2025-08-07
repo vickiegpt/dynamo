@@ -35,6 +35,7 @@ class Config:
             DEFAULT_DISAGGREGATION_STRATEGY
         )
         self.next_endpoint: str = ""
+        self.spec_dec_mode: Optional[str] = None
 
     def __str__(self) -> str:
         return (
@@ -49,7 +50,8 @@ class Config:
             f"publish_events_and_metrics={self.publish_events_and_metrics}, "
             f"disaggregation_mode={self.disaggregation_mode}, "
             f"disaggregation_strategy={self.disaggregation_strategy}, "
-            f"next_endpoint={self.next_endpoint})"
+            f"next_endpoint={self.next_endpoint}, "
+            f"spec_dec_mode={self.spec_dec_mode})"
         )
 
 
@@ -69,6 +71,20 @@ def is_first_worker(config):
         ) and (config.disaggregation_mode == DisaggregationMode.DECODE)
 
     return is_primary_worker
+
+
+def is_drafter(config):
+    """
+    Check if the current worker is a drafter worker.
+    """
+    return config.component == "drafter"
+
+
+def is_verifier(config):
+    """
+    Check if the current worker is a verifier worker.
+    """
+    return config.component == "verifier"
 
 
 def parse_endpoint(endpoint: str) -> tuple[str, str, str]:
@@ -145,6 +161,13 @@ def cmd_line_args():
         default="",
         help=f"Endpoint(in 'dyn://namespace.component.endpoint' format) to send requests to when running in disaggregation mode. Default: {DEFAULT_NEXT_ENDPOINT} if first worker, empty if next worker",
     )
+    parser.add_argument(
+        "--spec-dec-mode",
+        type=str,
+        default=None,
+        choices=["drafter", "verifier"],
+        help="Mode to use for speculative decoding. Options: 'drafter', 'verifier'. Default: None",
+    )
     args = parser.parse_args()
 
     config = Config()
@@ -190,5 +213,6 @@ def cmd_line_args():
     config.kv_block_size = args.kv_block_size
     config.extra_engine_args = args.extra_engine_args
     config.publish_events_and_metrics = args.publish_events_and_metrics
+    config.spec_dec_mode = args.spec_dec_mode
 
     return config

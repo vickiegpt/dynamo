@@ -31,6 +31,4 @@ kv_cache_config:
   enable_block_reuse: false
 
 cuda_graph_config:
-  use_cuda_graph: true
-  #cuda_graph_batch_sizes:
-  #- 1
+  max_batch_size: 16

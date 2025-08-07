@@ -29,4 +29,4 @@ kv_cache_config:
 # config field from 'enable_overlap_scheduler' to 'disable_overlap_scheduler':
 # https://github.com/NVIDIA/TensorRT-LLM/commit/b4e5df0ee0024eda3eeb83a6ba822245a30ab428
 cuda_graph_config:
-  use_cuda_graph: true
+  max_batch_size: 16
