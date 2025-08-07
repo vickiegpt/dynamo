@@ -1,11 +1,13 @@
 import torch
 from torch.multiprocessing.reductions import reduce_tensor
 
-from vllm.config import LoadConfig, VllmConfig, set_current_vllm_config
+from vllm.config import VllmConfig, set_current_vllm_config
 from vllm.distributed import parallel_state
 from vllm.logger import init_logger
 from vllm.model_executor.model_loader.default_loader import DefaultModelLoader
-from vllm.distributed.parallel_state import DRY_RUN_BACKEND
+from vllm.distributed.parallel_state import NON_DEVICE_BACKEND
+from vllm.model_executor.parameter import UninitializedParameterFromTensor
+from vllm.utils import get_distributed_init_method
 
 from .companion_messages import CUDATensorRebuildInfo
 
@@ -25,14 +27,14 @@ def override_vllm_config(
         device_config=vllm_config.device_config,
         load_config=vllm_config.load_config,
     )
-    # Override load config for dry run on SPECIFIED device
+    # Override load config for non-device run on SPECIFIED device
     # NOTE: we use device_id and not local_rank because we assume CUDA_VISIBLE_DEVICES is not set
     # local_rank would come from the client view which may not be correct
     new_vllm_config.load_config.device = torch.device(f"cuda:{device_id}")
 
     # We want to load the model for real here
     new_vllm_config.load_config.enable_ipc_loading = False
-
+    
     return new_vllm_config
 
 
@@ -44,11 +46,13 @@ class ModelInstanceManager:
         local_rank: int,
         global_rank: int,
         world_size: int,
+        companion_master_port: int,
     ):
         self.local_rank = local_rank
         self.global_rank = global_rank
         self.world_size = world_size
-
+        self.companion_master_port = companion_master_port
+        
         self.vllm_config = override_vllm_config(
             vllm_config,
             device_id,
@@ -58,65 +62,76 @@ class ModelInstanceManager:
 
         self._model = None
         self._model_parameters_ipc_info: dict[str, CUDATensorRebuildInfo] = {}
-
-        with set_current_vllm_config(self.vllm_config):
-            self._load_model()
-
-    def _initialize_dry_distributed_environment(self):
-        """Initialize distributed environment in dry mode for correct weight loading."""
-        # Set environment variables for torch.distributed if not set
-        logger.warning("Initializing dry distributed environment...")
-        # Initialize distributed environment in dry mode
-        parallel_state.init_distributed_environment(
-            world_size=self.world_size,
-            rank=self.global_rank,
-            distributed_init_method="env://",
-            local_rank=self.local_rank,
-            backend=DRY_RUN_BACKEND,
-        )
-        logger.warning("Dry distributed environment initialized!")
-
-        # Initialize model parallel groups
-        parallel_state.initialize_model_parallel(
-            tensor_model_parallel_size=self.vllm_config.parallel_config.tensor_parallel_size,
-            pipeline_model_parallel_size=self.vllm_config.parallel_config.pipeline_parallel_size,
-        )
-
-        logger.info(
-            "Initialized dry distributed environment: local rank=%d, global rank=%d, world_size=%d, "
-            "TP=%d, PP=%d, DP=%d",
-            self.local_rank,
-            self.global_rank,
-            self.world_size,
-            self.vllm_config.parallel_config.tensor_parallel_size,
-            self.vllm_config.parallel_config.pipeline_parallel_size,
-            self.vllm_config.parallel_config.data_parallel_size,
-        )
-
-    def _load_model(self):
-        # Initialize dry distributed environment first
-        self._initialize_dry_distributed_environment()
-
+        self._distributed_initialized = False
+    
+    def initialize_distributed(self):
+        """Initialize distributed environment. Must be called from main thread."""
+        if self._distributed_initialized:
+            logger.warning("[DIST-INIT] Distributed already initialized, skipping")
+            return
+            
+        logger.info("[DIST-INIT] Initializing distributed environment from main thread")
+        self._initialize_non_device_distributed_environment()
+        self._distributed_initialized = True
+        logger.info("[DIST-INIT] ✓ Distributed environment initialized successfully")
+    
+    def load_model_weights(self):
+        """Load model weights. Can be called from thread pool."""
+        if not self._distributed_initialized:
+            raise RuntimeError("Must call initialize_distributed() before load_model_weights()")
+        
+        logger.info("[MODEL-LOAD] Starting model weight loading in thread pool")
+        
         # Create model loader
-        load_config = LoadConfig()
-        default_loader = DefaultModelLoader(load_config=load_config)
+        assert self.vllm_config.load_config is not None
+        assert self.vllm_config.load_config.enable_ipc_loading is False
+        
+        logger.info(
+            "[MODEL-LOAD] Creating DefaultModelLoader with load_config:\n"
+            "  device=%s\n"
+            "  load_format=%s\n"
+            "  download_dir=%s",
+            self.vllm_config.load_config.device,
+            self.vllm_config.load_config.load_format,
+            self.vllm_config.load_config.download_dir,
+        )
+        
+        default_loader = DefaultModelLoader(self.vllm_config.load_config)
 
-        logger.info("Loading model %s...", self.vllm_config.model_config.model)
-
-        self._model = default_loader.load_model(
-            self.vllm_config, self.vllm_config.model_config
+        architectures = getattr(self.vllm_config.model_config, 'architectures', [])
+        architecture_name = architectures[0] if architectures else "Unknown"
+        logger.info(
+            "[MODEL-LOAD] Starting model load for %s\n"
+            "  Model architecture: %s\n"
+            "  Current device: %s",
+            self.vllm_config.model_config.model,
+            architecture_name,
+            self.vllm_config.load_config.device,
         )
 
+        # Load model with vllm config context
+        with set_current_vllm_config(self.vllm_config):
+            self._model = default_loader.load_model(
+                self.vllm_config, self.vllm_config.model_config
+            )
+
+        logger.info("[MODEL-LOAD] ✓ Model loaded successfully!")
+        
         # Make sure model is in eval mode
         assert self._model.training is False
 
-        logger.info("Model loaded! Getting IPC rebuild info...")
-
+        logger.info("[MODEL-LOAD] Getting IPC rebuild info for model parameters...")
+        
         # Extract parameters and create IPC rebuild info
         self._model_parameters_ipc_info = {}
         for name, param in self._model.named_parameters():
             if not isinstance(param, torch.nn.Parameter):
                 continue
+
+            # Check if parameter is still uninitialized (should not happen after load_weights)
+            if isinstance(param, UninitializedParameterFromTensor):
+                logger.error("Parameter %s is still uninitialized after weight loading!", name)
+                raise RuntimeError(f"Failed to materialize parameter {name}")
 
             # Make sure parameter is on the current device ID
             assert param.device == self.vllm_config.load_config.device
@@ -136,8 +151,150 @@ class ModelInstanceManager:
             )
 
         logger.info(
-            "Model initialized with %d parameters ready for IPC sharing",
+            "[MODEL-LOAD] Model initialized with %d parameters ready for IPC sharing",
             len(self._model_parameters_ipc_info),
+        )
+
+    def _initialize_non_device_distributed_environment(self):
+        """Initialize distributed environment in non-device mode for correct weight loading."""
+        logger.info(
+            "[DIST-INIT] Starting companion shadow process initialization:\n"
+            "  local_rank=%d, global_rank=%d, world_size=%d\n"
+            "  TP=%d, PP=%d, DP=%d, Expert Parallel enabled=%s\n"
+            "  companion_master_port=%d",
+            self.local_rank, self.global_rank, self.world_size,
+            self.vllm_config.parallel_config.tensor_parallel_size,
+            self.vllm_config.parallel_config.pipeline_parallel_size,
+            self.vllm_config.parallel_config.data_parallel_size,
+            self.vllm_config.parallel_config.enable_expert_parallel,
+            self.companion_master_port,
+        )
+        
+        # Initialize distributed environment in non-device mode with REQUIRED real CPU group
+        # The real CPU group is essential for in_the_same_node_as and _node_count to work
+        # NOTE: We use the same master IP as vLLM but with a dedicated companion master port to avoid conflicts
+        # However, with DP > 1 vLLM automatically sets the master port to the next free port which will break this for now
+        init_method = get_distributed_init_method(
+            self.vllm_config.parallel_config.data_parallel_master_ip,
+            self.companion_master_port
+        )
+        
+        logger.info(
+            "[DIST-INIT] About to call parallel_state.init_distributed_environment:\n"
+            "  init_method=%s\n"
+            "  backend=%s (will use gloo for non-device run)\n"
+            "  world_size=%d, rank=%d, local_rank=%d",
+            init_method,
+            NON_DEVICE_BACKEND,
+            self.world_size,
+            self.global_rank,
+            self.local_rank,
+        )
+        
+        # Check if torch.distributed is already initialized
+        import torch.distributed
+        if torch.distributed.is_initialized():
+            logger.warning(
+                "[DIST-INIT] torch.distributed is already initialized! "
+                "Current rank=%d, world_size=%d",
+                torch.distributed.get_rank() if torch.distributed.is_initialized() else -1,
+                torch.distributed.get_world_size() if torch.distributed.is_initialized() else -1,
+            )
+        
+        logger.info("[DIST-INIT] Calling parallel_state.init_distributed_environment NOW...")
+        
+        parallel_state.init_distributed_environment(
+            world_size=self.world_size,
+            rank=self.global_rank,
+            distributed_init_method=init_method,
+            local_rank=self.local_rank,
+            backend=NON_DEVICE_BACKEND,
+        )
+        
+        logger.info(
+            "[DIST-INIT] ✓ parallel_state.init_distributed_environment completed successfully!\n"
+            "  torch.distributed.is_initialized()=%s\n"
+            "  torch.distributed rank=%d, world_size=%d",
+            torch.distributed.is_initialized(),
+            torch.distributed.get_rank() if torch.distributed.is_initialized() else -1,
+            torch.distributed.get_world_size() if torch.distributed.is_initialized() else -1,
+        )
+
+        # Initialize model parallel groups
+        tp_size = self.vllm_config.parallel_config.tensor_parallel_size
+        pp_size = self.vllm_config.parallel_config.pipeline_parallel_size
+        
+        logger.info(
+            "[DIST-INIT] About to call parallel_state.initialize_model_parallel:\n"
+            "  tensor_model_parallel_size=%d\n"
+            "  pipeline_model_parallel_size=%d",
+            tp_size, pp_size
+        )
+        
+        parallel_state.initialize_model_parallel(
+            tensor_model_parallel_size=tp_size,
+            pipeline_model_parallel_size=pp_size,
+        )
+        
+        logger.info("[DIST-INIT] ✓ parallel_state.initialize_model_parallel completed successfully!")
+        
+        # Log information about created process groups
+        pp_group = parallel_state.get_pp_group()
+        world_group = parallel_state.get_world_group()
+        
+        # Get DP and EP groups if they exist
+        try:
+            dp_group = parallel_state.get_dp_group()
+            dp_size = dp_group.world_size
+            dp_rank = dp_group.rank_in_group
+        except (AssertionError, AttributeError):
+            # DP group may not be initialized
+            dp_size = 1
+            dp_rank = 0
+            
+        try:
+            ep_group = parallel_state.get_ep_group()
+            ep_size = ep_group.world_size
+            ep_rank = ep_group.rank_in_group
+        except (AssertionError, AttributeError):
+            # EP group may not be initialized
+            ep_size = 1
+            ep_rank = 0
+        
+        logger.info(
+            "[DIST-INIT] Process groups created:\n"
+            "  TP group: size=%d, rank=%d\n"
+            "  PP group: size=%d, rank=%d\n"
+            "  DP group: size=%d, rank=%d\n"
+            "  EP group: size=%d, rank=%d\n"
+            "  World group: size=%d, rank=%d",
+            parallel_state.get_tensor_model_parallel_world_size(),
+            parallel_state.get_tensor_model_parallel_rank(),
+            pp_group.world_size,
+            pp_group.rank_in_group,
+            dp_size,
+            dp_rank,
+            ep_size,
+            ep_rank,
+            world_group.world_size,
+            world_group.rank,
+        )
+
+        logger.info(
+            "[DIST-INIT] ✅ COMPLETE - Non-device distributed environment initialized successfully:\n"
+            "  local_rank=%d, global_rank=%d, world_size=%d\n"
+            "  TP=%d (rank %d), PP=%d (rank %d), DP=%d (rank %d), EP=%d (rank %d)",
+            self.local_rank,
+            self.global_rank,
+            self.world_size,
+            tp_size,
+            parallel_state.get_tensor_model_parallel_rank(),
+            pp_size,
+            pp_group.rank_in_group,
+            self.vllm_config.parallel_config.data_parallel_size,
+            dp_rank,
+            ep_size,
+            ep_rank,
         )
 
     def get_model_parameters_ipc_info(self) -> dict[str, CUDATensorRebuildInfo]:

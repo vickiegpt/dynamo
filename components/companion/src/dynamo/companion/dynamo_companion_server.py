@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class DynamoModelServer:
     """Model server that loads models on demand and shares parameters via CUDA IPC."""
     
-    def __init__(self, device_id: int, namespace: str = "companion"):
+    def __init__(self, device_id: int, namespace: str = "companion", companion_master_port: int = 29700):
         """Initialize model server for a specific GPU.
         
         Args:
@@ -47,6 +47,7 @@ class DynamoModelServer:
         """
         self.device_id = device_id
         self.namespace = namespace
+        self.companion_master_port = companion_master_port
         self.current_status = "ready"
         self.status_message = "Server ready, waiting for model request"
         self.loaded_model_name: Optional[str] = None
@@ -96,7 +97,7 @@ class DynamoModelServer:
         global_rank: int,
         world_size: int,
     ):
-        """Load model asynchronously."""
+        """Load model asynchronously with proper thread safety."""
         try:
             self.current_status = "loading"
             self.status_message = f"Loading model {vllm_config.model_config.model}"
@@ -115,21 +116,37 @@ class DynamoModelServer:
                 world_size,
             )
             
-            # Run model loading in thread pool to avoid blocking event loop
-            loop = asyncio.get_event_loop()
             start_time = time.time()
             
-            def load_model():
-                self.model_manager = ModelInstanceManager(
-                    vllm_config=vllm_config,
-                    device_id=self.device_id,
-                    local_rank=local_rank,
-                    global_rank=global_rank,
-                    world_size=world_size,
-                )
+            # Step 1: Create model manager
+            logger.info("[MAIN-THREAD] Creating ModelInstanceManager")
+            self.model_manager = ModelInstanceManager(
+                vllm_config=vllm_config,
+                device_id=self.device_id,
+                local_rank=local_rank,
+                global_rank=global_rank,
+                world_size=world_size,
+                companion_master_port=self.companion_master_port,
+            )
+            
+            # Step 2: Initialize distributed environment in MAIN thread
+            # This MUST happen in the main thread to avoid PyTorch distributed deadlocks
+            logger.info("[MAIN-THREAD] Initializing distributed environment in main thread")
+            self.model_manager.initialize_distributed()
+            logger.info("[MAIN-THREAD] ✓ Distributed environment initialized")
+            
+            # Step 3: Load model weights in thread pool (heavy I/O operation)
+            logger.info("[MAIN-THREAD] Starting model weight loading in thread pool")
+            loop = asyncio.get_event_loop()
+            
+            def load_weights_in_thread():
+                """Function to run in thread pool - only does I/O, no distributed ops."""
+                logger.info("[THREAD-POOL] Loading model weights")
+                self.model_manager.load_model_weights()
+                logger.info("[THREAD-POOL] ✓ Model weights loaded")
                 return self.model_manager.get_model_parameters_ipc_info()
             
-            model_parameters = await loop.run_in_executor(None, load_model)
+            model_parameters = await loop.run_in_executor(None, load_weights_in_thread)
             load_time = time.time() - start_time
             
             # Update server state
@@ -157,7 +174,7 @@ class DynamoModelServer:
             )
             
         except Exception as e:
-            logger.error("Failed to load model: %s", str(e))
+            logger.error("Failed to load model: %s", str(e), exc_info=True)
             self.current_status = "error"
             self.status_message = f"Failed to load model: {str(e)}"
             raise
@@ -226,7 +243,7 @@ class DynamoModelServer:
                     model_params = self.model_parameters
                     
             except Exception as e:
-                logger.error("Failed to load model %s: %s", model_name, str(e))
+                logger.error("Failed to load model %s: %s", model_name, str(e), exc_info=True)
                 yield ModelParametersResponse.from_model_parameters(
                     model_parameters=None,
                     model_name="",
@@ -385,10 +402,16 @@ async def companion_server(runtime: DistributedRuntime):
         default="companion",
         help="Dynamo namespace for service discovery",
     )
+    parser.add_argument(
+        "--companion-master-port",
+        type=int,
+        default=29700,
+        help="Master port for the CPU communication group for companion processes",
+    )
     args = parser.parse_args()
     
     # Create server instance
-    server = DynamoModelServer(device_id=args.device, namespace=args.namespace)
+    server = DynamoModelServer(device_id=args.device, namespace=args.namespace, companion_master_port=args.companion_master_port)
     
     # Build component name based on physical device ID
     # The client will discover the server by device ID and then send rank information
