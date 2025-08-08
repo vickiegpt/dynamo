@@ -11,7 +11,7 @@ export VERIFIER_CUDA_VISIBLE_DEVICES=${VERIFIER_CUDA_VISIBLE_DEVICES:-"0"}
 
 # Drafter variables
 export NUM_DRAFTERS=${NUM_DRAFTERS:-1}
-export DRAFTER_MODEL_PATH=${MODEL_PATH:-"meta-llama/Meta-Llama-3.2-1B-Instruct"}
+export DRAFTER_MODEL_PATH=${DRAFTER_MODEL_PATH:-"meta-llama/Meta-Llama-3.2-1B-Instruct"}
 export DRAFTER_MODEL_NAME=${DRAFTER_MODEL_NAME:-"meta-llama/Meta-Llama-3.2-1B-Instruct"}
 export DRAFTER_ENGINE_ARGS=${DRAFTER_ENGINE_ARGS:-"engine_configs/drafter.yaml"}
 export DRAFTER_CUDA_VISIBLE_DEVICES=${DRAFTER_CUDA_VISIBLE_DEVICES:-"1"}

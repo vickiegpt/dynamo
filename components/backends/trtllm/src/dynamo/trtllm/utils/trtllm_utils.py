@@ -99,14 +99,14 @@ def is_drafter(config):
     """
     Check if the current worker is a drafter worker.
     """
-    return config.component == "drafter"
+    return config.spec_dec_mode == "drafter"
 
 
 def is_verifier(config):
     """
     Check if the current worker is a verifier worker.
     """
-    return config.component == "verifier"
+    return config.spec_dec_mode == "verifier"
 
 
 def parse_endpoint(endpoint: str) -> tuple[str, str, str]:
