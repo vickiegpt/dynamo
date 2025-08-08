@@ -44,16 +44,14 @@ MAIN_DIR=$(dirname "$(readlink -f "$0")")
 (cd /tmp && \
 # Clone the TensorRT-LLM repository.
 if [ ! -d "TensorRT-LLM" ]; then
-  git clone https://github.com/NVIDIA/TensorRT-LLM.git
+  git clone https://github.com/jthomson04/TensorRT-LLM.git
 fi
 
 cd TensorRT-LLM
 
 # Checkout the specified commit.
 # Switch to the main branch to pull the latest changes.
-git checkout main
-git pull
-git checkout $TRTLLM_COMMIT
+git checkout jthomson04/connector-api-with-kvbm
 
 # Update the submodules.
 git submodule update --init --recursive
