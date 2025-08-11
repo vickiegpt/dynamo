@@ -1,0 +1,86 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+package dynamo
+
+import (
+	"fmt"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/intstr"
+)
+
+// WorkerDefaults implements ComponentDefaults for Worker components
+type WorkerDefaults struct {
+	*BaseComponentDefaults
+}
+
+func NewWorkerDefaults() *WorkerDefaults {
+	return &WorkerDefaults{&BaseComponentDefaults{}}
+}
+
+func (w *WorkerDefaults) GetBaseContainer(backendFramework BackendFramework) (corev1.Container, error) {
+	if backendFramework == "" {
+		return corev1.Container{}, fmt.Errorf("worker components require a backend framework")
+	}
+
+	container := w.getCommonContainer()
+
+	// Add worker base defaults
+	container.LivenessProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path: "/live",
+				Port: intstr.FromInt(9090),
+			},
+		},
+		PeriodSeconds:    5,
+		TimeoutSeconds:   30,
+		FailureThreshold: 1,
+	}
+
+	container.ReadinessProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path: "/health",
+				Port: intstr.FromInt(9090),
+			},
+		},
+		PeriodSeconds:    10,
+		TimeoutSeconds:   30,
+		FailureThreshold: 60,
+	}
+
+	container.Resources = corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("10"),
+			corev1.ResourceMemory: resource.MustParse("20Gi"),
+			"nvidia.com/gpu":      resource.MustParse("1"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("10"),
+			corev1.ResourceMemory: resource.MustParse("20Gi"),
+			"nvidia.com/gpu":      resource.MustParse("1"),
+		},
+	}
+
+	container.Env = []corev1.EnvVar{
+		{
+			Name:  "DYN_SYSTEM_ENABLED",
+			Value: "true",
+		},
+		{
+			Name:  "DYN_SYSTEM_USE_ENDPOINT_HEALTH_STATUS",
+			Value: "[\"generate\"]",
+		},
+		{
+			Name:  "DYN_SYSTEM_PORT",
+			Value: "9090",
+		},
+	}
+
+	return container, nil
+}

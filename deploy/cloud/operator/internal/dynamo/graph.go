@@ -702,28 +702,16 @@ func GenerateBasePodSpec(
 	multinodeDeploymentType commonconsts.MultinodeDeploymentType,
 	serviceName string,
 ) (corev1.PodSpec, error) {
-	container := corev1.Container{
-		Name:           "main",
-		LivenessProbe:  component.LivenessProbe,
-		ReadinessProbe: component.ReadinessProbe,
-		Env:            component.Envs,
-		Ports: []corev1.ContainerPort{
-			{
-				Protocol:      corev1.ProtocolTCP,
-				Name:          commonconsts.DynamoContainerPortName,
-				ContainerPort: int32(commonconsts.DynamoServicePort),
-			},
-		},
+	// Get component defaults
+	componentDefaults := ComponentDefaultsFactory(component.ComponentType)
+
+	// Get base container further parameterized by the backend engine
+	container, err := componentDefaults.GetBaseContainer(backendFramework)
+	if err != nil {
+		return corev1.PodSpec{}, fmt.Errorf("failed to get base container: %w", err)
 	}
-	// Add system port for worker components
-	if component.ComponentType == commonconsts.ComponentTypeWorker {
-		container.Ports = append(container.Ports, corev1.ContainerPort{
-			Protocol:      corev1.ProtocolTCP,
-			Name:          commonconsts.DynamoSystemPortName,
-			ContainerPort: int32(commonconsts.DynamoSystemPort),
-		})
-	}
-	// First merge the mainContainer from extraPodSpec to get the base command and args
+
+	// merge main container spec
 	if component.ExtraPodSpec != nil && component.ExtraPodSpec.MainContainer != nil {
 		main := component.ExtraPodSpec.MainContainer.DeepCopy()
 		if main != nil {
@@ -736,6 +724,7 @@ func GenerateBasePodSpec(
 		}
 	}
 
+	// merge resources
 	resourcesConfig, err := controller_common.GetResourcesConfig(component.Resources)
 	if err != nil {
 		return corev1.PodSpec{}, fmt.Errorf("failed to get resources config: %w", err)
@@ -743,6 +732,7 @@ func GenerateBasePodSpec(
 	if resourcesConfig != nil {
 		container.Resources = *resourcesConfig
 	}
+
 	imagePullSecrets := []corev1.LocalObjectReference{}
 	if secretsRetriever != nil && component.ExtraPodSpec != nil && component.ExtraPodSpec.MainContainer != nil && component.ExtraPodSpec.MainContainer.Image != "" {
 		secretsName, err := secretsRetriever.GetSecrets(namespace, component.ExtraPodSpec.MainContainer.Image)
@@ -760,6 +750,7 @@ func GenerateBasePodSpec(
 		})
 	}
 
+	// Add standard environment variables
 	addStandardEnvVars(&container, controllerConfig)
 
 	var volumes []corev1.Volume
@@ -777,9 +768,12 @@ func GenerateBasePodSpec(
 			MountPath: *component.PVC.MountPoint,
 		})
 	}
+
 	shmVolume, shmVolumeMount := generateSharedMemoryVolumeAndMount(&container.Resources)
 	volumes = append(volumes, shmVolume)
 	container.VolumeMounts = append(container.VolumeMounts, shmVolumeMount)
+
+	// allow
 	// Apply backend-specific container modifications
 	backend := BackendFactory(backendFramework)
 	if backend == nil {
