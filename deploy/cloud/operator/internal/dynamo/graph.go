@@ -698,16 +698,13 @@ func GenerateBasePodSpec(
 	multinodeDeploymentType commonconsts.MultinodeDeploymentType,
 	serviceName string,
 ) (corev1.PodSpec, error) {
-	// Get component defaults
+	// Start with base container generated per component type
 	componentDefaults := ComponentDefaultsFactory(component.ComponentType)
-
-	// Get base container further parameterized by the backend engine
 	container, err := componentDefaults.GetBaseContainer(backendFramework)
 	if err != nil {
 		return corev1.PodSpec{}, fmt.Errorf("failed to get base container: %w", err)
 	}
 
-	// merge main container spec
 	if component.ExtraPodSpec != nil && component.ExtraPodSpec.MainContainer != nil {
 		main := component.ExtraPodSpec.MainContainer.DeepCopy()
 		if main != nil {
@@ -720,7 +717,6 @@ func GenerateBasePodSpec(
 		}
 	}
 
-	// merge resources
 	overrideResources, err := controller_common.GetResourcesConfig(component.Resources)
 	if err != nil {
 		return corev1.PodSpec{}, fmt.Errorf("failed to get resources config: %w", err)
@@ -745,7 +741,6 @@ func GenerateBasePodSpec(
 		})
 	}
 
-	// Add standard environment variables
 	addStandardEnvVars(&container, controllerConfig)
 
 	var volumes []corev1.Volume
@@ -763,12 +758,10 @@ func GenerateBasePodSpec(
 			MountPath: *component.PVC.MountPoint,
 		})
 	}
-
 	shmVolume, shmVolumeMount := generateSharedMemoryVolumeAndMount(&container.Resources)
 	volumes = append(volumes, shmVolume)
 	container.VolumeMounts = append(container.VolumeMounts, shmVolumeMount)
 
-	// allow
 	// Apply backend-specific container modifications
 	backend := BackendFactory(backendFramework)
 	if backend == nil {
