@@ -8,6 +8,7 @@ package dynamo
 import (
 	"fmt"
 
+	commonconsts "github.com/ai-dynamo/dynamo/deploy/cloud/operator/internal/consts"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -29,12 +30,21 @@ func (w *WorkerDefaults) GetBaseContainer(backendFramework BackendFramework) (co
 
 	container := w.getCommonContainer()
 
+	// Add system port
+	container.Ports = []corev1.ContainerPort{
+		{
+			Protocol:      corev1.ProtocolTCP,
+			Name:          commonconsts.DynamoSystemPortName,
+			ContainerPort: int32(commonconsts.DynamoSystemPort),
+		},
+	}
+
 	// Add worker base defaults
 	container.LivenessProbe = &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
 				Path: "/live",
-				Port: intstr.FromInt(9090),
+				Port: intstr.FromString(commonconsts.DynamoSystemPortName),
 			},
 		},
 		PeriodSeconds:    5,
@@ -46,7 +56,7 @@ func (w *WorkerDefaults) GetBaseContainer(backendFramework BackendFramework) (co
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
 				Path: "/health",
-				Port: intstr.FromInt(9090),
+				Port: intstr.FromString(commonconsts.DynamoSystemPortName),
 			},
 		},
 		PeriodSeconds:    10,
@@ -78,7 +88,7 @@ func (w *WorkerDefaults) GetBaseContainer(backendFramework BackendFramework) (co
 		},
 		{
 			Name:  "DYN_SYSTEM_PORT",
-			Value: "9090",
+			Value: fmt.Sprintf("%d", commonconsts.DynamoSystemPort),
 		},
 	}
 

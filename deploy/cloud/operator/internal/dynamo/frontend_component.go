@@ -6,6 +6,9 @@
 package dynamo
 
 import (
+	"fmt"
+
+	commonconsts "github.com/ai-dynamo/dynamo/deploy/cloud/operator/internal/consts"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -24,12 +27,21 @@ func (f *FrontendDefaults) GetBaseContainer(backendFramework BackendFramework) (
 	// Frontend doesn't need backend-specific config
 	container := f.getCommonContainer()
 
+	// Add HTTP port
+	container.Ports = []corev1.ContainerPort{
+		{
+			Protocol:      corev1.ProtocolTCP,
+			Name:          commonconsts.DynamoContainerPortName,
+			ContainerPort: int32(commonconsts.DynamoServicePort),
+		},
+	}
+
 	// Add frontend-specific defaults
 	container.LivenessProbe = &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
 				Path: "/health",
-				Port: intstr.FromInt(8000),
+				Port: intstr.FromString(commonconsts.DynamoContainerPortName),
 			},
 		},
 		InitialDelaySeconds: 60,
@@ -44,7 +56,7 @@ func (f *FrontendDefaults) GetBaseContainer(backendFramework BackendFramework) (
 				Command: []string{
 					"/bin/sh",
 					"-c",
-					"curl -s http://localhost:8000/health | jq -e \".status == \\\"healthy\\\"\"",
+					"curl -s http://localhost:${DYNAMO_PORT}/health | jq -e \".status == \\\"healthy\\\"\"",
 				},
 			},
 		},
@@ -65,10 +77,11 @@ func (f *FrontendDefaults) GetBaseContainer(backendFramework BackendFramework) (
 		},
 	}
 
+	// Add standard environment variables
 	container.Env = []corev1.EnvVar{
 		{
-			Name:  "DYN_SYSTEM_PORT",
-			Value: "8000",
+			Name:  commonconsts.EnvDynamoServicePort,
+			Value: fmt.Sprintf("%d", commonconsts.DynamoServicePort),
 		},
 	}
 

@@ -6,7 +6,6 @@
 package dynamo
 
 import (
-	commonconsts "github.com/ai-dynamo/dynamo/deploy/cloud/operator/internal/consts"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -18,19 +17,9 @@ func (b *BaseComponentDefaults) GetBaseContainer(backendFramework BackendFramewo
 }
 
 func (b *BaseComponentDefaults) getCommonContainer() corev1.Container {
-	return corev1.Container{
+	container := corev1.Container{
 		Name: "main",
-		Ports: []corev1.ContainerPort{
-			{
-				Protocol:      corev1.ProtocolTCP,
-				Name:          commonconsts.DynamoContainerPortName,
-				ContainerPort: int32(commonconsts.DynamoServicePort),
-			},
-			{
-				Protocol:      corev1.ProtocolTCP,
-				Name:          commonconsts.DynamoHealthPortName,
-				ContainerPort: int32(commonconsts.DynamoHealthPort),
-			},
-		},
 	}
+
+	return container
 }

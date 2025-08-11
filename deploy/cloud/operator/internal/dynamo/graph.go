@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"sort"
 	"strconv"
@@ -668,11 +669,6 @@ func isWorkerComponent(componentType string) bool {
 
 // addStandardEnvVars adds the standard environment variables that are common to both Grove and Controller
 func addStandardEnvVars(container *corev1.Container, controllerConfig controller_common.Config) {
-	container.Env = append(container.Env, corev1.EnvVar{
-		Name:  commonconsts.EnvDynamoServicePort,
-		Value: fmt.Sprintf("%d", commonconsts.DynamoServicePort),
-	})
-
 	if controllerConfig.NatsAddress != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "NATS_SERVER",
@@ -725,13 +721,12 @@ func GenerateBasePodSpec(
 	}
 
 	// merge resources
-	resourcesConfig, err := controller_common.GetResourcesConfig(component.Resources)
+	overrideResources, err := controller_common.GetResourcesConfig(component.Resources)
 	if err != nil {
 		return corev1.PodSpec{}, fmt.Errorf("failed to get resources config: %w", err)
 	}
-	if resourcesConfig != nil {
-		container.Resources = *resourcesConfig
-	}
+	maps.Copy(container.Resources.Requests, overrideResources.Requests)
+	maps.Copy(container.Resources.Limits, overrideResources.Limits)
 
 	imagePullSecrets := []corev1.LocalObjectReference{}
 	if secretsRetriever != nil && component.ExtraPodSpec != nil && component.ExtraPodSpec.MainContainer != nil && component.ExtraPodSpec.MainContainer.Image != "" {
