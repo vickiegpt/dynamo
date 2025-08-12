@@ -20,6 +20,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strings"
 
 	grovev1alpha1 "github.com/NVIDIA/grove/operator/api/core/v1alpha1"
 	networkingv1beta1 "istio.io/client-go/pkg/apis/networking/v1beta1"
@@ -35,7 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	nvidiacomv1alpha1 "github.com/ai-dynamo/dynamo/deploy/cloud/operator/api/v1alpha1"
-	"github.com/ai-dynamo/dynamo/deploy/cloud/operator/internal/consts"
+	commonconsts "github.com/ai-dynamo/dynamo/deploy/cloud/operator/internal/consts"
 	commonController "github.com/ai-dynamo/dynamo/deploy/cloud/operator/internal/controller_common"
 	"github.com/ai-dynamo/dynamo/deploy/cloud/operator/internal/dynamo"
 )
@@ -134,6 +136,14 @@ func (r *DynamoGraphDeploymentReconciler) Reconcile(ctx context.Context, req ctr
 		reason = "failed_to_reconcile_the_resources"
 		return ctrl.Result{}, err
 	}
+
+	// Apply labels to the DGD itself after successful reconciliation
+	if err := r.applyDGDLabels(ctx, dynamoDeployment); err != nil {
+		logger.Error(err, "failed to apply DGD labels")
+		reason = "failed_to_apply_dgd_labels"
+		return ctrl.Result{}, err
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -146,7 +156,7 @@ func (r *DynamoGraphDeploymentReconciler) reconcileResources(ctx context.Context
 	logger := log.FromContext(ctx)
 	if r.Config.Grove.Enabled {
 		// check if explicit opt out of grove
-		if dynamoDeployment.Annotations[consts.KubeAnnotationEnableGrove] == consts.KubeLabelValueFalse {
+		if dynamoDeployment.Annotations[commonconsts.KubeAnnotationEnableGrove] == commonconsts.KubeLabelValueFalse {
 			logger.Info("Grove is explicitly disabled for this deployment, skipping grove resources reconciliation")
 			return r.reconcileDynamoComponentsDeployments(ctx, dynamoDeployment)
 		}
@@ -179,7 +189,7 @@ func (r *DynamoGraphDeploymentReconciler) reconcileGroveResources(ctx context.Co
 	})
 	resources := []Resource{groveGangSetAsResource}
 	for componentName, component := range dynamoDeployment.Spec.Services {
-		if component.ComponentType == consts.ComponentTypeMain {
+		if component.ComponentType == commonconsts.ComponentTypeMain {
 			// generate the main component service
 			mainComponentService, err := dynamo.GenerateComponentService(ctx, dynamo.GetDynamoComponentName(dynamoDeployment, componentName), dynamoDeployment.Namespace)
 			if err != nil {
@@ -245,6 +255,7 @@ func (r *DynamoGraphDeploymentReconciler) reconcileGroveResources(ctx context.Co
 			}
 		}
 	}
+
 	return r.checkResourcesReadiness(resources)
 }
 
@@ -292,6 +303,109 @@ func (r *DynamoGraphDeploymentReconciler) reconcileDynamoComponentsDeployments(c
 func (r *DynamoGraphDeploymentReconciler) FinalizeResource(ctx context.Context, dynamoDeployment *nvidiacomv1alpha1.DynamoGraphDeployment) error {
 	// for now doing nothing
 	return nil
+}
+
+// calculateDynamoNamespace extracts the dynamo namespace from the DGD, similar to graph.go logic
+func calculateDynamoNamespace(ctx context.Context, dynamoDeployment *nvidiacomv1alpha1.DynamoGraphDeployment) (string, error) {
+	graphDynamoNamespace := ""
+
+	for componentName, service := range dynamoDeployment.Spec.Services {
+		dynamoNamespace := dynamo.GetDefaultDynamoNamespace(ctx, dynamoDeployment)
+		if service.DynamoNamespace != nil && *service.DynamoNamespace != "" {
+			dynamoNamespace = *service.DynamoNamespace
+		}
+		if graphDynamoNamespace != "" && graphDynamoNamespace != dynamoNamespace {
+			return "", fmt.Errorf("namespace mismatch for component %s: graph uses namespace %s but component specifies %s", componentName, graphDynamoNamespace, dynamoNamespace)
+		}
+		graphDynamoNamespace = dynamoNamespace
+	}
+
+	// If no services, use default namespace
+	if graphDynamoNamespace == "" {
+		graphDynamoNamespace = dynamo.GetDefaultDynamoNamespace(ctx, dynamoDeployment)
+	}
+
+	return graphDynamoNamespace, nil
+}
+
+// calculateComponentLabels creates the manages-component labels for all services
+func calculateComponentLabels(services map[string]*nvidiacomv1alpha1.DynamoComponentDeploymentOverridesSpec) map[string]string {
+	componentLabels := make(map[string]string)
+	for serviceName := range services {
+		labelKey := commonconsts.KubeLabelManagesComponentPrefix + serviceName
+		componentLabels[labelKey] = commonconsts.KubeLabelValueTrue
+	}
+	return componentLabels
+}
+
+// extractExistingComponentLabels extracts current manages-component labels from the DGD
+func extractExistingComponentLabels(labels map[string]string) map[string]string {
+	if labels == nil {
+		return make(map[string]string)
+	}
+
+	existingComponentLabels := make(map[string]string)
+	for key, value := range labels {
+		if strings.HasPrefix(key, commonconsts.KubeLabelManagesComponentPrefix) {
+			existingComponentLabels[key] = value
+		}
+	}
+	return existingComponentLabels
+}
+
+// applyDGDLabels applies the required labels to the DGD object with conditional update logic
+func (r *DynamoGraphDeploymentReconciler) applyDGDLabels(ctx context.Context, dynamoDeployment *nvidiacomv1alpha1.DynamoGraphDeployment) error {
+	logger := log.FromContext(ctx)
+
+	// Calculate expected labels
+	expectedDynamoNamespace, err := calculateDynamoNamespace(ctx, dynamoDeployment)
+	if err != nil {
+		return fmt.Errorf("failed to calculate dynamo namespace: %w", err)
+	}
+	expectedComponentLabels := calculateComponentLabels(dynamoDeployment.Spec.Services)
+
+	// Check if labels need updating
+	needsUpdate := false
+
+	// Initialize labels map if nil
+	if dynamoDeployment.Labels == nil {
+		dynamoDeployment.Labels = make(map[string]string)
+		needsUpdate = true
+	}
+
+	// Check dynamo namespace label
+	if dynamoDeployment.Labels[commonconsts.KubeLabelDynamoNamespace] != expectedDynamoNamespace {
+		needsUpdate = true
+	}
+
+	// Check component labels
+	existingComponentLabels := extractExistingComponentLabels(dynamoDeployment.Labels)
+	if !reflect.DeepEqual(existingComponentLabels, expectedComponentLabels) {
+		needsUpdate = true
+	}
+
+	if !needsUpdate {
+		logger.Info("DGD labels are already up to date, skipping update")
+		return nil
+	}
+
+	// Apply label changes
+	// Remove old component labels
+	for key := range dynamoDeployment.Labels {
+		if strings.HasPrefix(key, commonconsts.KubeLabelManagesComponentPrefix) {
+			delete(dynamoDeployment.Labels, key)
+		}
+	}
+
+	// Set new labels
+	dynamoDeployment.Labels[commonconsts.KubeLabelDynamoNamespace] = expectedDynamoNamespace
+	for key, value := range expectedComponentLabels {
+		dynamoDeployment.Labels[key] = value
+	}
+
+	// Update the DGD
+	logger.Info("Updating DGD labels", "namespace", expectedDynamoNamespace, "components", len(expectedComponentLabels))
+	return r.Update(ctx, dynamoDeployment)
 }
 
 // SetupWithManager sets up the controller with the Manager.

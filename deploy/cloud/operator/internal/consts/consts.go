@@ -33,6 +33,8 @@ const (
 
 	KubeLabelDynamoComponentPod = "nvidia.com/dynamo-component-pod"
 
+	KubeLabelManagesComponentPrefix = "nvidia.com/manages-component-"
+
 	KubeResourceGPUNvidia = "nvidia.com/gpu"
 
 	DynamoDeploymentConfigEnvVar = "DYN_DEPLOYMENT_CONFIG"
