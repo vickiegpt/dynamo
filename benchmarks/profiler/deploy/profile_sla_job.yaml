@@ -8,7 +8,7 @@ metadata:
 spec:
   template:
     spec:
-      serviceAccountName: profile-sla-sa
+      serviceAccountName: dynamo-sa
       containers:
       - name: profile-sla
         image: ${DOCKER_IMAGE}
@@ -55,5 +55,5 @@ spec:
       volumes:
         - name: output-volume
           persistentVolumeClaim:
-            claimName: profiling-pvc
+            claimName: dynamo-pvc
   backoffLimit: 0

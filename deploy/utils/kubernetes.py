@@ -79,7 +79,7 @@ def deploy_access_pod(namespace: str) -> str:
 
     # Get the directory where this script is located
     script_dir = Path(__file__).parent
-    pod_yaml_path = script_dir / "deploy" / "pvc-access-pod.yaml"
+    pod_yaml_path = script_dir / "manifests" / "pvc-access-pod.yaml"
 
     if not pod_yaml_path.exists():
         print(f"ERROR: Pod YAML not found at {pod_yaml_path}")

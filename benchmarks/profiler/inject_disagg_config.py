@@ -40,7 +40,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from utils.kubernetes import check_kubectl_access, deploy_access_pod, run_command
+from deploy.utils.kubernetes import check_kubectl_access, deploy_access_pod, run_command
 
 
 def copy_disagg_config(

@@ -42,7 +42,7 @@ import time
 from pathlib import Path
 from typing import List
 
-from utils.kubernetes import check_kubectl_access, deploy_access_pod, run_command
+from deploy.utils.kubernetes import check_kubectl_access, deploy_access_pod, run_command
 
 
 def list_pvc_contents(

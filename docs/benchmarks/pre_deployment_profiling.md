@@ -162,12 +162,12 @@ spec:
 **Step 3: Run profiling (required)**
 
 ```bash
-cd $DYNAMO_HOME/benchmarks/profiler/deploy
-envsubst < profiling_pvc.yaml | kubectl apply -f -
-envsubst < profile_sla_sa.yaml | kubectl apply -f -
-envsubst < profile_sla_rbac.yaml | kubectl apply -f -
-envsubst < profile_sla_binding.yaml | kubectl apply -f -
-envsubst < profile_sla_job.yaml | kubectl apply -f -
+cd $DYNAMO_HOME
+envsubst < deploy/utils/manifests/pvc.yaml | kubectl apply -f -
+envsubst < deploy/utils/manifests/serviceaccount.yaml | kubectl apply -f -
+envsubst < deploy/utils/manifests/role.yaml | kubectl apply -f -
+envsubst < deploy/utils/manifests/rolebinding.yaml | kubectl apply -f -
+envsubst < benchmarks/profiler/deploy/profile_sla_job.yaml | kubectl apply -f -
 ```
 
 **Step 4: Wait for profiling to complete**
@@ -180,9 +180,9 @@ kubectl logs job/profile-sla -n $NAMESPACE
 
 The SLA profiling job requires specific Kubernetes permissions to manage DynamoGraphDeployment resources and access namespace information. The RBAC setup consists of:
 
-- **`profile_sla_sa.yaml`** - Service account with image pull secret for NVIDIA Container Registry access
-- **`profile_sla_rbac.yaml`** - Role defining required permissions for managing deployments and accessing namespace resources
-- **`profile_sla_binding.yaml`** - RoleBinding that associates the Role with the service account
+- **`deploy/utils/manifests/serviceaccount.yaml`** - Service account with image pull secret for NVIDIA Container Registry access
+- **`deploy/utils/manifests/role.yaml`** - Role defining required permissions for managing deployments and accessing namespace resources
+- **`deploy/utils/manifests/rolebinding.yaml`** - RoleBinding that associates the Role with the service account
 
 All three files are necessary:
 1. The service account provides identity and image pull credentials
@@ -195,11 +195,11 @@ After the profiling job completes successfully, the results are stored in the pe
 
 #### Accessing the Profiling Results PVC
 
-The profiling results are stored in a PVC named `profiling-pvc`. To access the results:
+The profiling results are stored in a PVC named `dynamo-pvc`. To access the results:
 
 1. **Deploy the PVC access pod (if not already running):**
    ```bash
-   kubectl apply -f benchmarks/profiler/deploy/pvc-access-pod.yaml -n $NAMESPACE
+kubectl apply -f deploy/utils/manifests/pvc-access-pod.yaml -n $NAMESPACE
    ```
 
 2. **Access the PVC through the pod:**
@@ -343,7 +343,7 @@ If you see `ErrImagePull` or `ImagePullBackOff` errors with 401 unauthorized mes
 
 2. Verify the service account was created with the image pull secret:
    ```bash
-   kubectl get serviceaccount profile-sla-sa -n $NAMESPACE -o yaml
+kubectl get serviceaccount dynamo-sa -n $NAMESPACE -o yaml
    ```
 
 3. The service account should show `imagePullSecrets` containing `nvcr-imagepullsecret`.

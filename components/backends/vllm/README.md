@@ -171,7 +171,7 @@ For Kubernetes deployment, YAML manifests are provided in the `deploy/` director
   # Update the image references in the YAML files
   ```
 
-- **Pre-Deployment Profiling (if Using SLA Planner)**: Follow the [pre-deployment profiling guide](../../../docs/architecture/pre_deployment_profiling.md) to run pre-deployment profiling. The results will be saved to the `profiling-pvc` PVC and queried by the SLA Planner.
+- **Pre-Deployment Profiling (if Using SLA Planner)**: Follow the [pre-deployment profiling guide](../../../docs/architecture/pre_deployment_profiling.md) to run pre-deployment profiling. The results will be saved to the `dynamo-pvc` PVC and queried by the SLA Planner.
 
 - **Port Forwarding**: After deployment, forward the frontend service to access the API:
   ```bash
