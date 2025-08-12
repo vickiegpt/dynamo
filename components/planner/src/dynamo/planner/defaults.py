@@ -81,6 +81,7 @@ class VllmComponentName:
     decode_worker_component_name = "backend"
     decode_worker_endpoint = "generate"
 
+
 class SGLangComponentName:
     prefill_worker_k8s_name = "SGLangPrefillWorker"
     prefill_worker_component_name = "worker"
