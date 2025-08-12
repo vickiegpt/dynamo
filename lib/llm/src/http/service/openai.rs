@@ -1030,6 +1030,7 @@ pub fn responses_router(
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // TODO: remove this once nvext is removed
 mod tests {
     use std::collections::HashMap;
 
