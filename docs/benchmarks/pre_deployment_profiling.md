@@ -162,11 +162,10 @@ spec:
 **Step 3: Run profiling (required)**
 
 ```bash
-cd $DYNAMO_HOME
-envsubst < deploy/utils/manifests/pvc.yaml | kubectl apply -f -
-envsubst < deploy/utils/manifests/serviceaccount.yaml | kubectl apply -f -
-envsubst < deploy/utils/manifests/role.yaml | kubectl apply -f -
-envsubst < deploy/utils/manifests/rolebinding.yaml | kubectl apply -f -
+# Set up Kubernetes namespace; if your namespace is already set up, skip this step
+NAMESPACE="$NAMESPACE" deploy/utils/setup_k8s_namespace.sh
+
+# Run the profiling job
 envsubst < benchmarks/profiler/deploy/profile_sla_job.yaml | kubectl apply -f -
 ```
 
@@ -180,9 +179,7 @@ kubectl logs job/profile-sla -n $NAMESPACE
 
 The SLA profiling job requires specific Kubernetes permissions to manage DynamoGraphDeployment resources and access namespace information. The RBAC setup consists of:
 
-- **`deploy/utils/manifests/serviceaccount.yaml`** - Service account with image pull secret for NVIDIA Container Registry access
-- **`deploy/utils/manifests/role.yaml`** - Role defining required permissions for managing deployments and accessing namespace resources
-- **`deploy/utils/manifests/rolebinding.yaml`** - RoleBinding that associates the Role with the service account
+- See the [Benchmarking Guide: Kubernetes Namespace Setup](benchmarking.md#kubernetes-namespace-setup-one-time-per-namespace) for details on the shared manifests and operator installation.
 
 All three files are necessary:
 1. The service account provides identity and image pull credentials
