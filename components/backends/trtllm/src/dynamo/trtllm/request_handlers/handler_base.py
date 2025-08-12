@@ -37,6 +37,7 @@ class DisaggregationMode(Enum):
     AGGREGATED = "prefill_and_decode"
     PREFILL = "prefill"
     DECODE = "decode"
+    ENCODE = "encode"
 
 
 class DisaggregationStrategy(Enum):
@@ -57,6 +58,7 @@ class RequestHandlerConfig:
     disaggregation_mode: DisaggregationMode
     disaggregation_strategy: DisaggregationStrategy
     next_client: object
+    encode_client: Optional[object] = None
     multimodal_processor: Optional[
         MultimodalRequestProcessor
     ] = None  # for multimodal support
@@ -75,6 +77,7 @@ class HandlerBase:
         self.disaggregation_mode = config.disaggregation_mode
         self.disaggregation_strategy = config.disaggregation_strategy
         self.next_client = config.next_client
+        self.encode_client = config.encode_client
         self.multimodal_processor = config.multimodal_processor
         self.first_generation = True
 

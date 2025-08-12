@@ -88,6 +88,21 @@ async def init(runtime: DistributedRuntime, config: Config):
             .client()
         )
 
+    encode_client = None
+    if config.encode_endpoint:
+        logging.info(
+            f"Initializing encode worker client for endpoint: {config.encode_endpoint}"
+        )
+        parsed_namespace, parsed_component_name, parsed_endpoint_name = parse_endpoint(
+            config.encode_endpoint
+        )
+        encode_client = (
+            await runtime.namespace(parsed_namespace)
+            .component(parsed_component_name)
+            .endpoint(parsed_endpoint_name)
+            .client()
+        )
+
     component = runtime.namespace(config.namespace).component(config.component)
     await component.create_service()
 
@@ -214,6 +229,7 @@ async def init(runtime: DistributedRuntime, config: Config):
             disaggregation_mode=config.disaggregation_mode,
             disaggregation_strategy=config.disaggregation_strategy,
             next_client=next_client,
+            encode_client=encode_client,
             multimodal_processor=multimodal_processor,
         )
 

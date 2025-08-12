@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import logging
 
+import torch
+
+from dynamo.runtime.logging import configure_dynamo_logging
 from dynamo.trtllm.request_handlers.handler_base import (
     DisaggregationMode,
     DisaggregationStrategy,
@@ -10,12 +14,15 @@ from dynamo.trtllm.request_handlers.handler_base import (
     RequestHandlerConfig,
 )
 
+configure_dynamo_logging()
+
 
 class RequestHandlerFactory:
     def __init__(self):
         self.handlers = {
             "prefill": PrefillHandler,
             "decode": DecodeHandler,
+            "encode": EncodeHandler,
             "prefill_and_decode": AggregatedHandler,
         }
 
@@ -66,6 +73,25 @@ class AggregatedHandler(HandlerBase):
             yield res
 
 
+class EncodeHandler(HandlerBase):
+    """
+    Handler for the encode mode.
+    """
+
+    def __init__(self, config: RequestHandlerConfig):
+        super().__init__(config)
+
+    async def generate(self, request: dict):
+        # 1. Perform the encoding work by generating random torch data
+        encodings = torch.rand(1, 1024)
+        logging.info(f"Encoding created in encode handler: {encodings}")
+        # 2. Add the result directly to the request payload
+        request["encodings"] = encodings
+
+        # 3. Yield the entire modified request object back to the caller
+        yield request
+
+
 class PrefillHandler(HandlerBase):
     """
     Handler for the prefill mode.
@@ -74,15 +100,28 @@ class PrefillHandler(HandlerBase):
     def __init__(self, config: RequestHandlerConfig):
         super().__init__(config)
 
+    async def remote_encode(self, request: dict):
+        async for res in await self.encode_client.round_robin(request):
+            yield res
+
     async def remote_decode(self, request: dict):
         async for res in await self.next_client.round_robin(request):
             yield res.data()
 
     async def generate(self, request: dict):
+        # STATE 1: If an encoder is configured and the request needs encoding, call it.
+        if self.encode_client and "encodings" not in request:
+            async for res in self.remote_encode(request):
+                # The encoder returns the modified request. Adopt it as our new state.
+                request = res
+                break  # The encoder only returns one response.
+
+        # STATE 2: Request is ready for prefill.
         # Generate the prefill response locally
         prefill_request = copy.deepcopy(request)
         prefill_response = None
         response_count = 0
+        logging.info(f"Prefill request: {prefill_request}")
         async for res in self.generate_locally(prefill_request):
             prefill_response = res
             response_count += 1

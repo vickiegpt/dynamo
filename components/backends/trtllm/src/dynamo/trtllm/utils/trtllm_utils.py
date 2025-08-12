@@ -15,6 +15,7 @@ from dynamo.trtllm.request_handlers.handler_base import (
 DEFAULT_ENDPOINT = "dyn://dynamo.tensorrt_llm.generate"
 DEFAULT_MODEL_PATH = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 DEFAULT_NEXT_ENDPOINT = "dyn://dynamo.tensorrt_llm_next.generate"
+DEFAULT_ENCODE_ENDPOINT = "dyn://dynamo.tensorrt_llm_encode.generate"
 DEFAULT_DISAGGREGATION_STRATEGY = DisaggregationStrategy.DECODE_FIRST
 DEFAULT_DISAGGREGATION_MODE = DisaggregationMode.AGGREGATED
 
@@ -46,6 +47,7 @@ class Config:
             DEFAULT_DISAGGREGATION_STRATEGY
         )
         self.next_endpoint: str = ""
+        self.encode_endpoint: str = ""
         self.modality: str = "text"
 
     def __str__(self) -> str:
@@ -71,6 +73,7 @@ class Config:
             f"disaggregation_mode={self.disaggregation_mode}, "
             f"disaggregation_strategy={self.disaggregation_strategy}, "
             f"next_endpoint={self.next_endpoint}, "
+            f"encode_endpoint={self.encode_endpoint}, "
             f"modality={self.modality})"
         )
 
@@ -230,6 +233,12 @@ def cmd_line_args():
         default="",
         help=f"Endpoint(in 'dyn://namespace.component.endpoint' format) to send requests to when running in disaggregation mode. Default: {DEFAULT_NEXT_ENDPOINT} if first worker, empty if next worker",
     )
+    parser.add_argument(
+        "--encode-endpoint",
+        type=str,
+        default="",
+        help=f"Endpoint(in 'dyn://namespace.component.endpoint' format) for the encode worker. Default: {DEFAULT_ENCODE_ENDPOINT}",
+    )
     args = parser.parse_args()
 
     config = Config()
@@ -270,6 +279,7 @@ def cmd_line_args():
     config.component = parsed_component_name
     config.endpoint = parsed_endpoint_name
     config.next_endpoint = args.next_endpoint
+    config.encode_endpoint = args.encode_endpoint
 
     config.tensor_parallel_size = args.tensor_parallel_size
     if args.pipeline_parallel_size is not None:
