@@ -15,7 +15,7 @@ trap cleanup EXIT INT TERM
 python3 -m dynamo.sglang.utils.clear_namespace --namespace dynamo
 
 # run ingress
-dynamo run in=http out=dyn --router-mode kv --http-port=8000 &
+python -m dynamo.frontend --router-mode kv --http-port=8000 &
 DYNAMO_PID=$!
 
 # run worker
@@ -25,4 +25,5 @@ python3 -m dynamo.sglang.worker \
   --page-size 16 \
   --tp 1 \
   --trust-remote-code \
-  --skip-tokenizer-init
+  --skip-tokenizer-init \
+  --kv-events-config '{"publisher": "zmq", "topic": "kv-events"}'

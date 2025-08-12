@@ -144,7 +144,7 @@ type Resource interface {
 
 func (r *DynamoGraphDeploymentReconciler) reconcileResources(ctx context.Context, dynamoDeployment *nvidiacomv1alpha1.DynamoGraphDeployment) (State, Reason, Message, error) {
 	logger := log.FromContext(ctx)
-	if r.Config.EnableGrove {
+	if r.Config.Grove.Enabled {
 		// check if explicit opt out of grove
 		if dynamoDeployment.Annotations[consts.KubeAnnotationEnableGrove] == consts.KubeLabelValueFalse {
 			logger.Info("Grove is explicitly disabled for this deployment, skipping grove resources reconciliation")
@@ -222,26 +222,27 @@ func (r *DynamoGraphDeploymentReconciler) reconcileGroveResources(ctx context.Co
 				return true
 			}))
 			// generate the main component virtual service
-			mainComponentVirtualService := dynamo.GenerateComponentVirtualService(ctx, dynamo.GetDynamoComponentName(dynamoDeployment, componentName), dynamoDeployment.Namespace, ingressSpec)
-			if err != nil {
-				logger.Error(err, "failed to generate the main component virtual service")
-				return "", "", "", fmt.Errorf("failed to generate the main component virtual service: %w", err)
-			}
-			_, syncedMainComponentVirtualService, err := commonController.SyncResource(ctx, r, dynamoDeployment, func(ctx context.Context) (*networkingv1beta1.VirtualService, bool, error) {
-				vsEnabled := ingressSpec.Enabled && ingressSpec.UseVirtualService && ingressSpec.VirtualServiceGateway != nil
-				if !vsEnabled {
-					logger.Info("VirtualService is not enabled")
-					return mainComponentVirtualService, true, nil
+			if r.Config.IngressConfig.UseVirtualService() {
+				mainComponentVirtualService := dynamo.GenerateComponentVirtualService(ctx, dynamo.GetDynamoComponentName(dynamoDeployment, componentName), dynamoDeployment.Namespace, ingressSpec)
+				if err != nil {
+					logger.Error(err, "failed to generate the main component virtual service")
+					return "", "", "", fmt.Errorf("failed to generate the main component virtual service: %w", err)
 				}
-				return mainComponentVirtualService, false, nil
-			})
-			if err != nil {
-				logger.Error(err, "failed to sync the main component virtual service")
-				return "", "", "", fmt.Errorf("failed to sync the main component virtual service: %w", err)
+				_, syncedMainComponentVirtualService, err := commonController.SyncResource(ctx, r, dynamoDeployment, func(ctx context.Context) (*networkingv1beta1.VirtualService, bool, error) {
+					if !ingressSpec.IsVirtualServiceEnabled() {
+						logger.Info("VirtualService is not enabled")
+						return mainComponentVirtualService, true, nil
+					}
+					return mainComponentVirtualService, false, nil
+				})
+				if err != nil {
+					logger.Error(err, "failed to sync the main component virtual service")
+					return "", "", "", fmt.Errorf("failed to sync the main component virtual service: %w", err)
+				}
+				resources = append(resources, commonController.WrapResource(syncedMainComponentVirtualService, func() bool {
+					return true
+				}))
 			}
-			resources = append(resources, commonController.WrapResource(syncedMainComponentVirtualService, func() bool {
-				return true
-			}))
 		}
 	}
 	return r.checkResourcesReadiness(resources)
@@ -308,7 +309,7 @@ func (r *DynamoGraphDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) err
 			GenericFunc: func(ge event.GenericEvent) bool { return true },
 		})).
 		WithEventFilter(commonController.EphemeralDeploymentEventFilter(r.Config))
-	if r.Config.EnableGrove {
+	if r.Config.Grove.Enabled {
 		ctrlBuilder = ctrlBuilder.Owns(&grovev1alpha1.PodGangSet{}, builder.WithPredicates(predicate.Funcs{
 			// ignore creation cause we don't want to be called again after we create the pod gang set
 			CreateFunc:  func(ce event.CreateEvent) bool { return false },
