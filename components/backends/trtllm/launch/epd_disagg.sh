@@ -37,7 +37,7 @@ DYNAMO_PID=$!
 CUDA_VISIBLE_DEVICES=$ENCODE_CUDA_VISIBLE_DEVICES python3 -m dynamo.trtllm \
   --model-path "$MODEL_PATH" \
   --served-model-name "$SERVED_MODEL_NAME" \
-  --extra-engine-args  "$ENCODE_ENGINE_ARGS" \
+  --extra-engine-args "$ENCODE_ENGINE_ARGS" \
   --disaggregation-strategy "$DISAGGREGATION_STRATEGY" \
   --modality "$MODALITY" \
   --disaggregation-mode encode &
@@ -47,7 +47,7 @@ ENCODE_PID=$!
 CUDA_VISIBLE_DEVICES=$PREFILL_CUDA_VISIBLE_DEVICES python3 -m dynamo.trtllm \
   --model-path "$MODEL_PATH" \
   --served-model-name "$SERVED_MODEL_NAME" \
-  --extra-engine-args  "$PREFILL_ENGINE_ARGS" \
+  --extra-engine-args "$PREFILL_ENGINE_ARGS" \
   --disaggregation-strategy "$DISAGGREGATION_STRATEGY" \
   --modality "$MODALITY" \
   --disaggregation-mode prefill \
@@ -58,8 +58,10 @@ PREFILL_PID=$!
 CUDA_VISIBLE_DEVICES=$DECODE_CUDA_VISIBLE_DEVICES python3 -m dynamo.trtllm \
   --model-path "$MODEL_PATH" \
   --served-model-name "$SERVED_MODEL_NAME" \
-  --extra-engine-args  "$DECODE_ENGINE_ARGS" \
+  --extra-engine-args "$DECODE_ENGINE_ARGS" \
   --disaggregation-strategy "$DISAGGREGATION_STRATEGY" \
   --modality "$MODALITY" \
   --disaggregation-mode decode &
 DECODE_PID=$!
+
+wait $DYNAMO_PID

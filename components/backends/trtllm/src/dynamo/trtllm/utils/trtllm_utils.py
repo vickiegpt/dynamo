@@ -265,6 +265,9 @@ def cmd_line_args():
             and config.disaggregation_mode != DisaggregationMode.AGGREGATED
         ):
             args.next_endpoint = DEFAULT_NEXT_ENDPOINT
+    elif config.disaggregation_mode == DisaggregationMode.ENCODE:
+        if args.endpoint == "":
+            args.endpoint = DEFAULT_ENCODE_ENDPOINT
     else:
         if args.endpoint == "":
             args.endpoint = DEFAULT_NEXT_ENDPOINT

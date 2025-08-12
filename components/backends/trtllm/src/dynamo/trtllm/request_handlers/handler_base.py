@@ -96,7 +96,7 @@ class HandlerBase:
         """
         Generate responses based on the disaggregation mode in the request.
         """
-        logging.debug(f"Request: {request}")
+        logging.info(f"Request: {request}")
 
         # Default to text-based input. This will be overwritten if multimodal
         # content is found and processed.
