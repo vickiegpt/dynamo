@@ -44,11 +44,11 @@ MAIN_DIR=$(dirname "$(readlink -f "$0")")
 (cd /tmp && \
 # Clone the TensorRT-LLM repository.
 if [ ! -d "TensorRT-LLM" ]; then
-  git clone https://github.com/richardhuo-nv/TensorRT-LLM.git
+  git clone https://github.com/jthomson04/TensorRT-LLM.git
 fi
 
 cd TensorRT-LLM
-git checkout rihuo/fix_eagle
+git checkout jthomson04/connector-api
 
 # Update the submodules.
 git submodule update --init --recursive
