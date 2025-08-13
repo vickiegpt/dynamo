@@ -150,7 +150,6 @@ spec:
         timeoutSeconds: 30
         failureThreshold: 1
       readinessProbe:
-        exec:
         httpGet:
           path: /health
           port: 9090
