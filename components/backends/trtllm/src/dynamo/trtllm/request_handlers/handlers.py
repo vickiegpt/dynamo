@@ -79,16 +79,23 @@ class EncodeHandler(HandlerBase):
     """
 
     def __init__(self, config: RequestHandlerConfig):
+        logging.info(f"EncodeHandler initialized with config: {config}")
         super().__init__(config)
 
     async def generate(self, request: dict):
+        logging.info(f"EncodeHandler received request: {request}")
         # 1. Perform the encoding work by generating random torch data
         encodings = torch.rand(1, 1024)
         logging.info(f"Encoding created in encode handler: {encodings}")
         # 2. Add the result directly to the request payload
-        request["encodings"] = encodings
+        request["encodings"] = encodings.tolist()
 
         # 3. Yield the entire modified request object back to the caller
+        logging.info(f"EncodeHandler yielding response: {request}")
+        if not request.get("streaming", False):
+            yield request
+            return
+
         yield request
 
 
@@ -98,19 +105,30 @@ class PrefillHandler(HandlerBase):
     """
 
     def __init__(self, config: RequestHandlerConfig):
+        logging.info(f"PrefillHandler initialized with config: {config}")
         super().__init__(config)
 
     async def remote_encode(self, request: dict):
+        logging.info(f"PrefillHandler.remote_encode sending request: {request}")
+        response_received = False
         async for res in await self.encode_client.round_robin(request):
-            yield res
+            logging.info(f"PrefillHandler.remote_encode received response: {res}")
+            response_received = True
+            yield res.data()
+
+        if not response_received:
+            logging.warning("No response received from the encode client.")
+            yield request
 
     async def remote_decode(self, request: dict):
         async for res in await self.next_client.round_robin(request):
             yield res.data()
 
     async def generate(self, request: dict):
+        logging.info(f"PrefillHandler.generate received request: {request}")
         # STATE 1: If an encoder is configured and the request needs encoding, call it.
         if self.encode_client and "encodings" not in request:
+            logging.info("PrefillHandler calling remote_encode")
             async for res in self.remote_encode(request):
                 # The encoder returns the modified request. Adopt it as our new state.
                 request = res
@@ -157,6 +175,7 @@ class DecodeHandler(HandlerBase):
     """
 
     def __init__(self, config: RequestHandlerConfig):
+        logging.info(f"DecodeHandler initialized with config: {config}")
         super().__init__(config)
 
     async def remote_prefill(self, request: dict):
@@ -164,6 +183,7 @@ class DecodeHandler(HandlerBase):
             yield res
 
     async def generate(self, request: dict):
+        logging.info(f"DecodeHandler.generate received request: {request}")
         if self.disaggregation_strategy == DisaggregationStrategy.DECODE_FIRST:
             prefill_response = None
             # If operating under decode_first strategy, the decode handler needs to trigger
