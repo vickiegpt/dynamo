@@ -37,6 +37,11 @@ async def run_benchmark_workflow(
     agg_client = DynamoDeploymentClient(namespace=namespace, deployment_name=agg_name)
     await deploy_and_wait(agg_client, agg_manifest)
     try:
+        print("Starting concurrency sweep!", flush=True)
+        print(
+            "This may take several minutes - running through multiple concurrency levels...",
+            flush=True,
+        )
         run_concurrency_sweep(
             service_url=agg_client.port_forward_frontend(),
             model_name=model,
@@ -45,6 +50,7 @@ async def run_benchmark_workflow(
             stddev=std,
             output_dir=Path(output_dir) / "agg",
         )
+        agg_client.stop_port_forward()
     finally:
         await teardown(agg_client)
 
@@ -63,6 +69,7 @@ async def run_benchmark_workflow(
             stddev=std,
             output_dir=Path(output_dir) / "disagg",
         )
+        disagg_client.stop_port_forward()
     finally:
         await teardown(disagg_client)
 

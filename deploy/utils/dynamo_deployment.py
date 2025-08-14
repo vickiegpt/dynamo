@@ -15,6 +15,7 @@
 
 import argparse
 import asyncio
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -24,8 +25,6 @@ import httpx  # added for HTTP requests
 import kubernetes_asyncio as kubernetes
 import yaml
 from kubernetes_asyncio import client, config
-
-from deploy.utils.kubernetes import run_command
 
 # Example chat completion request for testing deployments
 EXAMPLE_CHAT_REQUEST = {
@@ -70,6 +69,7 @@ class DynamoDeploymentClient:
         ] = None  # Will store the full deployment spec
         self.base_log_dir = Path(base_log_dir) if base_log_dir else Path("logs")
         self.frontend_port = frontend_port
+        self.port_forward_process = None
 
     async def _init_kubernetes(self):
         """Initialize kubernetes client"""
@@ -88,17 +88,44 @@ class DynamoDeploymentClient:
         """
         Port forward the frontend service to a local port.
         """
-        run_command(
-            [
-                "kubectl",
-                "port-forward",
-                f"svc/{self.service_name}",
-                f"{local_port}:{self.frontend_port}",
-                "-n",
-                self.namespace,
-            ]
-        )
+        cmd = [
+            "kubectl",
+            "port-forward",
+            f"svc/{self.service_name}",
+            f"{local_port}:{self.frontend_port}",
+            "-n",
+            self.namespace,
+        ]
+
+        print(f"Starting port forward: {' '.join(cmd)}")
+
+        # Start port forward in background
+        self.port_forward_process = subprocess.Popen(cmd)
+
+        # Wait a moment for port forward to establish
+        print("Waiting for port forward to establish...")
+        time.sleep(3)
+
+        print(f"Port forward started with PID: {self.port_forward_process.pid}")
         return f"http://localhost:{local_port}"
+
+    def stop_port_forward(self):
+        """
+        Stop the port forward process.
+        """
+        if self.port_forward_process:
+            print(
+                f"Stopping port forward process (PID: {self.port_forward_process.pid})"
+            )
+            self.port_forward_process.terminate()
+            try:
+                self.port_forward_process.wait(timeout=5)
+                print("Port forward stopped")
+            except subprocess.TimeoutExpired:
+                print("Port forward process did not terminate, killing it")
+                self.port_forward_process.kill()
+                self.port_forward_process.wait()
+            self.port_forward_process = None
 
     def get_service_url(self) -> str:
         """

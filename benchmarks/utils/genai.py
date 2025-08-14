@@ -1,20 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
 import subprocess
 from pathlib import Path
 from typing import List
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-formatter = logging.Formatter(
-    "%(asctime)s - %(name)s - %(levelname)s - %(message)s", "%Y-%m-%d %H:%M:%S"
-)
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
 
 CONCURRENCIES: List[int] = [1, 2, 5, 10, 50, 100, 250]
 
@@ -38,7 +27,7 @@ def run_genai_perf(
         "chat",
         "--streaming",
         "-u",
-        service_url.replace("http://", "").replace("https://", ""),
+        service_url,
         "--synthetic-input-tokens-mean",
         str(isl),
         "--synthetic-input-tokens-stddev",
@@ -58,12 +47,14 @@ def run_genai_perf(
         "--artifact-dir",
         output_dir,
         "--",
-        "-v",
+        "-vv",
         "--max-threads=300",
     ]
-    logger.info(
-        f"Running genai-perf with isl {isl}, osl {osl}, concurrency {concurrency}"
+    print(
+        f"Running genai-perf with isl {isl}, osl {osl}, concurrency {concurrency}",
+        flush=True,
     )
+
     gap_process = subprocess.Popen(
         cmd,
         cwd=output_dir,
@@ -73,22 +64,24 @@ def run_genai_perf(
     )
     stdout, stderr = gap_process.communicate()
     if gap_process.returncode == 0:
-        logger.info("Genai-perf profiling completed successfully")
-        logger.info(stdout)
+        print("Genai-perf profiling completed successfully", flush=True)
+        if stdout:
+            print(stdout)
     else:
-        logger.error(f"Genai-perf failed with error code: {gap_process.returncode}")
-        logger.error(f"stderr: {stderr}")
+        print(f"Genai-perf failed with error code: {gap_process.returncode}")
+        print(f"stderr: {stderr}")
         raise subprocess.CalledProcessError(gap_process.returncode, cmd)
 
 
 def run_concurrency_sweep(
     service_url: str, model_name: str, isl: int, osl: int, stddev: int, output_dir: Path
 ) -> None:
-    logger.info(
-        f"Running concurrency sweep for {model_name} with input sequence length {isl} and output sequence length {osl} and standard deviation {stddev}"
+    print(
+        f"Running concurrency sweep for {model_name} with ISL {isl} and OSL {osl} and standard deviation {stddev}",
+        flush=True,
     )
     for c in CONCURRENCIES:
-        logger.info(f"Starting concurrency level {c}")
+        print(f"Starting concurrency level {c}", flush=True)
         run_genai_perf(
             service_url, model_name, isl, osl, stddev, c, output_dir / f"c{c}"
         )
