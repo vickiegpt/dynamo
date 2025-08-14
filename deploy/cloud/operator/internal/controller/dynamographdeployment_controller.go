@@ -261,12 +261,33 @@ func (r *DynamoGraphDeploymentReconciler) checkResourcesReadiness(resources []Re
 	return PendingState, "some_resources_are_not_ready", Message(fmt.Sprintf("%d resources not ready: %v", len(notReadyResources), notReadyResources)), nil
 }
 
+func setDynamoNamespaceInEnvs(dynamoDeployment *nvidiacomv1alpha1.DynamoGraphDeployment) {
+	for _, env := range dynamoDeployment.Spec.Envs {
+		if env.Name == consts.EnvDynamoNamespace {
+			// already set, don't override it
+			return
+		}
+	}
+	envs := []corev1.EnvVar{
+		{
+			Name:  consts.EnvDynamoNamespace,
+			Value: dynamoDeployment.Namespace,
+		},
+	}
+	if dynamoDeployment.Spec.Envs == nil {
+		dynamoDeployment.Spec.Envs = envs
+		return
+	}
+	dynamoDeployment.Spec.Envs = append(dynamoDeployment.Spec.Envs, envs...)
+}
+
 func (r *DynamoGraphDeploymentReconciler) reconcileDynamoComponentsDeployments(ctx context.Context, dynamoDeployment *nvidiacomv1alpha1.DynamoGraphDeployment) (State, Reason, Message, error) {
 	resources := []Resource{}
 	logger := log.FromContext(ctx)
 
 	// generate the dynamoComponentsDeployments from the config
 	defaultIngressSpec := dynamo.GenerateDefaultIngressSpec(dynamoDeployment, r.Config.IngressConfig)
+	setDynamoNamespaceInEnvs(dynamoDeployment)
 	dynamoComponentsDeployments, err := dynamo.GenerateDynamoComponentsDeployments(ctx, dynamoDeployment, &defaultIngressSpec)
 	if err != nil {
 		logger.Error(err, "failed to generate the DynamoComponentsDeployments")

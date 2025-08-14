@@ -18,6 +18,7 @@ const (
 	MpiRunSshPort = 2222
 
 	EnvDynamoServicePort = "DYNAMO_PORT"
+	EnvDynamoNamespace   = "DYNAMO_NAMESPACE"
 
 	KubeLabelDynamoSelector = "nvidia.com/selector"
 
