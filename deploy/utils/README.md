@@ -58,18 +58,23 @@ If `DOCKER_SERVER`/`IMAGE_TAG` are omitted, the script installs the default oper
 
 ### PVC Manipulation Scripts
 
-Inject a manifest into the PVC and download the PVC contents:
+Inject a manifest into the PVC:
 
 ```bash
 python3 deploy/utils/inject_manifest.py \
   --namespace $NAMESPACE \
   --src ./my-disagg.yaml \
-  --dest /profiling_results/disagg.yaml
+  --dest /configs/disagg.yaml
+```
 
-python3 benchmarks/profiler/download_pvc_results.py \
+Download all files from the PVC to a local directory:
+
+```bash
+python3 deploy/utils/download_pvc_results.py \
   --namespace $NAMESPACE \
-  --output-dir ./all_pvc_files \
-  --no-config
+  --output-dir ./pvc_files \
+  --folder /results \
+  --no-config   # optional: skip *.yaml/*.yml in the download
 ```
 
 ## Notes

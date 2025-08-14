@@ -25,6 +25,8 @@ import kubernetes_asyncio as kubernetes
 import yaml
 from kubernetes_asyncio import client, config
 
+from deploy.utils.kubernetes import run_command
+
 # Example chat completion request for testing deployments
 EXAMPLE_CHAT_REQUEST = {
     "model": "Qwen/Qwen3-0.6B",
@@ -81,6 +83,20 @@ class DynamoDeploymentClient:
         self.k8s_client = client.ApiClient()
         self.custom_api = client.CustomObjectsApi(self.k8s_client)
         self.core_api = client.CoreV1Api(self.k8s_client)
+
+    def port_forward_frontend(self, local_port: int = 8000) -> str:
+        """
+        Port forward the frontend service to a local port.
+        """
+        run_command(
+            [
+                "kubectl",
+                "port-forward",
+                f"{self.service_name}.{self.namespace}.svc.cluster.local:{self.frontend_port}",
+                f"{local_port}:{self.frontend_port}",
+            ]
+        )
+        return f"http://localhost:{local_port}"
 
     def get_service_url(self) -> str:
         """

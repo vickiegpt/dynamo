@@ -39,7 +39,7 @@ async def run_benchmark_workflow(
     await deploy_and_wait(agg_client, agg_manifest)
     try:
         run_concurrency_sweep(
-            service_url=agg_client.get_service_url(),
+            service_url=agg_client.port_forward_frontend(),
             model_name=model,
             isl=isl,
             osl=osl,
@@ -57,7 +57,7 @@ async def run_benchmark_workflow(
     await deploy_and_wait(disagg_client, disagg_manifest)
     try:
         run_concurrency_sweep(
-            service_url=disagg_client.get_service_url(),
+            service_url=disagg_client.port_forward_frontend(),
             model_name=model,
             isl=isl,
             osl=osl,
