@@ -320,6 +320,12 @@ def main():
         help="Model name to benchmark (default: deepseek-ai/DeepSeek-R1-Distill-Llama-8B)",
     )
     decode_parser.add_argument(
+        "--tokenizer-path",
+        type=str,
+        default="deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+        help="Path to the tokenizer (default: deepseek-ai/DeepSeek-R1-Distill-Llama-8B)",
+    )
+    decode_parser.add_argument(
         "--base-url",
         type=str,
         default="http://localhost:8000",
