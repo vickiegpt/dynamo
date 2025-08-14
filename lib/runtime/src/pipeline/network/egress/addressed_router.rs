@@ -88,6 +88,7 @@ where
     U: Data + for<'de> Deserialize<'de> + MaybeError,
 {
     async fn generate(&self, request: SingleIn<AddressedRequest<T>>) -> Result<ManyOut<U>, Error> {
+        let _range = nvtx::range!("network.addressed_router.generate");
         let request_id = request.context().id().to_string();
         let (addressed_request, context) = request.transfer(());
         let (request, address) = addressed_request.into_parts();

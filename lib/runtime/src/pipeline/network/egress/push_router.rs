@@ -170,6 +170,7 @@ where
         instance_id: i64,
         request: SingleIn<T>,
     ) -> anyhow::Result<ManyOut<U>> {
+        let _range = nvtx::range!("network.push_router.generate_with_fault_detection");
         let subject = self.client.endpoint.subject_to(instance_id);
         let request = request.map(|req| AddressedRequest::new(req, subject));
 

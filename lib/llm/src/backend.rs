@@ -140,6 +140,8 @@ impl
         let processed_stream = stream::unfold(state, |mut state| async move {
             match state.stream.next().await {
                 Some(output) => {
+                    let _range = nvtx::range!("llm.backend.generate.process_output");
+
                     // move to state.process_output
                     // handle any error conditions / unwraps here
 
@@ -404,6 +406,7 @@ impl Decoder {
     /// In the future, this method may kick off async cpu/tokio tasks and or async cuda tasks to
     /// handle logits post-processing and/or other tasks.
     pub fn step(&mut self, token_id: TokenIdType) -> Result<StepResult> {
+        let _range = nvtx::range!("llm.backend.decoder.step");
         // increment the generated tokens
         self.generated_tokens += 1;
 

@@ -170,7 +170,7 @@ impl Server {
         // if let Some(port) = port {
         //     log::info!("Server listening on port {}", port);
         // }
-
+        let _range = nvtx::range!("network.zmq.recv_loop");
         loop {
             let frames = tokio::select! {
                 biased;
@@ -211,6 +211,7 @@ impl Server {
             let message = frames[2].to_vec();
             let message_size = message.len();
 
+            let _range = nvtx::range!("network.zmq.dispatch");
             if let Some(tx) = state.lock().await.active_streams.get(&request_id) {
                 // first we try to send the data eagerly without blocking
                 let action = match tx.try_send(message.into()) {

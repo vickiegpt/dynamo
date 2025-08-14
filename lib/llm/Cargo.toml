@@ -60,6 +60,7 @@ etcd-client = { workspace = true }
 futures =  { workspace = true }
 hf-hub = { workspace = true }
 humantime = { workspace = true } # input/batch
+nvtx = { workspace = true }
 rand = { workspace = true }
 oneshot = { workspace = true }
 prometheus = { workspace = true }

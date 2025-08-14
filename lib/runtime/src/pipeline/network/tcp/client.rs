@@ -52,6 +52,8 @@ impl TcpClient {
     }
 
     async fn connect(address: &str) -> std::io::Result<TcpStream> {
+        let _range = nvtx::range!("network.tcp.connect");
+
         // try to connect to the address; retry with linear backoff if AddrNotAvailable
         let backoff = std::time::Duration::from_millis(200);
         loop {
@@ -76,6 +78,7 @@ impl TcpClient {
         context: Arc<dyn AsyncEngineContext>,
         info: ConnectionInfo,
     ) -> Result<StreamSender> {
+        let _range = nvtx::range!("network.tcp.create_response_stream");
         let info =
             TcpStreamConnectionInfo::try_from(info).context("tcp-stream-connection-info-error")?;
         tracing::trace!("Creating response stream for {:?}", info);

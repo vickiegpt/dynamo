@@ -152,6 +152,8 @@ impl OpenAIPreprocessor {
         &self,
         request: &R,
     ) -> Result<(PreprocessedRequest, HashMap<String, String>)> {
+        let _range = nvtx::range!("llm.preprocessor.preprocess_request");
+
         let mut annotations = HashMap::new();
         let mut builder = PreprocessedRequest::builder();
         builder.model(request.model());
@@ -176,6 +178,7 @@ impl OpenAIPreprocessor {
                 }
             }
             PromptInput::Text(_) => {
+                let _range = nvtx::range!("llm.preprocessor.preprocess_request.tokenize");
                 if let Some(text_input) = request.extract_text() {
                     match text_input {
                         TextInput::Single(_) => {

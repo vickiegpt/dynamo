@@ -212,6 +212,7 @@ impl DecodeStream {
     /// represent valid UTF-8, and only follow-up token_ids will help produce
     /// a valid chunk.
     pub fn step(&mut self, id: u32) -> Result<Option<String>> {
+        let _range = nvtx::range!("llm.tokenizer.decode_stream.step");
         self.all_token_ids.push(id);
 
         let prefix_text = self.tokenizer.decode(

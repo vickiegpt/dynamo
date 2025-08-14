@@ -55,6 +55,7 @@ impl Decoder for TwoPartCodec {
     type Error = TwoPartCodecError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let _range = nvtx::range!("network.two_part.decode");
         // Need at least 24 bytes (header_len, body_len, checksum)
         if src.len() < 24 {
             return Ok(None);
@@ -118,6 +119,7 @@ impl Encoder<TwoPartMessage> for TwoPartCodec {
     type Error = TwoPartCodecError;
 
     fn encode(&mut self, item: TwoPartMessage, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        let _range = nvtx::range!("network.two_part.encode");
         let header_len = item.header.len();
         let body_len = item.data.len();
 
