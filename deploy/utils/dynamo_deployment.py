@@ -302,6 +302,10 @@ class DynamoDeploymentClient:
         except kubernetes.client.rest.ApiException as e:
             if e.status != 404:  # Ignore if already deleted
                 raise
+        finally:
+            # Close the kubernetes client session to avoid warnings
+            if hasattr(self, "k8s_client"):
+                await self.k8s_client.close()
 
 
 async def cleanup_remaining_deployments(deployment_clients, namespace):

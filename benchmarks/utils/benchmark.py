@@ -17,6 +17,12 @@ def main() -> int:
     parser.add_argument(
         "--disagg", required=True, help="Path to disaggregated DGD manifest"
     )
+    parser.add_argument(
+        "--vanilla",
+        required=True,
+        help="Path to vanilla vLLM manifest",
+        default="benchmarks/utils/vanilla-vllm.yaml",
+    )
     parser.add_argument("--namespace", required=True, help="Kubernetes namespace")
     parser.add_argument("--isl", type=int, default=200, help="Input sequence length")
     parser.add_argument(
@@ -36,7 +42,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    for p in [args.agg, args.disagg]:
+    for p in [args.agg, args.disagg, args.vanilla]:
         if not Path(p).is_file():
             print(f"ERROR: Manifest not found: {p}")
             return 1
@@ -46,6 +52,7 @@ def main() -> int:
             namespace=args.namespace,
             agg_manifest=args.agg,
             disagg_manifest=args.disagg,
+            vanilla_manifest=args.vanilla,
             isl=args.isl,
             std=args.std,
             osl=args.osl,
