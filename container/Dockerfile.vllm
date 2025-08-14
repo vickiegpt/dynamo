@@ -83,7 +83,7 @@ RUN apt-get update -y && \
     rm -rf /var/lib/apt/lists/*
 
 ARG NIXL_UCX_REF=v1.19.x
-ARG NIXL_REF=0.4.1
+ARG NIXL_REF=ba7e40760027796890ad17e95620526c3c5560ee
 
 ENV NIXL_SRC_DIR=/opt/nixl
 ENV NIXL_PREFIX=/opt/nvidia/nvda_nixl
