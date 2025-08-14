@@ -136,8 +136,8 @@ enum ResponseProcessingError {
     #[error("python exception: {0}")]
     PythonException(String),
 
-    #[error("python generator exit: {0}")]
-    PyGeneratorExit(String),
+    #[error("python asyncio cancelled: {0}")]
+    PythonAsyncioCancelled(String),
 
     #[error("deserialize error: {0}")]
     DeserializeError(String),
@@ -230,7 +230,7 @@ where
                                 let msg = format!("critical error: invalid response object from python async generator; application-logic-mismatch: {}", e);
                                 msg
                             }
-                            ResponseProcessingError::PyGeneratorExit(_) => {
+                            ResponseProcessingError::PythonAsyncioCancelled(_) => {
                                 "Stream ended before generation completed".to_string()
                             }
                             ResponseProcessingError::PythonException(e) => {
@@ -284,13 +284,14 @@ where
 {
     let item = item.map_err(|e| {
         println!();
-        let mut is_py_generator_exit = false;
+        let mut is_py_asyncio_cancelled = false;
         Python::with_gil(|py| {
             e.display(py);
-            is_py_generator_exit = e.is_instance_of::<pyo3::exceptions::PyGeneratorExit>(py);
+            is_py_asyncio_cancelled =
+                e.is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py);
         });
-        if is_py_generator_exit {
-            ResponseProcessingError::PyGeneratorExit(e.to_string())
+        if is_py_asyncio_cancelled {
+            ResponseProcessingError::PythonAsyncioCancelled(e.to_string())
         } else {
             ResponseProcessingError::PythonException(e.to_string())
         }
