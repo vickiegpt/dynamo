@@ -40,11 +40,22 @@ impl MetricsRegistry for DistributedRuntime {
     fn parent_hierarchy(&self) -> Vec<String> {
         vec![] // drt is the root, so no parent hierarchy
     }
+
+    fn stored_labels(&self) -> Vec<(&str, &str)> {
+        // Convert Vec<(String, String)> to Vec<(&str, &str)>
+        self.labels
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect()
+    }
+
+    fn labels_mut(&mut self) -> &mut Vec<(String, String)> {
+        &mut self.labels
+    }
 }
 
 impl DistributedRuntime {
     pub async fn new(runtime: Runtime, config: DistributedConfig) -> Result<Self> {
-        let secondary = runtime.secondary();
         let (etcd_config, nats_config, is_static) = config.dissolve();
 
         let runtime_clone = runtime.clone();
@@ -52,30 +63,10 @@ impl DistributedRuntime {
         let etcd_client = if is_static {
             None
         } else {
-            Some(
-                secondary
-                    .spawn(async move {
-                        let client = etcd::Client::new(etcd_config.clone(), runtime_clone)
-                            .await
-                            .context(format!(
-                                "Failed to connect to etcd server with config {:?}",
-                                etcd_config
-                            ))?;
-                        OK(client)
-                    })
-                    .await??,
-            )
+            Some(etcd::Client::new(etcd_config.clone(), runtime_clone).await?)
         };
 
-        let nats_client = secondary
-            .spawn(async move {
-                let client = nats_config.clone().connect().await.context(format!(
-                    "Failed to connect to NATS server with config {:?}",
-                    nats_config
-                ))?;
-                anyhow::Ok(client)
-            })
-            .await??;
+        let nats_client = nats_config.clone().connect().await?;
 
         // Start system status server for health and metrics if enabled in configuration
         let config = crate::config::RuntimeConfig::from_settings().unwrap_or_default();
@@ -111,6 +102,7 @@ impl DistributedRuntime {
                 prometheus::Registry,
             >::new())),
             system_health,
+            labels: Vec::new(),
         };
 
         // Start system status server if enabled

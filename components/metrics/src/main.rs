@@ -31,6 +31,7 @@ use dynamo_llm::kv_router::scheduler::KVHitRateEvent;
 use dynamo_llm::kv_router::KV_HIT_RATE_SUBJECT;
 use dynamo_runtime::{
     error, logging,
+    metrics::MetricsRegistry,
     traits::events::{EventPublisher, EventSubscriber},
     utils::{Duration, Instant},
     DistributedRuntime, ErrorContext, Result, Runtime, Worker,
@@ -59,6 +60,10 @@ struct Args {
     /// Endpoint to scrape metrics from
     #[arg(long)]
     endpoint: String,
+
+    /// Model name for the target component (optional)
+    #[arg(long)]
+    model_name: Option<String>,
 
     /// Polling interval in seconds for scraping dynamo endpoint stats (minimum 1 second)
     #[arg(long, default_value = "1")]
@@ -109,6 +114,7 @@ fn get_config(args: &Args) -> Result<LLMWorkerLoadCapacityConfig> {
     Ok(LLMWorkerLoadCapacityConfig {
         component_name: args.component.clone(),
         endpoint_name: args.endpoint.clone(),
+        model_name: args.model_name.clone(),
     })
 }
 
@@ -127,11 +133,18 @@ async fn app(runtime: Runtime) -> Result<()> {
     tracing::debug!("Creating unique instance of Count at {key}");
     drt.etcd_client()
         .expect("Unreachable because of DistributedRuntime::from_settings above")
-        .kv_create(key, serde_json::to_vec_pretty(&config)?, None)
+        .kv_create(&key, serde_json::to_vec_pretty(&config)?, None)
         .await
         .context("Unable to create unique instance of Count; possibly one already exists")?;
 
-    let target_component = namespace.component(&config.component_name)?;
+    let target_component = {
+        let c = namespace.component(&config.component_name)?;
+        if let Some(ref model) = config.model_name {
+            c.add_labels(&[("model", model.as_str())])?
+        } else {
+            c
+        }
+    };
     let target_endpoint = target_component.endpoint(&config.endpoint_name);
 
     let service_path = target_endpoint.path();
