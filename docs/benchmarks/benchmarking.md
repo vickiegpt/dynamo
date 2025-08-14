@@ -59,64 +59,90 @@ Bring your own benchmarking scripts and tools (covered in [Custom Benchmarking](
 
 All of these are included within Dynamo-built containers.
 
+Your Kubernetes namespace must be set up for Dynamo deployments. Follow the setup instructions [here](../../deploy/utils/README.md#kubernetes-setup-one-time-per-namespace).
+
 ## Quick Start
 
-Run benchmarks on Dynamo deployments.
+Run complete benchmarks on Dynamo deployments using the automated script. Plots are generated and saved to `$OUTPUT_DIR/plots`.
+
+### Basic Usage
+
+Use the provided example manifests (configure them for your desired model):
 
 ```bash
-# Set your configuration
-export NAMESPACE=hzhou-dynamo
-export MODEL="deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
-export INPUT_SEQUENCE_LENGTH=200
-export INPUT_SEQUENCE_STD=10
-export OUTPUT_SEQUENCE_LENGTH=200
+export NAMESPACE=benchmarking
 export AGG_CONFIG=components/backends/vllm/deploy/agg.yaml
 export DISAGG_CONFIG=components/backends/vllm/deploy/disagg.yaml
 export VANILLA_VLLM_CONFIG=benchmarks/utils/templates/vanilla-vllm.yaml
 export OUTPUT_DIR=benchmarks/results
 
+# Complete benchmark with example manifests
+./benchmarks/benchmark.sh \
+   --namespace $NAMESPACE \
+   --agg $AGG_CONFIG \
+   --disagg $DISAGG_CONFIG \
+   --vanilla $VANILLA_VLLM_CONFIG
+```
+
+### Custom Configuration
+
+```bash
+# Custom model, sequence lengths, and your own manifests
+./benchmarks/benchmark.sh \
+   --namespace $NAMESPACE \
+   --agg my-custom-agg.yaml \
+   --disagg my-custom-disagg.yaml \
+   --vanilla my-custom-vanilla.yaml \
+   --model "meta-llama/Meta-Llama-3-8B" \
+   --isl 512 \
+   --osl 512 \
+   --std 20 \
+   --output-dir benchmark_results
+```
+
+**Note**: The deployment manifests determine which model is actually deployed and benchmarked. Make sure your manifests are configured for the model you want to test.
+
+### Direct Python Execution
+
+For direct control over the benchmark workflow:
+
+```bash
+# Run benchmark directly with Python
 python3 -u -m benchmarks.utils.benchmark \
    --agg $AGG_CONFIG \
    --disagg $DISAGG_CONFIG \
    --vanilla $VANILLA_VLLM_CONFIG \
-   --isl $INPUT_SEQUENCE_LENGTH \
-   --std $INPUT_SEQUENCE_STD \
-   --osl $OUTPUT_SEQUENCE_LENGTH \
+   --isl 200 \
+   --std 10 \
+   --osl 200 \
    --namespace $NAMESPACE \
    --output-dir $OUTPUT_DIR
 
-# Generate plots from results
-python3 -m benchmarks.utils.plot --data-dir $OUTPUT_DIR --output-dir $OUTPUT_DIR/plots
+# Generate plots separately
+python3 -m benchmarks.utils.plot --data-dir $OUTPUT_DIR
 ```
 
 ## Configuration Options
 
-### Environment Variables
-
-| Variable | Required? | Default | Description |
-|----------|-----------|---------|-------------|
-| `NAMESPACE` | `Yes` | `None` | Kubernetes namespace |
-| `MODEL` | `No` |`deepseek-ai/DeepSeek-R1-Distill-Llama-8B` | HuggingFace model name |
-| `ISL` | `No` | `200` | Input sequence length (tokens) |
-| `STD` | `No` | `10 ` | Input sequence standard deviation |
-| `OSL` | `No` | `200` | Output sequence length (tokens) |
-| `OUTPUT_DIR` | `No` | `./benchmarks/results` | Local output directory |
-
-### Command Line Options
+All configuration is done via command line arguments:
 
 ```bash
-./benchmarks/benchmark.sh [OPTIONS]
+./benchmarks/benchmark.sh --namespace NAMESPACE --agg CONFIG --disagg CONFIG --vanilla CONFIG [OPTIONS]
 
-Options:
-  -h, --help         Show help message
-  -m, --model        Model name
-  -i, --isl          Input sequence length
-  -o, --osl          Output sequence length
-  -s, --scale        Tensor parallel scale (for multinode)
-  -n, --namespace    Kubernetes namespace
-  -d, --output-dir   Output directory
-  -e, --endpoint     Endpoint URL for existing deployment
-  --skip-deployment  Skip deployment creation
+REQUIRED:
+  -n, --namespace NAMESPACE     Kubernetes namespace
+  --agg CONFIG                  Aggregated deployment manifest
+  --disagg CONFIG               Disaggregated deployment manifest
+  --vanilla CONFIG              Vanilla vLLM deployment manifest
+
+OPTIONS:
+  -h, --help                    Show help message and examples
+  -m, --model MODEL             Model name (default: deepseek-ai/DeepSeek-R1-Distill-Llama-8B)
+  -i, --isl LENGTH              Input sequence length (default: 200)
+  -s, --std STDDEV              Input sequence standard deviation (default: 10)
+  -o, --osl LENGTH              Output sequence length (default: 200)
+  -d, --output-dir DIR          Output directory (default: ./benchmarks/results)
+  --verbose                     Enable verbose output
 ```
 
 ## Generated Results
@@ -143,27 +169,31 @@ The benchmark script generates four key performance plots:
 
 ### Data Files
 
-- **`benchmark_summary.csv`** - Complete metrics for all tests
-- **`BENCHMARK_REPORT.md`** - Human-readable summary report
-- **`raw_results/`** - Raw GenAI-Perf output files
-- **`logs/`** - Detailed execution logs
-- **`configs/`** - Generated Kubernetes configurations
+The benchmark generates structured output in your specified `OUTPUT_DIR`:
 
-### Result Analysis
+```
+benchmarks/results/
+├── SUMMARY.txt                  # Human-readable benchmark summary
+├── plots/                       # Performance visualization plots
+│   ├── p50_inter_token_latency_vs_concurrency.png
+│   ├── avg_inter_token_latency_vs_concurrency.png
+│   ├── request_throughput_vs_concurrency.png
+│   └── avg_time_to_first_token_vs_concurrency.png
+├── agg/                         # Aggregated deployment results
+│   ├── c1/                      # Concurrency level 1
+│   │   └── profile_export_genai_perf.json
+│   ├── c2/                      # Concurrency level 2
+│   └── ...                      # Other concurrency levels
+├── disagg/                      # Disaggregated deployment results
+│   └── c*/                      # Same structure as agg/
+└── vanilla/                     # Vanilla vLLM deployment results
+    └── c*/                      # Same structure as agg/
+```
 
-#### Interpreting Latency-Throughput Curves
-
-The generated plots show classic latency-throughput trade-offs:
-
-1. **Low Concurrency (1-10)**: Minimum latency, linear throughput scaling
-2. **Medium Concurrency (10-100)**: Optimal operating range for most workloads
-3. **High Concurrency (100+)**: Latency increases rapidly, throughput plateaus
-
-#### Comparing Deployment Types
-
-- **Dynamo Aggregated**: Best for mixed workloads, good latency and throughput balance
-- **Dynamo Disaggregated**: Optimized for high-throughput scenarios with separate prefill/decode
-- **Vanilla vLLM**: Baseline comparison, simpler deployment model
+Each concurrency directory contains:
+- **`profile_export_genai_perf.json`** - Structured metrics from GenAI-Perf
+- **`profile_export.json`** - Raw GenAI-Perf results
+- **`inputs.json`** - Generated test inputs
 
 ## Advanced Usage
 
@@ -188,8 +218,26 @@ For multi-node Dynamo deployments:
 
 ### Bring Your Own Scripts
 
-For custom benchmarking scenarios, you can pass in your benchmarking file to `benchmarks/benchmark.sh`:
+For custom benchmarking scenarios, you can:
 
-```bash
-CUSTOM_SCRIPT=<YOUR_SCRIPT_PATH> ./benchmarks/benchmark.sh
-```
+1. **Create custom deployment manifests**: Configure your own agg, disagg, and vanilla manifests for your specific models and hardware configurations
+
+2. **Modify concurrency levels**: Edit `benchmarks/utils/genai.py` to customize test parameters
+   ```python
+   CONCURRENCIES = [1, 5, 10, 25, 50, 100]  # Your custom levels
+   ```
+
+3. **Use direct Python modules**: Call the Python modules directly for full control
+   ```bash
+   # Custom benchmark workflow
+   python3 -m benchmarks.utils.benchmark --help
+
+   # Custom plot generation
+   python3 -m benchmarks.utils.plot --help
+   ```
+
+4. **Extend the workflow**: Modify `benchmarks/utils/workflow.py` to add custom deployment types or metrics collection
+
+5. **Generate different plots**: Modify `benchmarks/utils/plot.py` to generate a different set of plots for whatever you wish to visualize.
+
+The `benchmark.sh` script provides a complete end-to-end benchmarking experience. For more granular control, use the Python modules directly.
