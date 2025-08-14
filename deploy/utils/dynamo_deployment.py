@@ -92,8 +92,10 @@ class DynamoDeploymentClient:
             [
                 "kubectl",
                 "port-forward",
-                f"{self.service_name}.{self.namespace}.svc.cluster.local:{self.frontend_port}",
+                f"svc/{self.service_name}",
                 f"{local_port}:{self.frontend_port}",
+                "-n",
+                self.namespace,
             ]
         )
         return f"http://localhost:{local_port}"

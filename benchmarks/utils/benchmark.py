@@ -31,9 +31,6 @@ def main() -> int:
         "--osl", type=int, default=200, help="Output sequence length (default: 200)"
     )
     parser.add_argument(
-        "--concurrency", type=int, default=10, help="Concurrency level (default: 10)"
-    )
-    parser.add_argument(
         "--model",
         default="deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
         help="Model name (default: deepseek-ai/DeepSeek-R1-Distill-Llama-8B)",
@@ -54,7 +51,6 @@ def main() -> int:
             isl=args.isl,
             std=args.std,
             osl=args.osl,
-            concurrency=args.concurrency,
             model=args.model,
             output_dir=args.output_dir,
         )

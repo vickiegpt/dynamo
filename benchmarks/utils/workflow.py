@@ -27,7 +27,6 @@ async def run_benchmark_workflow(
     isl: int,
     std: int,
     osl: int,
-    concurrency: int,
     model: str,
     output_dir: str,
 ) -> None:
