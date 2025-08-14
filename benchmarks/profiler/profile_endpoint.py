@@ -60,7 +60,11 @@ def generate_prefill_benchmarks(args):
         genai_perf_artifact_dir = f"{args.artifact_dir}/gap_isl{isl}"
 
         gap_result = benchmark_prefill(
-            isl, genai_perf_artifact_dir, args.model_name, base_url=args.base_url
+            isl,
+            genai_perf_artifact_dir,
+            args.model_name,
+            args.tokenizer_path,
+            base_url=args.base_url,
         )
 
         if gap_result is not None:
@@ -177,6 +181,7 @@ def generate_decode_benchmarks(args):
                 num_request,
                 genai_perf_artifact_dir,
                 args.model_name,
+                args.tokenizer_path,
                 base_url=args.base_url,
             )
 
@@ -271,6 +276,12 @@ def main():
         type=str,
         default="deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
         help="Model name to benchmark (default: deepseek-ai/DeepSeek-R1-Distill-Llama-8B)",
+    )
+    prefill_parser.add_argument(
+        "--tokenizer-path",
+        type=str,
+        default="deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+        help="Path to the tokenizer (default: deepseek-ai/DeepSeek-R1-Distill-Llama-8B)",
     )
     prefill_parser.add_argument(
         "--base-url",
