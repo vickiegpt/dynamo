@@ -12,20 +12,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-tensor_parallel_size: 8
+pipeline_parallel_size: 2
+tensor_parallel_size: 2
 moe_expert_parallel_size: 1
 enable_attention_dp: false
-max_num_tokens: 1024
-max_batch_size: 2
+max_num_tokens: 8192
 trust_remote_code: true
 backend: pytorch
 enable_chunked_prefill: true
-# Overlap scheduler not currently supported in prefill only workers.
-disable_overlap_scheduler: true
+disable_overlap_scheduler: false
+
+cuda_graph_config:
+  max_batch_size: 16
 
 kv_cache_config:
-  free_gpu_memory_fraction: 0.1
-  enable_block_reuse: false
+  free_gpu_memory_fraction: 0.5
 
 cache_transceiver_config:
   backend: default

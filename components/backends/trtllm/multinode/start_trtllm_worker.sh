@@ -34,6 +34,12 @@ fi
 if [[ -n ${MODALITY} ]]; then
   EXTRA_ARGS+="--modality ${MODALITY} "
 fi
+echo "DEBUG EXTRA ARGS: ${EXTRA_ARGS}"
+
+
+cp /mnt/src/dynamo/trtllm/request_handlers/handler_base.py  /usr/local/lib/python3.12/dist-packages/dynamo/trtllm/request_handlers
+
+
 
 trtllm-llmapi-launch \
   python3 -m dynamo.trtllm \

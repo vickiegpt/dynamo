@@ -32,6 +32,39 @@ from dynamo.trtllm.utils.disagg_utils import (
 
 configure_dynamo_logging()
 
+def log_to_file(message: str, level: str = "info", request_id: Optional[str] = None) -> None:
+    """
+    Utility function to log messages to /tmp/logs.txt file.
+    
+    Args:
+        message (str): The message to log
+        level (str): Log level - one of 'debug', 'info', 'warning', 'error', 'critical'
+        request_id (str, optional): Optional request ID to include in the log
+    
+    Example:
+        log_to_file("Processing request", "info", "req-123")
+        log_to_file("An error occurred", "error")
+    """
+    try:
+        # Ensure the /tmp directory exists (should exist on most Unix systems)
+        os.makedirs("/tmp", exist_ok=True)
+        
+        # Format the timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        
+        # Format the message with optional request ID
+        request_prefix = f"[{request_id}] " if request_id else ""
+        formatted_message = f"{timestamp} - {level.upper()} - {request_prefix}{message}\n"
+        
+        # Write to the log file (append mode)
+        with open("/tmp/logs.txt", "a", encoding="utf-8") as f:
+            f.write(formatted_message)
+            
+    except Exception as e:
+        # Fall back to standard logging if file logging fails
+        logging.warning(f"Failed to write to /tmp/logs.txt: {e}")
+        # Log the original message to standard logger as fallback
+        getattr(logging, level.lower(), logging.info)(message)
 
 class DisaggregationMode(Enum):
     AGGREGATED = "prefill_and_decode"
@@ -101,12 +134,14 @@ class HandlerBase:
 
         # Check for multimodal request and process it
         if self.multimodal_processor:
+            log_to_file("Processing multimodal request", "info")
             processed_input = await self.multimodal_processor.process_openai_request(
                 request
             )
 
         else:
             # text-only flow
+            log_to_file("Processing text-only request", "info")
             processed_input = request.get("token_ids")
 
         # Check if there is an error in the publisher error queue
@@ -169,6 +204,9 @@ class HandlerBase:
         model_name = request.get("model", "unknown_model")
 
         # NEW: Updated engine call to include multimodal data
+        logging.info(f"Processed input: {processed_input}")
+        # Example usage of the log_to_file utility
+        log_to_file(f"Starting generation for model {model_name}", "info", request_id)
         async for res in self.engine.llm.generate_async(
             inputs=processed_input,  # Use the correctly extracted inputs
             sampling_params=sampling_params,
