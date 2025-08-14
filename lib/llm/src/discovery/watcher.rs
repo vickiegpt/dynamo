@@ -420,7 +420,7 @@ impl ModelWatcher {
                     // We don't need to check namespace for deletion since we're removing by key
                     // But we log the namespace for debugging if we can parse the entry
                     if let Ok(model_entry) = serde_json::from_slice::<ModelEntry>(kv.value()) {
-                        if model_entry.endpoint.namespace == target_namespace {
+                        if global_namespace || model_entry.endpoint.namespace == target_namespace {
                             tracing::info!(
                                 model_name = model_entry.name,
                                 namespace = model_entry.endpoint.namespace,

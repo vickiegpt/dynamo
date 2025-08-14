@@ -45,12 +45,12 @@ pub async fn run(runtime: Runtime, engine_config: EngineConfig) -> anyhow::Resul
                     if !is_global_namespace(namespace) {
                         // Use namespace-specific discovery if a specific namespace is configured
                         tracing::info!(
-                            "frontend will discover models from namespace: '{}'",
+                            "http ingress will discover models from namespace: '{}'",
                             namespace
                         );
                     } else {
                         // Use global discovery when namespace is "global", empty, or null
-                        tracing::info!("frontend will discover models from all namespaces");
+                        tracing::info!("http ingress will discover models from all namespaces");
                     }
                     run_namespace_watcher(
                         distributed_runtime,
