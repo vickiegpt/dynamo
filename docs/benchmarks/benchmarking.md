@@ -72,11 +72,13 @@ export INPUT_SEQUENCE_STD=10
 export OUTPUT_SEQUENCE_LENGTH=200
 export AGG_CONFIG=components/backends/vllm/deploy/agg.yaml
 export DISAGG_CONFIG=components/backends/vllm/deploy/disagg.yaml
+export VANILLA_VLLM_CONFIG=benchmarks/utils/templates/vanilla-vllm.yaml
 export OUTPUT_DIR=benchmarks/results
 
 python3 -u -m benchmarks.utils.benchmark \
    --agg $AGG_CONFIG \
    --disagg $DISAGG_CONFIG \
+   --vanilla $VANILLA_VLLM_CONFIG \
    --isl $INPUT_SEQUENCE_LENGTH \
    --std $INPUT_SEQUENCE_STD \
    --osl $OUTPUT_SEQUENCE_LENGTH \
@@ -84,7 +86,7 @@ python3 -u -m benchmarks.utils.benchmark \
    --output-dir $OUTPUT_DIR
 
 # Generate plots from results
-python3 benchmarks/utils/plot.py --data-dir ./benchmark_results --output-dir ./benchmark_results/plots
+python3 -m benchmarks.utils.plot --data-dir $OUTPUT_DIR --output-dir $OUTPUT_DIR/plots
 ```
 
 ## Configuration Options
