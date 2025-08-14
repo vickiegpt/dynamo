@@ -11,6 +11,7 @@ DOCKER_SERVER="${DOCKER_SERVER:-}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 DOCKER_USERNAME="${DOCKER_USERNAME:-}"
 DOCKER_PASSWORD="${DOCKER_PASSWORD:-}"
+HF_TOKEN="${HF_TOKEN:-}"
 PULL_SECRET_NAME=""
 
 RED='\033[0;31m'
@@ -49,6 +50,7 @@ Usage:
 Sets up Kubernetes namespace for Dynamo (one-time per namespace):
   - Creates namespace if absent
   - Applies common manifests (ServiceAccount, Role, RoleBinding, PVC)
+  - Installs CRDs once per cluster (if not already installed)
   - If DOCKER_SERVER/IMAGE_TAG are provided:
       * Builds/pushes a custom operator image with Earthly
       * Installs/updates the operator Helm release using that image
@@ -62,6 +64,7 @@ Environment variables:
   IMAGE_TAG         Image tag for operator (optional)
   DOCKER_USERNAME   Registry username (optional; if provided with DOCKER_PASSWORD, secret is created)
   DOCKER_PASSWORD   Registry password/token (optional)
+  HF_TOKEN          Hugging Face token; if set, a secret named hf-token-secret is created in the namespace (optional)
 EOF
 }
 
@@ -82,7 +85,30 @@ for mf in "$(dirname "$0")/manifests"/*.yaml; do
 done
 ok "Common manifests applied"
 
-# 3) Optional: Create imagePullSecret for private registry if credentials provided or requested
+# 3) Install CRDs once per cluster (only if not already installed)
+if command -v helm &>/dev/null; then
+  if ! helm status dynamo-crds -n default &>/dev/null; then
+    log "Installing CRDs via Helm release dynamo-crds in namespace $NAMESPACE"
+    pushd deploy/cloud/helm >/dev/null
+    helm upgrade --install dynamo-crds ./crds/ \
+      --namespace "$NAMESPACE" \
+      --wait \
+      --atomic
+    popd >/dev/null
+    ok "CRDs installed"
+  fi
+fi
+
+# 4) Optional: Create Hugging Face token secret if HF_TOKEN provided
+if [[ -n "$HF_TOKEN" ]]; then
+  kubectl create secret generic hf-token-secret \
+    --from-literal=HF_TOKEN="$HF_TOKEN" \
+    -n "$NAMESPACE" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  ok "hf-token-secret created/updated"
+fi
+
+# 5) Optional: Create imagePullSecret for private registry if credentials provided or requested
 if [[ -n "$DOCKER_SERVER" ]]; then
   if [[ -n "$DOCKER_USERNAME" && -n "$DOCKER_PASSWORD" ]]; then
     create_or_update_pull_secret "$DOCKER_SERVER" "$DOCKER_USERNAME" "$DOCKER_PASSWORD"
@@ -101,7 +127,7 @@ if [[ -n "$DOCKER_SERVER" ]]; then
   fi
 fi
 
-# 4) Operator: Build/push custom image if both vars provided, else use default NGC image
+# 6) Operator: Build/push custom image if both vars provided, else use default NGC image
 if [[ -n "$DOCKER_SERVER" && -n "$IMAGE_TAG" ]]; then
   if ! command -v earthly &>/dev/null; then warn "earthly not found; skipping operator build/push"; else
     log "Building and pushing operator images via earthly"

@@ -69,14 +69,14 @@ class DynamoDeploymentClient:
         self.base_log_dir = Path(base_log_dir) if base_log_dir else Path("logs")
         self.frontend_port = frontend_port
 
-    def _init_kubernetes(self):
+    async def _init_kubernetes(self):
         """Initialize kubernetes client"""
         try:
             # Try in-cluster config first (for pods with service accounts)
             config.load_incluster_config()
         except Exception:
             # Fallback to kube config file (for local development)
-            config.load_kube_config()
+            await config.load_kube_config()
 
         self.k8s_client = client.ApiClient()
         self.custom_api = client.CustomObjectsApi(self.k8s_client)
@@ -97,7 +97,7 @@ class DynamoDeploymentClient:
         Args:
             deployment: Either a dict containing the deployment spec or a path to a yaml file
         """
-        self._init_kubernetes()
+        await self._init_kubernetes()
 
         if isinstance(deployment, str):
             # Load from yaml file
