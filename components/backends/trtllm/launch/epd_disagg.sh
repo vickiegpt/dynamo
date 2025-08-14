@@ -40,6 +40,7 @@ CUDA_VISIBLE_DEVICES=$ENCODE_CUDA_VISIBLE_DEVICES python3 -m dynamo.trtllm \
   --extra-engine-args "$ENCODE_ENGINE_ARGS" \
   --disaggregation-strategy "$DISAGGREGATION_STRATEGY" \
   --modality "$MODALITY" \
+  --use-nixl-connect true \
   --disaggregation-mode encode &
 ENCODE_PID=$!
 
@@ -51,6 +52,7 @@ CUDA_VISIBLE_DEVICES=$PREFILL_CUDA_VISIBLE_DEVICES python3 -m dynamo.trtllm \
   --disaggregation-strategy "$DISAGGREGATION_STRATEGY" \
   --modality "$MODALITY" \
   --disaggregation-mode prefill \
+  --use-nixl-connect true \
   --encode-endpoint "$ENCODE_ENDPOINT" &
 PREFILL_PID=$!
 
@@ -61,6 +63,7 @@ CUDA_VISIBLE_DEVICES=$DECODE_CUDA_VISIBLE_DEVICES python3 -m dynamo.trtllm \
   --extra-engine-args "$DECODE_ENGINE_ARGS" \
   --disaggregation-strategy "$DISAGGREGATION_STRATEGY" \
   --modality "$MODALITY" \
+  --use-nixl-connect true \
   --disaggregation-mode decode &
 DECODE_PID=$!
 

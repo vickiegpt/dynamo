@@ -49,6 +49,7 @@ class Config:
         self.next_endpoint: str = ""
         self.encode_endpoint: str = ""
         self.modality: str = "text"
+        self.use_nixl_connect: bool = False
 
     def __str__(self) -> str:
         return (
@@ -74,7 +75,8 @@ class Config:
             f"disaggregation_strategy={self.disaggregation_strategy}, "
             f"next_endpoint={self.next_endpoint}, "
             f"encode_endpoint={self.encode_endpoint}, "
-            f"modality={self.modality})"
+            f"modality={self.modality}, "
+            f"use_nixl_connect={self.use_nixl_connect})"
         )
 
 
@@ -214,6 +216,12 @@ def cmd_line_args():
         help=f"Mode to use for disaggregation. Default: {DEFAULT_DISAGGREGATION_MODE}",
     )
     parser.add_argument(
+        "--use-nixl-connect",
+        type=bool,
+        default=False,
+        help="Use NIXL Connect for communication between workers.",
+    )
+    parser.add_argument(
         "--disaggregation-strategy",
         type=str,
         default=DEFAULT_DISAGGREGATION_STRATEGY,
@@ -302,5 +310,6 @@ def cmd_line_args():
     config.extra_engine_args = args.extra_engine_args
     config.publish_events_and_metrics = args.publish_events_and_metrics
     config.modality = args.modality
+    config.use_nixl_connect = args.use_nixl_connect
 
     return config

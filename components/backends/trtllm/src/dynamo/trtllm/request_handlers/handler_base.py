@@ -21,6 +21,7 @@ from typing import Optional
 from tensorrt_llm import SamplingParams
 from tensorrt_llm.llmapi import DisaggregatedParams as LlmDisaggregatedParams
 
+from dynamo.nixl_connect import Connector
 from dynamo.runtime.logging import configure_dynamo_logging
 from dynamo.trtllm.engine import TensorRTLLMEngine
 from dynamo.trtllm.multimodal_processor import MultimodalRequestProcessor
@@ -62,6 +63,7 @@ class RequestHandlerConfig:
     multimodal_processor: Optional[
         MultimodalRequestProcessor
     ] = None  # for multimodal support
+    connector: Optional[Connector] = None
 
 
 class HandlerBase:
@@ -80,6 +82,7 @@ class HandlerBase:
         self.encode_client = config.encode_client
         self.multimodal_processor = config.multimodal_processor
         self.first_generation = True
+        self.connector = config.connector
 
     def check_error(self, result: dict):
         """

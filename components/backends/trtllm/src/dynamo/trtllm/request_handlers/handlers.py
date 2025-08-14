@@ -6,6 +6,7 @@ import logging
 
 import torch
 
+import dynamo.nixl_connect as nixl_connect
 from dynamo.runtime.logging import configure_dynamo_logging
 from dynamo.trtllm.request_handlers.handler_base import (
     DisaggregationMode,
@@ -87,6 +88,22 @@ class EncodeHandler(HandlerBase):
         # 1. Perform the encoding work by generating random torch data
         encodings = torch.rand(1, 1024)
         logging.info(f"Encoding created in encode handler: {encodings}")
+
+        if self.connector and "nixl_metadata" in request:
+            # The prefill worker has requested that we write the encodings
+            # to a shared memory region.
+            metadata = nixl_connect.RdmaMetadata.model_validate(
+                request["nixl_metadata"]
+            )
+            descriptor = nixl_connect.Descriptor(encodings)
+            write_op = await self.connector.begin_write(descriptor, metadata)
+            with write_op:
+                await write_op.wait_for_completion()
+            logging.info("EncodeHandler completed write to shared memory.")
+            # Yield back an empty response to signal completion.
+            yield {}
+            return
+
         # 2. Add the result directly to the request payload
         request["encodings"] = encodings.tolist()
 
@@ -108,6 +125,37 @@ class PrefillHandler(HandlerBase):
         logging.info(f"PrefillHandler initialized with config: {config}")
         super().__init__(config)
 
+    async def remote_encode_with_nixl(self, request: dict):
+        # 1. Allocate a tensor for the encodings.
+        encodings_tensor = torch.zeros(1, 1024, dtype=torch.float32)
+        logging.info(f"PrefillHandler encodings before write: {encodings_tensor}")
+        # 2. Create a descriptor for the tensor.
+        descriptor = nixl_connect.Descriptor(encodings_tensor)
+
+        # 3. Create a writable operation.
+        with self.connector.create_writable(descriptor) as writable_op:
+            # 4. Get the metadata from the operation.
+            op_metadata = writable_op.metadata()
+
+            # 5. Send the metadata to the encode worker.
+            request["nixl_metadata"] = op_metadata.model_dump()
+            logging.info(f"PrefillHandler sending nixl metadata: {request}")
+            response_received = False
+            async for res in await self.encode_client.round_robin(request):
+                response_received = True
+
+            if not response_received:
+                raise RuntimeError("Did not receive a response from the encode worker.")
+
+            # 6. Wait for the encode worker to complete the write operation.
+            await writable_op.wait_for_completion()
+            logging.info(
+                f"PrefillHandler received encodings from encode worker: {encodings_tensor}"
+            )
+
+        # 7. Return the modifed encodings.
+        return encodings_tensor
+
     async def remote_encode(self, request: dict):
         logging.info(f"PrefillHandler.remote_encode sending request: {request}")
         response_received = False
@@ -128,12 +176,17 @@ class PrefillHandler(HandlerBase):
         logging.info(f"PrefillHandler.generate received request: {request}")
         # STATE 1: If an encoder is configured and the request needs encoding, call it.
         if self.encode_client and "encodings" not in request:
-            logging.info("PrefillHandler calling remote_encode")
-            async for res in self.remote_encode(request):
-                # The encoder returns the modified request. Adopt it as our new state.
-                request = res
-                logging.info(f"Encoded request: {request}")
-                break  # The encoder only returns one response.
+            if self.connector:
+                logging.info("PrefillHandler calling remote_encode_with_nixl")
+                encodings = await self.remote_encode_with_nixl(request)
+                request["encodings"] = encodings.tolist()
+            else:
+                logging.info("PrefillHandler calling remote_encode")
+                async for res in self.remote_encode(request):
+                    # The encoder returns the modified request. Adopt it as our new state.
+                    request = res
+                    logging.info(f"Encoded request: {request}")
+                    break  # The encoder only returns one response.
 
         # STATE 2: Request is ready for prefill.
         # Generate the prefill response locally

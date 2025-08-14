@@ -20,6 +20,7 @@ from tensorrt_llm.llmapi.tokenizer import tokenizer_factory
 from torch.cuda import device_count
 from transformers import AutoConfig
 
+import dynamo.nixl_connect as nixl_connect
 from dynamo.llm import ModelType, register_llm
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 from dynamo.runtime.logging import configure_dynamo_logging
@@ -207,6 +208,12 @@ async def init(runtime: DistributedRuntime, config: Config):
         # We already detokenize inside HandlerBase. No need to also do it in TRTLLM.
         default_sampling_params.detokenize = False
 
+    connector = None
+    if config.use_nixl_connect:
+        logging.info("Initializing NIXL Connect.")
+        connector = nixl_connect.Connector()
+        await connector.initialize()
+
     async with get_llm_engine(engine_args) as engine:
         endpoint = component.endpoint(config.endpoint)
 
@@ -231,6 +238,7 @@ async def init(runtime: DistributedRuntime, config: Config):
             next_client=next_client,
             encode_client=encode_client,
             multimodal_processor=multimodal_processor,
+            connector=connector,
         )
 
         if config.publish_events_and_metrics and is_first_worker(config):
