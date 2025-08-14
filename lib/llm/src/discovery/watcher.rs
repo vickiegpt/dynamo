@@ -21,7 +21,7 @@ use crate::{
     kv_router::{KvPushRouter, KvRouterConfig},
     migration::Migration,
     model_type::ModelInput,
-    preprocessor::{OpenAIPreprocessor, PreprocessedEmbeddingRequest, PreprocessedRequest},
+    preprocessor::{OpenAIPreprocessor, PreprocessedEmbeddingRequest, PreprocessedRequest, prompt::PromptFormatter},
     protocols::common::llm_backend::{EmbeddingsEngineOutput, LLMEngineOutput},
     protocols::openai::chat_completions::{
         NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse,
@@ -173,8 +173,8 @@ impl ModelWatcher {
             anyhow::bail!("Missing etcd_client");
         };
         // Load MDC once if needed
-        let mut card = if model_entry.model_input == ModelInput::Tokens 
-            || model_entry.model_type.supports_embedding() 
+        let mut card = if model_entry.model_input == ModelInput::Tokens
+            || model_entry.model_type.supports_embedding()
         {
             match model_entry.load_mdc(&etcd_client).await {
                 Ok(card) => {
@@ -201,54 +201,56 @@ impl ModelWatcher {
             let _cache_dir = Some(card.move_from_nats(self.drt.nats_client()).await?);
 
             if model_entry.model_type.supports_chat() {
-             
                 // Chat Completions
-                let frontend = SegmentSource::<
-                    SingleIn<NvCreateChatCompletionRequest>,
-                    ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>,
-                >::new();
+                if let Ok(preprocessor) = OpenAIPreprocessor::new(card.clone()).await {
+                    let frontend = SegmentSource::<
+                        SingleIn<NvCreateChatCompletionRequest>,
+                        ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>,
+                    >::new();
 
-                let preprocessor = OpenAIPreprocessor::new(card.clone()).await?.into_operator();
-                let backend = Backend::from_mdc(card.clone()).await?.into_operator();
-                let migration = Migration::from_mdc(card.clone()).await?.into_operator();
-                let router =
-                    PushRouter::<PreprocessedRequest, Annotated<LLMEngineOutput>>::from_client(
-                        client.clone(),
-                        self.router_mode,
-                    )
-                    .await?;
-                let service_backend = match self.router_mode {
-                    RouterMode::Random | RouterMode::RoundRobin | RouterMode::Direct(_) => {
-                        ServiceBackend::from_engine(Arc::new(router))
-                    }
-                    RouterMode::KV => {
-                        let chooser = self
-                            .manager
-                            .kv_chooser_for(
-                                &model_entry.name,
-                                &component,
-                                card.kv_cache_block_size,
-                                self.kv_router_config,
-                            )
-                            .await?;
-                        let kv_push_router = KvPushRouter::new(router, chooser);
-                        ServiceBackend::from_engine(Arc::new(kv_push_router))
-                    }
-                };
+                    let preprocessor = preprocessor.into_operator();
+                    let backend = Backend::from_mdc(card.clone()).await?.into_operator();
+                    let migration = Migration::from_mdc(card.clone()).await?.into_operator();
+                    let router =
+                        PushRouter::<PreprocessedRequest, Annotated<LLMEngineOutput>>::from_client(
+                            client.clone(),
+                            self.router_mode,
+                        )
+                        .await?;
+                    let service_backend = match self.router_mode {
+                        RouterMode::Random | RouterMode::RoundRobin | RouterMode::Direct(_) => {
+                            ServiceBackend::from_engine(Arc::new(router))
+                        }
+                        RouterMode::KV => {
+                            let chooser = self
+                                .manager
+                                .kv_chooser_for(
+                                    &model_entry.name,
+                                    &component,
+                                    card.kv_cache_block_size,
+                                    self.kv_router_config,
+                                )
+                                .await?;
+                            let kv_push_router = KvPushRouter::new(router, chooser);
+                            ServiceBackend::from_engine(Arc::new(kv_push_router))
+                        }
+                    };
 
-                let engine = frontend
-                    .link(preprocessor.forward_edge())?
-                    .link(backend.forward_edge())?
-                    .link(migration.forward_edge())?
-                    .link(service_backend)?
-                    .link(migration.backward_edge())?
-                    .link(backend.backward_edge())?
-                    .link(preprocessor.backward_edge())?
-                    .link(frontend)?;
-
-                self.manager
-                    .add_chat_completions_model(&model_entry.name, engine)?;
-            }
+                    let engine = frontend
+                        .link(preprocessor.forward_edge())?
+                        .link(backend.forward_edge())?
+                        .link(migration.forward_edge())?
+                        .link(service_backend)?
+                        .link(migration.backward_edge())?
+                        .link(backend.backward_edge())?
+                        .link(preprocessor.backward_edge())?
+                        .link(frontend)?;
+                    self.manager
+                        .add_chat_completions_model(&model_entry.name, engine)?;
+                } else {
+                    tracing::error!("Failed to create preprocessor for chat completions model");
+                }
+        }
 
             if model_entry.model_type.supports_completions() {
                 // Completions
@@ -256,8 +258,9 @@ impl ModelWatcher {
                         SingleIn<NvCreateCompletionRequest>,
                         ManyOut<Annotated<NvCreateCompletionResponse>>,
                     >::new();
-
-                let preprocessor = OpenAIPreprocessor::new(card.clone()).await?.into_operator();
+                let formatter = PromptFormatter::no_op();
+                let PromptFormatter::OAI(formatter) = formatter;
+                let preprocessor = OpenAIPreprocessor::new_with_formatter(card.clone(), formatter).await?.into_operator();
                 let backend = Backend::from_mdc(card.clone()).await?.into_operator();
                 let migration = Migration::from_mdc(card.clone()).await?.into_operator();
                 let router =
@@ -284,7 +287,7 @@ impl ModelWatcher {
                         ServiceBackend::from_engine(Arc::new(kv_push_router))
                     }
                 };
-                
+
                 let engine = frontend
                         .link(preprocessor.forward_edge())?
                         .link(backend.forward_edge())?
@@ -355,7 +358,7 @@ impl ModelWatcher {
                         .add_completions_model(&model_entry.name, engine)?;
             }
         }
-        
+
 
         Ok(())
     }
