@@ -38,9 +38,15 @@ dynamo-operator:
 
   # Controller manager configuration
   controllerManager:
-    # -- Node tolerations for controller manager pods
-    tolerations: []
-
+    tolerations:
+      - key: "dedicated"
+        operator: "Equal"
+        value: "user-workload"
+        effect: "NoSchedule"
+      - key: "dedicated"
+        operator: "Equal"
+        value: "user-workload"
+        effect: "NoExecute"
     manager:
       # Container image configuration for the operator manager
       image:
@@ -172,8 +178,15 @@ etcd:
     # Whether to enable liveness probes (disabled to reduce startup complexity)
     enabled: false
 
-  # Node tolerations for etcd pods (allows scheduling on specific nodes)
-  tolerations: []
+  tolerations:
+    - key: "dedicated"
+      operator: "Equal"
+      value: "user-workload"
+      effect: "NoSchedule"
+    - key: "dedicated"
+      operator: "Equal"
+      value: "user-workload"
+      effect: "NoExecute"
 
 # NATS configuration - messaging system for operator communication
 # For complete configuration options, see: https://github.com/nats-io/k8s/tree/main/helm/charts/nats
@@ -490,8 +503,16 @@ nats:
     # https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.24/#pod-v1-core
     merge:
       spec:
-        # Node tolerations for NATS pods (allows scheduling on specific nodes)
-        tolerations: []
+        tolerations:
+          - key: "dedicated"
+            operator: "Equal"
+            value: "user-workload"
+            effect: "NoSchedule"
+          - key: "dedicated"
+            operator: "Equal"
+            value: "user-workload"
+            effect: "NoExecute"
+
     patch: []
 
   # Headless service for StatefulSet pod discovery
@@ -609,6 +630,13 @@ nats:
     podTemplate:
       merge:
         spec:
-          # Node tolerations for NATS Box pods
-          tolerations: []
+          tolerations:
+            - key: "dedicated"
+              operator: "Equal"
+              value: "user-workload"
+              effect: "NoSchedule"
+            - key: "dedicated"
+              operator: "Equal"
+              value: "user-workload"
+              effect: "NoExecute"
       patch: []

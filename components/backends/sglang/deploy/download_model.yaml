@@ -1,0 +1,65 @@
+# Secret for HF token
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hf-token-secret
+type: Opaque
+stringData:
+  HF_TOKEN: "<token>"  # Replace with your actual token
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deepseek-r1-download
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: deepseek-r1-download
+  template:
+    metadata:
+      labels:
+        app: deepseek-r1-download
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.present
+                    operator: In
+                    values:
+                      - "true"
+      containers:
+        - name: downloader
+          image: lmsysorg/sglang:v0.5.0rc0-cu129-gb200
+          command:
+            - sh
+            - -c
+            - |
+              sleep infinity
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token-secret
+                  key: HF_TOKEN
+          volumeMounts:
+            - name: modelcache-pvc
+              mountPath: /data
+      restartPolicy: Always
+      volumes:
+        - name: modelcache-pvc
+          persistentVolumeClaim:
+            claimName: modelcache-pvc
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "user-workload"
+          effect: "NoSchedule"
+        - key: "dedicated"
+          operator: "Equal"
+          value: "user-workload"
+          effect: "NoExecute"

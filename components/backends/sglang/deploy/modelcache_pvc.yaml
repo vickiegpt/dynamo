@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: modelcache-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: oci-fss
+  resources:
+    requests:
+      storage: 1500Gi
