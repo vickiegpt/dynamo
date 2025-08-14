@@ -35,6 +35,7 @@ use crate::{
 };
 
 use super::{ModelEntry, ModelManager, MODEL_ROOT_PATH};
+use crate::namespace::is_global_namespace;
 
 pub struct ModelWatcher {
     manager: Arc<ModelManager>,
@@ -108,7 +109,11 @@ impl ModelWatcher {
 
                     match self.handle_put(&model_entry).await {
                         Ok(()) => {
-                            tracing::info!(model_name = model_entry.name, "added model");
+                            tracing::info!(
+                                model_name = model_entry.name,
+                                namespace = model_entry.endpoint.namespace,
+                                "added model"
+                            );
                             self.notify_on_model.notify_waiters();
                         }
                         Err(err) => {
@@ -328,5 +333,107 @@ impl ModelWatcher {
         let mut all = self.all_entries().await?;
         all.retain(|entry| entry.name == model_name);
         Ok(all)
+    }
+
+    /// Watch for model changes
+    /// Only process models from a specific namespace if target_namespace is not global namespace
+    pub async fn watch_namespace_filtered(
+        &self,
+        mut events_rx: Receiver<WatchEvent>,
+        target_namespace: &str,
+    ) {
+        tracing::debug!("model watcher started for namespace: {}", target_namespace);
+        let global_namespace = is_global_namespace(target_namespace);
+        while let Some(event) = events_rx.recv().await {
+            match event {
+                WatchEvent::Put(kv) => {
+                    let model_entry = match serde_json::from_slice::<ModelEntry>(kv.value()) {
+                        Ok(model_entry) => model_entry,
+                        Err(err) => {
+                            match kv.value_str() {
+                                Ok(value) => {
+                                    tracing::error!(%err, value, "Invalid JSON in model entry")
+                                }
+                                Err(value_str_err) => {
+                                    tracing::error!(original_error = %err, %value_str_err, "Invalid UTF-8 string in model entry, expected JSON")
+                                }
+                            }
+                            continue;
+                        }
+                    };
+
+                    // Filter by namespace - only process models from the target namespace
+                    if !global_namespace && model_entry.endpoint.namespace != target_namespace {
+                        tracing::debug!(
+                            model_namespace = model_entry.endpoint.namespace,
+                            target_namespace = target_namespace,
+                            model_name = model_entry.name,
+                            "Skipping model from different namespace"
+                        );
+                        continue;
+                    }
+
+                    let key = match kv.key_str() {
+                        Ok(k) => k,
+                        Err(err) => {
+                            tracing::error!(%err, ?kv, "Invalid UTF-8 string in model entry key, skipping");
+                            continue;
+                        }
+                    };
+                    self.manager.save_model_entry(key, model_entry.clone());
+
+                    if self.manager.has_model_any(&model_entry.name) {
+                        tracing::trace!(
+                            name = model_entry.name,
+                            namespace = model_entry.endpoint.namespace,
+                            "New endpoint for existing model in target namespace"
+                        );
+                        self.notify_on_model.notify_waiters();
+                        continue;
+                    }
+
+                    tracing::info!(
+                        model_name = model_entry.name,
+                        namespace = model_entry.endpoint.namespace,
+                        "Processing new model from target namespace"
+                    );
+
+                    match self.handle_put(&model_entry).await {
+                        Ok(()) => {
+                            tracing::debug!(name = model_entry.name, "Model added successfully");
+                            self.notify_on_model.notify_waiters();
+                        }
+                        Err(err) => {
+                            tracing::error!(%err, name = model_entry.name, "Failed to handle model entry");
+                        }
+                    }
+                }
+                WatchEvent::Delete(kv) => {
+                    let key = match kv.key_str() {
+                        Ok(k) => k,
+                        Err(err) => {
+                            tracing::error!(%err, ?kv, "Invalid UTF-8 string in model entry key, skipping delete");
+                            continue;
+                        }
+                    };
+
+                    // We don't need to check namespace for deletion since we're removing by key
+                    // But we log the namespace for debugging if we can parse the entry
+                    if let Ok(model_entry) = serde_json::from_slice::<ModelEntry>(kv.value()) {
+                        if model_entry.endpoint.namespace == target_namespace {
+                            tracing::info!(
+                                model_name = model_entry.name,
+                                namespace = model_entry.endpoint.namespace,
+                                "Model deleted from target namespace"
+                            );
+                        }
+                    }
+
+                    self.manager.remove_model_entry(key);
+                }
+            }
+        }
+
+        tracing::debug!("model watcher stopped for namespace: {}", target_namespace);
     }
 }
