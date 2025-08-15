@@ -27,6 +27,7 @@ pub mod mocker;
 pub mod model_card;
 pub mod model_type;
 pub mod perf;
+pub mod postprocessor;
 pub mod preprocessor;
 pub mod protocols;
 pub mod recorder;
@@ -37,6 +38,9 @@ pub mod types;
 
 #[cfg(feature = "block-manager")]
 pub mod block_manager;
+
+#[cfg(feature = "cuda")]
+pub mod cuda;
 
 /// Reads a JSON file, extracts a specific field, and deserializes it into type T.
 ///

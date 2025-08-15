@@ -166,7 +166,7 @@ impl RetryManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocols::common::{SamplingOptions, StopConditions};
+    use crate::protocols::common::{OutputOptions, SamplingOptions, StopConditions};
     use dynamo_runtime::pipeline::context::Controller;
     use dynamo_runtime::pipeline::AsyncEngine;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -175,6 +175,7 @@ mod tests {
     // Helper to create a mock preprocessed request
     fn create_mock_request(max_tokens: u32) -> PreprocessedRequest {
         PreprocessedRequest {
+            model: "mock".to_string(),
             token_ids: vec![1, 2, 3],
             batch_token_ids: None,
             stop_conditions: StopConditions {
@@ -182,6 +183,7 @@ mod tests {
                 ..Default::default()
             },
             sampling_options: SamplingOptions::default(),
+            output_options: OutputOptions::default(),
             eos_token_ids: vec![],
             mdc_sum: None,
             annotations: vec![],
@@ -197,6 +199,7 @@ mod tests {
             text: Some(format!("token_{}", token_id)),
             cum_log_probs: None,
             log_probs: None,
+            top_logprobs: None,
             finish_reason: None,
             index: None,
         })

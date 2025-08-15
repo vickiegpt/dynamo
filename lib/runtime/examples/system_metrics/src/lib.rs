@@ -16,6 +16,7 @@ use std::sync::Arc;
 pub const DEFAULT_NAMESPACE: &str = "dyn_example_namespace";
 pub const DEFAULT_COMPONENT: &str = "dyn_example_component";
 pub const DEFAULT_ENDPOINT: &str = "dyn_example_endpoint";
+pub const DEFAULT_MODEL_NAME: &str = "dyn_example_model";
 
 /// Stats structure returned by the endpoint's stats handler
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -82,7 +83,7 @@ impl AsyncEngine<SingleIn<String>, ManyOut<Annotated<String>>, Error> for Reques
     }
 }
 
-/// Backend function that sets up the system server with metrics and ingress handler
+/// Backend function that sets up the system status server with metrics and ingress handler
 /// This function can be reused by integration tests to ensure they use the exact same setup
 pub async fn backend(drt: DistributedRuntime, endpoint_name: Option<&str>) -> Result<()> {
     let endpoint_name = endpoint_name.unwrap_or(DEFAULT_ENDPOINT);
