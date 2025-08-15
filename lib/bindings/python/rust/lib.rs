@@ -25,6 +25,8 @@ use dynamo_runtime::{
 use dynamo_llm::{self as llm_rs};
 use dynamo_llm::{entrypoint::RouterConfig, kv_router::KvRouterConfig};
 
+use crate::llm::local_model::ModelRuntimeConfig;
+
 #[pyclass(eq, eq_int)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum RouterMode {
@@ -83,6 +85,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::entrypoint::KvRouterConfig>()?;
     m.add_class::<llm::kv::WorkerMetricsPublisher>()?;
     m.add_class::<llm::model_card::ModelDeploymentCard>()?;
+    m.add_class::<llm::local_model::ModelRuntimeConfig>()?;
     m.add_class::<llm::preprocessor::OAIChatPreprocessor>()?;
     m.add_class::<llm::backend::Backend>()?;
     m.add_class::<llm::kv::OverlapScores>()?;
@@ -133,7 +136,7 @@ fn log_message(level: &str, message: &str, module: &str, file: &str, line: u32) 
 }
 
 #[pyfunction]
-#[pyo3(signature = (model_type, endpoint, model_path, model_name=None, context_length=None, kv_cache_block_size=None, router_mode=None, migration_limit=0, user_data=None))]
+#[pyo3(signature = (model_type, endpoint, model_path, model_name=None, context_length=None, kv_cache_block_size=None, router_mode=None, migration_limit=0, runtime_config=None, user_data=None))]
 #[allow(clippy::too_many_arguments)]
 fn register_llm<'p>(
     py: Python<'p>,
@@ -145,6 +148,7 @@ fn register_llm<'p>(
     kv_cache_block_size: Option<u32>,
     router_mode: Option<RouterMode>,
     migration_limit: u32,
+    runtime_config: Option<ModelRuntimeConfig>,
     user_data: Option<&Bound<'p, PyDict>>,
 ) -> PyResult<Bound<'p, PyAny>> {
     let model_type_obj = match model_type {
@@ -175,6 +179,7 @@ fn register_llm<'p>(
             .kv_cache_block_size(kv_cache_block_size)
             .router_config(Some(router_config))
             .migration_limit(Some(migration_limit))
+            .runtime_config(runtime_config.unwrap_or_default().inner)
             .user_data(user_data_json);
         // Download from HF, load the ModelDeploymentCard
         let mut local_model = builder.build().await.map_err(to_pyerr)?;
@@ -559,7 +564,7 @@ impl EtcdClient {
         let client = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             client
-                .kv_create(key, value, lease_id)
+                .kv_create(&key, value, lease_id)
                 .await
                 .map_err(to_pyerr)?;
             Ok(())
