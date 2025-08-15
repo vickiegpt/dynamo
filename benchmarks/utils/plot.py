@@ -142,6 +142,104 @@ def create_plot(
     print(f"Saved plot: {output_path}")
 
 
+def create_efficiency_plot(
+    deployment_results: Dict, plots_dir: Path, output_tokens: int = 200
+) -> None:
+    """
+    Create an efficiency plot showing tok/s/gpu vs tok/s/user with concurrency as labeled points.
+
+    Args:
+        deployment_results: Dict of deployment_type -> results
+        plots_dir: Directory to save plots
+        output_tokens: Average output tokens per request (default 200)
+    """
+    plt.figure(figsize=(12, 8))
+
+    colors = {"agg": "#1f77b4", "disagg": "#ff7f0e", "vanilla": "#2ca02c"}
+    markers = {"agg": "o", "disagg": "s", "vanilla": "^"}
+
+    for deployment_type, results in deployment_results.items():
+        tok_s_per_user = []
+        tok_s_per_gpu = []
+        concurrency_levels = []
+
+        for concurrency, metrics in results:
+            try:
+                # Get request throughput (requests/sec)
+                request_throughput = metrics["request_throughput"]["avg"]
+
+                # Calculate total tokens per second
+                total_tok_s = request_throughput * output_tokens
+
+                # Calculate tok/s per user and per GPU
+                tok_s_user = total_tok_s / concurrency
+                tok_s_gpu = total_tok_s  # Assuming 1 GPU per deployment
+
+                tok_s_per_user.append(tok_s_user)
+                tok_s_per_gpu.append(tok_s_gpu)
+                concurrency_levels.append(concurrency)
+
+            except KeyError as e:
+                print(
+                    f"Warning: Missing metric for {deployment_type} concurrency {concurrency}: {e}"
+                )
+                continue
+
+        if tok_s_per_user and tok_s_per_gpu:
+            # Plot points
+            color = colors.get(deployment_type, "#888888")
+            marker = markers.get(deployment_type, "o")
+
+            plt.scatter(
+                tok_s_per_user,
+                tok_s_per_gpu,
+                c=color,
+                marker=marker,
+                s=120,
+                alpha=0.8,
+                label=deployment_type.title(),
+                edgecolors="black",
+                linewidth=1.5,
+            )
+
+            # Add concurrency labels
+            for i, (x, y, c) in enumerate(
+                zip(tok_s_per_user, tok_s_per_gpu, concurrency_levels)
+            ):
+                plt.annotate(
+                    f"{c}",
+                    (x, y),
+                    xytext=(8, 8),
+                    textcoords="offset points",
+                    fontsize=10,
+                    fontweight="bold",
+                    ha="left",
+                )
+
+    plt.title("GPU Efficiency vs User Experience", fontsize=14, fontweight="bold")
+    plt.xlabel("Tokens/sec per User", fontsize=12)
+    plt.ylabel("Tokens/sec per GPU", fontsize=12)
+    plt.grid(True, alpha=0.3)
+
+    # Add a note about what the numbers represent
+    plt.figtext(
+        0.02,
+        0.02,
+        "Note: Numbers on dots indicate concurrency level",
+        fontsize=10,
+        style="italic",
+        alpha=0.7,
+    )
+
+    plt.legend()
+
+    plt.tight_layout()
+    output_path = plots_dir / "efficiency_tok_s_gpu_vs_user.png"
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"Saved efficiency plot: {output_path}")
+
+
 def generate_plots(base_output_dir: Path) -> None:
     """
     Generate performance plots from benchmark results.
@@ -248,6 +346,9 @@ def generate_plots(base_output_dir: Path) -> None:
         log_scale_x=True,
     )
 
+    # 5. Efficiency plot: tok/s/gpu vs tok/s/user
+    create_efficiency_plot(deployment_results, plots_dir)
+
     # Generate summary
     summary_lines = [
         "Benchmark Results Summary",
@@ -273,6 +374,7 @@ def generate_plots(base_output_dir: Path) -> None:
             "  - avg_inter_token_latency_vs_concurrency.png",
             "  - request_throughput_vs_concurrency.png",
             "  - avg_time_to_first_token_vs_concurrency.png",
+            "  - efficiency_tok_s_gpu_vs_user.png",
         ]
     )
 
