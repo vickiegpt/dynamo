@@ -115,21 +115,21 @@ impl DeltaAggregator {
                 if aggregator.error.is_none() && delta.data.is_some() {
                     // Extract the data payload from the delta.
                     let delta = delta.data.unwrap();
-                    aggregator.id = delta.inner.id;
-                    aggregator.model = delta.inner.model;
-                    aggregator.created = delta.inner.created;
-                    aggregator.service_tier = delta.inner.service_tier;
+                    aggregator.id = delta.id;
+                    aggregator.model = delta.model;
+                    aggregator.created = delta.created;
+                    aggregator.service_tier = delta.service_tier;
 
                     // Aggregate usage statistics if available.
-                    if let Some(usage) = delta.inner.usage {
+                    if let Some(usage) = delta.usage {
                         aggregator.usage = Some(usage);
                     }
-                    if let Some(system_fingerprint) = delta.inner.system_fingerprint {
+                    if let Some(system_fingerprint) = delta.system_fingerprint {
                         aggregator.system_fingerprint = Some(system_fingerprint);
                     }
 
                     // Aggregate choices incrementally.
-                    for choice in delta.inner.choices {
+                    for choice in delta.choices {
                         let state_choice =
                             aggregator
                                 .choices
@@ -282,6 +282,10 @@ impl NvCreateChatCompletionResponse {
 #[cfg(test)]
 mod tests {
 
+    use crate::protocols::openai::chat_completions::{
+        NvChatChoiceStream, NvChatCompletionStreamResponseDelta,
+    };
+
     use super::*;
     use futures::stream;
 
@@ -293,21 +297,22 @@ mod tests {
         finish_reason: Option<async_openai::types::FinishReason>,
     ) -> Annotated<NvCreateChatCompletionStreamResponse> {
         // ALLOW: function_call is deprecated
-        let delta = async_openai::types::ChatCompletionStreamResponseDelta {
+        let delta = NvChatCompletionStreamResponseDelta {
             content: Some(text.to_string()),
             function_call: None,
             tool_calls: None,
             role,
             refusal: None,
+            reasoning_content: None,
         };
-        let choice = async_openai::types::ChatChoiceStream {
+        let choice = NvChatChoiceStream {
             index,
             delta,
             finish_reason,
             logprobs: None,
         };
 
-        let inner = async_openai::types::CreateChatCompletionStreamResponse {
+        let data = NvCreateChatCompletionStreamResponse {
             id: "test_id".to_string(),
             model: "meta/llama-3.1-8b-instruct".to_string(),
             created: 1234567890,
@@ -317,8 +322,6 @@ mod tests {
             choices: vec![choice],
             object: "chat.completion".to_string(),
         };
-
-        let data = NvCreateChatCompletionStreamResponse { inner };
 
         Annotated {
             data: Some(data),
@@ -424,7 +427,7 @@ mod tests {
     async fn test_multiple_choices() {
         // Create a delta with multiple choices
         // ALLOW: function_call is deprecated
-        let delta = async_openai::types::CreateChatCompletionStreamResponse {
+        let data = NvCreateChatCompletionStreamResponse {
             id: "test_id".to_string(),
             model: "test_model".to_string(),
             created: 1234567890,
@@ -432,26 +435,28 @@ mod tests {
             usage: None,
             system_fingerprint: None,
             choices: vec![
-                async_openai::types::ChatChoiceStream {
+                NvChatChoiceStream {
                     index: 0,
-                    delta: async_openai::types::ChatCompletionStreamResponseDelta {
+                    delta: NvChatCompletionStreamResponseDelta {
                         role: Some(async_openai::types::Role::Assistant),
                         content: Some("Choice 0".to_string()),
                         function_call: None,
                         tool_calls: None,
                         refusal: None,
+                        reasoning_content: None,
                     },
                     finish_reason: Some(async_openai::types::FinishReason::Stop),
                     logprobs: None,
                 },
-                async_openai::types::ChatChoiceStream {
+                NvChatChoiceStream {
                     index: 1,
-                    delta: async_openai::types::ChatCompletionStreamResponseDelta {
+                    delta: NvChatCompletionStreamResponseDelta {
                         role: Some(async_openai::types::Role::Assistant),
                         content: Some("Choice 1".to_string()),
                         function_call: None,
                         tool_calls: None,
                         refusal: None,
+                        reasoning_content: None,
                     },
                     finish_reason: Some(async_openai::types::FinishReason::Stop),
                     logprobs: None,
@@ -459,8 +464,6 @@ mod tests {
             ],
             object: "chat.completion".to_string(),
         };
-
-        let data = NvCreateChatCompletionStreamResponse { inner: delta };
 
         // Wrap it in Annotated and create a stream
         let annotated_delta = Annotated {
