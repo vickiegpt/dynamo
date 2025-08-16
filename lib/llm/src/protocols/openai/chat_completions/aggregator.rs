@@ -19,7 +19,9 @@ use std::collections::HashMap;
 use super::{NvCreateChatCompletionResponse, NvCreateChatCompletionStreamResponse};
 use crate::protocols::{
     codec::{Message, SseCodecError},
-    convert_sse_stream, Annotated,
+    convert_sse_stream,
+    openai::chat_completions::{NvChatChoice, NvChatCompletionResponseMessage},
+    Annotated,
 };
 
 use dynamo_runtime::engine::DataStream;
@@ -60,6 +62,9 @@ struct DeltaChoice {
     logprobs: Option<async_openai::types::ChatChoiceLogprobs>,
     // Optional tool calls for the chat choice.
     tool_calls: Option<Vec<async_openai::types::ChatCompletionMessageToolCall>>,
+
+    /// Optional function call for the reasoning content
+    reasoning_content: Option<String>,
 }
 
 impl Default for DeltaAggregator {
@@ -136,6 +141,7 @@ impl DeltaAggregator {
                                     finish_reason: None,
                                     logprobs: choice.logprobs,
                                     tool_calls: None,
+                                    reasoning_content: None,
                                 });
 
                         // Append content if available.
@@ -191,13 +197,13 @@ impl DeltaAggregator {
         let mut choices: Vec<_> = aggregator
             .choices
             .into_values()
-            .map(async_openai::types::ChatChoice::from)
+            .map(NvChatChoice::from)
             .collect();
 
         choices.sort_by(|a, b| a.index.cmp(&b.index));
 
         // Construct the final response object.
-        let inner = async_openai::types::CreateChatCompletionResponse {
+        let response = NvCreateChatCompletionResponse {
             id: aggregator.id,
             created: aggregator.created,
             usage: aggregator.usage,
@@ -208,21 +214,21 @@ impl DeltaAggregator {
             service_tier: aggregator.service_tier,
         };
 
-        let response = NvCreateChatCompletionResponse { inner };
+        // let response = NvCreateChatCompletionResponse { inner };
 
         Ok(response)
     }
 }
 
 #[allow(deprecated)]
-impl From<DeltaChoice> for async_openai::types::ChatChoice {
+impl From<DeltaChoice> for NvChatChoice {
     /// Converts a [`DeltaChoice`] into an [`async_openai::types::ChatChoice`].
     ///
     /// # Note
     /// The `function_call` field is deprecated.
     fn from(delta: DeltaChoice) -> Self {
-        async_openai::types::ChatChoice {
-            message: async_openai::types::ChatCompletionResponseMessage {
+        NvChatChoice {
+            message: NvChatCompletionResponseMessage {
                 role: delta.role.expect("delta should have a Role"),
                 content: if delta.tool_calls.is_some() {
                     None
@@ -233,6 +239,7 @@ impl From<DeltaChoice> for async_openai::types::ChatChoice {
                 refusal: None,
                 function_call: None,
                 audio: None,
+                reasoning_content: delta.reasoning_content,
             },
             index: delta.index,
             finish_reason: delta.finish_reason,
@@ -335,13 +342,13 @@ mod tests {
         let response = result.unwrap();
 
         // Verify that the response is empty and has default values
-        assert_eq!(response.inner.id, "");
-        assert_eq!(response.inner.model, "");
-        assert_eq!(response.inner.created, 0);
-        assert!(response.inner.usage.is_none());
-        assert!(response.inner.system_fingerprint.is_none());
-        assert_eq!(response.inner.choices.len(), 0);
-        assert!(response.inner.service_tier.is_none());
+        assert_eq!(response.id, "");
+        assert_eq!(response.model, "");
+        assert_eq!(response.created, 0);
+        assert!(response.usage.is_none());
+        assert!(response.system_fingerprint.is_none());
+        assert_eq!(response.choices.len(), 0);
+        assert!(response.service_tier.is_none());
     }
 
     #[tokio::test]
@@ -361,18 +368,18 @@ mod tests {
         let response = result.unwrap();
 
         // Verify the response fields
-        assert_eq!(response.inner.id, "test_id");
-        assert_eq!(response.inner.model, "meta/llama-3.1-8b-instruct");
-        assert_eq!(response.inner.created, 1234567890);
-        assert!(response.inner.usage.is_none());
-        assert!(response.inner.system_fingerprint.is_none());
-        assert_eq!(response.inner.choices.len(), 1);
-        let choice = &response.inner.choices[0];
+        assert_eq!(response.id, "test_id");
+        assert_eq!(response.model, "meta/llama-3.1-8b-instruct");
+        assert_eq!(response.created, 1234567890);
+        assert!(response.usage.is_none());
+        assert!(response.system_fingerprint.is_none());
+        assert_eq!(response.choices.len(), 1);
+        let choice = &response.choices[0];
         assert_eq!(choice.index, 0);
         assert_eq!(choice.message.content.as_ref().unwrap(), "Hello,");
         assert!(choice.finish_reason.is_none());
         assert_eq!(choice.message.role, async_openai::types::Role::User);
-        assert!(response.inner.service_tier.is_none());
+        assert!(response.service_tier.is_none());
     }
 
     #[tokio::test]
@@ -401,8 +408,8 @@ mod tests {
         let response = result.unwrap();
 
         // Verify the response fields
-        assert_eq!(response.inner.choices.len(), 1);
-        let choice = &response.inner.choices[0];
+        assert_eq!(response.choices.len(), 1);
+        let choice = &response.choices[0];
         assert_eq!(choice.index, 0);
         assert_eq!(choice.message.content.as_ref().unwrap(), "Hello, world!");
         assert_eq!(
@@ -472,9 +479,9 @@ mod tests {
         let mut response = result.unwrap();
 
         // Verify the response fields
-        assert_eq!(response.inner.choices.len(), 2);
-        response.inner.choices.sort_by(|a, b| a.index.cmp(&b.index)); // Ensure the choices are ordered
-        let choice0 = &response.inner.choices[0];
+        assert_eq!(response.choices.len(), 2);
+        response.choices.sort_by(|a, b| a.index.cmp(&b.index)); // Ensure the choices are ordered
+        let choice0 = &response.choices[0];
         assert_eq!(choice0.index, 0);
         assert_eq!(choice0.message.content.as_ref().unwrap(), "Choice 0");
         assert_eq!(
@@ -483,7 +490,7 @@ mod tests {
         );
         assert_eq!(choice0.message.role, async_openai::types::Role::Assistant);
 
-        let choice1 = &response.inner.choices[1];
+        let choice1 = &response.choices[1];
         assert_eq!(choice1.index, 1);
         assert_eq!(choice1.message.content.as_ref().unwrap(), "Choice 1");
         assert_eq!(
