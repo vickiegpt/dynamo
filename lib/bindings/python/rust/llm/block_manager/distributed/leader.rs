@@ -67,8 +67,8 @@ impl KvbmLeader {
 #[pymethods]
 impl KvbmLeader {
     #[new]
-    #[pyo3(signature = (bytes_per_block, world_size, drt))]
-    fn new(bytes_per_block: usize, world_size: usize, drt: DistributedRuntime) -> PyResult<Self> {
+    #[pyo3(signature = (world_size, drt))]
+    fn new(world_size: usize, drt: DistributedRuntime) -> PyResult<Self> {
 
         let barrier_id_prefix = get_barrier_id_prefix();
         let leader_init_timeout_sec: u64 =
@@ -81,7 +81,6 @@ impl KvbmLeader {
             .drt(drt.inner().clone())
             .host_blocks_config(get_blocks_config(CPU_CACHE, CPU_CACHE_OVERRIDE))
             .disk_blocks_config(get_blocks_config(DISK_CACHE, DISK_CACHE_OVERRIDE))
-            .bytes_per_block_overriden(bytes_per_block)
             .build()
             .map_err(to_pyerr)?;
 

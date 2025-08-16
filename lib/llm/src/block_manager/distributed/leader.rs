@@ -67,9 +67,6 @@ pub struct KvbmLeaderConfig {
 
     #[builder(default = "KvbmLeaderNumBlocksConfig::default()")]
     disk_blocks_config: KvbmLeaderNumBlocksConfig,
-
-    #[builder(default = "0")]
-    bytes_per_block_overriden: usize,
 }
 
 impl KvbmLeaderConfig {
@@ -137,22 +134,12 @@ impl KvbmLeader {
             .min()
             .unwrap();
 
-        let mut bytes_per_block = worker_data
+        let bytes_per_block = worker_data
             .values()
             .map(|data| data.bytes_per_block)
-            .max()
-            .unwrap();
+            .sum();
 
         assert!(bytes_per_block > 0, "bytes_per_block must be greater than 0");
-
-        // The NumBlocksConfig represents the overall assigned resources by the user,
-        // so we need to devide it by the world size to distribute the resources across all TPs.
-        bytes_per_block *= config.world_size;
-
-        // If bytes_per_block_overriden is greater than 0, it means the user has overridden this value.
-        if config.bytes_per_block_overriden > 0 {
-            bytes_per_block = config.bytes_per_block_overriden
-        }
 
         tracing::info!("Worker to leader barrier synced with {} workers", config.world_size);
         tracing::debug!("Worker data: {:?}", worker_data);

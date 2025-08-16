@@ -13,16 +13,14 @@ from dynamo.runtime import DistributedRuntime
 
 
 class DynamoKVBMConnectorWorker(KvCacheConnectorWorker):
-    def __init__(self, executor_config: ExecutorConfig, **kwargs):
+    def __init__(self, executor_config: ExecutorConfig):
         super().__init__(executor_config)
 
-        drt = kwargs.get("drt", None)
-        if drt is None:
-            self.drt = DistributedRuntime.detached()
-        else:
-            self.drt = drt
+        self.drt = DistributedRuntime.detached()
 
-        self._connector = RustKvConnectorWorker(self.drt, executor_config.mapping.rank)
+        self._connector = RustKvConnectorWorker(
+            self.drt, str(executor_config.mapping.rank)
+        )
 
     def register_kv_caches(self, kv_cache_tensor: torch.Tensor):
         """

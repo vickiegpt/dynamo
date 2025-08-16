@@ -403,7 +403,7 @@ impl PyTrtllmKvConnectorWorker {
             .map_err(to_pyerr)
     }
 
-    pub fn build_connector_meta(&mut self, metadata: Vec<u8>) -> PyResult<()> {
+    pub fn bind_connector_meta(&mut self, metadata: Vec<u8>) -> PyResult<()> {
         self.connector_worker
             .bind_connector_meta(metadata)
             .map_err(to_pyerr)

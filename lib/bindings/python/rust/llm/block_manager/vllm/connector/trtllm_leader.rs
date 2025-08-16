@@ -55,7 +55,7 @@ pub struct KvConnectorLeader {
 
 impl KvConnectorLeader {
     fn new(
-        worker_id: String,
+        worker_id: u64,
         drt: PyDistributedRuntime,
         block_manager: PyBlockManager,
         leader: PyKvbmLeader,
@@ -374,7 +374,7 @@ impl PyTrtllmKvConnectorLeader {
     #[new]
     #[pyo3(signature = (worker_id, drt, block_manager, leader))]
     pub fn new(
-        worker_id: String,
+        worker_id: u64,
         drt: PyDistributedRuntime,
         block_manager: PyBlockManager,
         leader: PyKvbmLeader,
