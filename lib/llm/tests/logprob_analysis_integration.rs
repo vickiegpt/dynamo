@@ -13,9 +13,7 @@ use dynamo_llm::protocols::openai::chat_completions::{
 };
 
 use async_openai::types::{
-    ChatChoiceLogprobs,
-    ChatCompletionTokenLogprob, FinishReason, Role,
-    TopLogprobs,
+    ChatChoiceLogprobs, ChatCompletionTokenLogprob, FinishReason, Role, TopLogprobs,
 };
 
 // Type aliases to simplify complex test data structures
