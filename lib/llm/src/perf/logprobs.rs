@@ -576,9 +576,7 @@ mod tests {
     };
     use approx::assert_abs_diff_eq;
     use async_openai::types::{
-        ChatChoiceLogprobs,
-        ChatCompletionTokenLogprob, FinishReason, Role,
-        TopLogprobs,
+        ChatChoiceLogprobs, ChatCompletionTokenLogprob, FinishReason, Role, TopLogprobs,
     };
     use futures::StreamExt;
     use std::sync::Arc;
