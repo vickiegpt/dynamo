@@ -15,7 +15,10 @@
 
 import argparse
 import asyncio
+import os
+import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -38,6 +41,38 @@ EXAMPLE_CHAT_REQUEST = {
     "stream": False,
     "max_tokens": 30,
 }
+
+
+class ProgressDisplay:
+    """Helper class for cleaner progress display during deployment waiting"""
+    
+    def __init__(self, verbose: bool = False):
+        self.verbose = verbose
+        self.last_message = ""
+        self.spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        self.spinner_idx = 0
+        
+    def update(self, message: str, newline: bool = False):
+        """Update progress display"""
+        if self.verbose or newline:
+            print(message)
+        else:
+            # Clear previous line and write new message
+            sys.stdout.write(f"\r\033[K{message}")
+            sys.stdout.flush()
+            self.last_message = message
+            
+    def spinner(self) -> str:
+        """Get next spinner character"""
+        char = self.spinner_chars[self.spinner_idx]
+        self.spinner_idx = (self.spinner_idx + 1) % len(self.spinner_chars)
+        return char
+        
+    def finish(self, message: str):
+        """Finish with a final message"""
+        if not self.verbose and self.last_message:
+            sys.stdout.write("\r\033[K")  # Clear the line
+        print(message)
 
 
 class DynamoDeploymentClient:
@@ -184,15 +219,28 @@ class DynamoDeploymentClient:
                 print(f"Failed to create deployment {self.deployment_name}: {e}")
                 raise
 
-    async def wait_for_deployment_ready(self, timeout: int = 1800):
+    async def wait_for_deployment_ready(self, timeout: int = 1800, verbose: bool = None):
         """
-        Wait for the custom resource to be ready.
-
+        Wait for the custom resource to be ready with improved progress display.
+        
         Args:
             timeout: Maximum time to wait in seconds, default to 30 mins (image pulling can take a while)
+            verbose: If True, show detailed status updates. If None, uses DYNAMO_VERBOSE env var.
         """
+        # Allow environment variable to control verbosity
+        if verbose is None:
+            verbose = os.environ.get("DYNAMO_VERBOSE", "false").lower() == "true"
+        
+        progress = ProgressDisplay(verbose=verbose)
         start_time = time.time()
-        # TODO: A little brittle, also should output intermediate status every so often.
+        last_status = None
+        last_conditions_str = ""
+        check_interval = 10 if not verbose else 20
+        
+        # Initial message
+        if not verbose:
+            print(f"⏳ Waiting for deployment '{self.deployment_name}'...")
+        
         while (time.time() - start_time) < timeout:
             try:
                 status = await self.custom_api.get_namespaced_custom_object(
@@ -202,45 +250,87 @@ class DynamoDeploymentClient:
                     plural="dynamographdeployments",
                     name=self.deployment_name,
                 )
-                # Check both conditions:
-                # 1. Ready condition is True
-                # 2. State is successful
+                
                 status_obj = status.get("status", {})
                 conditions = status_obj.get("conditions", [])
                 current_state = status_obj.get("state", "unknown")
-
-                print(f"Current deployment state: {current_state}")
-                print(f"Current conditions: {conditions}")
-                print(f"Elapsed time: {time.time() - start_time:.1f}s / {timeout}s")
-
+                elapsed = time.time() - start_time
+                
+                # Check readiness
                 ready_condition = False
+                ready_message = ""
                 for condition in conditions:
-                    if (
-                        condition.get("type") == "Ready"
-                        and condition.get("status") == "True"
-                    ):
-                        ready_condition = True
+                    if condition.get("type") == "Ready":
+                        ready_condition = condition.get("status") == "True"
+                        ready_message = condition.get("message", "")
                         break
-
-                state_successful = status_obj.get("state") == "successful"
-
+                
+                state_successful = current_state == "successful"
+                
+                # Extract not ready components from message
+                not_ready_components = []
+                if "resources not ready:" in ready_message:
+                    match = re.search(r'\[(.*?)\]', ready_message)
+                    if match:
+                        not_ready_components = match.group(1).split()
+                
+                # Format progress message based on mode
+                if not verbose:
+                    # Concise single-line progress with spinner
+                    spinner = progress.spinner()
+                    
+                    # Create status string
+                    if not_ready_components:
+                        # Show first 2 components, abbreviate if more
+                        components_str = ", ".join(not_ready_components[:2])
+                        if len(not_ready_components) > 2:
+                            components_str += f" +{len(not_ready_components)-2} more"
+                        status_str = f"Waiting for: {components_str}"
+                    else:
+                        status_str = f"State: {current_state}"
+                    
+                    # Format time
+                    time_str = f"[{elapsed:.0f}s]"
+                    
+                    message = f"{spinner} {time_str} {status_str}"
+                    progress.update(message)
+                    
+                else:
+                    # Verbose mode - show details when status changes
+                    conditions_str = str(conditions)
+                    if current_state != last_status or conditions_str != last_conditions_str:
+                        progress.update(f"Current deployment state: {current_state}")
+                        progress.update(f"Current conditions: {conditions}")
+                        progress.update(f"Elapsed time: {elapsed:.1f}s / {timeout}s")
+                        progress.update(
+                            f"Deployment not ready yet - Ready: {ready_condition}, "
+                            f"State successful: {state_successful}"
+                        )
+                        last_status = current_state
+                        last_conditions_str = conditions_str
+                
+                # Check if deployment is ready
                 if ready_condition and state_successful:
-                    print(
-                        "Deployment is ready: Ready condition is True and state is successful"
+                    progress.finish(
+                        f"✅ Deployment '{self.deployment_name}' ready after {elapsed:.1f}s"
                     )
                     return True
-                else:
-                    print(
-                        f"Deployment not ready yet - Ready condition: {ready_condition}, State successful: {state_successful}"
-                    )
-
+                    
             except kubernetes.client.rest.ApiException as e:
-                print(f"API Exception while checking deployment status: {e}")
-                print(f"Status code: {e.status}, Reason: {e.reason}")
+                if verbose:
+                    progress.update(f"API Exception while checking deployment status: {e}", newline=True)
+                    progress.update(f"Status code: {e.status}, Reason: {e.reason}", newline=True)
             except Exception as e:
-                print(f"Unexpected exception while checking deployment status: {e}")
-            await asyncio.sleep(20)
-        raise TimeoutError("Deployment failed to become ready within timeout")
+                if verbose:
+                    progress.update(f"Unexpected exception while checking deployment status: {e}", newline=True)
+            
+            await asyncio.sleep(check_interval)
+        
+        # Timeout reached
+        progress.finish(
+            f"❌ Deployment '{self.deployment_name}' failed to become ready within {timeout}s"
+        )
+        raise TimeoutError(f"Deployment failed to become ready within {timeout}s")
 
     async def check_chat_completion(self):
         """
