@@ -38,6 +38,8 @@ class MockLLM:
 
         tokens = request["token_ids"]
 
+        print(request)
+
         for token in tokens:
             await asyncio.sleep(time_per_input_token)
 
