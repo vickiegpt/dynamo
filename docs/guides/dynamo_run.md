@@ -72,12 +72,12 @@ You can also list models or send a request:
 
 *List the models*
 ```
-curl localhost:8080/v1/models
+curl localhost:8000/v1/models
 ```
 
 *Send a request*
 ```
-curl -d '{"model": "Llama-3.2-3B-Instruct-Q4_K_M", "max_completion_tokens": 2049, "messages":[{"role":"user", "content": "What is the capital of South Africa?" }]}' -H 'Content-Type: application/json' http://localhost:8080/v1/chat/completions
+curl -d '{"model": "Llama-3.2-3B-Instruct-Q4_K_M", "max_completion_tokens": 2049, "messages":[{"role":"user", "content": "Who is Lebron James?" }]}' -H 'Content-Type: application/json' http://localhost:8000/v1/chat/completions
 ```
 
 ## Distributed System
@@ -170,13 +170,13 @@ The KV-aware routing arguments:
 
 ### Request Migration
 
-In a [Distributed System](#distributed-system), you can enable [request migration](../architecture/request_migration.md) to handle worker failures gracefully. Use the `--migration-limit` flag to specify how many times a request can be migrated to another worker:
+In a [Distributed System](#distributed-system), you can enable [request migration](deployment/fault_tolerance/request_migration.md) to handle worker failures gracefully. Use the `--migration-limit` flag to specify how many times a request can be migrated to another worker:
 
 ```bash
 dynamo-run in=dyn://... out=<engine> ... --migration-limit=3
 ```
 
-This allows a request to be migrated up to 3 times before failing. See the [Request Migration Architecture](../architecture/request_migration.md) documentation for details on how this works.
+This allows a request to be migrated up to 3 times before failing. See the [Request Migration Architecture](deployment/fault_tolerance/request_migration.md) documentation for details on how this works.
 
 ## Development
 

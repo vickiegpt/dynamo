@@ -71,7 +71,7 @@ The `model_type` can be:
 - `model_name`: The name to call the model. Your incoming HTTP requests model name must match this. Defaults to the hugging face repo name, the folder name, or the GGUF file name.
 - `context_length`: Max model length in tokens. Defaults to the model's set max. Only set this if you need to reduce KV cache allocation to fit into VRAM.
 - `kv_cache_block_size`: Size of a KV block for the engine, in tokens. Defaults to 16.
-- `migration_limit`: Maximum number of times a request may be [migrated to another Instance](../architecture/request_migration.md). Defaults to 0.
+- `migration_limit`: Maximum number of times a request may be [migrated to another Instance](deployment/fault_tolerance/request_migration.md). Defaults to 0.
 - `user_data`: Optional dictionary containing custom metadata for worker behavior (e.g., LoRA configuration). Defaults to None.
 
 See `components/backends` for full code examples.
@@ -113,7 +113,7 @@ In the P/D disaggregated setup you would have `deepseek-distill-llama8b.prefill.
 
 A Python worker may need to be shut down promptly, for example when the node running the worker is to be reclaimed and there isn't enough time to complete all ongoing requests before the shutdown deadline.
 
-In such cases, you can signal incomplete responses by raising a `GeneratorExit` exception in your generate loop. This will immediately close the response stream, signaling to the frontend that the stream is incomplete. With request migration enabled (see the [`migration_limit`](../architecture/request_migration.md) parameter), the frontend will automatically migrate the partially completed request to another worker instance, if available, to be completed.
+In such cases, you can signal incomplete responses by raising a `GeneratorExit` exception in your generate loop. This will immediately close the response stream, signaling to the frontend that the stream is incomplete. With request migration enabled (see the [`migration_limit`](deployment/fault_tolerance/request_migration.md) parameter), the frontend will automatically migrate the partially completed request to another worker instance, if available, to be completed.
 
 > [!WARNING]
 > We will update the `GeneratorExit` exception to a new Dynamo exception. Please expect minor code breaking change in the near future.
@@ -136,4 +136,4 @@ class RequestHandler:
 
 When `GeneratorExit` is raised, the frontend receives the incomplete response and can seamlessly continue generation on another available worker instance, preserving the user experience even during worker shutdowns.
 
-For more information about how request migration works, see the [Request Migration Architecture](../architecture/request_migration.md) documentation.
+For more information about how request migration works, see the [Request Migration Architecture](deployment/fault_tolerance/request_migration.md) documentation.
