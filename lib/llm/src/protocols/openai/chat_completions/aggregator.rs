@@ -526,9 +526,9 @@ mod tests {
             Some(async_openai::types::Role::Assistant),
             Some(async_openai::types::FinishReason::ToolCalls),
         );
-        let delta = annotated_delta.data.unwrap().inner;
+        let data = annotated_delta.data.unwrap();
 
-        let data = NvCreateChatCompletionStreamResponse { inner: delta };
+        // let data: NvCreateChatCompletionStreamResponse = NvCreateChatCompletionStreamResponse { inner: delta };
 
         // Wrap it in Annotated and create a stream
         let annotated_delta = Annotated {
@@ -547,8 +547,8 @@ mod tests {
         let response = result.unwrap();
 
         // There should be one choice
-        assert_eq!(response.inner.choices.len(), 1);
-        let choice = &response.inner.choices[0];
+        assert_eq!(response.choices.len(), 1);
+        let choice = &response.choices[0];
 
         // The tool_calls field should be present and parsed
         assert!(choice.message.tool_calls.is_some());
