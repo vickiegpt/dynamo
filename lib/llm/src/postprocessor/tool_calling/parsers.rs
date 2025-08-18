@@ -5,7 +5,9 @@ use super::json_parser::try_tool_call_parse_json;
 use super::response::ToolCallResponse;
 
 /// Represents the format type for tool calls
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, clap::ValueEnum,
+)]
 pub enum ToolCallParserType {
     /// JSON format: `{"name": "function", "arguments": {...}}`
     Json,

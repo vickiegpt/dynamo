@@ -22,6 +22,8 @@ use dynamo_llm::entrypoint::RouterConfig;
 use dynamo_llm::kv_router::KvRouterConfig;
 use dynamo_llm::local_model::LocalModel;
 use dynamo_llm::mocker::protocols::MockEngineArgs;
+use dynamo_llm::postprocessor::reasoning_parser::parsers::ReasoningParserType;
+use dynamo_llm::postprocessor::tool_calling::parsers::ToolCallParserType;
 use dynamo_runtime::pipeline::RouterMode as RuntimeRouterMode;
 
 use crate::Output;
@@ -153,6 +155,12 @@ pub struct Flags {
     /// These are the command line arguments to the python engine when using `pystr` or `pytok`.
     #[arg(index = 2, last = true, hide = true, allow_hyphen_values = true)]
     pub last: Vec<String>,
+
+    #[clap(long)]
+    pub tool_calling_parser: Option<ToolCallParserType>,
+
+    #[clap(long)]
+    pub reasoning_parser: Option<ReasoningParserType>,
 }
 
 impl Flags {
