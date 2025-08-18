@@ -121,7 +121,7 @@ The examples below assume you build the latest image yourself from source. If us
         :link: examples/multimodal/README
         :link-type: doc
 
-        Deploy vision-language models with separated encoding and inference pipelines.
+        Deploy vision-language models with E/P/D disaggregated serving.
 
 
 .. toctree::
@@ -165,15 +165,6 @@ The examples below assume you build the latest image yourself from source. If us
    SLA Planner Deployment <guides/dynamo_deploy/sla_planner_deployment.md>
    Multi-node Deployment <guides/dynamo_deploy/multinode-deployment.md>
    Kubernetes Metrics Setup <guides/dynamo_deploy/k8s_metrics.md>
-
-.. toctree::
-   :hidden:
-   :caption: Performance & Optimization
-
-   KVBM Optimization <guides/performance/kvbm_optimization.md>
-   Benchmarking Overview <guides/performance/benchmarking/index.md>
-   Local Benchmarking <guides/performance/benchmarking/local.md>
-   Kubernetes Benchmarking <guides/performance/benchmarking/kubernetes.md>
 
 .. toctree::
    :hidden:
