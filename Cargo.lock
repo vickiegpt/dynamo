@@ -946,7 +946,7 @@ version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3fce8dd7fcfcbf3a0a87d8f515194b49d6135acab73e18bd380d1d93bb1a15eb"
 dependencies = [
- "clap 4.5.40",
+ "clap 4.5.45",
  "heck 0.4.1",
  "indexmap 2.9.0",
  "log",
@@ -1060,9 +1060,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.40"
+version = "4.5.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40b6887a1d8685cebccf115538db5c0efe625ccac9696ad45c409d96566e910f"
+checksum = "1fc0e74a703892159f5ae7d3aac52c8e6c392f5ae5f359c70b5881d60aaac318"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1070,9 +1070,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.40"
+version = "4.5.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0c66c08ce9f0c698cbce5c0279d0bb6ac936d8674174fe48f736533b964f59e"
+checksum = "b3e7f4214277f3c7aa526a59dd3fbe306a370daee1f8b7b8c987069cd8e888a8"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1083,9 +1083,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.40"
+version = "4.5.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2c7947ae4cc3d851207c1adb5b5e260ff0cca11446b1d6d1423788e442257ce"
+checksum = "14cb31bb0a7d536caef2639baa7fad459e15c3144efefa6dbd1c84562c4739f6"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -1916,6 +1916,7 @@ dependencies = [
  "bytes",
  "candle-core 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono",
+ "clap 4.5.45",
  "criterion",
  "cudarc 0.17.1",
  "dashmap",
@@ -1982,7 +1983,7 @@ dependencies = [
  "async-openai",
  "async-stream",
  "async-trait",
- "clap 4.5.40",
+ "clap 4.5.45",
  "dynamo-engine-llamacpp",
  "dynamo-engine-mistralrs",
  "dynamo-llm",
@@ -3779,7 +3780,7 @@ dependencies = [
  "anyhow",
  "base64 0.21.7",
  "bytecount",
- "clap 4.5.40",
+ "clap 4.5.45",
  "fancy-regex 0.11.0",
  "fraction",
  "getrandom 0.2.16",
@@ -4160,7 +4161,7 @@ name = "metrics"
 version = "0.4.0+post0"
 dependencies = [
  "axum 0.8.3",
- "clap 4.5.40",
+ "clap 4.5.45",
  "dynamo-llm",
  "dynamo-runtime",
  "futures",
@@ -4290,7 +4291,7 @@ dependencies = [
  "anyhow",
  "candle-core 0.9.1 (git+https://github.com/EricLBuehler/candle.git?rev=95d713f9)",
  "candle-nn",
- "clap 4.5.40",
+ "clap 4.5.45",
  "either",
  "futures",
  "image",
@@ -4335,7 +4336,7 @@ dependencies = [
  "candle-nn",
  "cfgrammar",
  "chrono",
- "clap 4.5.40",
+ "clap 4.5.45",
  "csv",
  "derive-new",
  "derive_more 2.0.1",
@@ -5970,7 +5971,7 @@ dependencies = [
 name = "router"
 version = "0.4.0+post0"
 dependencies = [
- "clap 4.5.40",
+ "clap 4.5.45",
  "dynamo-llm",
  "dynamo-runtime",
  "rand 0.9.1",
