@@ -82,12 +82,10 @@ class EncodeHandler(HandlerBase):
     def __init__(self, config: RequestHandlerConfig):
         logging.info(f"EncodeHandler initialized with config: {config}")
         super().__init__(config)
+        self.encodings = None
 
     async def generate(self, request: dict):
         logging.info(f"EncodeHandler received request: {request}")
-        # 1. Perform the encoding work by generating random torch data
-        encodings = torch.rand(1, 1024)
-        logging.info(f"Encoding created in encode handler: {encodings}")
 
         if self.connector and "nixl_metadata" in request:
             # The prefill worker has requested that we write the encodings
@@ -95,7 +93,24 @@ class EncodeHandler(HandlerBase):
             metadata = nixl_connect.RdmaMetadata.model_validate(
                 request["nixl_metadata"]
             )
-            descriptor = nixl_connect.Descriptor(encodings)
+            messages = request.get("messages", [])
+            _, _, embedding_paths = self.multimodal_processor.extract_prompt_and_media(
+                messages
+            )
+            if embedding_paths:
+                self.encodings = self.multimodal_processor.load_tensor_from_path_or_url(
+                    embedding_paths[0]
+                )
+            else:
+                # Placeholder for TRTLLM Encoder to be called
+                # TRTLLM Encoder will return a memory handler on the the encoder GPU with the encodings
+                logging.warning(
+                    "No embedding paths found, NIXL transfer for image urls not supported by TRTLLM Encoder yet"
+                )
+                yield {}
+                return
+
+            descriptor = nixl_connect.Descriptor(self.encodings)
             write_op = await self.connector.begin_write(descriptor, metadata)
             with write_op:
                 await write_op.wait_for_completion()
@@ -104,11 +119,6 @@ class EncodeHandler(HandlerBase):
             yield {}
             return
 
-        # 2. Add the result directly to the request payload
-        request["encodings"] = encodings.tolist()
-
-        # 3. Yield the entire modified request object back to the caller
-        logging.info(f"EncodeHandler yielding response: {request}")
         if not request.get("streaming", False):
             yield request
             return
@@ -127,7 +137,8 @@ class PrefillHandler(HandlerBase):
 
     async def remote_encode_with_nixl(self, request: dict):
         # 1. Allocate a tensor for the encodings.
-        encodings_tensor = torch.zeros(1, 1024, dtype=torch.float32)
+        shape = self.get_embeddings_shape()
+        encodings_tensor = torch.zeros(*shape, dtype=torch.float32)
         logging.info(f"PrefillHandler encodings before write: {encodings_tensor}")
         # 2. Create a descriptor for the tensor.
         descriptor = nixl_connect.Descriptor(encodings_tensor)
@@ -174,12 +185,13 @@ class PrefillHandler(HandlerBase):
 
     async def generate(self, request: dict):
         logging.info(f"PrefillHandler.generate received request: {request}")
+        embeddings_tensor = None
+
         # STATE 1: If an encoder is configured and the request needs encoding, call it.
         if self.encode_client and "encodings" not in request:
             if self.connector:
                 logging.info("PrefillHandler calling remote_encode_with_nixl")
-                encodings = await self.remote_encode_with_nixl(request)
-                request["encodings"] = encodings.tolist()
+                embeddings_tensor = await self.remote_encode_with_nixl(request)
             else:
                 logging.info("PrefillHandler calling remote_encode")
                 async for res in self.remote_encode(request):
@@ -194,7 +206,7 @@ class PrefillHandler(HandlerBase):
         prefill_response = None
         response_count = 0
         logging.info(f"Prefill request: {prefill_request}")
-        async for res in self.generate_locally(prefill_request):
+        async for res in self.generate_locally(prefill_request, embeddings_tensor):
             prefill_response = res
             response_count += 1
             if response_count > 1:

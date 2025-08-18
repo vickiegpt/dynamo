@@ -239,6 +239,7 @@ async def init(runtime: DistributedRuntime, config: Config):
             encode_client=encode_client,
             multimodal_processor=multimodal_processor,
             connector=connector,
+            embeddings_shape=config.embeddings_shape,
         )
 
         if config.publish_events_and_metrics and is_first_worker(config):

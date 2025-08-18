@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Optional
 
+import torch
 from tensorrt_llm import SamplingParams
 from tensorrt_llm.llmapi import DisaggregatedParams as LlmDisaggregatedParams
 
@@ -64,6 +65,7 @@ class RequestHandlerConfig:
         MultimodalRequestProcessor
     ] = None  # for multimodal support
     connector: Optional[Connector] = None
+    embeddings_shape: Optional[str] = None
 
 
 class HandlerBase:
@@ -83,6 +85,19 @@ class HandlerBase:
         self.multimodal_processor = config.multimodal_processor
         self.first_generation = True
         self.connector = config.connector
+        self.embeddings_shape = config.embeddings_shape
+
+    def get_embeddings_shape(self) -> Optional[list[int]]:
+        """Parse embeddings shape string into list of integers."""
+        if self.embeddings_shape is None:
+            return None
+        try:
+            return [int(x.strip()) for x in self.embeddings_shape.split(",")]
+        except ValueError as e:
+            logging.warning(
+                f"Invalid embeddings shape '{self.embeddings_shape}', using default [1, 1024]: {e}"
+            )
+            return [1, 1024]
 
     def check_error(self, result: dict):
         """
@@ -95,11 +110,23 @@ class HandlerBase:
                 result["finish_reason"] == "stop" or result["finish_reason"] == "error"
             )
 
-    async def generate_locally(self, request: dict):
+    async def generate_locally(
+        self, request: dict, embeddings: Optional[torch.Tensor] = None
+    ):
         """
         Generate responses based on the disaggregation mode in the request.
+
+        Args:
+            request: The request dictionary containing generation parameters
+            embeddings: Optional tensor containing embeddings for multimodal processing
         """
         logging.info(f"Request: {request}")
+
+        # Handle embeddings if provided
+        if embeddings is not None:
+            logging.info(
+                f"Embeddings provided: shape={embeddings.shape}, dtype={embeddings.dtype}"
+            )
 
         # Default to text-based input. This will be overwritten if multimodal
         # content is found and processed.
@@ -108,7 +135,7 @@ class HandlerBase:
         # Check for multimodal request and process it
         if self.multimodal_processor:
             processed_input = await self.multimodal_processor.process_openai_request(
-                request
+                request, embeddings
             )
 
         else:

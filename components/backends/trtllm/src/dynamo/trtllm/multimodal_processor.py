@@ -13,8 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import tempfile
 import time
 from typing import Any, Dict, List, Optional, Protocol, Tuple
+from urllib.parse import urlparse
+from urllib.request import urlretrieve
 
 import torch
 from tensorrt_llm.inputs import default_multimodal_input_loader
@@ -46,6 +49,35 @@ class MultimodalRequestProcessor:
         self.tokenizer = tokenizer
         self.modality = ""
 
+    def is_url(self, path: str) -> bool:
+        """Check if a path is a URL."""
+        parsed = urlparse(path)
+        return bool(parsed.scheme and parsed.netloc)
+
+    def load_tensor_from_path_or_url(self, path: str) -> torch.Tensor:
+        """Load a tensor from either a local file path or a URL."""
+        if self.is_url(path):
+            # Download the file to a temporary location
+            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                try:
+                    urlretrieve(path, tmp_file.name)
+                    tensor = torch.load(tmp_file.name, map_location="cpu")
+                    return tensor
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed to download or load tensor from URL {path}: {e}"
+                    )
+                finally:
+                    # Clean up temporary file
+                    import os
+
+                    try:
+                        os.unlink(tmp_file.name)
+                    except Exception:
+                        pass  # Ignore cleanup errors
+        else:
+            return torch.load(path, map_location="cpu")
+
     def extract_prompt_and_media(
         self, messages: List[Dict]
     ) -> Tuple[str, List[str], List[str]]:
@@ -70,7 +102,9 @@ class MultimodalRequestProcessor:
 
         return " ".join(text_parts), image_urls, embedding_paths
 
-    async def process_openai_request(self, request: Dict) -> Optional[Any]:
+    async def process_openai_request(
+        self, request: Dict, embeddings: Any
+    ) -> Optional[Any]:
         """Process OpenAI request and return with multimodal data."""
         # Normalize the request to handle OpenAI format
         if "stop_conditions" not in request:
@@ -96,9 +130,8 @@ class MultimodalRequestProcessor:
             return None
 
         loader_kwargs = {}
-        if embedding_paths:
-            mm_embeds = [torch.load(path) for path in embedding_paths]
-            loader_kwargs["mm_embeddings"] = mm_embeds
+        if embeddings is not None:
+            loader_kwargs["mm_embeddings"] = embeddings
         elif image_urls:
             loader_kwargs["media"] = [image_urls]
 
