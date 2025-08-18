@@ -188,6 +188,7 @@ mod tests {
             mdc_sum: None,
             annotations: vec![],
             estimated_prefix_hit_num_blocks: None,
+            backend_instance_id: None,
         }
     }
 
@@ -202,6 +203,7 @@ mod tests {
             top_logprobs: None,
             finish_reason: None,
             index: None,
+            backend_instance_id: None,
         })
     }
 
