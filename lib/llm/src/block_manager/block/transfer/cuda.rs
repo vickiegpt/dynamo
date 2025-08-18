@@ -17,6 +17,7 @@ use super::*;
 
 use super::TransferError;
 use crate::block_manager::storage::{DeviceStorage, PinnedStorage};
+use crate::cuda::CudaStream;
 use anyhow::Result;
 use cudarc::driver::result as cuda_result;
 use std::ops::Range;
@@ -25,7 +26,7 @@ type CudaMemcpyFnPtr = unsafe fn(
     src_ptr: *const u8,
     dst_ptr: *mut u8,
     size: usize,
-    stream: &CudaStream,
+    stream: &dyn CudaStream,
 ) -> Result<(), TransferError>;
 
 fn cuda_memcpy_fn_ptr(strategy: &TransferStrategy) -> Result<CudaMemcpyFnPtr, TransferError> {
@@ -43,7 +44,7 @@ fn cuda_memcpy_fn_ptr(strategy: &TransferStrategy) -> Result<CudaMemcpyFnPtr, Tr
 pub fn copy_block<'a, Source, Destination>(
     sources: &'a Source,
     destinations: &'a mut Destination,
-    stream: &CudaStream,
+    stream: &dyn CudaStream,
     strategy: TransferStrategy,
 ) -> Result<(), TransferError>
 where
@@ -93,7 +94,7 @@ pub fn copy_layers<'a, Source, Destination>(
     layer_range: Range<usize>,
     sources: &'a Source,
     destinations: &'a mut Destination,
-    stream: &CudaStream,
+    stream: &dyn CudaStream,
     strategy: TransferStrategy,
 ) -> Result<(), TransferError>
 where
@@ -167,7 +168,7 @@ unsafe fn cuda_memcpy_h2d(
     src_ptr: *const u8,
     dst_ptr: *mut u8,
     size: usize,
-    stream: &CudaStream,
+    stream: &dyn CudaStream,
 ) -> Result<(), TransferError> {
     debug_assert!(!src_ptr.is_null(), "Source host pointer is null");
     debug_assert!(!dst_ptr.is_null(), "Destination device pointer is null");
@@ -189,7 +190,7 @@ unsafe fn cuda_memcpy_d2h(
     src_ptr: *const u8,
     dst_ptr: *mut u8,
     size: usize,
-    stream: &CudaStream,
+    stream: &dyn CudaStream,
 ) -> Result<(), TransferError> {
     debug_assert!(!src_ptr.is_null(), "Source device pointer is null");
     debug_assert!(!dst_ptr.is_null(), "Destination host pointer is null");
@@ -211,7 +212,7 @@ unsafe fn cuda_memcpy_d2d(
     src_ptr: *const u8,
     dst_ptr: *mut u8,
     size: usize,
-    stream: &CudaStream,
+    stream: &dyn CudaStream,
 ) -> Result<(), TransferError> {
     debug_assert!(!src_ptr.is_null(), "Source device pointer is null");
     debug_assert!(!dst_ptr.is_null(), "Destination device pointer is null");

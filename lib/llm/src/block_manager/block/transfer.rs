@@ -26,8 +26,6 @@ use crate::block_manager::storage::{
     DeviceStorage, DiskStorage, PinnedStorage, SystemStorage,
 };
 
-use cudarc::driver::CudaStream;
-
 use nixl_sys::NixlDescriptor;
 use nixl_sys::XferOp::{Read, Write};
 use std::ops::Range;
@@ -147,6 +145,7 @@ where
     }
 }
 
+// todo - block and non-block variants
 pub fn handle_local_transfer<RB, WB>(
     sources: &[RB],
     targets: &mut [WB],
@@ -177,6 +176,8 @@ where
             for (src, dst) in sources.iter().zip(targets.iter_mut()) {
                 cuda::copy_block(src, dst, ctx.stream().as_ref(), RB::write_to_strategy())?;
             }
+
+            // todo: acquire an cuda event, recored on the stream, drop the stream, await on the event.
 
             ctx.cuda_event(tx)?;
             Ok(rx)

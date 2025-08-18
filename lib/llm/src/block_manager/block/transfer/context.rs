@@ -56,6 +56,13 @@ impl TransferContext {
                 loop {
                     tokio::select! {
                         Some((event, tx)) = cuda_event_rx.recv() => {
+
+                            // spawn a task
+
+                            // if the event is blocking, spawn blocking task
+
+                            // if the event is non-blocking, spawn a task that poll the event, and yield if ready.
+
                             if let Err(e) = event.synchronize() {
                                 tracing::error!("Error synchronizing CUDA event: {}", e);
                             }
@@ -83,14 +90,15 @@ impl TransferContext {
         self.nixl_agent.clone()
     }
 
-    pub fn stream(&self) -> &Arc<CudaStream> {
-        &self.stream
+    pub fn stream(&self) -> Arc<CudaStream> {
+        self.stream.clone()
     }
 
     pub fn async_rt_handle(&self) -> &Handle {
         &self.async_rt_handle
     }
 
+    #[deprecated(note = "Use `record_event` instead")]
     pub fn cuda_event(&self, tx: oneshot::Sender<()>) -> Result<(), TransferError> {
         let event = self
             .stream
