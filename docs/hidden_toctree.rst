@@ -44,12 +44,12 @@
    components/backends/sglang/docs/expert-distribution-eplb.md
    components/backends/sglang/docs/sgl-hicache-example.md
    components/backends/sglang/docs/sgl-http-server.md
-   components/backends/sglang/slurm_jobs/README.md
+   ../components/backends/sglang/slurm_jobs/README.md
    components/backends/trtllm/deploy/README.md
    components/backends/trtllm/kv-cache-tranfer.md
    components/backends/trtllm/llama4_plus_eagle.md
-   components/backends/trtllm/multinode/multinode-examples.md
-   components/backends/trtllm/multinode/multinode-multimodal-example.md
+   ../components/backends/trtllm/multinode/multinode-examples.md
+   ../components/backends/trtllm/multinode/multinode-multimodal-example.md
    components/backends/trtllm/performance_sweeps/README.md
    components/backends/vllm/deploy/README.md
    components/backends/vllm/LMCache_Integration.md

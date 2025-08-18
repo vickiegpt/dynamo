@@ -6,7 +6,7 @@ Performance testing tools and methodologies for Dynamo.
 
 - **[Local Benchmarking](local.md)** - Single-node performance testing
 - **[Kubernetes Benchmarking](kubernetes.md)** - Distributed performance testing  
-- **[SLURM Benchmarking](../../../components/backends/sglang/slurm_jobs/README.md)** - HPC cluster benchmarking
+- **[SLURM Benchmarking](../../../../components/backends/sglang/slurm_jobs/README.md)** - HPC cluster benchmarking
 
 ## Quick Examples
 
