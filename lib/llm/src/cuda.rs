@@ -16,22 +16,43 @@
 //! that we may tap the lower level CUDA context, streams, events, etcs from external sources and leverage
 //! them within Dynamo.
 
+pub use cudarc::driver::{
+    sys::{CUcontext, CUevent, CUstream},
+    DriverError,
+};
+
 use cudarc::driver::{
-    sys::{cuCtxPopCurrent_v2, cuCtxPushCurrent_v2, cudaError_enum, CUcontext, CUstream},
+    sys::{
+        cuCtxGetCurrent, cuCtxPopCurrent_v2, cuCtxPushCurrent_v2, cuStreamGetCtx, cudaError_enum,
+    },
     CudaContext, CudaStream,
 };
-use std::pin::Pin;
 use std::{marker::PhantomData, sync::Arc};
+use std::{pin::Pin, ptr::NonNull};
+
+/// Helper function to check CUDA results using cudarc's DriverError
+/// This is much better than raw FFI error handling
+pub fn check_cuda(result: cudaError_enum) -> Result<(), DriverError> {
+    if result == cudaError_enum::CUDA_SUCCESS {
+        Ok(())
+    } else {
+        // cudarc's DriverError already handles error name/description lookup internally
+        Err(DriverError(result))
+    }
+}
 
 pub trait DynamoCudaContextProvider {
     /// # Safety
     ///
     /// This method is unsafe because it directly accesses the underlying CUDA context.
     /// The caller must ensure that the context is valid and that the CUDA context is active.
-    unsafe fn cu_context(&self) -> cudarc::driver::sys::CUcontext;
+    ///
+    /// # Returns
+    /// A NonNull wrapper around the CUDA context, guaranteeing it's not null.
+    unsafe fn cu_context(&self) -> NonNull<cudarc::driver::sys::CUctx_st>;
 
     fn bind_to_thread(&self) -> Pin<Box<DynamoCudaContextGuard>> {
-        unsafe { DynamoCudaContextGuard::new(self.cu_context()) }
+        unsafe { DynamoCudaContextGuard::new(self.cu_context().as_ptr()) }
     }
 }
 
@@ -45,7 +66,15 @@ pub trait DynamoCudaStreamProvider {
     /// have proper lifetimes and scoping, which is not guaranteed by this trait.
     unsafe fn cu_stream(&self) -> cudarc::driver::sys::CUstream;
 
-    fn context(&self) -> Arc<dyn DynamoCudaContextProvider>;
+    fn context(&self) -> &dyn DynamoCudaContextProvider;
+}
+
+pub trait DynamoCudaEventProvider {
+    /// # Safety
+    ///
+    /// This method is unsafe because it directly accesses the underlying CUDA event.
+    /// The caller must ensure that the event is valid and a valid CUDA context is active.
+    unsafe fn cu_event(&self) -> cudarc::driver::sys::CUevent;
 }
 
 /// A CUDA context guard that ensures safe access to CUDA contexts.
@@ -57,7 +86,7 @@ pub trait DynamoCudaStreamProvider {
 /// - Provides safe access to the underlying CUDA context
 /// - Automatically manages context lifecycle
 pub struct DynamoCudaContextGuard {
-    context: cudarc::driver::sys::CUcontext,
+    context: NonNull<cudarc::driver::sys::CUctx_st>,
     // Prevent the guard from being moved
     _pin: std::marker::PhantomPinned,
     // Prevent Send + Sync to avoid crossing async boundaries
@@ -83,14 +112,15 @@ impl DynamoCudaContextGuard {
     /// This function dereferences a raw pointer and interacts with the CUDA driver API.
     /// The caller must ensure the context is valid.
     pub unsafe fn new(context: CUcontext) -> Pin<Box<Self>> {
+        // Validate context is not null
+        let context_nonnull = NonNull::new(context).expect("CUDA context cannot be null");
+
         // Push the context onto the CUDA context stack
         let result = cuCtxPushCurrent_v2(context);
-        if result != cudaError_enum::CUDA_SUCCESS {
-            panic!("Failed to push CUDA context: {:?}", result);
-        }
+        check_cuda(result).expect("Failed to push CUDA context");
 
         let guard = Self {
-            context,
+            context: context_nonnull,
             _pin: std::marker::PhantomPinned,
             _not_send_sync: PhantomData,
         };
@@ -106,7 +136,7 @@ impl DynamoCudaContextGuard {
     /// # Returns
     /// The raw CUDA context handle
     pub fn context(&self) -> cudarc::driver::sys::CUcontext {
-        self.context
+        self.context.as_ptr()
     }
 }
 
@@ -122,7 +152,7 @@ impl Drop for DynamoCudaContextGuard {
         }
 
         // Verify we popped the expected context
-        if popped_context != self.context {
+        if popped_context != self.context.as_ptr() {
             eprintln!(
                 "Warning: Popped context {:?} does not match expected context {:?}",
                 popped_context, self.context
@@ -134,7 +164,8 @@ impl Drop for DynamoCudaContextGuard {
 /// A CUDA context provider that wraps an external CUDA context.
 pub struct ExternalCudaContext {
     // SAFETY: CUcontext is thread-safe to pass between threads and can be used concurrently.
-    context: CUcontext,
+    // Using NonNull ensures we never have null contexts.
+    context: NonNull<cudarc::driver::sys::CUctx_st>,
 }
 
 // SAFETY: See notes on CUcontext above.
@@ -142,18 +173,27 @@ unsafe impl Send for ExternalCudaContext {}
 unsafe impl Sync for ExternalCudaContext {}
 
 impl ExternalCudaContext {
-    pub fn new(context: CUcontext) -> Arc<Self> {
-        Arc::new(Self { context })
+    fn new(context: CUcontext) -> Arc<Self> {
+        let context_nonnull = NonNull::new(context).expect("CUDA context cannot be null");
+        Arc::new(Self {
+            context: context_nonnull,
+        })
+    }
+
+    pub fn from_current() -> Result<Arc<Self>, DriverError> {
+        let mut context: CUcontext = std::ptr::null_mut();
+        check_cuda(unsafe { cuCtxGetCurrent(&mut context) })?;
+        Ok(Self::new(context))
     }
 
     pub fn cu_context(&self) -> CUcontext {
-        self.context
+        self.context.as_ptr()
     }
 }
 
 impl DynamoCudaContextProvider for ExternalCudaContext {
-    unsafe fn cu_context(&self) -> cudarc::driver::sys::CUcontext {
-        self.cu_context()
+    unsafe fn cu_context(&self) -> NonNull<cudarc::driver::sys::CUctx_st> {
+        self.context
     }
 }
 
@@ -164,8 +204,16 @@ pub struct ExternalCudaStream {
 }
 
 impl ExternalCudaStream {
-    pub fn new(stream: CUstream, context: Arc<dyn DynamoCudaContextProvider>) -> Self {
-        Self { stream, context }
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn new(stream: CUstream) -> Result<Self, DriverError> {
+        // Validate the stream by getting its context
+        let mut context: CUcontext = std::ptr::null_mut();
+        check_cuda(unsafe { cuStreamGetCtx(stream, &mut context) })?;
+
+        // Create a new context provider for the stream
+        let context = ExternalCudaContext::new(context);
+
+        Ok(Self { stream, context })
     }
 }
 
@@ -174,8 +222,8 @@ impl DynamoCudaStreamProvider for ExternalCudaStream {
         self.stream
     }
 
-    fn context(&self) -> Arc<dyn DynamoCudaContextProvider> {
-        self.context.clone()
+    fn context(&self) -> &dyn DynamoCudaContextProvider {
+        self.context.as_ref()
     }
 }
 
@@ -185,13 +233,14 @@ impl DynamoCudaStreamProvider for ExternalCudaStream {
 // Implementations of this trait for the [`cudarc`] crate.
 
 impl DynamoCudaContextProvider for CudaContext {
-    unsafe fn cu_context(&self) -> cudarc::driver::sys::CUcontext {
-        self.cu_ctx()
+    unsafe fn cu_context(&self) -> NonNull<cudarc::driver::sys::CUctx_st> {
+        let context = self.cu_ctx();
+        NonNull::new(context).expect("CudaContext returned null context")
     }
 }
 
 impl DynamoCudaContextProvider for CudaStream {
-    unsafe fn cu_context(&self) -> cudarc::driver::sys::CUcontext {
+    unsafe fn cu_context(&self) -> NonNull<cudarc::driver::sys::CUctx_st> {
         self.context().cu_context()
     }
 }
@@ -201,7 +250,25 @@ impl DynamoCudaStreamProvider for CudaStream {
         self.cu_stream()
     }
 
-    fn context(&self) -> Arc<dyn DynamoCudaContextProvider> {
-        self.context().clone()
+    fn context(&self) -> &dyn DynamoCudaContextProvider {
+        self.context().as_ref()
+    }
+}
+
+/// A CUDA event provider that wraps an external CUDA event.
+pub struct ExternalCudaEvent {
+    event: CUevent,
+}
+
+impl ExternalCudaEvent {
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn new(event: CUevent) -> Self {
+        Self { event }
+    }
+}
+
+impl DynamoCudaEventProvider for ExternalCudaEvent {
+    unsafe fn cu_event(&self) -> cudarc::driver::sys::CUevent {
+        self.event
     }
 }

@@ -33,7 +33,7 @@ testing-full  = ["testing-cuda", "testing-nixl"]
 testing-cuda  = ["dep:cudarc"]
 testing-nixl  = ["dep:nixl-sys"]
 testing-etcd = []
-block-manager = ["dep:nixl-sys", "dep:cudarc", "dep:ndarray", "dep:nix"]
+block-manager = ["dep:nixl-sys", "dep:cudarc", "dep:ndarray", "dep:nix", "cuda"]
 cuda          = ["dep:cudarc"]
 integration = []
 
