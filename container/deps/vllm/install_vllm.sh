@@ -152,7 +152,7 @@ else
     mkdir -p $VLLM_TEMP_DIR
     REMOTE_WHEEL_URL=https://vllm-wheels.s3.us-west-2.amazonaws.com/${VLLM_REF}/vllm-1.0.0.dev-cp38-abi3-manylinux1_x86_64.whl
     export VLLM_PRECOMPILED_WHEEL_LOCATION=$VLLM_TEMP_DIR/vllm-1.0.0.dev-cp38-abi3-manylinux1_x86_64.whl
-    curl -L $REMOTE_WHEEL_URL -o $VLLM_PRECOMPILED_WHEEL_LOCATION
+    curl -fS --retry 3 -L "$REMOTE_WHEEL_URL" -o "$VLLM_PRECOMPILED_WHEEL_LOCATION"
     if [ "$EDITABLE" = "true" ]; then
         VLLM_USE_PRECOMPILED=1 uv pip install -e . --torch-backend=$TORCH_BACKEND
     else
