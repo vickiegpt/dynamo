@@ -15,6 +15,9 @@
 
 use super::{NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse};
 use crate::{
+    postprocessor::reasoning_parser::{
+        parsers::base_reasoning_parser::BaseReasoningParser, ReasoningParser,
+    },
     protocols::{
         common::{self},
         openai::chat_completions::{NvChatChoiceStream, NvChatCompletionStreamResponseDelta},
@@ -69,6 +72,10 @@ pub struct DeltaGenerator {
     msg_counter: u64,
     /// Configuration options for response generation.
     options: DeltaGeneratorOptions,
+
+    /// Reasoning Parser object
+    /// This is used to parse reasoning content in the response.
+    reasoning_parser: BaseReasoningParser,
 }
 
 impl DeltaGenerator {
@@ -98,6 +105,10 @@ impl DeltaGenerator {
             completion_tokens_details: None,
         };
 
+        // Reasoning parser
+        let reasoning_parser =
+            BaseReasoningParser::new("<think>".to_string(), "</think>".to_string(), false, true);
+
         Self {
             id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
             object: "chat.completion.chunk".to_string(),
@@ -108,6 +119,7 @@ impl DeltaGenerator {
             usage,
             msg_counter: 0,
             options,
+            reasoning_parser,
         }
     }
 
@@ -184,6 +196,32 @@ impl DeltaGenerator {
         })
     }
 
+    fn create_reasoning_content(
+        &mut self,
+        text: Option<String>,
+    ) -> (Option<String>, Option<String>) {
+        if text.is_none() {
+            return (None, None);
+        }
+        let parser_result = self.reasoning_parser.parse_reasoning_streaming_incremental(
+            text.as_deref().expect("Text should not be None"),
+        );
+
+        let reasoning_content = if parser_result.reasoning_text.is_empty() {
+            None
+        } else {
+            Some(parser_result.reasoning_text)
+        };
+
+        let normal_text = if parser_result.normal_text.is_empty() {
+            None
+        } else {
+            Some(parser_result.normal_text)
+        };
+
+        (reasoning_content, normal_text)
+    }
+
     /// Creates a choice within a chat completion response.
     ///
     /// # Arguments
@@ -196,14 +234,15 @@ impl DeltaGenerator {
     /// * An [`async_openai::types::CreateChatCompletionStreamResponse`] instance representing the choice.
     #[allow(deprecated)]
     pub fn create_choice(
-        &self,
+        &mut self,
         index: u32,
         text: Option<String>,
         finish_reason: Option<async_openai::types::FinishReason>,
         logprobs: Option<async_openai::types::ChatChoiceLogprobs>,
     ) -> NvCreateChatCompletionStreamResponse {
+        let (reasoning_content, normal_text) = self.create_reasoning_content(text);
         let delta = NvChatCompletionStreamResponseDelta {
-            content: text,
+            content: normal_text,
             function_call: None,
             tool_calls: None,
             role: if self.msg_counter == 0 {
@@ -212,7 +251,7 @@ impl DeltaGenerator {
                 None
             },
             refusal: None,
-            reasoning_content: None,
+            reasoning_content,
         };
 
         let choice = NvChatChoiceStream {

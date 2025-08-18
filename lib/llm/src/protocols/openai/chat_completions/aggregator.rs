@@ -149,6 +149,17 @@ impl DeltaAggregator {
                             state_choice.text.push_str(content);
                         }
 
+                        if let Some(reasoning_content) = &choice.delta.reasoning_content {
+                            if state_choice.reasoning_content.is_none() {
+                                state_choice.reasoning_content = Some("".to_string());
+                            }
+                            state_choice
+                                .reasoning_content
+                                .as_mut()
+                                .expect("Reason Content")
+                                .push_str(reasoning_content);
+                        }
+
                         // Update finish reason if provided.
                         if let Some(finish_reason) = choice.finish_reason {
                             state_choice.finish_reason = Some(finish_reason);
