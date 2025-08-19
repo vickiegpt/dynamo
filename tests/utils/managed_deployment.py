@@ -305,6 +305,39 @@ class ManagedDeployment:
                 )
                 raise
 
+    async def _get_deployment_logs(self):
+        """
+        Get logs from all pods in the deployment, organized by component.
+        """
+        # Create logs directory
+        base_dir = os.path.join(self.log_dir, self.deployment_name)
+        os.makedirs(base_dir, exist_ok=True)
+
+        for component in self.deployment_spec.services:
+            component_dir = os.path.join(base_dir, component.name)
+            os.makedirs(component_dir, exist_ok=True)
+
+            # List pods for this component using the selector label
+            # nvidia.com/selector: deployment-name-component
+            label_selector = (
+                f"nvidia.com/selector={self.deployment_name}-{component.name.lower()}"
+            )
+
+            pods = await self._core_api.list_namespaced_pod(
+                namespace=self.namespace, label_selector=label_selector
+            )
+
+            # Get logs for each pod
+            for i, pod in enumerate(pods.items):
+                try:
+                    logs = await self._core_api.read_namespaced_pod_log(
+                        name=pod.metadata.name, namespace=self.namespace
+                    )
+                    with open(os.path.join(component_dir, f"{i}.log"), "w") as f:
+                        await f.write(logs)
+                except kubernetes.client.rest.ApiException as e:
+                    print(f"Error getting logs for pod {pod.metadata.name}: {e}")
+
     async def _delete_deployment(self):
         """
         Delete the DynamoGraphDeployment CR.
@@ -324,7 +357,6 @@ class ManagedDeployment:
     async def __aenter__(self):
         try:
             self._logger = logging.getLogger(self.__class__.__name__)
-            self._logger.info("here")
             await self._init_kubernetes()
             await self._create_deployment()
             await self._wait_for_ready()
@@ -333,7 +365,10 @@ class ManagedDeployment:
             raise
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self._delete_deployment()
+        try:
+            await self._get_deployment_logs()
+        finally:
+            await self._delete_deployment()
 
 
 async def main():
