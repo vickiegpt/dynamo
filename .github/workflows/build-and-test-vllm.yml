@@ -24,7 +24,7 @@ on:
 jobs:
   build-test:
     runs-on:
-        group: gpu-l40-runners
+        group: GPU_runners
     name: Build and Test - vLLM
     env:
       CONTAINER_ID: test_${{ github.run_id }}_${{ github.run_attempt }}_${{ github.job }}_vllm
