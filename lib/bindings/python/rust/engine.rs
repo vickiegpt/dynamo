@@ -14,8 +14,9 @@
 // limitations under the License.
 
 use std::sync::Arc;
-
-use super::context::PyContext;
+use pyo3::types::{PyDict, PyModule};
+use pyo3::{PyAny, PyErr};
+use super::context::{PyContext, callable_accepts_kwarg};
 use pyo3::prelude::*;
 use pyo3_async_runtimes::TaskLocals;
 use pythonize::{depythonize, pythonize};
@@ -32,12 +33,12 @@ pub use dynamo_runtime::{
 };
 pub use serde::{Deserialize, Serialize};
 
+
 /// Add bingings from this crate to the provided module
 pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PythonAsyncEngine>()?;
     Ok(())
 }
-
 // todos:
 // - [ ] enable context cancellation
 //   - this will likely require a change to the function signature python calling arguments
@@ -114,6 +115,7 @@ pub struct PythonServerStreamingEngine {
     _cancel_token: CancellationToken,
     generator: Arc<PyObject>,
     event_loop: Arc<PyObject>,
+    has_pycontext: bool
 }
 
 impl PythonServerStreamingEngine {
@@ -122,10 +124,16 @@ impl PythonServerStreamingEngine {
         generator: Arc<PyObject>,
         event_loop: Arc<PyObject>,
     ) -> Self {
+        let has_pycontext = Python::with_gil(|py| {
+            let callable = generator.bind(py);
+            callable_accepts_kwarg(py, callable, "context").unwrap_or(false)
+        });
+
         PythonServerStreamingEngine {
             _cancel_token: cancel_token,
             generator,
             event_loop,
+            has_pycontext,
         }
     }
 }
@@ -168,6 +176,7 @@ where
         let generator = self.generator.clone();
         let event_loop = self.event_loop.clone();
         let ctx_python = ctx.clone();
+        let has_pycontext = self.has_pycontext.clone();
 
         // Acquiring the GIL is similar to acquiring a standard lock/mutex
         // Performing this in an tokio async task could block the thread for an undefined amount of time
@@ -184,7 +193,15 @@ where
                 let py_request = pythonize(py, &request)?;
                 let py_ctx = Py::new(py, PyContext::new(ctx_python.clone()))?;
 
-                let gen = generator.call1(py, (py_request, py_ctx))?;
+                let gen = if has_pycontext {
+                    // Pass context as a kwarg
+                    let kwarg = PyDict::new(py);
+                    kwarg.set_item("context", &py_ctx)?;         
+                    generator.call(py, (py_request,), Some(&kwarg)) 
+                } else {
+                    // Legacy: No `context` arg
+                    generator.call1(py, (py_request,))
+                }?;    
 
                 let locals = TaskLocals::new(event_loop.bind(py).clone());
                 pyo3_async_runtimes::tokio::into_stream_with_locals_v1(locals, gen.into_bound(py))

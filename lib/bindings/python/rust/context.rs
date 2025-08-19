@@ -6,7 +6,6 @@
 pub use dynamo_runtime::pipeline::AsyncEngineContext;
 use pyo3::prelude::*;
 use std::sync::Arc;
-use tokio::time::{timeout, Duration};
 
 // PyContext is a wrapper around the AsyncEngineContext to allow for Python bindings.
 // Not all methods of the AsyncEngineContext are exposed, jsut the primary ones for tracing + cancellation.
@@ -18,7 +17,9 @@ pub struct PyContext {
 
 impl PyContext {
     pub fn new(inner: Arc<dyn AsyncEngineContext>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+        }
     }
 }
 
@@ -43,27 +44,33 @@ impl PyContext {
     }
 
     // allows building a async callback.
-    // since async tasks in python get canceled, but memory is not freed in rust.
-    // allow for up to 360 seconds for the async task to cycle and free memory.
-    // however, calling `is_stopped()` would take a long time, therefore its preferable to have a async method
-    #[pyo3(signature = (wait_for=60))]
-    fn async_is_stopped<'a>(&self, py: Python<'a>, wait_for: u16) -> PyResult<Bound<'a, PyAny>> {
+    fn async_killed_or_stopped<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         let inner = self.inner.clone();
-        // allow wait_for to be 360 seconds max
-        if !(1..=360).contains(&wait_for) {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "wait_for must be between 1 and 360 seconds to allow for async task to cycle.",
-            ));
-        }
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            // Wait up to `wait_for` seconds for inner.stopped() to complete.
-            if inner.is_stopped() {
-                return Ok(true);
+            tokio::select! {
+                _ = inner.killed() => {
+                    Ok(true)
+                }
+                _ = inner.stopped() => {
+                    Ok(true)
+                }
             }
-            let _ = timeout(Duration::from_secs(wait_for as u64), inner.stopped()).await;
-
-            Ok(inner.is_stopped() || inner.is_killed())
         })
     }
+
+    
+}
+
+// PyO3 equivalent for verify if signature contains target_name
+// def callable_accepts_kwarg(target_name: str):
+//      import inspect
+//      return target_name in inspect.signature(func).parameters
+pub fn callable_accepts_kwarg(py: Python, callable: &Bound<'_, PyAny>, target_name: &str) -> PyResult<bool> {
+    let inspect: Bound<'_, PyModule> = py.import("inspect")?;
+    let signature = inspect.call_method1("signature", (callable,))?;
+    let params_any: Bound<'_, PyAny> = signature.getattr("parameters")?;
+    params_any
+        .call_method1("__contains__", (target_name,))?
+        .extract::<bool>()
 }
