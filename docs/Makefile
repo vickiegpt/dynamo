@@ -31,6 +31,15 @@ clean:
 	@rm -fr ${BUILDDIR}
 .PHONY: help Makefile clean
 
+mdbook-build:
+	@cd mdbook && mdbook build
+
+mdbook-serve:
+	@cd mdbook && mdbook serve --open
+
+mdbook-clean:
+	@cd mdbook && rm -rf book
+
 
 # Catch-all target: route all unknown targets to Sphinx using the new
 # "make mode" option.  $(O) is meant as a shortcut for $(SPHINXOPTS).
