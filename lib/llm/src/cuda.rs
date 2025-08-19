@@ -81,6 +81,106 @@ pub trait CudaEvent {
     /// This method is unsafe because it directly accesses the underlying CUDA event.
     /// The caller must ensure that the event is valid and a valid CUDA context is active.
     unsafe fn cu_event(&self) -> sys::CUevent;
+
+    /// Creates a new CUDA event with default flags.
+    ///
+    /// Maps to: `cudaEventCreate(cudaEvent_t* event)`
+    ///
+    /// # Design Note
+    /// This is an associated function, which means it can only be called on concrete types,
+    /// not on trait objects (Box<dyn CudaEvent>). You must specify the implementation:
+    /// ```
+    /// let event = OwnedCudaEvent::create()?;        //  Works
+    /// let event = ExternalCudaEvent::create()?;     //  Works
+    /// // event_obj.create()                        //  Won't work if event_obj is Box<dyn CudaEvent>
+    /// ```
+    ///
+    /// # Returns
+    /// * `Ok(Box<dyn CudaEvent>)` - Successfully created event
+    /// * `Err(anyhow::Error)` - Failed to create event (invalid context, out of memory, etc.)
+    fn create() -> anyhow::Result<Box<dyn CudaEvent>>;
+
+    /// Creates a new CUDA event with specified flags.
+    ///
+    /// Maps to: `cudaEventCreateWithFlags(cudaEvent_t* event, unsigned int flags)`
+    ///
+    /// Same constraint as create() - must be called on concrete types.
+    ///
+    /// # Arguments
+    /// * `flags` - Event creation flags
+    ///
+    /// # Returns
+    /// * `Ok(Box<dyn CudaEvent>)` - Successfully created event with specified flags
+    /// * `Err(anyhow::Error)` - Failed to create event (invalid flags, invalid context, etc.)
+    fn create_with_flags(flags: CUevent_flags) -> anyhow::Result<Box<dyn CudaEvent>>;
+
+    /// Destroys the CUDA event and releases its resources.
+    ///
+    /// Maps to: `cudaEventDestroy(cudaEvent_t event)`
+    ///
+    /// Note: This may also be called automatically in Drop implementations.
+    ///
+    /// # Returns
+    /// * `Ok(())` - Event successfully destroyed
+    /// * `Err(anyhow::Error)` - Failed to destroy event (invalid event, etc.)
+    fn destroy(&self) -> anyhow::Result<()>;
+
+    /// Computes the elapsed time between this event (start) and the end event.
+    ///
+    /// Maps to: `cudaEventElapsedTime(float* ms, cudaEvent_t start, cudaEvent_t end)`
+    ///
+    /// # Arguments
+    /// * `end_event` - The ending event for the time measurement
+    ///
+    /// # Returns
+    /// * `Ok(f64)` - Time elapsed in milliseconds
+    /// * `Err(anyhow::Error)` - Failed to compute elapsed time (events not recorded, invalid events, etc.)
+    fn elapsed_time(&self, end_event: &dyn CudaEvent) -> anyhow::Result<f64>;
+
+    /// Records the event on the specified stream (or default stream if None).
+    ///
+    /// Maps to: `cudaEventRecord(cudaEvent_t event, cudaStream_t stream = 0)`
+    ///
+    /// # Arguments
+    /// * `stream` - Stream to record on, or None for default stream (stream 0)
+    ///
+    /// # Returns
+    /// * `Ok(())` - Event successfully recorded on stream
+    /// * `Err(anyhow::Error)` - Failed to record event (invalid stream, invalid event, etc.)
+    fn record(&self, stream: Option<&dyn CudaStream>) -> anyhow::Result<()>;
+
+    /// Records the event on the specified stream with additional flags.
+    ///
+    /// Maps to: `cudaEventRecordWithFlags(cudaEvent_t event, cudaStream_t stream = 0, unsigned int flags = 0)`
+    ///
+    /// # Arguments
+    /// * `stream` - Stream to record on, or None for default stream (stream 0)
+    /// * `flags` - Additional flags for recording
+    ///
+    /// # Returns
+    /// * `Ok(())` - Event successfully recorded on stream with flags
+    /// * `Err(anyhow::Error)` - Failed to record event (invalid stream, invalid flags, etc.)
+    fn record_with_flags(&self, stream: Option<&dyn CudaStream>, flags: CUevent_flags) -> anyhow::Result<()>;
+
+    /// Queries the event's completion status without blocking.
+    ///
+    /// Maps to: `cudaEventQuery(cudaEvent_t event)`
+    ///
+    /// # Returns
+    /// * `Ok(true)` - Event has completed
+    /// * `Ok(false)` - Event has not completed yet
+    /// * `Err(anyhow::Error)` - Query failed (invalid event, etc.)
+    fn query(&self) -> anyhow::Result<bool>;
+
+    /// Blocks until the event completes.
+    ///
+    /// Maps to: `cudaEventSynchronize(cudaEvent_t event)`
+    ///
+    /// # Returns
+    /// * `Ok(())` - Event completed successfully
+    /// * `Err(anyhow::Error)` - Synchronization failed (invalid event, etc.)
+    fn synchronize(&self) -> anyhow::Result<()>;
+
 }
 
 /// A CUDA context guard that ensures safe access to CUDA contexts.

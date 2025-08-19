@@ -47,7 +47,6 @@ impl From<RouterMode> for RsRouterMode {
 
 mod engine;
 mod http;
-mod integrations;
 mod llm;
 
 type JsonServerStreamingIngress =
