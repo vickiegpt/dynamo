@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{check_cuda, sys::CUevent, CudaEvent};
+use super::{check_cuda, sys::CUevent, CudaEvent, CudaStream};
 
 use ::cudarc::driver::sys::{cuEventCreate, cuEventDestroy_v2, CUevent_flags};
 
@@ -68,9 +68,35 @@ impl OwnedCudaEvent {
     }
 }
 
+// TODO[oandreeva]: implement these methods
+// keeping as unimplemented for now to enable compilation
 impl CudaEvent for OwnedCudaEvent {
     unsafe fn cu_event(&self) -> CUevent {
         self.event
+    }
+
+    fn destroy_event(&self) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    fn elapsed_time(&self, _end_event: &dyn CudaEvent) -> anyhow::Result<f64> {
+        unimplemented!()
+    }
+
+    fn record_event(&self, _stream: Option<&dyn CudaStream>) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    fn record_event_with_flags(&self, _stream: Option<&dyn CudaStream>, _flags: CUevent_flags) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    fn query_event(&self) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
+
+    fn synchronize_event(&self) -> anyhow::Result<()> {
+        unimplemented!()
     }
 }
 

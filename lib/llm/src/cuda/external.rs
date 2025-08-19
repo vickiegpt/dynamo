@@ -3,8 +3,8 @@
 
 use super::{
     check_cuda,
-    sys::{CUcontext, CUevent, CUstream},
-    CudaContext, CudaEvent, CudaStream,
+    sys::{CUcontext, CUstream},
+    CudaContext, CudaStream,
 };
 
 use cudarc::driver::{
@@ -100,6 +100,9 @@ impl CudaStream for ExternalCudaStream {
     }
 }
 
+/*
+// Note[oandreeva]: Disabling this for now
+
 // The PhantomData<*const ()> field automatically makes this !Send and !Sync
 // which prevents the guard from crossing async boundaries
 
@@ -126,3 +129,4 @@ impl CudaEvent for ExternalCudaEvent {
         self.event
     }
 }
+*/

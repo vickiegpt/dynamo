@@ -30,7 +30,7 @@ pub mod sys {
 /// Re-export the DriverError type from [`cudarc`] for convenience.
 pub use ::cudarc::driver::DriverError;
 
-use ::cudarc::driver::sys::{cuCtxPopCurrent_v2, cuCtxPushCurrent_v2, cudaError_enum, CUctx_st};
+use ::cudarc::driver::sys::{cuCtxPopCurrent_v2, cuCtxPushCurrent_v2, cudaError_enum, CUctx_st, CUevent_flags};
 
 use std::marker::PhantomData;
 use std::{pin::Pin, ptr::NonNull};
@@ -82,38 +82,6 @@ pub trait CudaEvent {
     /// The caller must ensure that the event is valid and a valid CUDA context is active.
     unsafe fn cu_event(&self) -> sys::CUevent;
 
-    /// Creates a new CUDA event with default flags.
-    ///
-    /// Maps to: `cudaEventCreate(cudaEvent_t* event)`
-    ///
-    /// # Design Note
-    /// This is an associated function, which means it can only be called on concrete types,
-    /// not on trait objects (Box<dyn CudaEvent>). You must specify the implementation:
-    /// ```
-    /// let event = OwnedCudaEvent::create()?;        //  Works
-    /// let event = ExternalCudaEvent::create()?;     //  Works
-    /// // event_obj.create()                        //  Won't work if event_obj is Box<dyn CudaEvent>
-    /// ```
-    ///
-    /// # Returns
-    /// * `Ok(Box<dyn CudaEvent>)` - Successfully created event
-    /// * `Err(anyhow::Error)` - Failed to create event (invalid context, out of memory, etc.)
-    fn create() -> anyhow::Result<Box<dyn CudaEvent>>;
-
-    /// Creates a new CUDA event with specified flags.
-    ///
-    /// Maps to: `cudaEventCreateWithFlags(cudaEvent_t* event, unsigned int flags)`
-    ///
-    /// Same constraint as create() - must be called on concrete types.
-    ///
-    /// # Arguments
-    /// * `flags` - Event creation flags
-    ///
-    /// # Returns
-    /// * `Ok(Box<dyn CudaEvent>)` - Successfully created event with specified flags
-    /// * `Err(anyhow::Error)` - Failed to create event (invalid flags, invalid context, etc.)
-    fn create_with_flags(flags: CUevent_flags) -> anyhow::Result<Box<dyn CudaEvent>>;
-
     /// Destroys the CUDA event and releases its resources.
     ///
     /// Maps to: `cudaEventDestroy(cudaEvent_t event)`
@@ -123,7 +91,7 @@ pub trait CudaEvent {
     /// # Returns
     /// * `Ok(())` - Event successfully destroyed
     /// * `Err(anyhow::Error)` - Failed to destroy event (invalid event, etc.)
-    fn destroy(&self) -> anyhow::Result<()>;
+    fn destroy_event(&self) -> anyhow::Result<()>;
 
     /// Computes the elapsed time between this event (start) and the end event.
     ///
@@ -147,7 +115,7 @@ pub trait CudaEvent {
     /// # Returns
     /// * `Ok(())` - Event successfully recorded on stream
     /// * `Err(anyhow::Error)` - Failed to record event (invalid stream, invalid event, etc.)
-    fn record(&self, stream: Option<&dyn CudaStream>) -> anyhow::Result<()>;
+    fn record_event(&self, stream: Option<&dyn CudaStream>) -> anyhow::Result<()>;
 
     /// Records the event on the specified stream with additional flags.
     ///
@@ -160,7 +128,7 @@ pub trait CudaEvent {
     /// # Returns
     /// * `Ok(())` - Event successfully recorded on stream with flags
     /// * `Err(anyhow::Error)` - Failed to record event (invalid stream, invalid flags, etc.)
-    fn record_with_flags(&self, stream: Option<&dyn CudaStream>, flags: CUevent_flags) -> anyhow::Result<()>;
+    fn record_event_with_flags(&self, stream: Option<&dyn CudaStream>, flags: CUevent_flags) -> anyhow::Result<()>;
 
     /// Queries the event's completion status without blocking.
     ///
@@ -170,7 +138,7 @@ pub trait CudaEvent {
     /// * `Ok(true)` - Event has completed
     /// * `Ok(false)` - Event has not completed yet
     /// * `Err(anyhow::Error)` - Query failed (invalid event, etc.)
-    fn query(&self) -> anyhow::Result<bool>;
+    fn query_event(&self) -> anyhow::Result<bool>;
 
     /// Blocks until the event completes.
     ///
@@ -179,7 +147,7 @@ pub trait CudaEvent {
     /// # Returns
     /// * `Ok(())` - Event completed successfully
     /// * `Err(anyhow::Error)` - Synchronization failed (invalid event, etc.)
-    fn synchronize(&self) -> anyhow::Result<()>;
+    fn synchronize_event(&self) -> anyhow::Result<()>;
 
 }
 
