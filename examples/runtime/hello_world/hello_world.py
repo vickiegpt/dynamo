@@ -18,7 +18,7 @@ import logging
 
 import uvloop
 
-from dynamo.runtime import PyContext, DistributedRuntime, dynamo_endpoint, dynamo_worker
+from dynamo.runtime import DistributedRuntime, PyContext, dynamo_endpoint, dynamo_worker
 from dynamo.runtime.logging import configure_dynamo_logging
 
 logger = logging.getLogger(__name__)
