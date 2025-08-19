@@ -30,6 +30,9 @@ async def content_generator(request: str, context: Context):
     logger.info(f"Received request: {request} with `id={context.id()}`")
     for word in request.split(","):
         await asyncio.sleep(1)
+        if context.is_stopped() or context.is_killed():
+            print("request got cancelled.")
+            return 
         yield f"Hello {word}!"
 
 
