@@ -20,8 +20,8 @@ set -euo pipefail
 
 # Parse arguments
 EDITABLE=true
-VLLM_REF="ba81acbdc1eec643ba815a76628ae3e4b2263b76"
-VLLM_GIT_URL="https://github.com/vllm-project/vllm.git"
+VLLM_REF="cf745da31e39a29e70deaef965386597f7a333dc"
+VLLM_GIT_URL="https://github.com/galletas1712/vllm.git"
 MAX_JOBS=16
 INSTALLATION_DIR=/tmp
 ARCH=$(uname -m)
@@ -183,6 +183,10 @@ else
     git clone https://github.com/flashinfer-ai/flashinfer.git --recursive
     cd flashinfer
     git checkout $FLASHINF_REF
+    # Set CUDA architectures for FlashInfer - include Ada (8.9) and other common architectures
+    # FlashInfer requires sm75+ (7.5 and above)
+    export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0"
+    echo "Building FlashInfer with CUDA architectures: $TORCH_CUDA_ARCH_LIST"
     uv pip install -v --no-build-isolation .
 fi
 

@@ -136,7 +136,6 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
     component = (
         runtime.namespace(config.namespace)
         .component(config.component)
-        .add_labels([("model", config.model)])
     )
     await component.create_service()
 

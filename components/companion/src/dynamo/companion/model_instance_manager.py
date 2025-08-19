@@ -5,7 +5,7 @@ from vllm.config import VllmConfig, set_current_vllm_config
 from vllm.distributed import parallel_state
 from vllm.logger import init_logger
 from vllm.model_executor.model_loader.default_loader import DefaultModelLoader
-from vllm.distributed.parallel_state import NON_DEVICE_BACKEND
+from vllm.distributed.parallel_state import FAKE_DISTRIBUTED_BACKEND
 from vllm.model_executor.parameter import UninitializedParameterFromTensor
 from vllm.utils import get_distributed_init_method
 
@@ -71,7 +71,7 @@ class ModelInstanceManager:
             return
             
         logger.info("[DIST-INIT] Initializing distributed environment from main thread")
-        self._initialize_non_device_distributed_environment()
+        self._initialize_fake_distributed_environment()
         self._distributed_initialized = True
         logger.info("[DIST-INIT] ✓ Distributed environment initialized successfully")
     
@@ -155,7 +155,7 @@ class ModelInstanceManager:
             len(self._model_parameters_ipc_info),
         )
 
-    def _initialize_non_device_distributed_environment(self):
+    def _initialize_fake_distributed_environment(self):
         """Initialize distributed environment in non-device mode for correct weight loading."""
         logger.info(
             "[DIST-INIT] Starting companion shadow process initialization:\n"
@@ -185,7 +185,7 @@ class ModelInstanceManager:
             "  backend=%s (will use gloo for non-device run)\n"
             "  world_size=%d, rank=%d, local_rank=%d",
             init_method,
-            NON_DEVICE_BACKEND,
+            FAKE_DISTRIBUTED_BACKEND,
             self.world_size,
             self.global_rank,
             self.local_rank,
@@ -208,7 +208,7 @@ class ModelInstanceManager:
             rank=self.global_rank,
             distributed_init_method=init_method,
             local_rank=self.local_rank,
-            backend=NON_DEVICE_BACKEND,
+            backend=FAKE_DISTRIBUTED_BACKEND,
         )
         
         logger.info(
