@@ -51,6 +51,6 @@ jobs:
           ./container/build.sh --tag ${{ steps.define_image_tag.outputs.image_tag }} --target runtime --framework vllm
       - name: Run pytest
         env:
-          PYTEST_MARKS: "pre_merge or mypy"
+          PYTEST_MARKS: "e2e and vllm and gpu_1"
         run: |
           docker run -v ${{ github.workspace }}:/workspace -w /workspace --name ${{ env.CONTAINER_ID }}_pytest ${{ steps.define_image_tag.outputs.image_tag }} bash -c "pytest --basetemp=/tmp --junitxml=${{ env.PYTEST_XML_FILE }} -m \"${{ env.PYTEST_MARKS }}\""
