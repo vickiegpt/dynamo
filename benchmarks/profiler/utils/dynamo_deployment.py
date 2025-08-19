@@ -69,14 +69,14 @@ class DynamoDeploymentClient:
         self.base_log_dir = Path(base_log_dir) if base_log_dir else Path("logs")
         self.frontend_port = frontend_port
 
-    async def _init_kubernetes(self):
+    def _init_kubernetes(self):
         """Initialize kubernetes client"""
         try:
             # Try in-cluster config first (for pods with service accounts)
             config.load_incluster_config()
         except Exception:
             # Fallback to kube config file (for local development)
-            await config.load_kube_config()
+            config.load_kube_config()
 
         self.k8s_client = client.ApiClient()
         self.custom_api = client.CustomObjectsApi(self.k8s_client)
@@ -88,17 +88,7 @@ class DynamoDeploymentClient:
         """
         service_url = f"http://{self.service_name}.{self.namespace}.svc.cluster.local:{self.frontend_port}"
         print(f"Using service URL: {service_url}")
-
         return service_url
-
-    def _set_image(self, spec):
-        if "image" in spec:
-            spec[
-                "image"
-            ] = "gitlab-master.nvidia.com/dl/ai-dynamo/dynamo/dynamo:nnshah1-vllm-latest"
-        for k, v in spec.items():
-            if isinstance(v, dict):
-                self._set_image(v)
 
     async def create_deployment(self, deployment: Union[dict, str]):
         """
@@ -107,7 +97,7 @@ class DynamoDeploymentClient:
         Args:
             deployment: Either a dict containing the deployment spec or a path to a yaml file
         """
-        await self._init_kubernetes()
+        self._init_kubernetes()
 
         if isinstance(deployment, str):
             # Load from yaml file
@@ -126,13 +116,6 @@ class DynamoDeploymentClient:
         self.deployment_spec["metadata"]["name"] = self.deployment_name
         self.deployment_spec["metadata"]["namespace"] = self.namespace
 
-        self._set_image(self.deployment_spec)
-
-        print(self.deployment_spec)
-
-        for k, v in self.deployment_spec.items():
-            if k == "extraPodSpec":
-                print(v)
         # Disable grove as it will cause the deployment to not report ready
         if "annotations" not in self.deployment_spec["metadata"]:
             self.deployment_spec["metadata"]["annotations"] = {}
@@ -219,49 +202,12 @@ class DynamoDeploymentClient:
         Test the deployment with a chat completion request using httpx.
         """
         EXAMPLE_CHAT_REQUEST["model"] = self.model_name
-        #      base_url = self.get_service_url()
-
-        import portforward
-
-        pf = portforward.AsyncPortForwarder(
-            "nnshah1-test", self.service_name, 8000, 8000
-        )
-        await pf.forward()
-        response_text = None
-        url = "http://localhost:8000/v1/chat/completions"
+        base_url = self.get_service_url()
+        url = f"{base_url}/v1/chat/completions"
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=EXAMPLE_CHAT_REQUEST)
             response.raise_for_status()
-            response_text = response.text
-        await pf.stop()
-
-        label_selector = f"nvidia.com/selector={self.service_name.lower()}"
-
-        print(label_selector)
-
-        pods = await self.core_api.list_namespaced_pod(
-            namespace=self.namespace, label_selector=label_selector
-        )
-
-        # Get logs for each pod
-        for i, pod in enumerate(pods.items):
-            try:
-                resp = await self.core_api.connect_get_namespaced_pod_exec(
-                    name=pod.metadata.name,
-                    namespace=self.namespace,
-                    command=["ps", "-aux"],
-                    stderr=True,
-                    stdin=False,
-                    stdout=True,
-                    tty=False,
-                )
-                print(resp)
-                print("here!")
-
-            except kubernetes.client.rest.ApiException as e:
-                print(f"Error getting logs for pod {pod.metadata.name}: {e}")
-
-        return response_text
+            return response.text
 
     async def get_deployment_logs(self):
         """
@@ -281,8 +227,6 @@ class DynamoDeploymentClient:
                 f"nvidia.com/selector={self.deployment_name}-{component.lower()}"
             )
 
-            print(label_selector)
-
             pods = await self.core_api.list_namespaced_pod(
                 namespace=self.namespace, label_selector=label_selector
             )
@@ -290,7 +234,6 @@ class DynamoDeploymentClient:
             # Get logs for each pod
             for i, pod in enumerate(pods.items):
                 try:
-                    #                    print(pod)
                     logs = await self.core_api.read_namespaced_pod_log(
                         name=pod.metadata.name, namespace=self.namespace
                     )
