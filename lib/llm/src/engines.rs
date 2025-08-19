@@ -231,7 +231,7 @@ impl
     ) -> Result<ManyOut<Annotated<NvCreateCompletionResponse>>, Error> {
         let (request, context) = incoming_request.transfer(());
         let ctx = context.context();
-        let deltas = request.response_generator(Some(ctx.id().to_string()));
+        let deltas = request.response_generator(ctx.id().to_string());
         let chars_string = prompt_to_string(&request.inner.prompt);
         let output = stream! {
             let mut id = 1;
