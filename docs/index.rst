@@ -152,7 +152,6 @@ The examples below assume you build the latest image yourself from source. If us
    Disaggregation and Performance Tuning <guides/disagg_perf_tuning.md>
    Metrics and Observability <guides/metrics.md>
    Health Checks and Troubleshooting <guides/troubleshooting/health_check.md>
-   Ports and Environment Variables Reference <guides/ports_and_environment_variables.md>
 
 .. toctree::
    :hidden:

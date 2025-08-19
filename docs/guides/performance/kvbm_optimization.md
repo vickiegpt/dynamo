@@ -10,14 +10,7 @@ Links to:
 
 ## Optimization Strategies
 
-- Block size tuning
-- Allocation policies
-- Eviction strategies
-- Memory pooling
-
 ## Performance Tuning
-
-Reference existing KVBM performance configurations.
 
 ## Monitoring
 

@@ -52,7 +52,7 @@ git checkout $(git describe --tags $(git rev-list --tags --max-count=1))
 
 ## Quick Start
 
-Below we provide a guide that lets you run all of our the common deployment patterns on a single node. See our [common LLM documentation](../llm/README.md) for client usage patterns and architecture overview.
+Below we provide a guide that lets you run all of our the common deployment patterns on a single node. 
 
 ### Start NATS and ETCD in the background
 
@@ -255,4 +255,4 @@ All deployment patterns support multi-node configurations through the `multinode
 For multi-node deployment examples and configuration details, see the [Multinode Deployment Guide](../../../guides/dynamo_deploy/multinode-deployment.md).
 
 ### SLURM
-- **[Deploying Dynamo with SGLang on SLURM](slurm_jobs/README.md)**
+- **[Deploying Dynamo with SGLang on SLURM](../../../docs/components/backends/sglang/slurm_jobs/README.md)**
