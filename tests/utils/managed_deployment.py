@@ -334,7 +334,7 @@ class ManagedDeployment:
                         name=pod.metadata.name, namespace=self.namespace
                     )
                     with open(os.path.join(component_dir, f"{i}.log"), "w") as f:
-                        await f.write(logs)
+                        f.write(logs)
                 except kubernetes.client.rest.ApiException as e:
                     print(f"Error getting logs for pod {pod.metadata.name}: {e}")
 
