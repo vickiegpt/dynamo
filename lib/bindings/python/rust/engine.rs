@@ -13,13 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use super::context::{callable_accepts_kwarg, PyContext};
+use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
 use pyo3::{PyAny, PyErr};
-use super::context::{PyContext, callable_accepts_kwarg};
-use pyo3::prelude::*;
 use pyo3_async_runtimes::TaskLocals;
 use pythonize::{depythonize, pythonize};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
@@ -32,7 +32,6 @@ pub use dynamo_runtime::{
     CancellationToken, Error, Result,
 };
 pub use serde::{Deserialize, Serialize};
-
 
 /// Add bingings from this crate to the provided module
 pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -115,7 +114,7 @@ pub struct PythonServerStreamingEngine {
     _cancel_token: CancellationToken,
     generator: Arc<PyObject>,
     event_loop: Arc<PyObject>,
-    has_pycontext: bool
+    has_pycontext: bool,
 }
 
 impl PythonServerStreamingEngine {
@@ -176,7 +175,7 @@ where
         let generator = self.generator.clone();
         let event_loop = self.event_loop.clone();
         let ctx_python = ctx.clone();
-        let has_pycontext = self.has_pycontext.clone();
+        let has_pycontext = self.has_pycontext;
 
         // Acquiring the GIL is similar to acquiring a standard lock/mutex
         // Performing this in an tokio async task could block the thread for an undefined amount of time
@@ -196,12 +195,12 @@ where
                 let gen = if has_pycontext {
                     // Pass context as a kwarg
                     let kwarg = PyDict::new(py);
-                    kwarg.set_item("context", &py_ctx)?;         
-                    generator.call(py, (py_request,), Some(&kwarg)) 
+                    kwarg.set_item("context", &py_ctx)?;
+                    generator.call(py, (py_request,), Some(&kwarg))
                 } else {
                     // Legacy: No `context` arg
                     generator.call1(py, (py_request,))
-                }?;    
+                }?;
 
                 let locals = TaskLocals::new(event_loop.bind(py).clone());
                 pyo3_async_runtimes::tokio::into_stream_with_locals_v1(locals, gen.into_bound(py))

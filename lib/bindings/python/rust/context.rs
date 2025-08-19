@@ -17,9 +17,7 @@ pub struct PyContext {
 
 impl PyContext {
     pub fn new(inner: Arc<dyn AsyncEngineContext>) -> Self {
-        Self {
-            inner,
-        }
+        Self { inner }
     }
 }
 
@@ -58,15 +56,17 @@ impl PyContext {
             }
         })
     }
-
-    
 }
 
 // PyO3 equivalent for verify if signature contains target_name
 // def callable_accepts_kwarg(target_name: str):
 //      import inspect
 //      return target_name in inspect.signature(func).parameters
-pub fn callable_accepts_kwarg(py: Python, callable: &Bound<'_, PyAny>, target_name: &str) -> PyResult<bool> {
+pub fn callable_accepts_kwarg(
+    py: Python,
+    callable: &Bound<'_, PyAny>,
+    target_name: &str,
+) -> PyResult<bool> {
     let inspect: Bound<'_, PyModule> = py.import("inspect")?;
     let signature = inspect.call_method1("signature", (callable,))?;
     let params_any: Bound<'_, PyAny> = signature.getattr("parameters")?;
