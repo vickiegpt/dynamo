@@ -14,7 +14,7 @@
 # limitations under the License.
 
 
-import asyncio 
+import asyncio
 from functools import wraps
 from typing import Any, AsyncGenerator, Callable, Type, Union
 
@@ -31,8 +31,6 @@ from dynamo._core import EtcdKvCache as EtcdKvCache
 from dynamo._core import ModelDeploymentCard as ModelDeploymentCard
 from dynamo._core import OAIChatPreprocessor as OAIChatPreprocessor
 from dynamo._core import PyContext as PyContext
-
-
 
 
 def dynamo_worker(static=False):
