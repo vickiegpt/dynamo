@@ -16,7 +16,7 @@
 import logging
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Optional
+from typing import Optional, Union
 
 import torch
 from tensorrt_llm import SamplingParams
@@ -65,7 +65,6 @@ class RequestHandlerConfig:
         MultimodalRequestProcessor
     ] = None  # for multimodal support
     connector: Optional[Connector] = None
-    embeddings_shape: Optional[str] = None
 
 
 class HandlerBase:
@@ -85,19 +84,6 @@ class HandlerBase:
         self.multimodal_processor = config.multimodal_processor
         self.first_generation = True
         self.connector = config.connector
-        self.embeddings_shape = config.embeddings_shape
-
-    def get_embeddings_shape(self) -> Optional[list[int]]:
-        """Parse embeddings shape string into list of integers."""
-        if self.embeddings_shape is None:
-            return None
-        try:
-            return [int(x.strip()) for x in self.embeddings_shape.split(",")]
-        except ValueError as e:
-            logging.warning(
-                f"Invalid embeddings shape '{self.embeddings_shape}', using default [1, 1024]: {e}"
-            )
-            return [1, 1024]
 
     def check_error(self, result: dict):
         """
@@ -111,22 +97,27 @@ class HandlerBase:
             )
 
     async def generate_locally(
-        self, request: dict, embeddings: Optional[torch.Tensor] = None
+        self, request: dict, embeddings: Optional[Union[torch.Tensor, dict]] = None
     ):
         """
         Generate responses based on the disaggregation mode in the request.
 
         Args:
             request: The request dictionary containing generation parameters
-            embeddings: Optional tensor containing embeddings for multimodal processing
+            embeddings: Optional tensor or dict containing embeddings for multimodal processing
         """
         logging.info(f"Request: {request}")
 
         # Handle embeddings if provided
         if embeddings is not None:
-            logging.info(
-                f"Embeddings provided: shape={embeddings.shape}, dtype={embeddings.dtype}"
-            )
+            if isinstance(embeddings, dict):
+                logging.info(
+                    f"Dict embeddings provided with keys: {list(embeddings.keys())}"
+                )
+            else:
+                logging.info(
+                    f"Tensor embeddings provided: shape={embeddings.shape}, dtype={embeddings.dtype}"
+                )
 
         # Default to text-based input. This will be overwritten if multimodal
         # content is found and processed.

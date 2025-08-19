@@ -50,7 +50,6 @@ class Config:
         self.encode_endpoint: str = ""
         self.modality: str = "text"
         self.use_nixl_connect: bool = False
-        self.embeddings_shape: Optional[str] = None
 
     def __str__(self) -> str:
         return (
@@ -77,8 +76,7 @@ class Config:
             f"next_endpoint={self.next_endpoint}, "
             f"encode_endpoint={self.encode_endpoint}, "
             f"modality={self.modality}, "
-            f"use_nixl_connect={self.use_nixl_connect}, "
-            f"embeddings_shape={self.embeddings_shape})"
+            f"use_nixl_connect={self.use_nixl_connect})"
         )
 
 
@@ -249,12 +247,6 @@ def cmd_line_args():
         default="",
         help=f"Endpoint(in 'dyn://namespace.component.endpoint' format) for the encode worker. Default: {DEFAULT_ENCODE_ENDPOINT}",
     )
-    parser.add_argument(
-        "--embeddings-shape",
-        type=str,
-        default=None,
-        help="Optional shape for embeddings tensor allocation in format 'batch_size,embedding_dim'. If not specified, embeddings are allocated dynamically when needed.",
-    )
     args = parser.parse_args()
 
     config = Config()
@@ -319,6 +311,5 @@ def cmd_line_args():
     config.publish_events_and_metrics = args.publish_events_and_metrics
     config.modality = args.modality
     config.use_nixl_connect = args.use_nixl_connect
-    config.embeddings_shape = args.embeddings_shape
 
     return config
