@@ -56,26 +56,60 @@ deploy/utils/setup_k8s_namespace.sh
 
 If `DOCKER_SERVER`/`IMAGE_TAG` are omitted, the script installs the default operator image `nvcr.io/nvidia/ai-dynamo/kubernetes-operator:0.4.0`.
 
-### PVC Manipulation Scripts
-
-Inject a manifest into the PVC:
+After running the setup script, verify the installation by checking the pods:
 
 ```bash
+kubectl get pods -n $NAMESPACE
+```
+
+The output should look something like:
+
+```
+NAME                                                            READY   STATUS    RESTARTS   AGE
+dynamo-platform-dynamo-operator-controller-manager-xxxxx       2/2     Running   0          5m
+dynamo-platform-etcd-0                                          1/1     Running   0          5m
+dynamo-platform-nats-0                                          2/2     Running   0          5m
+dynamo-platform-nats-box-xxxxx                                  1/1     Running   0          5m
+pvc-access-pod                                                   0/1     Completed 0          5m
+```
+
+### PVC Manipulation Scripts
+
+These scripts interact with the Persistent Volume Claim (PVC) that stores configuration files and benchmark/profiling results. They're essential for the Dynamo benchmarking and profiling workflows.
+
+#### Why These Scripts Are Needed
+
+1. **For Pre-Deployment Profiling**: The profiling job needs access to your Dynamo deployment configurations (DGD manifests) to test different parallelization strategies
+2. **For Retrieving Results**: Both benchmarking and profiling jobs write their results to the PVC, which you need to download for analysis
+
+#### Script Usage
+
+**Inject deployment configurations for profiling:**
+
+```bash
+# The profiling job reads your DGD config from the PVC
 python3 deploy/utils/inject_manifest.py \
   --namespace $NAMESPACE \
   --src ./my-disagg.yaml \
   --dest /configs/disagg.yaml
 ```
 
-Download all files from the PVC to a local directory:
+**Download benchmark/profiling results:**
 
 ```bash
+# After benchmarking or profiling completes, download results
 python3 deploy/utils/download_pvc_results.py \
   --namespace $NAMESPACE \
   --output-dir ./pvc_files \
   --folder /results \
   --no-config   # optional: skip *.yaml/*.yml in the download
 ```
+
+#### Next Steps
+
+For complete benchmarking workflows:
+- **Benchmarking Guide**: See [docs/benchmarks/benchmarking.md](../../docs/benchmarks/benchmarking.md) for comparing aggregated vs disaggregated vs vanilla vLLM deployments
+- **Pre-Deployment Profiling**: See [docs/benchmarks/pre_deployment_profiling.md](../../docs/benchmarks/pre_deployment_profiling.md) for optimizing configurations before deployment
 
 ## Notes
 

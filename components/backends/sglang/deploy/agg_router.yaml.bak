@@ -4,32 +4,30 @@
 apiVersion: nvidia.com/v1alpha1
 kind: DynamoGraphDeployment
 metadata:
-  name: trtllm-agg
+  name: sglang-agg-router
 spec:
   services:
     Frontend:
-      dynamoNamespace: trtllm-agg
+      dynamoNamespace: sglang-agg-router
       componentType: frontend
       replicas: 1
       resources:
         requests:
-          cpu: "5"
+          cpu: "10"
           memory: "10Gi"
         limits:
-          cpu: "5"
-          memory: "10Gi"
+          cpu: "32"
+          memory: "40Gi"
       extraPodSpec:
         mainContainer:
-          image: nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.4.0
-          workingDir: /workspace/components/backends/trtllm
-          command:
-            - /bin/sh
-            - -c
+          image: my-registry/sglang-runtime:my-tag
+          workingDir: /workspace/components/backends/sglang
+          command: ["sh", "-c"]
           args:
-            - "python3 -m dynamo.frontend --http-port 8000"
-    TRTLLMWorker:
+            - "python3 -m dynamo.sglang.utils.clear_namespace --namespace sglang-agg-router && python3 -m dynamo.frontend --http-port=8000  --router-mode kv"
+    SGLangDecodeWorker:
       envFromSecret: hf-token-secret
-      dynamoNamespace: trtllm-agg
+      dynamoNamespace: sglang-agg-router
       componentType: worker
       replicas: 1
       resources:
@@ -38,19 +36,22 @@ spec:
           memory: "20Gi"
           gpu: "1"
         limits:
-          cpu: "10"
-          memory: "20Gi"
+          cpu: "32"
+          memory: "80Gi"
           gpu: "1"
       extraPodSpec:
         mainContainer:
-          image: nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.4.0
-          workingDir: /workspace/components/backends/trtllm
+          image: my-registry/sglang-runtime:my-tag
+          workingDir: /workspace/components/backends/sglang
           command:
             - /bin/sh
             - -c
           args:
             - >-
-              python3 -m dynamo.trtllm
+              python3 -m dynamo.sglang.worker
               --model-path deepseek-ai/DeepSeek-R1-Distill-Llama-8B
               --served-model-name deepseek-ai/DeepSeek-R1-Distill-Llama-8B
-              --extra-engine-args engine_configs/agg.yaml
+              --page-size 16
+              --tp 1
+              --trust-remote-code
+              --skip-tokenizer-init

@@ -15,92 +15,108 @@
 
 # Dynamo Benchmarking Guide
 
-This guide provides instructions for benchmarking NVIDIA Dynamo deployments using industry-standard tools and methodologies. Currently, this guide is only for vLLM and Kubernetes.
+This guide shows how to benchmark NVIDIA Dynamo deployments on Kubernetes to compare performance between aggregated, disaggregated, and vanilla vLLM configurations.
 
-## Overview
+## What You'll Get
 
-Dynamo benchmarking enables you to:
-
-- Benchmark aggregated vs. disaggregated vs. vanilla vLLM deployments
-- Identify the best configuration for your workload and SLA requirements
-- Ensure your deployment meets latency and throughput requirements
-- Understand performance characteristics across different concurrency levels
-
-## Benchmarking Types
-
-### 1. Pre-Deployment Profiling
-
-For optimizing Dynamo configurations before deployment, see [Pre-Deployment Profiling](pre_deployment_profiling.md). This helps you:
-
-- Determine optimal tensor parallelism settings
-- Choose between aggregated and disaggregated topologies
-- Configure planner parameters for your SLA requirements
-
-### 2. Deployment Benchmarking
-
-Compare different deployment types with real workloads using GenAI-Perf. This guide covers:
-
-- **Dynamo Aggregated**: Single-stage inference with shared prefill/decode
-- **Dynamo Disaggregated**: Separate prefill and decode workers
-- **Vanilla vLLM**: Standard vLLM deployment for baseline comparison
-
-### 3. Custom Benchmarking
-
-Bring your own benchmarking scripts and tools (covered in [Custom Benchmarking](#custom-benchmarking)).
+Running the benchmark script will:
+- Deploy and test three configurations: Dynamo aggregated, Dynamo disaggregated, and vanilla vLLM
+- Generate performance plots comparing latency and throughput across different load levels
+- Save all results to analyze optimal configurations for your workload
 
 ## Prerequisites
 
-### Software Requirements
+1. **Kubernetes namespace setup** - If coming from [deploy/utils/README](../../deploy/utils/README.md), you should have already completed this:
+   ```bash
+   # Should already be done if following deploy/utils setup
+   NAMESPACE=benchmarking HF_TOKEN=$HF_TOKEN DOCKER_SERVER=$DOCKER_SERVER deploy/utils/setup_k8s_namespace.sh
+   ```
 
-1. **kubectl** - Kubernetes command-line tool
-2. **GenAI-Perf** - NVIDIA's LLM benchmarking tool
-3. **Python 3.8+** - For result analysis and plotting
-4. **Docker** (for containerized benchmarking)
-
-All of these are included within Dynamo-built containers.
-
-Your Kubernetes namespace must be set up for Dynamo deployments. Follow the setup instructions [here](../../deploy/utils/README.md#kubernetes-setup-one-time-per-namespace).
+2. **Tools** - All included in Dynamo containers:
+   - kubectl
+   - GenAI-Perf (NVIDIA's LLM benchmarking tool)
+   - Python 3.8+
 
 ## Quick Start
 
-Run complete benchmarks on Dynamo deployments using the automated script. Plots are generated and saved to `$OUTPUT_DIR/plots`.
+### Important: Check Image Accessibility
 
-### Basic Usage
+Before running benchmarks, ensure the container images in your YAML manifests are accessible. The example manifests may contain private registry images that need to be updated.
 
-Use the provided example manifests (configure them for your desired model):
+Manually edit your manifests to use accessible images from [Dynamo NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/ai-dynamo/collections/ai-dynamo/artifacts) or your own registry with proper credentials configured.
+
+You can also use the script below to automatically update the CRDs to use the public images.
 
 ```bash
-export NAMESPACE=benchmarking
-export AGG_CONFIG=components/backends/vllm/deploy/agg.yaml
-export DISAGG_CONFIG=components/backends/vllm/deploy/disagg.yaml
-export VANILLA_VLLM_CONFIG=benchmarks/utils/templates/vanilla-vllm.yaml
-export OUTPUT_DIR=benchmarks/results
-
-# Complete benchmark with example manifests
-./benchmarks/benchmark.sh \
-   --namespace $NAMESPACE \
-   --agg $AGG_CONFIG \
-   --disagg $DISAGG_CONFIG \
-   --vanilla $VANILLA_VLLM_CONFIG
+# Update vLLM backend files
+find components/backends/vllm/ -name "*.yaml" -type f -exec sed -i.bak 's|nvcr\.io/nvidian/[^[:space:]]*|nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.4.0|g' {} \;
 ```
 
-### Custom Configuration
+### Running the Benchmark
+
+The easiest way to benchmark is using the automated script with example manifests:
 
 ```bash
-# Custom model, sequence lengths, and your own manifests
+# 1. Set your namespace (same one from deploy/utils setup)
+export NAMESPACE=benchmarking
+
+# 2. Run the benchmark script
+./benchmarks/benchmark.sh \
+   --namespace $NAMESPACE \
+   --agg components/backends/vllm/deploy/agg.yaml \
+   --disagg components/backends/vllm/deploy/disagg.yaml \
+   --vanilla benchmarks/utils/templates/vanilla-vllm.yaml
+```
+
+You'll see output like this confirming your configuration:
+```
+=== Benchmark Configuration ===
+Namespace:              benchmarking
+Model:                  deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+Input Sequence Length:  200 tokens      # Auto-configured default
+Output Sequence Length: 200 tokens      # Auto-configured default
+Sequence Std Dev:       10 tokens       # Auto-configured default
+Output Directory:       ./benchmarks/results
+Aggregated Config:      components/backends/vllm/deploy/agg.yaml
+Disaggregated Config:   components/backends/vllm/deploy/disagg.yaml
+Vanilla Config:         benchmarks/utils/templates/vanilla-vllm.yaml
+===============================
+```
+
+The script will then:
+1. Deploy each configuration (aggregated, disaggregated, vanilla vLLM)
+2. Run GenAI-Perf benchmarks at various concurrency levels
+3. Generate comparison plots in `./benchmarks/results/plots/`
+4. Clean up deployments when complete
+
+**Note**: The script auto-configures reasonable defaults for ISL/OSL (200 tokens each). You can override these with `--isl` and `--osl` flags if needed for your specific workload.
+
+### What Happens During Benchmarking
+
+The script automatically:
+- Tests concurrency levels: 1, 2, 4, 8, 16, 32, 64, 128 concurrent requests
+- Measures key metrics: latency, throughput, time-to-first-token
+- Runs each test for sufficient duration to get stable results
+- Handles all deployment lifecycle (create, wait, benchmark, cleanup)
+
+### Using Your Own Models
+
+To benchmark your specific model, customize the manifests:
+
+```bash
+# With custom manifests and parameters
 ./benchmarks/benchmark.sh \
    --namespace $NAMESPACE \
    --agg my-custom-agg.yaml \
    --disagg my-custom-disagg.yaml \
    --vanilla my-custom-vanilla.yaml \
    --model "meta-llama/Meta-Llama-3-8B" \
-   --isl 512 \
-   --osl 512 \
-   --std 20 \
-   --output-dir benchmark_results
+   --isl 512 \                    # input sequence length
+   --osl 512 \                    # output sequence length
+   --output-dir my_benchmark_results
 ```
 
-**Note**: The deployment manifests determine which model is actually deployed and benchmarked. Make sure your manifests are configured for the model you want to test.
+**Important**: The model in your manifests must match what you're benchmarking. The `--model` flag is for GenAI-Perf configuration, not deployment.
 
 ### Direct Python Execution
 
@@ -145,23 +161,21 @@ OPTIONS:
   --verbose                     Enable verbose output
 ```
 
-## Generated Results
+## Understanding Your Results
 
-### Performance Plots
+After benchmarking completes, check `./benchmarks/results/` (or your custom output directory):
 
-The benchmark script generates four key performance plots:
+### Summary and Plots
 
-1. **`p50_inter_token_latency_vs_concurrency.png`**
-   - P50 inter-token latency across concurrency levels
-   - Shows how latency degrades with increased load
-
-2. **`avg_inter_token_latency_vs_concurrency.png`**
-   - Average inter-token latency across concurrency levels
-   - Indicates overall latency trends
-
-3. **`request_throughput_vs_concurrency.png`**
-   - Request throughput (req/s) across concurrency levels
-   - Shows system capacity and optimal operating points
+```
+benchmarks/results/
+├── SUMMARY.txt          # Quick overview of all results
+└── plots/               # Visual comparisons (these are what you want!)
+    ├── p50_inter_token_latency_vs_concurrency.png      # Token generation speed
+    ├── avg_time_to_first_token_vs_concurrency.png      # Response time
+    ├── request_throughput_vs_concurrency.png           # Requests per second
+    └── avg_inter_token_latency_vs_concurrency.png      # Average latency
+```
 
 4. **`avg_time_to_first_token_vs_concurrency.png`**
    - Time to first token across concurrency levels
@@ -169,7 +183,7 @@ The benchmark script generates four key performance plots:
 
 ### Data Files
 
-The benchmark generates structured output in your specified `OUTPUT_DIR`:
+For deeper analysis, raw data is organized by deployment type and concurrency:
 
 ```
 benchmarks/results/

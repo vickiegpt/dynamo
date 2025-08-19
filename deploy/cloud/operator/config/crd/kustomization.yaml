@@ -18,7 +18,6 @@
 # It should be run by config/default
 resources:
 - bases/nvidia.com_dynamocomponentdeployments.yaml
-- bases/nvidia.com_dynamocomponents.yaml
 - bases/nvidia.com_dynamographdeployments.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 

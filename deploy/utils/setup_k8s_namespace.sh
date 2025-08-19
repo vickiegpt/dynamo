@@ -173,4 +173,23 @@ else
   fi
 fi
 
+# 7) Install benchmark dependencies if requirements.txt exists
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REQUIREMENTS_FILE="$SCRIPT_DIR/requirements.txt"
+
+if [[ -f "$REQUIREMENTS_FILE" ]]; then
+  log "Installing benchmark dependencies..."
+  if command -v uv >/dev/null 2>&1; then
+    uv pip install -r "$REQUIREMENTS_FILE"
+  elif command -v pip3 >/dev/null 2>&1; then
+    pip3 install -r "$REQUIREMENTS_FILE"
+  elif command -v pip >/dev/null 2>&1; then
+    pip install -r "$REQUIREMENTS_FILE"
+  else
+    warn "No pip/pip3/uv found; skipping benchmark dependency installation"
+    warn "To run benchmarks, manually install: pip install -r deploy/utils/requirements.txt"
+  fi
+  ok "Benchmark dependencies installed"
+fi
+
 ok "Kubernetes namespace setup complete"
