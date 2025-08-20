@@ -20,6 +20,8 @@ pub mod cudarc;
 pub mod external;
 pub mod safe;
 
+pub mod v2;
+
 pub mod sys {
     //! This module re-exports the raw CUDA types from [`cudarc`] for convenience.
     pub use ::cudarc::driver::sys::{CUcontext, CUevent, CUstream};
@@ -35,6 +37,7 @@ use std::{pin::Pin, ptr::NonNull};
 
 /// Helper function to check CUDA results using cudarc's DriverError
 /// This is much better than raw FFI error handling
+#[inline]
 pub fn check_cuda(result: cudaError_enum) -> Result<(), DriverError> {
     if result == cudaError_enum::CUDA_SUCCESS {
         Ok(())
