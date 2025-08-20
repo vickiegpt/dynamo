@@ -26,15 +26,14 @@ description = "Dynamo LLM Library"
 
 [features]
 default = []
-
-# todo: enable this as default
+# todo(ops): get this working in CI as a default.
 # default = ["block-manager", "testing-full"]
 
 testing-full  = ["testing-cuda", "testing-nixl"]
 testing-cuda  = ["dep:cudarc"]
 testing-nixl  = ["dep:nixl-sys"]
+testing-etcd = []
 block-manager = ["dep:nixl-sys", "dep:cudarc", "dep:ndarray", "dep:nix"]
-sentencepiece = ["dep:sentencepiece"]
 cuda          = ["dep:cudarc"]
 integration = []
 
@@ -48,7 +47,7 @@ dynamo-runtime = { workspace = true }
 
 # workspace
 anyhow = { workspace = true }
-async-openai = { workspace = true }
+dynamo-async-openai = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
 async-nats = { workspace = true }
@@ -59,6 +58,7 @@ derive_builder = {workspace = true }
 either = { workspace = true }
 etcd-client = { workspace = true }
 futures =  { workspace = true }
+futures-util = "0.3.31"
 hf-hub = { workspace = true }
 humantime = { workspace = true } # input/batch
 rand = { workspace = true }
@@ -69,6 +69,7 @@ serde_json = { workspace = true }
 strum = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+tmq = "0.5.0"
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
@@ -93,7 +94,7 @@ dialoguer = { version = "0.11", default-features = false, features = ["editor", 
 
 # block_manager
 nixl-sys = {version = "0.4.1", optional = true }
-cudarc = { version = "0.16.6", features = ["cuda-12020"], optional = true }
+cudarc = { version = "0.17.1", features = ["cuda-12020"], optional = true }
 ndarray = { version = "0.16", optional = true }
 nix = { version = "0.26", optional = true }
 
@@ -102,7 +103,9 @@ unicode-segmentation = "1.12"
 
 # http-service
 axum = { workspace = true }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 tower-http = {workspace = true}
+rustls = { version = "0.23" }
 
 
 # tokenizers
@@ -111,7 +114,6 @@ tokenizers = { version = "0.21.4", default-features = false, features = [
   "esaxx_fast",
   "rustls-tls",
 ] }
-sentencepiece = { version = "0.11.2", optional = true }
 
 # backend
 galil-seiferas = { version = "0.1" }
@@ -143,6 +145,7 @@ proptest = "1.5.0"
 reqwest = { workspace = true }
 rstest = "0.18.2"
 rstest_reuse = "0.7.0"
+serial_test = "3"
 tempfile = "3.17.1"
 insta = { version = "1.41", features = [
   "glob",

@@ -12,6 +12,7 @@ from vllm.distributed.kv_events import KVEventsConfig
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.utils import FlexibleArgumentParser
 
+from . import __version__
 from .ports import (
     DEFAULT_DYNAMO_PORT_MAX,
     DEFAULT_DYNAMO_PORT_MIN,
@@ -57,6 +58,9 @@ class Config:
 def parse_args() -> Config:
     parser = FlexibleArgumentParser(
         description="vLLM server integrated with Dynamo LLM."
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"Dynamo Backend VLLM {__version__}"
     )
     parser.add_argument(
         "--endpoint",
@@ -166,7 +170,7 @@ async def configure_ports_with_etcd(config: Config, etcd_client):
         logger.info(f"Allocated ZMQ KV events port: {kv_port} (worker_id={worker_id})")
 
     # Allocate side channel ports
-    # https://github.com/vllm-project/vllm/blob/releases/v0.10.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py#L372
+    # https://github.com/vllm-project/vllm/blob/releases/v0.10.1/vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py#L443
     # NIXL calculates ports as: base_port + (dp_rank * tp_size) + tp_rank
     # For dp_rank, we need to reserve tp_size consecutive ports
     tp_size = config.engine_args.tensor_parallel_size or 1
