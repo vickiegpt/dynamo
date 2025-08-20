@@ -282,7 +282,7 @@ def calculate_recovery_time(test_dir, failure_type, fault_time):
 
 
 def process_test_directory(test_dir):
-    test_name = test_dir.split("test_worker_failure[", 1)[1].rstrip("]")
+    test_name = test_dir.split("test_fault_scenario[", 1)[1].rstrip("]")
     failure_type = test_name.split("-")[-1]
     test_prefix = "-".join(test_name.split("-")[:-1])
 

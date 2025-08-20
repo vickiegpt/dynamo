@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import logging
 from contextlib import contextmanager
 from multiprocessing import Process
@@ -9,7 +10,7 @@ import psutil
 import pytest
 
 from tests.fault_tolerance.deploy.client import client
-from tests.fault_tolerance.parse_results import main as parse_results
+from tests.fault_tolerance.deploy.parse_results import main as parse_results
 from tests.utils.deployment_graph import Payload
 from tests.utils.managed_deployment import DeploymentSpec, ManagedDeployment
 
@@ -206,7 +207,7 @@ def results_summary():
 
 @pytest.mark.e2e
 @pytest.mark.slow
-def test_fault_scenario(
+async def test_fault_scenario(
     deployment_spec_test,  # noqa: F811
     request,
     # runtime_services,
@@ -258,15 +259,15 @@ def test_fault_scenario(
     deployment_spec_test.name = "foo"
 
     deployment_spec_test.set_image(
-        "gitlab-master.nvidia.com/dl/ai-dynamo/dynamo/dynamo:nnshah1-vllm-latest"
+        "gitlab-master.nvidia.com/dl/ai-dynamo/dynamo/dynamo:nnshah1-vllm-latest-1"
     )
 
-    with ManagedDeployment(
+    async with ManagedDeployment(
         namespace="nnshah1-test",
         log_dir=request.node.name,
         deployment_spec=deployment_spec_test,
     ):
-        pass
+        await asyncio.sleep(3000)
 
     # with DynamoServeProcess(
     #     deployment_graph,

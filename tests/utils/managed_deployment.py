@@ -7,10 +7,12 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from typing import Optional
 
 import kubernetes
 import psutil
 import yaml
+from kr8s.asyncio.objects import Pod as kr8s_Pod
 from kubernetes_asyncio import client, config
 
 benchmark_utils_path = os.path.join(
@@ -73,7 +75,7 @@ class ServiceSpec:
 
     # ----- Image -----
     @property
-    def image(self) -> str:
+    def image(self) -> Optional[str]:
         """Container image for the service"""
         try:
             return self._spec["extraPodSpec"]["mainContainer"]["image"]
@@ -145,7 +147,7 @@ class DeploymentSpec:
             "nvidia.com/enable-grove"
         ] = "false"
 
-    def set_image(self, image, service_name=None):
+    def set_image(self, image: str, service_name: Optional[str] = None):
         if service_name is None:
             services = self.services
         else:
@@ -181,11 +183,13 @@ class ManagedDeployment:
     log_dir: str
     deployment_spec: DeploymentSpec
     namespace: str
+    frontend_service_name: Optional[str] = "frontend"
 
     _custom_api = None
     _core_api = None
     _in_cluster = False
     _logger = logging.getLogger()
+    _port_forward = None
 
     async def _init_kubernetes(self):
         """Initialize kubernetes client"""
@@ -310,7 +314,7 @@ class ManagedDeployment:
         Get logs from all pods in the deployment, organized by component.
         """
         # Create logs directory
-        base_dir = os.path.join(self.log_dir, self.deployment_name)
+        base_dir = self.log_dir
         os.makedirs(base_dir, exist_ok=True)
 
         for component in self.deployment_spec.services:
@@ -360,8 +364,23 @@ class ManagedDeployment:
             await self._init_kubernetes()
             await self._create_deployment()
             await self._wait_for_ready()
+
+            # List pods for this component using the selector label
+            # nvidia.com/selector: deployment-name-component
+            label_selector = f"nvidia.com/selector={self.deployment_name}-{self.frontend_service_name.lower()}"
+
+            frontend_service_pod = await kr8s_Pod.get(
+                label_selector=label_selector, namespace=self.namespace
+            )
+
+            self._port_forward = frontend_service_pod.portforward(
+                remote_port=8000, local_port=8000
+            )
+            await self._port_forward.start()
         except:
             await self._delete_deployment()
+            if self._port_forward:
+                await self._port_forward.stop()
             raise
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -369,6 +388,8 @@ class ManagedDeployment:
             await self._get_deployment_logs()
         finally:
             await self._delete_deployment()
+            if self._port_forward:
+                self._port_forward.stop()
 
 
 async def main():
