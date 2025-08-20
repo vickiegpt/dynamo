@@ -165,7 +165,9 @@ impl DeltaAggregator {
         // After aggregation, inspect each choice's text for tool call syntax
         for choice in aggregator.choices.values_mut() {
             if choice.tool_calls.is_none() {
-                if let Ok(tool_calls) = try_tool_call_parse_aggregate(&choice.text, tool_parser_name.as_deref()) {
+                if let Ok(tool_calls) =
+                    try_tool_call_parse_aggregate(&choice.text, tool_parser_name.as_deref())
+                {
                     if tool_calls.is_empty() {
                         continue;
                     }

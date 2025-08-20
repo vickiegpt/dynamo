@@ -546,19 +546,20 @@ async fn chat_completions(
             process_metrics_only(response, &mut response_collector);
         });
 
-        let response = NvCreateChatCompletionResponse::from_annotated_stream(stream, tool_parser_name)
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    request_id,
-                    "Failed to fold chat completions stream for: {:?}",
-                    e
-                );
-                ErrorMessage::internal_server_error(&format!(
-                    "Failed to fold chat completions stream: {}",
-                    e
-                ))
-            })?;
+        let response =
+            NvCreateChatCompletionResponse::from_annotated_stream(stream, tool_parser_name)
+                .await
+                .map_err(|e| {
+                    tracing::error!(
+                        request_id,
+                        "Failed to fold chat completions stream for: {:?}",
+                        e
+                    );
+                    ErrorMessage::internal_server_error(&format!(
+                        "Failed to fold chat completions stream: {}",
+                        e
+                    ))
+                })?;
 
         inflight_guard.mark_ok();
         Ok(Json(response).into_response())
