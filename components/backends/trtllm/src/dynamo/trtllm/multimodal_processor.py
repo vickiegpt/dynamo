@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import tempfile
 import time
 from typing import Any, Dict, List, Optional, Protocol, Tuple
@@ -21,6 +22,10 @@ from urllib.request import urlretrieve
 
 import torch
 from tensorrt_llm.inputs import default_multimodal_input_loader
+
+from dynamo.runtime.logging import configure_dynamo_logging
+
+configure_dynamo_logging()
 
 
 class TokenizerProtocol(Protocol):
@@ -131,7 +136,10 @@ class MultimodalRequestProcessor:
 
         loader_kwargs = {}
         if embeddings is not None:
-            loader_kwargs["mm_embeddings"] = embeddings
+            # loader_kwargs["mm_embeddings"] = embeddings
+            logging.info(f"Using embeddings in prefill worker: {embeddings}")
+            dummy_url = "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/inpaint.png"
+            loader_kwargs["media"] = [dummy_url]
         elif image_urls:
             loader_kwargs["media"] = [image_urls]
 
