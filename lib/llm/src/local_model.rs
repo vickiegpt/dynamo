@@ -59,6 +59,7 @@ pub struct LocalModelBuilder {
     extra_engine_args: Option<PathBuf>,
     runtime_config: ModelRuntimeConfig,
     user_data: Option<serde_json::Value>,
+    tool_parser_name: Option<String>,
 }
 
 impl Default for LocalModelBuilder {
@@ -81,6 +82,7 @@ impl Default for LocalModelBuilder {
             extra_engine_args: Default::default(),
             runtime_config: Default::default(),
             user_data: Default::default(),
+            tool_parser_name: Default::default(),
         }
     }
 }
@@ -172,6 +174,11 @@ impl LocalModelBuilder {
         self
     }
 
+    pub fn tool_parser_name(&mut self, tool_parser_name: Option<String>) -> &mut Self {
+        self.tool_parser_name = tool_parser_name;
+        self
+    }
+
     /// Make an LLM ready for use:
     /// - Download it from Hugging Face (and NGC in future) if necessary
     /// - Resolve the path
@@ -213,6 +220,7 @@ impl LocalModelBuilder {
                 tls_key_path: self.tls_key_path.take(),
                 router_config: self.router_config.take().unwrap_or_default(),
                 runtime_config: self.runtime_config.clone(),
+                tool_parser_name: self.tool_parser_name.take(),
             });
         }
 
@@ -289,6 +297,7 @@ impl LocalModelBuilder {
             tls_key_path: self.tls_key_path.take(),
             router_config: self.router_config.take().unwrap_or_default(),
             runtime_config: self.runtime_config.clone(),
+            tool_parser_name: self.tool_parser_name.take(),
         })
     }
 }
@@ -305,6 +314,7 @@ pub struct LocalModel {
     tls_key_path: Option<PathBuf>,
     router_config: RouterConfig,
     runtime_config: ModelRuntimeConfig,
+    tool_parser_name: Option<String>,
 }
 
 impl LocalModel {
@@ -370,6 +380,10 @@ impl LocalModel {
     /// For the case where we only need the card and don't want to clone it.
     pub fn into_card(self) -> ModelDeploymentCard {
         self.card
+    }
+
+    pub fn tool_parser_name(&self) -> Option<String> {
+        self.tool_parser_name.clone()
     }
 
     /// Attach this model the endpoint. This registers it on the network

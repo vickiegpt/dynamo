@@ -32,6 +32,7 @@ pub struct State {
     manager: Arc<ModelManager>,
     etcd_client: Option<etcd::Client>,
     flags: StateFlags,
+    tool_parser_name: Option<String>,
 }
 
 #[derive(Default, Debug)]
@@ -71,7 +72,7 @@ impl StateFlags {
 }
 
 impl State {
-    pub fn new(manager: Arc<ModelManager>) -> Self {
+    pub fn new(manager: Arc<ModelManager>, tool_parser_name: Option<String>) -> Self {
         Self {
             manager,
             metrics: Arc::new(Metrics::default()),
@@ -82,10 +83,15 @@ impl State {
                 embeddings_endpoints_enabled: AtomicBool::new(false),
                 responses_endpoints_enabled: AtomicBool::new(false),
             },
+            tool_parser_name: Some(tool_parser_name.unwrap_or_else(|| String::from(""))),
         }
     }
 
-    pub fn new_with_etcd(manager: Arc<ModelManager>, etcd_client: Option<etcd::Client>) -> Self {
+    pub fn new_with_etcd(
+        manager: Arc<ModelManager>,
+        etcd_client: Option<etcd::Client>,
+        tool_parser_name: Option<String>,
+    ) -> Self {
         Self {
             manager,
             metrics: Arc::new(Metrics::default()),
@@ -96,6 +102,7 @@ impl State {
                 embeddings_endpoints_enabled: AtomicBool::new(false),
                 responses_endpoints_enabled: AtomicBool::new(false),
             },
+            tool_parser_name: Some(tool_parser_name.unwrap_or_else(|| String::from(""))),
         }
     }
     /// Get the Prometheus [`Metrics`] object which tracks request counts and inflight requests
@@ -118,6 +125,10 @@ impl State {
     // TODO
     pub fn sse_keep_alive(&self) -> Option<Duration> {
         None
+    }
+
+    pub fn tool_parser_name(&self) -> Option<String> {
+        self.tool_parser_name.clone()
     }
 }
 
@@ -172,6 +183,9 @@ pub struct HttpServiceConfig {
 
     #[builder(default = "None")]
     etcd_client: Option<etcd::Client>,
+
+    #[builder(default = "None")]
+    tool_parser_name: Option<String>,
 }
 
 impl HttpService {
@@ -294,7 +308,11 @@ impl HttpServiceConfigBuilder {
         let config: HttpServiceConfig = self.build_internal()?;
 
         let model_manager = Arc::new(ModelManager::new());
-        let state = Arc::new(State::new_with_etcd(model_manager, config.etcd_client));
+        let state = Arc::new(State::new_with_etcd(
+            model_manager,
+            config.etcd_client,
+            config.tool_parser_name,
+        ));
 
         state
             .flags
@@ -354,6 +372,11 @@ impl HttpServiceConfigBuilder {
 
     pub fn with_etcd_client(mut self, etcd_client: Option<etcd::Client>) -> Self {
         self.etcd_client = Some(etcd_client);
+        self
+    }
+
+    pub fn with_tool_parser_name(mut self, tool_parser_name: Option<String>) -> Self {
+        self.tool_parser_name = Some(tool_parser_name);
         self
     }
 
