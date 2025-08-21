@@ -79,7 +79,7 @@ jobs:
       run: |
         echo "Disk space before:"
           df -h
-          sudo rm -rf ${{ matrix.dir }}/target/debug/deps ${{ matrix.dir }}/target/debug/incremental
+          sudo rm -rf ${{ matrix.dir }}/target/debug/incremental
           echo "Disk space after:"
           df -h
     - name: Install Rust in dev environment
