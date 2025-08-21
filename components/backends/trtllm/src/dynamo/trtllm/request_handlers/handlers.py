@@ -230,7 +230,9 @@ class PrefillHandler(HandlerBase):
             if embedding_paths:
                 # If an encoder is configured and the request needs encoding, call it.
                 if self.encode_client and self.connector:
-                    logging.debug("PrefillHandler calling remote_encode_with_nixl")
+                    logging.debug(
+                        "PrefillHandler calling Encode Worker via remote_encode_with_nixl"
+                    )
                     embeddings_tensor = await self.remote_encode_with_nixl(request)
 
         # Request is ready for prefill.

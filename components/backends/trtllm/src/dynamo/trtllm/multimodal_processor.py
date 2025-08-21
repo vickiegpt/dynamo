@@ -136,10 +136,18 @@ class MultimodalRequestProcessor:
 
         loader_kwargs = {}
         if embeddings is not None:
+            # EPD flow
             loader_kwargs["mm_embeddings"] = [embeddings]
             logging.debug(f"Using NIXL embeddings in prefill worker: {embeddings}")
         elif image_urls:
+            # Image-only flow
             loader_kwargs["media"] = [image_urls]
+        elif embedding_paths:
+            # PD flow with no NIXL and no encoder
+            loader_kwargs["mm_embeddings"] = [
+                self.load_tensor_from_path_or_url(path) for path in embedding_paths
+            ]
+            logging.debug(f"Using embedding paths in prefill worker: {embedding_paths}")
 
         # Process with default_multimodal_input_loader
         processed_inputs = default_multimodal_input_loader(
