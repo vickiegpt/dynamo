@@ -48,6 +48,10 @@ pub async fn run(runtime: Runtime, engine_config: EngineConfig) -> anyhow::Resul
     if let Some(http_host) = local_model.http_host() {
         http_service_builder = http_service_builder.host(http_host);
     }
+
+    if let Some(tool_parser_name) = local_model.tool_parser_name() {
+        http_service_builder = http_service_builder.with_tool_parser_name(Some(tool_parser_name));
+    }
     http_service_builder =
         http_service_builder.with_request_template(engine_config.local_model().request_template());
 
