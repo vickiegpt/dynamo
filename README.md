@@ -118,8 +118,9 @@ Dynamo provides a simple way to spin up a local set of inference components incl
 - **Workers** – Set of pre-configured LLM serving engines.
 
 ```
-# Start an OpenAI compatible HTTP server, a pre-processor (prompt templating and tokenization) and a router:
-python -m dynamo.frontend --http-port 8080
+# Start an OpenAI compatible HTTP server, a pre-processor (prompt templating and tokenization) and a router.
+# Pass the TLS certificate and key paths to use HTTPS instead of HTTP.
+python -m dynamo.frontend --http-port 8080 [--tls-cert-path cert.pem] [--tls-key-path key.pem]
 
 # Start the SGLang engine, connecting to NATS and etcd to receive requests. You can run several of these,
 # both for the same model and for multiple models. The frontend node will discover them.
@@ -207,7 +208,10 @@ It is recommended to use [NGC PyTorch Container](https://catalog.ngc.nvidia.com/
 ### Install prerequisites
 ```
 # Optional step: Only required for Blackwell and Grace Hopper
-pip3 install torch==2.7.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+uv pip install torch==2.7.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+# Required until the trtllm version is bumped to include this pinned dependency itself
+uv pip install "cuda-python>=12,<13"
 
 sudo apt-get -y install libopenmpi-dev
 ```
