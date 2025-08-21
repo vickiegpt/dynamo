@@ -87,12 +87,18 @@ jobs:
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
     - name: Set up Rust Toolchain Components
       run: rustup component add rustfmt clippy
+    - name: Check disk space
+      run: df -h && du -sh /home/runner/work/dynamo/* && du -sh ${{ matrix.dir }}/target/* && du -sh ${{ matrix.dir }}/target/debug/*      
     - name: Verify Code Formatting
       working-directory: ${{ matrix.dir }}
       run: cargo fmt -- --check
+    - name: Check disk space
+      run: df -h && du -sh /home/runner/work/dynamo/* && du -sh ${{ matrix.dir }}/target/* && du -sh ${{ matrix.dir }}/target/debug/*      
     - name: Run Clippy Checks
       working-directory: ${{ matrix.dir }}
       run: cargo clippy --no-deps --all-targets -- -D warnings
+    - name: Check disk space
+      run: df -h && du -sh /home/runner/work/dynamo/* && du -sh ${{ matrix.dir }}/target/* && du -sh ${{ matrix.dir }}/target/debug/*
     - name: Install and Run cargo-deny
       working-directory: ${{ matrix.dir }}
       run: |
@@ -100,17 +106,17 @@ jobs:
         cargo-deny --no-default-features check --hide-inclusion-graph licenses bans --config ${{ github.workspace }}/deny.toml
     # Have an explicit step to build tests first to separate time spent on build vs execution.
     - name: Check disk space
-      run: df -h && du -sh /home/runner/work/dynamo/*
+      run: df -h && du -sh /home/runner/work/dynamo/* && du -sh ${{ matrix.dir }}/target/* && du -sh ${{ matrix.dir }}/target/debug/*
     - name: Compile Tests
       working-directory: ${{ matrix.dir }}
-      run: cargo test --locked --no-run  && cargo clean
+      run: cargo test --locked --no-run 
     - name: Check disk space
-      run: df -h && du -sh /home/runner/work/dynamo/*
+      run: df -h && du -sh /home/runner/work/dynamo/* && du -sh ${{ matrix.dir }}/target/* && du -sh ${{ matrix.dir }}/target/debug/*
     - name: Run Doc Tests
       working-directory: ${{ matrix.dir }}
-      run: cargo doc --no-deps && cargo test --locked --doc  && cargo clean
+      run: cargo doc --no-deps && cargo test --locked --doc 
     - name: Check disk space
-      run: df -h && du -sh /home/runner/work/dynamo/*
+      run: df -h && du -sh /home/runner/work/dynamo/* && du -sh ${{ matrix.dir }}/target/* && du -sh ${{ matrix.dir }}/target/debug/*
     - name: Run Unit Tests
       working-directory: ${{ matrix.dir }}
       # NOTE: --all-targets doesn't run doc tests
