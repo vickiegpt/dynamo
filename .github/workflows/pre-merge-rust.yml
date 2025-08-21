@@ -75,7 +75,13 @@ jobs:
           ${{ matrix.dir }}/target/
         key: ${{ runner.os }}-cargo-${{ matrix.dir }}-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: ${{ runner.os }}-cargo-${{ matrix.dir }}-
-
+    - name: Free runner disk space
+      run: |
+        echo "Disk space before:"
+          df -h
+          sudo rm -rf ${{ matrix.dir }}/target/debug/deps ${{ matrix.dir }}/target/debug/incremental
+          echo "Disk space after:"
+          df -h
     - name: Install Rust in dev environment
       # Install Rust only to run GitHub Local Actions in (dev environment) using the `ACT` environment variable.
       # See act usage: https://nektosact.com/introduction.html
