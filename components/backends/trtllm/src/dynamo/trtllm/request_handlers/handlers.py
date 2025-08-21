@@ -222,15 +222,16 @@ class PrefillHandler(HandlerBase):
         logging.debug(f"PrefillHandler.generate received request: {request}")
         embeddings_tensor = None
 
-        _, _, embedding_paths = self.multimodal_processor.extract_prompt_and_media(
-            request.get("messages", [])
-        )
-        # This check will be removed once TRTLLM Encoder is integrated.
-        if embedding_paths:
-            # If an encoder is configured and the request needs encoding, call it.
-            if self.encode_client and self.connector:
-                logging.debug("PrefillHandler calling remote_encode_with_nixl")
-                embeddings_tensor = await self.remote_encode_with_nixl(request)
+        if self.multimodal_processor:
+            _, _, embedding_paths = self.multimodal_processor.extract_prompt_and_media(
+                request.get("messages", [])
+            )
+            # This check will be removed once TRTLLM Encoder is integrated.
+            if embedding_paths:
+                # If an encoder is configured and the request needs encoding, call it.
+                if self.encode_client and self.connector:
+                    logging.debug("PrefillHandler calling remote_encode_with_nixl")
+                    embeddings_tensor = await self.remote_encode_with_nixl(request)
 
         # Request is ready for prefill.
         # Generate the prefill response locally
@@ -242,11 +243,6 @@ class PrefillHandler(HandlerBase):
             response_count += 1
             if response_count > 1:
                 raise ValueError("Prefill response should be generated only once.")
-
-        if prefill_response is None:
-            logging.warning(
-                "Prefill response is None. It's possible that the generation resulted in an empty response."
-            )
 
         if (
             self.disaggregation_strategy == DisaggregationStrategy.PREFILL_FIRST
