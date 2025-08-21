@@ -36,6 +36,7 @@ Running the benchmark script will:
    - kubectl
    - GenAI-Perf (NVIDIA's LLM benchmarking tool)
    - Python 3.8+
+   - requirements under `deploy/utils/requirements.txt`
 
 ## Quick Start
 
@@ -54,7 +55,7 @@ find components/backends/vllm/ -name "*.yaml" -type f -exec sed -i.bak 's|nvcr\.
 
 ### Running the Benchmark
 
-The easiest way to benchmark is using the automated script with example manifests:
+The easiest way to benchmark is using the automated script with example manifests. Modify the example manifests to use the model you would like to benchmark and to match your hardware.
 
 ```bash
 # 1. Set your namespace (same one from deploy/utils setup)
