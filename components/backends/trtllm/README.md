@@ -428,7 +428,7 @@ The request format is identical to regular multimodal requests:
 
 ```bash
 curl localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '{
-    "model": "Qwen/Qwen2-VL-7B-Instruct",
+    "model": "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
     "messages": [
         {
             "role": "user",
