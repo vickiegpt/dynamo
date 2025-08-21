@@ -99,14 +99,18 @@ jobs:
         cargo-deny --version || cargo install cargo-deny@0.16.4
         cargo-deny --no-default-features check --hide-inclusion-graph licenses bans --config ${{ github.workspace }}/deny.toml
     # Have an explicit step to build tests first to separate time spent on build vs execution.
+    - name: Check disk space
+      run: df -h && du -sh /home/runner/work/*    
     - name: Compile Tests
       working-directory: ${{ matrix.dir }}
-      run: cargo test --locked --no-run
+      run: cargo test --locked --no-run  && cargo clean
     - name: Check disk space
       run: df -h && du -sh /home/runner/work/*
     - name: Run Doc Tests
       working-directory: ${{ matrix.dir }}
-      run: cargo doc --no-deps && cargo test --locked --doc
+      run: cargo doc --no-deps && cargo test --locked --doc  && cargo clean
+    - name: Check disk space
+      run: df -h && du -sh /home/runner/work/*      
     - name: Run Unit Tests
       working-directory: ${{ matrix.dir }}
       # NOTE: --all-targets doesn't run doc tests
