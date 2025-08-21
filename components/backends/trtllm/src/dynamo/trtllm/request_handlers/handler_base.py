@@ -106,18 +106,7 @@ class HandlerBase:
             request: The request dictionary containing generation parameters
             embeddings: Optional tensor or dict containing embeddings for multimodal processing
         """
-        logging.info(f"Request: {request}")
-
-        # Handle embeddings if provided
-        if embeddings is not None:
-            if isinstance(embeddings, dict):
-                logging.info(
-                    f"Dict embeddings provided with keys: {list(embeddings.keys())}"
-                )
-            else:
-                logging.info(
-                    f"Tensor embeddings provided: shape={embeddings.shape}, dtype={embeddings.dtype}"
-                )
+        logging.debug(f"Request: {request}")
 
         # Default to text-based input. This will be overwritten if multimodal
         # content is found and processed.

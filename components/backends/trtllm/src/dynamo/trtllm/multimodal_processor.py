@@ -131,15 +131,13 @@ class MultimodalRequestProcessor:
         )
 
         if not image_urls and not embedding_paths:
-            # No multimodal content, return None
+            logging.warning("No multimodal content, returning None")
             return None
 
         loader_kwargs = {}
         if embeddings is not None:
-            # loader_kwargs["mm_embeddings"] = embeddings
-            logging.info(f"Using embeddings in prefill worker: {embeddings}")
-            dummy_url = "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/inpaint.png"
-            loader_kwargs["media"] = [dummy_url]
+            loader_kwargs["mm_embeddings"] = [embeddings]
+            logging.debug(f"Using NIXL embeddings in prefill worker: {embeddings}")
         elif image_urls:
             loader_kwargs["media"] = [image_urls]
 

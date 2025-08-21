@@ -14,51 +14,9 @@ from dynamo.trtllm.request_handlers.handler_base import (
     HandlerBase,
     RequestHandlerConfig,
 )
+from dynamo.trtllm.utils.encode_utils import EncodeUtils
 
 configure_dynamo_logging()
-
-
-def serialize_tensor_dict(tensor_dict: dict) -> dict:
-    """Serialize a dictionary of tensors to JSON-serializable format."""
-    serialized = {}
-    for key, tensor in tensor_dict.items():
-        if isinstance(tensor, torch.Tensor):
-            serialized[key] = {
-                "data": tensor.tolist(),
-                "shape": list(tensor.shape),
-                "dtype": str(tensor.dtype),
-            }
-        else:
-            # Non-tensor values pass through
-            serialized[key] = tensor
-    return serialized
-
-
-def deserialize_tensor_dict(serialized_dict: dict) -> dict:
-    """Deserialize a dictionary back to tensors."""
-    deserialized = {}
-    for key, value in serialized_dict.items():
-        if (
-            isinstance(value, dict)
-            and "data" in value
-            and "shape" in value
-            and "dtype" in value
-        ):
-            # Reconstruct tensor
-            dtype_map = {
-                "torch.float32": torch.float32,
-                "torch.float16": torch.float16,
-                "torch.bfloat16": torch.bfloat16,
-                "torch.int64": torch.int64,
-                "torch.int32": torch.int32,
-            }
-            dtype = dtype_map.get(value["dtype"], torch.float32)
-            tensor = torch.tensor(value["data"], dtype=dtype)
-            deserialized[key] = tensor
-        else:
-            # Non-tensor values pass through
-            deserialized[key] = value
-    return deserialized
 
 
 class RequestHandlerFactory:
@@ -123,15 +81,12 @@ class EncodeHandler(HandlerBase):
     """
 
     def __init__(self, config: RequestHandlerConfig):
-        logging.info(f"EncodeHandler initialized with config: {config}")
         super().__init__(config)
         self.encodings = None
         self.auxiliary_data = {}
 
     async def generate(self, request: dict):
-        logging.info(f"EncodeHandler received request: {request}")
-
-        if self.connector and request.get("use_nixl", False):
+        if self.connector:
             # Load embeddings first to get the actual shape
             messages = request.get("messages", [])
             _, _, embedding_paths = self.multimodal_processor.extract_prompt_and_media(
@@ -156,16 +111,10 @@ class EncodeHandler(HandlerBase):
                     self.auxiliary_data = {
                         k: v for k, v in loaded_data.items() if k != "mm_embeddings"
                     }
-                    logging.info(
-                        f"EncodeHandler loaded dict embeddings: mm_embeddings shape={self.encodings.shape}, auxiliary_keys={list(self.auxiliary_data.keys())}"
-                    )
                 else:
                     # Tensor format (e.g., llava_next_mm_embed_seashore.pt)
                     self.encodings = loaded_data
                     self.auxiliary_data = {}
-                    logging.info(
-                        f"EncodeHandler loaded tensor embeddings with shape: {self.encodings.shape}"
-                    )
             else:
                 # Placeholder for TRTLLM Encoder to be called
                 # TRTLLM Encoder will return a memory handler on the the encoder GPU with the encodings
@@ -186,18 +135,18 @@ class EncodeHandler(HandlerBase):
                     "nixl_readable_metadata": op_metadata.model_dump(),
                     "embeddings_shape": list(self.encodings.shape),
                     "embeddings_dtype": str(self.encodings.dtype),
-                    "auxiliary_data": serialize_tensor_dict(
+                    "auxiliary_data": EncodeUtils.serialize_tensor_dict(
                         self.auxiliary_data
                     ),  # Serialize tensors for JSON
                 }
                 yield response
 
                 # Wait for the prefill worker to complete the read operation
-                logging.info(
+                logging.debug(
                     "EncodeHandler waiting for PrefillHandler to read embeddings..."
                 )
                 await readable_op.wait_for_completion()
-                logging.info("EncodeHandler completed readable operation.")
+                logging.debug("EncodeHandler completed readable operation.")
             return
 
         if not request.get("streaming", False):
@@ -213,21 +162,13 @@ class PrefillHandler(HandlerBase):
     """
 
     def __init__(self, config: RequestHandlerConfig):
-        logging.info(f"PrefillHandler initialized with config: {config}")
         super().__init__(config)
 
     async def remote_encode_with_nixl(self, request: dict):
-        # 1. Send request to encode worker with nixl flag
-        request["use_nixl"] = True
-        logging.info(f"PrefillHandler sending request to EncodeHandler: {request}")
-
         # 2. Get response with shape info and readable metadata
         encode_response = None
         async for res in await self.encode_client.round_robin(request):
             encode_response = res.data()
-            logging.info(
-                f"PrefillHandler received response from EncodeHandler: {encode_response}"
-            )
             break
 
         if not encode_response:
@@ -246,18 +187,9 @@ class PrefillHandler(HandlerBase):
 
         # 4. Dynamically allocate tensor with correct shape and dtype
         # Convert dtype string back to torch dtype
-        dtype_map = {
-            "torch.float32": torch.float32,
-            "torch.float16": torch.float16,
-            "torch.bfloat16": torch.bfloat16,
-            "torch.int64": torch.int64,
-        }
-        embeddings_dtype = dtype_map.get(embeddings_dtype_str, torch.float32)
+        embeddings_dtype = EncodeUtils.get_torch_dtype_from_string(embeddings_dtype_str)
 
         encodings_tensor = torch.zeros(*embeddings_shape, dtype=embeddings_dtype)
-        logging.info(
-            f"PrefillHandler dynamically allocated tensor: shape={encodings_tensor.shape}, dtype={encodings_tensor.dtype}"
-        )
 
         # 5. Create descriptor for our allocated tensor
         descriptor = nixl_connect.Descriptor(encodings_tensor)
@@ -267,66 +199,44 @@ class PrefillHandler(HandlerBase):
         with read_op:
             # 7. Wait for the read operation to complete
             await read_op.wait_for_completion()
-            logging.info(
+            logging.debug(
                 f"PrefillHandler successfully read embeddings: {encodings_tensor.shape}"
             )
 
         # 8. Reconstruct original format and return
         if auxiliary_data:
             # Deserialize auxiliary tensors and reconstruct dictionary format
-            deserialized_auxiliary = deserialize_tensor_dict(auxiliary_data)
+            deserialized_auxiliary = EncodeUtils.deserialize_tensor_dict(auxiliary_data)
             result = {"mm_embeddings": encodings_tensor}
             result.update(deserialized_auxiliary)
-            logging.info(
-                f"PrefillHandler reconstructed dict embeddings with keys: {list(result.keys())}"
-            )
             return result
         else:
             # Return just the tensor
-            logging.info(
-                f"PrefillHandler returning tensor embeddings: {encodings_tensor.shape}"
-            )
             return encodings_tensor
-
-    async def remote_encode(self, request: dict):
-        logging.info(f"PrefillHandler.remote_encode sending request: {request}")
-        response_received = False
-        async for res in await self.encode_client.round_robin(request):
-            logging.info(f"PrefillHandler.remote_encode received response: {res}")
-            response_received = True
-            yield res.data()
-
-        if not response_received:
-            logging.warning("No response received from the encode client.")
-            yield request
 
     async def remote_decode(self, request: dict):
         async for res in await self.next_client.round_robin(request):
             yield res.data()
 
     async def generate(self, request: dict):
-        logging.info(f"PrefillHandler.generate received request: {request}")
+        logging.debug(f"PrefillHandler.generate received request: {request}")
         embeddings_tensor = None
 
-        # STATE 1: If an encoder is configured and the request needs encoding, call it.
-        if self.encode_client and "encodings" not in request:
-            if self.connector:
-                logging.info("PrefillHandler calling remote_encode_with_nixl")
+        _, _, embedding_paths = self.multimodal_processor.extract_prompt_and_media(
+            request.get("messages", [])
+        )
+        # This check will be removed once TRTLLM Encoder is integrated.
+        if embedding_paths:
+            # If an encoder is configured and the request needs encoding, call it.
+            if self.encode_client and self.connector:
+                logging.debug("PrefillHandler calling remote_encode_with_nixl")
                 embeddings_tensor = await self.remote_encode_with_nixl(request)
-            else:
-                logging.info("PrefillHandler calling remote_encode")
-                async for res in self.remote_encode(request):
-                    # The encoder returns the modified request. Adopt it as our new state.
-                    request = res
-                    logging.info(f"Encoded request: {request}")
-                    break  # The encoder only returns one response.
 
-        # STATE 2: Request is ready for prefill.
+        # Request is ready for prefill.
         # Generate the prefill response locally
         prefill_request = copy.deepcopy(request)
         prefill_response = None
         response_count = 0
-        logging.info(f"Prefill request: {prefill_request}")
         async for res in self.generate_locally(prefill_request, embeddings_tensor):
             prefill_response = res
             response_count += 1
@@ -361,7 +271,6 @@ class DecodeHandler(HandlerBase):
     """
 
     def __init__(self, config: RequestHandlerConfig):
-        logging.info(f"DecodeHandler initialized with config: {config}")
         super().__init__(config)
 
     async def remote_prefill(self, request: dict):
@@ -369,7 +278,6 @@ class DecodeHandler(HandlerBase):
             yield res
 
     async def generate(self, request: dict):
-        logging.info(f"DecodeHandler.generate received request: {request}")
         if self.disaggregation_strategy == DisaggregationStrategy.DECODE_FIRST:
             prefill_response = None
             # If operating under decode_first strategy, the decode handler needs to trigger
