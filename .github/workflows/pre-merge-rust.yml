@@ -75,13 +75,6 @@ jobs:
           ${{ matrix.dir }}/target/
         key: ${{ runner.os }}-cargo-${{ matrix.dir }}-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: ${{ runner.os }}-cargo-${{ matrix.dir }}-
-    - name: Free runner disk space
-      run: |
-        echo "Disk space before:"
-          df -h
-          sudo rm -rf ${{ matrix.dir }}/target/debug/incremental
-          echo "Disk space after:"
-          df -h
     - name: Install Rust in dev environment
       # Install Rust only to run GitHub Local Actions in (dev environment) using the `ACT` environment variable.
       # See act usage: https://nektosact.com/introduction.html
@@ -128,4 +121,7 @@ jobs:
       # NOTE: --all-targets doesn't run doc tests
       run: cargo test --locked --all-targets
     - name: Check disk space
-      run: df -h && du -sh /home/runner/work/dynamo/*      
+      run: df -h && du -sh /home/runner/work/dynamo/*
+    - name: Remove incremental data
+      run: |
+        rm -rf ${{ matrix.dir }}/target/debug/incremental
