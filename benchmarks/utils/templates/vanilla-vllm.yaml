@@ -32,7 +32,7 @@ spec:
         image: vllm/vllm-openai:latest
         command: ["/bin/sh", "-c"]
         args: [
-          "vllm serve deepseek-ai/DeepSeek-R1-Distill-Llama-8B --host 0.0.0.0 --port 8000 --trust-remote-code --enable-chunked-prefill --max-num-batched-tokens 3500 --gpu-memory-utilization 0.95 --disable-log-requests"
+          "vllm serve Qwen/Qwen3-0.6B --host 0.0.0.0 --port 8000 --trust-remote-code --enable-chunked-prefill --max-num-batched-tokens 3500 --gpu-memory-utilization 0.95 --disable-log-requests"
         ]
         env:
         - name: HUGGING_FACE_HUB_TOKEN
