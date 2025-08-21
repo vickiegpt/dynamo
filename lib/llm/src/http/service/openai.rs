@@ -295,7 +295,7 @@ async fn completions(
     // apply any annotations to the front of the stream
     let stream = stream::iter(annotations).chain(stream);
 
-    let tool_parser_name = state.tool_parser_name();
+    let tool_call_parser = state.tool_call_parser();
 
     if streaming {
         let stream = stream.map(move |response| {
@@ -316,7 +316,7 @@ async fn completions(
             process_metrics_only(response, &mut response_collector);
         });
 
-        let response = NvCreateCompletionResponse::from_annotated_stream(stream, tool_parser_name)
+        let response = NvCreateCompletionResponse::from_annotated_stream(stream, tool_call_parser)
             .await
             .map_err(|e| {
                 tracing::error!(
@@ -480,7 +480,7 @@ async fn chat_completions(
     // todo - determine the proper error code for when a request model is not present
     tracing::trace!("Getting chat completions engine for model: {}", model);
 
-    let tool_parser_name = state.tool_parser_name();
+    let tool_call_parser = state.tool_call_parser();
 
     let engine = state
         .manager()
@@ -547,7 +547,7 @@ async fn chat_completions(
         });
 
         let response =
-            NvCreateChatCompletionResponse::from_annotated_stream(stream, tool_parser_name)
+            NvCreateChatCompletionResponse::from_annotated_stream(stream, tool_call_parser)
                 .await
                 .map_err(|e| {
                     tracing::error!(
@@ -736,8 +736,8 @@ async fn responses(
         .map_err(|e| ErrorMessage::from_anyhow(e, "Failed to generate completions"))?;
 
     // TODO: handle streaming, currently just unary
-    let tool_parser_name = state.tool_parser_name();
-    let response = NvCreateChatCompletionResponse::from_annotated_stream(stream, tool_parser_name)
+    let tool_call_parser = state.tool_call_parser();
+    let response = NvCreateChatCompletionResponse::from_annotated_stream(stream, tool_call_parser)
         .await
         .map_err(|e| {
             tracing::error!(

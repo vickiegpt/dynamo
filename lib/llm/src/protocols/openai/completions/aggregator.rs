@@ -65,9 +65,9 @@ impl DeltaAggregator {
     /// Aggregates a stream of [`Annotated<CompletionResponse>`]s into a single [`CompletionResponse`].
     pub async fn apply(
         stream: impl Stream<Item = Annotated<NvCreateCompletionResponse>>,
-        tool_parser_name: Option<String>,
+        tool_call_parser: Option<String>,
     ) -> Result<NvCreateCompletionResponse> {
-        tracing::trace!("Tool parser name: {:?}", tool_parser_name); // Remove this after enabling tool calling for completions
+        tracing::trace!("Tool parser name: {:?}", tool_call_parser); // Remove this after enabling tool calling for completions
         let aggregator = stream
             .fold(DeltaAggregator::new(), |mut aggregator, delta| async move {
                 let delta = match delta.ok() {
@@ -179,17 +179,17 @@ impl From<DeltaChoice> for dynamo_async_openai::types::Choice {
 impl NvCreateCompletionResponse {
     pub async fn from_sse_stream(
         stream: DataStream<Result<Message, SseCodecError>>,
-        tool_parser_name: Option<String>,
+        tool_call_parser: Option<String>,
     ) -> Result<NvCreateCompletionResponse> {
         let stream = convert_sse_stream::<NvCreateCompletionResponse>(stream);
-        NvCreateCompletionResponse::from_annotated_stream(stream, tool_parser_name).await
+        NvCreateCompletionResponse::from_annotated_stream(stream, tool_call_parser).await
     }
 
     pub async fn from_annotated_stream(
         stream: impl Stream<Item = Annotated<NvCreateCompletionResponse>>,
-        tool_parser_name: Option<String>,
+        tool_call_parser: Option<String>,
     ) -> Result<NvCreateCompletionResponse> {
-        DeltaAggregator::apply(stream, tool_parser_name).await
+        DeltaAggregator::apply(stream, tool_call_parser).await
     }
 }
 

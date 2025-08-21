@@ -177,10 +177,10 @@ def parse_args():
         help="Prefix for Dynamo frontend metrics. If unset, uses DYN_METRICS_PREFIX env var or 'dynamo_frontend'.",
     )
     parser.add_argument(
-        "--tool-parser-name",
+        "--tool-call-parser",
         type=str,
         default=None,
-        help="Tool parser name for the model. Available options: 'hermes', 'nemotron_deci', 'llama3_json', 'mistral', 'phi4', 'default'.",
+        help="Tool parser name for the model. Available options: 'hermes', 'nemotron_deci', 'llama3_json', 'mistral', 'phi4'.",
     )
 
     flags = parser.parse_args()
@@ -239,8 +239,8 @@ async def async_main():
         kwargs["tls_cert_path"] = flags.tls_cert_path
     if flags.tls_key_path:
         kwargs["tls_key_path"] = flags.tls_key_path
-    if flags.tool_parser_name:
-        kwargs["tool_parser_name"] = flags.tool_parser_name
+    if flags.tool_call_parser:
+        kwargs["tool_call_parser"] = flags.tool_call_parser
 
     if is_static:
         # out=dyn://<static_endpoint>

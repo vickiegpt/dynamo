@@ -59,7 +59,7 @@ pub struct LocalModelBuilder {
     extra_engine_args: Option<PathBuf>,
     runtime_config: ModelRuntimeConfig,
     user_data: Option<serde_json::Value>,
-    tool_parser_name: Option<String>,
+    tool_call_parser: Option<String>,
 }
 
 impl Default for LocalModelBuilder {
@@ -82,7 +82,7 @@ impl Default for LocalModelBuilder {
             extra_engine_args: Default::default(),
             runtime_config: Default::default(),
             user_data: Default::default(),
-            tool_parser_name: Default::default(),
+            tool_call_parser: Default::default(),
         }
     }
 }
@@ -174,8 +174,8 @@ impl LocalModelBuilder {
         self
     }
 
-    pub fn tool_parser_name(&mut self, tool_parser_name: Option<String>) -> &mut Self {
-        self.tool_parser_name = tool_parser_name;
+    pub fn tool_call_parser(&mut self, tool_call_parser: Option<String>) -> &mut Self {
+        self.tool_call_parser = tool_call_parser;
         self
     }
 
@@ -220,7 +220,7 @@ impl LocalModelBuilder {
                 tls_key_path: self.tls_key_path.take(),
                 router_config: self.router_config.take().unwrap_or_default(),
                 runtime_config: self.runtime_config.clone(),
-                tool_parser_name: self.tool_parser_name.take(),
+                tool_call_parser: self.tool_call_parser.take(),
             });
         }
 
@@ -297,7 +297,7 @@ impl LocalModelBuilder {
             tls_key_path: self.tls_key_path.take(),
             router_config: self.router_config.take().unwrap_or_default(),
             runtime_config: self.runtime_config.clone(),
-            tool_parser_name: self.tool_parser_name.take(),
+            tool_call_parser: self.tool_call_parser.take(),
         })
     }
 }
@@ -314,7 +314,7 @@ pub struct LocalModel {
     tls_key_path: Option<PathBuf>,
     router_config: RouterConfig,
     runtime_config: ModelRuntimeConfig,
-    tool_parser_name: Option<String>,
+    tool_call_parser: Option<String>,
 }
 
 impl LocalModel {
@@ -382,8 +382,8 @@ impl LocalModel {
         self.card
     }
 
-    pub fn tool_parser_name(&self) -> Option<String> {
-        self.tool_parser_name.clone()
+    pub fn tool_call_parser(&self) -> Option<String> {
+        self.tool_call_parser.clone()
     }
 
     /// Attach this model the endpoint. This registers it on the network

@@ -96,7 +96,7 @@ impl DeltaAggregator {
     /// * `Err(String)` if an error occurs during processing.
     pub async fn apply(
         stream: impl Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>>,
-        tool_parser_name: Option<String>,
+        tool_call_parser: Option<String>,
     ) -> Result<NvCreateChatCompletionResponse, String> {
         let aggregator = stream
             .fold(DeltaAggregator::new(), |mut aggregator, delta| async move {
@@ -166,7 +166,7 @@ impl DeltaAggregator {
         for choice in aggregator.choices.values_mut() {
             if choice.tool_calls.is_none() {
                 if let Ok(tool_calls) =
-                    try_tool_call_parse_aggregate(&choice.text, tool_parser_name.as_deref())
+                    try_tool_call_parse_aggregate(&choice.text, tool_call_parser.as_deref())
                 {
                     if tool_calls.is_empty() {
                         continue;
@@ -254,7 +254,7 @@ pub trait ChatCompletionAggregator {
     /// * `Err(String)` if an error occurs.
     async fn from_annotated_stream(
         stream: impl Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>>,
-        tool_parser_name: Option<String>,
+        tool_call_parser: Option<String>,
     ) -> Result<NvCreateChatCompletionResponse, String>;
 
     /// Converts an SSE stream into a [`NvCreateChatCompletionResponse`].
@@ -267,24 +267,24 @@ pub trait ChatCompletionAggregator {
     /// * `Err(String)` if an error occurs.
     async fn from_sse_stream(
         stream: DataStream<Result<Message, SseCodecError>>,
-        tool_parser_name: Option<String>,
+        tool_call_parser: Option<String>,
     ) -> Result<NvCreateChatCompletionResponse, String>;
 }
 
 impl ChatCompletionAggregator for dynamo_async_openai::types::CreateChatCompletionResponse {
     async fn from_annotated_stream(
         stream: impl Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>>,
-        tool_parser_name: Option<String>,
+        tool_call_parser: Option<String>,
     ) -> Result<NvCreateChatCompletionResponse, String> {
-        DeltaAggregator::apply(stream, tool_parser_name).await
+        DeltaAggregator::apply(stream, tool_call_parser).await
     }
 
     async fn from_sse_stream(
         stream: DataStream<Result<Message, SseCodecError>>,
-        tool_parser_name: Option<String>,
+        tool_call_parser: Option<String>,
     ) -> Result<NvCreateChatCompletionResponse, String> {
         let stream = convert_sse_stream::<NvCreateChatCompletionStreamResponse>(stream);
-        NvCreateChatCompletionResponse::from_annotated_stream(stream, tool_parser_name).await
+        NvCreateChatCompletionResponse::from_annotated_stream(stream, tool_call_parser).await
     }
 }
 
