@@ -103,7 +103,7 @@ jobs:
       working-directory: ${{ matrix.dir }}
       run: cargo test --locked --no-run
     - name: Check disk space
-      run: df -h
+      run: df -h && du -sh /home/runner/work/*
     - name: Run Doc Tests
       working-directory: ${{ matrix.dir }}
       run: cargo doc --no-deps && cargo test --locked --doc
