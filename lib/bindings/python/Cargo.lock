@@ -1331,6 +1331,7 @@ dependencies = [
  "either",
  "futures",
  "once_cell",
+ "prometheus",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",

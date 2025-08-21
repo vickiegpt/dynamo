@@ -63,3 +63,7 @@ scrape_configs:
   #   scrape_interval: 5s
   #   static_configs:
   #     - targets: ['prometheus:9090']  # on the "monitoring" network
+  - job_name: 'kvbm-metrics'
+    scrape_interval: 2s
+    static_configs:
+      - targets: ['host.docker.internal:9998']  # on the "monitoring" network

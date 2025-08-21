@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::any::Any;
+use std::{any::Any, sync::Arc};
 
 use dynamo_llm::{
     block_manager::{
@@ -14,6 +14,7 @@ use dynamo_llm::{
 };
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
 use tokio_util::sync::CancellationToken;
+use dynamo_llm::block_manager::metrics_kvbm::KvbmMetrics;
 
 use super::*;
 
@@ -190,11 +191,16 @@ impl<R: RequestKey> ConnectorSlotManager<R> {
         let mut xfer_engine = LocalTransferEngine::new(block_manager.clone(), leader, xfer_rx);
         let primary_token = drt.primary_token();
         let runtime_primary = drt.runtime().primary();
+
+        let ns = drt.namespace("kvbm_connector_slot_manager").unwrap();
+
         let drt_for_task = drt;
+
+        let kvbm_metrics = KvbmMetrics::new(ns);
 
         let xfer_engine_task = CriticalTaskExecutionHandle::new_with_runtime(
             |cancellation_token| async move {
-                xfer_engine.execute(cancellation_token, drt_for_task).await
+                xfer_engine.execute(cancellation_token, drt_for_task, kvbm_metrics.clone()).await
             },
             primary_token,
             "LocalTransferEngine",
@@ -1027,6 +1033,7 @@ impl LocalTransferEngine {
         &mut self,
         cancellation_token: CancellationToken,
         drt: DistributedRuntime,
+        kvbm_metrics: KvbmMetrics,
     ) -> anyhow::Result<()> {
         let (onboard_tx, mut onboard_rx) = mpsc::unbounded_channel();
         let (offload_tx, mut offload_rx) = mpsc::unbounded_channel();
@@ -1063,7 +1070,7 @@ impl LocalTransferEngine {
                         break;
                     }
                     if let Err(e) =
-                        process_offload_request(req, &block_manager_offload, &leader_offload).await
+                        process_offload_request(req, &block_manager_offload, &leader_offload, kvbm_metrics.clone()).await
                     {
                         tracing::error!("LocalOffloadTask: error processing request: {:?}", e);
                     }
@@ -1132,7 +1139,12 @@ async fn process_offload_request(
     offload_req: LocalOffloadRequest,
     block_manager: &VllmBlockManager,
     leader: &Arc<KvbmLeader>,
+    kvbm_metrics: KvbmMetrics,
 ) -> anyhow::Result<()> {
+    kvbm_metrics.offload_requests.inc();
+    tracing::info!("ziqif offload_requests: {:?}", kvbm_metrics.offload_requests);
+    tracing::info!("ziqif offload_requests value: {}", kvbm_metrics.offload_requests.get());
+
     let request_id = &offload_req.request_id;
     let operation_id = &offload_req.operation_id;
 

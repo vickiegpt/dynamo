@@ -27,7 +27,7 @@ use dynamo_llm::tokens::{SaltHash, TokenBlockSequence, Tokens};
 
 use std::{
     collections::HashSet,
-    sync::{Arc, Mutex},
+    sync::Mutex,
 };
 use tokio;
 use tokio::sync::mpsc;
