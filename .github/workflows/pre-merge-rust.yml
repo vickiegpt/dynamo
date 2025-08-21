@@ -101,6 +101,8 @@ jobs:
     - name: Compile Tests
       working-directory: ${{ matrix.dir }}
       run: cargo test --locked --no-run
+    - name: Check disk space
+      run: df -h
     - name: Run Doc Tests
       working-directory: ${{ matrix.dir }}
       run: cargo doc --no-deps && cargo test --locked --doc
