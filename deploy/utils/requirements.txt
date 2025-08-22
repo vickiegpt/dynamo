@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Benchmarking dependencies for Dynamo
+genai-perf==0.0.15
 
 # Plotting and visualization
 matplotlib>=3.5.0
