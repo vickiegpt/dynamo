@@ -4,7 +4,6 @@
 import asyncio
 import logging
 import os
-import sys
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -14,12 +13,6 @@ import psutil
 import yaml
 from kr8s.asyncio.objects import Pod as kr8s_Pod
 from kubernetes_asyncio import client, config
-
-benchmark_utils_path = os.path.join(
-    os.environ.get("DYNAMO_HOME", "/workspace"), "benchmarks/profiler/utils"
-)
-
-sys.path.append(benchmark_utils_path)
 
 
 def terminate_process(process, logger=logging.getLogger(), immediate_kill=False):
@@ -117,15 +110,26 @@ class ServiceSpec:
 
 
 class DeploymentSpec:
-    def __init__(self, base: str):
+    def __init__(self, base: str, endpoint="/v1/chat/completions", port=8000):
         """Load the deployment YAML file"""
         with open(base, "r") as f:
             self._deployment_spec = yaml.safe_load(f)
+        self._endpoint = endpoint
+        self._port = port
 
     @property
     def name(self) -> str:
         """Deployment name"""
         return self._deployment_spec["metadata"]["name"]
+
+    @property
+    def port(self) -> int:
+        """Deployment name"""
+        return self._port
+
+    @property
+    def endpoint(self) -> str:
+        return self._endpoint
 
     @name.setter
     def name(self, value: str):
@@ -133,7 +137,7 @@ class DeploymentSpec:
 
     @property
     def namespace(self) -> str:
-        """Deployment name"""
+        """Deployment namespace"""
         return self._deployment_spec["metadata"]["namespace"]
 
     @namespace.setter
@@ -190,6 +194,7 @@ class ManagedDeployment:
     _in_cluster = False
     _logger = logging.getLogger()
     _port_forward = None
+    _deployment_name = None
 
     async def _init_kubernetes(self):
         """Initialize kubernetes client"""
@@ -204,6 +209,48 @@ class ManagedDeployment:
         k8s_client = client.ApiClient()
         self._custom_api = client.CustomObjectsApi(k8s_client)
         self._core_api = client.CoreV1Api(k8s_client)
+        self._apps_v1 = client.AppsV1Api()
+
+    async def _wait_for_pods(self, label, expected, timeout=60):
+        for _ in range(timeout):
+            pods = await self._core_api.list_namespaced_pod(
+                self.namespace, label_selector=label
+            )
+            running = sum(
+                1
+                for pod in pods.items
+                if any(
+                    cond.type == "Ready" and cond.status == "True"
+                    for cond in (pod.status.conditions or [])
+                )
+            )
+            if running == expected:
+                return True
+            await asyncio.sleep(1)
+        raise Exception(f"Didn't Reach Expected Pod Count {label}=={expected}")
+
+    async def _scale_statfulset(self, name, label, replicas):
+        body = {"spec": {"replicas": replicas}}
+        await self._apps_v1.patch_namespaced_stateful_set_scale(
+            name, self.namespace, body
+        )
+        await self._wait_for_pods(label, replicas)
+
+    async def _restart_stateful(self, name, label):
+        self._logger.info(f"Restarting {name} {label}")
+
+        await self._scale_statfulset(name, label, 0)
+        nats_pvc = await self._core_api.list_namespaced_persistent_volume_claim(
+            self.namespace, label_selector=label
+        )
+        for pvc in nats_pvc.items:
+            await self._core_api.delete_namespaced_persistent_volume_claim(
+                pvc.metadata.name, self.namespace
+            )
+
+        await self._scale_statfulset(name, label, 1)
+
+        self._logger.info(f"Restarted {name} {label}")
 
     async def _wait_for_ready(self, timeout: int = 1800):
         """
@@ -214,6 +261,9 @@ class ManagedDeployment:
         """
         start_time = time.time()
         # TODO: A little brittle, also should output intermediate status every so often.
+
+        self._logger.info("Waiting for Deployment {self._deployment_name}")
+
         while (time.time() - start_time) < timeout:
             try:
                 status = await self._custom_api.get_namespaced_custom_object(
@@ -221,7 +271,7 @@ class ManagedDeployment:
                     version="v1alpha1",
                     namespace=self.namespace,
                     plural="dynamographdeployments",
-                    name=self.deployment_name,
+                    name=self._deployment_name,
                 )
                 # Check both conditions:
                 # 1. Ready condition is True
@@ -269,6 +319,18 @@ class ManagedDeployment:
             await asyncio.sleep(20)
         raise TimeoutError("Deployment failed to become ready within timeout")
 
+    async def _restart_nats(self):
+        NATS_STS_NAME = "dynamo-platform-nats"
+        NATS_LABEL = "app.kubernetes.io/component=nats"
+
+        await self._restart_stateful(NATS_STS_NAME, NATS_LABEL)
+
+    async def _restart_etcd(self):
+        ETCD_STS_NAME = "dynamo-platform-etcd"
+        ETCD_LABEL = "app.kubernetes.io/component=etcd"
+
+        await self._restart_stateful(ETCD_STS_NAME, ETCD_LABEL)
+
     async def _create_deployment(self):
         """
         Create a DynamoGraphDeployment from either a dict or yaml file path.
@@ -276,20 +338,14 @@ class ManagedDeployment:
         Args:
             deployment: Either a dict containing the deployment spec or a path to a yaml file
         """
-        await self._init_kubernetes()
 
-        # Extract component names
+        # Extract service names
 
         self._services = self.deployment_spec.services
 
-        self.deployment_spec.namespace = self.namespace
-        self.deployment_name = self.deployment_spec.name
-
-        print(self.deployment_spec.spec())
-
-        for k, v in self.deployment_spec.spec().items():
-            if k == "extraPodSpec":
-                print(v)
+        self._logger.info(
+            f"Starting Deployment {self._deployment_name} with spec {self.deployment_spec}"
+        )
 
         try:
             await self._custom_api.create_namespaced_custom_object(
@@ -299,13 +355,13 @@ class ManagedDeployment:
                 plural="dynamographdeployments",
                 body=self.deployment_spec.spec(),
             )
-            self._logger.info(f"Successfully created deployment {self.deployment_name}")
+            self._logger.info(f"Deployment Started {self._deployment_name}")
         except kubernetes.client.rest.ApiException as e:
             if e.status == 409:  # Already exists
-                self._logger.info(f"Deployment {self.deployment_name} already exists")
+                self._logger.info(f"Deployment {self._deployment_name} already exists")
             else:
                 self._logger.info(
-                    f"Failed to create deployment {self.deployment_name}: {e}"
+                    f"Failed to create deployment {self._deployment_name}: {e}"
                 )
                 raise
 
@@ -324,7 +380,7 @@ class ManagedDeployment:
             # List pods for this component using the selector label
             # nvidia.com/selector: deployment-name-component
             label_selector = (
-                f"nvidia.com/selector={self.deployment_name}-{component.name.lower()}"
+                f"nvidia.com/selector={self._deployment_name}-{component.name.lower()}"
             )
 
             pods = await self._core_api.list_namespaced_pod(
@@ -347,49 +403,65 @@ class ManagedDeployment:
         Delete the DynamoGraphDeployment CR.
         """
         try:
-            await self._custom_api.delete_namespaced_custom_object(
-                group="nvidia.com",
-                version="v1alpha1",
-                namespace=self.namespace,
-                plural="dynamographdeployments",
-                name=self.deployment_name,
-            )
-        except kubernetes.client.rest.ApiException as e:
+            if self._deployment_name:
+                await self._custom_api.delete_namespaced_custom_object(
+                    group="nvidia.com",
+                    version="v1alpha1",
+                    namespace=self.namespace,
+                    plural="dynamographdeployments",
+                    name=self._deployment_name,
+                )
+        except client.exceptions.ApiException as e:
             if e.status != 404:  # Ignore if already deleted
                 raise
+
+    async def _start_port_forward(self):
+        label_selector = f"nvidia.com/selector={self._deployment_name}-{self.frontend_service_name.lower()}"
+
+        frontend_service_pod = await kr8s_Pod.get(
+            label_selector=label_selector, namespace=self.namespace
+        )
+
+        self._port_forward = frontend_service_pod.portforward(
+            remote_port=self.deployment_spec.port,
+            local_port=self.deployment_spec.port,
+            address="0.0.0.0",
+        )
+        await self._port_forward.start()
+
+    async def _stop_port_forward(self):
+        print("stopping!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        if self._port_forward:
+            await self._port_forward.stop()
+            self._port_forward = None
+
+    async def _cleanup(self):
+        try:
+            await self._get_deployment_logs()
+        finally:
+            print("stopping!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            await self._stop_port_forward()
+            await self._delete_deployment()
 
     async def __aenter__(self):
         try:
             self._logger = logging.getLogger(self.__class__.__name__)
+            self.deployment_spec.namespace = self.namespace
+            self._deployment_name = self.deployment_spec.name
             await self._init_kubernetes()
+            await self._delete_deployment()
+            await self._restart_etcd()
+            await self._restart_nats()
             await self._create_deployment()
             await self._wait_for_ready()
+            await self._start_port_forward()
 
-            # List pods for this component using the selector label
-            # nvidia.com/selector: deployment-name-component
-            label_selector = f"nvidia.com/selector={self.deployment_name}-{self.frontend_service_name.lower()}"
-
-            frontend_service_pod = await kr8s_Pod.get(
-                label_selector=label_selector, namespace=self.namespace
-            )
-
-            self._port_forward = frontend_service_pod.portforward(
-                remote_port=8000, local_port=8000
-            )
-            await self._port_forward.start()
         except:
-            await self._delete_deployment()
-            if self._port_forward:
-                await self._port_forward.stop()
+            await self._cleanup()
             raise
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        try:
-            await self._get_deployment_logs()
-        finally:
-            await self._delete_deployment()
-            if self._port_forward:
-                self._port_forward.stop()
+        await self._cleanup()
 
 
 async def main():

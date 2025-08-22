@@ -100,8 +100,7 @@ def _single_request(
 
 
 def client(
-    deployment_graph,
-    server_process,
+    deployment_spec,
     payload,
     log_dir,
     index,
@@ -116,7 +115,7 @@ def client(
     try:
         log_path = os.path.join(log_dir, f"client_{index}.log.txt")
         with open(log_path, "w") as log:
-            url = f"http://localhost:{server_process.port}/{deployment_graph.endpoints[0]}"
+            url = f"http://localhost:{deployment_spec.port}/{deployment_spec.endpoint}"
 
             for i in range(requests_per_client):
                 result = _single_request(

@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import logging
+import multiprocessing
+import time
 from contextlib import contextmanager
 from multiprocessing import Process
 
@@ -14,6 +15,9 @@ from tests.fault_tolerance.deploy.parse_results import main as parse_results
 from tests.utils.deployment_graph import Payload
 from tests.utils.managed_deployment import DeploymentSpec, ManagedDeployment
 
+multiprocessing.set_start_method("spawn")
+
+
 # Initial payload used for testing
 # initial deployment readiness.
 
@@ -21,7 +25,7 @@ text_prompt = "Tell me a short joke about AI."
 
 text_payload = Payload(
     payload_chat={
-        "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+        "model": "Qwen/Qwen3-0.6B",
         "messages": [
             {
                 "role": "user",
@@ -91,16 +95,6 @@ def deployment_spec_test(request):
 # )
 
 
-def _set_deployment_args(request, max_num_seqs):
-    decode_worker_name = "VllmWorker"
-    args = {}
-
-    if max_num_seqs is not None:
-        args[f"--{decode_worker_name}.max_num_seqs"] = max_num_seqs
-
-    return args
-
-
 def _list_vllm_worker_processes():
     processes = []
     for ps_process in psutil.process_iter(["name", "cmdline"]):
@@ -119,8 +113,7 @@ def _clients(
     logger,
     num_clients,
     request,
-    deployment_graph,
-    server_process,
+    deployment_spec,
     payload,
     requests_per_client,
     input_token_length,
@@ -133,8 +126,7 @@ def _clients(
             Process(
                 target=client,
                 args=(
-                    deployment_graph,
-                    server_process,
+                    deployment_spec,
                     payload,
                     request.node.name,
                     i,
@@ -210,20 +202,14 @@ def results_summary():
 async def test_fault_scenario(
     deployment_spec_test,  # noqa: F811
     request,
-    # runtime_services,
-    # num_clients,
-    # requests_per_client,
-    # worker_metrics,  # noqa: F811
-    # respawn,
-    # failures,  # noqa: F811
-    # input_token_length,
-    # output_token_length,
-    # max_num_seqs,
-    # max_retries,
-    # display_dynamo_output,
-    # nvidia_smi,  # noqa: F811
-    # separate_process_logs,
-    # hf_hub_offline,
+    image,
+    namespace,
+    num_clients,
+    requests_per_client,
+    #    failures,  # noqa: F811
+    input_token_length,
+    output_token_length,
+    max_retries,
 ):
     """
     Test dynamo serve deployments with injected failures
@@ -232,61 +218,35 @@ async def test_fault_scenario(
     # runtime_services is used to start nats and etcd
 
     logger = logging.getLogger(request.node.name)
-    logger.info("Starting test_deployment")
-
-    # deployment_graph, payload = deployment_graph_test
-
-    # if hf_hub_offline:
-    #     os.environ["HF_HUB_OFFLINE"] = "1"
-    # else:
-    #     if "HF_HUB_OFFLINE" in os.environ:
-    #         del os.environ["HF_HUB_OFFLINE"]
-    # if respawn:
-    #     os.environ["DYN_CIRCUS_RESPAWN"] = "1"
-    # else:
-    #     if "DYN_CIRCUS_RESPAWN" in os.environ:
-    #         del os.environ["DYN_CIRCUS_RESPAWN"]
-
-    # if separate_process_logs:
-    #     os.environ["DYN_CIRCUS_LOG_DIR"] = os.path.abspath(request.node.name)
-
-    # deployment_args = _set_deployment_args(request, max_num_seqs)
 
     deployment_spec_test.disable_grove()
 
-    print(deployment_spec_test._deployment_spec)
+    deployment_spec_test.name = "fault-tolerance-test"
 
-    deployment_spec_test.name = "foo"
-
-    deployment_spec_test.set_image(
-        "gitlab-master.nvidia.com/dl/ai-dynamo/dynamo/dynamo:nnshah1-vllm-latest-1"
-    )
+    deployment_spec_test.set_image(image)
 
     async with ManagedDeployment(
-        namespace="nnshah1-test",
+        namespace=namespace,
         log_dir=request.node.name,
         deployment_spec=deployment_spec_test,
     ):
-        await asyncio.sleep(3000)
+        time.sleep(10)
 
-    # with DynamoServeProcess(
-    #     deployment_graph,
-    #     request,
-    #     display_output=display_dynamo_output,
-    #     args=deployment_args,
-    # ) as server_process:
-    #     server_process.wait_for_ready(payload)
+        with _clients(
+            logger,
+            num_clients,
+            request,
+            deployment_spec_test,
+            text_payload,
+            requests_per_client,
+            input_token_length,
+            output_token_length,
+            max_retries,
+        ):
+            pass
 
-    #     with _clients(
-    #         logger,
-    #         num_clients,
-    #         request,
-    #         deployment_graph,
-    #         server_process,
-    #         payload,
-    #         requests_per_client,
-    #         input_token_length,
-    #         output_token_length,
-    #         max_retries,
-    #     ):
-    #         _inject_failures(failures, logger)
+
+#             _inject_failures(failures, logger)
+
+
+#        await asyncio.sleep(3000)
