@@ -210,7 +210,7 @@ impl Leader for KvConnectorLeader {
         block_ids: Vec<BlockId>,
         context_current_position: usize,
     ) -> anyhow::Result<()> {
-        tracing::debug!(request_id, "num_device_blocks: {}", block_ids.len(),);
+        tracing::debug!(request_id, "num_device_blocks: {}, context_current_position: {}", block_ids.len(), context_current_position);
 
         let shared_slot = self.slot_manager().get_slot(&request_id)?;
         let mut slot = shared_slot
@@ -227,7 +227,7 @@ impl Leader for KvConnectorLeader {
             .get(&request_id)
         {
             if num_external_tokens > 0 {
-                let num_computed_tokens = (context_current_position + 1) - num_external_tokens;
+                let num_computed_tokens = context_current_position - num_external_tokens;
                 slot.record_cached_device_tokens(num_computed_tokens);
                 slot.advance_computed_position(num_computed_tokens)?;
 
@@ -317,7 +317,7 @@ impl Leader for KvConnectorLeader {
             slot.apply_scheduler_output_with_computed_position(
                 &new_req.prompt_token_ids,
                 &new_req.block_ids,
-                new_req.num_computed_tokens - 1,
+                new_req.num_computed_tokens,
             )?;
 
             if let Some(pending_ops) = slot.take_pending_operations() {
@@ -347,7 +347,7 @@ impl Leader for KvConnectorLeader {
             slot.apply_scheduler_output_with_computed_position(
                 &cached_req.new_token_ids,
                 &cached_req.new_block_ids,
-                cached_req.num_computed_tokens - 1,
+                cached_req.num_computed_tokens,
             )?;
 
             if let Some(pending_ops) = slot.take_pending_operations() {
