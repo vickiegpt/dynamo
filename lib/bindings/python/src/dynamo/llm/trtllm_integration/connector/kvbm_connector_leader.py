@@ -54,7 +54,7 @@ class DynamoKVBMConnectorLeader(KvCacheConnectorScheduler):
                 str(req.request_id),
                 req.new_tokens,
                 req.new_block_ids,
-                req.computed_position + 1,
+                req.computed_position,
             )
 
         resumed_from_preemption = False
@@ -64,7 +64,7 @@ class DynamoKVBMConnectorLeader(KvCacheConnectorScheduler):
                 resumed_from_preemption,
                 req.new_tokens,
                 req.new_block_ids,
-                req.computed_position + 1,
+                req.computed_position,
             )
 
         return self._connector.build_connector_metadata(output)
