@@ -3,6 +3,7 @@
 
 mod base_parser;
 mod deepseek_r1_parser;
+mod gpt_oss_parser;
 
 use std::collections::HashMap;
 
@@ -17,24 +18,6 @@ pub struct ParserResult {
     /// The extracted reasoning text from within reasoning blocks.
     pub reasoning_token_ids: Vec<u32>,
 }
-
-// impl ParserResult {
-//     pub fn get_some_reasoning(&self) -> Option<Vec<u32>> {
-//         if self.reasoning_token_ids.is_empty() {
-//             None
-//         } else {
-//             Some(self.reasoning_token_ids.clone())
-//         }
-//     }
-
-//     pub fn get_some_normal_text(&self) -> Option<Vec<u32>> {
-//         if self.normal_token_ids.is_empty() {
-//             None
-//         } else {
-//             Some(self.normal_token_ids.clone())
-//         }
-//     }
-// }
 
 pub trait ReasoningParser: Send + std::fmt::Debug {
     /// Parses a standalone, non-streaming input chunk. Implementations may reset or ignore
@@ -53,6 +36,7 @@ pub trait ReasoningParser: Send + std::fmt::Debug {
 pub enum ReasoningParserType {
     DeepseekR1,
     Basic,
+    GptOss,
 }
 
 #[derive(std::fmt::Debug)]
@@ -84,6 +68,9 @@ impl ReasoningParserType {
                     true,
                     vocab,
                 )),
+            },
+            ReasoningParserType::GptOss => ReasoningParserWrapper {
+                parser: Box::new(gpt_oss_parser::GptOssReasoningParser::new()),
             },
         }
     }
