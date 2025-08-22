@@ -73,7 +73,7 @@ You'll see output like this confirming your configuration:
 ```
 === Benchmark Configuration ===
 Namespace:              benchmarking
-Model:                  meta-llama/Meta-Llama-3.1-8B-Instruct
+Model:                  deepseek-ai/DeepSeek-R1-Distill-Llama-8B
 Input Sequence Length:  200 tokens      # Auto-configured default
 Output Sequence Length: 200 tokens      # Auto-configured default
 Sequence Std Dev:       10 tokens       # Auto-configured default

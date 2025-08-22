@@ -11,7 +11,7 @@ DYNAMO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Configuration - all set via command line arguments
 NAMESPACE=""
-MODEL="meta-llama/Meta-Llama-3.1-8B-Instruct"
+MODEL="deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
 ISL=200
 STD=10
 OSL=200
