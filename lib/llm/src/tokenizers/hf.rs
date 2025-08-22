@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
+
 use tokenizers::tokenizer::Tokenizer as HfTokenizer;
 
 use super::{
@@ -34,6 +36,10 @@ impl HuggingFaceTokenizer {
 
     pub fn from_tokenizer(tokenizer: HfTokenizer) -> Self {
         HuggingFaceTokenizer { tokenizer }
+    }
+
+    pub fn get_vocab(&self, with_added_tokens: bool) -> HashMap<String, u32> {
+        self.tokenizer.get_vocab(with_added_tokens)
     }
 }
 

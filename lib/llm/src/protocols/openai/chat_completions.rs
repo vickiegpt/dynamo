@@ -28,7 +28,7 @@ use super::{
 };
 
 pub mod aggregator;
-mod delta;
+pub mod delta;
 
 pub use aggregator::DeltaAggregator;
 pub use delta::DeltaGenerator;

@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::{collections::HashMap, sync::Arc};
+use crate::tokenizers::{traits::Tokenizer};
+
 use dynamo_parsers::{ParserResult, ReasoningParser, ReasoningParserType, ReasoningParserWrapper};
 
 use super::{NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse};
@@ -15,14 +18,14 @@ impl NvCreateChatCompletionRequest {
     ///
     /// # Returns
     /// * [`DeltaGenerator`] configured with model name and response options.
-    pub fn response_generator(&self) -> DeltaGenerator {
+    pub fn response_generator(&self, tokenizer: Option<&Arc<(dyn Tokenizer + 'static)>>, vocab: Option<&HashMap<String, u32>>) -> DeltaGenerator {
         let options = DeltaGeneratorOptions {
             enable_usage: true,
             enable_logprobs: self.inner.logprobs.unwrap_or(false)
                 || self.inner.top_logprobs.unwrap_or(0) > 0,
         };
 
-        DeltaGenerator::new(self.inner.model.clone(), options)
+        DeltaGenerator::new(self.inner.model.clone(), options, tokenizer, vocab)
     }
 }
 
@@ -36,7 +39,6 @@ pub struct DeltaGeneratorOptions {
 }
 
 /// Generates incremental chat completion responses in a streaming fashion.
-#[derive(Debug)]
 pub struct DeltaGenerator {
     /// Unique identifier for the chat completion session.
     id: String,
@@ -58,7 +60,9 @@ pub struct DeltaGenerator {
 
     /// Reasoning Parser object
     /// This is used to parse reasoning content in the response.
-    reasoning_parser: ReasoningParserWrapper,
+    reasoning_parser: Option<ReasoningParserWrapper>,
+
+    tokenizer: Option<Arc<(dyn Tokenizer + 'static)>>,
 }
 
 impl DeltaGenerator {
@@ -70,7 +74,7 @@ impl DeltaGenerator {
     ///
     /// # Returns
     /// * A new instance of [`DeltaGenerator`].
-    pub fn new(model: String, options: DeltaGeneratorOptions) -> Self {
+    pub fn new(model: String, options: DeltaGeneratorOptions, tokenizer: Option<&Arc<(dyn Tokenizer + 'static)>>, vocab: Option<&HashMap<String, u32>>) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -94,7 +98,17 @@ impl DeltaGenerator {
         let reasoning_parser_type = ReasoningParserType::Basic;
 
         // Reasoning parser wrapper
-        let reasoning_parser = reasoning_parser_type.get_reasoning_parser();
+        let reasoning_parser = if let Some(v) = vocab {
+            Some(reasoning_parser_type.get_reasoning_parser(v))
+        } else {
+            None
+        };
+
+        let tokenizer = if let Some(tokenizer) = tokenizer {
+            Some(tokenizer.clone())
+        } else {
+            None
+        };
 
         Self {
             id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
@@ -107,6 +121,7 @@ impl DeltaGenerator {
             msg_counter: 0,
             options,
             reasoning_parser,
+            tokenizer,
         }
     }
 
@@ -183,13 +198,11 @@ impl DeltaGenerator {
         })
     }
 
-    fn create_reasoning_content(&mut self, text: Option<String>) -> Option<ParserResult> {
-        let text = text?;
-        let parser_result = self
-            .reasoning_parser
-            .parse_reasoning_streaming_incremental(&text);
-
-        Some(parser_result)
+    fn create_reasoning_content(&mut self, token_ids: Vec<u32>) -> Option<ParserResult> {
+        if self.tokenizer.is_none() || self.reasoning_parser.is_none() {
+            return None;
+        }
+        Some(self.reasoning_parser.as_mut().unwrap().parse_reasoning_streaming_incremental(&token_ids))
     }
 
     /// Creates a choice within a chat completion response.
@@ -207,17 +220,12 @@ impl DeltaGenerator {
         &mut self,
         index: u32,
         text: Option<String>,
+        reasoning_content: Option<String>,
         finish_reason: Option<dynamo_async_openai::types::FinishReason>,
         logprobs: Option<dynamo_async_openai::types::ChatChoiceLogprobs>,
     ) -> NvCreateChatCompletionStreamResponse {
-        let reasoning_parser_result = self.create_reasoning_content(text).unwrap_or_default();
-
-        let (normal_text, reasoning_content) = (
-            reasoning_parser_result.get_some_normal_text(),
-            reasoning_parser_result.get_some_reasoning(),
-        );
         let delta = dynamo_async_openai::types::ChatCompletionStreamResponseDelta {
-            content: normal_text,
+            content: text,
             function_call: None,
             tool_calls: None,
             role: if self.msg_counter == 0 {
@@ -226,7 +234,7 @@ impl DeltaGenerator {
                 None
             },
             refusal: None,
-            reasoning_content,
+            reasoning_content: reasoning_content
         };
 
         let choice = dynamo_async_openai::types::ChatChoiceStream {
@@ -292,7 +300,7 @@ impl crate::protocols::openai::DeltaGeneratorExt<NvCreateChatCompletionStreamRes
 
         let logprobs = self.create_logprobs(
             delta.tokens,
-            delta.token_ids,
+            delta.token_ids.clone(),
             delta.log_probs,
             delta.top_logprobs,
         );
@@ -319,8 +327,23 @@ impl crate::protocols::openai::DeltaGeneratorExt<NvCreateChatCompletionStreamRes
         };
 
         // Create the streaming response.
+        let reasoning_parser_result = self.create_reasoning_content(delta.token_ids);
+        
+        let (normal_text, reasoning_content) = if let Some(parser_result) = reasoning_parser_result {
+            let none_if_empty = |vec: String| {
+                if vec.is_empty() {
+                    None
+                } else {
+                    Some(vec)
+                }
+            };
+            (none_if_empty(self.tokenizer.as_ref().unwrap().decode(&parser_result.normal_token_ids, false).unwrap()),
+             none_if_empty(self.tokenizer.as_ref().unwrap().decode(&parser_result.reasoning_token_ids, false).unwrap()))
+        } else {
+            (delta.text, None)
+        };
         let index = 0;
-        let stream_response = self.create_choice(index, delta.text, finish_reason, logprobs);
+        let stream_response = self.create_choice(index, normal_text, reasoning_content, finish_reason, logprobs);
 
         Ok(stream_response)
     }

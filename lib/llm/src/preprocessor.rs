@@ -94,6 +94,7 @@ pub struct OpenAIPreprocessor {
     formatter: Arc<dyn OAIPromptFormatter>,
     tokenizer: Arc<dyn Tokenizer>,
     model_info: Arc<dyn ModelInfo>,
+    vocab: HashMap<String, u32>,
 }
 
 impl OpenAIPreprocessor {
@@ -113,6 +114,7 @@ impl OpenAIPreprocessor {
                 );
             }
         };
+        let vocab = tokenizer.get_vocab(true);
         let tokenizer = Arc::new(tokenizer);
 
         let Some(model_info) = mdc.model_info else {
@@ -127,6 +129,7 @@ impl OpenAIPreprocessor {
             tokenizer,
             model_info,
             mdcsum,
+            vocab
         }))
     }
 
@@ -499,7 +502,7 @@ impl
         let (request, context) = request.into_parts();
 
         // create a response generator
-        let response_generator = request.response_generator();
+        let response_generator = request.response_generator(None, None);
         let mut response_generator = Box::new(response_generator);
 
         // convert the chat completion request to a common completion request
