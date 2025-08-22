@@ -179,7 +179,7 @@ benchmarks/results/
     └── avg_inter_token_latency_vs_concurrency.png      # Average latency
 ```
 
-Example plots (generated using meta-llama/Meta-Llama-3.1-8B-Instruct on A100s):
+Example plots -- **for demonstration purposes only**:
 
 <table>
   <tr>
