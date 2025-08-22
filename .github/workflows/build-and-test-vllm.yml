@@ -46,13 +46,16 @@ jobs:
         id: define_image_tag
         run: |
           echo "image_tag=vllm:latest" >> $GITHUB_OUTPUT
+      - name: Debug
+        run: | 
+          lsmod | grep nvidia || true
+          dmesg | grep -i nvrm || true
+          nvidia-smi
       - name: Build image
         env:
           GITHUB_TOKEN: ${{ secrets.CI_TOKEN }}
         run: |
           ./container/build.sh --tag ${{ steps.define_image_tag.outputs.image_tag }} --target runtime --framework vllm
-      - name: Debug
-        run: nvidia-smi          
       - name: Run pytest
         env:
           PYTEST_MARKS: "e2e and vllm and gpu_1 and not slow"
