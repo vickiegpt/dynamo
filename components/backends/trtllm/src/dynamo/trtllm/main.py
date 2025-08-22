@@ -19,7 +19,7 @@ from tensorrt_llm.llmapi.llm_utils import update_llm_args_with_extra_options
 from tensorrt_llm.llmapi.tokenizer import tokenizer_factory
 from torch.cuda import device_count
 
-from dynamo.llm import ModelType, register_llm
+from dynamo.llm import ModelInput, ModelType, register_llm
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 from dynamo.runtime.logging import configure_dynamo_logging
 from dynamo.trtllm.engine import get_llm_engine
@@ -181,7 +181,8 @@ async def init(runtime: DistributedRuntime, config: Config):
         if is_first_worker(config):
             # Register the model with the endpoint if only the worker is first in the disaggregation chain.
             await register_llm(
-                ModelType.Backend,
+                ModelInput.Tokens,
+                ModelType.Chat,
                 endpoint,
                 config.model_path,
                 config.served_model_name,

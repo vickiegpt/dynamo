@@ -145,7 +145,7 @@ async def init(runtime: DistributedRuntime, config: Config):
     if not config.engine_args.data_parallel_rank:  # if rank is 0 or None then register
         await register_llm(
             ModelInput.Tokens,
-            ModelType.Backend,
+            ModelType.Chat,
             generate_endpoint,
             config.model,
             config.served_model_name,

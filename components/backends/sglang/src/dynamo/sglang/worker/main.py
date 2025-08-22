@@ -18,6 +18,7 @@ from sglang.srt.utils import get_ip, get_zmq_socket
 from dynamo.llm import (
     ForwardPassMetrics,
     KvStats,
+    ModelInput,
     ModelType,
     WorkerMetricsPublisher,
     WorkerStats,
@@ -334,7 +335,8 @@ async def init(
 
     endpoint = component.endpoint("generate")
     await register_llm(
-        ModelType.Backend,
+        ModelInput.Tokens,
+        ModelType.Chat,
         endpoint,
         server_args.model_path,
         server_args.served_model_name,

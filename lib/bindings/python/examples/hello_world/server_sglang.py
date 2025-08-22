@@ -27,7 +27,7 @@ import sglang
 import uvloop
 from sglang.srt.server_args import ServerArgs
 
-from dynamo.llm import ModelType, register_llm
+from dynamo.llm import ModelInput, ModelType, register_llm
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 
 DEFAULT_ENDPOINT = "dyn://dynamo.backend.generate"
@@ -91,7 +91,7 @@ async def init(runtime: DistributedRuntime, config: Config):
     await component.create_service()
 
     endpoint = component.endpoint(config.endpoint)
-    await register_llm(ModelType.Backend, endpoint, config.model)
+    await register_llm(ModelInput.Tokens, ModelType.Chat, endpoint, config.model)
 
     engine_args = ServerArgs(
         model_path=config.model,
