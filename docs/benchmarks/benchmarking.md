@@ -55,7 +55,7 @@ find components/backends/vllm/ -name "*.yaml" -type f -exec sed -i.bak 's|nvcr\.
 
 ### Running the Benchmark
 
-The easiest way to benchmark is using the automated script with example manifests. Modify the example manifests to use the model you would like to benchmark and to match your hardware.
+The easiest way to benchmark is using the automated script with example manifests. Modify the example manifests to use the model you would like to benchmark and to match your hardware. The default model is `meta-llama/Meta-Llama-3.1-8B-Instruct`.
 
 ```bash
 # 1. Set your namespace (same one from deploy/utils setup)
@@ -73,7 +73,7 @@ You'll see output like this confirming your configuration:
 ```
 === Benchmark Configuration ===
 Namespace:              benchmarking
-Model:                  deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+Model:                  meta-llama/Meta-Llama-3.1-8B-Instruct
 Input Sequence Length:  200 tokens      # Auto-configured default
 Output Sequence Length: 200 tokens      # Auto-configured default
 Sequence Std Dev:       10 tokens       # Auto-configured default
@@ -175,12 +175,24 @@ benchmarks/results/
     ├── p50_inter_token_latency_vs_concurrency.png      # Token generation speed
     ├── avg_time_to_first_token_vs_concurrency.png      # Response time
     ├── request_throughput_vs_concurrency.png           # Requests per second
+    ├── efficiency_tok_s_gpu_vs_user.png                # GPU efficiency
     └── avg_inter_token_latency_vs_concurrency.png      # Average latency
 ```
 
-4. **`avg_time_to_first_token_vs_concurrency.png`**
-   - Time to first token across concurrency levels
-   - Critical for user experience and response time
+Example plots (generated using meta-llama/Meta-Llama-3.1-8B-Instruct on A100s):
+
+<table>
+  <tr>
+    <td><img src="../images/p50_inter_token_latency_vs_concurrency.png" alt="P50 Inter-Token Latency vs Concurrency" width="400"></td>
+    <td><img src="../images/avg_time_to_first_token_vs_concurrency.png" alt="Average Time to First Token vs Concurrency" width="400"></td>
+    <td><img src="../images/request_throughput_vs_concurrency.png" alt="Request Throughput vs Concurrency" width="400"></td>
+  </tr>
+  <tr>
+    <td><img src="../images/efficiency_tok_s_gpu_vs_user_2.png" alt="GPU Efficiency (tokens/s/GPU)" width="400"></td>
+    <td><img src="../images/avg_inter_token_latency_vs_concurrency.png" alt="Average Inter-Token Latency vs Concurrency" width="400"></td>
+    <td></td>
+  </tr>
+</table>
 
 ### Data Files
 
@@ -193,6 +205,7 @@ benchmarks/results/
 │   ├── p50_inter_token_latency_vs_concurrency.png
 │   ├── avg_inter_token_latency_vs_concurrency.png
 │   ├── request_throughput_vs_concurrency.png
+│   ├── efficiency_tok_s_gpu_vs_user.png
 │   └── avg_time_to_first_token_vs_concurrency.png
 ├── agg/                         # Aggregated deployment results
 │   ├── c1/                      # Concurrency level 1
