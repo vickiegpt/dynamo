@@ -274,7 +274,7 @@ class DynamoModelServer:
             return
         
         # Case 3: Same model - verify config matches
-        config_matches = self.loaded_config_hash == request.config_hash
+        config_matches = self.loaded_config_hash == request.config_hash and self.loaded_world_size == request.world_size and self.loaded_local_rank == request.local_rank and self.loaded_global_rank == request.global_rank
         
         if not config_matches:
             error_msg = (
