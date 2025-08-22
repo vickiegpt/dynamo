@@ -589,13 +589,17 @@ impl Slot for VllmConnectorSlot {
         // in onborading case
         if computed_position < self.current_position {
             tracing::debug!(
-                "computed_position={} <= current_position={}, so we are onboarding during prefilling phase",
+                "computed_position={} < current_position={}, so we are onboarding during prefilling phase",
                 computed_position, self.current_position
             );
             return Ok(());
         }
 
         // now we decide what we should do for the new computed tokens
+        tracing::debug!(
+                "applying scheduler output, computed_position={}, sequence_total_tokens={}",
+                computed_position, self.sequence.total_tokens()
+            );
 
         if computed_position < self.sequence.total_tokens() {
             // no need to apply new tokens, since it's applied when created the slot during prefilling
@@ -617,7 +621,7 @@ impl Slot for VllmConnectorSlot {
         }
 
         let num_candidate_blocks =
-            ((computed_position + 1) / self.block_size) - self.evaluated_blocks;
+            (computed_position / self.block_size) - self.evaluated_blocks;
 
         if num_candidate_blocks != 0 {
             // do we have a mechanism for skipping gpu cache hit blocks?  not sure yet.
