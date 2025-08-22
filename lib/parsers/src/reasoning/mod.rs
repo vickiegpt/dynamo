@@ -40,12 +40,12 @@ pub trait ReasoningParser: Send + std::fmt::Debug {
     /// Parses a standalone, non-streaming input chunk. Implementations may reset or ignore
     /// internal streaming state and should return the split of normal vs reasoning text for
     /// this complete input. Marker tokens must not be included in either output.
-    fn detect_and_parse_reasoning(&self, token_ids: &Vec<u32>) -> ParserResult;
+    fn detect_and_parse_reasoning(&self, token_ids: &[u32]) -> ParserResult;
 
     /// Parses a streaming chunk and updates internal state. The return value should be the
     /// delta: only the newly discovered normal and reasoning text attributable to this chunk
     /// (not the cumulative totals). Marker tokens must not be included in either output.
-    fn parse_reasoning_streaming_incremental(&mut self, token_ids: &Vec<u32>) -> ParserResult;
+    fn parse_reasoning_streaming_incremental(&mut self, token_ids: &[u32]) -> ParserResult;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,11 +61,11 @@ pub struct ReasoningParserWrapper {
 }
 
 impl ReasoningParser for ReasoningParserWrapper {
-    fn detect_and_parse_reasoning(&self, token_ids: &Vec<u32>) -> ParserResult {
+    fn detect_and_parse_reasoning(&self, token_ids: &[u32]) -> ParserResult {
         self.parser.detect_and_parse_reasoning(token_ids)
     }
 
-    fn parse_reasoning_streaming_incremental(&mut self, token_ids: &Vec<u32>) -> ParserResult {
+    fn parse_reasoning_streaming_incremental(&mut self, token_ids: &[u32]) -> ParserResult {
         self.parser.parse_reasoning_streaming_incremental(token_ids)
     }
 }
@@ -82,7 +82,7 @@ impl ReasoningParserType {
                     "</think>".into(),
                     false,
                     true,
-                    vocab
+                    vocab,
                 )),
             },
         }

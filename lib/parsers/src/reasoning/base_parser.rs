@@ -24,14 +24,8 @@ impl BasicReasoningParser {
         stream_reasoning: bool,
         vocab: &HashMap<String, u32>,
     ) -> Self {
-        let think_start_token_id = vocab
-            .get(&think_start_token)
-            .cloned()
-            .unwrap();
-        let think_end_token_id = vocab
-            .get(&think_end_token)
-            .cloned()
-            .unwrap();
+        let think_start_token_id = vocab.get(&think_start_token).cloned().unwrap();
+        let think_end_token_id = vocab.get(&think_end_token).cloned().unwrap();
 
         Self {
             think_start_token: think_start_token_id,
@@ -45,23 +39,29 @@ impl BasicReasoningParser {
 }
 
 impl ReasoningParser for BasicReasoningParser {
-    fn detect_and_parse_reasoning(&self, token_ids: &Vec<u32>) -> ParserResult {
-        log::debug!("detect_and_parse_reasoning called with token_ids: {:?}", token_ids);
+    fn detect_and_parse_reasoning(&self, token_ids: &[u32]) -> ParserResult {
+        log::debug!(
+            "detect_and_parse_reasoning called with token_ids: {:?}",
+            token_ids
+        );
 
         let in_reasoning = self._in_reasoning || token_ids.contains(&self.think_start_token);
         log::debug!("in_reasoning: {}", in_reasoning);
+        let mut processed_text = token_ids.to_vec();
 
         if !in_reasoning {
             log::debug!("No reasoning detected, returning normal text.");
             return ParserResult {
-                normal_token_ids: token_ids.clone(),
+                normal_token_ids: processed_text,
                 reasoning_token_ids: Vec::new(),
             };
         }
 
         // The text is considered to be in a reasoning block.
-        let mut processed_text = token_ids.clone();
-        if let Some(pos) = processed_text.iter().position(|&x| x == self.think_start_token) {
+        if let Some(pos) = processed_text
+            .iter()
+            .position(|&x| x == self.think_start_token)
+        {
             processed_text.remove(pos);
         }
         log::debug!(
@@ -81,7 +81,10 @@ impl ReasoningParser for BasicReasoningParser {
         }
 
         // Extract reasoning content
-        let (reasoning_token_ids, normal_token_ids) = if let Some(pos) = processed_text.iter().position(|&x| x == self.think_end_token) {
+        let (reasoning_token_ids, normal_token_ids) = if let Some(pos) = processed_text
+            .iter()
+            .position(|&x| x == self.think_end_token)
+        {
             let reasoning_token_ids = processed_text[..pos].to_vec();
             let normal_token_ids = processed_text[pos + 1..].to_vec();
             (reasoning_token_ids, normal_token_ids)
@@ -98,7 +101,7 @@ impl ReasoningParser for BasicReasoningParser {
         }
     }
 
-    fn parse_reasoning_streaming_incremental(&mut self, token_ids: &Vec<u32>) -> ParserResult {
+    fn parse_reasoning_streaming_incremental(&mut self, token_ids: &[u32]) -> ParserResult {
         // Incrementally parse the streaming text
         self._buffer.extend(token_ids);
         let mut current_text = self._buffer.clone();
@@ -136,7 +139,10 @@ impl ReasoningParser for BasicReasoningParser {
 
         // Strip `<think>` token if present
         if !self.stripped_think_start && current_text.contains(&self.think_start_token) {
-            if let Some(pos) = current_text.iter().position(|&x| x == self.think_start_token) {
+            if let Some(pos) = current_text
+                .iter()
+                .position(|&x| x == self.think_start_token)
+            {
                 current_text.remove(pos);
             }
             // current_text = current_text.replace(&self.think_start_token, "");
@@ -157,9 +163,9 @@ impl ReasoningParser for BasicReasoningParser {
             self._in_reasoning = false;
             let start_idx = think_end_idx + 1;
             let normal_token_ids: &[u32] = if start_idx < current_text.len() {
-                &current_text[start_idx..].to_vec()
+                &current_text[start_idx..]
             } else {
-                &[].to_vec()
+                [].as_ref()
             };
             return ParserResult {
                 normal_token_ids: normal_token_ids.to_vec(),

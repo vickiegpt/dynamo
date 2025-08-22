@@ -20,18 +20,18 @@ impl DeepseekR1ReasoningParser {
                 "</think>".to_string(),
                 true,
                 true,
-                vocab
+                vocab,
             ),
         }
     }
 }
 
 impl ReasoningParser for DeepseekR1ReasoningParser {
-    fn parse_reasoning_streaming_incremental(&mut self, token_ids: &Vec<u32>) -> ParserResult {
+    fn parse_reasoning_streaming_incremental(&mut self, token_ids: &[u32]) -> ParserResult {
         self.base.parse_reasoning_streaming_incremental(token_ids)
     }
 
-    fn detect_and_parse_reasoning(&self, token_ids: &Vec<u32>) -> ParserResult {
+    fn detect_and_parse_reasoning(&self, token_ids: &[u32]) -> ParserResult {
         self.base.detect_and_parse_reasoning(token_ids)
     }
 }

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::tokenizers::traits::Tokenizer;
 use std::{collections::HashMap, sync::Arc};
-use crate::tokenizers::{traits::Tokenizer};
 
 use dynamo_parsers::{ParserResult, ReasoningParser, ReasoningParserType, ReasoningParserWrapper};
 
@@ -18,7 +18,11 @@ impl NvCreateChatCompletionRequest {
     ///
     /// # Returns
     /// * [`DeltaGenerator`] configured with model name and response options.
-    pub fn response_generator(&self, tokenizer: Option<&Arc<(dyn Tokenizer + 'static)>>, vocab: Option<&HashMap<String, u32>>) -> DeltaGenerator {
+    pub fn response_generator(
+        &self,
+        tokenizer: Option<&Arc<(dyn Tokenizer + 'static)>>,
+        vocab: Option<&HashMap<String, u32>>,
+    ) -> DeltaGenerator {
         let options = DeltaGeneratorOptions {
             enable_usage: true,
             enable_logprobs: self.inner.logprobs.unwrap_or(false)
@@ -74,7 +78,12 @@ impl DeltaGenerator {
     ///
     /// # Returns
     /// * A new instance of [`DeltaGenerator`].
-    pub fn new(model: String, options: DeltaGeneratorOptions, tokenizer: Option<&Arc<(dyn Tokenizer + 'static)>>, vocab: Option<&HashMap<String, u32>>) -> Self {
+    pub fn new(
+        model: String,
+        options: DeltaGeneratorOptions,
+        tokenizer: Option<&Arc<(dyn Tokenizer + 'static)>>,
+        vocab: Option<&HashMap<String, u32>>,
+    ) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -98,17 +107,7 @@ impl DeltaGenerator {
         let reasoning_parser_type = ReasoningParserType::Basic;
 
         // Reasoning parser wrapper
-        let reasoning_parser = if let Some(v) = vocab {
-            Some(reasoning_parser_type.get_reasoning_parser(v))
-        } else {
-            None
-        };
-
-        let tokenizer = if let Some(tokenizer) = tokenizer {
-            Some(tokenizer.clone())
-        } else {
-            None
-        };
+        let reasoning_parser = vocab.map(|v| reasoning_parser_type.get_reasoning_parser(v));
 
         Self {
             id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
@@ -121,7 +120,7 @@ impl DeltaGenerator {
             msg_counter: 0,
             options,
             reasoning_parser,
-            tokenizer,
+            tokenizer: tokenizer.cloned(),
         }
     }
 
@@ -202,7 +201,12 @@ impl DeltaGenerator {
         if self.tokenizer.is_none() || self.reasoning_parser.is_none() {
             return None;
         }
-        Some(self.reasoning_parser.as_mut().unwrap().parse_reasoning_streaming_incremental(&token_ids))
+        Some(
+            self.reasoning_parser
+                .as_mut()
+                .unwrap()
+                .parse_reasoning_streaming_incremental(&token_ids),
+        )
     }
 
     /// Creates a choice within a chat completion response.
@@ -234,7 +238,7 @@ impl DeltaGenerator {
                 None
             },
             refusal: None,
-            reasoning_content: reasoning_content
+            reasoning_content,
         };
 
         let choice = dynamo_async_openai::types::ChatChoiceStream {
@@ -328,8 +332,9 @@ impl crate::protocols::openai::DeltaGeneratorExt<NvCreateChatCompletionStreamRes
 
         // Create the streaming response.
         let reasoning_parser_result = self.create_reasoning_content(delta.token_ids);
-        
-        let (normal_text, reasoning_content) = if let Some(parser_result) = reasoning_parser_result {
+
+        let (normal_text, reasoning_content) = if let Some(parser_result) = reasoning_parser_result
+        {
             let none_if_empty = |vec: String| {
                 if vec.is_empty() {
                     None
@@ -337,13 +342,33 @@ impl crate::protocols::openai::DeltaGeneratorExt<NvCreateChatCompletionStreamRes
                     Some(vec)
                 }
             };
-            (none_if_empty(self.tokenizer.as_ref().unwrap().decode(&parser_result.normal_token_ids, false).unwrap()),
-             none_if_empty(self.tokenizer.as_ref().unwrap().decode(&parser_result.reasoning_token_ids, false).unwrap()))
+            (
+                none_if_empty(
+                    self.tokenizer
+                        .as_ref()
+                        .unwrap()
+                        .decode(&parser_result.normal_token_ids, false)
+                        .unwrap(),
+                ),
+                none_if_empty(
+                    self.tokenizer
+                        .as_ref()
+                        .unwrap()
+                        .decode(&parser_result.reasoning_token_ids, false)
+                        .unwrap(),
+                ),
+            )
         } else {
             (delta.text, None)
         };
         let index = 0;
-        let stream_response = self.create_choice(index, normal_text, reasoning_content, finish_reason, logprobs);
+        let stream_response = self.create_choice(
+            index,
+            normal_text,
+            reasoning_content,
+            finish_reason,
+            logprobs,
+        );
 
         Ok(stream_response)
     }
