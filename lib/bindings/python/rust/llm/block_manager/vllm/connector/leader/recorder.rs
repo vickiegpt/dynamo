@@ -116,7 +116,7 @@ impl KvConnectorLeaderRecorder {
             .unwrap();
 
         let connector_leader = KvConnectorLeader {
-            slot_manager: ConnectorSlotManager::new(block_manager.clone(), leader, drt.clone()),
+            slot_manager: ConnectorSlotManager::new(block_manager.clone(), leader, drt.clone(), RequestType::Immediate),
             block_size,
             inflight_requests: HashSet::new(),
             onboarding_slots: HashSet::new(),

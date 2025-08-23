@@ -21,6 +21,7 @@ use dynamo_llm::block_manager::{
         locality::Logical,
     },
     connector::*,
+    connector::protocol::RequestType,
     BasicMetadata, DiskStorage, ImmutableBlock, PinnedStorage,
 };
 use dynamo_llm::tokens::{SaltHash, TokenBlockSequence, Tokens};
@@ -105,7 +106,7 @@ impl KvConnectorLeader {
         let drt = drt.inner().clone();
 
         Self {
-            slot_manager: ConnectorSlotManager::new(block_manager.clone(), leader, drt.clone()),
+            slot_manager: ConnectorSlotManager::new(block_manager.clone(), leader, drt.clone(), RequestType::Immediate),
             block_size,
             inflight_requests: HashSet::new(),
             onboarding_slots: HashSet::new(),
@@ -222,7 +223,7 @@ impl Leader for KvConnectorLeader {
                 "triggering onboarding for {} external tokens",
                 num_external_tokens
             );
-            slot.trigger_onboarding(num_external_tokens)?;
+            slot.trigger_onboarding(num_external_tokens, RequestType::Immediate)?;
             self.onboarding_slots.insert(request_id);
         }
 

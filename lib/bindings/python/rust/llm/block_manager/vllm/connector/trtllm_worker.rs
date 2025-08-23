@@ -219,6 +219,10 @@ impl Worker for KvConnectorWorker {
             // todo(ryan): capture the context, pass this to the scheduler to do the await on another thread
             // or put the event on a stream and use stream waits to keep it all on device.
             event_sync_blocking(self.layer_events[self.layers_complete - 1]);
+            if !offloading_operations.is_empty() {
+                tracing::debug!("Start {} offloading operations.", offloading_operations.len())
+            }
+
             for operation in offloading_operations {
                 self.connector.enqueue_request(operation);
             }

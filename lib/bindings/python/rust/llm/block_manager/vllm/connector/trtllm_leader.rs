@@ -8,6 +8,7 @@ use crate::llm::block_manager::vllm::connector::leader::slot::{
 };
 use crate::llm::block_manager::BlockManagerBuilder;
 use crate::llm::block_manager::{distributed::KvbmLeader as PyKvbmLeader, vllm::KvbmRequest};
+use dynamo_llm::block_manager::connector::protocol::RequestType;
 use crate::DistributedRuntime as PyDistributedRuntime;
 use anyhow;
 use std::collections::HashSet;
@@ -107,6 +108,7 @@ impl KvConnectorLeader {
                     block_manager.get_block_manager().clone(),
                     leader.clone(),
                     drt.clone(),
+                    RequestType::Scheduled,
                 );
 
                 let _ = slot_manager_cell.set(sm);
@@ -236,7 +238,7 @@ impl Leader for KvConnectorLeader {
                     "triggering onboarding for {} external tokens",
                     num_external_tokens
                 );
-                slot.trigger_onboarding(num_external_tokens)?;
+                slot.trigger_onboarding(num_external_tokens, RequestType::Scheduled)?;
                 self.onboarding_slots.insert(request_id.clone());
             }
 

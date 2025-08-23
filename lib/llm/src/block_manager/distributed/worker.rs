@@ -200,6 +200,8 @@ impl KvbmWorker {
         let bytes_per_block =
             num_layers * outer_dim * config.page_size * inner_dim * config.dtype_width_bytes;
 
+        tracing::debug!("bytes_per_block: {bytes_per_block}");
+
         let mut layout_builder_instance = LayoutConfigBuilder::default();
         let layout_builder = layout_builder_instance
             .num_layers(num_layers)

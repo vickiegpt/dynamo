@@ -136,7 +136,7 @@ pub trait Slot: std::fmt::Debug {
     fn acquire_local_matches(&mut self, num_computed_tokens: usize) -> Result<(), SlotError>;
 
     /// Trigger the onboarding operation for the slot.
-    fn trigger_onboarding(&mut self, num_external_tokens: usize) -> Result<(), SlotError>;
+    fn trigger_onboarding(&mut self, num_external_tokens: usize, request_type: RequestType) -> Result<(), SlotError>;
 
     /// Take all pending operations for the slot.
     fn take_pending_operations(&mut self) -> Option<Vec<WorkerTransferRequest>>;
@@ -190,6 +190,7 @@ impl<R: RequestKey> ConnectorSlotManager<R> {
         block_manager: VllmBlockManager,
         leader: Arc<KvbmLeader>,
         drt: DistributedRuntime,
+        onboard_request_type: RequestType,
     ) -> Self {
         tracing::debug!(
             "creating slot manager with block size: {}",
@@ -202,10 +203,11 @@ impl<R: RequestKey> ConnectorSlotManager<R> {
         let primary_token = drt.primary_token();
         let runtime_primary = drt.runtime().primary();
         let drt_for_task = drt;
+        let onboard_request_type = onboard_request_type;
 
         let xfer_engine_task = CriticalTaskExecutionHandle::new_with_runtime(
-            |cancellation_token| async move {
-                xfer_engine.execute(cancellation_token, drt_for_task).await
+            move |cancellation_token, | async move {
+                xfer_engine.execute(cancellation_token, drt_for_task, onboard_request_type).await
             },
             primary_token,
             "LocalTransferEngine",
@@ -621,7 +623,7 @@ impl Slot for VllmConnectorSlot {
         }
 
         let num_candidate_blocks =
-            (computed_position / self.block_size) - self.evaluated_blocks;
+            ((computed_position + 1) / self.block_size) - self.evaluated_blocks;
 
         if num_candidate_blocks != 0 {
             // do we have a mechanism for skipping gpu cache hit blocks?  not sure yet.
@@ -831,7 +833,7 @@ impl Slot for VllmConnectorSlot {
         Ok(())
     }
 
-    fn trigger_onboarding(&mut self, num_external_tokens: usize) -> Result<(), SlotError> {
+    fn trigger_onboarding(&mut self, num_external_tokens: usize, request_type: RequestType) -> Result<(), SlotError> {
         if !matches!(self.state(), SlotState::OnboardStaged(_)) {
             return Err(SlotError::InvalidOperation(format!(
                 "slot must be in the OnboardStaged state to trigger onboarding; got {:?}",
@@ -866,7 +868,7 @@ impl Slot for VllmConnectorSlot {
             // construct offload requests - transfer engine + worker
             let src_blocks = Box::new(AnyImmutableBlocks::<PinnedStorage, _, _>::new(host_blocks));
 
-            self.onboard_blocks(src_blocks, dst_block_ids)?;
+            self.onboard_blocks(src_blocks, dst_block_ids, request_type)?;
 
             // shift the evaluated blocks position to the end of the computed/cached blocks
             self.evaluated_blocks += num_host_blocks;
@@ -889,7 +891,7 @@ impl Slot for VllmConnectorSlot {
             // construct offload requests - transfer engine + worker
             let src_blocks = Box::new(AnyImmutableBlocks::<DiskStorage, _, _>::new(disk_blocks));
 
-            self.onboard_blocks(src_blocks, dst_block_ids)?;
+            self.onboard_blocks(src_blocks, dst_block_ids, request_type)?;
 
             // shift the evaluated blocks position to the end of the computed/cached blocks
             self.evaluated_blocks += num_disk_blocks;
@@ -994,6 +996,7 @@ impl VllmConnectorSlot {
         &mut self,
         src_blocks: Box<dyn AnyBlocks>,
         dst_block_ids: Vec<BlockId>,
+        request_type: RequestType,
     ) -> Result<(), SlotError> {
         debug_assert_eq!(src_blocks.len(), dst_block_ids.len());
 
@@ -1012,7 +1015,7 @@ impl VllmConnectorSlot {
             request_id: self.request_id.clone(),
             uuid: operation_id,
             transfer_type: TransferType::Load,
-            request_type: RequestType::Immediate,
+            request_type,
         };
 
         if let Err(e) = self.xfer_tx.send(xfer_req) {
@@ -1134,6 +1137,7 @@ impl LocalTransferEngine {
         &mut self,
         cancellation_token: CancellationToken,
         drt: DistributedRuntime,
+        onboard_request_type: RequestType,
     ) -> anyhow::Result<()> {
         let (onboard_tx, mut onboard_rx) = mpsc::unbounded_channel();
         let (offload_tx, mut offload_rx) = mpsc::unbounded_channel();
@@ -1145,13 +1149,13 @@ impl LocalTransferEngine {
         let leader_onboard = Arc::clone(&self.leader);
 
         let onboard_task = CriticalTaskExecutionHandle::new_with_runtime(
-            |cancellation_token_onboard| async move {
+            move |cancellation_token_onboard| async move {
                 while let Some(req) = onboard_rx.recv().await {
                     if cancellation_token_onboard.is_cancelled() {
                         tracing::debug!("LocalOnboardTask: received cancellation signal");
                         break;
                     }
-                    if let Err(e) = process_onboard_request(req, &leader_onboard).await {
+                    if let Err(e) = process_onboard_request(req, &leader_onboard, onboard_request_type).await {
                         tracing::error!("LocalOnboardTask: error processing request: {:?}", e);
                     }
                 }
@@ -1313,7 +1317,7 @@ async fn process_offload_request(
     // 4. Wait for the offload request to complete
     match notify_receiver.await {
         Ok(_) => {
-            tracing::debug!("Transfer completed successfully");
+            tracing::debug!("Offloading Transfer completed successfully");
         }
         Err(_) => {
             return Err(anyhow::anyhow!("Transfer completion notification failed"));
@@ -1344,6 +1348,7 @@ async fn process_offload_request(
 async fn process_onboard_request(
     onboard_req: LocalOnboardRequest,
     leader: &Arc<KvbmLeader>,
+    request_type: RequestType,
 ) -> anyhow::Result<()> {
     let request_id = &onboard_req.request_id;
     let operation_id = &onboard_req.operation_id;
@@ -1367,7 +1372,7 @@ async fn process_onboard_request(
             request_id: request_id.clone(),
             uuid: *operation_id,
             requirement: None,
-            request_type: RequestType::Immediate,
+            request_type,
         }),
     };
 
@@ -1375,7 +1380,7 @@ async fn process_onboard_request(
 
     match notify_receiver.await {
         Ok(_) => {
-            tracing::debug!("Transfer completed successfully");
+            tracing::debug!("Onboarding Transfer completed successfully");
         }
         Err(_) => {
             return Err(anyhow::anyhow!("Transfer completion notification failed"));

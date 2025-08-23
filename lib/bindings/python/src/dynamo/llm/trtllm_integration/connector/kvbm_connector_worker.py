@@ -24,6 +24,8 @@ class DynamoKVBMConnectorWorker(KvCacheConnectorWorker):
             self.drt, str(executor_config.mapping.rank)
         )
 
+        self.kv_cache_tensor = None
+
     def register_kv_caches(self, kv_cache_tensor: torch.Tensor):
         """
         Register the KV cache tensors to the worker.
@@ -34,6 +36,15 @@ class DynamoKVBMConnectorWorker(KvCacheConnectorWorker):
         print(f"Register KV Caches on rank {self.rank}")
         logger.info(
             f"KvConnectorWorker started registering the kv caches on rank {self._config.mapping.rank}"
+        )
+
+        print(
+            f"kv_cache_tensor shape: {kv_cache_tensor.shape}, kv_cache_tensor dtype: {kv_cache_tensor.dtype}"
+        )
+
+        self.kv_cache_tensor = kv_cache_tensor
+        print(
+            f"block size in bytes: {kv_cache_tensor[0].numel() * kv_cache_tensor[0].element_size()}"
         )
 
         num_device_blocks = kv_cache_tensor.shape[0]
@@ -122,6 +133,30 @@ class DynamoKVBMConnectorWorker(KvCacheConnectorWorker):
         Note: IDs may only be returned from this call after they've been provided in the `finished_gen_req_ids` and `started_loading_req_ids` arguments.
         Additionally, the runtime will only take action based on these returned IDs once they've been returned by ALL workers. This allows some workers to take longer than others to complete the operations.
         """
-        return self._connector.get_finished(
+        (finished_saving, finished_loading) = self._connector.get_finished(
             finished_gen_req_ids, started_loading_req_ids
         )
+
+        if finished_saving:
+            print(
+                f"index 3 after saving: {self.kv_cache_tensor[3]}, shape: {self.kv_cache_tensor[3].shape}"
+            )
+            print(
+                f"index 3 [15] after saving: {self.kv_cache_tensor[3][15]}, shape: {self.kv_cache_tensor[3][15].shape}"
+            )
+            print(
+                f"index 3 [16] after saving: {self.kv_cache_tensor[3][16]}, shape: {self.kv_cache_tensor[3][16].shape}"
+            )
+
+        if finished_loading:
+            print(
+                f"index 3 after loading: {self.kv_cache_tensor[3]}, shape: {self.kv_cache_tensor[3].shape}"
+            )
+            print(
+                f"index 3 [15] after loading: {self.kv_cache_tensor[3][15]}, shape: {self.kv_cache_tensor[3][15].shape}"
+            )
+            print(
+                f"index 3 [16] after loading: {self.kv_cache_tensor[3][16]}, shape: {self.kv_cache_tensor[3][16].shape}"
+            )
+
+        return (finished_saving, finished_loading)
