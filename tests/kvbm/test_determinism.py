@@ -29,7 +29,6 @@ import requests
 
 # Test markers to align with repository conventions
 pytestmark = [
-    pytest.mark.kvbm,
     pytest.mark.e2e,
     pytest.mark.slow,
     pytest.mark.nightly,
@@ -69,15 +68,16 @@ class VLLMServerManager:
 
         # Construct serve command
         self.server_cmd = [
-            "vllm",
-            "serve",
-            "--block-size",
-            "16",
+            "trtllm-serve",
+            os.environ.get("KVBM_MODEL_ID", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"),
+            "--host",
+            "localhost",
             "--port",
             str(self.port),
-            "--kv-transfer-config",
-            '{"kv_connector":"DynamoConnector","kv_role":"kv_both", "kv_connector_module_path": "dynamo.llm.vllm_integration.connector"}',
-            os.environ.get("KVBM_MODEL_ID", "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"),
+            "--backend",
+            "pytorch",
+            "--extra_llm_api_options",
+            "/tmp/config.yaml",
         ]
 
         # GPU blocks override
@@ -297,11 +297,20 @@ class DeterminismTester:
     def reset_prefix_cache(self):
         """Reset the prefix cache."""
         print("Resetting prefix cache...")
-        response = requests.post(
-            f"{self.base_url}/reset_prefix_cache",
-            timeout=int(os.environ.get("KVBM_HTTP_TIMEOUT", "30")),
-        )
-        response.raise_for_status()
+        print("resetting with Shakespeare sequences...")
+        shakespeare_count = 250 // self.shakespeare_interval
+        for seq_idx in range(1, shakespeare_count + 1):
+            start_word = (seq_idx - 1) * self.word_count
+            content = self.get_shakespeare_content(start_word)
+
+            if content:
+                print(
+                    f" Resetting Shakespeare sequence {seq_idx} (words {start_word}-{start_word + self.word_count - 1})..."
+                )
+                try:
+                    self.make_request(content)
+                except Exception as e:
+                    print(f"  Resetting: Resetting request failed: {e}")
         print("Cache reset done")
 
     def warmup_server(self):
