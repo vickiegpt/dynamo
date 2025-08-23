@@ -621,7 +621,7 @@ impl Slot for VllmConnectorSlot {
         }
 
         let num_candidate_blocks =
-            (computed_position / self.block_size) - self.evaluated_blocks;
+            ((computed_position + 1) / self.block_size) - self.evaluated_blocks;
 
         if num_candidate_blocks != 0 {
             // do we have a mechanism for skipping gpu cache hit blocks?  not sure yet.
@@ -1313,10 +1313,10 @@ async fn process_offload_request(
     // 4. Wait for the offload request to complete
     match notify_receiver.await {
         Ok(_) => {
-            tracing::debug!("Transfer completed successfully");
+            tracing::debug!("Offloading transfer completed successfully");
         }
         Err(_) => {
-            return Err(anyhow::anyhow!("Transfer completion notification failed"));
+            return Err(anyhow::anyhow!("Offloading transfer completion notification failed"));
         }
     }
     tracing::debug!(
@@ -1375,10 +1375,10 @@ async fn process_onboard_request(
 
     match notify_receiver.await {
         Ok(_) => {
-            tracing::debug!("Transfer completed successfully");
+            tracing::debug!("Onboarding transfer completed successfully");
         }
         Err(_) => {
-            return Err(anyhow::anyhow!("Transfer completion notification failed"));
+            return Err(anyhow::anyhow!("Onboarding transfer completion notification failed"));
         }
     }
 
