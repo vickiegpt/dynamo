@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import logging
 import multiprocessing
-import time
 from contextlib import contextmanager
 from multiprocessing import Process
 
@@ -230,7 +230,11 @@ async def test_fault_scenario(
         log_dir=request.node.name,
         deployment_spec=deployment_spec_test,
     ):
-        time.sleep(10)
+        await asyncio.sleep(10)
+
+        print(multiprocessing.get_start_method())
+
+        await asyncio.sleep(120)
 
         with _clients(
             logger,

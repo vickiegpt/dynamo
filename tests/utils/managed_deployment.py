@@ -11,7 +11,7 @@ from typing import Optional
 import kubernetes
 import psutil
 import yaml
-from kr8s.asyncio.objects import Pod as kr8s_Pod
+from kr8s.objects import Pod as kr8s_Pod
 from kubernetes_asyncio import client, config
 
 
@@ -415,10 +415,10 @@ class ManagedDeployment:
             if e.status != 404:  # Ignore if already deleted
                 raise
 
-    async def _start_port_forward(self):
+    def _start_port_forward(self):
         label_selector = f"nvidia.com/selector={self._deployment_name}-{self.frontend_service_name.lower()}"
 
-        frontend_service_pod = await kr8s_Pod.get(
+        frontend_service_pod = kr8s_Pod.get(
             label_selector=label_selector, namespace=self.namespace
         )
 
@@ -427,20 +427,19 @@ class ManagedDeployment:
             local_port=self.deployment_spec.port,
             address="0.0.0.0",
         )
-        await self._port_forward.start()
+        self._port_forward.start()
 
-    async def _stop_port_forward(self):
+    def _stop_port_forward(self):
         print("stopping!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         if self._port_forward:
-            await self._port_forward.stop()
-            self._port_forward = None
+            self._port_forward.stop()
 
     async def _cleanup(self):
         try:
             await self._get_deployment_logs()
         finally:
             print("stopping!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-            await self._stop_port_forward()
+            self._stop_port_forward()
             await self._delete_deployment()
 
     async def __aenter__(self):
@@ -454,7 +453,7 @@ class ManagedDeployment:
             await self._restart_nats()
             await self._create_deployment()
             await self._wait_for_ready()
-            await self._start_port_forward()
+            self._start_port_forward()
 
         except:
             await self._cleanup()
