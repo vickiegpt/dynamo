@@ -42,7 +42,7 @@ fi
 
 # Set default TensorRT-LLM git URL if not specified
 if [ -z "$TRTLLM_GIT_URL" ]; then
-    TRTLLM_GIT_URL="https://github.com/jthomson04/TensorRT-LLM.git"
+    TRTLLM_GIT_URL="https://github.com/richardhuo-nv/TensorRT-LLM.git"
 fi
 
 # Store directory where script is being launched from
