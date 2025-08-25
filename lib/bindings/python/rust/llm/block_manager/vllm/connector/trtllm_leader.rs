@@ -10,6 +10,8 @@ use crate::llm::block_manager::BlockManagerBuilder;
 use crate::llm::block_manager::{distributed::KvbmLeader as PyKvbmLeader, vllm::KvbmRequest};
 use crate::DistributedRuntime as PyDistributedRuntime;
 use anyhow;
+use dynamo_llm::block_manager::metrics_kvbm::KvbmMetrics;
+use dynamo_runtime::metrics::prometheus_names::kvbm_connector;
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Handle;
@@ -55,6 +57,7 @@ pub struct KvConnectorLeader {
     onboarding_slots: HashSet<String>,
     iteration_counter: u64,
     inflight_request_to_num_external_tokens: HashMap<String, usize>,
+    kvbm_metrics: KvbmMetrics,
 }
 
 impl KvConnectorLeader {
@@ -72,6 +75,13 @@ impl KvConnectorLeader {
         let leader = leader_py.get_inner().clone();
         let drt = drt.inner().clone();
         let handle: Handle = drt.runtime().primary();
+
+        let ns = drt
+            .namespace(kvbm_connector::KVBM_CONNECTOR_LEADER)
+            .unwrap();
+
+        let kvbm_metrics = KvbmMetrics::new(&ns);
+        let kvbm_metrics_clone = kvbm_metrics.clone();
 
         let slot_manager_cell = Arc::new(OnceLock::new());
 
@@ -107,6 +117,7 @@ impl KvConnectorLeader {
                     block_manager.get_block_manager().clone(),
                     leader.clone(),
                     drt.clone(),
+                    kvbm_metrics_clone.clone(),
                 );
 
                 let _ = slot_manager_cell.set(sm);
@@ -125,6 +136,7 @@ impl KvConnectorLeader {
             onboarding_slots: HashSet::new(),
             iteration_counter: 0,
             inflight_request_to_num_external_tokens: HashMap::new(),
+            kvbm_metrics,
         }
     }
 }
@@ -195,6 +207,10 @@ impl Leader for KvConnectorLeader {
             // Add to the map so that onboarding can be triggered in update_state_after_alloc.
             self.inflight_request_to_num_external_tokens
                 .insert(request_id, num_external_tokens);
+
+            self.kvbm_metrics
+                .matched_tokens
+                .inc_by(num_external_tokens as u64);
             Ok((num_external_tokens, true))
         } else {
             Ok((0, false))
@@ -210,7 +226,12 @@ impl Leader for KvConnectorLeader {
         block_ids: Vec<BlockId>,
         context_current_position: usize,
     ) -> anyhow::Result<()> {
-        tracing::debug!(request_id, "num_device_blocks: {}, context_current_position: {}", block_ids.len(), context_current_position);
+        tracing::debug!(
+            request_id,
+            "num_device_blocks: {}, context_current_position: {}",
+            block_ids.len(),
+            context_current_position
+        );
 
         let shared_slot = self.slot_manager().get_slot(&request_id)?;
         let mut slot = shared_slot
