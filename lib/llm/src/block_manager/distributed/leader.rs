@@ -11,12 +11,12 @@ use dynamo_runtime::utils::leader_worker_barrier::LeaderBarrier;
 
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::sync::oneshot;
 use tokio::sync::Notify;
 use tokio::sync::OnceCell;
+use tokio::sync::oneshot;
 use tokio::time::sleep;
 
 /// Data that is sent to workers over ETCD to establish a ZMQ connection.

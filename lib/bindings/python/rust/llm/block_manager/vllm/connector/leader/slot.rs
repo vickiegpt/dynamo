@@ -601,9 +601,10 @@ impl Slot for VllmConnectorSlot {
 
         // now we decide what we should do for the new computed tokens
         tracing::debug!(
-                "applying scheduler output, computed_position={}, sequence_total_tokens={}",
-                computed_position, self.sequence.total_tokens()
-            );
+            "applying scheduler output, computed_position={}, sequence_total_tokens={}",
+            computed_position,
+            self.sequence.total_tokens()
+        );
 
         if computed_position < self.sequence.total_tokens() {
             // no need to apply new tokens, since it's applied when created the slot during prefilling
@@ -1337,7 +1338,9 @@ async fn process_offload_request(
             tracing::debug!("Offloading transfer completed successfully");
         }
         Err(_) => {
-            return Err(anyhow::anyhow!("Offloading transfer completion notification failed"));
+            return Err(anyhow::anyhow!(
+                "Offloading transfer completion notification failed"
+            ));
         }
     }
     tracing::debug!(
@@ -1411,7 +1414,9 @@ async fn process_onboard_request(
             tracing::debug!("Onboarding transfer completed successfully");
         }
         Err(_) => {
-            return Err(anyhow::anyhow!("Onboarding transfer completion notification failed"));
+            return Err(anyhow::anyhow!(
+                "Onboarding transfer completion notification failed"
+            ));
         }
     }
 
