@@ -9,6 +9,11 @@ on:
       - main
       - "pull-request/[0-9]+"
 
+# Do not cancel main branch runs
+concurrency:
+  group: ${{ matrix.framework }}-build-test-${{ github.ref_name || github.run_id }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+
 jobs:
   build-test:
     runs-on: gpu-l40-runners
