@@ -9,14 +9,6 @@ set -euo pipefail
 
 SCCACHE_VERSION="v0.8.2"
 
-# Common function to check if sccache is enabled
-check_sccache_enabled() {
-    if [ "$USE_SCCACHE" != "true" ]; then
-        echo "USE_SCCACHE is not set to 'true', skipping sccache operation"
-        return 1
-    fi
-    return 0
-}
 
 usage() {
     cat << EOF
@@ -24,7 +16,6 @@ Usage: $0 [COMMAND] [OPTIONS]
 
 Commands:
     install         Install sccache binary (requires ARCH_ALT environment variable)
-    
     show-stats      Display sccache statistics with optional build name
     help            Show this help message
 
@@ -38,11 +29,6 @@ Environment variables:
 Examples:
     # Install sccache (requires ARCH_ALT to be set)
     ARCH_ALT=x86_64 $0 install
-    
-    
-    # Setup environment variables with parameters (for use with eval)
-    eval "$(USE_SCCACHE=true $0 setup-env-vars my-bucket us-west-2 amd64)"
-    
     # Show stats with build name
     $0 show-stats "UCX"
 EOF
@@ -53,16 +39,12 @@ install_sccache() {
         echo "Error: ARCH_ALT environment variable is required for sccache installation"
         exit 1
     fi
-
     echo "Installing sccache ${SCCACHE_VERSION} for architecture ${ARCH_ALT}..."
-    
     # Download and install sccache
     wget --tries=3 --waitretry=5 \
         "https://github.com/mozilla/sccache/releases/download/${SCCACHE_VERSION}/sccache-${SCCACHE_VERSION}-${ARCH_ALT}-unknown-linux-musl.tar.gz"
-    
     tar -xzf "sccache-${SCCACHE_VERSION}-${ARCH_ALT}-unknown-linux-musl.tar.gz"
     mv "sccache-${SCCACHE_VERSION}-${ARCH_ALT}-unknown-linux-musl/sccache" /usr/local/bin/
-    
     # Cleanup
     rm -rf sccache*
     echo "sccache installed successfully"
