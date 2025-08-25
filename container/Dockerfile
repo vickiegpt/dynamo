@@ -294,7 +294,7 @@ RUN uv build --wheel --out-dir /opt/dynamo/dist && \
         # do not enable KVBM feature, ensure compatibility with lower glibc
         uv run --python 3.11 maturin build --release --out /opt/dynamo/dist && \
         uv run --python 3.10 maturin build --release --out /opt/dynamo/dist; \
-    fi
+    fi && \
     /tmp/use-sccache.sh show-stats "Dynamo"
 
 ##############################################
