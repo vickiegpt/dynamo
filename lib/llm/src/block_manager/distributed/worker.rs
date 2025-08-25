@@ -431,6 +431,7 @@ impl KvbmWorker {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn worker_task(
         device_layout: Box<dyn NixlLayout<StorageType = DeviceStorage>>,
         mut layout_builder: LayoutConfigBuilder,
