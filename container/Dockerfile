@@ -123,7 +123,7 @@ ARG SCCACHE_REGION
 
 ENV ARCH_ALT=${ARCH_ALT}
 RUN if [ "$USE_SCCACHE" = "true" ]; then \
-        /tmp/use-sccache.sh install $ARCH_ALT; \
+        /tmp/use-sccache.sh install; \
     fi
 
 # Set sccache environment variables if USE_SCCACHE is set
