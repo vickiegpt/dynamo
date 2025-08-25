@@ -101,42 +101,78 @@ run_single() {
 # MTP0 Configuration (gen_mtp_size=0)
 run_4_gpus_mtp0() {
     echo "Running 4 GPUs MTP0 combinations..."
-    run_single 1 4 4 16 16 false "0.9" 0 0 "1 2 4 8 16 24 "
-    run_single 1 3 4 32 32 false "0.9" 0 0 "32 48"
-    run_single 1 2 4 64 64 false "0.9" 0 0 "64 96"
-    run_single 2 3 4 128 128 false "0.9" 0 0 "128 192"
-    run_single 3 2 4 64 64 true "0.8" 0 0 "256 384"
-    run_single 2 1 4 128 128 true "0.8" 0 0 "512 768"
+    if (( ISL == OSL )); then
+        run_single 1 4 4 128 128 false "0.9" 0 0 "1 2 4 8 16 32 64 128 192 256"
+        run_single 1 4 4 128 128 true "0.85" 0 0 "256 512 768 1024"
+        run_single 1 3 4 256 256 true "0.85" 0 0 "1024 1536 2048"
+        run_single 2 3 4 512 512 true "0.85" 0 0 "2048 2560 3072"
+        run_single 1 1 4 768 768 true "0.85" 0 0 "3072 3584 4096"
+    else
+        run_single 1 4 4 16 16 false "0.9" 0 0 "1 2 4 8 16 24 "
+        run_single 1 3 4 32 32 false "0.9" 0 0 "32 48"
+        run_single 1 2 4 64 64 false "0.9" 0 0 "64 96"
+        run_single 2 3 4 128 128 false "0.9" 0 0 "128 192"
+        run_single 3 2 4 64 64 true "0.8" 0 0 "256 384"
+        run_single 2 1 4 128 128 true "0.8" 0 0 "512 768"
+    fi
 }
 
 run_8_gpus_mtp0() {
     echo "Running 8 GPUs MTP0 combinations..."
-    run_single 1 4 8 16 16 false "0.9" 0 0 "1 2 4 8 16 24"
-    run_single 1 2 8 32 32 false "0.9" 0 0 "32 48"
-    run_single 2 3 8 64 64 false "0.9" 0 0 "64 96"
-    run_single 1 1 8 128 128 false "0.9" 0 0 "128 192"
-    run_single 3 2 8 32 32 true "0.8" 0 0 "256 384"
-    run_single 3 1 8 64 64 true "0.8" 0 0 "512 768"
-    run_single 4 1 8 128 128 true "0.8" 0 0 "1024 1536"
-    run_single 6 1 8 256 256 true "0.8" 0 0 "2048 3072"
+    if (( ISL == OSL )); then
+        run_single 1 4 8 128 128 false "0.9" 0 0 "1 2 4 8 16 32 64 128 192 256"
+        run_single 1 4 8 32 32 true "0.8" 0 0 "256 384 512"
+        run_single 1 3 8 64 64 true "0.8" 0 0 "512 768 1024"
+        run_single 2 3 8 128 128 true "0.8" 0 0 "1024 1536 2048"
+        run_single 1 1 8 256 256 true "0.8" 0 0 "2048 3072 4096"
+        run_single 3 2 8 512 512 true "0.8" 0 0 "4096 6144 8192"
+        run_single 3 2 8 768 768 true "0.8" 0 0 "6144 8192 12288"
+        run_single 2 1 8 1024 1024 true "0.8" 0 0 "8192 12288 16384"
+    else
+        run_single 1 4 8 16 16 false "0.9" 0 0 "1 2 4 8 16 24"
+        run_single 1 2 8 32 32 false "0.9" 0 0 "32 48"
+        run_single 2 3 8 64 64 false "0.9" 0 0 "64 96"
+        run_single 1 1 8 128 128 false "0.9" 0 0 "128 192"
+        run_single 3 2 8 32 32 true "0.8" 0 0 "256 384"
+        run_single 3 1 8 64 64 true "0.8" 0 0 "512 768"
+        run_single 4 1 8 128 128 true "0.8" 0 0 "1024 1536"
+        run_single 6 1 8 256 256 true "0.8" 0 0 "2048 3072"
+    fi
 }
 
 run_16_gpus_mtp0() {
     echo "Running 16 GPUs MTP0 combinations..."
-    run_single 1 1 16 8 8 true "0.8" 0 0 "16 32 64 128 192" # 5
-    run_single 2 1 16 16 16 true "0.8" 0 0 "256 384"        # 6
-    run_single 4 1 16 32 32 true "0.8" 0 0 "512 768"        # 8
-    run_single 6 1 16 64 64 true "0.8" 0 0 "1024 1536"      # 10
-    run_single 9 1 16 128 128 true "0.8" 0 0 "2048 3072"    # 13
-    run_single 12 1 16 256 256 true "0.8" 0 288 "4096 6144" # 16
+    if (( ISL == OSL )); then
+        run_single 1 1 16 64 64 true "0.75" 0 0 "16 32 64 128 256 512 1024 1536 2048"
+        run_single 2 1 16 128 128 true "0.75" 0 256 "2048 3072 4096"
+        run_single 2 1 16 256 256 true "0.75" 0 288 "4096 6144 8192"
+        run_single 3 1 16 512 512 true "0.75" 0 288 "8192 12288 16384"
+        run_single 3 1 16 768 768 true "0.75" 0 288 "12288 16384"
+        run_single 4 1 16 1024 1024 true "0.75" 0 288 "16384 24576"
+    else
+        run_single 1 1 16 8 8 true "0.8" 0 0 "16 32 64 128 192" # 5
+        run_single 2 1 16 16 16 true "0.8" 0 0 "256 384"        # 6
+        run_single 4 1 16 32 32 true "0.8" 0 0 "512 768"        # 8
+        run_single 6 1 16 64 64 true "0.8" 0 0 "1024 1536"      # 10
+        run_single 9 1 16 128 128 true "0.8" 0 0 "2048 3072"    # 13
+        run_single 12 1 16 256 256 true "0.8" 0 288 "4096 6144" # 16
+    fi
 }
 
 run_32_gpus_mtp0() {
     echo "Running 32 GPUs MTP0 combinations..."
-    run_single 1 1 32 4 4 true "0.7" 0 0 "32 64 128 192"   # 9
-    run_single 2 1 32 8 8 true "0.7" 0 0 "256 384"         # 10
-    run_single 4 1 32 16 16 true "0.7" 0 0 "512 768"       # 12
-    run_single 7 1 32 32 32 true "0.7" 0 0 "1024 1536"     # 15
+    if (( ISL == OSL )); then
+        run_single 1 1 32 32 32 true "0.7" 0 0 "32 64 128 256 512 1024 1536 2048"
+        run_single 2 1 32 64 64 true "0.7" 0 288 "2048 3072 4096"
+        run_single 3 1 32 128 128 true "0.7" 0 288 "4096 6144 8192"
+        run_single 4 1 32 256 256 true "0.7" 0 288 "8192 12288 16384"
+        run_single 6 1 32 512 512 true "0.7" 0 288 "16384 24576"
+    else
+        run_single 1 1 32 4 4 true "0.7" 0 0 "32 64 128 192"   # 9
+        run_single 2 1 32 8 8 true "0.7" 0 0 "256 384"         # 10
+        run_single 4 1 32 16 16 true "0.7" 0 0 "512 768"       # 12
+        run_single 7 1 32 32 32 true "0.7" 0 0 "1024 1536"     # 15
+    fi
 }
 
 # MTP Configuration (gen_mtp_size=1,2,3)
