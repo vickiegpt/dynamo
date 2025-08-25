@@ -43,7 +43,7 @@ jobs:
           docker system prune -af
       - name: Debug
         run: |
-          lsmod | grep nvidia || true
+          lsmod | grep nvidia
           sudo dmesg | grep -i nvrm || true
           nvidia-smi
       - name: Build image
@@ -53,7 +53,7 @@ jobs:
           ./container/build.sh --tag ${{ matrix.framework }}:latest --target ${{ matrix.target }} --framework ${{ matrix.framework }}
       - name: Run pytest
         run: |
-          docker run --gpus all -v ${{ github.workspace }}:/workspace -w /workspace \
+          docker run --rm --gpus all -v ${{ github.workspace }}:/workspace -w /workspace \
             --name ${{ env.CONTAINER_ID }}_pytest \
             ${{ matrix.framework }}:latest \
             bash -c "pytest -xsv --basetemp=/tmp --junitxml=${{ env.PYTEST_XML_FILE }} -m \"${{ env.PYTEST_MARKS }}\""
