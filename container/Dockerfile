@@ -114,16 +114,16 @@ RUN wget --tries=3 --waitretry=5 https://github.com/etcd-io/etcd/releases/downlo
     rm /tmp/etcd.tar.gz
 ENV PATH=/usr/local/bin/etcd/:$PATH
 
+COPY container/use-sccache.sh /tmp/use-sccache.sh
 # Install sccache if requested
 ARG USE_SCCACHE
+ARG ARCH_ALT
 ARG SCCACHE_BUCKET
 ARG SCCACHE_REGION
+
+ENV ARCH_ALT=${ARCH_ALT}
 RUN if [ "$USE_SCCACHE" = "true" ]; then \
-        SCCACHE_VERSION="v0.8.2" && \
-        wget --tries=3 --waitretry=5 "https://github.com/mozilla/sccache/releases/download/${SCCACHE_VERSION}/sccache-${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" && \
-        tar -xzf "sccache-${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" && \
-        mv "sccache-${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache" /usr/local/bin/ && \
-        rm -rf sccache*; \
+        /tmp/use-sccache.sh install $ARCH_ALT; \
     fi
 
 # Set sccache environment variables if USE_SCCACHE is set
@@ -164,8 +164,7 @@ RUN rm -rf /opt/hpcx/ucx && \
       --enable-mt && \
     make -j$(nproc) &&                              \
     make -j$(nproc) install-strip &&                \
-    echo "=== sccache stats AFTER UCX build ===" && \
-    sccache --show-stats && \
+    /tmp/use-sccache.sh show-stats "UCX" && \
     echo "/usr/local/ucx/lib" > /etc/ld.so.conf.d/ucx.conf && \
     echo "/usr/local/ucx/lib/ucx" >> /etc/ld.so.conf.d/ucx.conf && \
     ldconfig && \
@@ -188,9 +187,8 @@ RUN git clone --depth 1 --branch ${NIXL_REF} "https://github.com/ai-dynamo/nixl.
     fi && \
     meson setup build/ --buildtype=release --prefix=$NIXL_PREFIX $nixl_build_args && \
     ninja -C build/ -j$(nproc) && \
-    echo "=== sccache stats AFTER NIXL build ===" && \
-    sccache --show-stats && \
     ninja -C build/ install && \
+    /tmp/use-sccache.sh show-stats "NIXL" && \
     echo "$NIXL_LIB_DIR" > /etc/ld.so.conf.d/nixl.conf && \
     echo "$NIXL_PLUGIN_DIR" >> /etc/ld.so.conf.d/nixl.conf && \
     ldconfig
@@ -239,7 +237,7 @@ ARG ENABLE_KVBM
 WORKDIR /opt/dynamo
 
 RUN dnf update -y \
-    && dnf install -y llvm-toolset protobuf-compiler python3.12-devel \
+    && dnf install -y llvm-toolset protobuf-compiler python3.12-devel wget \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
@@ -254,10 +252,7 @@ COPY --from=base $CARGO_HOME $CARGO_HOME
 COPY --from=base $NIXL_PREFIX $NIXL_PREFIX
 COPY --from=base $VIRTUAL_ENV $VIRTUAL_ENV
 
-ENV PATH=$CARGO_HOME/bin:$VIRTUAL_ENV/bin:$PATH:/usr/local/bin/sccache
-
-# Copy sccache from base stage if it was installed
-COPY --from=base /usr/local/bin/sccache /usr/local/bin/sccache
+ENV PATH=$CARGO_HOME/bin:$VIRTUAL_ENV/bin:$PATH
 
 # Copy configuration files first for better layer caching
 COPY pyproject.toml README.md LICENSE Cargo.toml Cargo.lock rust-toolchain.toml hatch_build.py /opt/dynamo/
@@ -266,10 +261,18 @@ COPY pyproject.toml README.md LICENSE Cargo.toml Cargo.lock rust-toolchain.toml 
 COPY lib/ /opt/dynamo/lib/
 COPY components/ /opt/dynamo/components/
 
-# Redeclare sccache ARGs for wheel_builder stage
+# Install sccache if requested
+COPY container/use-sccache.sh /tmp/use-sccache.sh
+# Install sccache if requested
 ARG USE_SCCACHE
+ARG ARCH_ALT
 ARG SCCACHE_BUCKET
 ARG SCCACHE_REGION
+
+ENV ARCH_ALT=${ARCH_ALT}
+RUN if [ "$USE_SCCACHE" = "true" ]; then \
+        /tmp/use-sccache.sh install; \
+    fi
 
 # Set sccache environment variables if USE_SCCACHE is set
 ENV SCCACHE_BUCKET=${USE_SCCACHE:+${SCCACHE_BUCKET}} \
@@ -291,9 +294,8 @@ RUN uv build --wheel --out-dir /opt/dynamo/dist && \
         # do not enable KVBM feature, ensure compatibility with lower glibc
         uv run --python 3.11 maturin build --release --out /opt/dynamo/dist && \
         uv run --python 3.10 maturin build --release --out /opt/dynamo/dist; \
-    fi && \
-    echo "=== sccache stats after dynamo build ===" && \
-    sccache --show-stats
+    fi
+    /tmp/use-sccache.sh show-stats "Dynamo"
 
 ##############################################
 ########## Dev entrypoint image ##############

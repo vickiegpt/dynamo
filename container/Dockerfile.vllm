@@ -105,15 +105,17 @@ ARG MAX_JOBS=16
 ENV MAX_JOBS=$MAX_JOBS
 ENV CUDA_HOME=/usr/local/cuda
 
+# Install sccache if requested
+COPY container/use-sccache.sh /tmp/use-sccache.sh
+# Install sccache if requested
 ARG USE_SCCACHE
+ARG ARCH_ALT
 ARG SCCACHE_BUCKET
 ARG SCCACHE_REGION
+
+ENV ARCH_ALT=${ARCH_ALT}
 RUN if [ "$USE_SCCACHE" = "true" ]; then \
-        SCCACHE_VERSION="v0.8.2" && \
-        wget --tries=3 --waitretry=5 "https://github.com/mozilla/sccache/releases/download/${SCCACHE_VERSION}/sccache-${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" && \
-        tar -xzf "sccache-${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" && \
-        mv "sccache-${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache" /usr/local/bin/ && \
-        rm -rf sccache*; \
+        /tmp/use-sccache.sh install; \
     fi
 
 # Set environment variables - they'll be empty strings if USE_SCCACHE=false
@@ -131,8 +133,7 @@ RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
         cp /tmp/deps/vllm/install_vllm.sh /tmp/install_vllm.sh && \
         chmod +x /tmp/install_vllm.sh && \
         /tmp/install_vllm.sh --editable --vllm-ref $VLLM_REF --max-jobs $MAX_JOBS --arch $ARCH --installation-dir /opt --deepgemm-ref $DEEPGEMM_REF --flashinf-ref $FLASHINF_REF --torch-backend $TORCH_BACKEND && \
-        echo "sccache STATS after vllm build" && \
-        sccache --show-stats
+        /tmp/use-sccache.sh show-stats "vLLM";
 
 ENV LD_LIBRARY_PATH=\
 /opt/vllm/tools/ep_kernels/ep_kernels_workspace/nvshmem_install/lib:\
