@@ -60,7 +60,6 @@ show_stats() {
     fi
 }
 
-
 main() {
     case "${1:-help}" in
         install)
