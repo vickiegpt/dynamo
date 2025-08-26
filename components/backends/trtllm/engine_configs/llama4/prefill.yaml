@@ -1,0 +1,24 @@
+# engine_configs/llama4/agg.yaml
+
+# Model: https://huggingface.co/nvidia/Llama-4-Maverick-17B-128E-Instruct-FP8/tree/main
+# Model Path: "/lustre/share/coreai_dlalgo_ci/artifacts/model/llama-4-maverick_17b_128e_pyt/safetensors_mode-instruct/hf-e91306a-dynamo-fp8/"
+
+backend: pytorch
+tensor_parallel_size: 8
+moe_expert_parallel_size: 1
+moe_tensor_parallel_size: 8
+
+max_batch_size: 16
+max_seq_len: 40000
+disable_overlap_scheduler: true
+
+kv_cache_config:
+  free_gpu_memory_fraction: 0.5
+  dtype: fp8
+
+cuda_graph_config:
+  enable_padding: true
+  max_batch_size: 16
+
+cache_transceiver_config:
+  backend: default
