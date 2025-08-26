@@ -121,7 +121,7 @@ pub fn try_tool_call_parse_pythonic(
 
     let tool_response = parse_tool_calls(&matches[0]);
 
-    Ok((tool_response?, Some(String::new()))) // TODO: Add support for normal text 
+    Ok((tool_response?, Some(String::new()))) // TODO: Add support for normal text
 }
 
 #[cfg(test)]
@@ -139,7 +139,7 @@ mod tests {
         let (result, _) = try_tool_call_parse_pythonic(message).unwrap();
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
-        let (name, args) = extract_name_and_args(result[0].clone()); // TODO: Add support for normal text 
+        let (name, args) = extract_name_and_args(result[0].clone()); // TODO: Add support for normal text
         assert_eq!(name, "foo");
         assert_eq!(args["a"], "1");
         assert_eq!(args["b"], "2");
