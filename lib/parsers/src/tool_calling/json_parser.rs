@@ -7,8 +7,11 @@ use regex::RegexBuilder;
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::parsers::JsonParserConfig;
+use super::config::JsonParserConfig;
 use super::response::{CalledFunction, ToolCallResponse, ToolCallType};
+
+// Remove this line:
+// pub use super::config::{JsonParserConfig, ToolCallConfig, ToolCallParserType};
 
 // Same as CalledFunction with named parameters
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
