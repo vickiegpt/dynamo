@@ -35,6 +35,12 @@ if [[ -n ${MODALITY} ]]; then
   EXTRA_ARGS+="--modality ${MODALITY} "
 fi
 
+# FIXME: yaml engine config files should take precedence, but don't seem to be,
+# so set max num tokens here as a workaround
+if [[ -n ${MAX_NUM_TOKENS} ]]; then
+  EXTRA_ARGS+="--max-num-tokens ${MAX_NUM_TOKENS} "
+fi
+
 trtllm-llmapi-launch \
   python3 -m dynamo.trtllm \
     --model-path "${MODEL_PATH}" \
