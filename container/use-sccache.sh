@@ -50,7 +50,6 @@ install_sccache() {
     echo "sccache installed successfully"
 }
 
-
 show_stats() {
     if command -v sccache >/dev/null 2>&1; then
         echo "=== sccache statistics AFTER $1 ==="
