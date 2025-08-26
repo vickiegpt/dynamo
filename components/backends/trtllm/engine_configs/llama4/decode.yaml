@@ -21,3 +21,5 @@ cuda_graph_config:
 
 cache_transceiver_config:
   backend: default
+  # TODO: Should it be same on both prefill/decode?
+  max_tokens_in_buffer: 40000
