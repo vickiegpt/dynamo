@@ -112,11 +112,28 @@ RUN wget --tries=3 --waitretry=5 "https://static.rust-lang.org/rustup/archive/1.
 RUN apt-get update -y \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         # NIXL build dependencies
-        autoconf automake cmake git libtool meson net-tools ninja-build pybind11-dev \
-        # RDMA/IB dependencies
-        ibverbs-providers ibverbs-utils libibumad-dev libibverbs-dev librdmacm-dev libnuma-dev rdma-core \
+        autoconf \
+        automake \
+        cmake \
+        git \
+        libtool \
+        meson \
+        net-tools \
+        ninja-build \
+        pybind11-dev \
+        # These headers are missing with the hpcx installer, required
+        # by UCX to find RDMA devices
+        ibverbs-providers \
+        ibverbs-utils \
+        libibumad-dev \
+        libibverbs-dev \
+        librdmacm-dev \
+        libnuma-dev \
+        rdma-core \
         # Rust build dependencies
-        clang libclang-dev protobuf-compiler \
+        clang \
+        libclang-dev \
+        protobuf-compiler \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -208,6 +225,7 @@ RUN git clone --depth 1 --branch ${NIXL_REF} "https://github.com/ai-dynamo/nixl.
     ldconfig
 
 # Build NIXL Python module
+# TODO OPS-590: Move gds_path selection based on arch into NIXL build and re-enable gds backend for arm64
 RUN if [ "$ARCH" = "arm64" ]; then \
         cd ${NIXL_SRC_DIR} && uv build . --out-dir /opt/dynamo/wheelhouse/nixl \
         --config-settings=setup-args="-Ddisable_gds_backend=true"; \
@@ -226,7 +244,7 @@ RUN mkdir -p /opt/dynamo/venv && \
 ENV VIRTUAL_ENV=/opt/dynamo/venv \
     PATH="/opt/dynamo/venv/bin:${PATH}"
 
-# Install Python dependencies
+# Install common and test dependencies
 RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requirements.txt \
     --mount=type=bind,source=./container/deps/requirements.test.txt,target=/tmp/requirements.test.txt \
     uv pip install --requirement /tmp/requirements.txt --requirement /tmp/requirements.test.txt
