@@ -20,6 +20,9 @@ use crate::block_manager::storage::{DeviceStorage, PinnedStorage};
 use anyhow::Result;
 use cudarc::driver::result as cuda_result;
 use std::ops::Range;
+use std::sync::OnceLock;
+use std::sync::Mutex;
+use std::time::Instant;
 
 type CudaMemcpyFnPtr = unsafe fn(
     src_ptr: *const u8,
@@ -117,7 +120,6 @@ where
             let mut dst_view = dst_data.layer_view_mut(layer_idx, outer_idx)?;
 
             debug_assert_eq!(src_view.size(), dst_view.size());
-
             unsafe {
                 memcpy_fn(
                     src_view.as_ptr(),
@@ -171,17 +173,103 @@ unsafe fn cuda_memcpy_h2d(
 ) -> Result<(), TransferError> {
     debug_assert!(!src_ptr.is_null(), "Source host pointer is null");
     debug_assert!(!dst_ptr.is_null(), "Destination device pointer is null");
-    debug_assert!(
-        (src_ptr as usize + size <= dst_ptr as usize)
-            || (dst_ptr as usize + size <= src_ptr as usize),
-        "Source and destination device memory regions must not overlap for D2D copy"
-    );
 
     unsafe {
         let src_slice = std::slice::from_raw_parts(src_ptr, size);
         cuda_result::memcpy_htod_async(dst_ptr as u64, src_slice, stream.cu_stream())
             .map_err(|e| TransferError::ExecutionError(format!("CUDA H2D memcpy failed: {}", e)))?
     };
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct CudaMemcpyRequest {
+    src_ptr: u64,
+    dst_ptr: u64,
+    size: usize,
+}
+
+static CUDA_MEMCPY_REQUESTS: OnceLock<Mutex<Vec<CudaMemcpyRequest>>> = OnceLock::new();
+static LAST_BATCH_TIME: OnceLock<Mutex<Instant>> = OnceLock::new();
+
+fn global_cuda_memcpy_requests() -> &'static Mutex<Vec<CudaMemcpyRequest>> {
+    CUDA_MEMCPY_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn last_batch_time() -> &'static Mutex<Instant> {
+    LAST_BATCH_TIME.get_or_init(|| Mutex::new(Instant::now()))
+}
+
+fn add_cuda_memcpy_request(request: CudaMemcpyRequest) {
+    let requests = global_cuda_memcpy_requests();
+    let mut guard = requests.lock().unwrap();
+    guard.push(request);
+}
+
+fn get_cuda_memcpy_request_count() -> usize {
+    let requests = global_cuda_memcpy_requests();
+    requests.lock().unwrap().len()
+}
+
+fn cuda_memcpy_batch_elapsed_ms() -> u64 {
+    let last_batch = last_batch_time();
+    let guard = last_batch.lock().unwrap();
+    guard.elapsed().as_millis() as u64
+}
+
+fn update_last_batch_time() {
+    let last_batch = last_batch_time();
+    let mut guard = last_batch.lock().unwrap();
+    *guard = Instant::now();
+}
+
+fn batch_cuda_memcpy(stream: &CudaStream) -> Result<(), TransferError> {
+    let requests_mutex = global_cuda_memcpy_requests();
+    let mut requests = requests_mutex.lock().unwrap();
+
+    if requests.is_empty() {
+        return Ok(());
+    }
+
+    // Sort requests by src_ptr and dst_ptr to help merging contiguous requests
+    requests.sort_by(|a, b| {
+        (a.src_ptr, a.dst_ptr)
+            .cmp(&(b.src_ptr, b.dst_ptr))
+    });
+    tracing::info!("sorted requests: {:?}", requests);
+
+    let mut merged_requests: Vec<CudaMemcpyRequest> = Vec::new();
+    let mut curr = requests.first().unwrap().clone();
+
+    for req in requests.drain(1..) {
+        let curr_src_end = curr.src_ptr + curr.size as u64;
+        let curr_dst_end = curr.dst_ptr + curr.size as u64;
+        if req.src_ptr == curr_src_end && req.dst_ptr == curr_dst_end {
+             // Merge contiguous requests
+            curr.size += req.size;
+        } else {
+            tracing::info!("cannot merge requests, inserting curr: {:?}", curr);
+            merged_requests.push(curr);
+            curr = req;
+        }
+    }
+    merged_requests.push(curr);
+
+    for req in merged_requests {
+        unsafe {
+            tracing::info!("merged CUDA D2H memcpy: src_ptr={}, dst_ptr={}, size={}", req.src_ptr, req.dst_ptr, req.size);
+            let dst_slice = std::slice::from_raw_parts_mut(req.dst_ptr as *mut u8, req.size);
+            cuda_result::memcpy_dtoh_async(
+                dst_slice,
+                req.src_ptr,
+                stream.cu_stream(),
+            )
+            .map_err(|e| TransferError::ExecutionError(format!("CUDA D2H memcpy failed: {}", e)))?;
+        }
+    }
+
+    update_last_batch_time();
+
     Ok(())
 }
 
@@ -195,17 +283,23 @@ unsafe fn cuda_memcpy_d2h(
 ) -> Result<(), TransferError> {
     debug_assert!(!src_ptr.is_null(), "Source device pointer is null");
     debug_assert!(!dst_ptr.is_null(), "Destination host pointer is null");
-    debug_assert!(
-        (src_ptr as usize + size <= dst_ptr as usize)
-            || (dst_ptr as usize + size <= src_ptr as usize),
-        "Source and destination device memory regions must not overlap for D2D copy"
-    );
 
-    unsafe {
-        let dst_slice = std::slice::from_raw_parts_mut(dst_ptr, size);
-        cuda_result::memcpy_dtoh_async(dst_slice, src_ptr as u64, stream.cu_stream())
-            .map_err(|e| TransferError::ExecutionError(format!("CUDA D2H memcpy failed: {}", e)))?;
+    add_cuda_memcpy_request(CudaMemcpyRequest {
+        src_ptr: src_ptr as u64,
+        dst_ptr: dst_ptr as u64,
+        size,
+    });
+
+    // TODO (ziqif): make these configurable
+    if get_cuda_memcpy_request_count() >= 600 || cuda_memcpy_batch_elapsed_ms() >= 10 {
+        batch_cuda_memcpy(stream)?;
     }
+
+    // unsafe {
+    //     let dst_slice = std::slice::from_raw_parts_mut(dst_ptr, size);
+    //     cuda_result::memcpy_dtoh_async(dst_slice, src_ptr as u64, stream.cu_stream())
+    //         .map_err(|e| TransferError::ExecutionError(format!("CUDA D2H memcpy failed: {}", e)))?;
+    // }
     Ok(())
 }
 
