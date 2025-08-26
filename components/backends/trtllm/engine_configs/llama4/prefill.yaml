@@ -10,6 +10,7 @@ moe_tensor_parallel_size: 8
 
 max_batch_size: 16
 max_seq_len: 40000
+max_num_tokens: 40000
 disable_overlap_scheduler: true
 
 kv_cache_config:
