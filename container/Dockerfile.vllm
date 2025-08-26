@@ -280,16 +280,14 @@ ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
 CMD []
 
 #######################################
-########## Local Development/CI #######
+########## Local Development #######
 #######################################
 #
-# PURPOSE: Local development and CI image
+# PURPOSE: Local development
 #
 # This stage adds development tools, utilities, and dependencies specifically
 # needed for:
 # - Local development and debugging
-# - Automated testing and CI/CD pipelines
-# - QA test scripts and internal model testing
 # - vscode/cursor development
 #
 # Use this stage when you need a full development environment with additional
