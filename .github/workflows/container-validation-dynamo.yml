@@ -38,8 +38,15 @@ jobs:
       - name: Build image
         env:
           GITHUB_TOKEN: ${{ secrets.CI_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          SCCACHE_S3_BUCKET:  ${{ secrets.SCCACHE_S3_BUCKET }}
         run: |
-          ./container/build.sh --tag ${{ steps.define_image_tag.outputs.image_tag }} --target dev --framework none
+          ./container/build.sh --tag ${{ steps.define_image_tag.outputs.image_tag }} \
+            --target dev \
+            --framework none \
+            --use-sccache \
+            --sccache-bucket "$SCCACHE_S3_BUCKET" \
+            --sccache-region "$AWS_DEFAULT_REGION"
       - name: Start services with docker-compose
         working-directory: ./deploy
         run: |
