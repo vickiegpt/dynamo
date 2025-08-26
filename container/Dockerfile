@@ -253,11 +253,14 @@ RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requi
 ##### Wheel Build Image ##########
 ##################################
 
+# Redeclare ARCH_ALT ARG so it's available for interpolation in the FROM instruction
 ARG ARCH_ALT
+
 FROM quay.io/pypa/manylinux_2_28_${ARCH_ALT} AS wheel_builder
 
 # Redeclare ARGs for this stage
 ARG ARCH
+ARG ARCH_ALT
 ARG CARGO_BUILD_JOBS
 ARG RELEASE_BUILD
 ARG ENABLE_KVBM
