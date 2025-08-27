@@ -1074,4 +1074,38 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         assert_eq!(args["from"], "New York");
         assert_eq!(args["to"], "Los Angeles");
     }
+
+    #[test]
+    fn test_pythonic_parser_basic_with_constants() {
+        let input = r#"[get_weather(location="San Francisco", unit="fahrenheit"), get_weather(location="New York", unit="fahrenheit")]"#;
+        let (result, content) = detect_and_parse_tool_call(input, Some("pythonic")).unwrap();
+        assert_eq!(content, Some("".to_string()));
+        assert_eq!(result.len(), 2);
+        let (name, args) = extract_name_and_args(result[0].clone());
+        assert_eq!(name, "get_weather");
+        assert_eq!(args["location"], "San Francisco");
+        assert_eq!(args["unit"], "fahrenheit");
+        let (name, args) = extract_name_and_args(result[1].clone());
+        assert_eq!(name, "get_weather");
+        assert_eq!(args["location"], "New York");
+        assert_eq!(args["unit"], "fahrenheit");
+    }
+
+    #[test]
+    #[ignore]
+    fn test_pythonic_parser_with_constants_and_normal_text() {
+        let input = r#"Hey How are you? [get_weather(location="San Francisco", unit="fahrenheit"), get_weather(location="New York", unit="fahrenheit")]"#;
+        let (result, content) = detect_and_parse_tool_call(input, Some("pythonic")).unwrap();
+        assert_eq!(content, Some("Hey How are you?".to_string()));
+        assert_eq!(result.len(), 2);
+
+        let (name, args) = extract_name_and_args(result[0].clone());
+        assert_eq!(name, "get_weather");
+        assert_eq!(args["location"], "San Francisco");
+        assert_eq!(args["unit"], "fahrenheit");
+        let (name, args) = extract_name_and_args(result[1].clone());
+        assert_eq!(name, "get_weather");
+        assert_eq!(args["location"], "New York");
+        assert_eq!(args["unit"], "fahrenheit");
+    }
 }

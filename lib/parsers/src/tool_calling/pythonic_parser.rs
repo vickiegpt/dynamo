@@ -134,7 +134,61 @@ mod tests {
     }
 
     #[test]
-    fn test_get_regex_matches() {
+    fn test_strip_text() {
+        let message = "Hello, world!";
+        let stripped = strip_text(message);
+        assert_eq!(stripped, "Hello, world!");
+
+        let message = "<|python_start|>foo(a=1, b=2)<|python_end|>";
+        let stripped = strip_text(message);
+        assert_eq!(stripped, "foo(a=1, b=2)");
+
+        let message = "<|python_start|>foo(a=1, b=2)";
+        let stripped = strip_text(message);
+        assert_eq!(stripped, "foo(a=1, b=2)");
+
+        let message = "foo(a=1, b=2)<|python_end|>";
+        let stripped = strip_text(message);
+        assert_eq!(stripped, "foo(a=1, b=2)");
+    }
+
+    #[test]
+    fn test_get_regex_matches_simple_case() {
+        // Simple Case
+        let message = "[foo(a=1, b=2), bar(x=3)]";
+        let matches = get_regex_matches(message);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0], "[foo(a=1, b=2), bar(x=3)]");
+    }
+
+    #[test]
+    fn test_get_regex_matches_text_before_and_after() {
+        // Spacing in arg and value and text before and after
+        let message = "Hey yo ! [foo(a=1, b=2), bar(x= 3)] Hey yo";
+        let matches = get_regex_matches(message);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0], "[foo(a=1, b=2), bar(x= 3)]");
+    }
+
+    #[test]
+    fn test_get_regex_matches_new_line_in_arg_and_value() {
+        // New Line in Arg and value
+        let message = "Hey \n yo ! [foo(a=1,b=2), \n bar(x=3)] Hey yo";
+        let matches = get_regex_matches(message);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0], "[foo(a=1,b=2), \n bar(x=3)]");
+    }
+
+    #[test]
+    fn test_get_regex_matches_no_call() {
+        // No Call
+        let message = "Hey yo !";
+        let matches = get_regex_matches(message);
+        assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_tool_call_parse_pythonic_basic() {
         let message = "[foo(a=1, b=2), bar(x=3)]";
         let (result, _) = try_tool_call_parse_pythonic(message).unwrap();
         assert!(!result.is_empty());
@@ -146,5 +200,75 @@ mod tests {
         let (name, args) = extract_name_and_args(result[1].clone());
         assert_eq!(name, "bar");
         assert_eq!(args["x"], "3");
+    }
+
+    #[test]
+    fn test_parse_tool_call_parse_pythonic_with_text() {
+        let message = "Hey yo ! [foo(a=1, b=2), bar(x=3)] Hey yo";
+        let (result, _) = try_tool_call_parse_pythonic(message).unwrap();
+        assert!(!result.is_empty());
+        assert_eq!(result.len(), 2);
+        let (name, args) = extract_name_and_args(result[0].clone());
+        assert_eq!(name, "foo");
+        assert_eq!(args["a"], "1");
+        assert_eq!(args["b"], "2");
+        let (name, args) = extract_name_and_args(result[1].clone());
+        assert_eq!(name, "bar");
+        assert_eq!(args["x"], "3");
+    }
+
+    #[test]
+    fn test_parse_tool_call_parse_pythonic_with_text_and_new_line() {
+        let message = "Hey \n yo ! [foo(a=1, b=2), bar(x=3)] Hey yo";
+        let (result, _) = try_tool_call_parse_pythonic(message).unwrap();
+        assert!(!result.is_empty());
+        assert_eq!(result.len(), 2);
+        let (name, args) = extract_name_and_args(result[0].clone());
+        assert_eq!(name, "foo");
+        assert_eq!(args["a"], "1");
+        assert_eq!(args["b"], "2");
+        let (name, args) = extract_name_and_args(result[1].clone());
+        assert_eq!(name, "bar");
+        assert_eq!(args["x"], "3");
+    }
+
+    #[test]
+    fn test_parse_tool_call_parse_pythonic_with_no_calls() {
+        let message = "Hey \n yo !";
+        let (result, _) = try_tool_call_parse_pythonic(message).unwrap();
+        assert!(result.is_empty());
+        assert_eq!(result.len(), 0)
+    }
+
+    #[test]
+    #[ignore]
+    fn test_parse_tool_call_parse_pythonic_with_list_arg_values() {
+        let message = "[foo(a=[1, 2, 3], b=2), bar(x=[3, 4, 5])]";
+        let (result, _) = try_tool_call_parse_pythonic(message).unwrap();
+        assert!(!result.is_empty());
+        assert_eq!(result.len(), 2);
+        let (name, args) = extract_name_and_args(result[0].clone());
+        assert_eq!(name, "foo");
+        assert_eq!(args["a"], "[1, 2, 3]");
+        assert_eq!(args["b"], "2");
+        let (name, args) = extract_name_and_args(result[1].clone());
+        assert_eq!(name, "bar");
+        assert_eq!(args["x"], "[3, 4, 5]");
+    }
+
+    #[test]
+    #[ignore]
+    fn test_parse_tool_call_parse_pythonic_with_dict_arg_values() {
+        let message = "[foo(a={'a': 1, 'b': 2}, b=2), bar(x={'x': 3, 'y': 4})]";
+        let (result, _) = try_tool_call_parse_pythonic(message).unwrap();
+        assert!(!result.is_empty());
+        assert_eq!(result.len(), 2);
+        let (name, args) = extract_name_and_args(result[0].clone());
+        assert_eq!(name, "foo");
+        assert_eq!(args["a"], "{'a': 1, 'b': 2}");
+        assert_eq!(args["b"], "2");
+        let (name, args) = extract_name_and_args(result[1].clone());
+        assert_eq!(name, "bar");
+        assert_eq!(args["x"], "{'x': 3, 'y': 4}");
     }
 }
