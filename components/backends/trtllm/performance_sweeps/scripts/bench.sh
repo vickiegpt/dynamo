@@ -53,10 +53,6 @@ fi
 set -x
 config_file=${log_path}/config.yaml
 
-
-# install genai-perf
-pip install genai-perf
-
 # Create artifacts root directory if it doesn't exist
 if [ ! -d "${artifacts_dir}" ]; then
     mkdir -p "${artifacts_dir}"
@@ -147,38 +143,44 @@ curl -v  -w "%{http_code}" "${hostname}:${port}/v1/chat/completions" \
 }'
 
 cp ${log_path}/output_workers.log ${log_path}/workers_start.log
+
+python3 ./bench/benchmark_serving.py \
+        --model ${model} \
+        --dataset-name random \
+        --num-prompts "${multi_round}" \
+        --random-input-len ${isl} \
+        --random-output-len ${osl} \
+        --random-range-ratio 0.8 \
+        --ignore-eos \
+        --backend "dynamo" \
+        --endpoint "/v1/chat/completions" \
+        --percentile-metrics ttft,tpot,itl,e2el \
+        --max-concurrency "1" \
+        --host ${hostname} \
+        --port ${port}
+
 echo "Starting benchmark..."
 for concurrency in ${concurrency_list}; do
     concurrency=$((concurrency * num_gen_servers))
     num_prompts=$((concurrency * multi_round))
     echo "Benchmarking with concurrency ${concurrency} ... ${num_prompts} prompts"
     mkdir -p ${log_path}/concurrency_${concurrency}
-    genai-perf profile \
-    	--model ${model} \
-    	--tokenizer ${model_path} \
-    	--endpoint-type chat \
-    	--endpoint /v1/chat/completions \
-    	--streaming \
-    	--url ${hostname}:${port} \
-    	--synthetic-input-tokens-mean ${isl} \
-    	--synthetic-input-tokens-stddev 0 \
-    	--output-tokens-mean ${osl} \
-    	--output-tokens-stddev 0 \
-    	--extra-inputs max_tokens:${osl} \
-    	--extra-inputs min_tokens:${osl} \
-    	--extra-inputs ignore_eos:true \
-	    --extra-inputs "{\"nvext\":{\"ignore_eos\":true}}" \
-    	--concurrency ${concurrency} \
-    	--request-count $(($concurrency*10)) \
-    	--warmup-request-count $(($concurrency*2)) \
-	    --num-dataset-entries ${num_prompts} \
-    	--random-seed 100 \
-    	--artifact-dir ${artifacts_dir} \
-    	-- \
-    	-v \
-    	--max-threads ${concurrency} \
-    	-H 'Authorization: Bearer NOT USED' \
-    	-H 'Accept: text/event-stream'
+
+    python3 ./bench/benchmark_serving.py \
+        --model ${model} \
+        --dataset-name random \
+        --num-prompts "$num_prompts" \
+        --random-input-len ${isl} \
+        --random-output-len ${osl} \
+        --random-range-ratio 0.8 \
+        --ignore-eos \
+        --backend "dynamo" \
+        --endpoint "/v1/chat/completions" \
+        --percentile-metrics ttft,tpot,itl,e2el \
+        --max-concurrency "$concurrency" \
+        --host ${hostname} \
+        --port ${port}
+
     echo "Benchmark with concurrency ${concurrency} done"
     do_get_logs ${log_path}/output_workers.log ${log_path}/concurrency_${concurrency}
     echo -n "" > ${log_path}/output_workers.log
