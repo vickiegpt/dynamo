@@ -24,32 +24,79 @@ networks:
 services:
   nats-server:
     image: nats:2.11.4
-    command: [ "-js", "--trace", "-m", "8222" ]
+    command: ["-js", "--trace", "-m", "8222"]
     ports:
       - 4222:4222
       - 6222:6222
-      - 8222:8222  # the endpoints include /varz, /healthz, ...
+      - 8222:8222 # the endpoints include /varz, /healthz, ...
     networks:
       - server
       - monitoring
 
-  etcd-server:
-    image: bitnami/etcd:3.6.1
+  etcd0:
+    image: bitnami/etcd:latest
     environment:
       - ALLOW_NONE_AUTHENTICATION=yes
+      - ETCD_NAME=etcd0
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd0:2380
+      - ETCD_ADVERTISE_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_INITIAL_CLUSTER=etcd0=http://etcd0:2380,etcd1=http://etcd1:2380,etcd2=http://etcd2:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-1
     ports:
-      - 2379:2379  # this port exposes the /metrics endpoint
-      - 2380:2380
-    networks:
-      - server
-      - monitoring
+      - "2379:2379"
+      - "2380:2380"
+
+  etcd1:
+    image: bitnami/etcd:latest
+    environment:
+      - ALLOW_NONE_AUTHENTICATION=yes
+      - ETCD_NAME=etcd1
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd1:2380
+      - ETCD_ADVERTISE_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_INITIAL_CLUSTER=etcd0=http://etcd0:2380,etcd1=http://etcd1:2380,etcd2=http://etcd2:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-1
+    ports:
+      - "23791:2379"
+      - "23801:2380"
+
+  etcd2:
+    image: bitnami/etcd:latest
+    environment:
+      - ALLOW_NONE_AUTHENTICATION=yes
+      - ETCD_NAME=etcd2
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd2:2380
+      - ETCD_ADVERTISE_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_INITIAL_CLUSTER=etcd0=http://etcd0:2380,etcd1=http://etcd1:2380,etcd2=http://etcd2:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-1
+    ports:
+      - "23792:2379"
+      - "23802:2380"
 
   # All the services below are part of the metrics profile and monitoring network.
 
   # The exporter translates from /varz and other stats to Prometheus metrics
   nats-prometheus-exporter:
     image: natsio/prometheus-nats-exporter:0.17.3
-    command: ["-varz", "-connz", "-routez", "-subz", "-gatewayz", "-leafz", "-jsz=all", "http://nats-server:8222"]
+    command:
+      [
+        "-varz",
+        "-connz",
+        "-routez",
+        "-subz",
+        "-gatewayz",
+        "-leafz",
+        "-jsz=all",
+        "http://nats-server:8222",
+      ]
     ports:
       - 7777:7777
     networks:
@@ -82,7 +129,7 @@ services:
       # dcgm uses NVIDIA_VISIBLE_DEVICES variable but normally it is CUDA_VISIBLE_DEVICES
       - NVIDIA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}
       - DCGM_EXPORTER_LISTEN=:9401
-    runtime: nvidia  # Specify the NVIDIA runtime
+    runtime: nvidia # Specify the NVIDIA runtime
     networks:
       - monitoring
 
@@ -94,12 +141,12 @@ services:
     volumes:
       - ./metrics/prometheus.yml:/etc/prometheus/prometheus.yml
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
       # These provide the web console functionality
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--web.enable-lifecycle'
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"
     restart: unless-stopped
     # Example to pull from the /query endpoint:
     # {__name__=~"DCGM.*", job="dcgm-exporter"}
@@ -109,7 +156,7 @@ services:
       - "9090:9090"
     profiles: [metrics]
     extra_hosts:
-    - "host.docker.internal:host-gateway"
+      - "host.docker.internal:host-gateway"
     depends_on:
       - dcgm-exporter
       - nats-prometheus-exporter
