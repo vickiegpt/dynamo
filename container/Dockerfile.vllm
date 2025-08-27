@@ -263,10 +263,7 @@ RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requi
     uv pip install --requirement /tmp/requirements.txt --requirement /tmp/requirements.test.txt
 
 # Copy benchmarks, examples, and tests for CI
-COPY tests /workspace/tests
-COPY benchmarks /workspace/benchmarks
-COPY examples /workspace/examples
-COPY components /workspace/components
+COPY . /workspace/
 
 # Copy attribution files
 COPY ATTRIBUTION* LICENSE /workspace/
