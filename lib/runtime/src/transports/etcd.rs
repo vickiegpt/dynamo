@@ -33,9 +33,11 @@ use tokio::time::{Duration, interval};
 
 mod lease;
 mod path;
+mod resilient_watch;
 
 use lease::*;
 pub use path::*;
+pub use resilient_watch::{create_resilient_watch, ReconnectEvent, RetryConfig};
 
 use super::utils::build_in_runtime;
 
@@ -307,6 +309,124 @@ impl Client {
     }
 
     pub async fn kv_get_and_watch_prefix(
+        &self,
+        prefix: impl AsRef<str> + std::fmt::Display,
+    ) -> Result<PrefixWatcher> {
+        // Check if resilient watch is enabled
+        let use_resilient = std::env::var("ETCD_WATCH_RESILIENT")
+            .map(|v| v.to_lowercase() != "false")
+            .unwrap_or(true);
+
+        if use_resilient {
+            self.kv_get_and_watch_prefix_resilient(prefix).await
+        } else {
+            self.kv_get_and_watch_prefix_legacy(prefix).await
+        }
+    }
+
+    /// Resilient version of kv_get_and_watch_prefix that handles reconnection
+    async fn kv_get_and_watch_prefix_resilient(
+        &self,
+        prefix: impl AsRef<str> + std::fmt::Display,
+    ) -> Result<PrefixWatcher> {
+        let mut kv_client = self.client.kv_client();
+        
+        let mut get_response = kv_client
+            .get(prefix.as_ref(), Some(GetOptions::new().with_prefix()))
+            .await?;
+
+        let kvs = get_response.take_kvs();
+        tracing::trace!("initial kv count: {:?}", kvs.len());
+
+        let (tx, rx) = mpsc::channel(32);
+        let prefix_str = prefix.as_ref().to_string();
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let cancel_token_clone = cancel_token.clone();
+        
+        // Get etcd endpoints from config
+        let endpoints = match std::env::var("ETCD_ENDPOINTS") {
+            Ok(endpoints_str) => endpoints_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect(),
+            Err(_) => vec!["http://localhost:2379".to_string()],
+        };
+
+        // Create resilient watch
+        let mut watch_rx = create_resilient_watch(
+            self.client.clone(),
+            prefix_str.clone(),
+            Some(WatchOptions::new().with_prefix().with_prev_key()),
+            endpoints,
+            cancel_token_clone,
+        ).await?;
+
+        let rt = self.rt.clone();
+        rt.spawn(async move {
+            // Send initial KVs
+            for kv in kvs {
+                if tx.send(WatchEvent::Put(kv)).await.is_err() {
+                    return;
+                }
+            }
+
+            // Process watch events
+            loop {
+                tokio::select! {
+                    maybe_resp = watch_rx.recv() => {
+                        let Some(response) = maybe_resp else {
+                            tracing::info!("Resilient watch stream closed for prefix '{}'", prefix_str);
+                            return;
+                        };
+
+                        // Process events from the response
+                        for event in response.events() {
+                            let Some(kv) = event.kv() else {
+                                continue;
+                            };
+
+                            match event.event_type() {
+                                etcd_client::EventType::Put => {
+                                    if let Err(err) = tx.send(WatchEvent::Put(kv.clone())).await {
+                                        tracing::error!("Error forwarding WatchEvent::Put: {err}");
+                                        return;
+                                    }
+                                }
+                                etcd_client::EventType::Delete => {
+                                    if tx.send(WatchEvent::Delete(kv.clone())).await.is_err() {
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ = tx.closed() => {
+                        tracing::debug!("No more receivers, stopping watcher for prefix '{}'", prefix_str);
+                        cancel_token.cancel();
+                        return;
+                    }
+                }
+            }
+        });
+
+        // Create a dummy watcher for compatibility
+        let (dummy_watcher, _) = self.client
+            .watch_client()
+            .watch(
+                prefix.as_ref(),
+                Some(WatchOptions::new().with_prefix()),
+            )
+            .await?;
+
+        Ok(PrefixWatcher {
+            prefix: prefix.as_ref().to_string(),
+            watcher: dummy_watcher,
+            rx,
+        })
+    }
+
+    /// Legacy version of kv_get_and_watch_prefix (original implementation)
+    async fn kv_get_and_watch_prefix_legacy(
         &self,
         prefix: impl AsRef<str> + std::fmt::Display,
     ) -> Result<PrefixWatcher> {
