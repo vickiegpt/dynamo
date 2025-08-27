@@ -86,9 +86,25 @@ pub fn parse_tool_calls(src: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
     Ok(res)
 }
 
-// constants only: int/float/str/bool/None
+// // constants only: int/float/str/bool/None
+// fn const_expr(e: &Expr) -> Result<Value, Box<dyn std::error::Error>> {
+//     // TODO: Add support for lists/dicts
+//     match e {
+//         Expr::Constant(constant) => Ok(match &constant.value {
+//             Constant::Bool(b) => json!(b),
+//             Constant::None => Value::Null,
+//             Constant::Int(i) => json!(i.to_string()),
+//             Constant::Float(f) => json!(f),
+//             Constant::Str(s) => json!(s),
+//             Constant::List(l) => json!(l.iter().map(|e| const_expr(e)).collect::<Result<Vec<Value>, Box<dyn std::error::Error>>>()),
+//             Constant::Dict(d) => json!(d.iter().map(|(k, v)| (k, const_expr(v))).collect::<Result<HashMap<String, Value>, Box<dyn std::error::Error>>>()),
+//             _ => return Err("unsupported constant type".into()),
+//         }),
+//         _ => Err("only constant values are allowed".into()),
+//     }
+// }
+
 fn const_expr(e: &Expr) -> Result<Value, Box<dyn std::error::Error>> {
-    // TODO: Add support for lists/dicts
     match e {
         Expr::Constant(constant) => Ok(match &constant.value {
             Constant::Bool(b) => json!(b),
@@ -98,7 +114,35 @@ fn const_expr(e: &Expr) -> Result<Value, Box<dyn std::error::Error>> {
             Constant::Str(s) => json!(s),
             _ => return Err("unsupported constant type".into()),
         }),
-        _ => Err("only constant values are allowed".into()),
+        // Handle Python lists as expressions, not constants
+        Expr::List(expr_list) => {
+            let list_values: Result<Vec<Value>, Box<dyn std::error::Error>> =
+                expr_list.elts.iter().map(|e| const_expr(e)).collect();
+            Ok(json!(list_values?))
+        }
+        // Handle Python dictionaries as expressions, not constants
+        Expr::Dict(expr_dict) => {
+            let mut dict_map = std::collections::HashMap::new();
+            for (key_expr, value_expr) in expr_dict.keys.iter().zip(expr_dict.values.iter()) {
+                // Keys should be strings for JSON compatibility
+                // Handle the case where key_expr is Option<Expr>
+                let key = match key_expr {
+                    Some(k) => match const_expr(k)? {
+                        Value::String(s) => s,
+                        other => other.to_string(),
+                    },
+                    None => {
+                        return Err(
+                            "dictionary unpacking (**kwargs) not supported in constants".into()
+                        );
+                    }
+                };
+                let value = const_expr(value_expr)?;
+                dict_map.insert(key, value);
+            }
+            Ok(json!(dict_map))
+        }
+        _ => Err("only constant values, lists, and dicts are allowed".into()),
     }
 }
 
@@ -117,11 +161,17 @@ pub fn try_tool_call_parse_pythonic(
         return Ok((vec![], Some(stripped)));
     }
 
-    println!("Matches: {:?}", matches[0]);
-
     let tool_response = parse_tool_calls(&matches[0]);
 
-    Ok((tool_response?, Some(String::new()))) // TODO: Add support for normal text
+    // normal text is everything before the first match
+    let normal_text = stripped
+        .split(&matches[0])
+        .next()
+        .unwrap()
+        .trim()
+        .to_string();
+
+    Ok((tool_response?, Some(normal_text)))
 }
 
 #[cfg(test)]
@@ -190,7 +240,8 @@ mod tests {
     #[test]
     fn test_parse_tool_call_parse_pythonic_basic() {
         let message = "[foo(a=1, b=2), bar(x=3)]";
-        let (result, _) = try_tool_call_parse_pythonic(message).unwrap();
+        let (result, content) = try_tool_call_parse_pythonic(message).unwrap();
+        assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
         let (name, args) = extract_name_and_args(result[0].clone()); // TODO: Add support for normal text
@@ -205,7 +256,8 @@ mod tests {
     #[test]
     fn test_parse_tool_call_parse_pythonic_with_text() {
         let message = "Hey yo ! [foo(a=1, b=2), bar(x=3)] Hey yo";
-        let (result, _) = try_tool_call_parse_pythonic(message).unwrap();
+        let (result, content) = try_tool_call_parse_pythonic(message).unwrap();
+        assert_eq!(content, Some("Hey yo !".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
         let (name, args) = extract_name_and_args(result[0].clone());
@@ -220,7 +272,8 @@ mod tests {
     #[test]
     fn test_parse_tool_call_parse_pythonic_with_text_and_new_line() {
         let message = "Hey \n yo ! [foo(a=1, b=2), bar(x=3)] Hey yo";
-        let (result, _) = try_tool_call_parse_pythonic(message).unwrap();
+        let (result, content) = try_tool_call_parse_pythonic(message).unwrap();
+        assert_eq!(content, Some("Hey \n yo !".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
         let (name, args) = extract_name_and_args(result[0].clone());
@@ -235,13 +288,29 @@ mod tests {
     #[test]
     fn test_parse_tool_call_parse_pythonic_with_no_calls() {
         let message = "Hey \n yo !";
-        let (result, _) = try_tool_call_parse_pythonic(message).unwrap();
+        let (result, content) = try_tool_call_parse_pythonic(message).unwrap();
+        assert_eq!(content, Some("Hey \n yo !".to_string()));
         assert!(result.is_empty());
         assert_eq!(result.len(), 0)
     }
 
     #[test]
-    #[ignore]
+    fn test_parse_tool_call_parse_pythonic_with_python_tags() {
+        let message = "<|python_start|>[foo(a=1, b=2), bar(x=3)]<|python_end|>";
+        let (result, content) = try_tool_call_parse_pythonic(message).unwrap();
+        assert_eq!(content, Some("".to_string()));
+        assert!(!result.is_empty());
+        assert_eq!(result.len(), 2);
+        let (name, args) = extract_name_and_args(result[0].clone());
+        assert_eq!(name, "foo");
+        assert_eq!(args["a"], "1");
+        assert_eq!(args["b"], "2");
+        let (name, args) = extract_name_and_args(result[1].clone());
+        assert_eq!(name, "bar");
+        assert_eq!(args["x"], "3");
+    }
+
+    #[test]
     fn test_parse_tool_call_parse_pythonic_with_list_arg_values() {
         let message = "[foo(a=[1, 2, 3], b=2), bar(x=[3, 4, 5])]";
         let (result, _) = try_tool_call_parse_pythonic(message).unwrap();
@@ -249,26 +318,25 @@ mod tests {
         assert_eq!(result.len(), 2);
         let (name, args) = extract_name_and_args(result[0].clone());
         assert_eq!(name, "foo");
-        assert_eq!(args["a"], "[1, 2, 3]");
+        assert_eq!(args["a"], json!(["1", "2", "3"]));
         assert_eq!(args["b"], "2");
         let (name, args) = extract_name_and_args(result[1].clone());
         assert_eq!(name, "bar");
-        assert_eq!(args["x"], "[3, 4, 5]");
+        assert_eq!(args["x"], json!(["3", "4", "5"]));
     }
 
     #[test]
-    #[ignore]
     fn test_parse_tool_call_parse_pythonic_with_dict_arg_values() {
-        let message = "[foo(a={'a': 1, 'b': 2}, b=2), bar(x={'x': 3, 'y': 4})]";
+        let message = "[foo(a={'a': 1, 'b': 2}, b=2), bar(x={'x': 3, 'y': {'e': 'f'}})]";
         let (result, _) = try_tool_call_parse_pythonic(message).unwrap();
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
         let (name, args) = extract_name_and_args(result[0].clone());
         assert_eq!(name, "foo");
-        assert_eq!(args["a"], "{'a': 1, 'b': 2}");
+        assert_eq!(args["a"], json!({"a": "1", "b": "2"}));
         assert_eq!(args["b"], "2");
         let (name, args) = extract_name_and_args(result[1].clone());
         assert_eq!(name, "bar");
-        assert_eq!(args["x"], "{'x': 3, 'y': 4}");
+        assert_eq!(args["x"], json!({"x": "3", "y": {"e": "f"}}));
     }
 }
