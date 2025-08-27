@@ -62,7 +62,7 @@ if [ ! -d "${artifacts_dir}" ]; then
     mkdir -p "${artifacts_dir}"
 fi
 
-hostname=$HEAD_NODE_IP
+hostname=$HEAD_NODE
 port=8000
 
 echo "Hostname: ${hostname}, Port: ${port}"

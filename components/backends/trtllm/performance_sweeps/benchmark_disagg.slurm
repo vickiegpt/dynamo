@@ -66,7 +66,7 @@ mkdir -p ${artifacts_dir}
 
 
 # Set clock
-srun ${set_clock_cmd}
+#srun ${set_clock_cmd}
 
 container_mounts=${MOUNT_DIR}:${MOUNT_DIR},${model_path}:${model_path}
 
@@ -110,9 +110,12 @@ nsys_on=""
 nodes=($(scontrol show hostnames "$SLURM_JOB_NODELIST"))
 
 export HEAD_NODE="${nodes[0]}"
-export HEAD_NODE_IP="$(hostname -i)"
-export ETCD_ENDPOINTS="${HEAD_NODE_IP}:2379"
-export NATS_SERVER="nats://${HEAD_NODE_IP}:4222"
+export HEAD_NODE_IP=$
+export ETCD_ENDPOINTS="http://${HEAD_NODE}:2379"
+export NATS_SERVER="nats://${HEAD_NODE}:4222"
+
+echo "HEAD_NODE: ${HEAD_NODE}"
+echo "HEAD_NODE_ID: ${HEAD_NODE_ID}"
 
 # Create a temporary file to store PIDs
 PID_FILE=$(mktemp)
