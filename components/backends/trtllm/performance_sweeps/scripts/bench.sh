@@ -160,7 +160,8 @@ curl -v  -w "%{http_code}" "${hostname}:${port}/v1/chat/completions" \
 cp ${log_path}/output_workers.log ${log_path}/workers_start.log
 
 python3 ${SCRIPTS_DIR}/scripts/bench/benchmark_serving.py \
-        --model ${model} \
+        --served-model-name ${model} \
+        --model ${model_path} \
         --dataset-name random \
         --num-prompts "${multi_round}" \
         --random-input-len ${isl} \
@@ -182,6 +183,7 @@ for concurrency in ${concurrency_list}; do
     mkdir -p ${log_path}/concurrency_${concurrency}
 
     python3 ${SCRIPTS_DIR}/scripts/bench/benchmark_serving.py \
+        --served-model-name ${model} \
         --model ${model_path} \
         --dataset-name random \
         --num-prompts "$num_prompts" \
