@@ -144,7 +144,7 @@ curl -v  -w "%{http_code}" "${hostname}:${port}/v1/chat/completions" \
 
 cp ${log_path}/output_workers.log ${log_path}/workers_start.log
 
-python3 ./bench/benchmark_serving.py \
+python3 ${SCRIPTS_DIR}/scripts/bench/benchmark_serving.py \
         --model ${model} \
         --dataset-name random \
         --num-prompts "${multi_round}" \
@@ -166,7 +166,7 @@ for concurrency in ${concurrency_list}; do
     echo "Benchmarking with concurrency ${concurrency} ... ${num_prompts} prompts"
     mkdir -p ${log_path}/concurrency_${concurrency}
 
-    python3 ./bench/benchmark_serving.py \
+    python3 ${SCRIPTS_DIR}/scripts/bench/benchmark_serving.py \
         --model ${model} \
         --dataset-name random \
         --num-prompts "$num_prompts" \
