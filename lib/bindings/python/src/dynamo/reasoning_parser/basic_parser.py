@@ -4,7 +4,7 @@
 from typing import Sequence, Tuple
 
 # import from __init__.py in the same directory
-from dynamo.reasoning_parser import BaseReasoningParser
+from __init__ import BaseReasoningParser
 
 
 class BasicReasoningParser(BaseReasoningParser):

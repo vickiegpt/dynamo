@@ -2043,6 +2043,7 @@ dependencies = [
  "anyhow",
  "dynamo-async-openai",
  "lazy_static",
+ "minijinja",
  "openai-harmony",
  "regex",
  "serde",
