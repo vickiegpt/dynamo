@@ -130,20 +130,13 @@ impl KvbmLeader {
             leader_sockets.pub_url.clone(),
             leader_sockets.ack_url.clone(),
         );
-        leader.spawn_barrier_task(
-            drt,
-            leader_urls
-        );
+        leader.spawn_barrier_task(drt, leader_urls);
         leader.spawn_zmq_task(leader_sockets, cancel_token);
 
         Ok(leader)
     }
 
-    fn spawn_barrier_task(
-        &self,
-        drt: DistributedRuntime,
-        leader_urls: (String, String),
-    ) {
+    fn spawn_barrier_task(&self, drt: DistributedRuntime, leader_urls: (String, String)) {
         let state = self.state.clone();
         let leader_config = self.config.clone();
         let ready = Arc::clone(&self.workers_sync_ready);
@@ -151,13 +144,7 @@ impl KvbmLeader {
         let done = Arc::clone(&self.workers_sync_done);
 
         tokio::spawn(async move {
-            match KvbmLeader::run_barrier_sync(
-                drt,
-                leader_urls,
-                leader_config,
-            )
-            .await
-            {
+            match KvbmLeader::run_barrier_sync(drt, leader_urls, leader_config).await {
                 Ok((num_device_blocks, num_host_blocks, num_disk_blocks)) => {
                     // write back results
                     state
@@ -250,12 +237,11 @@ impl KvbmLeader {
             num_disk_blocks,
         });
 
-        let leader_to_worker_barrier: LeaderBarrier<KvbmLeaderData, ()> =
-            LeaderBarrier::new(
-                barrier_id_leader_to_worker.clone(),
-                leader_config.world_size,
-                Some(Duration::from_secs(leader_config.leader_init_timeout_secs)),
-            );
+        let leader_to_worker_barrier: LeaderBarrier<KvbmLeaderData, ()> = LeaderBarrier::new(
+            barrier_id_leader_to_worker.clone(),
+            leader_config.world_size,
+            Some(Duration::from_secs(leader_config.leader_init_timeout_secs)),
+        );
 
         let _worker_data = leader_to_worker_barrier
             .sync(&drt, zmq_data_leader_to_worker.as_ref())
