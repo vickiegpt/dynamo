@@ -334,7 +334,7 @@ impl KvbmWorker {
             barrier_id_worker_to_leader
         );
 
-        let worker_to_leader_barrier = WorkerBarrier::<KvbmLeaderData, KvbmWorkerData>::new(
+        let worker_to_leader_barrier = WorkerBarrier::<(), KvbmWorkerData>::new(
             barrier_id_worker_to_leader,
             worker_id.to_string(),
         );
@@ -344,8 +344,7 @@ impl KvbmWorker {
             bytes_per_block,
         };
 
-        // leader_data is not important in the worker to leader phase
-        let _leader_data = tokio::select! {
+        tokio::select! {
             _ = cancel_token.cancelled() => {
                 return Err(anyhow::anyhow!("Cancelled"))
             }
@@ -356,9 +355,8 @@ impl KvbmWorker {
         .map_err(|e| anyhow::anyhow!("Failed to sync worker to leader barrier: {:?}", e))?;
 
         tracing::debug!(
-            "Worker {} received leader data: {:?} in worker to leader phase",
-            worker_id,
-            _leader_data
+            "Worker {} sent the worker data in worker to leader phase",
+            worker_id
         );
 
         let barrier_id_leader_to_worker =
@@ -369,7 +367,7 @@ impl KvbmWorker {
             barrier_id_leader_to_worker
         );
 
-        let leader_to_worker_barrier = WorkerBarrier::<KvbmLeaderData, KvbmWorkerData>::new(
+        let leader_to_worker_barrier = WorkerBarrier::<KvbmLeaderData, ()>::new(
             barrier_id_leader_to_worker,
             worker_id.to_string(),
         );
@@ -378,7 +376,7 @@ impl KvbmWorker {
             _ = cancel_token.cancelled() => {
                 return Err(anyhow::anyhow!("Cancelled"))
             }
-            leader_data = leader_to_worker_barrier.sync(&drt, &worker_data) => {
+            leader_data = leader_to_worker_barrier.sync(&drt, &()) => {
                 leader_data
             }
         }

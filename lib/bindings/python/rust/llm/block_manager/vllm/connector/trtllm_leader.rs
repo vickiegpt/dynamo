@@ -99,7 +99,7 @@ impl KvConnectorLeader {
 
                 let block_manager = match BlockManagerBuilder::new()
                     .worker_id(worker_id)
-                    .leader(leader_py) // your distributed::KvbmLeader
+                    .leader(leader_py)
                     .page_size(page_size)
                     .disable_device_pool(false)
                     .build()
@@ -176,11 +176,6 @@ impl Leader for KvConnectorLeader {
         let mut slot = shared_slot
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to lock slot: {}", e))?;
-
-        if slot.state() == SlotState::Prefilling {
-            tracing::warn!("slot is in the Prefilled state; this seems like we need to reset the slot and start over");
-            slot.reset();
-        }
 
         // early exit if we cannot match full block
         if (slot.sequence().total_tokens() - num_computed_tokens) < self.block_size {
@@ -412,7 +407,7 @@ impl Leader for KvConnectorLeader {
             .remove(&request_id);
 
         // if the slot has finished, we can return false to trtllm, indicating all gpu blocks are free to be reused
-        // otherwise, we return false, which means there are still outstanding operations on gpu blocks which
+        // otherwise, we return true, which means there are still outstanding operations on gpu blocks which
         // must be awaited before the gpu blocks can be reused. if we return true, then it is the worker side
         // of the connector api which will be used to inform trtllm that the request is finished.
         if let SlotState::Finished = slot.state() {
