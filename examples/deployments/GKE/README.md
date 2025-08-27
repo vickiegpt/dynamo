@@ -1,4 +1,4 @@
-# Dynamo Cloud Deployment on GKE
+# Dynamo Deployment on GKE
 
 ## Pre-requisites
 
@@ -61,10 +61,6 @@ sudo apt-get install -y helm
 ```bash
 git clone https://github.com/ai-dynamo/dynamo.git
 
-# Grant permission
-sudo chown -R $USER:$USER $HOME/dynamo
-chmod -R u+rwX $HOME//dynamo
-
 # Checkout to the desired branch
 git checkout release/0.4.0
 ```
@@ -82,51 +78,7 @@ kubectl create secret generic hf-token-secret \
   -n ${NAMESPACE}
 ```
 
-## Install Dynamo Cloud Platform
-
-### Dynamo CRD deployments
-
-If CRD exists, need to grant Helm access to manage an existing CRD
-
-```bash
-# Check if Dynamo CRD exists
-$ kubectl get crds
-------------------------------
-dynamocomponentdeployments.nvidia.com
-dynamographdeployments.nvidia.com
-```
-
-**Note:** If Helm fails to install CRD due to "missing Helm-specific labels and annotations", need to manually modify the CRD metadata
-
-```bash
-# dynamocomponentdeployments
-kubectl label crd dynamocomponentdeployments.nvidia.com app.kubernetes.io/managed-by=Helm --overwrite
-kubectl annotate crd dynamocomponentdeployments.nvidia.com meta.helm.sh/release-name=dynamo-crds --overwrite
-kubectl annotate crd dynamocomponentdeployments.nvidia.com meta.helm.sh/release-namespace=default --overwrite
-
-# dynamographdeployments
-kubectl label crd dynamographdeployments.nvidia.com app.kubernetes.io/managed-by=Helm --overwrite
-kubectl annotate crd dynamographdeployments.nvidia.com \
-  meta.helm.sh/release-name=dynamo-crds \
-  meta.helm.sh/release-namespace=default --overwrite
-```
-
-**Expected output in CRD metadata**
-
-```bash
-$kubectl get crd dynamocomponentdeployments.nvidia.com -o yaml
-```
-
-```yaml
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: Helm
-  annotations:
-    meta.helm.sh/release-name: dynamo-crds
-    meta.helm.sh/release-namespace: default
-```
-
-## Install Dynamo Cloud
+## Install Dynamo Kubernetes Platform
 
 ### Path 1: Production Deployment (Selected)
 
@@ -171,7 +123,7 @@ helm install dynamo-platform ./platform/ \
 **Expected output**
 
 ```bash
-$kubectl get pods
+kubectl get pods
 NAME                                                              READY   STATUS             RESTARTS   AGE
 dynamo-platform-dynamo-operator-controller-manager-69b9794fpgv9   2/2     Running            0          4m27s
 dynamo-platform-etcd-0                                            1/1     Running            0          4m27s
@@ -187,18 +139,18 @@ We will deploy a LLM model to the Dynamo platform. Here we use `Qwen/Qwen3-0.6B`
 
 In the deployment yaml file, some adjustments have to/ could be made:
 
-- **(Required)** Add args to change LD_LIBRARY_PATH and PATH of decoder container, to enable GKE find the correct GPU driver
+- **(Required)** Add args to change `LD_LIBRARY_PATH` and `PATH` of decoder container, to enable GKE find the correct GPU driver
 - Change VLLM  image to the desired one on NGC
 - Add namespace to metadata
 - Adjust GPU/CPU request and limits
 - Change model to deploy
 
-More configurations please refer to https://github.com/ai-dynamo/dynamo/tree/main/components/backends/vllm/deploy 
+More configurations please refer to https://github.com/ai-dynamo/dynamo/tree/main/examples/deployments/GKE/vllm
 
 ### Highlighted configurations in yaml file
 Please note that `LD_LIBRARY_PATH` needs to be set properly in GKE as per [Run GPUs in GKE](https://cloud.google.com/kubernetes-engine/docs/how-to/gpus)
 
-Following snippet is present in the deploymentyaml file.
+The following snippet needs to be present in the `args` field of the deployment `yaml` file:
 
 ```bash
 export LD_LIBRARY_PATH=/usr/local/nvidia/lib64:$LD_LIBRARY_PATH
@@ -206,10 +158,7 @@ export PATH=$PATH:/usr/local/nvidia/bin:/usr/local/nvidia/lib64
 /sbin/ldconfig
 ```
 
-```bash
-$ cd dynamo/components/backends/vllm/deploy
-$ vim disagg_gke.yaml  
-```
+For example, refer to the following from [`examples/deployments/GKE/vllm/disagg_gke.yaml`](./vllm/disagg_gke.yaml)
 
 ```yaml
 metadata:
@@ -229,14 +178,13 @@ spec:
             export LD_LIBRARY_PATH=/usr/local/nvidia/lib64:$LD_LIBRARY_PATH
             export PATH=$PATH:/usr/local/nvidia/bin:/usr/local/nvidia/lib64
             /sbin/ldconfig
-            nvidia-smi
             python3 -m dynamo.vllm --model Qwen/Qwen3-0.6B
 ```
 
 ## Deploy the model
 
 ```bash
-cd dynamo/components/backends/vllm/deploy
+cd dynamo/examples/deployments/GKE/vllm
 
 kubectl apply -f disagg_gke.yaml
 ```
@@ -244,7 +192,7 @@ kubectl apply -f disagg_gke.yaml
 **Expected output after successful deployment**
 
 ```bash
-$ kubectl get pods
+kubectl get pods
 NAME                                                              READY   STATUS    RESTARTS   AGE
 dynamo-platform-dynamo-operator-controller-manager-c665684ssqkx   2/2     Running   0          65m
 dynamo-platform-etcd-0                                            1/1     Running   0          65m
@@ -268,7 +216,7 @@ export FRONTEND_POD=$(kubectl get pods -n ${KUBE_NS} | grep "${DEPLOYMENT_NAME}-
 kubectl port-forward deployment/vllm-disagg-frontend  8000:8000 -n ${NAMESPACE}
 
 # disagg
-$ curl localhost:8000/v1/chat/completions \
+curl localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "Qwen/Qwen3-0.6B",
