@@ -6,7 +6,7 @@ use crate::{ParserResult, ReasoningParser};
 use minijinja::{Environment, context};
 
 use std::io::{BufRead, BufReader, Write};
-use std::process::{ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -28,6 +28,13 @@ fn read_from_stdout(stdout: ChildStdout, tx: Sender<String>) {
             }
             Err(_) => break,
         }
+    }
+}
+
+fn read_and_print_stderr(stderr: ChildStderr) {
+    let reader = BufReader::new(stderr);
+    for line in reader.lines().map_while(Result::ok) {
+        tracing::error!("Python stderr: {}", line);
     }
 }
 
@@ -152,15 +159,19 @@ impl PythonProcessParser {
             .arg(&script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap();
 
-        let stdin = child.stdin.take().expect("Failed to open stdin");
-        let stdout = child.stdout.take().expect("Failed to open stdout");
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
 
         // Channels for communication between threads
         let (tx_in, rx_in): (Sender<String>, Receiver<String>) = mpsc::channel();
         let (tx_out, rx_out): (Sender<String>, Receiver<String>) = mpsc::channel();
+
+        thread::spawn(move || read_and_print_stderr(stderr));
 
         // Thread to handle writing to Python stdin
         thread::spawn(move || write_to_stdin(stdin, rx_in));
@@ -222,10 +233,9 @@ impl ReasoningParser for PythonProcessParser {
             .expect("Failed to execute python process");
 
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
             return ParserResult {
-                normal_text: text.to_string(),
-                reasoning_text: format!("Error executing python process: {}", stderr),
+                normal_text: String::new(),
+                reasoning_text: String::new(),
             };
         }
 
