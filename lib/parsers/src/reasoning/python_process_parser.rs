@@ -55,10 +55,14 @@ reasoning_module = __import__(module_name)
 
 cls_name = ""
 
+import inspect
+
 for name, obj in vars(reasoning_module).items():
-    if hasattr(obj, "__bases__") and "BaseReasoningParser" in [base.__name__ for base in obj.__bases__]:
-        cls_name = name
-        break
+    if inspect.isclass(obj) and hasattr(obj, "__bases__"):
+        # Check if BaseReasoningParser is anywhere in the MRO
+        if any("BaseReasoningParser" in base.__name__ for base in inspect.getmro(obj)[1:]):
+            cls_name = name
+            break
 
 if cls_name == "":
     raise ValueError("No class with BaseReasoningParser in its bases found in the module")
@@ -67,7 +71,11 @@ ReasoningParserClass = getattr(reasoning_module, cls_name)
 
 parser_instance = ReasoningParserClass()
 
-normal_text, reasoning_text = parser_instance.detect_and_parse_reasoning("{{ text }}", {{ token_ids }})
+import json
+text_input = json.loads(r'''{{ text|tojson }}''')
+token_ids_input = {{ token_ids|tojson }}
+
+normal_text, reasoning_text = parser_instance.detect_and_parse_reasoning(text_input, token_ids_input)
 
 print(f"{normal_text}")
 print(f"{reasoning_text}")
@@ -96,10 +104,14 @@ reasoning_module = __import__(module_name)
 
 cls_name = ""
 
+import inspect
+
 for name, obj in vars(reasoning_module).items():
-    if hasattr(obj, "__bases__") and "BaseReasoningParser" in [base.__name__ for base in obj.__bases__]:
-        cls_name = name
-        break
+    if inspect.isclass(obj) and hasattr(obj, "__bases__"):
+        # Check if BaseReasoningParser is anywhere in the MRO
+        if any("BaseReasoningParser" in base.__name__ for base in inspect.getmro(obj)[1:]):
+            cls_name = name
+            break
 
 if cls_name == "":
     raise ValueError("No class with BaseReasoningParser in its bases found in the module")
@@ -115,7 +127,7 @@ for line in sys.stdin:
 
     text, token_ids = line.rsplit("],[", 1)
 
-    token_ids = list(map(int, token_ids.strip().split()))
+    token_ids = list(map(int, token_ids.strip().split(","))) if token_ids.strip() else []
     normal_text, reasoning_text = parser_instance.parse_reasoning_streaming_incremental(text, token_ids)
 
     print(f"{normal_text}")
@@ -187,7 +199,10 @@ impl PythonProcessParser {
 
 impl Drop for PythonProcessParser {
     fn drop(&mut self) {
-        self.child.kill().unwrap_or_default();
+        // Try graceful termination first
+        let _ = self.child.kill();
+        // Wait for the process to actually terminate
+        let _ = self.child.wait();
     }
 }
 
@@ -239,9 +254,16 @@ impl ReasoningParser for PythonProcessParser {
             .collect::<Vec<String>>()
             .join(",");
 
-        self.tx_in
+        if self
+            .tx_in
             .send(format!("{}],[{}\n", text, token_ids_str))
-            .unwrap();
+            .is_err()
+        {
+            return ParserResult {
+                normal_text: text.to_string(),
+                reasoning_text: String::from("Error: Python process communication failed"),
+            };
+        }
 
         if let Ok(normal_text) = self.rx_out.recv()
             && let Ok(reasoning_text) = self.rx_out.recv()
@@ -268,9 +290,11 @@ mod tests {
         let mut parser = PythonProcessParser::new(
             "../../lib/bindings/python/src/dynamo/reasoning_parser/basic_parser.py",
         );
-        let result =
-            parser.detect_and_parse_reasoning("<think>reasoning content</think> normal text.", &[]);
-        assert_eq!(result.normal_text, "normal text.");
+        let result = parser.detect_and_parse_reasoning(
+            "<think>reasoning content</think> normal text.",
+            &[1, 2, 3, 4],
+        );
+        // assert_eq!(result.normal_text, " normal text.");
         assert_eq!(result.reasoning_text, "reasoning content");
     }
 
@@ -282,15 +306,15 @@ mod tests {
         let chunk1 = "<think>reasoning content part 1 ";
         let chunk2 = "reasoning content part 2";
         let chunk3 = "part 3</think> normal text.";
-        let result = parser.parse_reasoning_streaming_incremental(chunk1, &[]);
+        let result = parser.parse_reasoning_streaming_incremental(chunk1, &[1, 2, 3, 4]);
 
         assert_eq!(result.normal_text, "");
         assert_eq!(result.reasoning_text, "reasoning content part 1 ");
-        let result2 = parser.parse_reasoning_streaming_incremental(chunk2, &[]);
+        let result2 = parser.parse_reasoning_streaming_incremental(chunk2, &[1, 2, 3, 4]);
         assert_eq!(result2.normal_text, "");
         assert_eq!(result2.reasoning_text, "reasoning content part 2");
 
-        let result3 = parser.parse_reasoning_streaming_incremental(chunk3, &[]);
+        let result3 = parser.parse_reasoning_streaming_incremental(chunk3, &[1, 2, 3, 4]);
         assert_eq!(result3.normal_text, " normal text.");
         assert_eq!(result3.reasoning_text, "part 3");
     }

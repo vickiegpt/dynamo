@@ -120,10 +120,15 @@ impl ReasoningParserType {
 
     pub fn get_reasoning_parser_from_name(name_or_path: &str) -> ReasoningParserWrapper {
         tracing::debug!("Selected reasoning parser: {}", name_or_path);
-        // check if name_or_path is a file path
-        if std::path::Path::new(name_or_path).exists() {
+        // Prefer Python parser only if this looks like a concrete .py file
+        let path = std::path::Path::new(name_or_path);
+        if path.is_file()
+            && let Some(ext) = path.extension().and_then(|s| s.to_str())
+            && ext.eq_ignore_ascii_case("py")
+        {
+            let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
             return ReasoningParserWrapper {
-                parser: Box::new(PythonProcessParser::new(name_or_path)),
+                parser: Box::new(PythonProcessParser::new(abs.to_string_lossy().as_ref())),
             };
         }
         match name_or_path.to_lowercase().as_str() {
@@ -132,7 +137,7 @@ impl ReasoningParserType {
             "gpt_oss" => Self::GptOss.get_reasoning_parser(),
             _ => {
                 tracing::warn!(
-                    "Unknown reasoning parser type '{}', falling back to Basic Reasoning Parser",
+                    "Unknown reasoning parser type '{}' or file provided incorrect, falling back to Basic Reasoning Parser",
                     name_or_path
                 );
                 Self::Basic.get_reasoning_parser()

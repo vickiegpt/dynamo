@@ -28,24 +28,18 @@ class BasicReasoningParser(BaseReasoningParser):
         One-time parsing: Detects and parses reasoning sections in the provided text.
         Returns both reasoning content and normal text separately.
         """
-        in_reasoning = self._in_reasoning or self.think_start_token in text
-
-        if not in_reasoning:
+        start_idx = text.find(self.think_start_token)
+        if start_idx == -1:
             return (text, "")
-
-        # The text is considered to be in a reasoning block.
-        processed_text = text.replace(self.think_start_token, "").strip()
-
-        if self.think_end_token not in processed_text:
-            # Assume reasoning was truncated before `</think>` token
-            return ("", processed_text)
-
-        # Extract reasoning content
-        splits = processed_text.split(self.think_end_token, maxsplit=1)
-        reasoning_text = splits[0]
-        normal_text = splits[1].strip()
-
-        return (normal_text, reasoning_text)
+        normal_prefix = text[:start_idx]
+        after_start = text[start_idx + len(self.think_start_token) :]
+        end_idx = after_start.find(self.think_end_token)
+        if end_idx == -1:
+            # Reasoning started but not closed yet
+            return (normal_prefix, after_start)
+        reasoning_text = after_start[:end_idx]
+        normal_suffix = after_start[end_idx + len(self.think_end_token) :]
+        return (normal_prefix + normal_suffix, reasoning_text)
 
     def parse_reasoning_streaming_incremental(
         self, new_text: str, _token_ids: Sequence[int]
@@ -60,44 +54,32 @@ class BasicReasoningParser(BaseReasoningParser):
             Streams reasoning content as it arrives
         """
         self._buffer += new_text
-        current_text = self._buffer
+        current = self._buffer
+        normal_out = ""
 
-        # If the current text is a prefix of the think token, keep buffering
-        if any(
-            token.startswith(current_text) and token != current_text
-            for token in [self.think_start_token, self.think_end_token]
-        ):
-            return ("", "")
-
-        # Strip `<think>` token if present
-        if not self.stripped_think_start and self.think_start_token in current_text:
-            current_text = current_text.replace(self.think_start_token, "")
-            self.stripped_think_start = True
+        # If not in reasoning, emit normal prefix up to `<think>`
+        if not self._in_reasoning:
+            start_idx = current.find(self.think_start_token)
+            if start_idx == -1:
+                self._buffer = ""
+                return (current, "")
+            normal_out = current[:start_idx]
+            current = current[start_idx + len(self.think_start_token) :]
             self._in_reasoning = True
+            self.stripped_think_start = True
 
-        # Handle end of reasoning block
-        if self._in_reasoning and self.think_end_token in current_text:
-            end_idx = current_text.find(self.think_end_token)
-
-            reasoning_text = current_text[:end_idx]
-
+        # In reasoning: check for `</think>`
+        end_idx = current.find(self.think_end_token)
+        if end_idx != -1:
+            reasoning_delta = current[:end_idx]
+            normal_suffix = current[end_idx + len(self.think_end_token) :]
             self._buffer = ""
             self._in_reasoning = False
-            normal_text = current_text[end_idx + len(self.think_end_token) :]
+            self.stripped_think_start = False
+            return (normal_out + normal_suffix, reasoning_delta.rstrip())
 
-            return (normal_text, reasoning_text.rstrip())
-
-        # Continue with reasoning content
-        if self._in_reasoning:
-            if self.stream_reasoning:
-                self._buffer = ""
-                return ("", current_text)
-            else:
-                return ("", "")
-
-        # If we're not in a reasoning block return as normal text
-        if not self._in_reasoning:
+        # No end yet
+        if self.stream_reasoning:
             self._buffer = ""
-            return (current_text, "")
-
-        return ("", "")
+            return (normal_out, current)
+        return (normal_out, "")
