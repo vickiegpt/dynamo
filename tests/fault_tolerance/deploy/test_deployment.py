@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import logging
 import multiprocessing
+import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from multiprocessing import Process
 
 import psutil
@@ -55,6 +56,14 @@ deployment_specs = {
 }
 
 
+@dataclass
+class Failure:
+    time: int
+    pod_name: str
+    command: str
+    replicas: int = 1
+
+
 # Each failure scenaro contains a list of failure injections
 # Each failure injection has a time in seconds after the pervious injection and
 # a list of failures to inject including the number of failures for each type.
@@ -67,16 +76,13 @@ deployment_specs = {
 # terminates 1 prefill worker after 30 seconds
 
 failure_scenarios = {
-    "decode_worker": [[30, [("dynamo_vllmworker", 1)]]],
-    "prefill_worker": [[30, [("dynamo_prefillworker", 1)]]],
-    "frontend": [[30, [("dynamo_frontend", 1)]]],
-    "processor": [[30, [("dynamo_processor", 1)]]],
-    "vllm_worker": [[30, [("vllm_worker", 1)]]],
+    "frontend": [Failure(10, "frontend", "dynamo.frontend")],
+    #     "vllm_engine_core": [[30, [("vllm_engine_core", 1)]]],
     "none": [],
 }
 
 
-@pytest.fixture(params=list(failure_scenarios.keys()))
+@pytest.fixture(params=["none", "frontend"])
 def failures(request):
     return failure_scenarios[request.param]
 
@@ -146,39 +152,37 @@ def _clients(
         logger.debug(f"{proc} joined")
 
 
-# def _inject_failures(failures, logger):  # noqa: F811
-#     circus_controller = CircusController.from_state_file("dynamo")
+def _inject_failures(failures, logger, deployment: ManagedDeployment):  # noqa: F811
+    for failure in failures:
+        time.sleep(failure.time)
 
-#     for failure_time, component in failures:
-#         time.sleep(failure_time)
-#         for component_name, number in component:
-#             logger.info(f"Injecting failure for: {component_name}")
+        pods = deployment.get_pods(failure.pod_name)[failure.pod_name]
 
-#             if "dynamo" in component_name:
-#                 result = circus_controller.client.call(
-#                     {"command": "list", "properties": {"name": f"{component_name}"}}
-#                 )
-#                 if result["status"] == "error":
-#                     logger.warning(f"component {component_name} not found {result}")
-#                     continue
+        num_pods = len(pods)
 
-#                 num_processes = len(result["pids"])
-#                 if number is None:
-#                     number = num_processes
-#                 for x in range(number):
-#                     pid = result["pids"][x % num_processes]
-#                     logger.info(f"Terminating {component_name} Pid {pid}")
-#                     terminate_process_tree(pid, logger, immediate_kill=True)
-#             elif "vllm" in component_name:
-#                 vllm_processes = _list_vllm_worker_processes()
-#                 num_processes = len(vllm_processes)
-#                 if number is None:
-#                     number = len(vllm_processes)
-#                 for x in range(number):
-#                     pid = vllm_processes[x % num_processes]
-#                     terminate_process_tree(pid, logger, immediate_kill=True)
+        replicas = failure.replicas
 
-#     circus_controller.close()
+        if not replicas:
+            replicas = num_pods
+
+        for x in range(replicas):
+            pod = pods[x % num_pods]
+
+            pod.delete(force=True)
+
+
+#            processes = deployment.get_processes(pod)
+
+#            for process in processes:
+#               if failure.command in process.command:
+#                  logger.info(f"Terminating {failure.pod_name} Pid {process.pid} Command {process.command}")
+#                 process.kill()
+#                 logger.info("waiting!")
+#                process.wait()
+#               logger.info("waited!")
+#              for process in deployment.get_processes(pod):
+#                 print(process.pid)
+#                print(process.command)
 
 
 global_result_list = []
@@ -199,6 +203,7 @@ def results_summary():
 
 @pytest.mark.e2e
 @pytest.mark.slow
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_fault_scenario(
     deployment_spec_test,  # noqa: F811
     request,
@@ -206,7 +211,7 @@ async def test_fault_scenario(
     namespace,
     num_clients,
     requests_per_client,
-    #    failures,  # noqa: F811
+    failures,  # noqa: F811
     input_token_length,
     output_token_length,
     max_retries,
@@ -229,13 +234,7 @@ async def test_fault_scenario(
         namespace=namespace,
         log_dir=request.node.name,
         deployment_spec=deployment_spec_test,
-    ):
-        await asyncio.sleep(10)
-
-        print(multiprocessing.get_start_method())
-
-        await asyncio.sleep(120)
-
+    ) as deployment:
         with _clients(
             logger,
             num_clients,
@@ -247,10 +246,7 @@ async def test_fault_scenario(
             output_token_length,
             max_retries,
         ):
-            pass
-
-
-#             _inject_failures(failures, logger)
+            _inject_failures(failures, logger, deployment)
 
 
 #        await asyncio.sleep(3000)

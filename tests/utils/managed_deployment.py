@@ -4,14 +4,17 @@
 import asyncio
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional
 
+import kr8s
 import kubernetes
 import psutil
 import yaml
 from kr8s.objects import Pod as kr8s_Pod
+from kr8s.objects import Service as kr8s_Service
 from kubernetes_asyncio import client, config
 
 
@@ -124,7 +127,7 @@ class DeploymentSpec:
 
     @property
     def port(self) -> int:
-        """Deployment name"""
+        """Deployment port"""
         return self._port
 
     @property
@@ -180,6 +183,36 @@ class DeploymentSpec:
         """Save updated deployment to file"""
         with open(out_file, "w") as f:
             yaml.safe_dump(self._deployment_spec, f, default_flow_style=False)
+
+
+class PodProcess:
+    def __init__(self, pod: kr8s_Pod, line: str):
+        self.pid = int(re.split(r"\s+", line)[1])
+        self.command = " ".join(
+            re.split(r"\s+", line)[10:]
+        )  # Columns 10+ are the command
+        self._pod = pod
+
+    def kill(self, signal="SIGKILL"):
+        """Kill this process in the given pod"""
+        command = ["kill", "-9", str(self.pid)]
+        print(command)
+        result = self._pod.exec(["kill", "-SIGTERM", str(self.pid)])
+
+        print(result)
+
+    def wait(self, timeout: int = 60):
+        """Wait for this process to exit in the given pod"""
+        # Simple implementation; adjust as needed
+        for _ in range(timeout):
+            result = self._pod.exec(
+                ["kill", "-0", str(self.pid)]
+            )  # Check if process exists
+            print(result)
+            if result.returncode != 0:
+                return True  # Process exited
+            time.sleep(1)
+        return False  # Timed out
 
 
 @dataclass
@@ -286,6 +319,9 @@ class ManagedDeployment:
                     f"Elapsed time: {time.time() - start_time:.1f}s / {timeout}s"
                 )
 
+                for svc in kr8s.get("services", namespace=self.namespace):
+                    print(f"Service: {svc.namespace}/{svc.name}")
+
                 ready_condition = False
                 for condition in conditions:
                     if (
@@ -355,6 +391,7 @@ class ManagedDeployment:
                 plural="dynamographdeployments",
                 body=self.deployment_spec.spec(),
             )
+            self._logger.info(self.deployment_spec.spec())
             self._logger.info(f"Deployment Started {self._deployment_name}")
         except kubernetes.client.rest.ApiException as e:
             if e.status == 409:  # Already exists
@@ -364,6 +401,44 @@ class ManagedDeployment:
                     f"Failed to create deployment {self._deployment_name}: {e}"
                 )
                 raise
+
+    def get_processes(self, pod) -> list:
+        """Get list of processes in the given pod"""
+        result = pod.exec(["ps", "-aux"])
+        lines = result.stdout.decode().splitlines()
+        # Skip header line
+        processes = [PodProcess(pod, line) for line in lines[1:]]
+        return processes
+
+    def get_pods(self, component_name=None):
+        result = {}
+
+        component_list = []
+
+        if not component_name:
+            component_list = [
+                component.name for component in self.deployment_spec.services
+            ]
+        else:
+            component_list = [component_name]
+
+        for component in component_list:
+            # List pods for this component using the selector label
+            # nvidia.com/selector: deployment-name-component
+            label_selector = (
+                f"nvidia.com/selector={self._deployment_name}-{component.lower()}"
+            )
+
+            pods = []
+
+            for pod in kr8s.get(
+                "pods", namespace=self.namespace, label_selector=label_selector
+            ):
+                pods.append(pod)
+
+            result[component.lower()] = pods
+
+        return result
 
     async def _get_deployment_logs(self):
         """
@@ -416,17 +491,21 @@ class ManagedDeployment:
                 raise
 
     def _start_port_forward(self):
-        label_selector = f"nvidia.com/selector={self._deployment_name}-{self.frontend_service_name.lower()}"
+        for svc in kr8s.get("services", namespace=self.namespace):
+            print(f"Service: {svc.namespace}/{svc.name}")
 
-        frontend_service_pod = kr8s_Pod.get(
-            label_selector=label_selector, namespace=self.namespace
-        )
+        service_name = f"{self._deployment_name}-{self.frontend_service_name.lower()}"
 
-        self._port_forward = frontend_service_pod.portforward(
+        frontend_service = kr8s_Service.get(service_name, namespace=self.namespace)
+
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+
+        self._port_forward = frontend_service.portforward(
             remote_port=self.deployment_spec.port,
             local_port=self.deployment_spec.port,
             address="0.0.0.0",
         )
+
         self._port_forward.start()
 
     def _stop_port_forward(self):
@@ -458,6 +537,7 @@ class ManagedDeployment:
         except:
             await self._cleanup()
             raise
+        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self._cleanup()

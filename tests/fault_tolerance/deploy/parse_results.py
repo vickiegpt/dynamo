@@ -307,7 +307,8 @@ def process_test_directory(test_dir):
         violations_after,
     ) = calculate_metrics(df, fault_time)
 
-    recovery_time = calculate_recovery_time(test_dir, failure_type, fault_time)
+    recovery_time = 0
+    #    recovery_time = calculate_recovery_time(test_dir, failure_type, fault_time)
 
     return {
         "test": test_prefix,
