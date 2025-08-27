@@ -123,10 +123,16 @@ impl KvbmLeader {
         };
 
         let cancel_token = tokio_util::sync::CancellationToken::new();
-        leader.spawn_barrier_task(
-            drt,
+
+        // The leader_sockets struct cannot be cloned,
+        // so we use a tuple to "struct" the two urls
+        let leader_urls = (
             leader_sockets.pub_url.clone(),
             leader_sockets.ack_url.clone(),
+        );
+        leader.spawn_barrier_task(
+            drt,
+            leader_urls
         );
         leader.spawn_zmq_task(leader_sockets, cancel_token);
 
@@ -136,8 +142,7 @@ impl KvbmLeader {
     fn spawn_barrier_task(
         &self,
         drt: DistributedRuntime,
-        leader_sockets_pub_url: String,
-        leader_sockets_ack_url: String,
+        leader_urls: (String, String),
     ) {
         let state = self.state.clone();
         let leader_config = self.config.clone();
@@ -148,8 +153,7 @@ impl KvbmLeader {
         tokio::spawn(async move {
             match KvbmLeader::run_barrier_sync(
                 drt,
-                leader_sockets_pub_url,
-                leader_sockets_ack_url,
+                leader_urls,
                 leader_config,
             )
             .await
@@ -180,8 +184,7 @@ impl KvbmLeader {
 
     async fn run_barrier_sync(
         drt: DistributedRuntime,
-        leader_sockets_pub_url: String,
-        leader_sockets_ack_url: String,
+        leader_urls: (String, String),
         leader_config: KvbmLeaderConfig,
     ) -> anyhow::Result<(usize, usize, usize)> {
         let barrier_id_worker_to_leader =
@@ -191,16 +194,10 @@ impl KvbmLeader {
             leader_config.world_size,
             barrier_id_worker_to_leader
         );
-        let zmq_data_worker_to_leader: Arc<KvbmLeaderData> = Arc::new(KvbmLeaderData {
-            pub_url: leader_sockets_pub_url.clone(),
-            ack_url: leader_sockets_ack_url.clone(),
-            num_host_blocks: 0, // doesn't matter for worker to leader sync
-            num_disk_blocks: 0, // doesn't matter for worker to leader sync
-        });
 
         // Build our leader barrier and publish the data.
         // TODO: Use a separate timeout parameter from the ZMQ connection timeout
-        let worker_to_leader_barrier: LeaderBarrier<KvbmLeaderData, worker::KvbmWorkerData> =
+        let worker_to_leader_barrier: LeaderBarrier<(), worker::KvbmWorkerData> =
             LeaderBarrier::new(
                 barrier_id_worker_to_leader.clone(),
                 leader_config.world_size,
@@ -208,7 +205,7 @@ impl KvbmLeader {
             );
 
         let worker_data = worker_to_leader_barrier
-            .sync(&drt, zmq_data_worker_to_leader.as_ref())
+            .sync(&drt, &())
             .await
             .map_err(|e| anyhow::anyhow!("Failed to sync worker to leader barrier: {:?}", e))?;
 
@@ -245,14 +242,15 @@ impl KvbmLeader {
             barrier_id_leader_to_worker
         );
 
+        let (leader_pub_url, leader_ack_url) = leader_urls;
         let zmq_data_leader_to_worker = Arc::new(KvbmLeaderData {
-            pub_url: leader_sockets_pub_url.clone(),
-            ack_url: leader_sockets_ack_url.clone(),
+            pub_url: leader_pub_url,
+            ack_url: leader_ack_url,
             num_host_blocks,
             num_disk_blocks,
         });
 
-        let leader_to_worker_barrier: LeaderBarrier<KvbmLeaderData, worker::KvbmWorkerData> =
+        let leader_to_worker_barrier: LeaderBarrier<KvbmLeaderData, ()> =
             LeaderBarrier::new(
                 barrier_id_leader_to_worker.clone(),
                 leader_config.world_size,
