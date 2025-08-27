@@ -7,6 +7,21 @@ set -e
 set -u
 trap 'echo "Error occurred at line $LINENO"; exit 1' ERR
 
+# Check if SCRIPTS_DIR is set, if not try to infer it or exit
+if [ -z "${SCRIPTS_DIR:-}" ]; then
+    # Try to infer SCRIPTS_DIR from the current script location
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    SCRIPTS_DIR="$(dirname "$SCRIPT_DIR")"
+    echo "SCRIPTS_DIR not set, inferred as: ${SCRIPTS_DIR}"
+fi
+
+# Verify SCRIPTS_DIR exists and contains expected structure
+if [ ! -d "${SCRIPTS_DIR}/scripts/bench" ]; then
+    echo "Error: SCRIPTS_DIR (${SCRIPTS_DIR}) does not contain expected structure"
+    echo "Expected: ${SCRIPTS_DIR}/scripts/bench to exist"
+    exit 1
+fi
+
 WAIT_TIME=300
 
 model=$1
