@@ -182,7 +182,7 @@ for concurrency in ${concurrency_list}; do
     mkdir -p ${log_path}/concurrency_${concurrency}
 
     python3 ${SCRIPTS_DIR}/scripts/bench/benchmark_serving.py \
-        --model ${model} \
+        --model ${model_path} \
         --dataset-name random \
         --num-prompts "$num_prompts" \
         --random-input-len ${isl} \
