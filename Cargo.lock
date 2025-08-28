@@ -2066,6 +2066,7 @@ dependencies = [
  "async-trait",
  "blake3",
  "bytes",
+ "derive_builder",
  "dynamo-runtime",
  "hex",
  "serde",
