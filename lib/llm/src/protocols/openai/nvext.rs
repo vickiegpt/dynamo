@@ -34,13 +34,13 @@ pub struct NvExt {
     #[builder(default, setter(strip_option))] // NIM LLM might default to -1
     #[validate(custom(function = "validate_top_k"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub top_k: Option<i32>, // ← Change from i64 to i32
+    pub top_k: Option<i32>,
 
     /// How much to penalize tokens based on how frequently they occur in the text.
     /// A value of 1 means no penalty, while values larger than 1 discourage and values smaller encourage.
     #[builder(default, setter(strip_option))]
     #[validate(range(exclusive_min = 0.0, max = 2.0))]
-    pub repetition_penalty: Option<f32>, // ← Change from f64 to f32
+    pub repetition_penalty: Option<f32>,
 
     /// If true, sampling will be forced to be greedy.
     /// The backend is responsible for selecting the correct backend-specific options to

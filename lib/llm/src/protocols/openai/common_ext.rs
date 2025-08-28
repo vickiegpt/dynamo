@@ -183,6 +183,23 @@ mod tests {
     }
 
     #[test]
+    fn test_validation_min_tokens() {
+        // Test that min_tokens with 0 is valid
+        let common_ext = CommonExt {
+            ignore_eos: None,
+            min_tokens: Some(0), // Should be valid (min = 0)
+            top_k: None,
+            repetition_penalty: None,
+            guided_json: None,
+            guided_regex: None,
+            guided_grammar: None,
+            guided_choice: None,
+            guided_decoding_backend: None,
+        };
+        assert!(common_ext.validate().is_ok());
+    }
+
+    #[test]
     fn test_common_ext_neither_specified() {
         // Test that neither ignore_eos nor min_tokens specified works
         let common_ext = CommonExt::builder().build().unwrap();

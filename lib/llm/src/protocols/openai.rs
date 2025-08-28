@@ -33,9 +33,13 @@ pub struct AnnotatedDelta<R> {
 
 trait OpenAISamplingOptionsProvider {
     fn get_temperature(&self) -> Option<f32>;
+
     fn get_top_p(&self) -> Option<f32>;
+
     fn get_frequency_penalty(&self) -> Option<f32>;
+
     fn get_presence_penalty(&self) -> Option<f32>;
+
     fn nvext(&self) -> Option<&nvext::NvExt>;
 }
 
