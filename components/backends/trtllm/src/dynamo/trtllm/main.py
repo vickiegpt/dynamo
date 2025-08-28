@@ -126,6 +126,7 @@ async def init(runtime: DistributedRuntime, config: Config):
         dynamic_batch_config=dynamic_batch_config,
     )
     modality = getattr(config, "modality", None) or "text"
+    parallel_spec_dec = getattr(config, "parallel_spec_dec", False)
     arg_map = {
         "model": model_path,
         "scheduler_config": scheduler_config,
@@ -188,12 +189,19 @@ async def init(runtime: DistributedRuntime, config: Config):
             endpoint=drafter_endpoint,
             max_draft_len=max_draft_len,
         )
-        drafter = DynamoAPIDrafter(spec_config=drafter_config, runtime=runtime)
+        drafter = DynamoAPIDrafter(spec_config=drafter_config, draft_client=next_client)
         spec_config = UserProvidedDecodingConfig(
             drafter=drafter,
             max_draft_len=max_draft_len,
         )
         arg_map["speculative_config"] = spec_config
+
+    parallel_spec_dec_config = None
+    if parallel_spec_dec:
+        parallel_spec_dec_config = {
+            "pre_verify": True,
+            "old_draft_tokens": [],
+        }
 
     logging.info(f"TensorRT-LLM engine args: {arg_map}")
     engine_args = arg_map
@@ -205,7 +213,6 @@ async def init(runtime: DistributedRuntime, config: Config):
     default_sampling_params.stop = None
     modelType = ModelType.Backend
     multimodal_processor = None
-
     if modality == "multimodal":
         engine_args["skip_tokenizer_init"] = False
         modelType = ModelType.Chat
@@ -224,7 +231,6 @@ async def init(runtime: DistributedRuntime, config: Config):
 
     async with get_llm_engine(engine_args) as engine:
         endpoint = component.endpoint(config.endpoint)
-
         if is_first_worker(config) and not is_drafter(config):
             # Register the model with the endpoint if only the worker is first in the disaggregation chain.
             # Drafter workers should not register.
@@ -246,8 +252,8 @@ async def init(runtime: DistributedRuntime, config: Config):
             disaggregation_strategy=config.disaggregation_strategy,
             next_client=next_client,
             multimodal_processor=multimodal_processor,
+            parallel_spec_dec_config=parallel_spec_dec_config,
         )
-
         if config.publish_events_and_metrics and is_first_worker(config):
             # Initialize and pass in the publisher to the request handler to
             # publish events and metrics.

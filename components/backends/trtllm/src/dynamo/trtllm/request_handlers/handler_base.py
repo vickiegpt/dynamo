@@ -60,6 +60,9 @@ class RequestHandlerConfig:
     multimodal_processor: Optional[
         MultimodalRequestProcessor
     ] = None  # for multimodal support
+    parallel_spec_dec_config: Optional[
+        dict
+    ] = None  # for parallel speculative decoding support
 
 
 class HandlerBase:
@@ -76,6 +79,7 @@ class HandlerBase:
         self.disaggregation_strategy = config.disaggregation_strategy
         self.next_client = config.next_client
         self.multimodal_processor = config.multimodal_processor
+        self.parallel_spec_dec_config = config.parallel_spec_dec_config
         self.first_generation = True
 
     def check_error(self, result: dict):
@@ -174,6 +178,7 @@ class HandlerBase:
             sampling_params=sampling_params,
             disaggregated_params=disaggregated_params,
             streaming=streaming,
+            parallel_spec_dec_params=self.parallel_spec_dec_config,
         ):
             # TRTLLM engine needs to start generating tokens first before stats
             # can be retrieved.
