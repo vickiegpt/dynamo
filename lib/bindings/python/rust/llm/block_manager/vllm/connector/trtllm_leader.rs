@@ -98,7 +98,7 @@ impl KvConnectorLeader {
                 }
 
                 let block_manager = match BlockManagerBuilder::new()
-                    .worker_id(worker_id)
+                    .worker_id(0)
                     .leader(leader_py)
                     .page_size(page_size)
                     .disable_device_pool(false)

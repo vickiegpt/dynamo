@@ -9,6 +9,7 @@ use zmq::*;
 
 use dynamo_runtime::utils::leader_worker_barrier::LeaderBarrier;
 
+use anyhow::Context;
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -289,6 +290,7 @@ impl KvbmLeader {
         });
     }
 
+    // This is supposed to be used in non-blocking leader initialization
     pub fn spawn_leader_readiness_barrier(&self, drt: DistributedRuntime) {
         let leader_config = self.config.clone();
         let handle = drt.runtime().primary();
@@ -302,6 +304,21 @@ impl KvbmLeader {
                 }
             }
         });
+    }
+
+    // This is supposed to be used in blocking leader initialization
+    pub fn run_leader_readiness_barrier_blocking(
+        &self,
+        drt: DistributedRuntime,
+    ) -> anyhow::Result<()> {
+        let leader_config = self.config.clone();
+        let fut = KvbmLeader::run_leader_readiness(drt, leader_config);
+
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(fut)
+                .context("leader readiness barrier failed")
+        })
     }
 
     async fn run_leader_readiness(

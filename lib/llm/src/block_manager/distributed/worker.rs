@@ -136,7 +136,7 @@ pub struct KvbmWorker {
 }
 
 impl KvbmWorker {
-    pub async fn new(config: KvbmWorkerConfig) -> anyhow::Result<Self> {
+    pub async fn new(config: KvbmWorkerConfig, layout_blocking: bool) -> anyhow::Result<Self> {
         tracing::info!(
             "Initializing KvbmWorker with params: num_device_blocks={}, page_size={}, dtype_width_bytes={}",
             config.num_device_blocks,
@@ -157,11 +157,8 @@ impl KvbmWorker {
             )));
         }
 
-        let layout_type: LayoutType;
-        let mut outer_dim = 1;
-        let num_layers;
-        let inner_dim;
-        if !config.is_fully_contiguous_layout {
+        let (layout_type, num_layers, outer_dim, inner_dim) = if !config.is_fully_contiguous_layout
+        {
             let (outer_contiguous, outer_dim) = if shape[0] >= config.num_device_blocks {
                 (false, shape[1])
             } else if shape[1] >= config.num_device_blocks {
@@ -172,9 +169,8 @@ impl KvbmWorker {
                     shape
                 )));
             };
-            layout_type = LayoutType::LayerSeparate { outer_contiguous };
-            num_layers = device_tensors.len();
-            inner_dim = shape[2..].iter().product::<usize>() / config.page_size;
+            let num_layers = device_tensors.len();
+            let inner_dim = shape[2..].iter().product::<usize>() / config.page_size;
 
             tracing::info!(
                 "Inferred layout: num_layers={}, outer_dim={}, page_size={}, inner_dim={}",
@@ -183,11 +179,17 @@ impl KvbmWorker {
                 config.page_size,
                 inner_dim
             );
+
+            (
+                LayoutType::LayerSeparate { outer_contiguous },
+                num_layers,
+                outer_dim,
+                inner_dim,
+            )
         } else {
-            layout_type = LayoutType::FullyContiguous;
-            num_layers = shape[1];
-            outer_dim = shape[2];
-            inner_dim = shape[3..].iter().product::<usize>() / config.page_size;
+            let num_layers = shape[1];
+            let outer_dim = shape[2];
+            let inner_dim = shape[3..].iter().product::<usize>() / config.page_size;
             tracing::info!(
                 "Inferred layout: num_layers={}, outer_dim={}, page_size={}, inner_dim={}",
                 num_layers,
@@ -195,7 +197,14 @@ impl KvbmWorker {
                 config.page_size,
                 inner_dim
             );
-        }
+
+            (
+                LayoutType::FullyContiguous,
+                num_layers,
+                outer_dim,
+                inner_dim,
+            )
+        };
 
         let bytes_per_block =
             num_layers * outer_dim * config.page_size * inner_dim * config.dtype_width_bytes;
@@ -213,10 +222,44 @@ impl KvbmWorker {
             .build()?
             .create_layout(layout_type, device_tensors)?;
 
-        let layout_builder_clone = layout_builder.clone();
+        let layout_builder = layout_builder.clone();
 
-        // add worker-connector scheduler here
-        // let scheduler = KvbmWorkerScheduler::new(config.scheduler.clone());
+        let (task, handler_rx) = if layout_blocking {
+            Self::run_blocking_layout_initialization(
+                config,
+                bytes_per_block,
+                device_layout,
+                layout_builder,
+                layout_type,
+            )
+            .await?
+        } else {
+            Self::run_non_blocking_layout_initialization(
+                config,
+                bytes_per_block,
+                device_layout,
+                layout_builder,
+                layout_type,
+            )
+            .await?
+        };
+
+        Ok(Self {
+            task: Some(task),
+            block_transfer_handler_rx: Some(handler_rx),
+        })
+    }
+
+    async fn run_blocking_layout_initialization(
+        config: KvbmWorkerConfig,
+        bytes_per_block: usize,
+        device_layout: Box<dyn NixlLayout<StorageType = DeviceStorage>>,
+        layout_builder: LayoutConfigBuilder,
+        layout_type: LayoutType,
+    ) -> anyhow::Result<(
+        CriticalTaskExecutionHandle,
+        oneshot::Receiver<transfer::BlockTransferHandler>,
+    )> {
         let cancel_token = config.drt.primary_token().clone();
 
         // barrier sync with leader to get the leader data
@@ -248,7 +291,7 @@ impl KvbmWorker {
             move |cancel_token| {
                 KvbmWorker::worker_task(
                     device_layout,
-                    layout_builder_clone,
+                    layout_builder,
                     leader_data,
                     layout_type,
                     worker_config,
@@ -262,6 +305,12 @@ impl KvbmWorker {
             "kvbm-worker-task",
         )?;
 
+        // waiting for the worker layout allocation ready
+        match layout_ready_rx.await {
+            Ok(_) => tracing::info!("worker layout allocation finished."),
+            Err(_) => tracing::error!("Worker layout dropped without sending"),
+        }
+
         let worker_config = config.clone();
         let cancel_for_barrier = cancel_token.clone();
         // wait until the leader finished the initialization of all components
@@ -274,18 +323,87 @@ impl KvbmWorker {
             })
         })?;
 
-        // waiting for the worker layout allocation ready
-        match layout_ready_rx.await {
-            Ok(_) => tracing::info!("worker layout allocation finished."),
-            Err(_) => tracing::error!("Worker layout dropped without sending"),
-        }
-
-        Ok(Self {
-            task: Some(task),
-            block_transfer_handler_rx: Some(handler_rx),
-        })
+        Ok((task, handler_rx))
     }
 
+    async fn run_non_blocking_layout_initialization(
+        config: KvbmWorkerConfig,
+        bytes_per_block: usize,
+        device_layout: Box<dyn NixlLayout<StorageType = DeviceStorage> + Send + 'static>,
+        layout_builder: LayoutConfigBuilder,
+        layout_type: LayoutType,
+    ) -> anyhow::Result<(
+        CriticalTaskExecutionHandle,
+        oneshot::Receiver<transfer::BlockTransferHandler>,
+    )> {
+        let cancel_token = config.drt.primary_token().clone();
+        let scheduler_client = config.scheduler_client.clone();
+
+        // channel to get BlockTransferHandler back to the caller
+        let (handler_tx, handler_rx) = oneshot::channel::<transfer::BlockTransferHandler>();
+
+        // channel that the worker will use to signal layout readiness
+        let (layout_ready_tx, layout_ready_rx) = oneshot::channel::<String>();
+
+        // clone what we need inside the orchestrator
+        let worker_config = config.clone();
+        let cancel_token_for_task = cancel_token.clone();
+
+        // Single task that orchestrates everything in-order.
+        let task = CriticalTaskExecutionHandle::new(
+            move |ct| {
+                let cfg = worker_config.clone();
+                let scheduler = scheduler_client.clone();
+
+                async move {
+                    // 1) barrier (must finish before worker_task starts)
+                    let leader_data =
+                        KvbmWorker::leader_barrier_sync(cfg.clone(), ct.clone(), bytes_per_block)
+                            .await?;
+
+                    // 2) start the long-running worker (after barrier)
+                    //    Spawn it so the orchestrator can continue with readiness + waiting.
+                    let dev_layout = device_layout; // moved in
+                    let lb = layout_builder; // moved in
+                    let lt = layout_type; // moved in
+
+                    let worker_fut = KvbmWorker::worker_task(
+                        dev_layout,
+                        lb,
+                        leader_data,
+                        lt,
+                        cfg.clone(),
+                        ct.clone(),
+                        handler_tx,
+                        layout_ready_tx,
+                        scheduler,
+                    );
+
+                    // If worker_task returns Result, handle/log it inside the spawned task.
+                    tokio::spawn(async move {
+                        if let Err(e) = worker_fut.await {
+                            tracing::error!("worker_task exited with error: {e:#}");
+                        }
+                    });
+
+                    // 3) wait for the worker’s layout allocation readiness
+                    match layout_ready_rx.await {
+                        Ok(_) => tracing::info!("worker layout allocation finished."),
+                        Err(_) => tracing::warn!("worker layout readiness channel dropped"),
+                    }
+
+                    // 4) wait for leader to finish its side of initialization
+                    KvbmWorker::leader_readiness_sync(cfg.clone(), ct.clone()).await?;
+
+                    Ok::<(), anyhow::Error>(())
+                }
+            },
+            cancel_token_for_task,
+            "kvbm-worker-task",
+        )?;
+
+        Ok((task, handler_rx))
+    }
     /// One-time use method to extract the block transfer handler from the worker.
     ///
     /// This is a bit of a hack. Improve the API design around this in the future.

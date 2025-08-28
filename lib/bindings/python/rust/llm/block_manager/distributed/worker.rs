@@ -107,7 +107,7 @@ impl KvbmWorker {
 #[pymethods]
 impl KvbmWorker {
     #[new]
-    #[pyo3(signature = (num_device_blocks, page_size, tensors, device_id=0, dtype_width_bytes=2, drt=None))]
+    #[pyo3(signature = (num_device_blocks, page_size, tensors, device_id=0, dtype_width_bytes=2, drt=None, layout_blocking=false))]
     fn new(
         num_device_blocks: usize,
         page_size: usize,
@@ -115,6 +115,7 @@ impl KvbmWorker {
         device_id: usize,
         dtype_width_bytes: usize,
         drt: Option<DistributedRuntime>,
+        layout_blocking: bool,
     ) -> PyResult<Self> {
         let py_drt = drt.ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("DistributedRuntime (drt) must be provided")
@@ -146,7 +147,7 @@ impl KvbmWorker {
 
         let worker = rt
             .block_on(async move {
-                let kvbm_worker = KvbmWorkerImpl::new(config).await?;
+                let kvbm_worker = KvbmWorkerImpl::new(config, layout_blocking).await?;
                 anyhow::Ok(kvbm_worker)
             })
             .map_err(to_pyerr)?;

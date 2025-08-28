@@ -136,7 +136,7 @@ mod tests {
                 .device_id(i)
                 .build()?;
 
-            let worker = KvbmWorker::new(config).await?;
+            let worker = KvbmWorker::new(config, false).await?;
             workers.push(worker);
         }
 

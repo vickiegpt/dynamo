@@ -142,7 +142,7 @@ impl Worker for KvConnectorWorker {
         self.layer_events = raw_event_handles;
 
         let worker = self.drt.runtime().primary().block_on(async move {
-            let worker = KvbmWorker::new(config).await?;
+            let worker = KvbmWorker::new(config, true).await?;
             anyhow::Ok(worker)
         })?;
 
