@@ -32,6 +32,7 @@ use nixl_sys::NixlDescriptor;
 use nixl_sys::XferOp::{Read, Write};
 use std::ops::Range;
 use tokio::sync::oneshot;
+use std::time::Duration;
 
 
 // Removed unused imports for zero-copy scatter kernel implementation
@@ -440,7 +441,13 @@ where
                     }
                 }
 
-                cuda::copy_blocks_with_customized_kernel(sources, targets, ctx.stream().as_ref(), RB::write_to_strategy())?;
+                // Launch kernel and get any device pointers that need cleanup
+                let cleanup_ptrs = cuda::copy_blocks_with_customized_kernel(sources, targets, ctx.stream().as_ref(), RB::write_to_strategy())?;
+
+                // Record H2D completion event with debug info + cleanup
+                let worker_id = if !sources.is_empty() { Some(sources[0].block_data().worker_id()) } else { None };
+                ctx.cuda_event_with_cleanup(tx, "H2D".to_string(), worker_id, cleanup_ptrs)?;
+                return Ok(rx);
             } else if RB::write_to_strategy() == TransferStrategy::CudaAsyncD2H {
                 // Verify D2H: Device -> Host transfer
                 if sources.len() > 0 {
@@ -484,17 +491,22 @@ where
                     }
                 }
 
-                cuda::copy_blocks_with_customized_kernel(sources, targets, ctx.stream().as_ref(), RB::write_to_strategy())?;
+                // Launch kernel and get any device pointers that need cleanup
+                let cleanup_ptrs = cuda::copy_blocks_with_customized_kernel(sources, targets, ctx.stream().as_ref(), RB::write_to_strategy())?;
+
+                // Record D2H completion event with debug info + cleanup
+                let worker_id = if !sources.is_empty() { Some(sources[0].block_data().worker_id()) } else { None };
+                ctx.cuda_event_with_cleanup(tx, "D2H".to_string(), worker_id, cleanup_ptrs)?;
+                return Ok(rx);
             } else {
-                // D2D transfers use standard block copy
+                // Fall back to individual copy for single H2D blocks
                 for (src, dst) in sources.iter().zip(targets.iter_mut()) {
                     cuda::copy_block(src, dst, ctx.stream().as_ref(), RB::write_to_strategy())?;
                 }
-            }
 
-            // todo: acquire an cuda event, recored on the stream, drop the stream, await on the event.
-            ctx.cuda_event(tx)?;
-            Ok(rx)
+                ctx.cuda_event(tx)?;
+                return Ok(rx);
+            }
         }
         TransferStrategy::Nixl(transfer_type) => {
             let transfer_fut = nixl::write_blocks_to(sources, targets, &ctx, transfer_type)?;
@@ -534,6 +546,40 @@ where
         ctx: Arc<TransferContext>,
     ) -> Result<oneshot::Receiver<()>, TransferError> {
         L::handle_transfer(self, dst, ctx)
+    }
+}
+
+// Add timeout for transfer completion to detect kernel failures
+pub async fn handle_local_transfer_with_timeout<RB, WB>(
+    sources: Vec<RB>,
+    targets: &mut Vec<WB>,
+    ctx: Arc<TransferContext>,
+) -> Result<(), TransferError>
+where
+    RB: BlockDataProvider + Send + Sync,
+    WB: BlockDataProviderMut + Send + Sync,
+    Vec<RB>: WriteTo<WB>,
+{
+    let completion_receiver = sources.write_to(targets, ctx)?;
+
+    // Add timeout to detect kernel failures
+    let timeout_duration = Duration::from_secs(30); // 30 second timeout
+
+    match tokio::time::timeout(timeout_duration, completion_receiver).await {
+        Ok(Ok(())) => {
+            println!("✅ Transfer completed successfully");
+            Ok(())
+        }
+        Ok(Err(_)) => {
+            let error = TransferError::ExecutionError("Transfer completion channel closed".into());
+            println!("❌ Transfer failed: channel closed");
+            Err(error)
+        }
+        Err(_) => {
+            let error = TransferError::ExecutionError("Transfer timeout - kernel may have crashed".into());
+            println!("⏰ Transfer timed out after {:?} - possible kernel crash", timeout_duration);
+            Err(error)
+        }
     }
 }
 
