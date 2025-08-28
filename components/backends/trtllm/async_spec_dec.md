@@ -36,3 +36,19 @@ export NUM_DRAFTERS=2
 export DRAFTER_CUDA_VISIBLE_DEVICES:-"1,2"
 ./launch/spec_dec.sh
 ```
+
+## Parallel Speculative Decoding
+
+To enable parallel speculative decoding, add the ```--parallel-spec-dec``` to the verifier:
+
+```
+# run verifier worker with speculative decoding
+CUDA_VISIBLE_DEVICES=$VERIFIER_CUDA_VISIBLE_DEVICES \
+python3 -m dynamo.trtllm \
+  --model-path "$MODEL_PATH" \
+  --served-model-name "$SERVED_MODEL_NAME" \
+  --extra-engine-args "$VERIFIER_ENGINE_ARGS" \
+  --spec-dec-mode "verifier" & \
+  --parallel-spec-dec
+VERIFIER_PID=$!
+```

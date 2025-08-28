@@ -48,6 +48,7 @@ class Config:
         self.next_endpoint: str = ""
         self.spec_dec_mode: Optional[str] = None
         self.modality: str = "text"
+        self.parallel_spec_dec: bool = False
 
     def __str__(self) -> str:
         return (
@@ -72,8 +73,9 @@ class Config:
             f"disaggregation_mode={self.disaggregation_mode}, "
             f"disaggregation_strategy={self.disaggregation_strategy}, "
             f"next_endpoint={self.next_endpoint}, "
-            f"spec_dec_mode={self.spec_dec_mode}"
-            f"modality={self.modality})"
+            f"spec_dec_mode={self.spec_dec_mode}, "
+            f"modality={self.modality}, "
+            f"parallel_spec_dec={self.parallel_spec_dec})"
         )
 
 
@@ -253,6 +255,11 @@ def cmd_line_args():
         choices=["drafter", "verifier"],
         help="Mode to use for speculative decoding. Options: 'drafter', 'verifier'. Default: None",
     )
+    parser.add_argument(
+        "--parallel-spec-dec",
+        action="store_true",
+        help="Enable parallel speculative decoding.",
+    )
     args = parser.parse_args()
 
     config = Config()
@@ -313,5 +320,6 @@ def cmd_line_args():
     config.publish_events_and_metrics = args.publish_events_and_metrics
     config.spec_dec_mode = args.spec_dec_mode
     config.modality = args.modality
+    config.parallel_spec_dec = args.parallel_spec_dec
 
     return config
