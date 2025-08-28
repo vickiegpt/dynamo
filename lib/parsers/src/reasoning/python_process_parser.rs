@@ -12,10 +12,12 @@ use std::thread;
 
 fn write_to_stdin(mut stdin: ChildStdin, rx: Receiver<String>) {
     while let Ok(line) = rx.recv() {
-        stdin
-            .write_all(line.as_bytes())
-            .expect("Failed to write to stdin");
-        stdin.flush().expect("Failed to flush stdin");
+        if stdin.write_all(line.as_bytes()).is_err() {
+            tracing::error!("Failed to write to Python stdin");
+        }
+        if stdin.flush().is_err() {
+            tracing::error!("Failed to flush Python stdin");
+        }
     }
 }
 
@@ -24,9 +26,9 @@ fn read_from_stdout(stdout: ChildStdout, tx: Sender<String>) {
     for line in reader.lines() {
         match line {
             Ok(line) => {
-                tx.send(line).expect("Failed to send stdout line");
+                tx.send(line).unwrap();
             }
-            Err(_) => break,
+            Err(_) => tracing::error!("Failed to read from Python stdout"),
         }
     }
 }
@@ -196,7 +198,7 @@ impl PythonProcessParser {
             .unwrap()
     }
 
-    pub fn render_script_streaming(path: &str) -> String {
+    fn render_script_streaming(path: &str) -> String {
         let mut env = Environment::new();
         env.add_template(
             "reasoning_parser_streaming",
@@ -229,17 +231,27 @@ impl ReasoningParser for PythonProcessParser {
         let output = std::process::Command::new("python3")
             .arg("-c")
             .arg(script)
-            .output()
-            .expect("Failed to execute python process");
+            .output();
 
-        if !output.status.success() {
+        let output_unwrapped = match output {
+            Err(_) => {
+                tracing::error!("Failed to execute Python process");
+                return ParserResult {
+                    normal_text: text.to_string(),
+                    reasoning_text: String::new(),
+                };
+            }
+            Ok(output) => output,
+        };
+
+        if !output_unwrapped.status.success() {
             return ParserResult {
                 normal_text: String::new(),
                 reasoning_text: String::new(),
             };
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout = String::from_utf8_lossy(&output_unwrapped.stdout);
         let mut lines = stdout.lines();
         let normal_text = lines.next().unwrap_or("").to_string();
         let reasoning_text = lines.next().unwrap_or("").to_string();
@@ -257,10 +269,7 @@ impl ReasoningParser for PythonProcessParser {
     ) -> ParserResult {
         let token_ids_str = token_ids
             .iter()
-            .map(|&id| id as usize)
-            .collect::<Vec<usize>>()
-            .iter()
-            .map(|id| id.to_string())
+            .map(|&id| id.to_string())
             .collect::<Vec<String>>()
             .join(",");
 
