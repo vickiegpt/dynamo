@@ -11,7 +11,7 @@ members = [
     "lib/async-openai",
     "lib/parsers",
     "lib/bindings/c",
-    "lib/engines/*",
+    "lib/engines/*", "rust-tracing-playground",
 ]
 resolver = "3"
 
