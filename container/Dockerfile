@@ -238,8 +238,9 @@ RUN if [ "$ARCH" = "arm64" ]; then \
 ##################################
 
 # Create and activate virtual environment
+ARG PYTHON_VERSION
 RUN mkdir -p /opt/dynamo/venv && \
-    uv venv /opt/dynamo/venv --python 3.12
+    uv venv /opt/dynamo/venv --python $PYTHON_VERSION
 
 ENV VIRTUAL_ENV=/opt/dynamo/venv \
     PATH="/opt/dynamo/venv/bin:${PATH}"
@@ -280,8 +281,9 @@ ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-16} \
     PATH=/usr/local/cargo/bin:/opt/dynamo/venv/bin:$PATH
 
 # Install system dependencies
+ARG PYTHON_VERSION
 RUN dnf update -y \
-    && dnf install -y llvm-toolset protobuf-compiler python3.12-devel wget \
+    && dnf install -y llvm-toolset protobuf-compiler python${PYTHON_VERSION}-devel wget \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
