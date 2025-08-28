@@ -171,7 +171,7 @@ impl Worker for KvConnectorWorker {
             .build()?;
 
         let worker = self.drt.runtime().primary().block_on(async move {
-            let worker = KvbmWorker::new(config).await?;
+            let worker = KvbmWorker::new(config, false).await?;
             anyhow::Ok(worker)
         })?;
 
