@@ -41,109 +41,11 @@ fn read_and_print_stderr(stderr: ChildStderr) {
 }
 
 // define a jinja template in static string
-pub const REASONING_PYTHON_TEMPLATE: &str = r#"
-import os
-import sys
-# get absolute path
-PATH = "{{ path }}"
-PATH = os.path.abspath(PATH)
+pub const REASONING_PYTHON_TEMPLATE: &str =
+    include_str!("templates/non_streaming_reasoning_parser.jinja");
 
-
-#extract parent directory
-parent_dir = os.path.dirname(PATH)
-
-#extract filename without extension
-module_name, _ = os.path.splitext(os.path.basename(PATH))
-
-sys.path.append(parent_dir)
-
-#import the module
-reasoning_module = __import__(module_name)
-
-# find class with BaseReasoningParser in its bases
-
-cls_name = ""
-
-import inspect
-
-for name, obj in vars(reasoning_module).items():
-    if inspect.isclass(obj) and hasattr(obj, "__bases__"):
-        # Check if BaseReasoningParser is anywhere in the MRO
-        if any("BaseReasoningParser" in base.__name__ for base in inspect.getmro(obj)[1:]):
-            cls_name = name
-            break
-
-if cls_name == "":
-    raise ValueError("No class with BaseReasoningParser in its bases found in the module")
-
-ReasoningParserClass = getattr(reasoning_module, cls_name)
-
-parser_instance = ReasoningParserClass()
-
-import json
-text_input = json.loads(r'''{{ text|tojson }}''')
-token_ids_input = {{ token_ids|tojson }}
-
-normal_text, reasoning_text = parser_instance.detect_and_parse_reasoning(text_input, token_ids_input)
-
-print(f"{normal_text}")
-print(f"{reasoning_text}")
-"#;
-
-pub const REASONING_PYTHON_TEMPLATE_STREAMING: &str = r#"
-import os
-import sys
-# get absolute path
-PATH = "{{ path }}"
-PATH = os.path.abspath(PATH)
-
-
-#extract parent directory
-parent_dir = os.path.dirname(PATH)
-
-#extract filename without extension
-module_name, _ = os.path.splitext(os.path.basename(PATH))
-
-sys.path.append(parent_dir)
-
-#import the module
-reasoning_module = __import__(module_name)
-
-# find class with BaseReasoningParser in its bases
-
-cls_name = ""
-
-import inspect
-
-for name, obj in vars(reasoning_module).items():
-    if inspect.isclass(obj) and hasattr(obj, "__bases__"):
-        # Check if BaseReasoningParser is anywhere in the MRO
-        if any("BaseReasoningParser" in base.__name__ for base in inspect.getmro(obj)[1:]):
-            cls_name = name
-            break
-
-if cls_name == "":
-    raise ValueError("No class with BaseReasoningParser in its bases found in the module")
-
-ReasoningParserClass = getattr(reasoning_module, cls_name)
-
-parser_instance = ReasoningParserClass()
-
-# read text and token_ids from sys.stdin in a loop
-for line in sys.stdin:
-    if not line:
-        break
-
-    text, token_ids = line.rsplit("],[", 1)
-
-    token_ids = list(map(int, token_ids.strip().split(","))) if token_ids.strip() else []
-    normal_text, reasoning_text = parser_instance.parse_reasoning_streaming_incremental(text, token_ids)
-
-    print(f"{normal_text}")
-    print(f"{reasoning_text}")
-    sys.stdout.flush()
-"#;
-
+pub const REASONING_PYTHON_TEMPLATE_STREAMING: &str =
+    include_str!("templates/streaming_reasoning_parser.jinja");
 #[derive(std::fmt::Debug)]
 pub struct PythonProcessParser {
     path: String,
