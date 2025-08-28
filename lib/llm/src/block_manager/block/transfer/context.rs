@@ -15,15 +15,15 @@
 
 use super::*;
 
-use cudarc::driver::{CudaEvent, CudaStream, sys::CUevent_flags, result as cuda_result};
+use cudarc::driver::{CudaEvent, CudaStream, result as cuda_result, sys::CUevent_flags};
 use nixl_sys::Agent as NixlAgent;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 // Add debug tracking for event-receiver mapping
 static EVENT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -32,9 +32,9 @@ static EVENT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 pub struct DebugEventInfo {
     pub event_id: u64,
     pub transfer_direction: String,
-    pub worker_id: Option<u64>,  // WorkerID is u64
+    pub worker_id: Option<u64>, // WorkerID is u64
     pub timestamp: std::time::Instant,
-    pub cleanup_ptrs: Option<Vec<u64>>,  // Device pointers to free when event completes
+    pub cleanup_ptrs: Option<Vec<u64>>, // Device pointers to free when event completes
 }
 
 pub struct TransferContext {
@@ -154,7 +154,7 @@ impl TransferContext {
         &self,
         tx: oneshot::Sender<()>,
         transfer_direction: String,
-        worker_id: Option<u64>
+        worker_id: Option<u64>,
     ) -> Result<(), TransferError> {
         self.cuda_event_with_cleanup(tx, transfer_direction, worker_id, None)
     }
@@ -164,7 +164,7 @@ impl TransferContext {
         tx: oneshot::Sender<()>,
         transfer_direction: String,
         worker_id: Option<u64>,
-        cleanup_ptrs: Option<Vec<u64>>
+        cleanup_ptrs: Option<Vec<u64>>,
     ) -> Result<(), TransferError> {
         let event_id = EVENT_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
         let timestamp = std::time::Instant::now();
@@ -183,8 +183,10 @@ impl TransferContext {
             String::new()
         };
 
-        println!("📝 [TRANSFER_CONTEXT] Recording Event#{} for {} (worker: {:?}){}",
-                event_id, transfer_direction, worker_id, cleanup_msg);
+        println!(
+            "📝 [TRANSFER_CONTEXT] Recording Event#{} for {} (worker: {:?}){}",
+            event_id, transfer_direction, worker_id, cleanup_msg
+        );
 
         let event = self
             .stream

@@ -69,10 +69,7 @@ fn batch_cuda_memcpy(stream: &CudaStream, memcpy_fn: CudaMemcpyFnPtr) -> Result<
     }
 
     // Sort requests by src_ptr and dst_ptr to help merging contiguous requests
-    requests.sort_by(|a, b| {
-        (a.src_ptr, a.dst_ptr)
-            .cmp(&(b.src_ptr, b.dst_ptr))
-    });
+    requests.sort_by(|a, b| (a.src_ptr, a.dst_ptr).cmp(&(b.src_ptr, b.dst_ptr)));
 
     let mut merged_requests: Vec<CudaMemcpyRequest> = Vec::new();
 
@@ -81,7 +78,7 @@ fn batch_cuda_memcpy(stream: &CudaStream, memcpy_fn: CudaMemcpyFnPtr) -> Result<
         let curr_src_end = curr.src_ptr + curr.size as u64;
         let curr_dst_end = curr.dst_ptr + curr.size as u64;
         if req.src_ptr == curr_src_end && req.dst_ptr == curr_dst_end {
-             // Merge contiguous requests
+            // Merge contiguous requests
             curr.size += req.size;
         } else {
             merged_requests.push(curr);
@@ -91,7 +88,10 @@ fn batch_cuda_memcpy(stream: &CudaStream, memcpy_fn: CudaMemcpyFnPtr) -> Result<
     requests.clear();
     merged_requests.push(curr);
 
-    tracing::info!("ziqif sending out {} merged requests", merged_requests.len());
+    tracing::info!(
+        "ziqif sending out {} merged requests",
+        merged_requests.len()
+    );
     for req in merged_requests {
         unsafe {
             memcpy_fn(
@@ -126,8 +126,13 @@ where
         let layer_size = src_data.layer_view(0, 0)?.size();
         let total_size = layer_size * num_layers * num_outer_dims;
 
-        tracing::info!("Using copy_kernel_KV (FATBIN) for {} blocks [{}L×{}O×{}B]",
-                    sources.len(), num_layers, num_outer_dims, layer_size);
+        tracing::info!(
+            "Using copy_kernel_KV (FATBIN) for {} blocks [{}L×{}O×{}B]",
+            sources.len(),
+            num_layers,
+            num_outer_dims,
+            layer_size
+        );
 
         // Collect all source and destination addresses for each layer's K/V components
         let mut src_addresses = Vec::new();
@@ -138,7 +143,7 @@ where
                 // K cache addresses (outer_dim = 0)
                 if let (Ok(src_k), Ok(dst_k)) = (
                     src_block.block_data().layer_view(layer_idx, 0),
-                    dst_block.block_data().layer_view(layer_idx, 0)
+                    dst_block.block_data().layer_view(layer_idx, 0),
                 ) {
                     unsafe {
                         src_addresses.push(src_k.as_ptr() as u64);
@@ -148,7 +153,7 @@ where
                 // V cache addresses (outer_dim = 1)
                 if let (Ok(src_v), Ok(dst_v)) = (
                     src_block.block_data().layer_view(layer_idx, 1),
-                    dst_block.block_data().layer_view(layer_idx, 1)
+                    dst_block.block_data().layer_view(layer_idx, 1),
                 ) {
                     unsafe {
                         src_addresses.push(src_v.as_ptr() as u64);
@@ -158,38 +163,68 @@ where
             }
         }
 
-        tracing::info!("Copy size: {} bytes, {} transfers [{} src/dst pairs]",
-                    layer_size, src_addresses.len(), src_addresses.len());
+        tracing::info!(
+            "Copy size: {} bytes, {} transfers [{} src/dst pairs]",
+            layer_size,
+            src_addresses.len(),
+            src_addresses.len()
+        );
 
         // Validate addresses before kernel launch to prevent crashes
-        for (i, (&src_addr, &dst_addr)) in src_addresses.iter().zip(dst_addresses.iter()).enumerate() {
+        for (i, (&src_addr, &dst_addr)) in
+            src_addresses.iter().zip(dst_addresses.iter()).enumerate()
+        {
             if src_addr == 0 {
-                return Err(TransferError::ExecutionError(format!("Invalid null source address at index {}", i)));
+                return Err(TransferError::ExecutionError(format!(
+                    "Invalid null source address at index {}",
+                    i
+                )));
             }
             if dst_addr == 0 {
-                return Err(TransferError::ExecutionError(format!("Invalid null destination address at index {}", i)));
+                return Err(TransferError::ExecutionError(format!(
+                    "Invalid null destination address at index {}",
+                    i
+                )));
             }
             if src_addr == dst_addr {
-                return Err(TransferError::ExecutionError(format!("Source and dest addresses are identical at index {}: 0x{:x}", i, src_addr)));
+                return Err(TransferError::ExecutionError(format!(
+                    "Source and dest addresses are identical at index {}: 0x{:x}",
+                    i, src_addr
+                )));
             }
             // Check for obviously invalid addresses (e.g., very small values that might be offsets instead of pointers)
             if src_addr < 0x1000 || dst_addr < 0x1000 {
-                return Err(TransferError::ExecutionError(format!("Suspicious address at index {}: src=0x{:x}, dst=0x{:x}", i, src_addr, dst_addr)));
+                return Err(TransferError::ExecutionError(format!(
+                    "Suspicious address at index {}: src=0x{:x}, dst=0x{:x}",
+                    i, src_addr, dst_addr
+                )));
             }
         }
 
         // Validate parameters
         if layer_size == 0 {
-            return Err(TransferError::ExecutionError("Invalid layer size: cannot be zero".into()));
+            return Err(TransferError::ExecutionError(
+                "Invalid layer size: cannot be zero".into(),
+            ));
         }
         if src_addresses.len() != dst_addresses.len() {
-            return Err(TransferError::ExecutionError(format!("Address count mismatch: {} src vs {} dst", src_addresses.len(), dst_addresses.len())));
+            return Err(TransferError::ExecutionError(format!(
+                "Address count mismatch: {} src vs {} dst",
+                src_addresses.len(),
+                dst_addresses.len()
+            )));
         }
         if src_addresses.len() > i32::MAX as usize {
-            return Err(TransferError::ExecutionError(format!("Too many addresses: {} exceeds i32::MAX", src_addresses.len())));
+            return Err(TransferError::ExecutionError(format!(
+                "Too many addresses: {} exceeds i32::MAX",
+                src_addresses.len()
+            )));
         }
 
-        tracing::info!("✅ Address validation passed for {} transfers", src_addresses.len());
+        tracing::info!(
+            "✅ Address validation passed for {} transfers",
+            src_addresses.len()
+        );
 
         // Launch kernel with validated parameters
         let ptr_array_size = src_addresses.len() * std::mem::size_of::<u64>();
@@ -201,16 +236,22 @@ where
             let _context_guard = stream.context().bind_to_thread();
 
             // Allocate device memory for pointer arrays
-            d_src_ptrs = cuda_result::malloc_sync(ptr_array_size)
-                .map_err(|e| TransferError::ExecutionError(format!("Failed to allocate source pointers: {}", e)))?;
-            d_dst_ptrs = cuda_result::malloc_sync(ptr_array_size)
-                .map_err(|e| TransferError::ExecutionError(format!("Failed to allocate dest pointers: {}", e)))?;
+            d_src_ptrs = cuda_result::malloc_sync(ptr_array_size).map_err(|e| {
+                TransferError::ExecutionError(format!("Failed to allocate source pointers: {}", e))
+            })?;
+            d_dst_ptrs = cuda_result::malloc_sync(ptr_array_size).map_err(|e| {
+                TransferError::ExecutionError(format!("Failed to allocate dest pointers: {}", e))
+            })?;
 
             // Copy pointer arrays to device
             cuda_result::memcpy_htod_async(d_src_ptrs, &src_addresses, stream.cu_stream())
-                .map_err(|e| TransferError::ExecutionError(format!("Failed to copy source pointers: {}", e)))?;
+                .map_err(|e| {
+                    TransferError::ExecutionError(format!("Failed to copy source pointers: {}", e))
+                })?;
             cuda_result::memcpy_htod_async(d_dst_ptrs, &dst_addresses, stream.cu_stream())
-                .map_err(|e| TransferError::ExecutionError(format!("Failed to copy dest pointers: {}", e)))?;
+                .map_err(|e| {
+                    TransferError::ExecutionError(format!("Failed to copy dest pointers: {}", e))
+                })?;
 
             // Launch kernel for transfers
             let kernel = get_copy_kernel()?;
@@ -223,27 +264,35 @@ where
             let grid_dim = (blocks_needed, 1, 1);
             let block_dim = (threads_per_block, 1, 1);
 
-            tracing::info!("Grid-stride: {} pairs, {} blocks × {} threads",
-                        src_addresses.len(), blocks_needed, threads_per_block);
+            tracing::info!(
+                "Grid-stride: {} pairs, {} blocks × {} threads",
+                src_addresses.len(),
+                blocks_needed,
+                threads_per_block
+            );
 
             // cuLaunchKernel expects pointers to parameter values
             let src_ptr_param = d_src_ptrs;
             let dst_ptr_param = d_dst_ptrs;
-            let size_param = layer_size;  // Size per layer component (32KB)
+            let size_param = layer_size; // Size per layer component (32KB)
             let num_pairs_param = src_addresses.len() as i32; // Match kernel's int num_pairs
 
             let params = [
-                &src_ptr_param as *const _ as *mut std::ffi::c_void,    // Pointer to device address
-                &dst_ptr_param as *const _ as *mut std::ffi::c_void,    // Pointer to device address
-                &size_param as *const _ as *mut std::ffi::c_void,       // Pointer to size value
-                &num_pairs_param as *const _ as *mut std::ffi::c_void,  // Pointer to num_pairs (int)
+                &src_ptr_param as *const _ as *mut std::ffi::c_void, // Pointer to device address
+                &dst_ptr_param as *const _ as *mut std::ffi::c_void, // Pointer to device address
+                &size_param as *const _ as *mut std::ffi::c_void,    // Pointer to size value
+                &num_pairs_param as *const _ as *mut std::ffi::c_void, // Pointer to num_pairs (int)
             ];
 
             let result = cudarc::driver::sys::cuLaunchKernel(
                 kernel,
-                grid_dim.0, grid_dim.1, grid_dim.2,  // grid dimensions
-                block_dim.0, block_dim.1, block_dim.2,  // block dimensions
-                0, // shared memory
+                grid_dim.0,
+                grid_dim.1,
+                grid_dim.2, // grid dimensions
+                block_dim.0,
+                block_dim.1,
+                block_dim.2, // block dimensions
+                0,           // shared memory
                 stream.cu_stream(),
                 params.as_ptr() as *mut *mut std::ffi::c_void,
                 std::ptr::null_mut(), // extra
@@ -253,15 +302,19 @@ where
                 // Clean up allocated device memory on failure
                 let _ = cuda_result::free_sync(d_src_ptrs);
                 let _ = cuda_result::free_sync(d_dst_ptrs);
-                return Err(TransferError::ExecutionError(format!("Kernel launch failed: {:?}", result)));
+                return Err(TransferError::ExecutionError(format!(
+                    "Kernel launch failed: {:?}",
+                    result
+                )));
             }
 
-            tracing::info!("copy_kernel_KV launched successfully - returning pointers for event-based cleanup");
+            tracing::info!(
+                "copy_kernel_KV launched successfully - returning pointers for event-based cleanup"
+            );
 
             // Return device pointers for cleanup when event completes
             return Ok(Some(vec![d_src_ptrs, d_dst_ptrs]));
         }
-
     } else {
         // Fall back to individual copy for single H2D blocks
         for (src, dst) in sources.iter().zip(destinations.iter_mut()) {
@@ -408,7 +461,6 @@ where
     Ok(())
 }
 
-
 /// H2D Implementation
 #[inline(always)]
 unsafe fn cuda_memcpy_h2d(
@@ -417,10 +469,13 @@ unsafe fn cuda_memcpy_h2d(
     size: usize,
     stream: &CudaStream,
 ) -> Result<(), TransferError> {
-
     // ADD INDIVIDUAL TRANSFER LOGGING
-    tracing::info!(" H2D Transfer: 0x{:x} → 0x{:x} ({} bytes)",
-        src_ptr as usize, dst_ptr as usize, size);
+    tracing::info!(
+        " H2D Transfer: 0x{:x} → 0x{:x} ({} bytes)",
+        src_ptr as usize,
+        dst_ptr as usize,
+        size
+    );
 
     debug_assert!(!src_ptr.is_null(), "Source host pointer is null");
     debug_assert!(!dst_ptr.is_null(), "Destination device pointer is null");
@@ -441,8 +496,12 @@ unsafe fn cuda_memcpy_d2h(
     size: usize,
     stream: &CudaStream,
 ) -> Result<(), TransferError> {
-    tracing::info!(" D2H Transfer: 0x{:x} → 0x{:x} ({} bytes)",
-        src_ptr as usize, dst_ptr as usize, size);
+    tracing::info!(
+        " D2H Transfer: 0x{:x} → 0x{:x} ({} bytes)",
+        src_ptr as usize,
+        dst_ptr as usize,
+        size
+    );
 
     debug_assert!(!src_ptr.is_null(), "Source device pointer is null");
     debug_assert!(!dst_ptr.is_null(), "Destination host pointer is null");

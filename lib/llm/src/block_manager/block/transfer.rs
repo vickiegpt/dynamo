@@ -22,8 +22,8 @@ mod strategy;
 use super::*;
 
 use crate::block_manager::storage::{
+    DeviceStorage, DiskStorage, PinnedStorage, StorageType, SystemStorage,
     nixl::{NixlRegisterableStorage, NixlStorage},
-    DeviceStorage, DiskStorage, PinnedStorage, SystemStorage, StorageType,
 };
 
 use cudarc::driver::CudaStream;
@@ -31,23 +31,22 @@ use cudarc::driver::CudaStream;
 use nixl_sys::NixlDescriptor;
 use nixl_sys::XferOp::{Read, Write};
 use std::ops::Range;
-use tokio::sync::oneshot;
 use std::time::Duration;
-
+use tokio::sync::oneshot;
 
 // Removed unused imports for zero-copy scatter kernel implementation
 use cudarc::driver::result as cuda_result;
-use std::sync::{Mutex, OnceLock};
 use std::collections::VecDeque;
+use std::sync::{Mutex, OnceLock};
 
 // Pre-allocated device buffers for kernel pointer arrays
 const MAX_PREALLOCATED_BLOCKS: usize = 1024;
-const TRANSFER_BUFFER_POOL_SIZE: usize = 8;  // Number of concurrent buffers
+const TRANSFER_BUFFER_POOL_SIZE: usize = 8; // Number of concurrent buffers
 
 struct TransferBuffer {
     id: usize,
-    src_ptrs: u64,  // Device pointer to u64 array
-    dst_ptrs: u64,  // Device pointer to u64 array
+    src_ptrs: u64, // Device pointer to u64 array
+    dst_ptrs: u64, // Device pointer to u64 array
     capacity: usize,
 }
 
@@ -93,7 +92,9 @@ fn get_copy_kernel_module() -> Result<cudarc::driver::sys::CUmodule, TransferErr
     } else if let Ok(module) = load_runtime_fatbin() {
         module
     } else {
-        return Err(TransferError::ExecutionError("No copy_kernel_KV FATBIN found (tried embedded and runtime paths)".to_string()));
+        return Err(TransferError::ExecutionError(
+            "No copy_kernel_KV FATBIN found (tried embedded and runtime paths)".to_string(),
+        ));
     };
 
     let module_ptr = module as usize;
@@ -114,11 +115,15 @@ fn get_copy_kernel() -> Result<cudarc::driver::sys::CUfunction, TransferError> {
     let func = unsafe {
         let mut func = std::ptr::null_mut();
         let func_name = std::ffi::CString::new("copy_kernel_KV").unwrap();
-        let result = cudarc::driver::sys::cuModuleGetFunction(&mut func, module, func_name.as_ptr());
+        let result =
+            cudarc::driver::sys::cuModuleGetFunction(&mut func, module, func_name.as_ptr());
         if result == cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
             func
         } else {
-            return Err(TransferError::ExecutionError(format!("Failed to get kernel function: {:?}", result)));
+            return Err(TransferError::ExecutionError(format!(
+                "Failed to get kernel function: {:?}",
+                result
+            )));
         }
     };
 
@@ -137,11 +142,21 @@ fn get_transfer_buffer_pool() -> Result<&'static TransferBufferPool, TransferErr
             let (src_ptrs, dst_ptrs) = unsafe {
                 let src_ptrs = match cuda_result::malloc_sync(ptr_array_size) {
                     Ok(ptr) => ptr,
-                    Err(e) => return Err(format!("Failed to allocate transfer src buffer {}: {}", i, e)),
+                    Err(e) => {
+                        return Err(format!(
+                            "Failed to allocate transfer src buffer {}: {}",
+                            i, e
+                        ));
+                    }
                 };
                 let dst_ptrs = match cuda_result::malloc_sync(ptr_array_size) {
                     Ok(ptr) => ptr,
-                    Err(e) => return Err(format!("Failed to allocate transfer dst buffer {}: {}", i, e)),
+                    Err(e) => {
+                        return Err(format!(
+                            "Failed to allocate transfer dst buffer {}: {}",
+                            i, e
+                        ));
+                    }
                 };
                 (src_ptrs, dst_ptrs)
             };
@@ -154,8 +169,12 @@ fn get_transfer_buffer_pool() -> Result<&'static TransferBufferPool, TransferErr
             });
         }
 
-        println!("📦 Allocated {} transfer buffers, {} blocks per buffer ({} KB each)",
-                 TRANSFER_BUFFER_POOL_SIZE, MAX_PREALLOCATED_BLOCKS, ptr_array_size / 1024);
+        println!(
+            "📦 Allocated {} transfer buffers, {} blocks per buffer ({} KB each)",
+            TRANSFER_BUFFER_POOL_SIZE,
+            MAX_PREALLOCATED_BLOCKS,
+            ptr_array_size / 1024
+        );
 
         Ok(TransferBufferPool {
             available: Mutex::new(buffers),
@@ -205,14 +224,19 @@ fn load_embedded_fatbin() -> Result<cudarc::driver::sys::CUmodule, cudarc::drive
         println!("📦 Loading embedded FATBIN ({} bytes)", FATBIN.len());
         unsafe {
             let mut module = std::ptr::null_mut();
-            let result = cudarc::driver::sys::cuModuleLoadData(&mut module, FATBIN.as_ptr() as *const std::ffi::c_void);
+            let result = cudarc::driver::sys::cuModuleLoadData(
+                &mut module,
+                FATBIN.as_ptr() as *const std::ffi::c_void,
+            );
             if result == cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
                 return Ok(module);
             }
         }
     }
 
-    Err(cudarc::driver::DriverError(cudarc::driver::sys::cudaError_enum::CUDA_ERROR_FILE_NOT_FOUND))
+    Err(cudarc::driver::DriverError(
+        cudarc::driver::sys::cudaError_enum::CUDA_ERROR_FILE_NOT_FOUND,
+    ))
 }
 
 // Try to load FATBIN from filesystem (runtime)
@@ -223,7 +247,10 @@ fn load_runtime_fatbin() -> Result<cudarc::driver::sys::CUmodule, cudarc::driver
             println!("📁 Loading FATBIN from runtime env var: {}", runtime_path);
             unsafe {
                 let mut module = std::ptr::null_mut();
-                let result = cudarc::driver::sys::cuModuleLoadData(&mut module, fatbin_data.as_ptr() as *const std::ffi::c_void);
+                let result = cudarc::driver::sys::cuModuleLoadData(
+                    &mut module,
+                    fatbin_data.as_ptr() as *const std::ffi::c_void,
+                );
                 if result == cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
                     return Ok(module);
                 }
@@ -233,11 +260,11 @@ fn load_runtime_fatbin() -> Result<cudarc::driver::sys::CUmodule, cudarc::driver
 
     // 2. Check standard runtime locations (priority order)
     let runtime_paths = [
-        "./src/block_manager/block/transfer/kernels/copy_kernel_kv.fatbin",  // Primary: Next to transfer module
-        "./kernels/copy_kernel_kv.fatbin",                                   // Working directory kernels
-        "./copy_kernel_kv.fatbin",                                           // Current directory
-        "/usr/local/lib/dynamo/kernels/copy_kernel_kv.fatbin",               // System install
-        "/opt/dynamo/kernels/copy_kernel_kv.fatbin",                         // Alternative system
+        "./src/block_manager/block/transfer/kernels/copy_kernel_kv.fatbin", // Primary: Next to transfer module
+        "./kernels/copy_kernel_kv.fatbin", // Working directory kernels
+        "./copy_kernel_kv.fatbin",         // Current directory
+        "/usr/local/lib/dynamo/kernels/copy_kernel_kv.fatbin", // System install
+        "/opt/dynamo/kernels/copy_kernel_kv.fatbin", // Alternative system
     ];
 
     for path in &runtime_paths {
@@ -245,7 +272,10 @@ fn load_runtime_fatbin() -> Result<cudarc::driver::sys::CUmodule, cudarc::driver
             println!("📁 Loading FATBIN from runtime path: {}", path);
             unsafe {
                 let mut module = std::ptr::null_mut();
-                let result = cudarc::driver::sys::cuModuleLoadData(&mut module, fatbin_data.as_ptr() as *const std::ffi::c_void);
+                let result = cudarc::driver::sys::cuModuleLoadData(
+                    &mut module,
+                    fatbin_data.as_ptr() as *const std::ffi::c_void,
+                );
                 if result == cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
                     return Ok(module);
                 }
@@ -253,7 +283,9 @@ fn load_runtime_fatbin() -> Result<cudarc::driver::sys::CUmodule, cudarc::driver
         }
     }
 
-    Err(cudarc::driver::DriverError(cudarc::driver::sys::cudaError_enum::CUDA_ERROR_FILE_NOT_FOUND))
+    Err(cudarc::driver::DriverError(
+        cudarc::driver::sys::cudaError_enum::CUDA_ERROR_FILE_NOT_FOUND,
+    ))
 }
 
 pub use crate::block_manager::storage::{CudaAccessible, Local, Remote};
@@ -381,7 +413,6 @@ where
     <RB as StorageTypeProvider>::StorageType: NixlDescriptor,
     <WB as StorageTypeProvider>::StorageType: NixlDescriptor,
 {
-
     let (tx, rx) = oneshot::channel();
 
     match RB::write_to_strategy() {
@@ -403,7 +434,7 @@ where
                 if sources.len() > 0 {
                     if let (Ok(first_src), Ok(first_dst)) = (
                         sources[0].block_data().layer_view(0, 0),
-                        targets[0].block_data().layer_view(0, 0)
+                        targets[0].block_data().layer_view(0, 0),
                     ) {
                         unsafe {
                             // Get storage types and block IDs
@@ -413,21 +444,38 @@ where
                             let dst_block_id = targets[0].block_data().block_id();
 
                             // Verify H2D direction: source should be Pinned/System, dest should be Device
-                            let direction_correct = matches!(src_storage, StorageType::Pinned | StorageType::System) &&
-                                                  matches!(dst_storage, StorageType::Device(_));
+                            let direction_correct =
+                                matches!(src_storage, StorageType::Pinned | StorageType::System)
+                                    && matches!(dst_storage, StorageType::Device(_));
 
                             print!("H2D: {} blocks | ", sources.len());
-                            print!("src[{}]={:?}@{:p}", src_block_id, src_storage, first_src.as_ptr());
+                            print!(
+                                "src[{}]={:?}@{:p}",
+                                src_block_id,
+                                src_storage,
+                                first_src.as_ptr()
+                            );
                             if sources.len() > 1 {
-                                if let Ok(last_src) = sources[sources.len()-1].block_data().layer_view(0, 0) {
-                                    let last_src_id = sources[sources.len()-1].block_data().block_id();
+                                if let Ok(last_src) =
+                                    sources[sources.len() - 1].block_data().layer_view(0, 0)
+                                {
+                                    let last_src_id =
+                                        sources[sources.len() - 1].block_data().block_id();
                                     print!("..{}@{:p}", last_src_id, last_src.as_ptr());
                                 }
                             }
-                            print!(" → dst[{}]={:?}@{:p}", dst_block_id, dst_storage, first_dst.as_ptr());
+                            print!(
+                                " → dst[{}]={:?}@{:p}",
+                                dst_block_id,
+                                dst_storage,
+                                first_dst.as_ptr()
+                            );
                             if sources.len() > 1 {
-                                if let Ok(last_dst) = targets[targets.len()-1].block_data().layer_view(0, 0) {
-                                    let last_dst_id = targets[targets.len()-1].block_data().block_id();
+                                if let Ok(last_dst) =
+                                    targets[targets.len() - 1].block_data().layer_view(0, 0)
+                                {
+                                    let last_dst_id =
+                                        targets[targets.len() - 1].block_data().block_id();
                                     print!("..{}@{:p}", last_dst_id, last_dst.as_ptr());
                                 }
                             }
@@ -442,10 +490,19 @@ where
                 }
 
                 // Launch kernel and get any device pointers that need cleanup
-                let cleanup_ptrs = cuda::copy_blocks_with_customized_kernel(sources, targets, ctx.stream().as_ref(), RB::write_to_strategy())?;
+                let cleanup_ptrs = cuda::copy_blocks_with_customized_kernel(
+                    sources,
+                    targets,
+                    ctx.stream().as_ref(),
+                    RB::write_to_strategy(),
+                )?;
 
                 // Record H2D completion event with debug info + cleanup
-                let worker_id = if !sources.is_empty() { Some(sources[0].block_data().worker_id()) } else { None };
+                let worker_id = if !sources.is_empty() {
+                    Some(sources[0].block_data().worker_id())
+                } else {
+                    None
+                };
                 ctx.cuda_event_with_cleanup(tx, "H2D".to_string(), worker_id, cleanup_ptrs)?;
                 return Ok(rx);
             } else if RB::write_to_strategy() == TransferStrategy::CudaAsyncD2H {
@@ -453,7 +510,7 @@ where
                 if sources.len() > 0 {
                     if let (Ok(first_src), Ok(first_dst)) = (
                         sources[0].block_data().layer_view(0, 0),
-                        targets[0].block_data().layer_view(0, 0)
+                        targets[0].block_data().layer_view(0, 0),
                     ) {
                         unsafe {
                             // Get storage types and block IDs
@@ -463,21 +520,37 @@ where
                             let dst_block_id = targets[0].block_data().block_id();
 
                             // Verify D2H direction: source should be Device, dest should be Pinned/System
-                            let direction_correct = matches!(src_storage, StorageType::Device(_)) &&
-                                                  matches!(dst_storage, StorageType::Pinned | StorageType::System);
+                            let direction_correct = matches!(src_storage, StorageType::Device(_))
+                                && matches!(dst_storage, StorageType::Pinned | StorageType::System);
 
                             print!("D2H: {} blocks | ", sources.len());
-                            print!("src[{}]={:?}@{:p}", src_block_id, src_storage, first_src.as_ptr());
+                            print!(
+                                "src[{}]={:?}@{:p}",
+                                src_block_id,
+                                src_storage,
+                                first_src.as_ptr()
+                            );
                             if sources.len() > 1 {
-                                if let Ok(last_src) = sources[sources.len()-1].block_data().layer_view(0, 0) {
-                                    let last_src_id = sources[sources.len()-1].block_data().block_id();
+                                if let Ok(last_src) =
+                                    sources[sources.len() - 1].block_data().layer_view(0, 0)
+                                {
+                                    let last_src_id =
+                                        sources[sources.len() - 1].block_data().block_id();
                                     print!("..{}@{:p}", last_src_id, last_src.as_ptr());
                                 }
                             }
-                            print!(" → dst[{}]={:?}@{:p}", dst_block_id, dst_storage, first_dst.as_ptr());
+                            print!(
+                                " → dst[{}]={:?}@{:p}",
+                                dst_block_id,
+                                dst_storage,
+                                first_dst.as_ptr()
+                            );
                             if sources.len() > 1 {
-                                if let Ok(last_dst) = targets[targets.len()-1].block_data().layer_view(0, 0) {
-                                    let last_dst_id = targets[targets.len()-1].block_data().block_id();
+                                if let Ok(last_dst) =
+                                    targets[targets.len() - 1].block_data().layer_view(0, 0)
+                                {
+                                    let last_dst_id =
+                                        targets[targets.len() - 1].block_data().block_id();
                                     print!("..{}@{:p}", last_dst_id, last_dst.as_ptr());
                                 }
                             }
@@ -492,10 +565,19 @@ where
                 }
 
                 // Launch kernel and get any device pointers that need cleanup
-                let cleanup_ptrs = cuda::copy_blocks_with_customized_kernel(sources, targets, ctx.stream().as_ref(), RB::write_to_strategy())?;
+                let cleanup_ptrs = cuda::copy_blocks_with_customized_kernel(
+                    sources,
+                    targets,
+                    ctx.stream().as_ref(),
+                    RB::write_to_strategy(),
+                )?;
 
                 // Record D2H completion event with debug info + cleanup
-                let worker_id = if !sources.is_empty() { Some(sources[0].block_data().worker_id()) } else { None };
+                let worker_id = if !sources.is_empty() {
+                    Some(sources[0].block_data().worker_id())
+                } else {
+                    None
+                };
                 ctx.cuda_event_with_cleanup(tx, "D2H".to_string(), worker_id, cleanup_ptrs)?;
                 return Ok(rx);
             } else {
@@ -576,8 +658,12 @@ where
             Err(error)
         }
         Err(_) => {
-            let error = TransferError::ExecutionError("Transfer timeout - kernel may have crashed".into());
-            println!("⏰ Transfer timed out after {:?} - possible kernel crash", timeout_duration);
+            let error =
+                TransferError::ExecutionError("Transfer timeout - kernel may have crashed".into());
+            println!(
+                "⏰ Transfer timed out after {:?} - possible kernel crash",
+                timeout_duration
+            );
             Err(error)
         }
     }
@@ -665,9 +751,3 @@ mod tests {
         // );
     }
 }
-
-
-
-
-
-

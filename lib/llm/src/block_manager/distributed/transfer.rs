@@ -57,9 +57,13 @@ impl BlockTransferHandler {
         );
 
         if host_blocks_contiguous {
-            tracing::info!("Host blocks use FullyContiguous layout - single-base scatter kernel enabled");
+            tracing::info!(
+                "Host blocks use FullyContiguous layout - single-base scatter kernel enabled"
+            );
         } else {
-            tracing::info!("Host blocks use LayerSeparate layout - multi-base scatter kernel required");
+            tracing::info!(
+                "Host blocks use LayerSeparate layout - multi-base scatter kernel required"
+            );
         }
 
         Ok(Self {

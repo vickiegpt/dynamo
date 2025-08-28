@@ -355,7 +355,9 @@ impl KvbmWorker {
         // Determine if host blocks will be contiguous based on layout type
         let host_blocks_contiguous = match layout_type {
             LayoutType::FullyContiguous => {
-                tracing::info!("Host layout: FullyContiguous - enabling single-base scatter kernel optimization");
+                tracing::info!(
+                    "Host layout: FullyContiguous - enabling single-base scatter kernel optimization"
+                );
                 true
             }
             LayoutType::LayerSeparate { outer_contiguous } => {
@@ -363,7 +365,7 @@ impl KvbmWorker {
                     "Host layout: LayerSeparate (outer_contiguous: {}) - enabling multi-base scatter kernel",
                     outer_contiguous
                 );
-                false  // LayerSeparate is never contiguous across blocks for our purposes
+                false // LayerSeparate is never contiguous across blocks for our purposes
             }
         };
 
