@@ -109,32 +109,21 @@ if [ -f "${artifacts_dir}/deployment_config.json" ]; then
 fi
 echo "${deployment_config}" > "${artifacts_dir}/deployment_config.json"
 
-# Wait for server to become healthy (up to 50 attempts)
+# Wait for server to load (up to 50 attempts)
 failed=true
 for ((i=1; i<=50; i++)); do
     sleep $((i == 1 ? WAIT_TIME : 20))
-    response=$(curl -s -w "\n%{http_code}" "${hostname}:${port}/health")
+    response=$(curl -s -w "\n%{http_code}" "${hostname}:${port}/v1/models")
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | sed '$d')
 
-    if [[ "$http_code" == "200" ]] && echo "$body" | grep -q '"status":"healthy"' && echo "$body" | grep -q '"endpoints":\[[^]]*"dyn://dynamo.tensorrt_llm.generate"'; then
-        if [[ "$kind" == *disagg* ]]; then
-            if echo "$body" | grep -q '"tensorrt_llm_next"'; then
-                echo "Health check succeeded on attempt $i"
-                echo "$body"
-                failed=false
-                break
-            else
-                echo "Attempt $i: tensorrt_llm_next key not found in etcd."
-            fi
-        else
-            echo "Health check succeeded on attempt $i"
-            echo "$body"
-            failed=false
-            break
-        fi
+    if [[ "$http_code" == "200" ]]; then
+        echo "Model check succeeded on attempt $i"
+        echo "$body"
+        failed=false
+        break
     else
-        echo "Attempt $i failed: /health not ready (HTTP $http_code)."
+        echo "Attempt $i failed: /v1/models not ready (HTTP $http_code)."
     fi
 done
 
