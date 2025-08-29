@@ -25,6 +25,7 @@ To learn what KVBM is, please check [here](https://docs.nvidia.com/dynamo/latest
 > - Ensure that `etcd` is running before starting.
 > - KVBM does not currently support CUDA graphs in TensorRT-LLM.
 > - KVBM only supports TensorRT-LLM’s PyTorch backend.
+> - KVBM requires TensorRT-LLM at commit ce580ce4f52af3ad0043a800b3f9469e1f1109f6 or newer.
 
 ## Quick Start
 
@@ -34,19 +35,24 @@ To use KVBM in TensorRT-LLM, you can follow the steps below:
 # start up etcd for KVBM leader/worker registration and discovery
 docker compose -f deploy/docker-compose.yml up -d
 
-# build a container containing trtllm and kvbm, note that KVBM integration is only availiable on TensorRT-LLM commit: TBD
-./container/build.sh --framework trtllm --tensorrtllm-commit TBD --enable-kvbm
+# Build a container that includes TensorRT-LLM and KVBM. Note: KVBM integration is only available in TensorRT-LLM commit ce580ce4f52af3ad0043a800b3f9469e1f1109f6.
+./container/build.sh --framework trtllm --tensorrtllm-commit ce580ce4f52af3ad0043a800b3f9469e1f1109f6 --enable-kvbm
 
 # launch the container
 ./container/run.sh --framework trtllm -it --mount-workspace --use-nixl-gds
 
 # enable kv offloading to CPU memory
-# 4 means 4GB of pinned CPU memory would be used
+# 60 means 60GB of pinned CPU memory would be used
 export DYN_KVBM_CPU_CACHE_GB=60
 
 # enable kv offloading to disk
-# 8 means 8GB of disk would be used
+# 20 means 20GB of disk would be used
 export DYN_KVBM_DISK_CACHE_GB=20
+
+# Allocating memory and disk storage can take some time.
+# We recommend setting a higher timeout for leader–worker initialization.
+# 1200 means 1200 seconds timeout
+export DYN_KVBM_LEADER_WORKER_INIT_TIMEOUT_SECS=1200
 ```
 
 ```bash
@@ -103,8 +109,8 @@ EOF
 # serve an example LLM model
 trtllm-serve deepseek-ai/DeepSeek-R1-Distill-Llama-8B --host localhost --port 8000 --backend pytorch --extra_llm_api_options /tmp/kvbm_llm_api_config.yaml
 
-# start vllm with DYN_SYSTEM_ENABLED set to true and DYN_SYSTEM_PORT port to 6880.
-# NOTE: Make sure port 6880 (for KVBM worker metrics) and port 6881 (for KVBM leader metrics) are available.
+# start trtllm-serve with DYN_SYSTEM_ENABLED set to true and DYN_SYSTEM_PORT set to 6880
+# NOTE: Ensure ports 6880 (KVBM worker metrics) and 6881 (KVBM leader metrics) are available.
 DYN_SYSTEM_ENABLED=true DYN_SYSTEM_PORT=6880 trtllm-serve deepseek-ai/DeepSeek-R1-Distill-Llama-8B --host localhost --port 8000 --backend pytorch --extra_llm_api_options /tmp/kvbm_llm_api_config.yaml
 
 # optional if firewall blocks KVBM metrics ports to send prometheus metrics

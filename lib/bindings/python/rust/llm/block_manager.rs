@@ -233,7 +233,7 @@ pub struct BlockManagerBuilder {
 impl BlockManagerBuilder {
     pub fn new() -> Self {
         Self {
-            page_size: 0,
+            page_size: 32, // default consistent with BlockManager::new
             ..Default::default()
         }
     }
