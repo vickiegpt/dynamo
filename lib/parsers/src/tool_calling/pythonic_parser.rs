@@ -7,7 +7,7 @@ use rustpython_parser::{
     ast::{Constant, Expr, Mod},
     parse,
 };
-use serde_json::{Value, json, Number};
+use serde_json::{Number, Value, json};
 
 fn strip_text(message: &str) -> String {
     // Remove unexpected python tags if any
@@ -66,7 +66,10 @@ pub fn parse_tool_calls(src: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
         let mut obj = serde_json::Map::new();
         for keyword in keywords.iter() {
             let Some(arg_ident) = keyword.arg.as_ref() else {
-                tracing::debug!("Skipping **kwargs in pythonic tool call for function {}", name);
+                tracing::debug!(
+                    "Skipping **kwargs in pythonic tool call for function {}",
+                    name
+                );
                 continue;
             };
 
@@ -91,7 +94,6 @@ pub fn parse_tool_calls(src: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
     }
     Ok(res)
 }
-
 
 fn const_expr(e: &Expr) -> Result<Value, Box<dyn std::error::Error>> {
     match e {
