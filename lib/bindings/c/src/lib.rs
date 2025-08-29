@@ -20,8 +20,8 @@ use std::ffi::CStr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use dynamo_llm::kv_router::{
-    KvRouter, KvRouterConfig, RouterConfigOverride, indexer::compute_block_hash_for_seq, protocols::*,
-    publisher::KvEventPublisher,
+    KvRouter, KvRouterConfig, RouterConfigOverride, indexer::compute_block_hash_for_seq,
+    protocols::*, publisher::KvEventPublisher,
 };
 use dynamo_llm::{
     model_card::{ModelDeploymentCard, ROOT_PATH as MDC_ROOT_PATH},
@@ -29,8 +29,8 @@ use dynamo_llm::{
 };
 use dynamo_runtime::{
     DistributedRuntime, Worker,
-    storage::key_value_store::{EtcdStorage, KeyValueStore, KeyValueStoreManager},
     slug::Slug,
+    storage::key_value_store::{EtcdStorage, KeyValueStore, KeyValueStoreManager},
 };
 use std::sync::Arc;
 static WK: OnceCell<Worker> = OnceCell::new();
@@ -341,16 +341,15 @@ impl Default for DynamoKvRouterConfig {
     }
 }
 
-impl From<DynamoKvRouterConfig> for KvRouterConfig {
-    fn from(config: DynamoKvRouterConfig) -> Self {
-        KvRouterConfig::new(
-            Some(config.overlap_score_weight),
-            Some(config.router_temperature),
-            Some(config.use_kv_events),
-            Some(config.router_replica_sync),
-            Some(config.max_num_batched_tokens),
-        )
-    }
+// Helper function to convert DynamoKvRouterConfig to KvRouterConfig
+fn convert_to_kv_router_config(config: DynamoKvRouterConfig) -> KvRouterConfig {
+    KvRouterConfig::new(
+        Some(config.overlap_score_weight),
+        Some(config.router_temperature),
+        Some(config.use_kv_events),
+        Some(config.router_replica_sync),
+        Some(config.max_num_batched_tokens),
+    )
 }
 
 // KV Router per-request override structure for C API
@@ -363,20 +362,19 @@ pub struct DynamoRouterConfigOverride {
     pub router_temperature: f64,
 }
 
-impl From<DynamoRouterConfigOverride> for RouterConfigOverride {
-    fn from(config: DynamoRouterConfigOverride) -> Self {
-        RouterConfigOverride {
-            overlap_score_weight: if config.has_overlap_score_weight {
-                Some(config.overlap_score_weight)
-            } else {
-                None
-            },
-            router_temperature: if config.has_router_temperature {
-                Some(config.router_temperature)
-            } else {
-                None
-            },
-        }
+// Helper function to convert DynamoRouterConfigOverride to RouterConfigOverride
+fn convert_to_router_config_override(config: DynamoRouterConfigOverride) -> RouterConfigOverride {
+    RouterConfigOverride {
+        overlap_score_weight: if config.has_overlap_score_weight {
+            Some(config.overlap_score_weight)
+        } else {
+            None
+        },
+        router_temperature: if config.has_router_temperature {
+            Some(config.router_temperature)
+        } else {
+            None
+        },
     }
 }
 
@@ -443,7 +441,7 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
             KvRouterConfig::default()
         } else {
             let config = unsafe { *config };
-            KvRouterConfig::from(config)
+            convert_to_kv_router_config(config)
         };
 
         // Check if router is already initialized
@@ -453,7 +451,14 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
         }
 
         // Try to create the router
-        match KvRouter::new(component.clone(), kv_block_size, None, Some(kv_router_config)).await {
+        match KvRouter::new(
+            component.clone(),
+            kv_block_size,
+            None,
+            Some(kv_router_config),
+        )
+        .await
+        {
             Ok(router) => {
                 // Try to initialize the static router
                 match KV_ROUTER.get_or_init(async move { router }).await {
@@ -465,7 +470,8 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                             return DynamoLlmResult::ERR;
                         };
 
-                        let kvstore: Box<dyn KeyValueStore> = Box::new(EtcdStorage::new(etcd_client.clone()));
+                        let kvstore: Box<dyn KeyValueStore> =
+                            Box::new(EtcdStorage::new(etcd_client.clone()));
                         let card_store = Arc::new(KeyValueStoreManager::new(kvstore));
                         let card_key = Slug::from_string(&component_name);
 
@@ -475,7 +481,8 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                         {
                             Ok(Some(mut mdc)) => {
                                 // Download any remote files in the MDC
-                                if let Err(e) = mdc.move_from_nats(drt.nats_client().clone()).await {
+                                if let Err(e) = mdc.move_from_nats(drt.nats_client().clone()).await
+                                {
                                     eprintln!("Failed to download MDC files: {:?}", e);
                                     return DynamoLlmResult::ERR;
                                 }
@@ -483,10 +490,11 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                                 // Create preprocessor
                                 match OpenAIPreprocessor::new(mdc).await {
                                     Ok(preprocessor) => {
-                                        match PREPROCESSOR.get_or_init(async move { preprocessor }).await {
-                                            _preprocessor_ref => {
-                                                DynamoLlmResult::OK
-                                            }
+                                        match PREPROCESSOR
+                                            .get_or_init(async move { preprocessor })
+                                            .await
+                                        {
+                                            _preprocessor_ref => DynamoLlmResult::OK,
                                         }
                                     }
                                     Err(e) => {
@@ -496,7 +504,10 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                                 }
                             }
                             Ok(None) => {
-                                eprintln!("No ModelDeploymentCard found for component: {}", component_name);
+                                eprintln!(
+                                    "No ModelDeploymentCard found for component: {}",
+                                    component_name
+                                );
                                 DynamoLlmResult::ERR
                             }
                             Err(e) => {
@@ -525,9 +536,13 @@ pub extern "C" fn dynamo_kv_router_init(
     component_c_str: *const c_char,
     kv_block_size: u32,
 ) -> DynamoLlmResult {
-    dynamo_kv_router_init_with_config(namespace_c_str, component_c_str, kv_block_size, std::ptr::null())
+    dynamo_kv_router_init_with_config(
+        namespace_c_str,
+        component_c_str,
+        kv_block_size,
+        std::ptr::null(),
+    )
 }
-
 
 // Below are the bindings used by the Inference Gateway Endpoint Picker ort any other client which only needs routing.
 // The EPP workflow
@@ -728,7 +743,7 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id_with_config(
             None
         } else {
             let config = unsafe { *config_override };
-            Some(RouterConfigOverride::from(config))
+            Some(convert_to_router_config_override(config))
         };
 
         // Find best match with optional config override
@@ -776,7 +791,9 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id_with_config(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dynamo_kv_router_free_tokens(tokens_ptr: *mut u32) {
     if !tokens_ptr.is_null() {
-        unsafe { libc::free(tokens_ptr as *mut libc::c_void); }
+        unsafe {
+            libc::free(tokens_ptr as *mut libc::c_void);
+        }
     }
 }
 

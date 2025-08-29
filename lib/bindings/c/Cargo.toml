@@ -27,7 +27,7 @@ name = "dynamo_llm_capi"
 crate-type = ["staticlib", "cdylib"]
 
 [build-dependencies]
-cbindgen = "0.27"
+cbindgen = "0.29"
 
 [dependencies]
 dynamo-llm = { path = "../../llm" }
