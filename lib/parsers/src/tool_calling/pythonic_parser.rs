@@ -7,7 +7,7 @@ use rustpython_parser::{
     ast::{Constant, Expr, Mod},
     parse,
 };
-use serde_json::{Value, json};
+use serde_json::{Value, json, Number};
 
 fn strip_text(message: &str) -> String {
     // Remove unexpected python tags if any
@@ -65,13 +65,19 @@ pub fn parse_tool_calls(src: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
 
         let mut obj = serde_json::Map::new();
         for keyword in keywords.iter() {
-            let arg_name = keyword
-                .arg
-                .as_ref()
-                .ok_or("**kwargs not allowed")
-                .unwrap()
-                .to_string();
-            obj.insert(arg_name, const_expr(&keyword.value).unwrap());
+            let Some(arg_ident) = keyword.arg.as_ref() else {
+                tracing::debug!("Skipping **kwargs in pythonic tool call for function {}", name);
+                continue;
+            };
+
+            match const_expr(&keyword.value) {
+                Ok(value) => {
+                    obj.insert(arg_ident.to_string(), value);
+                }
+                Err(e) => {
+                    tracing::debug!("Skipping non-constant argument {}: {}", arg_ident, e);
+                }
+            }
         }
 
         res.push(ToolCallResponse {
@@ -86,30 +92,23 @@ pub fn parse_tool_calls(src: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
     Ok(res)
 }
 
-// // constants only: int/float/str/bool/None
-// fn const_expr(e: &Expr) -> Result<Value, Box<dyn std::error::Error>> {
-//     // TODO: Add support for lists/dicts
-//     match e {
-//         Expr::Constant(constant) => Ok(match &constant.value {
-//             Constant::Bool(b) => json!(b),
-//             Constant::None => Value::Null,
-//             Constant::Int(i) => json!(i.to_string()),
-//             Constant::Float(f) => json!(f),
-//             Constant::Str(s) => json!(s),
-//             Constant::List(l) => json!(l.iter().map(|e| const_expr(e)).collect::<Result<Vec<Value>, Box<dyn std::error::Error>>>()),
-//             Constant::Dict(d) => json!(d.iter().map(|(k, v)| (k, const_expr(v))).collect::<Result<HashMap<String, Value>, Box<dyn std::error::Error>>>()),
-//             _ => return Err("unsupported constant type".into()),
-//         }),
-//         _ => Err("only constant values are allowed".into()),
-//     }
-// }
 
 fn const_expr(e: &Expr) -> Result<Value, Box<dyn std::error::Error>> {
     match e {
         Expr::Constant(constant) => Ok(match &constant.value {
             Constant::Bool(b) => json!(b),
             Constant::None => Value::Null,
-            Constant::Int(i) => json!(i.to_string()),
+            Constant::Int(i) => {
+                // Try to downcast to i64/u64; fallback to string if out of range
+                use num_traits::ToPrimitive;
+                if let Some(v) = i.to_i64() {
+                    Value::Number(Number::from(v))
+                } else if let Some(v) = i.to_u64() {
+                    Value::Number(Number::from(v))
+                } else {
+                    Value::String(i.to_string())
+                }
+            }
             Constant::Float(f) => json!(f),
             Constant::Str(s) => json!(s),
             _ => return Err("unsupported constant type".into()),
@@ -246,11 +245,11 @@ mod tests {
         assert_eq!(result.len(), 2);
         let (name, args) = extract_name_and_args(result[0].clone()); // TODO: Add support for normal text
         assert_eq!(name, "foo");
-        assert_eq!(args["a"], "1");
-        assert_eq!(args["b"], "2");
+        assert_eq!(args["a"], 1);
+        assert_eq!(args["b"], 2);
         let (name, args) = extract_name_and_args(result[1].clone());
         assert_eq!(name, "bar");
-        assert_eq!(args["x"], "3");
+        assert_eq!(args["x"], 3);
     }
 
     #[test]
@@ -262,11 +261,11 @@ mod tests {
         assert_eq!(result.len(), 2);
         let (name, args) = extract_name_and_args(result[0].clone());
         assert_eq!(name, "foo");
-        assert_eq!(args["a"], "1");
-        assert_eq!(args["b"], "2");
+        assert_eq!(args["a"], 1);
+        assert_eq!(args["b"], 2);
         let (name, args) = extract_name_and_args(result[1].clone());
         assert_eq!(name, "bar");
-        assert_eq!(args["x"], "3");
+        assert_eq!(args["x"], 3);
     }
 
     #[test]
@@ -278,11 +277,11 @@ mod tests {
         assert_eq!(result.len(), 2);
         let (name, args) = extract_name_and_args(result[0].clone());
         assert_eq!(name, "foo");
-        assert_eq!(args["a"], "1");
-        assert_eq!(args["b"], "2");
+        assert_eq!(args["a"], 1);
+        assert_eq!(args["b"], 2);
         let (name, args) = extract_name_and_args(result[1].clone());
         assert_eq!(name, "bar");
-        assert_eq!(args["x"], "3");
+        assert_eq!(args["x"], 3);
     }
 
     #[test]
@@ -303,11 +302,11 @@ mod tests {
         assert_eq!(result.len(), 2);
         let (name, args) = extract_name_and_args(result[0].clone());
         assert_eq!(name, "foo");
-        assert_eq!(args["a"], "1");
-        assert_eq!(args["b"], "2");
+        assert_eq!(args["a"], 1);
+        assert_eq!(args["b"], 2);
         let (name, args) = extract_name_and_args(result[1].clone());
         assert_eq!(name, "bar");
-        assert_eq!(args["x"], "3");
+        assert_eq!(args["x"], 3);
     }
 
     #[test]
@@ -318,11 +317,11 @@ mod tests {
         assert_eq!(result.len(), 2);
         let (name, args) = extract_name_and_args(result[0].clone());
         assert_eq!(name, "foo");
-        assert_eq!(args["a"], json!(["1", "2", "3"]));
-        assert_eq!(args["b"], "2");
+        assert_eq!(args["a"], json!([1, 2, 3]));
+        assert_eq!(args["b"], 2);
         let (name, args) = extract_name_and_args(result[1].clone());
         assert_eq!(name, "bar");
-        assert_eq!(args["x"], json!(["3", "4", "5"]));
+        assert_eq!(args["x"], json!([3, 4, 5]));
     }
 
     #[test]
@@ -333,10 +332,10 @@ mod tests {
         assert_eq!(result.len(), 2);
         let (name, args) = extract_name_and_args(result[0].clone());
         assert_eq!(name, "foo");
-        assert_eq!(args["a"], json!({"a": "1", "b": "2"}));
-        assert_eq!(args["b"], "2");
+        assert_eq!(args["a"], json!({"a": 1, "b": 2}));
+        assert_eq!(args["b"], 2);
         let (name, args) = extract_name_and_args(result[1].clone());
         assert_eq!(name, "bar");
-        assert_eq!(args["x"], json!({"x": "3", "y": {"e": "f"}}));
+        assert_eq!(args["x"], json!({"x": 3, "y": {"e": "f"}}));
     }
 }
