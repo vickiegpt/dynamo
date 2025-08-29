@@ -22,7 +22,7 @@ This guide explains how to leverage KVBM (KV Block Manager) to mange KV cache an
 To learn what KVBM is, please check [here](https://docs.nvidia.com/dynamo/latest/architecture/kvbm_intro.html)
 
 > [!Note]
-> - Ensure that `etcd` is running before starting.
+> - Ensure that `etcd` and 'nats' are running before starting.
 > - KVBM does not currently support CUDA graphs in TensorRT-LLM.
 > - KVBM only supports TensorRT-LLM’s PyTorch backend.
 > - KVBM requires TensorRT-LLM at commit ce580ce4f52af3ad0043a800b3f9469e1f1109f6 or newer.
