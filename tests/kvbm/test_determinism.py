@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, TextIO, Tuple
+from typing import Any, Dict, List, Optional, TextIO, Tuple
 
 import pytest
 import requests
@@ -128,7 +128,7 @@ class LLMServerManager:
         config_path = os.environ.get(
             "KVBM_TRTLLM_LLMAPI_CONFIG_PATH", "/tmp/kvbm_llm_api_config.yaml"
         )
-        llm_api_config = {}
+        llm_api_config: dict[str, Any] = {}
         llm_api_config[
             "cuda_graph_config"
         ] = None  # explicitly disable CUDA graph since Connector API doesn't support CUDA graph yet in TRTLLM
@@ -146,7 +146,7 @@ class LLMServerManager:
         if gpu_cache_blocks is not None:
             del llm_api_config["kv_cache_config"]["free_gpu_memory_fraction"]
             llm_api_config["kv_cache_config"]["max_tokens"] = (
-                gpu_cache_blocks * 32
+                int(gpu_cache_blocks) * 32
             )  # TRTLLM defaults 32 tokens per block
 
         # Construct serve command
