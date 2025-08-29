@@ -19,10 +19,13 @@ from dynamo.llm.trtllm_integration.rust import (
 from dynamo.llm.trtllm_integration.rust import SchedulerOutput as RustSchedulerOutput
 from dynamo.runtime import DistributedRuntime
 
+from .utils import find_and_set_available_port_from_env
+
 
 class DynamoKVBMConnectorLeader(KvCacheConnectorScheduler):
     def __init__(self, executor_config: ExecutorConfig):
         super().__init__(executor_config)
+        find_and_set_available_port_from_env("DYN_SYSTEM_PORT")
         self.drt = DistributedRuntime.detached()
 
         world_size = self._config.mapping.world_size

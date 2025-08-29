@@ -11,11 +11,14 @@ from dynamo.llm.trtllm_integration.rust import (
 )
 from dynamo.runtime import DistributedRuntime
 
+from .utils import find_and_set_available_port_from_env
+
 
 class DynamoKVBMConnectorWorker(KvCacheConnectorWorker):
     def __init__(self, executor_config: ExecutorConfig):
         super().__init__(executor_config)
 
+        find_and_set_available_port_from_env("DYN_SYSTEM_PORT")
         self.drt = DistributedRuntime.detached()
 
         self.rank = executor_config.mapping.rank
