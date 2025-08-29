@@ -35,7 +35,7 @@ To use KVBM in TensorRT-LLM, you can follow the steps below:
 # start up etcd for KVBM leader/worker registration and discovery
 docker compose -f deploy/docker-compose.yml up -d
 
-# Build a container that includes TensorRT-LLM and KVBM. Note: KVBM integration is only available in TensorRT-LLM commit ce580ce4f52af3ad0043a800b3f9469e1f1109f6.
+# Build a container that includes TensorRT-LLM and KVBM. Note: KVBM integration is only available in TensorRT-LLM commit ce580ce4f52af3ad0043a800b3f9469e1f1109f6 or newer.
 ./container/build.sh --framework trtllm --tensorrtllm-commit ce580ce4f52af3ad0043a800b3f9469e1f1109f6 --enable-kvbm
 
 # launch the container
