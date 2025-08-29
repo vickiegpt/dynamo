@@ -22,9 +22,11 @@ This guide explains how to leverage KVBM (KV Block Manager) to mange KV cache an
 To learn what KVBM is, please check [here](https://docs.nvidia.com/dynamo/latest/architecture/kvbm_intro.html)
 
 > [!Note]
-> - Ensure that `etcd` and 'nats' are running before starting.
+> - Ensure that `etcd` and `nats` are running before starting.
 > - KVBM does not currently support CUDA graphs in TensorRT-LLM.
 > - KVBM only supports TensorRT-LLM’s PyTorch backend.
+> - To enable disk cache offloading, you must first enable a CPU memory cache offloading.
+> - Disable partial reuse `enable_partial_reuse: false` in the LLM API config’s `kv_connector_config` to increase offloading cache hits.
 > - KVBM requires TensorRT-LLM at commit ce580ce4f52af3ad0043a800b3f9469e1f1109f6 or newer.
 
 ## Quick Start
@@ -45,7 +47,7 @@ docker compose -f deploy/docker-compose.yml up -d
 # 60 means 60GB of pinned CPU memory would be used
 export DYN_KVBM_CPU_CACHE_GB=60
 
-# enable kv offloading to disk
+# enable kv offloading to disk. Note: To enable disk cache offloading, you must first enable a CPU memory cache offloading.
 # 20 means 20GB of disk would be used
 export DYN_KVBM_DISK_CACHE_GB=20
 
@@ -57,6 +59,7 @@ export DYN_KVBM_LEADER_WORKER_INIT_TIMEOUT_SECS=1200
 
 ```bash
 # write an example LLM API config
+# Note: Disable partial reuse "enable_partial_reuse: false" in the LLM API config’s "kv_connector_config" to increase offloading cache hits.
 cat > "/tmp/kvbm_llm_api_config.yaml" <<EOF
 backend: pytorch
 cuda_graph_config: null
