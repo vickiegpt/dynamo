@@ -51,7 +51,7 @@ pub fn parse_tool_calls(src: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
         _ => return Ok(vec![]),
     };
 
-    let mut res = Vec::new();
+    let mut res = Vec::with_capacity(elts.len());
     for (idx, elt) in elts.iter().enumerate() {
         let (func, keywords) = match elt {
             Expr::Call(call) => (&call.func, &call.keywords),
@@ -88,6 +88,7 @@ pub fn parse_tool_calls(src: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
             tp: ToolCallType::Function,
             function: CalledFunction {
                 name: name.to_string(),
+                // Safety: `Value::Object` is always valid JSON, so serialization cannot fail
                 arguments: serde_json::to_string(&Value::Object(obj)).unwrap(),
             },
         });
@@ -168,7 +169,7 @@ pub fn try_tool_call_parse_pythonic(
     let normal_text = stripped
         .split(&matches[0])
         .next()
-        .unwrap()
+        .unwrap() // Safety: `split()` always returns at least one element (the string before the first delimiter, or the entire string if delimiter not found)
         .trim()
         .to_string();
 
