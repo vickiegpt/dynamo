@@ -29,7 +29,7 @@ fn get_regex_matches(message: &str) -> Vec<String> {
 }
 
 pub fn parse_tool_calls(src: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
-    let ast = parse(src, Mode::Expression, "<input>").unwrap();
+    let ast = parse(src, Mode::Expression, "<input>")?;
 
     /*
     AST: Expression(ModExpression {
