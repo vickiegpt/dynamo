@@ -25,7 +25,14 @@ enum_class = false
 
 
 [export]
-include = ["DynamoLlmResult", "dynamo_llm_init", "dynamo_llm_shutdown"]
+include = [
+    "DynamoLlmResult",
+    "dynamo_llm_init",
+    "dynamo_llm_shutdown",
+    "dynamo_kv_router_init",
+    "dynamo_kv_router_query_instance_id",
+    "dynamo_kv_router_free_tokens",
+]
 
 [export.rename]
 "DynamoLlmResult" = "dynamo_llm_result_t"

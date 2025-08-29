@@ -24,7 +24,7 @@ repository.workspace = true
 
 [lib]
 name = "dynamo_llm_capi"
-crate-type = ["cdylib"]
+crate-type = ["staticlib", "cdylib"]
 
 [build-dependencies]
 cbindgen = "0.27"
