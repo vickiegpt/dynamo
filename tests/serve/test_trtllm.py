@@ -177,11 +177,8 @@ def test_metrics_labels(request, runtime_services):
     This test uses the --extra-engine-args flag with agg.yaml configuration
     to start the backend without needing a pre-built TensorRT-LLM engine.
 
-    Prerequisites:
-    - etcd and NATS must be running (docker compose -f deploy/docker-compose.yml up -d)
-    - The test runs from the trtllm directory to access engine_configs/agg.yaml
+    The test runs from the trtllm directory to access engine_configs/agg.yaml
     """
-    import os
     import re
     import subprocess
     import threading
