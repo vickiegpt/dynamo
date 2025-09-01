@@ -50,6 +50,8 @@ jobs:
           nvidia-smi
       - name: Test
         run: |
+          apt-get install nvidia-container-toolkit
+          nvidia-ctk runtime configure --runtime=docker
           docker run --runtime=nvidia --rm --gpus all nvidia/cuda nvidia-smi
       # - name: Build image
       #   env:
