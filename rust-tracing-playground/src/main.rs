@@ -1,8 +1,10 @@
 use opentelemetry::global;
 use opentelemetry::trace::{TraceContextExt};
+use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};
 use opentelemetry_otlp::WithExportConfig;
+use std::collections::HashMap;
 use std::time::Duration;
-use tracing::{info, instrument};
+use tracing::{info, instrument, Span};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -12,7 +14,7 @@ async fn simulate_work(task_name: &str, duration_ms: u64) {
     tokio::time::sleep(Duration::from_millis(duration_ms)).await;
     
     // Simulate some nested work
-    for i in 0..3 {
+    for i in 0..1 {
         simulate_nested_task(i, duration_ms / 3).await;
     }
     
@@ -51,10 +53,89 @@ async fn process_request(request_id: u32) {
     
     // Simulate different types of work
     simulate_work("database_query", 200).await;
+    // simulate_work("external_api_call", 300).await;
+    // simulate_work("data_processing", 150).await;
+    
+    info!(request_id = request_id, "Request processing completed");
+}
+
+/// Simulate extracting trace context from HTTP headers (incoming request)
+fn extract_trace_context_from_headers(headers: &HashMap<String, String>) -> opentelemetry::Context {
+    // Create an extractor that reads from our headers map
+    struct HeaderExtractor<'a>(&'a HashMap<String, String>);
+    
+    impl<'a> Extractor for HeaderExtractor<'a> {
+        fn get(&self, key: &str) -> Option<&str> {
+            self.0.get(key).map(|v| v.as_str())
+        }
+
+        fn keys(&self) -> Vec<&str> {
+            self.0.keys().map(|k| k.as_str()).collect()
+        }
+    }
+
+    let extractor = HeaderExtractor(headers);
+    let propagator = opentelemetry::sdk::propagation::TraceContextPropagator::new();
+    
+    // Extract the context from headers
+    propagator.extract(&extractor)
+}
+
+/// Simulate injecting trace context into HTTP headers (outgoing request)
+fn inject_trace_context_into_headers(context: &opentelemetry::Context) -> HashMap<String, String> {
+    let mut headers = HashMap::new();
+    
+    // Create an injector that writes to our headers map
+    struct HeaderInjector<'a>(&'a mut HashMap<String, String>);
+    
+    impl<'a> Injector for HeaderInjector<'a> {
+        fn set(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_string(), value);
+        }
+    }
+
+    let mut injector = HeaderInjector(&mut headers);
+    let propagator = opentelemetry::sdk::propagation::TraceContextPropagator::new();
+    
+    // Inject the current context into headers
+    propagator.inject_context(context, &mut injector);
+    
+    headers
+}
+
+/// Process a request as if it came from another service (with trace context in headers)
+// #[instrument]
+async fn process_request_from_service(request_id: u32, headers: HashMap<String, String>) {
+    // Extract trace context from incoming headers
+    let parent_context = extract_trace_context_from_headers(&headers);
+    
+    // Create a span with the extracted context as parent
+    let span = tracing::info_span!("process_request_from_service", request_id = request_id);
+    span.set_parent(parent_context);
+    
+    let _enter = span.enter();
+    
+    info!(request_id = request_id, "Processing request from external service");
+    
+    // Log the trace context to verify it was propagated correctly
+    let current_span = Span::current();
+    let otel_context = current_span.context();
+    let span_ref = otel_context.span();
+    let span_context = span_ref.span_context();
+    
+    info!(
+        request_id = request_id,
+        trace_id = %span_context.trace_id(),
+        span_id = %span_context.span_id(),
+        "Received trace context from headers"
+    );
+    
+    // Continue with normal processing - these will be part of the same trace
+    simulate_work("database_query", 200).await;
     simulate_work("external_api_call", 300).await;
     simulate_work("data_processing", 150).await;
     
-    info!(request_id = request_id, "Request processing completed");
+    info!(request_id = request_id, "Request from external service completed");
 }
 
 #[tokio::main]
@@ -91,22 +172,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Generate 2 separate requests with distinct trace IDs
     // Each process_request call will create its own root trace
+    let mut propagated_headers = HashMap::new();
+    
     {
         let request_span = tracing::info_span!("request_1");
         let _enter = request_span.enter();
         info!("Processing first request");
         process_request(1).await;
+        
+        // Simulate making an outbound call - inject trace context into headers
+        let current_span = Span::current();
+        let otel_context = current_span.context();
+        propagated_headers = inject_trace_context_into_headers(&otel_context);
+        
+        info!("Injected trace context into headers for service boundary crossing");
+        for (key, value) in &propagated_headers {
+            info!(header_key = %key, header_value = %value, "Propagation header");
+        }
+
+        // Simulate receiving a request from another service with trace context
+        info!("Simulating request from external service with propagated trace context");
+        process_request_from_service(3, propagated_headers).await;
     }
     
     // Wait between requests to clearly separate them
     tokio::time::sleep(Duration::from_secs(1)).await;
     
-    {
-        let request_span = tracing::info_span!("request_2");
-        let _enter = request_span.enter();
-        info!("Processing second request");
-        process_request(2).await;
-    }
+    // {
+    //     let request_span = tracing::info_span!("request_2");
+    //     let _enter = request_span.enter();
+    //     info!("Processing second request");
+    //     process_request(2).await;
+    // }
+
+    // Wait a bit more
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
     info!("🏁 Both requests completed, shutting down");
     
