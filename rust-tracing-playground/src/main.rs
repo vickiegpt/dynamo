@@ -4,9 +4,70 @@ use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};
 use opentelemetry_otlp::WithExportConfig;
 use std::collections::HashMap;
 use std::time::Duration;
-use tracing::{info, instrument, Span};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing::{info, instrument, Span, Event, Subscriber};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer, registry::LookupSpan};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use std::fmt;
+
+/// A custom layer that only prints event messages
+struct CustomLayer;
+
+impl<S> Layer<S> for CustomLayer 
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn on_event(&self, event: &Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
+        // Get the message field from the event
+        let mut visitor = MessageVisitor::default();
+        event.record(&mut visitor);
+        
+        // Get the span context if it exists
+        let span: Option<tracing_subscriber::registry::SpanRef<'_, S>> = event.parent().and_then(|id| ctx.span(id)).or_else(|| ctx.lookup_current());;
+        let (trace_id, span_id) = if let Some(span) = span {
+            // Get the OpenTelemetry context from the span
+            let extensions = span.extensions();
+            let span_ref = extensions.get::<tracing_opentelemetry::OtelData>();
+            
+            if let Some(otel_data) = span_ref {
+                let cx = otel_data.parent_cx.clone();
+                let span: opentelemetry::trace::SpanRef<'_> = cx.span();
+                let span_context = span.span_context();
+                (
+                    format!("{}", span_context.trace_id()),
+                    format!("{}", span_context.span_id())
+                )
+            } else {
+                ("no_trace".to_string(), "no_span".to_string())
+            }
+        } else {
+            ("root".to_string(), "root".to_string())
+        };
+
+        // Print the message with trace context if we found one
+        if let Some(message) = visitor.message {
+            println!("[trace_id={}, span_id={}] {}", trace_id, span_id, message);
+        }
+    }
+}
+
+#[derive(Default)]
+struct MessageVisitor {
+    message: Option<String>,
+}
+
+impl tracing::field::Visit for MessageVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
+        if field.name() == "message" {
+            self.message = Some(format!("{:?}", value));
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.message = Some(value.to_string());
+        }
+    }
+}
 
 #[instrument]
 async fn simulate_work(task_name: &str, duration_ms: u64) {
@@ -111,6 +172,8 @@ async fn process_request_from_service(request_id: u32, headers: HashMap<String, 
     
     // Create a span with the extracted context as parent
     let span = tracing::info_span!("process_request_from_service", request_id = request_id);
+
+    // the span itself can be set with 
     span.set_parent(parent_context);
     
     let _enter = span.enter();
@@ -161,11 +224,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
         .with(tracing_opentelemetry::layer().with_tracer(tracer))
         .with(tracing_subscriber::filter::LevelFilter::INFO)
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)  // Disable ANSI colors and formatting
-                .with_target(false) // Remove target (crate name) from output
-        )
+        .with(CustomLayer)
         .init();
 
     info!("🚀 Starting Rust Tracing Playground with OTLP export to Tempo");
@@ -182,7 +241,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         // Simulate making an outbound call - inject trace context into headers
         let current_span = Span::current();
-        let otel_context = current_span.context();
+        let otel_context: opentelemetry::Context = current_span.context();
         propagated_headers = inject_trace_context_into_headers(&otel_context);
         
         info!("Injected trace context into headers for service boundary crossing");
