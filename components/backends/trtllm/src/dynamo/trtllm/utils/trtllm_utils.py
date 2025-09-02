@@ -51,6 +51,7 @@ class Config:
         self.encode_endpoint: str = ""
         self.modality: str = "text"
         self.use_nixl_connect: bool = False
+        self.model_type: Optional[str] = None
 
     def __str__(self) -> str:
         return (
@@ -77,7 +78,8 @@ class Config:
             f"next_endpoint={self.next_endpoint}, "
             f"encode_endpoint={self.encode_endpoint}, "
             f"modality={self.modality}, "
-            f"use_nixl_connect={self.use_nixl_connect})"
+            f"use_nixl_connect={self.use_nixl_connect}, "
+            f"model_type={self.model_type})"
         )
 
 
@@ -95,6 +97,9 @@ def is_first_worker(config):
         is_primary_worker = (
             config.disaggregation_strategy == DisaggregationStrategy.DECODE_FIRST
         ) and (config.disaggregation_mode == DisaggregationMode.DECODE)
+
+    if config.disaggregation_mode == DisaggregationMode.ENCODE:
+        is_primary_worker = False
 
     return is_primary_worker
 
@@ -220,6 +225,12 @@ def cmd_line_args():
         help=f"Mode to use for disaggregation. Default: {DEFAULT_DISAGGREGATION_MODE}",
     )
     parser.add_argument(
+        "--model-type",
+        type=str,
+        default=None,
+        help="Type of the model. Default: None",
+    )
+    parser.add_argument(
         "--use-nixl-connect",
         type=bool,
         default=False,
@@ -315,5 +326,7 @@ def cmd_line_args():
     config.publish_events_and_metrics = args.publish_events_and_metrics
     config.modality = args.modality
     config.use_nixl_connect = args.use_nixl_connect
+    if args.model_type is not None:
+        config.model_type = args.model_type
 
     return config

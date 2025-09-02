@@ -15,6 +15,7 @@ from dynamo.trtllm.request_handlers.handler_base import (
     RequestHandlerConfig,
 )
 from dynamo.trtllm.utils.encode_utils import EncodeUtils
+from dynamo.trtllm.utils.test_util import default_multimodal_input_loader
 
 configure_dynamo_logging()
 
@@ -84,45 +85,50 @@ class EncodeHandler(HandlerBase):
         super().__init__(config)
         self.encodings = None
         self.auxiliary_data = {}
+        self.model_dir = config.model_path
+        self.model_type = config.model_type
+        self.tokenizer = config.tokenizer
 
     async def generate(self, request: dict):
         if self.connector:
             # Load embeddings first to get the actual shape
             messages = request.get("messages", [])
-            _, _, embedding_paths = self.multimodal_processor.extract_prompt_and_media(
-                messages
-            )
+            (
+                text_prompts,
+                image_urls,
+                embedding_paths,
+            ) = self.multimodal_processor.extract_prompt_and_media(messages)
             if embedding_paths:
                 loaded_data = self.multimodal_processor.load_tensor_from_path_or_url(
                     embedding_paths[0]
                 )
-
-                # Handle both tensor and dictionary formats
-                if isinstance(loaded_data, dict):
-                    # Dictionary format (e.g., maverick_mm_embed_seashore_v3.pt)
-                    self.encodings = loaded_data.get("mm_embeddings")
-                    if self.encodings is None:
-                        yield {
-                            "error": "Dictionary embeddings missing 'mm_embeddings' key"
-                        }
-                        return
-
-                    # Store auxiliary data for later transmission
-                    self.auxiliary_data = {
-                        k: v for k, v in loaded_data.items() if k != "mm_embeddings"
-                    }
-                else:
-                    # Tensor format (e.g., llava_next_mm_embed_seashore.pt)
-                    self.encodings = loaded_data
-                    self.auxiliary_data = {}
             else:
-                # Placeholder for TRTLLM Encoder to be called
-                # TRTLLM Encoder will return a memory handler on the the encoder GPU with the encodings
-                logging.warning(
-                    "No embedding paths found, NIXL transfer for image urls not supported by TRTLLM Encoder yet"
+                logging.info("Encoding llm with MultimodalEncoder")
+                inputs = default_multimodal_input_loader(
+                    tokenizer=self.tokenizer,
+                    model_dir=self.model_dir,
+                    model_type=self.model_type,
+                    modality="image",
+                    prompts=text_prompts,
+                    media=image_urls,
                 )
+                loaded_data = self.engine.llm.generate(inputs)
                 yield {"error": "No embedding paths found"}
                 return
+            if isinstance(loaded_data, dict):
+                # Dictionary format (e.g., maverick_mm_embed_seashore_v3.pt)
+                self.encodings = loaded_data.get("mm_embeddings")
+                if self.encodings is None:
+                    yield {"error": "Dictionary embeddings missing 'mm_embeddings' key"}
+                    return
+                # Store auxiliary data for later transmission
+                self.auxiliary_data = {
+                    k: v for k, v in loaded_data.items() if k != "mm_embeddings"
+                }
+            else:
+                # Tensor format (e.g., llava_next_mm_embed_seashore.pt)
+                self.encodings = loaded_data
+                self.auxiliary_data = {}
 
             # Create readable operation with main embeddings tensor (works for both formats)
             descriptor = nixl_connect.Descriptor(self.encodings)

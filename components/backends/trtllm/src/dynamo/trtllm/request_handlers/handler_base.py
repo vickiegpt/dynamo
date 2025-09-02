@@ -19,8 +19,8 @@ from enum import Enum
 from typing import Optional, Union
 
 import torch
-from tensorrt_llm import SamplingParams
 from tensorrt_llm.llmapi import DisaggregatedParams as LlmDisaggregatedParams
+from tensorrt_llm.llmapi.llm import SamplingParams
 
 from dynamo.nixl_connect import Connector
 from dynamo.runtime.logging import configure_dynamo_logging
