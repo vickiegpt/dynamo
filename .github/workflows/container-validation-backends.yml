@@ -47,22 +47,25 @@ jobs:
           docker system prune -af
       - name: Debug
         run: |
-          nvidia-smi
-      - name: Build image
-        env:
-          GITHUB_TOKEN: ${{ secrets.CI_TOKEN }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
-          SCCACHE_S3_BUCKET:  ${{ secrets.SCCACHE_S3_BUCKET }}
-        run: |
-          ./container/build.sh --tag ${{ matrix.framework }}:latest \
-            --target ${{ matrix.target }} \
-            --framework ${{ matrix.framework }} \
-            # --use-sccache \
-            # --sccache-bucket "$SCCACHE_S3_BUCKET" \
-            # --sccache-region "$AWS_DEFAULT_REGION"
-      - name: Run pytest
-        run: |
-          docker run --runtime=nvidia --rm --gpus all -w /workspace \
-            --name ${{ env.CONTAINER_ID }}_pytest \
-            ${{ matrix.framework }}:latest \
-            bash -c "pytest -xsv --basetemp=/tmp --junitxml=${{ env.PYTEST_XML_FILE }} -m \"${{ env.PYTEST_MARKS }}\""
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
+          aws s3 ls
+      # - name: Build image
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.CI_TOKEN }}
+      #     AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      #     SCCACHE_S3_BUCKET:  ${{ secrets.SCCACHE_S3_BUCKET }}
+      #   run: |
+      #     ./container/build.sh --tag ${{ matrix.framework }}:latest \
+      #       --target ${{ matrix.target }} \
+      #       --framework ${{ matrix.framework }} \
+      #       # --use-sccache \
+      #       # --sccache-bucket "$SCCACHE_S3_BUCKET" \
+      #       # --sccache-region "$AWS_DEFAULT_REGION"
+      # - name: Run pytest
+      #   run: |
+      #     docker run --runtime=nvidia --rm --gpus all -w /workspace \
+      #       --name ${{ env.CONTAINER_ID }}_pytest \
+      #       ${{ matrix.framework }}:latest \
+      #       bash -c "pytest -xsv --basetemp=/tmp --junitxml=${{ env.PYTEST_XML_FILE }} -m \"${{ env.PYTEST_MARKS }}\""
