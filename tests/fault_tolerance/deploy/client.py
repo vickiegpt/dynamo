@@ -179,7 +179,7 @@ def client(
                             del pod_ports[pod.name]
 
                 if pods_ready:
-                    pod = pods_ready[i % len(pods)]
+                    pod = pods_ready[i % len(pods_ready)]
                     if pod.name not in pod_ports:
                         pod_ports[pod.name] = pod.portforward(
                             remote_port=deployment_spec.port,
