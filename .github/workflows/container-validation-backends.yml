@@ -50,27 +50,19 @@ jobs:
           nvidia-smi
       - name: Test
         run: |
-          curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
-            && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-            sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-            sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-          sudo apt-get update
-          sudo apt-get install -y nvidia-container-toolkit
-          sudo nvidia-ctk runtime configure --runtime=docker
-          sudo systemctl restart docker
           docker run --runtime=nvidia --rm --gpus all nvidia/cuda nvidia-smi
-      # - name: Build image
-      #   env:
-      #     GITHUB_TOKEN: ${{ secrets.CI_TOKEN }}
-      #     AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
-      #     SCCACHE_S3_BUCKET:  ${{ secrets.SCCACHE_S3_BUCKET }}
-      #   run: |
-      #     ./container/build.sh --tag ${{ matrix.framework }}:latest \
-      #       --target ${{ matrix.target }} \
-      #       --framework ${{ matrix.framework }} \
-      #       --use-sccache \
-      #       --sccache-bucket "$SCCACHE_S3_BUCKET" \
-      #       --sccache-region "$AWS_DEFAULT_REGION"
+      - name: Build image
+        env:
+          GITHUB_TOKEN: ${{ secrets.CI_TOKEN }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          SCCACHE_S3_BUCKET:  ${{ secrets.SCCACHE_S3_BUCKET }}
+        run: |
+          ./container/build.sh --tag ${{ matrix.framework }}:latest \
+            --target ${{ matrix.target }} \
+            --framework ${{ matrix.framework }} \
+            --use-sccache \
+            --sccache-bucket "$SCCACHE_S3_BUCKET" \
+            --sccache-region "$AWS_DEFAULT_REGION"
       # - name: Run pytest
       #   run: |
       #     docker run --runtime=nvidia --rm --gpus all -w /workspace \
