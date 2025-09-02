@@ -618,15 +618,12 @@ async def main():
 
     deployment_spec.name = "foo"
 
-    deployment_spec.set_image(
-        "gitlab-master.nvidia.com/dl/ai-dynamo/dynamo/dynamo:nnshah1-vllm-latest"
-    )
+    deployment_spec.set_image("nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.4.1")
 
     async with ManagedDeployment(
-        namespace="nnshah1-test", log_dir=".", deployment_spec=deployment_spec
+        namespace="test", log_dir=".", deployment_spec=deployment_spec
     ):
-        pass
-    #        time.sleep(60)
+        time.sleep(60)
 
 
 if __name__ == "__main__":
