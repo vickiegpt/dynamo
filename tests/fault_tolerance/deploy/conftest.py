@@ -17,18 +17,30 @@ import pytest
 
 
 def pytest_addoption(parser):
-    parser.addoption("--image", type=str, required=True)
-    parser.addoption("--namespace", type=str, required=True)
+    parser.addoption("--image", type=str, default=None)
+    parser.addoption("--namespace", type=str, default="fault-tolerance-test")
     parser.addoption("--requests-per-client", type=int, default=100)
     parser.addoption("--clients", type=int, default=10)
     parser.addoption("--input-token-length", type=int, default=100)
     parser.addoption("--output-token-length", type=int, default=100)
     parser.addoption("--max-retries", type=int, default=1)
+    parser.addoption("--model", type=str, default=None)
+    parser.addoption("--max-request-rate", type=int, default=1)
+
+
+@pytest.fixture
+def max_request_rate(request):
+    return request.config.getoption("--max-request-rate")
 
 
 @pytest.fixture
 def image(request):
     return request.config.getoption("--image")
+
+
+@pytest.fixture
+def model(request):
+    return request.config.getoption("--model")
 
 
 @pytest.fixture

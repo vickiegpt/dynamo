@@ -34,12 +34,12 @@ def parse_test_log(file_path):
     with open(file_path, "r") as f:
         for line in f:
             line = line.strip()
-            if "Running command: dynamo serve" in line:
+            if "Starting Deployment fault-tolerance-test with spec" in line:
                 start_time = datetime.fromisoformat(
                     line.split(" ")[1].replace("T", " ")
                 )
-                start_cmd = line.split("Running command:")[1]
-            elif "Deployment Ready" in line:
+                start_cmd = []
+            elif "Deployment fault-tolerance-test is ready" in line:
                 ready_time = datetime.fromisoformat(
                     line.split(" ")[1].replace("T", " ")
                 )
@@ -95,10 +95,7 @@ def parse_client_logs(test_dir, expected_length=100):
     return None
 
 
-def calculate_metrics(df, fault_time, sla=2.1):
-    success = df["success"].sum()
-    failure = len(df) - success
-
+def calculate_metrics(df, fault_time, sla=None):
     if fault_time:
         before_fault = df[df["time"] <= fault_time]
         after_fault = df[df["time"] > fault_time]
@@ -110,24 +107,39 @@ def calculate_metrics(df, fault_time, sla=2.1):
     successful_before = before_fault[before_fault["success"]]
     avg_before = successful_before["request_elapsed_time"].mean()
     std_before = successful_before["request_elapsed_time"].std()
+    success_before_count = before_fault["success"].sum()
+    failure_before_count = len(before_fault) - success_before_count
 
-    avg_after, std_after = None, None
+    avg_after, std_after, success_after_count, failure_after_count = (
+        None,
+        None,
+        None,
+        None,
+    )
     if after_fault is not None and not after_fault.empty:
         successful_after = after_fault[after_fault["success"]]
         avg_after = successful_after["request_elapsed_time"].mean()
         std_after = successful_after["request_elapsed_time"].std()
+        success_after_count = after_fault["success"].sum()
+        failure_after_count = len(after_fault) - success_after_count
 
-    # SLA violations (only successful requests exceeding the SLA)
-    violations_before = (successful_before["request_elapsed_time"] > sla).sum()
-    violations_after = (
-        (successful_after["request_elapsed_time"] > sla).sum()
-        if after_fault is not None and not after_fault.empty
-        else None
-    )
+    if sla:
+        # SLA violations (only successful requests exceeding the SLA)
+        violations_before = (successful_before["request_elapsed_time"] > sla).sum()
+        violations_after = (
+            (successful_after["request_elapsed_time"] > sla).sum()
+            if after_fault is not None and not after_fault.empty
+            else None
+        )
+    else:
+        violations_before = None
+        violations_after = None
 
     return (
-        success,
-        failure,
+        success_before_count,
+        failure_before_count,
+        success_after_count,
+        failure_after_count,
         avg_before,
         std_before,
         avg_after,
@@ -138,150 +150,106 @@ def calculate_metrics(df, fault_time, sla=2.1):
 
 
 def parse_process_log(log_dir, process_name):
-    process_ready_line = {
-        "dynamo_Frontend": "added model",
-        "dynamo_VllmWorker": "Starting VllmWorker instance with all registered endpoints",
-        "dynamo_Processor": "Starting Processor instance with all registered endpoints",
-        "dynamo_PrefillWorker": "Starting PrefillWorker instance with all registered endpoints",
+    process_ready_pattern = {
+        "Frontend": re.compile(r"added model (?P<model_name>.*?)"),
+        "VllmDecodeWorker": re.compile(
+            r"main.init: VllmWorker for (?P<model_name>.*?) has been initialized"
+        ),
+        "VllmPrefillWorker": re.compile(
+            r"main.setup_vllm_engine: VllmWorker for (?P<model_name>.*?) has been initialized"
+        ),
     }
-    process_shutdown_line = {
-        "dynamo_Frontend": "SIGTERM received, starting graceful shutdown",
-        "dynamo_VllmWorker": "Received shutdown signal, shutting down DistributedRuntime",
-        "dynamo_Processor": "Received signal 15, initiating graceful shutdown",
-        "dynamo_PrefillWorker": "Shutdown hooks completed successfully",
-    }
-    process_log_path = os.path.join(log_dir, "error.log")
+    if not os.path.isdir(log_dir):
+        return {}
+    ready_times = {}
 
-    if not os.path.isfile(process_log_path):
-        return None, None
+    print(log_dir)
 
-    process_ready = []
-    process_shutdown = []
+    for entry in os.listdir(log_dir):
+        if entry.endswith(".log") and "metrics" not in entry:
+            replica_number = entry.split(".")[0]
 
-    process_start_time = None
+            if replica_number not in ready_times:
+                ready_times[replica_number] = []
 
-    with open(process_log_path, "r") as f:
-        for line in f:
-            clean_line = re.sub(r"\x1b\[.*?m", "", line.strip())  # Remove ANSI codes
-            if not clean_line:
-                continue
+            process_start_time = None
 
-            parts = clean_line.split()
-            if len(parts) < 2:
-                continue
+            with open(os.path.join(log_dir, entry), "r") as f:
+                for line in f:
+                    clean_line = re.sub(
+                        r"\x1b\[.*?m", "", line.strip()
+                    )  # Remove ANSI codes
+                    if not clean_line:
+                        continue
 
-            try:
-                # Parse timestamp (remove 'Z' for naive datetime)
-                timestamp = datetime.fromisoformat(parts[0].replace("Z", ""))
-            except ValueError:
-                continue
+                    parts = clean_line.split()
+                    if len(parts) < 2:
+                        continue
 
-            if not process_start_time:
-                process_start_time = timestamp
+                    try:
+                        # Parse timestamp (remove 'Z' for naive datetime)
+                        timestamp = datetime.fromisoformat(parts[0].replace("Z", ""))
+                    except ValueError:
+                        continue
 
-            log_message = " ".join(parts[1:])
+                    if not process_start_time:
+                        process_start_time = timestamp
 
-            relative_time = (timestamp - process_start_time).total_seconds()
+                    log_message = " ".join(parts[1:])
 
-            # Check for process start lines
-            if process_name in process_ready_line:
-                if process_ready_line[process_name] in log_message:
-                    process_ready.append((timestamp, log_message, relative_time))
+                    relative_time = (timestamp - process_start_time).total_seconds()
 
-            # Check for process end lines
-            if process_name in process_shutdown_line:
-                if process_shutdown_line[process_name] in log_message:
-                    process_shutdown.append((timestamp, log_message, relative_time))
+                    # Check for process start lines
+                    if process_name in process_ready_pattern:
+                        if process_ready_pattern[process_name].search(log_message):
+                            if "previous" in entry:
+                                location = 0
+                            else:
+                                location = -1
+                            ready_times[replica_number].insert(
+                                location, (timestamp, log_message, relative_time)
+                            )
 
-    return process_ready, process_shutdown
-
-
-def parse_watcher_log(test_dir, fault_time):
-    before_requests = []
-    after_requests = []
-    watcher_log_path = os.path.join(test_dir, "watcher.log.txt")
-    if not os.path.isfile(watcher_log_path):
-        return None, None
-    with open(watcher_log_path, "r") as f:
-        for line in f:
-            try:
-                data = json.loads(line.strip())
-            except json.JSONDecodeError:
-                continue
-            if "metrics" not in data:
-                continue
-            entry_time = datetime.fromisoformat(data["time"].replace("T", " "))
-            for metric in data["metrics"]:
-                if len(metric) != 2:
-                    continue
-                _, metric_data = metric
-                if (
-                    "num_requests_waiting" in metric_data
-                    and "request_active_slots" in metric_data
-                    and metric_data["request_active_slots"] > 0
-                ):
-                    if fault_time is None or entry_time <= fault_time:
-                        before_requests.append(metric_data["num_requests_waiting"])
-                    else:
-                        after_requests.append(metric_data["num_requests_waiting"])
-
-    avg_before = (
-        sum(before_requests) / len(before_requests) if before_requests else None
-    )
-    avg_after = sum(after_requests) / len(after_requests) if after_requests else None
-    return avg_before, avg_after
+    return ready_times
 
 
 def calculate_recovery_time(test_dir, failure_type, fault_time):
+    if not fault_time:
+        return None
+
     processes = [
-        "dynamo_Frontend",
-        "dynamo_Processor",
-        "dynamo_VllmWorker",
-        "dynamo_PrefillWorker",
+        "Frontend",
+        "VllmDecodeWorker",
+        "VllmPrefillWorker",
     ]
 
-    process_start_ends = {}
+    process_start = {}
     start_time = None
 
     for process in processes:
-        starts, ends = parse_process_log(os.path.join(test_dir, process), process)
+        starts = parse_process_log(os.path.join(test_dir, process), process)
         if starts:
-            process_start_ends[process] = (starts, ends)
+            process_start[process] = starts
 
-    if failure_type == "processor":
-        start_time = process_start_ends["dynamo_Processor"][0][-1][0]
-    elif failure_type == "frontend":
-        start_time = process_start_ends["dynamo_Frontend"][0][-1][0]
-    elif failure_type == "decode_worker":
-        start_times = [
-            x
-            for x in process_start_ends["dynamo_VllmWorker"][0]
-            if "VllmWorker:1" in x[1]
-        ]
-        if not start_times:
-            return None
-        start_time = start_times[-1][0]
+    print(process_start)
+    last_recovery_time = 0
+    print(fault_time)
+    for process, replicas in process_start.items():
+        print(starts)
+        for replica, container_starts in replicas.items():
+            for starts in container_starts:
+                start_time = starts[0]
+                recovery_time = (start_time - fault_time).total_seconds()
+                print(recovery_time, start_time, fault_time, process, replica)
+                if recovery_time > last_recovery_time:
+                    last_recovery_time = recovery_time
 
-    elif failure_type == "prefill_worker":
-        if "dynamo_PrefillWorker" not in process_start_ends:
-            return None
-        start_times = [
-            x
-            for x in process_start_ends["dynamo_PrefillWorker"][0]
-            if "PrefillWorker:1" in x[1]
-        ]
-        start_time = start_times[-1][0]
-
-    if not start_time:
-        return None
-
-    if fault_time > start_time:
-        return None
-
-    return (start_time - fault_time).total_seconds()
+    return last_recovery_time
 
 
 def process_test_directory(test_dir):
+    if "test_fault_scenario" not in test_dir:
+        return {}
     test_name = test_dir.split("test_fault_scenario[", 1)[1].rstrip("]")
     failure_type = test_name.split("-")[-1]
     test_prefix = "-".join(test_name.split("-")[:-1])
@@ -293,12 +261,11 @@ def process_test_directory(test_dir):
 
     if df is None or df.empty:
         return None
-    pending_requests_before, pending_requests_after = parse_watcher_log(
-        test_dir, fault_time
-    )
     (
-        success,
-        failure,
+        success_before,
+        failure_before,
+        success_after,
+        failure_after,
         avg_before,
         std_before,
         avg_after,
@@ -307,22 +274,21 @@ def process_test_directory(test_dir):
         violations_after,
     ) = calculate_metrics(df, fault_time)
 
-    recovery_time = 0
-    #    recovery_time = calculate_recovery_time(test_dir, failure_type, fault_time)
+    recovery_time = calculate_recovery_time(test_dir, failure_type, fault_time)
 
     return {
         "test": test_prefix,
         "cmd": start_cmd,
         "failure": failure_type,
         "start_time": startup_time,
-        "success_requests": success,
-        "failed_requests": failure,
+        "success_before_requests": success_before,
+        "failed_before_requests": failure_before,
+        "success_after_requests": success_after,
+        "failed_after_requests": failure_after,
         "avg_latency_before": avg_before,
         "std_latency_before": std_before,
         "avg_latency_after": avg_after,
         "std_latency_after": std_after,
-        "pending_requests_before": pending_requests_before,
-        "pending_requests_after": pending_requests_after,
         "violations_before": violations_before,
         "violations_after": violations_after,
         "recovery_time": recovery_time,
@@ -338,7 +304,7 @@ def main(logs_dir, tablefmt, log_paths=[]):
                 results.append(result)
     elif logs_dir:
         for entry in os.listdir(logs_dir):
-            if entry.startswith("test_worker_failure[") and os.path.isdir(
+            if entry.startswith("test_fault_scenario[") and os.path.isdir(
                 os.path.join(logs_dir, entry)
             ):
                 result = process_test_directory(os.path.join(logs_dir, entry))
@@ -358,10 +324,13 @@ def main(logs_dir, tablefmt, log_paths=[]):
     order = [
         "none",
         "frontend",
-        "processor",
+        "frontend_pod",
         "decode_worker",
+        "decode_worker_pod",
         "prefill_worker",
-        "vllm_worker",
+        "prefill_worker_pod",
+        "vllm_decode_engine_core",
+        "vllm_prefill_engine_core",
     ]
 
     # Print grouped tables
@@ -374,28 +343,28 @@ def main(logs_dir, tablefmt, log_paths=[]):
         group = new_group
         headers = [
             "Failure",
-            "Startup Time",
-            "Success",
-            "Failed",
-            "Latency Before",
-            "Latency After",
-            "Pending Before",
-            "Pending After",
-            "Violations Before",
-            "Violations After",
-            "Recovery Time",
+            "Startup",
+            "Success\nBefore",
+            "Failed\nBefore",
+            "Success\nAfter",
+            "Failed\nAfter",
+            "Latency\nBefore",
+            "Latency\nAfter",
+            "Violations\nBefore",
+            "Violations\nAfter",
+            "Recovery",
         ]
         rows = []
         for res in group:
             row = [
                 res["failure"],
                 res["start_time"],  # if res["start_time"] is not None else "N/A",
-                res["success_requests"],
-                res["failed_requests"],
+                res["success_before_requests"],
+                res["failed_before_requests"],
+                res["success_after_requests"],
+                res["failed_after_requests"],
                 res["avg_latency_before"],
                 res["avg_latency_after"],
-                res["pending_requests_before"],
-                res["pending_requests_after"],
                 res["violations_before"],
                 res["violations_after"],
                 res["recovery_time"],

@@ -22,6 +22,36 @@ from datetime import datetime
 
 import requests
 
+from tests.utils.managed_deployment import ManagedDeployment
+
+LOG_FORMAT = "[TEST] %(asctime)s %(levelname)s %(name)s: %(message)s"
+DATE_FORMAT = "%Y-%m-%dT%H:%M:%S"
+
+
+payload = {
+    "model": "",
+    "messages": [
+        {
+            "role": "user",
+            "content": "",
+        }
+    ],
+    "max_tokens": 0,
+    "temperature": 0.1,
+    #        "seed": 10,
+    "ignore_eos": True,
+    "min_tokens": 0,
+    "stream": False,
+}
+
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format=LOG_FORMAT,
+    datefmt=DATE_FORMAT,  # ISO 8601 UTC format
+)
+
 
 def _get_random_prompt(length):
     word_list = [f"{i}" for i in range(10)]
@@ -30,7 +60,9 @@ def _get_random_prompt(length):
 
 def _single_request(
     url,
+    pod,
     payload,
+    model,
     logger,
     retry_attempts=1,
     input_token_length=100,
@@ -41,6 +73,8 @@ def _single_request(
     prompt = _get_random_prompt(input_token_length)
     payload["messages"][0]["content"] = prompt
     payload["max_tokens"] = output_token_length
+    payload["min_tokens"] = output_token_length
+    payload["model"] = model
     response = None
     end_time = None
     start_time = time.time()
@@ -48,7 +82,7 @@ def _single_request(
 
     while retry_attempts:
         start_request_time = time.time()
-
+        response = None
         try:
             response = requests.post(
                 url,
@@ -61,7 +95,7 @@ def _single_request(
 
             try:
                 content = response.json()
-            except json.JSONDecodeError:
+            except ValueError:
                 pass
 
             results.append(
@@ -69,6 +103,8 @@ def _single_request(
                     "status": response.status_code,
                     "result": content,
                     "request_elapsed_time": end_time - start_request_time,
+                    "url": url,
+                    "pod": pod,
                 }
             )
 
@@ -85,9 +121,10 @@ def _single_request(
                     "status": str(e),
                     "result": None,
                     "request_elapsed_time": time.time() - start_request_time,
+                    "url": url,
+                    "pod": pod,
                 }
             )
-            logger.warning("Retrying due to Request failed: %s", e)
             time.sleep(retry_delay)
             retry_attempts -= 1
             continue
@@ -96,31 +133,77 @@ def _single_request(
         "time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "results": results,
         "total_time": time.time() - start_time,
+        "url": url,
+        "pod": pod,
     }
 
 
 def client(
     deployment_spec,
-    payload,
+    namespace,
+    model,
     log_dir,
     index,
     requests_per_client,
     input_token_length,
     output_token_length,
     max_retries,
+    max_request_rate,
     retry_delay=1,
 ):
     logger = logging.getLogger(f"CLIENT: {index}")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    managed_deployment = ManagedDeployment(None, deployment_spec, namespace)
+    managed_deployment._deployment_name = deployment_spec.name
+    pod_ports = {}
+
+    min_elapsed_time = 1 / max_request_rate
 
     try:
         log_path = os.path.join(log_dir, f"client_{index}.log.txt")
         with open(log_path, "w") as log:
-            url = f"http://localhost:{deployment_spec.port}/{deployment_spec.endpoint}"
-
             for i in range(requests_per_client):
+                pods = managed_deployment.get_pods(
+                    managed_deployment.frontend_service_name
+                )
+
+                pods_ready = []
+
+                for pod in pods[managed_deployment.frontend_service_name]:
+                    if pod.ready():
+                        pods_ready.append(pod)
+                    else:
+                        if pod.name in pod_ports:
+                            pod_ports[pod.name].stop()
+                            del pod_ports[pod.name]
+
+                if pods_ready:
+                    pod = pods_ready[i % len(pods)]
+                    if pod.name not in pod_ports:
+                        pod_ports[pod.name] = pod.portforward(
+                            remote_port=deployment_spec.port,
+                            local_port=0,
+                            address="0.0.0.0",
+                        )
+                        pod_ports[pod.name].start()
+
+                        while pod_ports[pod.name].local_port == 0:
+                            time.sleep(1)
+
+                    port = pod_ports[pod.name].local_port
+                    pod_name = pod.name
+                else:
+                    port = 0
+                    pod_name = None
+
+                url = f"http://localhost:{port}/{deployment_spec.endpoint}"
+
                 result = _single_request(
                     url,
-                    payload.payload_chat,
+                    pod_name,
+                    payload,
+                    model,
                     logger,
                     max_retries,
                     input_token_length=input_token_length,
@@ -128,11 +211,14 @@ def client(
                     retry_delay=retry_delay,
                 )
                 logger.info(
-                    f"Request: {i} Status: {result['results'][-1]['status']} Latency: {result['results'][-1]['request_elapsed_time']}"
+                    f"Request: {i} Pod {pod.name} Local Port {port} Status: {result['results'][-1]['status']} Latency: {result['results'][-1]['request_elapsed_time']}"
                 )
 
                 log.write(json.dumps(result) + "\n")
                 log.flush()
+                if result["total_time"] < min_elapsed_time:
+                    time.sleep(min_elapsed_time - result["total_time"])
+
     except Exception as e:
         logger.error(str(e))
     logger.info("Exiting")

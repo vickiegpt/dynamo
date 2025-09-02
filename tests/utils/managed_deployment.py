@@ -5,56 +5,18 @@ import asyncio
 import logging
 import os
 import re
+import shlex
 import time
 from dataclasses import dataclass
 from typing import Optional
 
 import kr8s
 import kubernetes
-import psutil
+import requests
 import yaml
 from kr8s.objects import Pod as kr8s_Pod
 from kr8s.objects import Service as kr8s_Service
 from kubernetes_asyncio import client, config
-
-
-def terminate_process(process, logger=logging.getLogger(), immediate_kill=False):
-    try:
-        logger.info("Terminating PID: %s name: %s", process.pid, process.name())
-        if immediate_kill:
-            logger.info("Sending Kill: %s %s", process.pid, process.name())
-            process.kill()
-        else:
-            process.terminate()
-    except psutil.AccessDenied:
-        logger.warning("Access denied for PID %s", process.pid)
-    except psutil.NoSuchProcess:
-        logger.warning("PID %s no longer exists", process.pid)
-
-
-def terminate_process_tree(
-    pid, logger=logging.getLogger(), immediate_kill=False, timeout=10
-):
-    try:
-        parent = psutil.Process(pid)
-        for child in parent.children(recursive=True):
-            terminate_process(child, logger, immediate_kill)
-
-        terminate_process(parent, logger, immediate_kill)
-
-        for child in parent.children(recursive=True):
-            try:
-                child.wait(timeout)
-            except psutil.TimeoutExpired:
-                terminate_process(child, logger, immediate_kill=True)
-        try:
-            parent.wait(timeout)
-        except psutil.TimeoutExpired:
-            terminate_process(parent, logger, immediate_kill=True)
-
-    except psutil.NoSuchProcess:
-        # Process already terminated
-        pass
 
 
 class ServiceSpec:
@@ -95,6 +57,47 @@ class ServiceSpec:
     def replicas(self, value: int):
         self._spec["replicas"] = value
 
+    @property
+    def model(self) -> Optional[str]:
+        """Model being served by this service"""
+        try:
+            args_list = self._spec["extraPodSpec"]["mainContainer"]["args"]
+        except KeyError:
+            return None
+        args_str = " ".join(args_list)
+        parts = shlex.split(args_str)
+        for i, part in enumerate(parts):
+            if part == "--model":
+                return parts[i + 1] if i + 1 < len(parts) else None
+        return None
+
+    @model.setter
+    def model(self, value: str):
+        if "extraPodSpec" not in self._spec:
+            return
+        if "mainContainer" not in self._spec["extraPodSpec"]:
+            return
+
+        args_list = self._spec["extraPodSpec"]["mainContainer"].get("args", [])
+        args_str = " ".join(args_list)
+        parts = shlex.split(args_str)
+
+        model_index = None
+        for i, part in enumerate(parts):
+            if part == "--model":
+                model_index = i
+                break
+
+        if model_index is not None:
+            if model_index + 1 < len(parts):
+                parts[model_index + 1] = value
+            else:
+                return
+        else:
+            return
+
+        self._spec["extraPodSpec"]["mainContainer"]["args"] = [" ".join(parts)]
+
     # ----- GPUs -----
     @property
     def gpus(self) -> int:
@@ -113,12 +116,15 @@ class ServiceSpec:
 
 
 class DeploymentSpec:
-    def __init__(self, base: str, endpoint="/v1/chat/completions", port=8000):
+    def __init__(
+        self, base: str, endpoint="/v1/chat/completions", port=8000, system_port=9090
+    ):
         """Load the deployment YAML file"""
         with open(base, "r") as f:
             self._deployment_spec = yaml.safe_load(f)
         self._endpoint = endpoint
         self._port = port
+        self._system_port = system_port
 
     @property
     def name(self) -> str:
@@ -129,6 +135,11 @@ class DeploymentSpec:
     def port(self) -> int:
         """Deployment port"""
         return self._port
+
+    @property
+    def system_port(self) -> int:
+        """Deployment port"""
+        return self._system_port
 
     @property
     def endpoint(self) -> str:
@@ -153,6 +164,14 @@ class DeploymentSpec:
         self._deployment_spec["metadata"]["annotations"][
             "nvidia.com/enable-grove"
         ] = "false"
+
+    def set_model(self, model: str, service_name: Optional[str] = None):
+        if service_name is None:
+            services = self.services
+        else:
+            services = [self[service_name]]
+        for service in services:
+            service.model = model
 
     def set_image(self, image: str, service_name: Optional[str] = None):
         if service_name is None:
@@ -193,25 +212,30 @@ class PodProcess:
         )  # Columns 10+ are the command
         self._pod = pod
 
-    def kill(self, signal="SIGKILL"):
+    def kill(self, signal=None):
         """Kill this process in the given pod"""
-        command = ["kill", "-9", str(self.pid)]
-        print(command)
-        result = self._pod.exec(["kill", "-SIGTERM", str(self.pid)])
 
-        print(result)
+        if not signal:
+            if self.pid == 1:
+                signal = "SIGINT"
+            else:
+                signal = "SIGKILL"
+
+        return self._pod.exec(["kill", f"-{signal}", str(self.pid)])
 
     def wait(self, timeout: int = 60):
         """Wait for this process to exit in the given pod"""
         # Simple implementation; adjust as needed
         for _ in range(timeout):
-            result = self._pod.exec(
-                ["kill", "-0", str(self.pid)]
-            )  # Check if process exists
-            print(result)
-            if result.returncode != 0:
-                return True  # Process exited
-            time.sleep(1)
+            try:
+                result = self._pod.exec(
+                    ["kill", "-0", str(self.pid)]
+                )  # Check if process exists
+                if result.returncode != 0:
+                    return True  # Process exited
+                time.sleep(1)
+            except Exception:
+                return True
         return False  # Timed out
 
 
@@ -220,7 +244,7 @@ class ManagedDeployment:
     log_dir: str
     deployment_spec: DeploymentSpec
     namespace: str
-    frontend_service_name: Optional[str] = "frontend"
+    frontend_service_name: Optional[str] = "Frontend"
 
     _custom_api = None
     _core_api = None
@@ -238,13 +262,13 @@ class ManagedDeployment:
         except Exception:
             # Fallback to kube config file (for local development)
             await config.load_kube_config()
-
+        self._deployment_name = self.deployment_spec.name
         k8s_client = client.ApiClient()
         self._custom_api = client.CustomObjectsApi(k8s_client)
         self._core_api = client.CoreV1Api(k8s_client)
         self._apps_v1 = client.AppsV1Api()
 
-    async def _wait_for_pods(self, label, expected, timeout=60):
+    async def _wait_for_pods(self, label, expected, timeout=300):
         for _ in range(timeout):
             pods = await self._core_api.list_namespaced_pod(
                 self.namespace, label_selector=label
@@ -285,7 +309,7 @@ class ManagedDeployment:
 
         self._logger.info(f"Restarted {name} {label}")
 
-    async def _wait_for_ready(self, timeout: int = 1800):
+    async def _wait_for_ready(self, timeout: int = 1800, sleep=1, log_interval=60):
         """
         Wait for the custom resource to be ready.
 
@@ -293,12 +317,14 @@ class ManagedDeployment:
             timeout: Maximum time to wait in seconds, default to 30 mins (image pulling can take a while)
         """
         start_time = time.time()
-        # TODO: A little brittle, also should output intermediate status every so often.
 
-        self._logger.info("Waiting for Deployment {self._deployment_name}")
+        self._logger.info(f"Waiting for Deployment {self._deployment_name}")
+
+        attempt = 0
 
         while (time.time() - start_time) < timeout:
             try:
+                attempt += 1
                 status = await self._custom_api.get_namespaced_custom_object(
                     group="nvidia.com",
                     version="v1alpha1",
@@ -313,15 +339,6 @@ class ManagedDeployment:
                 conditions = status_obj.get("conditions", [])
                 current_state = status_obj.get("state", "unknown")
 
-                self._logger.info(f"Current deployment state: {current_state}")
-                self._logger.info(f"Current conditions: {conditions}")
-                self._logger.info(
-                    f"Elapsed time: {time.time() - start_time:.1f}s / {timeout}s"
-                )
-
-                for svc in kr8s.get("services", namespace=self.namespace):
-                    print(f"Service: {svc.namespace}/{svc.name}")
-
                 ready_condition = False
                 for condition in conditions:
                     if (
@@ -334,14 +351,24 @@ class ManagedDeployment:
                 state_successful = status_obj.get("state") == "successful"
 
                 if ready_condition and state_successful:
+                    self._logger.info(f"Current deployment state: {current_state}")
+                    self._logger.info(f"Current conditions: {conditions}")
                     self._logger.info(
-                        "Deployment is ready: Ready condition is True and state is successful"
+                        f"Elapsed time: {time.time() - start_time:.1f}s / {timeout}s"
                     )
+
+                    self._logger.info(f"Deployment {self._deployment_name} is ready")
                     return True
                 else:
-                    self._logger.info(
-                        f"Deployment not ready yet - Ready condition: {ready_condition}, State successful: {state_successful}"
-                    )
+                    if attempt % log_interval == 0:
+                        self._logger.info(f"Current deployment state: {current_state}")
+                        self._logger.info(f"Current conditions: {conditions}")
+                        self._logger.info(
+                            f"Elapsed time: {time.time() - start_time:.1f}s / {timeout}s"
+                        )
+                        self._logger.info(
+                            f"Deployment not ready yet - Ready condition: {ready_condition}, State successful: {state_successful}"
+                        )
 
             except kubernetes.client.rest.ApiException as e:
                 self._logger.info(
@@ -352,7 +379,7 @@ class ManagedDeployment:
                 self._logger.info(
                     f"Unexpected exception while checking deployment status: {e}"
                 )
-            await asyncio.sleep(20)
+            await asyncio.sleep(sleep)
         raise TimeoutError("Deployment failed to become ready within timeout")
 
     async def _restart_nats(self):
@@ -436,42 +463,76 @@ class ManagedDeployment:
             ):
                 pods.append(pod)
 
-            result[component.lower()] = pods
+            result[component] = pods
 
         return result
 
-    async def _get_deployment_logs(self):
-        """
-        Get logs from all pods in the deployment, organized by component.
-        """
-        # Create logs directory
-        base_dir = self.log_dir
-        os.makedirs(base_dir, exist_ok=True)
+    def get_pod_logs(self, service, pod, suffix=""):
+        directory = os.path.join(self.log_dir, service)
+        os.makedirs(directory, exist_ok=True)
 
-        for component in self.deployment_spec.services:
-            component_dir = os.path.join(base_dir, component.name)
-            os.makedirs(component_dir, exist_ok=True)
+        try:
+            with open(os.path.join(directory, f"{pod.name}{suffix}.yaml"), "w") as f:
+                f.write(pod.to_yaml())
+        except Exception as e:
+            self._logger.error(e)
+        try:
+            with open(os.path.join(directory, f"{pod.name}{suffix}.log"), "w") as f:
+                f.write("\n".join(pod.logs()))
+        except Exception as e:
+            self._logger.error(e)
+        try:
+            with open(
+                os.path.join(directory, f"{pod.name}{suffix}.previous.log"), "w"
+            ) as f:
+                f.write("\n".join(pod.logs(previous=True)))
+        except Exception as e:
+            self._logger.error(e)
 
-            # List pods for this component using the selector label
-            # nvidia.com/selector: deployment-name-component
-            label_selector = (
-                f"nvidia.com/selector={self._deployment_name}-{component.name.lower()}"
-            )
+        self._get_pod_metrics(pod, service, suffix)
 
-            pods = await self._core_api.list_namespaced_pod(
-                namespace=self.namespace, label_selector=label_selector
-            )
+    def _get_service_logs(self, component_name=None, suffix=""):
+        service_pods = self.get_pods(component_name)
 
-            # Get logs for each pod
-            for i, pod in enumerate(pods.items):
-                try:
-                    logs = await self._core_api.read_namespaced_pod_log(
-                        name=pod.metadata.name, namespace=self.namespace
-                    )
-                    with open(os.path.join(component_dir, f"{i}.log"), "w") as f:
-                        f.write(logs)
-                except kubernetes.client.rest.ApiException as e:
-                    print(f"Error getting logs for pod {pod.metadata.name}: {e}")
+        for service, pods in service_pods.items():
+            for i, pod in enumerate(pods):
+                self.get_pod_logs(service, pod, suffix)
+
+    def _get_pod_metrics(self, pod, service_name, suffix=""):
+        directory = os.path.join(self.log_dir, service_name)
+        os.makedirs(directory, exist_ok=True)
+        port = None
+        if service_name == self.frontend_service_name:
+            port = self.deployment_spec.port
+        else:
+            port = self.deployment_spec.system_port
+
+        pf = pod.portforward(remote_port=port, local_port=0, address="0.0.0.0")
+        pf.start()
+
+        while pf.local_port == 0:
+            time.sleep(1)
+
+        content = None
+
+        try:
+            url = f"http://localhost:{pf.local_port}/metrics"
+
+            response = requests.get(url, timeout=30)
+            content = None
+            try:
+                content = response.text
+            except ValueError:
+                pass
+
+        except Exception as e:
+            self._logger.error(str(e))
+
+        if content:
+            with open(
+                os.path.join(directory, f"{pod.name}.metrics{suffix}.log"), "w"
+            ) as f:
+                f.write(content)
 
     async def _delete_deployment(self):
         """
@@ -490,15 +551,10 @@ class ManagedDeployment:
             if e.status != 404:  # Ignore if already deleted
                 raise
 
-    def _start_port_forward(self):
-        for svc in kr8s.get("services", namespace=self.namespace):
-            print(f"Service: {svc.namespace}/{svc.name}")
-
+    def start_port_forward(self):
         service_name = f"{self._deployment_name}-{self.frontend_service_name.lower()}"
 
         frontend_service = kr8s_Service.get(service_name, namespace=self.namespace)
-
-        logging.getLogger("httpx").setLevel(logging.WARNING)
 
         self._port_forward = frontend_service.portforward(
             remote_port=self.deployment_spec.port,
@@ -509,15 +565,13 @@ class ManagedDeployment:
         self._port_forward.start()
 
     def _stop_port_forward(self):
-        print("stopping!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         if self._port_forward:
             self._port_forward.stop()
 
     async def _cleanup(self):
         try:
-            await self._get_deployment_logs()
+            self._get_service_logs()
         finally:
-            print("stopping!!!!!!!!!!!!!!!!!!!!!!!!!!!")
             self._stop_port_forward()
             await self._delete_deployment()
 
@@ -526,13 +580,13 @@ class ManagedDeployment:
             self._logger = logging.getLogger(self.__class__.__name__)
             self.deployment_spec.namespace = self.namespace
             self._deployment_name = self.deployment_spec.name
+            logging.getLogger("httpx").setLevel(logging.WARNING)
             await self._init_kubernetes()
             await self._delete_deployment()
             await self._restart_etcd()
             await self._restart_nats()
             await self._create_deployment()
             await self._wait_for_ready()
-            self._start_port_forward()
 
         except:
             await self._cleanup()
