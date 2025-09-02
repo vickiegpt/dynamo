@@ -68,7 +68,7 @@ failure_scenarios = {
     "frontend": [Failure(10, "Frontend", "dynamo.frontend")],
     "frontend_pod": [Failure(10, "Frontend", "delete_pod")],
     "decode_worker": [Failure(10, "VllmDecodeWorker", "dynamo.vllm")],
-    "decode_worker_pod": [Failure(10, "VllmDecodeWorker", "delete pod")],
+    "decode_worker_pod": [Failure(10, "VllmDecodeWorker", "delete_pod")],
     "prefill_worker": [Failure(10, "VllmPrefillWorker", "dynamo.vllm")],
     "prefill_worker_pod": [Failure(10, "VllmPrefillWorker", "delete_pod")],
     "vllm_decode_engine_core": [
@@ -144,6 +144,9 @@ def _inject_failures(failures, logger, deployment: ManagedDeployment):  # noqa: 
 
         num_pods = len(pods)
 
+        if not pods:
+            continue
+
         replicas = failure.replicas
 
         if not replicas:
@@ -172,16 +175,20 @@ global_result_list = []
 
 
 @pytest.fixture(autouse=True)
-def results_table(request):
+def results_table(request, sla):
     yield
-    parse_results(logs_dir=None, log_paths=[request.node.name], tablefmt="fancy")
+    parse_results(
+        logs_dir=None, log_paths=[request.node.name], tablefmt="fancy_grid", sla=sla
+    )
     global_result_list.append(request.node.name)
 
 
 @pytest.fixture(autouse=True, scope="session")
-def results_summary():
+def results_summary(sla):
     yield
-    parse_results(logs_dir=None, log_paths=global_result_list, tablefmt="fancy")
+    parse_results(
+        logs_dir=None, log_paths=global_result_list, tablefmt="fancy_grid", sla=sla
+    )
 
 
 @pytest.mark.e2e

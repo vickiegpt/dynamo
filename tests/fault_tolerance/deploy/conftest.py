@@ -26,6 +26,12 @@ def pytest_addoption(parser):
     parser.addoption("--max-retries", type=int, default=1)
     parser.addoption("--model", type=str, default=None)
     parser.addoption("--max-request-rate", type=int, default=1)
+    parser.addoption("--sla", type=float, default=None)
+
+
+@pytest.fixture(scope="session")
+def sla(request):
+    return request.config.getoption("--sla")
 
 
 @pytest.fixture

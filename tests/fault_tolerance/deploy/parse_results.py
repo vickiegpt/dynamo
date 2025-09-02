@@ -247,7 +247,7 @@ def calculate_recovery_time(test_dir, failure_type, fault_time):
     return last_recovery_time
 
 
-def process_test_directory(test_dir):
+def process_test_directory(test_dir, sla):
     if "test_fault_scenario" not in test_dir:
         return {}
     test_name = test_dir.split("test_fault_scenario[", 1)[1].rstrip("]")
@@ -272,7 +272,7 @@ def process_test_directory(test_dir):
         std_after,
         violations_before,
         violations_after,
-    ) = calculate_metrics(df, fault_time)
+    ) = calculate_metrics(df, fault_time, sla)
 
     recovery_time = calculate_recovery_time(test_dir, failure_type, fault_time)
 
@@ -295,11 +295,11 @@ def process_test_directory(test_dir):
     }
 
 
-def main(logs_dir, tablefmt, log_paths=[]):
+def main(logs_dir, tablefmt, log_paths=[], sla=None):
     results = []
     if log_paths:
         for log_path in log_paths:
-            result = process_test_directory(log_path)
+            result = process_test_directory(log_path, sla)
             if result:
                 results.append(result)
     elif logs_dir:
@@ -307,7 +307,7 @@ def main(logs_dir, tablefmt, log_paths=[]):
             if entry.startswith("test_fault_scenario[") and os.path.isdir(
                 os.path.join(logs_dir, entry)
             ):
-                result = process_test_directory(os.path.join(logs_dir, entry))
+                result = process_test_directory(os.path.join(logs_dir, entry), sla)
                 if result:
                     results.append(result)
 
@@ -341,34 +341,60 @@ def main(logs_dir, tablefmt, log_paths=[]):
                 if failure == res["failure"]:
                     new_group.append(res)
         group = new_group
-        headers = [
-            "Failure",
-            "Startup",
-            "Success\nBefore",
-            "Failed\nBefore",
-            "Success\nAfter",
-            "Failed\nAfter",
-            "Latency\nBefore",
-            "Latency\nAfter",
-            "Violations\nBefore",
-            "Violations\nAfter",
-            "Recovery",
-        ]
+        if sla:
+            headers = [
+                "Failure",
+                "Startup",
+                "Success\nBefore",
+                "Failed\nBefore",
+                "Success\nAfter",
+                "Failed\nAfter",
+                "Latency\nBefore",
+                "Latency\nAfter",
+                "Violations\nBefore",
+                "Violations\nAfter",
+                "Recovery",
+            ]
+        else:
+            headers = [
+                "Failure",
+                "Startup",
+                "Success\nBefore",
+                "Failed\nBefore",
+                "Success\nAfter",
+                "Failed\nAfter",
+                "Latency\nBefore",
+                "Latency\nAfter",
+                "Recovery",
+            ]
         rows = []
         for res in group:
-            row = [
-                res["failure"],
-                res["start_time"],  # if res["start_time"] is not None else "N/A",
-                res["success_before_requests"],
-                res["failed_before_requests"],
-                res["success_after_requests"],
-                res["failed_after_requests"],
-                res["avg_latency_before"],
-                res["avg_latency_after"],
-                res["violations_before"],
-                res["violations_after"],
-                res["recovery_time"],
-            ]
+            if sla:
+                row = [
+                    res["failure"],
+                    res["start_time"],  # if res["start_time"] is not None else "N/A",
+                    res["success_before_requests"],
+                    res["failed_before_requests"],
+                    res["success_after_requests"],
+                    res["failed_after_requests"],
+                    res["avg_latency_before"],
+                    res["avg_latency_after"],
+                    res["violations_before"],
+                    res["violations_after"],
+                    res["recovery_time"],
+                ]
+            else:
+                row = [
+                    res["failure"],
+                    res["start_time"],  # if res["start_time"] is not None else "N/A",
+                    res["success_before_requests"],
+                    res["failed_before_requests"],
+                    res["success_after_requests"],
+                    res["failed_after_requests"],
+                    res["avg_latency_before"],
+                    res["avg_latency_after"],
+                    res["recovery_time"],
+                ]
             rows.append(row)
 
         print(f"\nTest Group: {test_prefix}")
@@ -393,6 +419,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--format", choices=["fancy", "markdown"], default="fancy", help="Table format"
     )
+    parser.add_argument("--sla", type=float, default=None)
+
     args = parser.parse_args()
 
     # Map format choices to tabulate formats
@@ -400,4 +428,4 @@ if __name__ == "__main__":
         "fancy_grid" if args.format == "fancy" else "pipe"
     )  # Using pipe for markdown compatibility
 
-    main(args.log_dir, tablefmt)
+    main(args.log_dir, tablefmt, args.sla)
