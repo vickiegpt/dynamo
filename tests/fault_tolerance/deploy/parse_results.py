@@ -163,8 +163,6 @@ def parse_process_log(log_dir, process_name):
         return {}
     ready_times = {}
 
-    print(log_dir)
-
     for entry in os.listdir(log_dir):
         if entry.endswith(".log") and "metrics" not in entry:
             replica_number = entry.split(".")[0]
@@ -231,16 +229,12 @@ def calculate_recovery_time(test_dir, failure_type, fault_time):
         if starts:
             process_start[process] = starts
 
-    print(process_start)
     last_recovery_time = 0
-    print(fault_time)
     for process, replicas in process_start.items():
-        print(starts)
         for replica, container_starts in replicas.items():
             for starts in container_starts:
                 start_time = starts[0]
                 recovery_time = (start_time - fault_time).total_seconds()
-                print(recovery_time, start_time, fault_time, process, replica)
                 if recovery_time > last_recovery_time:
                     last_recovery_time = recovery_time
 
