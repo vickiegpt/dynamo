@@ -3,13 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 # This script is used to set the development version for the dynamo project.
 
+import argparse
 import os
 import re
 import subprocess
 import warnings
-import tomlkit
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+import tomlkit
+
+parser = argparse.ArgumentParser(description="Set the development version for the dynamo project.")
+parser.add_argument("--build-id", type=str, help="The build id to use for the development version.")
+args = parser.parse_args()
 
 
 
@@ -33,20 +39,6 @@ def extract_pyproject_toml_info(files, param):
             results.append({"error": str(e)})
     return results
 
-
-def get_git_hash():
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return result.stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
-
-
 def validate_python_version(version: str) -> bool:
     # https://peps.python.org/pep-0440/#appendix-b-parsing-version-strings-with-regular-expressions
     return (
@@ -61,23 +53,20 @@ def validate_python_version(version: str) -> bool:
 def define_dev_version(current_version: str):
     if not validate_python_version(current_version):
         raise ValueError(f"Invalid version format: {current_version}")
-    if not os.environ.get("CI_PIPELINE_ID"):
+    if not os.environ.get("BUILD_ID"):
         warnings.warn(
-            "CI_PIPELINE_ID is not set, please set it in the environment variables"
+            "BUILD_ID is not set, please set it in the environment variables"
         )
-    if not get_git_hash():
-        raise ValueError("Git hash is not set")
     version = re.match(r"(\d+\.\d+\.\d+)", current_version).group(1)
     pipeline_id = (
-        ".dev" + os.environ.get("CI_PIPELINE_ID")
-        if os.environ.get("CI_PIPELINE_ID")
+        ".dev" + args.build_id
+        if args.build_id
         else ""
     )
     if not validate_python_version(f"{version}{pipeline_id}"):
         raise ValueError(f"Invalid version format: {version}")
 
-    hash = "+" + get_git_hash() if get_git_hash() else ""
-    version = f"{version}{pipeline_id}{hash}"
+    version = f"{version}{pipeline_id}"
     return version
 
 
