@@ -48,9 +48,6 @@ jobs:
       - name: Debug
         run: |
           nvidia-smi
-      - name: Test
-        run: |
-          docker run --runtime=nvidia --rm --gpus all nvidia/cuda nvidia-smi
       - name: Build image
         env:
           GITHUB_TOKEN: ${{ secrets.CI_TOKEN }}
@@ -63,9 +60,9 @@ jobs:
             --use-sccache \
             --sccache-bucket "$SCCACHE_S3_BUCKET" \
             --sccache-region "$AWS_DEFAULT_REGION"
-      # - name: Run pytest
-      #   run: |
-      #     docker run --runtime=nvidia --rm --gpus all -w /workspace \
-      #       --name ${{ env.CONTAINER_ID }}_pytest \
-      #       ${{ matrix.framework }}:latest \
-      #       bash -c "pytest -xsv --basetemp=/tmp --junitxml=${{ env.PYTEST_XML_FILE }} -m \"${{ env.PYTEST_MARKS }}\""
+      - name: Run pytest
+        run: |
+          docker run --runtime=nvidia --rm --gpus all -w /workspace \
+            --name ${{ env.CONTAINER_ID }}_pytest \
+            ${{ matrix.framework }}:latest \
+            bash -c "pytest -xsv --basetemp=/tmp --junitxml=${{ env.PYTEST_XML_FILE }} -m \"${{ env.PYTEST_MARKS }}\""
