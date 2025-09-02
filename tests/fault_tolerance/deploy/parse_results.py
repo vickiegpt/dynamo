@@ -392,7 +392,7 @@ def main(logs_dir, tablefmt, log_paths=[], sla=None):
             rows.append(row)
 
         print(f"\nTest Group: {test_prefix}")
-        print(f"\nTest Command: {commands[test_prefix]}")
+        #     print(f"\nTest Command: {commands[test_prefix]}")
         print(
             tabulate(
                 rows,
