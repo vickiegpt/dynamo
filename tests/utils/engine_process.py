@@ -32,7 +32,7 @@ class EngineProcess(ManagedProcess):
         except Exception:
             return False
 
-    def curl_metrics_endpoint(self, port=8081):
+    def get_metrics(self, port=8081):
         """Curl the metrics endpoint and return the response."""
         import requests
 
