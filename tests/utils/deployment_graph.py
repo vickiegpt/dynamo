@@ -90,7 +90,7 @@ def completions_response_handler(response):
     return result["choices"][0]["text"]
 
 
-def metrics_label_handler(response):
+def metrics_handler(response):
     """Handler to check if metrics endpoint is working and contains model label."""
     import logging
     import re

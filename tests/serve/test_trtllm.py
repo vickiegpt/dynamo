@@ -12,7 +12,7 @@ from tests.serve.common import EngineConfig, create_payload_for_config
 from tests.utils.deployment_graph import (
     chat_completions_response_handler,
     completions_response_handler,
-    metrics_label_handler,
+    metrics_handler,
 )
 from tests.utils.engine_process import EngineProcess
 
@@ -121,7 +121,7 @@ trtllm_configs = {
             "v1/chat/completions",
             "metrics",
         ],  # Make a request to make sure the model is loaded and metrics are published.
-        response_handlers=[chat_completions_response_handler, metrics_label_handler],
+        response_handlers=[chat_completions_response_handler, metrics_handler],
         model="Qwen/Qwen3-0.6B",
     ),
 }
@@ -173,7 +173,7 @@ def test_deployment(trtllm_config_test, request, runtime_services):
 
             for _ in range(payload.repeat_count):
                 if endpoint == "metrics":
-                    response = server_process.curl_metrics_endpoint(
+                    response = server_process.get_metrics(
                         server_process.backend_metrics_port
                     )
                     response_handler(response)
