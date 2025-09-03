@@ -59,4 +59,4 @@ if [ "${SLURM_NODEID}" = "0" ]; then
     echo "hostname saved to ${work_dir}/hostnames/${disaggregation_mode}_${instance_id}.txt"
 fi
 
-trtllm-llmapi-launch trtllm-serve ${model_path} --host $(hostname) --port 8336 --extra_llm_api_options ${config_file}
+trtllm-llmapi-launch trtllm-serve ${model_path} --host 0.0.0.0 --port 8336 --extra_llm_api_options ${config_file}
