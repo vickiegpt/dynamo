@@ -22,7 +22,7 @@ gcloud container clusters create ${CLUSTER_NAME} \
  	--project=${PROJECT_ID} \
  	--location=${ZONE} \
 	--subnetwork=default \
-    --disk-size=${DISK_SIZE} \
+  --disk-size=${DISK_SIZE} \
 	--machine-type=${CLUSTER_MACHINE_TYPE} \
  	--num-nodes=1
 ```
@@ -150,7 +150,7 @@ More configurations please refer to https://github.com/ai-dynamo/dynamo/tree/mai
 ### Highlighted configurations in yaml file
 Please note that `LD_LIBRARY_PATH` needs to be set properly in GKE as per [Run GPUs in GKE](https://cloud.google.com/kubernetes-engine/docs/how-to/gpus)
 
-The following snippet needs to be present in the `args` field of the deployment yaml file:
+The following snippet needs to be present in the `args` field of the deployment `yaml` file:
 
 ```bash
 export LD_LIBRARY_PATH=/usr/local/nvidia/lib64:$LD_LIBRARY_PATH
@@ -235,4 +235,3 @@ curl localhost:8000/v1/chat/completions \
 ```json
 {"id":"chatcmpl-bd0670d9-0342-4eea-97c1-99b69f1f931f","choices":[{"index":0,"message":{"content":"Okay, here’s a detailed character background for your intrepid explorer, tailored to fit the premise of Aeloria, with a focus on a","refusal":null,"tool_calls":null,"role":"assistant","function_call":null,"audio":null},"finish_reason":"stop","logprobs":null}],"created":1756336263,"model":"google/gemma-3-1b-it","service_tier":null,"system_fingerprint":null,"object":"chat.completion","usage":{"prompt_tokens":190,"completion_tokens":29,"total_tokens":219,"prompt_tokens_details":null,"completion_tokens_details":null}}
 ```
-
