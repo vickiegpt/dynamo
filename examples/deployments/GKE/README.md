@@ -22,12 +22,12 @@ gcloud container clusters create ${CLUSTER_NAME} \
  	--project=${PROJECT_ID} \
  	--location=${ZONE} \
 	--subnetwork=default \
-       --disk-size=${DISK_SIZE} \
+    --disk-size=${DISK_SIZE} \
 	--machine-type=${CLUSTER_MACHINE_TYPE} \
- 	--num-nodes=3
+ 	--num-nodes=1
 ```
 
-#### a. Create GPU pool
+#### Create GPU pool
 
 ```bash
 gcloud container node-pools create gpu-pool \
@@ -135,7 +135,7 @@ Other ways to install Dynamo platform could be found here https://github.com/ai-
 
 ## Deploy Inference Graph
 
-We will deploy a LLM model to the Dynamo platform. Here we use `Qwen/Qwen3-0.6B` model with VLLM and disaggregated deployment as an example. 
+We will deploy a LLM model to the Dynamo platform. Here we use `google/gemma-3-1b-it` model with VLLM and disaggregated deployment as an example. 
 
 In the deployment yaml file, some adjustments have to/ could be made:
 
@@ -150,7 +150,7 @@ More configurations please refer to https://github.com/ai-dynamo/dynamo/tree/mai
 ### Highlighted configurations in yaml file
 Please note that `LD_LIBRARY_PATH` needs to be set properly in GKE as per [Run GPUs in GKE](https://cloud.google.com/kubernetes-engine/docs/how-to/gpus)
 
-The following snippet needs to be present in the `args` field of the deployment `yaml` file:
+The following snippet needs to be present in the `args` field of the deployment yaml file:
 
 ```bash
 export LD_LIBRARY_PATH=/usr/local/nvidia/lib64:$LD_LIBRARY_PATH
@@ -178,7 +178,7 @@ spec:
             export LD_LIBRARY_PATH=/usr/local/nvidia/lib64:$LD_LIBRARY_PATH
             export PATH=$PATH:/usr/local/nvidia/bin:/usr/local/nvidia/lib64
             /sbin/ldconfig
-            python3 -m dynamo.vllm --model Qwen/Qwen3-0.6B
+            python3 -m dynamo.vllm --model google/gemma-3-1b-it
 ```
 
 ## Deploy the model
@@ -206,11 +206,10 @@ vllm-disagg-vllmprefillworker-55d5b74b4f-zrskh                    1/1     Runnin
 ## Test the Deployment
 
 ```bash
-export KUBE_NS=dynamo-cloud
 export DEPLOYMENT_NAME=vllm-disagg
 
 # Find the frontend pod
-export FRONTEND_POD=$(kubectl get pods -n ${KUBE_NS} | grep "${DEPLOYMENT_NAME}-frontend" | sort -k1 | tail -n1 | awk '{print $1}')
+export FRONTEND_POD=$(kubectl get pods -n ${NAMESPACE} | grep "${DEPLOYMENT_NAME}-frontend" | sort -k1 | tail -n1 | awk '{print $1}')
 
 # Forward the pod's port to localhost
 kubectl port-forward deployment/vllm-disagg-frontend  8000:8000 -n ${NAMESPACE}
@@ -219,7 +218,7 @@ kubectl port-forward deployment/vllm-disagg-frontend  8000:8000 -n ${NAMESPACE}
 curl localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Qwen/Qwen3-0.6B",
+    "model": "google/gemma-3-1b-it",
     "messages": [
     {
         "role": "user",
@@ -234,6 +233,6 @@ curl localhost:8000/v1/chat/completions \
 ### Response
 
 ```json
-{"id":"chatcmpl-beb23715-8066-4d50-b6d7-b24a91e3e98d","choices":[{"index":0,"message":{"content":"<think>\nOkay, so I need to develop a character background for the explorer in Eldoria. Let me start by recalling the user's query.","refusal":null,"tool_calls":null,"role":"assistant","function_call":null,"audio":null},"finish_reason":"stop","logprobs":null}],"created":1756243811,"model":"Qwen/Qwen3-0.6B","service_tier":null,"system_fingerprint":null,"object":"chat.completion","usage":{"prompt_tokens":196,"completion_tokens":29,"total_tokens":225,"prompt_tokens_details":null,"completion_tokens_details":null}}
+{"id":"chatcmpl-bd0670d9-0342-4eea-97c1-99b69f1f931f","choices":[{"index":0,"message":{"content":"Okay, here’s a detailed character background for your intrepid explorer, tailored to fit the premise of Aeloria, with a focus on a","refusal":null,"tool_calls":null,"role":"assistant","function_call":null,"audio":null},"finish_reason":"stop","logprobs":null}],"created":1756336263,"model":"google/gemma-3-1b-it","service_tier":null,"system_fingerprint":null,"object":"chat.completion","usage":{"prompt_tokens":190,"completion_tokens":29,"total_tokens":219,"prompt_tokens_details":null,"completion_tokens_details":null}}
 ```
 
