@@ -8,9 +8,11 @@
 //! descriptor types.
 
 pub mod descriptor;
+pub mod validation;
 
 pub use descriptor::{
     ComponentDescriptor,
+    DescriptorBuilder,
     DescriptorError,
     EntityDescriptor,
     EndpointDescriptor,
