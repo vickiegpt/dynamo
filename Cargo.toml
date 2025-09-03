@@ -5,7 +5,6 @@
 members = [
     "components/metrics",
     "components/oscar",
-    "components/router",
     "launch/*",
     "lib/llm",
     "lib/runtime",
