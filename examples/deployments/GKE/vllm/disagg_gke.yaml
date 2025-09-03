@@ -4,7 +4,7 @@ apiVersion: nvidia.com/v1alpha1
 kind: DynamoGraphDeployment
 metadata:
   name: vllm-disagg
-  namespace: dynamo-cloud
+  namespace: dynamo-cloud-040
 spec:
   services:
     Frontend:
@@ -99,7 +99,8 @@ spec:
             export LD_LIBRARY_PATH=/usr/local/nvidia/lib64:$LD_LIBRARY_PATH
             export PATH=$PATH:/usr/local/nvidia/bin:/usr/local/nvidia/lib64
             /sbin/ldconfig
-            python3 -m dynamo.vllm --model Qwen/Qwen3-0.6B  2>&1 | tee /tmp/vllm.log
+            nvidia-smi
+            python3 -m dynamo.vllm --model google/gemma-3-1b-it  2>&1 | tee /tmp/vllm.log
     VllmPrefillWorker:
       dynamoNamespace: vllm-disagg
       envFromSecret: hf-token-secret
@@ -153,4 +154,5 @@ spec:
             export LD_LIBRARY_PATH=/usr/local/nvidia/lib64:$LD_LIBRARY_PATH
             export PATH=$PATH:/usr/local/nvidia/bin:/usr/local/nvidia/lib64
             /sbin/ldconfig
-            python3 -m dynamo.vllm --model Qwen/Qwen3-0.6B  --is-prefill-worker 2>&1 | tee /tmp/vllm.log
+            nvidia-smi
+            python3 -m dynamo.vllm --model google/gemma-3-1b-it  --is-prefill-worker 2>&1 | tee /tmp/vllm.log
