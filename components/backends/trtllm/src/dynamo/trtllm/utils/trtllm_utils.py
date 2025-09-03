@@ -7,10 +7,7 @@ from typing import Optional
 from tensorrt_llm.llmapi import BuildConfig
 
 from dynamo.trtllm import __version__
-from dynamo.trtllm.request_handlers.handler_base import (
-    DisaggregationMode,
-    DisaggregationStrategy,
-)
+from dynamo.trtllm.constants import DisaggregationMode, DisaggregationStrategy
 
 # Default endpoint for the next worker.
 DEFAULT_ENDPOINT = "dyn://dynamo.tensorrt_llm.generate"
@@ -51,7 +48,6 @@ class Config:
         self.encode_endpoint: str = ""
         self.modality: str = "text"
         self.use_nixl_connect: bool = False
-        self.model_type: Optional[str] = None
 
     def __str__(self) -> str:
         return (
@@ -78,8 +74,7 @@ class Config:
             f"next_endpoint={self.next_endpoint}, "
             f"encode_endpoint={self.encode_endpoint}, "
             f"modality={self.modality}, "
-            f"use_nixl_connect={self.use_nixl_connect}, "
-            f"model_type={self.model_type})"
+            f"use_nixl_connect={self.use_nixl_connect})"
         )
 
 

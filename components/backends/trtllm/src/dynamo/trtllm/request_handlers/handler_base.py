@@ -15,7 +15,6 @@
 
 import logging
 from dataclasses import asdict, dataclass
-from enum import Enum
 from typing import Optional, Union
 
 import torch
@@ -24,6 +23,7 @@ from tensorrt_llm.llmapi.llm import SamplingParams
 
 from dynamo.nixl_connect import Connector
 from dynamo.runtime.logging import configure_dynamo_logging
+from dynamo.trtllm.constants import DisaggregationMode, DisaggregationStrategy
 from dynamo.trtllm.engine import TensorRTLLMEngine
 from dynamo.trtllm.multimodal_processor import MultimodalRequestProcessor
 from dynamo.trtllm.publisher import Publisher
@@ -33,18 +33,6 @@ from dynamo.trtllm.utils.disagg_utils import (
 )
 
 configure_dynamo_logging()
-
-
-class DisaggregationMode(Enum):
-    AGGREGATED = "prefill_and_decode"
-    PREFILL = "prefill"
-    DECODE = "decode"
-    ENCODE = "encode"
-
-
-class DisaggregationStrategy(Enum):
-    PREFILL_FIRST = "prefill_first"
-    DECODE_FIRST = "decode_first"
 
 
 @dataclass

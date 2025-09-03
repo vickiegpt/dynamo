@@ -5,17 +5,17 @@ import copy
 import logging
 
 import torch
+from tensorrt_llm._torch.shared_tensor import SharedTensorContainer
+from tensorrt_llm.inputs import default_multimodal_input_loader
 
 import dynamo.nixl_connect as nixl_connect
 from dynamo.runtime.logging import configure_dynamo_logging
+from dynamo.trtllm.constants import DisaggregationMode, DisaggregationStrategy
 from dynamo.trtllm.request_handlers.handler_base import (
-    DisaggregationMode,
-    DisaggregationStrategy,
     HandlerBase,
     RequestHandlerConfig,
 )
 from dynamo.trtllm.utils.encode_utils import EncodeUtils
-from dynamo.trtllm.utils.test_util import default_multimodal_input_loader
 
 configure_dynamo_logging()
 
@@ -85,13 +85,16 @@ class EncodeHandler(HandlerBase):
         super().__init__(config)
         self.encodings = None
         self.auxiliary_data = {}
-        self.model_dir = config.model_path
-        self.model_type = config.model_type
-        self.tokenizer = config.tokenizer
+        # Get values from multimodal_processor instead of config directly
+        if self.multimodal_processor:
+            self.model_dir = self.multimodal_processor.model_dir
+            self.model_type = self.multimodal_processor.model_type
+            self.tokenizer = self.multimodal_processor.tokenizer
 
     async def generate(self, request: dict):
         if self.connector:
             # Load embeddings first to get the actual shape
+            logging.info("Encoding handler called")
             messages = request.get("messages", [])
             (
                 text_prompts,
@@ -99,6 +102,7 @@ class EncodeHandler(HandlerBase):
                 embedding_paths,
             ) = self.multimodal_processor.extract_prompt_and_media(messages)
             if embedding_paths:
+                logging.info(f"Embedding paths: {embedding_paths}")
                 loaded_data = self.multimodal_processor.load_tensor_from_path_or_url(
                     embedding_paths[0]
                 )
@@ -109,12 +113,23 @@ class EncodeHandler(HandlerBase):
                     model_dir=self.model_dir,
                     model_type=self.model_type,
                     modality="image",
-                    prompts=text_prompts,
-                    media=image_urls,
+                    prompts=text_prompts[0],
+                    media=image_urls[0],
                 )
-                loaded_data = self.engine.llm.generate(inputs)
-                yield {"error": "No embedding paths found"}
-                return
+                # Debug: Check the type of engine.llm
+                engine_llm_type = type(self.engine.llm).__name__
+                logging.info(f"Engine LLM type: {engine_llm_type}")
+                logging.info(f"Engine LLM object: {self.engine.llm}")
+                encoder_outputs = self.engine.llm.generate(inputs)
+                encoder_embeddings = [
+                    SharedTensorContainer.from_dict(
+                        output.mm_embedding_handle
+                    ).get_local_view()
+                    for output in encoder_outputs
+                ]
+                # Currently we only support one embedding/image per request
+                loaded_data = encoder_embeddings[0]
+                logging.info(f"Loaded data: {loaded_data}")
             if isinstance(loaded_data, dict):
                 # Dictionary format (e.g., maverick_mm_embed_seashore_v3.pt)
                 self.encodings = loaded_data.get("mm_embeddings")
@@ -131,7 +146,24 @@ class EncodeHandler(HandlerBase):
                 self.auxiliary_data = {}
 
             # Create readable operation with main embeddings tensor (works for both formats)
-            descriptor = nixl_connect.Descriptor(self.encodings)
+            # Workaround: Create fresh GPU buffer to avoid UCX memory allocation issues
+            transfer_tensor = self.encodings
+            if hasattr(self.encodings, "is_cuda") and self.encodings.is_cuda:
+                import torch
+
+                logging.info(
+                    f"Creating fresh GPU buffer on {self.encodings.device} for nixl transfer"
+                )
+                # Create new tensor buffer on same device and copy data
+                transfer_tensor = torch.empty_like(
+                    self.encodings, device=self.encodings.device
+                )
+                transfer_tensor.copy_(self.encodings)
+                logging.info(
+                    f"Copied tensor data to fresh buffer: {transfer_tensor.shape} on {transfer_tensor.device}"
+                )
+
+            descriptor = nixl_connect.Descriptor(transfer_tensor)
             with self.connector.create_readable(descriptor) as readable_op:
                 # Get the metadata for the readable operation
                 op_metadata = readable_op.metadata()
@@ -229,17 +261,11 @@ class PrefillHandler(HandlerBase):
         embeddings_tensor = None
 
         if self.multimodal_processor:
-            _, _, embedding_paths = self.multimodal_processor.extract_prompt_and_media(
-                request.get("messages", [])
-            )
-            # This check will be removed once TRTLLM Encoder is integrated.
-            if embedding_paths:
-                # If an encoder is configured and the request needs encoding, call it.
-                if self.encode_client and self.connector:
-                    logging.debug(
-                        "PrefillHandler calling Encode Worker via remote_encode_with_nixl"
-                    )
-                    embeddings_tensor = await self.remote_encode_with_nixl(request)
+            if self.encode_client and self.connector:
+                logging.debug(
+                    "PrefillHandler calling Encode Worker via remote_encode_with_nixl"
+                )
+                embeddings_tensor = await self.remote_encode_with_nixl(request)
 
         # Request is ready for prefill.
         # Generate the prefill response locally

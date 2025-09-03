@@ -8,17 +8,16 @@ from typing import AsyncGenerator, Optional, Union
 from tensorrt_llm import MultimodalEncoder
 from tensorrt_llm.llmapi.llm import LLM
 
-from dynamo.trtllm.request_handlers.handler_base import DisaggregationMode
+from dynamo.trtllm.constants import DisaggregationMode
 
 logging.basicConfig(level=logging.DEBUG)
 
 
 class TensorRTLLMEngine:
-    def __init__(self, engine_args, disaggregation_mode=None, model_type=None):
+    def __init__(self, engine_args, disaggregation_mode=None):
         self.engine_args = engine_args
         self._llm: Optional[Union[LLM, MultimodalEncoder]] = None
         self.disaggregation_mode = disaggregation_mode
-        self.model_type = model_type
 
     async def initialize(self):
         if not self._llm:
@@ -27,7 +26,6 @@ class TensorRTLLMEngine:
                 self._llm = MultimodalEncoder(
                     model=model,
                     max_batch_size=self.engine_args.pop("max_batch_size"),
-                    model_type=self.model_type,
                 )
             else:
                 self._llm = LLM(
@@ -54,9 +52,9 @@ class TensorRTLLMEngine:
 
 @asynccontextmanager
 async def get_llm_engine(
-    engine_args, disaggregation_mode=None, model_type=None
+    engine_args, disaggregation_mode=None
 ) -> AsyncGenerator[TensorRTLLMEngine, None]:
-    engine = TensorRTLLMEngine(engine_args, disaggregation_mode, model_type)
+    engine = TensorRTLLMEngine(engine_args, disaggregation_mode)
     try:
         await engine.initialize()
         yield engine
