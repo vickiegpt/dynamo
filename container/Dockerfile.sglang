@@ -350,6 +350,11 @@ RUN cargo build \
 	--features dynamo-llm/block-manager \
 	--workspace
 
+WORKDIR /workspace
+COPY _set_dev_version.py .
+ARG BUILD_ID
+RUN [[ -n $BUILD_ID ]] && python _set_dev_version.py --build-id $BUILD_ID
+
 # Build dynamo wheel
 RUN uv build --wheel --out-dir /workspace/dist && \
     cd /workspace/lib/bindings/python && \

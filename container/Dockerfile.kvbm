@@ -152,6 +152,10 @@ ENV VIRTUAL_ENV=/opt/dynamo/venv
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
 # Install NIXL Python module
+WORKDIR /opt/nixl
+COPY _set_dev_version.py .
+ARG BUILD_ID
+RUN [[ -n ${BUILD_ID} ]] && python _set_dev_version.py --build-id ${BUILD_ID}
 RUN cd /opt/nixl && uv build . --out-dir /workspace/wheels/nixl
 
 # Install the wheel
@@ -347,6 +351,11 @@ RUN cargo build \
 	--locked \
 	--features dynamo-llm/block-manager \
 	--workspace
+
+WORKDIR /workspace
+COPY _set_dev_version.py .
+ARG BUILD_ID
+RUN [[ -n ${BUILD_ID} ]] && python _set_dev_version.py --build-id ${BUILD_ID}
 
 # Build dynamo wheel
 RUN uv build --wheel --out-dir /workspace/dist && \
