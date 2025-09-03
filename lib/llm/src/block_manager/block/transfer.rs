@@ -23,238 +23,14 @@ use super::*;
 
 use crate::block_manager::storage::{
     nixl::{NixlRegisterableStorage, NixlStorage},
-    DeviceStorage, DiskStorage, PinnedStorage, SystemStorage, StorageType,
+    DeviceStorage, DiskStorage, PinnedStorage, SystemStorage,
 };
-
-use cudarc::driver::CudaStream;
 
 use nixl_sys::NixlDescriptor;
 use nixl_sys::XferOp::{Read, Write};
 use std::ops::Range;
 use tokio::sync::oneshot;
 use std::time::Duration;
-
-
-// Removed unused imports for zero-copy scatter kernel implementation
-use cudarc::driver::result as cuda_result;
-use std::sync::{Mutex, OnceLock};
-use std::collections::VecDeque;
-
-// Pre-allocated device buffers for kernel pointer arrays
-const MAX_PREALLOCATED_BLOCKS: usize = 1024;
-const TRANSFER_BUFFER_POOL_SIZE: usize = 8;  // Number of concurrent buffers
-
-struct TransferBuffer {
-    id: usize,
-    src_ptrs: u64,  // Device pointer to u64 array
-    dst_ptrs: u64,  // Device pointer to u64 array
-    capacity: usize,
-}
-
-struct TransferBufferPool {
-    available: Mutex<VecDeque<TransferBuffer>>,
-    total_buffers: usize,
-}
-
-impl TransferBufferPool {
-    fn acquire(&self) -> Option<TransferBuffer> {
-        let mut available = self.available.lock().unwrap();
-        available.pop_front()
-    }
-
-    fn release(&self, buffer: TransferBuffer) {
-        let mut available = self.available.lock().unwrap();
-        available.push_back(buffer);
-    }
-
-    fn len(&self) -> usize {
-        let available = self.available.lock().unwrap();
-        available.len()
-    }
-}
-
-// Global storage for transfer buffer pool and kernel function
-// Note: Store CUDA pointers as usize to avoid Send/Sync issues with raw pointers
-static TRANSFER_BUFFER_POOL: OnceLock<Result<TransferBufferPool, String>> = OnceLock::new();
-static COPY_KERNEL_MODULE: Mutex<Option<usize>> = Mutex::new(None);
-static COPY_KERNEL_FUNCTION: Mutex<Option<usize>> = Mutex::new(None);
-
-// Load the copy_kernel_KV module from FATBIN
-fn get_copy_kernel_module() -> Result<cudarc::driver::sys::CUmodule, TransferError> {
-    let mut module_guard = COPY_KERNEL_MODULE.lock().unwrap();
-
-    if let Some(module_ptr) = *module_guard {
-        return Ok(module_ptr as cudarc::driver::sys::CUmodule);
-    }
-
-    // Load the module on first access
-    let module = if let Ok(module) = load_embedded_fatbin() {
-        module
-    } else if let Ok(module) = load_runtime_fatbin() {
-        module
-    } else {
-        return Err(TransferError::ExecutionError("No copy_kernel_KV FATBIN found (tried embedded and runtime paths)".to_string()));
-    };
-
-    let module_ptr = module as usize;
-    *module_guard = Some(module_ptr);
-    Ok(module as cudarc::driver::sys::CUmodule)
-}
-
-// Get the copy_kernel_KV function
-fn get_copy_kernel() -> Result<cudarc::driver::sys::CUfunction, TransferError> {
-    let mut func_guard = COPY_KERNEL_FUNCTION.lock().unwrap();
-
-    if let Some(func_ptr) = *func_guard {
-        return Ok(func_ptr as cudarc::driver::sys::CUfunction);
-    }
-
-    // Load the function on first access
-    let module = get_copy_kernel_module()?;
-    let func = unsafe {
-        let mut func = std::ptr::null_mut();
-        let func_name = std::ffi::CString::new("copy_kernel_KV").unwrap();
-        let result = cudarc::driver::sys::cuModuleGetFunction(&mut func, module, func_name.as_ptr());
-        if result == cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
-            func
-        } else {
-            return Err(TransferError::ExecutionError(format!("Failed to get kernel function: {:?}", result)));
-        }
-    };
-
-    let func_ptr = func as usize;
-    *func_guard = Some(func_ptr);
-    Ok(func as cudarc::driver::sys::CUfunction)
-}
-
-// Get or initialize pre-allocated transfer buffer pool
-fn get_transfer_buffer_pool() -> Result<&'static TransferBufferPool, TransferError> {
-    let result = TRANSFER_BUFFER_POOL.get_or_init(|| {
-        let ptr_array_size = MAX_PREALLOCATED_BLOCKS * std::mem::size_of::<u64>();
-        let mut buffers = VecDeque::with_capacity(TRANSFER_BUFFER_POOL_SIZE);
-
-        for i in 0..TRANSFER_BUFFER_POOL_SIZE {
-            let (src_ptrs, dst_ptrs) = unsafe {
-                let src_ptrs = match cuda_result::malloc_sync(ptr_array_size) {
-                    Ok(ptr) => ptr,
-                    Err(e) => return Err(format!("Failed to allocate transfer src buffer {}: {}", i, e)),
-                };
-                let dst_ptrs = match cuda_result::malloc_sync(ptr_array_size) {
-                    Ok(ptr) => ptr,
-                    Err(e) => return Err(format!("Failed to allocate transfer dst buffer {}: {}", i, e)),
-                };
-                (src_ptrs, dst_ptrs)
-            };
-
-            buffers.push_back(TransferBuffer {
-                id: i,
-                src_ptrs,
-                dst_ptrs,
-                capacity: MAX_PREALLOCATED_BLOCKS,
-            });
-        }
-
-        println!("📦 Allocated {} transfer buffers, {} blocks per buffer ({} KB each)",
-                 TRANSFER_BUFFER_POOL_SIZE, MAX_PREALLOCATED_BLOCKS, ptr_array_size / 1024);
-
-        Ok(TransferBufferPool {
-            available: Mutex::new(buffers),
-            total_buffers: TRANSFER_BUFFER_POOL_SIZE,
-        })
-    });
-
-    match result {
-        Ok(pool) => Ok(pool),
-        Err(e) => Err(TransferError::ExecutionError(e.clone())),
-    }
-}
-
-// RAII wrapper for automatic buffer release
-struct TransferBufferGuard {
-    buffer: Option<TransferBuffer>,
-    pool: &'static TransferBufferPool,
-}
-
-impl TransferBufferGuard {
-    fn new(buffer: TransferBuffer, pool: &'static TransferBufferPool) -> Self {
-        Self {
-            buffer: Some(buffer),
-            pool,
-        }
-    }
-
-    fn get(&self) -> &TransferBuffer {
-        self.buffer.as_ref().unwrap()
-    }
-}
-
-impl Drop for TransferBufferGuard {
-    fn drop(&mut self) {
-        if let Some(buffer) = self.buffer.take() {
-            self.pool.release(buffer);
-        }
-    }
-}
-
-// Try to load embedded FATBIN (compile-time)
-fn load_embedded_fatbin() -> Result<cudarc::driver::sys::CUmodule, cudarc::driver::DriverError> {
-    // Check if FATBIN was embedded at compile time
-    if option_env!("DYNAMO_FATBIN_AVAILABLE").is_some() {
-        // FATBIN was copied to OUT_DIR by build.rs and embedded here
-        const FATBIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/copy_kernel_kv.fatbin"));
-        println!("📦 Loading embedded FATBIN ({} bytes)", FATBIN.len());
-        unsafe {
-            let mut module = std::ptr::null_mut();
-            let result = cudarc::driver::sys::cuModuleLoadData(&mut module, FATBIN.as_ptr() as *const std::ffi::c_void);
-            if result == cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
-                return Ok(module);
-            }
-        }
-    }
-
-    Err(cudarc::driver::DriverError(cudarc::driver::sys::cudaError_enum::CUDA_ERROR_FILE_NOT_FOUND))
-}
-
-// Try to load FATBIN from filesystem (runtime)
-fn load_runtime_fatbin() -> Result<cudarc::driver::sys::CUmodule, cudarc::driver::DriverError> {
-    // 1. Check runtime environment variable first
-    if let Ok(runtime_path) = std::env::var("DYNAMO_FATBIN_PATH") {
-        if let Ok(fatbin_data) = std::fs::read(&runtime_path) {
-            println!("📁 Loading FATBIN from runtime env var: {}", runtime_path);
-            unsafe {
-                let mut module = std::ptr::null_mut();
-                let result = cudarc::driver::sys::cuModuleLoadData(&mut module, fatbin_data.as_ptr() as *const std::ffi::c_void);
-                if result == cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
-                    return Ok(module);
-                }
-            }
-        }
-    }
-
-    // 2. Check standard runtime locations (priority order)
-    let runtime_paths = [
-        "./src/block_manager/block/transfer/kernels/copy_kernel_kv.fatbin",  // Primary: Next to transfer module
-        "./kernels/copy_kernel_kv.fatbin",                                   // Working directory kernels
-        "./copy_kernel_kv.fatbin",                                           // Current directory
-        "/usr/local/lib/dynamo/kernels/copy_kernel_kv.fatbin",               // System install
-        "/opt/dynamo/kernels/copy_kernel_kv.fatbin",                         // Alternative system
-    ];
-
-    for path in &runtime_paths {
-        if let Ok(fatbin_data) = std::fs::read(path) {
-            println!("📁 Loading FATBIN from runtime path: {}", path);
-            unsafe {
-                let mut module = std::ptr::null_mut();
-                let result = cudarc::driver::sys::cuModuleLoadData(&mut module, fatbin_data.as_ptr() as *const std::ffi::c_void);
-                if result == cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
-                    return Ok(module);
-                }
-            }
-        }
-    }
-
-    Err(cudarc::driver::DriverError(cudarc::driver::sys::cudaError_enum::CUDA_ERROR_FILE_NOT_FOUND))
-}
 
 pub use crate::block_manager::storage::{CudaAccessible, Local, Remote};
 pub use async_trait::async_trait;
@@ -384,8 +160,29 @@ where
 
     let (tx, rx) = oneshot::channel();
 
+    tracing::debug!("=== TRANSFER FUNCTION START ===");
+    tracing::debug!("Transfer: sources.len() = {}, targets.len() = {}", sources.len(), targets.len());
+    tracing::debug!("Transfer: RB::write_to_strategy() = {:?}", RB::write_to_strategy());
+
+    // 🔍 MANUAL MEMCHECK: Validate inputs
+    if sources.is_empty() {
+        tracing::error!("🚨 EMPTY SOURCES: No source blocks provided");
+        return Err(TransferError::NoBlocksProvided);
+    }
+
+    if targets.is_empty() {
+        tracing::error!("🚨 EMPTY TARGETS: No target blocks provided");
+        return Err(TransferError::NoBlocksProvided);
+    }
+
+    if sources.len() != targets.len() {
+        tracing::error!("🚨 COUNT MISMATCH: {} sources vs {} targets", sources.len(), targets.len());
+        return Err(TransferError::CountMismatch(sources.len(), targets.len()));
+    }
+
     match RB::write_to_strategy() {
         TransferStrategy::Memcpy => {
+            tracing::debug!("Transfer: Using MEMCPY strategy");
             for (src, dst) in sources.iter().zip(targets.iter_mut()) {
                 // TODO: Unlike all other transfer strategies, this is fully blocking.
                 // We probably want some sort of thread pool to handle these.
@@ -398,105 +195,118 @@ where
         TransferStrategy::CudaAsyncH2D
         | TransferStrategy::CudaAsyncD2H
         | TransferStrategy::CudaAsyncD2D => {
+            tracing::debug!("Transfer: Using CUDA strategy: {:?}", RB::write_to_strategy());
             if RB::write_to_strategy() == TransferStrategy::CudaAsyncH2D {
-                // Verify H2D: Host -> Device transfer
-                if sources.len() > 0 {
-                    if let (Ok(first_src), Ok(first_dst)) = (
-                        sources[0].block_data().layer_view(0, 0),
-                        targets[0].block_data().layer_view(0, 0)
-                    ) {
-                        unsafe {
-                            // Get storage types and block IDs
-                            let src_storage = sources[0].block_data().storage_type();
-                            let dst_storage = targets[0].block_data().storage_type();
-                            let src_block_id = sources[0].block_data().block_id();
-                            let dst_block_id = targets[0].block_data().block_id();
+                tracing::debug!("=== H2D TRANSFER START ===");
+                tracing::debug!("H2D: sources.len() = {}, targets.len() = {}", sources.len(), targets.len());
+                tracing::debug!("H2D: RB::write_to_strategy() = {:?}", RB::write_to_strategy());
+                tracing::debug!("H2D: Strategy match confirmed, proceeding with H2D logic");
 
-                            // Verify H2D direction: source should be Pinned/System, dest should be Device
-                            let direction_correct = matches!(src_storage, StorageType::Pinned | StorageType::System) &&
-                                                  matches!(dst_storage, StorageType::Device(_));
+                // Get worker_id for cleanup
+                let worker_id = if !sources.is_empty() { Some(sources[0].block_data().worker_id()) } else { None };
+                tracing::debug!("H2D: worker_id = {:?}", worker_id);
 
-                            print!("H2D: {} blocks | ", sources.len());
-                            print!("src[{}]={:?}@{:p}", src_block_id, src_storage, first_src.as_ptr());
-                            if sources.len() > 1 {
-                                if let Ok(last_src) = sources[sources.len()-1].block_data().layer_view(0, 0) {
-                                    let last_src_id = sources[sources.len()-1].block_data().block_id();
-                                    print!("..{}@{:p}", last_src_id, last_src.as_ptr());
-                                }
-                            }
-                            print!(" → dst[{}]={:?}@{:p}", dst_block_id, dst_storage, first_dst.as_ptr());
-                            if sources.len() > 1 {
-                                if let Ok(last_dst) = targets[targets.len()-1].block_data().layer_view(0, 0) {
-                                    let last_dst_id = targets[targets.len()-1].block_data().block_id();
-                                    print!("..{}@{:p}", last_dst_id, last_dst.as_ptr());
-                                }
-                            }
+                // Use simplified single kernel approach - let CUDA handle large transfers
+                let selected_stream = ctx.next_h2d_stream();
+                tracing::debug!("H2D: {} blocks using H2D stream pool", sources.len());
 
-                            if direction_correct {
-                                println!(" ✅");
-                            } else {
-                                println!(" ❌ WRONG_DIRECTION");
-                            }
+                let cleanup_result = cuda::copy_blocks_with_customized_kernel(sources, targets, selected_stream.as_ref(), RB::write_to_strategy())?;
+
+                // 🔍 MANUAL MEMCHECK: Validate cleanup result
+                if let Some((pointers, size)) = cleanup_result {
+                    // Validate all pointers
+                    for &ptr in &pointers {
+                        if ptr == 0 {
+                            tracing::error!("🚨 NULL CLEANUP POINTER: ptr=0x{:x}", ptr);
+                            return Err(TransferError::ExecutionError("Null cleanup pointer detected".to_string()));
                         }
                     }
+
+                    tracing::debug!("H2D: Cleanup needed: {} pointers, {} bytes", pointers.len(), size);
+                    ctx.cuda_event_with_pinned_cleanup(tx, "H2D".to_string(), worker_id, pointers)?;
+                } else {
+                    tracing::debug!("H2D: No cleanup needed");
+                    ctx.cuda_event(tx)?;
                 }
 
-                // Launch kernel and get any device pointers that need cleanup
-                let cleanup_ptrs = cuda::copy_blocks_with_customized_kernel(sources, targets, ctx.stream().as_ref(), RB::write_to_strategy())?;
-
-                // Record H2D completion event with debug info + cleanup
-                let worker_id = if !sources.is_empty() { Some(sources[0].block_data().worker_id()) } else { None };
-                ctx.cuda_event_with_cleanup(tx, "H2D".to_string(), worker_id, cleanup_ptrs)?;
+                tracing::debug!("=== H2D TRANSFER COMPLETE ===");
                 return Ok(rx);
+
             } else if RB::write_to_strategy() == TransferStrategy::CudaAsyncD2H {
-                // Verify D2H: Device -> Host transfer
-                if sources.len() > 0 {
-                    if let (Ok(first_src), Ok(first_dst)) = (
-                        sources[0].block_data().layer_view(0, 0),
-                        targets[0].block_data().layer_view(0, 0)
-                    ) {
-                        unsafe {
-                            // Get storage types and block IDs
-                            let src_storage = sources[0].block_data().storage_type();
-                            let dst_storage = targets[0].block_data().storage_type();
-                            let src_block_id = sources[0].block_data().block_id();
-                            let dst_block_id = targets[0].block_data().block_id();
+                tracing::debug!("=== D2H TRANSFER START ===");
+                tracing::debug!("D2H: sources.len() = {}, targets.len() = {}", sources.len(), targets.len());
+                tracing::debug!("D2H: RB::write_to_strategy() = {:?}", RB::write_to_strategy());
+                tracing::debug!("D2H: Strategy match confirmed, proceeding with D2H logic");
 
-                            // Verify D2H direction: source should be Device, dest should be Pinned/System
-                            let direction_correct = matches!(src_storage, StorageType::Device(_)) &&
-                                                  matches!(dst_storage, StorageType::Pinned | StorageType::System);
+                // Get worker_id for cleanup
+                let worker_id = if !sources.is_empty() { Some(sources[0].block_data().worker_id()) } else { None };
+                tracing::debug!("D2H: worker_id = {:?}", worker_id);
 
-                            print!("D2H: {} blocks | ", sources.len());
-                            print!("src[{}]={:?}@{:p}", src_block_id, src_storage, first_src.as_ptr());
-                            if sources.len() > 1 {
-                                if let Ok(last_src) = sources[sources.len()-1].block_data().layer_view(0, 0) {
-                                    let last_src_id = sources[sources.len()-1].block_data().block_id();
-                                    print!("..{}@{:p}", last_src_id, last_src.as_ptr());
-                                }
-                            }
-                            print!(" → dst[{}]={:?}@{:p}", dst_block_id, dst_storage, first_dst.as_ptr());
-                            if sources.len() > 1 {
-                                if let Ok(last_dst) = targets[targets.len()-1].block_data().layer_view(0, 0) {
-                                    let last_dst_id = targets[targets.len()-1].block_data().block_id();
-                                    print!("..{}@{:p}", last_dst_id, last_dst.as_ptr());
-                                }
-                            }
+                // Process in chunks of 72 blocks with dedicated streams
+                const CHUNK_SIZE: usize = 128 * 72;
+                let total_blocks = sources.len();
+                let num_chunks = (total_blocks + CHUNK_SIZE - 1) / CHUNK_SIZE;
 
-                            if direction_correct {
-                                tracing::info!(" CORRECT DIRECTION");
-                            } else {
-                                tracing::info!(" WRONG DIRECTION");
-                            }
-                        }
+                tracing::debug!("D2H: Processing {} blocks in {} chunks of {}", total_blocks, num_chunks, CHUNK_SIZE);
+
+                let mut all_cleanup_pointers = Vec::new();
+                let mut chunk_events = Vec::new();
+
+                for chunk_idx in 0..num_chunks {
+                    let start_idx = chunk_idx * CHUNK_SIZE;
+                    let end_idx = std::cmp::min(start_idx + CHUNK_SIZE, total_blocks);
+                    let chunk_size = end_idx - start_idx;
+
+                    let source_chunk = &sources[start_idx..end_idx];
+                    let target_chunk = &mut targets[start_idx..end_idx];
+
+                    // Get dedicated stream for this chunk
+                    let chunk_stream = ctx.next_d2h_stream();
+                    tracing::debug!("D2H: Chunk {}/{} ({} blocks) using dedicated D2H stream",
+                                   chunk_idx + 1, num_chunks, chunk_size);
+
+                    // Launch kernel for this chunk
+                    let cleanup_result = cuda::copy_blocks_with_customized_kernel(
+                        source_chunk,
+                        target_chunk,
+                        chunk_stream.as_ref(),
+                        RB::write_to_strategy()
+                    )?;
+
+                    // Collect cleanup pointers from this chunk
+                    if let Some((pointers, _size)) = cleanup_result {
+                        all_cleanup_pointers.extend(pointers);
                     }
+
+                    // Record event on this chunk's stream to track completion
+                    let chunk_event = chunk_stream
+                        .record_event(Some(cudarc::driver::sys::CUevent_flags::CU_EVENT_BLOCKING_SYNC))
+                        .map_err(|e| TransferError::ExecutionError(e.to_string()))?;
+                    chunk_events.push(chunk_event);
                 }
 
-                // Launch kernel and get any device pointers that need cleanup
-                let cleanup_ptrs = cuda::copy_blocks_with_customized_kernel(sources, targets, ctx.stream().as_ref(), RB::write_to_strategy())?;
+                // Wait for all chunk events to complete, then cleanup
+                ctx.async_rt_handle().spawn(async move {
+                    // Wait for all chunk events to complete
+                    for (idx, chunk_event) in chunk_events.iter().enumerate() {
+                        if let Err(e) = chunk_event.synchronize() {
+                            tracing::error!("D2H: Chunk {} event synchronization failed: {}", idx, e);
+                        }
+                    }
 
-                // Record D2H completion event with debug info + cleanup
-                let worker_id = if !sources.is_empty() { Some(sources[0].block_data().worker_id()) } else { None };
-                ctx.cuda_event_with_cleanup(tx, "D2H".to_string(), worker_id, cleanup_ptrs)?;
+                    // All chunks completed, now cleanup all pointers
+                    if !all_cleanup_pointers.is_empty() {
+                        tracing::debug!("D2H: Cleaning up {} total pointers from all chunks", all_cleanup_pointers.len());
+                        if let Err(e) = cuda::cleanup_pinned_pointers(all_cleanup_pointers) {
+                            tracing::error!("D2H: Failed to cleanup pointers: {}", e);
+                        }
+                    }
+
+                    // Signal overall completion
+                    tx.send(()).unwrap();
+                });
+
+                tracing::debug!("=== D2H TRANSFER COMPLETE ===");
                 return Ok(rx);
             } else {
                 // Fall back to individual copy for single H2D blocks
@@ -567,17 +377,17 @@ where
 
     match tokio::time::timeout(timeout_duration, completion_receiver).await {
         Ok(Ok(())) => {
-            println!("✅ Transfer completed successfully");
+            tracing::debug!("Transfer completed successfully");
             Ok(())
         }
         Ok(Err(_)) => {
             let error = TransferError::ExecutionError("Transfer completion channel closed".into());
-            println!("❌ Transfer failed: channel closed");
+            tracing::debug!("Transfer failed: channel closed");
             Err(error)
         }
         Err(_) => {
             let error = TransferError::ExecutionError("Transfer timeout - kernel may have crashed".into());
-            println!("⏰ Transfer timed out after {:?} - possible kernel crash", timeout_duration);
+            tracing::debug!("Transfer timed out after {:?} - possible kernel crash", timeout_duration);
             Err(error)
         }
     }

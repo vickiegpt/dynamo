@@ -21,7 +21,7 @@ fn main() {
     if let Some(fatbin_path) = find_fatbin_file() {
         // Copy FATBIN to OUT_DIR so we can include it with a predictable path
         let out_dir = env::var("OUT_DIR").unwrap();
-        let dest_path = PathBuf::from(out_dir).join("copy_kernel_kv.fatbin");
+        let dest_path = PathBuf::from(out_dir).join("vectorized_copy.fatbin");
 
         if let Err(e) = std::fs::copy(&fatbin_path, &dest_path) {
             println!("cargo:warning=Failed to copy FATBIN to OUT_DIR: {}", e);
@@ -39,6 +39,7 @@ fn main() {
 
     // Rerun build if environment variable changes
     println!("cargo:rerun-if-env-changed=DYNAMO_FATBIN_PATH");
+
 }
 
 fn find_fatbin_file() -> Option<PathBuf> {
@@ -55,13 +56,7 @@ fn find_fatbin_file() -> Option<PathBuf> {
 
     // 2. Check standard locations (priority order)
     let default_paths = [
-        "src/block_manager/block/transfer/kernels/copy_kernel_kv.fatbin",  // Primary: Next to transfer module
-        "./kernels/copy_kernel_kv.fatbin",                               // Working directory kernels
-        "../../cuda_kernels/build/copy_kernel_kv.fatbin",                // Development build
-        "../../../cuda_kernels/build/copy_kernel_kv.fatbin",
-        "../../../../cuda_kernels/build/copy_kernel_kv.fatbin",
-        "cuda_kernels/build/copy_kernel_kv.fatbin",
-        "./copy_kernel_kv.fatbin",                                       // Current directory
+        "src/block_manager/block/transfer/kernels/vectorized_copy.fatbin",  // Primary: Next to transfer module
     ];
 
     for path in &default_paths {
@@ -74,6 +69,7 @@ fn find_fatbin_file() -> Option<PathBuf> {
 
     None
 }
+
 
 // NOTE: Preserving this build.rs for reference. We may want to re-enable
 // custom kernel compilation in the future.
