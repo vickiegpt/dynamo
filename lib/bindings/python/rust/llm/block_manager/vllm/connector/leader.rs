@@ -84,7 +84,7 @@ pub struct KvConnectorLeader {
     inflight_requests: HashSet<String>,
     onboarding_slots: HashSet<String>,
     iteration_counter: u64,
-    kvbm_metrics: KvbmMetrics,
+    kvbm_metrics: Arc<KvbmMetrics>,
 }
 
 impl KvConnectorLeader {
@@ -107,7 +107,7 @@ impl KvConnectorLeader {
             .namespace(kvbm_connector::KVBM_CONNECTOR_LEADER)
             .unwrap();
 
-        let kvbm_metrics = KvbmMetrics::new(&ns);
+        let kvbm_metrics = Arc::new(KvbmMetrics::new(&ns));
         let kvbm_metrics_clone = kvbm_metrics.clone();
 
         let slot_manager_cell = Arc::new(OnceLock::new());
@@ -239,7 +239,7 @@ impl Leader for KvConnectorLeader {
 
         // find matches for any remaining tokens
         // this will advance the computed position and hold any newly matched blocks in the slot
-        slot.acquire_local_matches(num_computed_tokens)?;
+        slot.acquire_local_matches(num_computed_tokens, self.kvbm_metrics.clone())?;
 
         // return the number of external tokens that are ready for onboarding
         // we always return true here as we always asynchronously onboard matched blocks

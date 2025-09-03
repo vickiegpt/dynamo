@@ -8,11 +8,13 @@ use dynamo_llm::{
         block::{locality::LocalityProvider, BlockMetadata},
         connector::protocol::{LeaderTransferRequest, RequestType, TransferType},
         distributed::{BlockTransferPool, BlockTransferRequest, KvbmLeader},
+        metrics_kvbm::EventStats,
         Storage,
     },
     tokens::TokenBlock,
 };
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
+use nvtx;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
@@ -133,7 +135,11 @@ pub trait Slot: std::fmt::Debug {
     /// If external tokens are matched, then the slot will transition to the [`SlotState::Onboarding`] state.
     /// `num_computed_tokens` is the number of tokens that have been computed on the device, this indicated the number of
     /// blocks in the ISL sequence that we should skip before we start looking for matches.
-    fn acquire_local_matches(&mut self, num_computed_tokens: usize) -> Result<(), SlotError>;
+    fn acquire_local_matches(
+        &mut self,
+        num_computed_tokens: usize,
+        kvbm_metrics: Arc<KvbmMetrics>,
+    ) -> Result<(), SlotError>;
 
     /// Trigger the onboarding operation for the slot.
     fn trigger_onboarding(&mut self, num_external_tokens: usize) -> Result<(), SlotError>;
@@ -190,7 +196,7 @@ impl<R: RequestKey> ConnectorSlotManager<R> {
         block_manager: VllmBlockManager,
         leader: Arc<KvbmLeader>,
         drt: DistributedRuntime,
-        kvbm_metrics: KvbmMetrics,
+        kvbm_metrics: Arc<KvbmMetrics>,
     ) -> Self {
         tracing::debug!(
             "creating slot manager with block size: {}",
@@ -710,7 +716,13 @@ impl Slot for VllmConnectorSlot {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    fn acquire_local_matches(&mut self, num_computed_tokens: usize) -> Result<(), SlotError> {
+    fn acquire_local_matches(
+        &mut self,
+        num_computed_tokens: usize,
+        kvbm_metrics: Arc<KvbmMetrics>,
+    ) -> Result<(), SlotError> {
+        nvtx::range!("acquire_local_matches");
+
         if matches!(self.state(), SlotState::OnboardStaged(_)) {
             tracing::debug!("slot is already in the OnboardStaged state; skipping lookup");
             return Ok(());
@@ -757,28 +769,62 @@ impl Slot for VllmConnectorSlot {
         //     disk.touch_blocks_blocking(&sequence_hashes)?;
         // }
 
+        kvbm_metrics
+            .kvbm_stats
+            .host_match_latency
+            .blocking_lock()
+            .insert(self.request_id.clone(), EventStats::new(0));
+        nvtx::range_push!("host_blocks_match");
         let mut host_blocks = self
             .block_manager
             .host()
             .map(|host| host.match_sequence_hashes_blocking(&sequence_hashes[search_offset..]))
             .transpose()?
             .unwrap_or_default();
+        nvtx::range_pop!();
 
         let num_matched_host_blocks = host_blocks.len();
+
+        if let Some(event_stat) = kvbm_metrics
+            .kvbm_stats
+            .host_match_latency
+            .blocking_lock()
+            .get_mut(&self.request_id)
+        {
+            event_stat.match_blocks_complete(num_matched_host_blocks);
+        }
+
         self.record_cached_host_tokens(num_matched_host_blocks * block_size);
 
         // advance the search offset by the number of matched host blocks
         let search_offset = search_offset + num_matched_host_blocks;
 
+        kvbm_metrics
+            .kvbm_stats
+            .disk_match_latency
+            .blocking_lock()
+            .insert(self.request_id.clone(), EventStats::new(0));
         // start at host offset
+        nvtx::range_push!("host_blocks_match");
         let mut disk_blocks = self
             .block_manager
             .disk()
             .map(|disk| disk.match_sequence_hashes_blocking(&sequence_hashes[search_offset..]))
             .transpose()?
             .unwrap_or_default();
+        nvtx::range_pop!();
 
         let num_matched_disk_blocks = disk_blocks.len();
+
+        if let Some(event_stat) = kvbm_metrics
+            .kvbm_stats
+            .disk_match_latency
+            .blocking_lock()
+            .get_mut(&self.request_id)
+        {
+            event_stat.match_blocks_complete(num_matched_disk_blocks);
+        }
+
         self.record_cached_disk_tokens(num_matched_disk_blocks * block_size);
 
         let num_matched_blocks = num_matched_host_blocks + num_matched_disk_blocks;
@@ -1139,7 +1185,7 @@ impl LocalTransferEngine {
         &mut self,
         cancellation_token: CancellationToken,
         drt: DistributedRuntime,
-        kvbm_metrics: KvbmMetrics,
+        kvbm_metrics: Arc<KvbmMetrics>,
     ) -> anyhow::Result<()> {
         let (onboard_tx, mut onboard_rx) = mpsc::unbounded_channel();
         let (offload_tx, mut offload_rx) = mpsc::unbounded_channel();
@@ -1256,12 +1302,22 @@ async fn process_offload_request(
     offload_req: LocalOffloadRequest,
     block_manager: &VllmBlockManager,
     leader: &Arc<KvbmLeader>,
-    kvbm_metrics: KvbmMetrics,
+    kvbm_metrics: Arc<KvbmMetrics>,
 ) -> anyhow::Result<()> {
+    nvtx::range!("process_offload_request");
     kvbm_metrics.offload_requests.inc();
     kvbm_metrics
         .offload_blocks_d2h
         .inc_by(offload_req.block_ids.len() as u64);
+    kvbm_metrics
+        .kvbm_stats
+        .host_offload_latency
+        .lock()
+        .await
+        .insert(
+            offload_req.request_id.clone(),
+            EventStats::new(offload_req.block_ids.len()),
+        );
 
     let request_id = &offload_req.request_id;
     let operation_id = &offload_req.operation_id;
@@ -1336,6 +1392,15 @@ async fn process_offload_request(
     match notify_receiver.await {
         Ok(_) => {
             tracing::debug!("Offloading transfer completed successfully");
+            if let Some(event_stat) = kvbm_metrics
+                .kvbm_stats
+                .host_offload_latency
+                .lock()
+                .await
+                .get_mut(&offload_req.request_id)
+            {
+                event_stat.event_complete();
+            }
         }
         Err(_) => {
             return Err(anyhow::anyhow!(
@@ -1368,17 +1433,36 @@ async fn process_offload_request(
 async fn process_onboard_request(
     onboard_req: LocalOnboardRequest,
     leader: &Arc<KvbmLeader>,
-    kvbm_metrics: KvbmMetrics,
+    kvbm_metrics: Arc<KvbmMetrics>,
 ) -> anyhow::Result<()> {
+    nvtx::range!("process_onboard_request");
     kvbm_metrics.onboard_requests.inc();
     if onboard_req.src_blocks.storage_pool() == BlockTransferPool::Host {
         kvbm_metrics
             .onboard_blocks_h2d
             .inc_by(onboard_req.src_blocks.len() as u64);
+        kvbm_metrics
+            .kvbm_stats
+            .host_onboard_latency
+            .lock()
+            .await
+            .insert(
+                onboard_req.request_id.clone(),
+                EventStats::new(onboard_req.src_blocks.len()),
+            );
     } else if onboard_req.src_blocks.storage_pool() == BlockTransferPool::Disk {
         kvbm_metrics
             .onboard_blocks_d2d
             .inc_by(onboard_req.src_blocks.len() as u64);
+        kvbm_metrics
+            .kvbm_stats
+            .disk_onboard_latency
+            .lock()
+            .await
+            .insert(
+                onboard_req.request_id.clone(),
+                EventStats::new(onboard_req.src_blocks.len()),
+            );
     }
 
     let request_id = &onboard_req.request_id;
@@ -1412,6 +1496,27 @@ async fn process_onboard_request(
     match notify_receiver.await {
         Ok(_) => {
             tracing::debug!("Onboarding transfer completed successfully");
+            if onboard_req.src_blocks.storage_pool() == BlockTransferPool::Host {
+                if let Some(event_stat) = kvbm_metrics
+                    .kvbm_stats
+                    .host_onboard_latency
+                    .lock()
+                    .await
+                    .get_mut(&onboard_req.request_id)
+                {
+                    event_stat.event_complete();
+                }
+            } else if onboard_req.src_blocks.storage_pool() == BlockTransferPool::Disk {
+                if let Some(event_stat) = kvbm_metrics
+                    .kvbm_stats
+                    .disk_onboard_latency
+                    .lock()
+                    .await
+                    .get_mut(&onboard_req.request_id)
+                {
+                    event_stat.event_complete();
+                }
+            }
         }
         Err(_) => {
             return Err(anyhow::anyhow!(

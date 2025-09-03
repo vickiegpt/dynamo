@@ -82,6 +82,7 @@ validator = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 xxhash-rust = { workspace = true }
+nvtx = { version = "1.3" }
 
 # ModelExpress client for model downloading
 # NOTE: These will be uncommented once the packages are published to crates.io
