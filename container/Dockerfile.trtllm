@@ -291,7 +291,7 @@ RUN cargo build \
 WORKDIR /opt/dynamo
 COPY _set_dev_version.py .
 ARG BUILD_ID
-RUN [[ -n $BUILD_ID ]] && python _set_dev_version.py --build-id $BUILD_ID
+RUN [[ -n $BUILD_ID ]] && python3 _set_dev_version.py --build-id $BUILD_ID
 # Build dynamo wheels
 RUN uv build --wheel --out-dir /workspace/dist && \
     cd /workspace/lib/bindings/python && \

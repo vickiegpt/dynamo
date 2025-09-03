@@ -227,7 +227,7 @@ RUN git clone --depth 1 --branch ${NIXL_REF} "https://github.com/ai-dynamo/nixl.
 WORKDIR /opt/nixl
 COPY _set_dev_version.py .
 ARG BUILD_ID
-RUN [[ -n ${BUILD_ID} ]] && python _set_dev_version.py --build-id ${BUILD_ID}
+RUN [[ -n ${BUILD_ID} ]] && python3 _set_dev_version.py --build-id ${BUILD_ID}
 # Build NIXL Python module
 # TODO OPS-590: Move gds_path selection based on arch into NIXL build and re-enable gds backend for arm64
 RUN if [ "$ARCH" = "arm64" ]; then \
@@ -317,7 +317,7 @@ COPY components/ /opt/dynamo/components/
 WORKDIR /opt/dynamo
 COPY _set_dev_version.py .
 ARG BUILD_ID
-RUN [[ -n $BUILD_ID ]] && python _set_dev_version.py --build-id $BUILD_ID
+RUN [[ -n $BUILD_ID ]] && python3 _set_dev_version.py --build-id $BUILD_ID
 
 # Build wheels
 RUN uv build --wheel --out-dir /opt/dynamo/dist && \
