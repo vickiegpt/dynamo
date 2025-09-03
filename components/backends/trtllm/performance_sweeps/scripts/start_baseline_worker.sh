@@ -9,6 +9,7 @@ model_name=$4
 model_path=$5
 disaggregation_mode=$6
 instance_id=$7
+work_dir=$8
 unset UCX_TLS
 echo "config_file: ${config_file}, enable_pdl: ${enable_pdl}, ctx_gpus: ${ctx_gpus}, disaggregation_mode: ${disaggregation_mode}"
 
@@ -41,7 +42,6 @@ echo "  max_batch_size: ${max_batch_size}"
 echo "  max_seq_len: ${max_seq_len}"
 
 export TLLM_LOG_LEVEL=INFO
-export TRTLLM_MOE_ENABLE_ALLTOALL_WITHOUT_ALLGATHER=1
 
 if [ "${enable_pdl}" = "true" ]; then
     export TRTLLM_ENABLE_PDL=1
