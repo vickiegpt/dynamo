@@ -65,6 +65,12 @@ jobs:
         run: |
           docker run --runtime=nvidia --rm --gpus all -w /workspace \
             --network host \
+            --shm-size=10G \
+            --ulimit memlock=-1 \
+            --ulimit stack=67108864 \
+            --ipc host \
+            --privileged \
+            --network host \
             --name ${{ env.CONTAINER_ID }}_pytest \
             ${{ matrix.framework }}:latest \
             bash -c "pytest -xsv --basetemp=/tmp --junitxml=${{ env.PYTEST_XML_FILE }} -m \"${{ env.PYTEST_MARKS }}\""
