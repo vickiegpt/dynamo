@@ -8,6 +8,7 @@ ctx_gpus=$3
 model_name=$4
 model_path=$5
 disaggregation_mode=$6
+instance_id=$7
 unset UCX_TLS
 echo "config_file: ${config_file}, enable_pdl: ${enable_pdl}, ctx_gpus: ${ctx_gpus}, disaggregation_mode: ${disaggregation_mode}"
 
@@ -48,5 +49,14 @@ fi
 
 export TRTLLM_UCX_INTERFACE=enP6p9s0np0
 export UCX_NET_DEVICES=mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1,enP6p9s0np0
+
+# save the hostname to a file
+
+# if SLURM_NODEID is 0
+if [ "${SLURM_NODEID}" = "0" ]; then
+    mkdir -p ${work_dir}/hostnames/
+    echo $(hostname) > ${work_dir}/hostnames/${disaggregation_mode}_${instance_id}.txt
+    echo "hostname saved to ${work_dir}/hostnames/${disaggregation_mode}_${instance_id}.txt"
+fi
 
 trtllm-llmapi-launch trtllm-serve ${model_path} --host $(hostname) --port 8336 --extra_llm_api_options ${config_file}

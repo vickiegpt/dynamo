@@ -159,7 +159,7 @@ for ((i=1; i<=PREFILL_COUNT; i++)); do
         --overlap \
         --ntasks 4 \
         --nodes 1 \
-        bash ${SCRIPTS_DIR}/scripts/start_baseline_worker.sh ${full_logdir}/prefill_config.yaml "${enable_pdl}" ${ctx_gpus} ${nsys_on} ${served_model_name} ${model_path} 'prefill' &> ${full_logdir}/output_workers.log &
+        bash ${SCRIPTS_DIR}/scripts/start_baseline_worker.sh ${full_logdir}/prefill_config.yaml "${enable_pdl}" ${ctx_gpus} ${nsys_on} ${served_model_name} ${model_path} 'prefill' ${i} &> ${full_logdir}/output_workers.log &
   prefill_pids+=($!)
   echo "$!" >> "$PID_FILE"
 done
@@ -190,7 +190,7 @@ for ((i=1; i<=DECODE_COUNT; i++)); do
       --ntasks $gen_tp_size \
       --oversubscribe \
       --overlap \
-      bash ${SCRIPTS_DIR}/scripts/start_baseline_worker.sh ${full_logdir}/decode_config.yaml "${enable_pdl}" ${ctx_gpus} ${nsys_on} ${served_model_name} ${model_path} 'decode' &> ${full_logdir}/output_workers.log &
+      bash ${SCRIPTS_DIR}/scripts/start_baseline_worker.sh ${full_logdir}/decode_config.yaml "${enable_pdl}" ${ctx_gpus} ${nsys_on} ${served_model_name} ${model_path} 'decode' ${i} &> ${full_logdir}/output_workers.log &
   echo "$!" >> "$PID_FILE"
 done
 

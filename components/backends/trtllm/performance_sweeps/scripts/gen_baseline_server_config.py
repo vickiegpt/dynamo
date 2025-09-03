@@ -57,9 +57,9 @@ if __name__ == "__main__":
             actual_hostname = f.read().strip()
             print(f"Hostname: {actual_hostname} in {hostname_file}")
 
-        if hostname_file.startswith("CTX"):
+        if hostname_file.startswith("prefill"):
             ctx_hostnames.append(actual_hostname)
-        elif hostname_file.startswith("GEN"):
+        elif hostname_file.startswith("decode"):
             gen_hostnames.append(actual_hostname)
 
     print(f"ctx_hostnames: {ctx_hostnames}")
