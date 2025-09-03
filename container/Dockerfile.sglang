@@ -353,7 +353,7 @@ RUN cargo build \
 WORKDIR /workspace
 COPY _set_dev_version.py .
 ARG BUILD_ID
-RUN [[ -n $BUILD_ID ]] && python3 _set_dev_version.py --build-id $BUILD_ID
+RUN [[ -n $BUILD_ID ]] && python3 -m pip install tomlkit && python3 _set_dev_version.py --build-id $BUILD_ID
 
 # Build dynamo wheel
 RUN uv build --wheel --out-dir /workspace/dist && \
