@@ -91,7 +91,8 @@ ok "Common manifests applied"
 
 # 3) Install CRDs once per cluster (only if not already installed)
 if command -v helm &>/dev/null; then
-  if ! helm status dynamo-crds -n "$NAMESPACE" &>/dev/null; then
+  # Check if the main CRDs already exist cluster-wide
+  if ! kubectl get crd dynamocomponentdeployments.nvidia.com &>/dev/null; then
     log "Installing CRDs via Helm release dynamo-crds in namespace $NAMESPACE"
     pushd "$REPO_ROOT/deploy/cloud/helm" >/dev/null
     helm upgrade --install dynamo-crds ./crds/ \
@@ -100,6 +101,9 @@ if command -v helm &>/dev/null; then
       --atomic
     popd >/dev/null
     ok "CRDs installed"
+  else
+    log "CRDs already exist cluster-wide, skipping installation"
+    ok "CRDs already present"
   fi
 fi
 
