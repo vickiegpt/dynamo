@@ -1406,6 +1406,7 @@ dependencies = [
  "strum",
  "tempfile",
  "thiserror 2.0.15",
+ "thread_local",
  "tmq",
  "tokenizers",
  "tokio",

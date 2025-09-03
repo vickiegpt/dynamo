@@ -14,7 +14,6 @@
 // limitations under the License.
 
 use super::*;
-use super::cuda::{self, get_memory_tracker};
 
 use cudarc::driver::{CudaEvent, CudaStream, sys::CUevent_flags, result as cuda_result};
 use nixl_sys::Agent as NixlAgent;
@@ -24,7 +23,7 @@ use std::thread::JoinHandle;
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // Add debug tracking for event-receiver mapping
 static EVENT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -49,10 +48,6 @@ pub struct TransferContext {
     nixl_agent: Arc<Option<NixlAgent>>,
     stream: Arc<CudaStream>, // Primary stream for backward compatibility
     // Should have pools, RAII objects.
-    h2d_stream_pool: Arc<Vec<Arc<CudaStream>>>, // Pool of H2D streams (immutable)
-    h2d_stream_counter: Arc<std::sync::atomic::AtomicUsize>, // H2D round-robin counter
-    d2h_stream_pool: Arc<Vec<Arc<CudaStream>>>, // Pool of D2H streams (immutable)
-    d2h_stream_counter: Arc<std::sync::atomic::AtomicUsize>, // D2H round-robin counter
     async_rt_handle: Handle,
 
     cuda_event_tx: mpsc::UnboundedSender<(CudaEvent, oneshot::Sender<()>, DebugEventInfo)>,
@@ -66,47 +61,6 @@ impl TransferContext {
         stream: Arc<CudaStream>,
         async_rt_handle: Handle,
     ) -> Self {
-        Self::new_with_separate_pools(nixl_agent, stream, async_rt_handle, 10, 20) // 10 H2D + 20 D2H streams
-    }
-
-    pub fn new_with_separate_pools(
-        nixl_agent: Arc<Option<NixlAgent>>,
-        primary_stream: Arc<CudaStream>,
-        async_rt_handle: Handle,
-        h2d_pool_size: usize,
-        d2h_pool_size: usize,
-    ) -> Self {
-        // Create separate H2D and D2H stream pools from the same CUDA context
-        let mut h2d_stream_pool = Vec::new();
-        for i in 0..h2d_pool_size {
-            match primary_stream.context().new_stream() {
-                Ok(stream) => {
-                    h2d_stream_pool.push(stream);
-                    tracing::debug!("Created H2D CUDA stream #{} for parallel execution", i);
-                },
-                Err(e) => {
-                    tracing::warn!("Failed to create H2D CUDA stream #{}: {}", i, e);
-                    break; // Use fewer streams if creation fails
-                }
-            }
-        }
-
-        let mut d2h_stream_pool = Vec::new();
-        for i in 0..d2h_pool_size {
-            match primary_stream.context().new_stream() {
-                Ok(stream) => {
-                    d2h_stream_pool.push(stream);
-                    tracing::debug!("Created D2H CUDA stream #{} for parallel execution", i);
-                },
-                Err(e) => {
-                    tracing::warn!("Failed to create D2H CUDA stream #{}: {}", i, e);
-                    break; // Use fewer streams if creation fails
-                }
-            }
-        }
-
-        tracing::debug!("Initialized TransferContext with {} H2D streams and {} D2H streams",
-            h2d_stream_pool.len(), d2h_stream_pool.len());
 
         let (cuda_event_tx, mut cuda_event_rx) =
             mpsc::unbounded_channel::<(CudaEvent, oneshot::Sender<()>, DebugEventInfo)>();
@@ -136,11 +90,7 @@ impl TransferContext {
                                     // Clean up device pointers using appropriate method
                                     let cleanup_msg = match (&debug_info.cleanup_info, &debug_info.cleanup_ptrs) {
                                         (Some(CleanupInfo::PinnedFree { pointers }), _) => {
-                                            // Clean up pinned memory pointers
-                                            tracing::debug!("🔧 PINNED CLEANUP: Freeing {} pinned memory pointers", pointers.len());
-
-                                            if let Err(e) = cuda::cleanup_pinned_pointers(pointers.clone()) {
-                                                tracing::error!("🚨 PINNED CLEANUP FAILED: {}", e);
+                                            if let Err(_e) = cuda::cleanup_pinned_pointers(pointers.clone()) {
                                                 // Fallback to direct free to prevent memory leaks
                                                 for &ptr in pointers {
                                                     unsafe {
@@ -153,22 +103,6 @@ impl TransferContext {
                                             }
                                         },
                                         (Some(CleanupInfo::DirectFree(pointers)), _) => {
-                                            // 🔍 MANUAL MEMCHECK: Validate all pointers before direct free
-                                            for &ptr in pointers.iter() {
-                                                if ptr == 0 {
-                                                    tracing::error!("🚨 NULL POINTER IN DIRECT FREE: Event#{} ptr=0x{:x}",
-                                                        debug_info.event_id, ptr);
-                                                    panic!("Null pointer in direct free - stopping for inspection");
-                                                }
-
-                                                // Validate with memory tracker
-                                                if let Ok(tracker) = get_memory_tracker().lock() {
-                                                    if let Err(e) = tracker.validate_pointer(ptr) {
-                                                        tracing::error!("🚨 INVALID POINTER IN DIRECT FREE: {}", e);
-                                                        panic!("Invalid pointer in direct free: {}", e);
-                                                    }
-                                                }
-                                            }
 
                                             // Direct free for non-pool managed pointers
                                             for &ptr in pointers {
@@ -245,11 +179,7 @@ impl TransferContext {
 
         Self {
             nixl_agent,
-            stream: primary_stream,
-            h2d_stream_pool: Arc::new(h2d_stream_pool), // No more Mutex wrapper
-            h2d_stream_counter: Arc::new(AtomicUsize::new(0)),
-            d2h_stream_pool: Arc::new(d2h_stream_pool), // No more Mutex wrapper
-            d2h_stream_counter: Arc::new(AtomicUsize::new(0)),
+            stream,
             async_rt_handle,
             cuda_event_tx,
             cuda_event_worker: Some(cuda_event_worker),
@@ -263,63 +193,6 @@ impl TransferContext {
 
     pub fn stream(&self) -> &Arc<CudaStream> {
         &self.stream
-    }
-
-    /// Get next available H2D stream using round-robin selection for load balancing
-    pub fn next_h2d_stream(&self) -> Arc<CudaStream> {
-        // No locks needed - direct access to immutable stream pool!
-        if self.h2d_stream_pool.is_empty() {
-            // Fall back to primary stream if no H2D pool streams available
-            self.stream.clone()
-        } else {
-            // Round-robin selection across H2D pool + primary stream
-            let total_streams = self.h2d_stream_pool.len() + 1; // +1 for primary stream
-            let index = self.h2d_stream_counter.fetch_add(1, Ordering::Relaxed) % total_streams;
-
-            if index == 0 {
-                // Use primary stream
-                self.stream.clone()
-            } else {
-                // Use H2D pool stream
-                self.h2d_stream_pool[index - 1].clone()
-            }
-        }
-    }
-
-    /// Get next available D2H stream using round-robin selection for load balancing
-    /// Uses only D2H pool streams (no primary stream fallback)
-    pub fn next_d2h_stream(&self) -> Arc<CudaStream> {
-        // No locks needed - direct access to immutable stream pool!
-        if self.d2h_stream_pool.is_empty() {
-            // Fall back to primary stream if no D2H pool streams available
-            self.stream.clone()
-        } else {
-            // Round-robin selection across D2H pool streams only (no primary)
-            let total_streams = self.d2h_stream_pool.len();
-            let index = self.d2h_stream_counter.fetch_add(1, Ordering::Relaxed) % total_streams;
-
-            // Use D2H pool stream directly
-            self.d2h_stream_pool[index].clone()
-        }
-    }
-
-    /// Get a specific D2H stream by index (0 = first D2H pool stream, 1+ = subsequent D2H pool streams)
-    /// Used by auto-stream logic for D2H/D2D transfers
-    pub fn stream_by_index(&self, index: usize) -> Arc<CudaStream> {
-        // No locks needed - direct access to immutable stream pool!
-        if index < self.d2h_stream_pool.len() {
-            self.d2h_stream_pool[index].clone()
-        } else {
-            // Fall back to primary if index out of bounds
-            self.stream.clone()
-        }
-    }
-
-    /// Get total number of available D2H streams (D2H pool only, no primary)
-    /// Used by auto-stream logic for D2H/D2D transfers
-    pub fn stream_count(&self) -> usize {
-        // No locks needed - direct access to immutable stream pool!
-        self.d2h_stream_pool.len() // No +1, only pool streams
     }
 
     pub fn async_rt_handle(&self) -> &Handle {

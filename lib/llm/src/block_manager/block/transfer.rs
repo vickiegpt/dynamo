@@ -30,7 +30,6 @@ use nixl_sys::NixlDescriptor;
 use nixl_sys::XferOp::{Read, Write};
 use std::ops::Range;
 use tokio::sync::oneshot;
-use std::time::Duration;
 
 pub use crate::block_manager::storage::{CudaAccessible, Local, Remote};
 pub use async_trait::async_trait;
@@ -157,32 +156,10 @@ where
     <RB as StorageTypeProvider>::StorageType: NixlDescriptor,
     <WB as StorageTypeProvider>::StorageType: NixlDescriptor,
 {
-
     let (tx, rx) = oneshot::channel();
-
-    tracing::debug!("=== TRANSFER FUNCTION START ===");
-    tracing::debug!("Transfer: sources.len() = {}, targets.len() = {}", sources.len(), targets.len());
-    tracing::debug!("Transfer: RB::write_to_strategy() = {:?}", RB::write_to_strategy());
-
-    // 🔍 MANUAL MEMCHECK: Validate inputs
-    if sources.is_empty() {
-        tracing::error!("🚨 EMPTY SOURCES: No source blocks provided");
-        return Err(TransferError::NoBlocksProvided);
-    }
-
-    if targets.is_empty() {
-        tracing::error!("🚨 EMPTY TARGETS: No target blocks provided");
-        return Err(TransferError::NoBlocksProvided);
-    }
-
-    if sources.len() != targets.len() {
-        tracing::error!("🚨 COUNT MISMATCH: {} sources vs {} targets", sources.len(), targets.len());
-        return Err(TransferError::CountMismatch(sources.len(), targets.len()));
-    }
 
     match RB::write_to_strategy() {
         TransferStrategy::Memcpy => {
-            tracing::debug!("Transfer: Using MEMCPY strategy");
             for (src, dst) in sources.iter().zip(targets.iter_mut()) {
                 // TODO: Unlike all other transfer strategies, this is fully blocking.
                 // We probably want some sort of thread pool to handle these.
@@ -196,7 +173,7 @@ where
         | TransferStrategy::CudaAsyncD2H
         | TransferStrategy::CudaAsyncD2D => {
             tracing::debug!("Transfer: Using CUDA strategy: {:?}", RB::write_to_strategy());
-            if RB::write_to_strategy() == TransferStrategy::CudaAsyncH2D {
+            if RB::write_to_strategy() == TransferStrategy::CudaAsyncH2D || RB::write_to_strategy() == TransferStrategy::CudaAsyncD2H {
                 tracing::debug!("=== H2D TRANSFER START ===");
                 tracing::debug!("H2D: sources.len() = {}, targets.len() = {}", sources.len(), targets.len());
                 tracing::debug!("H2D: RB::write_to_strategy() = {:?}", RB::write_to_strategy());
@@ -204,24 +181,14 @@ where
 
                 // Get worker_id for cleanup
                 let worker_id = if !sources.is_empty() { Some(sources[0].block_data().worker_id()) } else { None };
-                tracing::debug!("H2D: worker_id = {:?}", worker_id);
 
                 // Use simplified single kernel approach - let CUDA handle large transfers
-                let selected_stream = ctx.next_h2d_stream();
-                tracing::debug!("H2D: {} blocks using H2D stream pool", sources.len());
+                let selected_stream = ctx.stream();
 
                 let cleanup_result = cuda::copy_blocks_with_customized_kernel(sources, targets, selected_stream.as_ref(), RB::write_to_strategy())?;
 
                 // 🔍 MANUAL MEMCHECK: Validate cleanup result
                 if let Some((pointers, size)) = cleanup_result {
-                    // Validate all pointers
-                    for &ptr in &pointers {
-                        if ptr == 0 {
-                            tracing::error!("🚨 NULL CLEANUP POINTER: ptr=0x{:x}", ptr);
-                            return Err(TransferError::ExecutionError("Null cleanup pointer detected".to_string()));
-                        }
-                    }
-
                     tracing::debug!("H2D: Cleanup needed: {} pointers, {} bytes", pointers.len(), size);
                     ctx.cuda_event_with_pinned_cleanup(tx, "H2D".to_string(), worker_id, pointers)?;
                 } else {
@@ -230,83 +197,6 @@ where
                 }
 
                 tracing::debug!("=== H2D TRANSFER COMPLETE ===");
-                return Ok(rx);
-
-            } else if RB::write_to_strategy() == TransferStrategy::CudaAsyncD2H {
-                tracing::debug!("=== D2H TRANSFER START ===");
-                tracing::debug!("D2H: sources.len() = {}, targets.len() = {}", sources.len(), targets.len());
-                tracing::debug!("D2H: RB::write_to_strategy() = {:?}", RB::write_to_strategy());
-                tracing::debug!("D2H: Strategy match confirmed, proceeding with D2H logic");
-
-                // Get worker_id for cleanup
-                let worker_id = if !sources.is_empty() { Some(sources[0].block_data().worker_id()) } else { None };
-                tracing::debug!("D2H: worker_id = {:?}", worker_id);
-
-                // Process in chunks of 72 blocks with dedicated streams
-                const CHUNK_SIZE: usize = 128 * 72;
-                let total_blocks = sources.len();
-                let num_chunks = (total_blocks + CHUNK_SIZE - 1) / CHUNK_SIZE;
-
-                tracing::debug!("D2H: Processing {} blocks in {} chunks of {}", total_blocks, num_chunks, CHUNK_SIZE);
-
-                let mut all_cleanup_pointers = Vec::new();
-                let mut chunk_events = Vec::new();
-
-                for chunk_idx in 0..num_chunks {
-                    let start_idx = chunk_idx * CHUNK_SIZE;
-                    let end_idx = std::cmp::min(start_idx + CHUNK_SIZE, total_blocks);
-                    let chunk_size = end_idx - start_idx;
-
-                    let source_chunk = &sources[start_idx..end_idx];
-                    let target_chunk = &mut targets[start_idx..end_idx];
-
-                    // Get dedicated stream for this chunk
-                    let chunk_stream = ctx.next_d2h_stream();
-                    tracing::debug!("D2H: Chunk {}/{} ({} blocks) using dedicated D2H stream",
-                                   chunk_idx + 1, num_chunks, chunk_size);
-
-                    // Launch kernel for this chunk
-                    let cleanup_result = cuda::copy_blocks_with_customized_kernel(
-                        source_chunk,
-                        target_chunk,
-                        chunk_stream.as_ref(),
-                        RB::write_to_strategy()
-                    )?;
-
-                    // Collect cleanup pointers from this chunk
-                    if let Some((pointers, _size)) = cleanup_result {
-                        all_cleanup_pointers.extend(pointers);
-                    }
-
-                    // Record event on this chunk's stream to track completion
-                    let chunk_event = chunk_stream
-                        .record_event(Some(cudarc::driver::sys::CUevent_flags::CU_EVENT_BLOCKING_SYNC))
-                        .map_err(|e| TransferError::ExecutionError(e.to_string()))?;
-                    chunk_events.push(chunk_event);
-                }
-
-                // Wait for all chunk events to complete, then cleanup
-                ctx.async_rt_handle().spawn(async move {
-                    // Wait for all chunk events to complete
-                    for (idx, chunk_event) in chunk_events.iter().enumerate() {
-                        if let Err(e) = chunk_event.synchronize() {
-                            tracing::error!("D2H: Chunk {} event synchronization failed: {}", idx, e);
-                        }
-                    }
-
-                    // All chunks completed, now cleanup all pointers
-                    if !all_cleanup_pointers.is_empty() {
-                        tracing::debug!("D2H: Cleaning up {} total pointers from all chunks", all_cleanup_pointers.len());
-                        if let Err(e) = cuda::cleanup_pinned_pointers(all_cleanup_pointers) {
-                            tracing::error!("D2H: Failed to cleanup pointers: {}", e);
-                        }
-                    }
-
-                    // Signal overall completion
-                    tx.send(()).unwrap();
-                });
-
-                tracing::debug!("=== D2H TRANSFER COMPLETE ===");
                 return Ok(rx);
             } else {
                 // Fall back to individual copy for single H2D blocks
@@ -356,40 +246,6 @@ where
         ctx: Arc<TransferContext>,
     ) -> Result<oneshot::Receiver<()>, TransferError> {
         L::handle_transfer(self, dst, ctx)
-    }
-}
-
-// Add timeout for transfer completion to detect kernel failures
-pub async fn handle_local_transfer_with_timeout<RB, WB>(
-    sources: Vec<RB>,
-    targets: &mut Vec<WB>,
-    ctx: Arc<TransferContext>,
-) -> Result<(), TransferError>
-where
-    RB: BlockDataProvider + Send + Sync,
-    WB: BlockDataProviderMut + Send + Sync,
-    Vec<RB>: WriteTo<WB>,
-{
-    let completion_receiver = sources.write_to(targets, ctx)?;
-
-    // Add timeout to detect kernel failures
-    let timeout_duration = Duration::from_secs(30); // 30 second timeout
-
-    match tokio::time::timeout(timeout_duration, completion_receiver).await {
-        Ok(Ok(())) => {
-            tracing::debug!("Transfer completed successfully");
-            Ok(())
-        }
-        Ok(Err(_)) => {
-            let error = TransferError::ExecutionError("Transfer completion channel closed".into());
-            tracing::debug!("Transfer failed: channel closed");
-            Err(error)
-        }
-        Err(_) => {
-            let error = TransferError::ExecutionError("Transfer timeout - kernel may have crashed".into());
-            tracing::debug!("Transfer timed out after {:?} - possible kernel crash", timeout_duration);
-            Err(error)
-        }
     }
 }
 
@@ -475,9 +331,3 @@ mod tests {
         // );
     }
 }
-
-
-
-
-
-

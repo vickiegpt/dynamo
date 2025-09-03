@@ -21,16 +21,69 @@ use crate::block_manager::block::{BlockDataProvider, BlockDataProviderMut};
 
 use anyhow::Result;
 use cudarc::driver::result as cuda_result;
-use cudarc::driver::sys;
 use cudarc::driver::CudaStream;
 use std::ops::Range;
 use std::sync::Mutex;
 use std::ffi::c_void;
 
-// Global storage for kernel function - use OnceLock for better performance
-use std::sync::OnceLock;
-static COPY_KERNEL_MODULE: OnceLock<cudarc::driver::sys::CUmodule> = OnceLock::new();
-static COPY_KERNEL_FUNCTION: OnceLock<cudarc::driver::sys::CUfunction> = OnceLock::new();
+/// Simple pinned memory allocation
+pub fn allocate_pinned_memory(size: usize) -> Result<u64, TransferError> {
+    // 16-byte alignment for vectorized operations
+    let aligned_size = (size + 15) & !15;
+
+    if aligned_size == 0 {
+        return Err(TransferError::ExecutionError("Invalid allocation size".to_string()));
+    }
+
+    unsafe {
+        let result = cuda_result::malloc_host(aligned_size, 0);
+        match result {
+            Ok(ptr) => {
+                let ptr_value = ptr as u64;
+                tracing::debug!("Allocated pinned memory: {}KB, ptr=0x{:x}", aligned_size / 1024, ptr_value);
+                Ok(ptr_value)
+            },
+            Err(e) => {
+                tracing::error!("Pinned memory allocation failed: {}", e);
+                Err(TransferError::ExecutionError(format!("Pinned memory allocation failed: {}", e)))
+            }
+        }
+    }
+}
+
+/// Simple pinned memory deallocation
+pub fn deallocate_pinned_memory(ptr: u64) -> Result<(), TransferError> {
+    if ptr == 0 {
+        return Err(TransferError::ExecutionError("Cannot deallocate null pointer".to_string()));
+    }
+
+    unsafe {
+        let result = cuda_result::free_host(ptr as *mut std::ffi::c_void);
+        match result {
+            Ok(()) => {
+                tracing::debug!("Deallocated pinned memory: ptr=0x{:x}", ptr);
+                Ok(())
+            },
+            Err(e) => {
+                tracing::error!("Pinned memory deallocation failed: {}", e);
+                Err(TransferError::ExecutionError(format!("Pinned memory deallocation failed: {}", e)))
+            }
+        }
+    }
+}
+
+/// Cleanup function for multiple pointers
+pub fn cleanup_pinned_pointers(pointers: Vec<u64>) -> Result<(), TransferError> {
+    for ptr in &pointers {
+        deallocate_pinned_memory(*ptr)?;
+    }
+    tracing::debug!("Cleaned up {} pinned memory pointers", pointers.len());
+    Ok(())
+}
+
+// Global storage for kernel function - store as usize to avoid Send/Sync issues
+static COPY_KERNEL_MODULE: Mutex<Option<usize>> = Mutex::new(None);
+static COPY_KERNEL_FUNCTION: Mutex<Option<usize>> = Mutex::new(None);
 
 type CudaMemcpyFnPtr = unsafe fn(
     src_ptr: *const u8,
@@ -312,6 +365,36 @@ where
     Ok(())
 }
 
+/// Helper function to perform the appropriate CUDA memcpy based on storage types
+// Allow dead code because it's used in debug assertions
+#[allow(dead_code)]
+fn expected_strategy<Source: Storage, Dest: Storage>() -> TransferStrategy {
+    match (
+        std::any::TypeId::of::<Source>(),
+        std::any::TypeId::of::<Dest>(),
+    ) {
+        (src, dst)
+            if src == std::any::TypeId::of::<PinnedStorage>()
+                && dst == std::any::TypeId::of::<DeviceStorage>() =>
+        {
+            TransferStrategy::CudaAsyncH2D
+        }
+        (src, dst)
+            if src == std::any::TypeId::of::<DeviceStorage>()
+                && dst == std::any::TypeId::of::<PinnedStorage>() =>
+        {
+            TransferStrategy::CudaAsyncD2H
+        }
+        (src, dst)
+            if src == std::any::TypeId::of::<DeviceStorage>()
+                && dst == std::any::TypeId::of::<DeviceStorage>() =>
+        {
+            TransferStrategy::CudaAsyncD2D
+        }
+        _ => TransferStrategy::Invalid,
+    }
+}
+
 /// H2D Implementation
 #[inline(always)]
 unsafe fn cuda_memcpy_h2d(
@@ -320,7 +403,7 @@ unsafe fn cuda_memcpy_h2d(
     size: usize,
     stream: &CudaStream,
 ) -> Result<(), TransferError> {
-    tracing::debug!("🏊 H2D Transfer: 0x{:x} -> 0x{:x} ({} bytes)",
+    tracing::debug!("H2D Transfer: 0x{:x} -> 0x{:x} ({} bytes)",
         src_ptr as usize, dst_ptr as usize, size);
 
     debug_assert!(!src_ptr.is_null(), "Source host pointer is null");
@@ -342,7 +425,7 @@ unsafe fn cuda_memcpy_d2h(
     size: usize,
     stream: &CudaStream,
 ) -> Result<(), TransferError> {
-    tracing::debug!("🏊 D2H Transfer: 0x{:x} -> 0x{:x} ({} bytes)",
+    tracing::debug!("D2H Transfer: 0x{:x} -> 0x{:x} ({} bytes)",
         src_ptr as usize, dst_ptr as usize, size);
 
     debug_assert!(!src_ptr.is_null(), "Source device pointer is null");
@@ -384,14 +467,15 @@ unsafe fn cuda_memcpy_d2d(
     Ok(())
 }
 
-// Load the vectorized_copy module from FATBIN - optimized with OnceLock
+// Load the vectorized_copy module from FATBIN
 fn get_copy_kernel_module() -> Result<cudarc::driver::sys::CUmodule, TransferError> {
-    // Fast path: return cached module if available (no mutex!)
-    if let Some(&module) = COPY_KERNEL_MODULE.get() {
-        return Ok(module);
+    let mut module_guard = COPY_KERNEL_MODULE.lock().unwrap();
+
+    if let Some(module_ptr) = *module_guard {
+        return Ok(module_ptr as cudarc::driver::sys::CUmodule);
     }
 
-    // Slow path: load module on first access
+    // Load the module on first access
     let module = if let Ok(module) = load_embedded_fatbin() {
         module
     } else if let Ok(module) = load_runtime_fatbin() {
@@ -400,19 +484,20 @@ fn get_copy_kernel_module() -> Result<cudarc::driver::sys::CUmodule, TransferErr
         return Err(TransferError::ExecutionError("No vectorized_copy FATBIN found (tried embedded and runtime paths)".to_string()));
     };
 
-    // Cache the module (only first caller succeeds, others get cached value)
-    let _ = COPY_KERNEL_MODULE.set(module);
-    Ok(module)
+    let module_ptr = module as usize;
+    *module_guard = Some(module_ptr);
+    Ok(module as cudarc::driver::sys::CUmodule)
 }
 
-// Get the vectorized_copy function - optimized with OnceLock
+// Get the vectorized_copy function
 fn get_copy_kernel() -> Result<cudarc::driver::sys::CUfunction, TransferError> {
-    // Fast path: return cached function if available (no mutex!)
-    if let Some(&func) = COPY_KERNEL_FUNCTION.get() {
-        return Ok(func);
+    let mut func_guard = COPY_KERNEL_FUNCTION.lock().unwrap();
+
+    if let Some(func_ptr) = *func_guard {
+        return Ok(func_ptr as cudarc::driver::sys::CUfunction);
     }
 
-    // Slow path: load function on first access
+    // Load the function on first access
     let module = get_copy_kernel_module()?;
     let func = unsafe {
         let mut func = std::ptr::null_mut();
@@ -425,9 +510,9 @@ fn get_copy_kernel() -> Result<cudarc::driver::sys::CUfunction, TransferError> {
         }
     };
 
-    // Cache the function (only first caller succeeds, others get cached value)
-    let _ = COPY_KERNEL_FUNCTION.set(func);
-    Ok(func)
+    let func_ptr = func as usize;
+    *func_guard = Some(func_ptr);
+    Ok(func as cudarc::driver::sys::CUfunction)
 }
 
 // Try to load embedded FATBIN (compile-time)
