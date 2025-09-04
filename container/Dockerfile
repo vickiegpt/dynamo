@@ -163,7 +163,7 @@ ENV PATH=/usr/local/bin/etcd/:$PATH
 ##################################
 
 # Build and install UCX
-RUN --mount=type=secret,id=${AWS_CONTAINER_AUTHORIZATION_TOKEN_BASENAME},target=${AWS_CONTAINER_AUTHORIZATION_IMAGE_TOKEN_FILE} \
+RUN --mount=type=secret,id=${AWS_CONTAINER_AUTHORIZATION_IMAGE_TOKEN_BASENAME},target=${AWS_CONTAINER_AUTHORIZATION_IMAGE_TOKEN_FILE} \
     rm -rf /opt/hpcx/ucx && \
     rm -rf /usr/local/ucx && \
     echo "Building UCX with reference $NIXL_UCX_REF" && \
