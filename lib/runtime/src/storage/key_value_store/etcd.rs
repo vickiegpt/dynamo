@@ -217,11 +217,11 @@ impl EtcdBucket {
         }
         let current_version = kvs.first().unwrap().version() as u64;
         if current_version != version + 1 {
-            tracing::warn!(
+            tracing::debug!(
                 current_version,
                 attempted_next_version = version,
                 key,
-                "update: Wrong revision"
+                "update: Wrong revision (expected behavior, will overwrite anyway)"
             );
             // NATS does a resync_update, overwriting the key anyway and getting the new revision.
             // So we do too in etcd.

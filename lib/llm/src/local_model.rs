@@ -414,14 +414,61 @@ impl LocalModel {
         let nats_client = endpoint.drt().nats_client();
         self.card.move_to_nats(nats_client.clone()).await?;
 
-        // Publish the Model Deployment Card to etcd
+        // Publish the Model Deployment Card to etcd with smart update logic
         let kvstore: Box<dyn KeyValueStore> = Box::new(EtcdStorage::new(etcd_client.clone()));
         let card_store = Arc::new(KeyValueStoreManager::new(kvstore));
-        let key = self.card.slug().to_string();
+        let slug_key = self.card.slug();
+        let key = slug_key.to_string();
 
-        card_store
-            .publish(model_card::ROOT_PATH, None, &key, &mut self.card)
-            .await?;
+        // Check if MDC already exists and compare content
+        match card_store.load::<ModelDeploymentCard>(model_card::ROOT_PATH, slug_key).await {
+            Ok(Some(existing)) => {
+                if !self.card.content_equals(&existing) {
+                    // Content changed, need update
+                    // Handle revision 0 edge case: revision 0 triggers create() which won't update existing keys
+                    self.card.revision = existing.revision.max(1);
+                    card_store
+                        .publish(model_card::ROOT_PATH, None, &key, &mut self.card)
+                        .await?;
+                    tracing::debug!(
+                        model = %self.card.slug(),
+                        revision = self.card.revision,
+                        "Updated ModelDeploymentCard in etcd (content changed)"
+                    );
+                } else {
+                    // Content identical, preserve metadata and skip write
+                    self.card.revision = existing.revision;
+                    self.card.last_published = existing.last_published;
+                    tracing::debug!(
+                        model = %self.card.slug(),
+                        revision = self.card.revision,
+                        "Skipped ModelDeploymentCard update (content identical)"
+                    );
+                }
+            }
+            Ok(None) => {
+                // New MDC
+                card_store
+                    .publish(model_card::ROOT_PATH, None, &key, &mut self.card)
+                    .await?;
+                tracing::debug!(
+                    model = %self.card.slug(),
+                    revision = self.card.revision,
+                    "Published new ModelDeploymentCard to etcd"
+                );
+            }
+            Err(e) => {
+                // Resilience: still try to publish on load errors
+                tracing::debug!(
+                    model = %self.card.slug(),
+                    error = %e,
+                    "Could not load existing MDC from etcd. Publishing anyway for resilience."
+                );
+                card_store
+                    .publish(model_card::ROOT_PATH, None, &key, &mut self.card)
+                    .await?;
+            }
+        }
 
         // Publish our ModelEntry to etcd. This allows ingress to find the model card.
         // (Why don't we put the model card directly under this key?)

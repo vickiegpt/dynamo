@@ -36,7 +36,7 @@ pub const ROOT_PATH: &str = "mdc";
 /// If a model deployment card hasn't been refreshed in this much time the worker is likely gone
 const CARD_MAX_AGE: chrono::TimeDelta = chrono::TimeDelta::minutes(5);
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelInfoType {
     HfConfigJson(String),
@@ -48,6 +48,19 @@ pub enum ModelInfoType {
 pub enum TokenizerKind {
     HfTokenizerJson(String),
     GGUF(Box<HfTokenizer>),
+}
+
+// Custom PartialEq implementation for TokenizerKind
+// GGUF contains complex boxed structs that can't be meaningfully compared,
+// so we always return false for GGUF comparisons
+impl PartialEq for TokenizerKind {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (TokenizerKind::HfTokenizerJson(a), TokenizerKind::HfTokenizerJson(b)) => a == b,
+            (TokenizerKind::GGUF(_), TokenizerKind::GGUF(_)) => false,  // Can't compare GGUF tokenizers
+            _ => false,
+        }
+    }
 }
 
 /// Supported types of prompt formatters.
@@ -62,7 +75,7 @@ pub enum TokenizerKind {
 /// TODO(): Add an enum for the PromptFormatDataModel with at minimum arms for:
 /// - OaiChat
 /// - OaiChatToolUse
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptFormatterArtifact {
     HfTokenizerConfigJson(String),
@@ -80,14 +93,14 @@ pub enum PromptContextMixin {
     Llama3DateTime,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum GenerationConfig {
     HfGenerationConfigJson(String),
     GGUF(PathBuf),
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Builder, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Builder, Default, PartialEq)]
 pub struct ModelDeploymentCard {
     /// Human readable model name, e.g. "Meta Llama 3.1 8B Instruct"
     pub display_name: String,
@@ -213,6 +226,25 @@ impl ModelDeploymentCard {
         } else {
             false
         }
+    }
+
+    /// Compare two ModelDeploymentCards for content equality, ignoring metadata fields
+    /// like revision and last_published that change even when content is the same.
+    /// This is used to determine if we need to update the card in etcd.
+    pub fn content_equals(&self, other: &Self) -> bool {
+        // Clone both cards and zero out metadata fields
+        let mut self_copy = self.clone();
+        let mut other_copy = other.clone();
+
+        // Zero out fields that should not affect content comparison
+        self_copy.revision = 0;
+        self_copy.last_published = None;
+        other_copy.revision = 0;
+        other_copy.last_published = None;
+
+        // Now use PartialEq to compare (requires PartialEq on all nested types)
+        // This will properly handle the TokenizerKind::GGUF special case
+        self_copy == other_copy
     }
 
     /// Is this a full model card with tokenizer?
