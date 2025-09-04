@@ -14,8 +14,8 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 # Database configuration - URLs loaded from environment variables
-PIPELINE_INDEX = os.getenv('METRICS_PIPELINE_URL', '')
-JOB_INDEX = os.getenv('METRICS_JOB_URL', '')
+PIPELINE_INDEX = os.getenv('PIPELINE_INDEX', '')
+JOB_INDEX = os.getenv('JOB_INDEX', '')
 
 class GitHubMetricsUploader:
     def __init__(self):
@@ -27,8 +27,8 @@ class GitHubMetricsUploader:
         if not self.pipeline_index or not self.jobs_index:
             raise ValueError(
                 "Database URLs not configured. Please set environment variables:\n"
-                "  METRICS_PIPELINE_URL - URL for pipeline metrics\n"
-                "  METRICS_JOB_URL - URL for job metrics"
+                "  PIPELINE_INDEX - URL for pipeline metrics\n"
+                "  JOB_INDEX - URL for job metrics"
             )
         
     def post_to_db(self, url: str, data: Dict[str, Any]) -> None:
