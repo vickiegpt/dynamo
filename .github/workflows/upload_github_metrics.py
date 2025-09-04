@@ -34,10 +34,17 @@ class GitHubMetricsUploader:
     def post_to_db(self, url: str, data: Dict[str, Any]) -> None:
         """Push json data to the database/OpenSearch URL"""
         print(f"Posting metrics to database...")
-        response = requests.post(url, data=json.dumps(data), headers=self.headers)
-        if not (200 <= response.status_code < 300):
-            raise ValueError(f"Error posting to DB: {response.status_code}, {response.text}")
-        print(f"Successfully posted metrics with ID: {data.get('_id', 'unknown')}")
+        try:
+            response = requests.post(url, data=json.dumps(data), headers=self.headers, timeout=30)
+            if not (200 <= response.status_code < 300):
+                raise ValueError(f"Error posting to DB: HTTP {response.status_code}")
+            print(f"Successfully posted metrics with ID: {data.get('_id', 'unknown')}")
+        except requests.exceptions.RequestException as e:
+            # Mask the URL in error messages to prevent exposure
+            error_msg = str(e)
+            if url in error_msg:
+                error_msg = error_msg.replace(url, "***DATABASE_URL***")
+            raise ValueError(f"Database connection failed: {error_msg}")
 
     def get_github_api_data(self, endpoint: str) -> Optional[Dict[str, Any]]:
         """Fetch data from GitHub API"""
@@ -216,7 +223,11 @@ class GitHubMetricsUploader:
 
 def main():
     """Main function to upload GitHub Actions metrics"""
-    uploader = GitHubMetricsUploader()
+    try:
+        uploader = GitHubMetricsUploader()
+    except ValueError as e:
+        print(f"Configuration error: {e}")
+        return
     
     # Upload workflow metrics
     try:
@@ -224,7 +235,11 @@ def main():
         uploader.post_workflow_metrics()
         print("Workflow metrics uploaded successfully")
     except Exception as e:
-        print(f"Error uploading workflow metrics: {e}")
+        error_msg = str(e)
+        # Mask any URLs that might appear in error messages
+        if uploader.pipeline_index in error_msg:
+            error_msg = error_msg.replace(uploader.pipeline_index, "***PIPELINE_URL***")
+        print(f"Error uploading workflow metrics: {error_msg}")
         
     # Upload job metrics
     try:
@@ -232,7 +247,11 @@ def main():
         uploader.post_job_metrics()
         print("Job metrics uploaded successfully")
     except Exception as e:
-        print(f"Error uploading job metrics: {e}")
+        error_msg = str(e)
+        # Mask any URLs that might appear in error messages
+        if uploader.jobs_index in error_msg:
+            error_msg = error_msg.replace(uploader.jobs_index, "***JOB_URL***")
+        print(f"Error uploading job metrics: {error_msg}")
 
 if __name__ == "__main__":
     main()
