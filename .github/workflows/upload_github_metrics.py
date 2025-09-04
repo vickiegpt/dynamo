@@ -12,10 +12,45 @@ import requests
 import pandas as pd
 from datetime import datetime
 from typing import Dict, Any, Optional
+from urllib.parse import urlparse
+import re
 
 # Database configuration - URLs loaded from environment variables
 PIPELINE_INDEX = os.getenv('PIPELINE_INDEX', '')
 JOB_INDEX = os.getenv('JOB_INDEX', '')
+
+def mask_sensitive_urls(error_msg: str, url: str) -> str:
+    """
+    Comprehensively mask sensitive URLs and hostnames in error messages
+    """
+    if not url:
+        return error_msg
+        
+    try:
+        parsed_url = urlparse(url)
+        hostname = parsed_url.hostname
+        path = parsed_url.path
+        
+        # Replace components in order of specificity
+        if hostname:
+            error_msg = error_msg.replace(hostname, "***HOSTNAME***")
+        if url in error_msg:
+            error_msg = error_msg.replace(url, "***DATABASE_URL***")
+        if path and path in error_msg:
+            error_msg = error_msg.replace(path, "***PATH***")
+            
+        # Also mask any remaining URL patterns
+        # Replace any remaining http://hostname patterns
+        if hostname:
+            pattern = rf"https?://{re.escape(hostname)}"
+            error_msg = re.sub(pattern, "***MASKED_URL***", error_msg)
+            
+    except Exception:
+        # If URL parsing fails, do basic masking
+        if url in error_msg:
+            error_msg = error_msg.replace(url, "***DATABASE_URL***")
+    
+    return error_msg
 
 class GitHubMetricsUploader:
     def __init__(self):
@@ -42,8 +77,7 @@ class GitHubMetricsUploader:
         except requests.exceptions.RequestException as e:
             # Mask the URL in error messages to prevent exposure
             error_msg = str(e)
-            if url in error_msg:
-                error_msg = error_msg.replace(url, "***DATABASE_URL***")
+            error_msg = mask_sensitive_urls(error_msg, url)
             raise ValueError(f"Database connection failed: {error_msg}")
 
     def get_github_api_data(self, endpoint: str) -> Optional[Dict[str, Any]]:
@@ -236,9 +270,8 @@ def main():
         print("Workflow metrics uploaded successfully")
     except Exception as e:
         error_msg = str(e)
-        # Mask any URLs that might appear in error messages
-        if uploader.pipeline_index in error_msg:
-            error_msg = error_msg.replace(uploader.pipeline_index, "***PIPELINE_URL***")
+        # Comprehensive URL masking
+        error_msg = mask_sensitive_urls(error_msg, uploader.pipeline_index)
         print(f"Error uploading workflow metrics: {error_msg}")
         
     # Upload job metrics
@@ -248,9 +281,8 @@ def main():
         print("Job metrics uploaded successfully")
     except Exception as e:
         error_msg = str(e)
-        # Mask any URLs that might appear in error messages
-        if uploader.jobs_index in error_msg:
-            error_msg = error_msg.replace(uploader.jobs_index, "***JOB_URL***")
+        # Comprehensive URL masking
+        error_msg = mask_sensitive_urls(error_msg, uploader.jobs_index)
         print(f"Error uploading job metrics: {error_msg}")
 
 if __name__ == "__main__":
