@@ -49,11 +49,21 @@ fi
 export TRTLLM_UCX_INTERFACE=enP6p9s0np0
 export UCX_NET_DEVICES=mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1,enP6p9s0np0
 
+# FIXME: The max_num_tokens, max_batch_size and max_seq_len
+# is not being set correctly. However, the performance is
+# better without them. It is only set in the top-level yaml.
+#
+#trtllm-llmapi-launch python3 -m dynamo.trtllm \
+#    --model-path ${model_path} \
+#    --served-model-name ${model_name} \
+#    --max-num-tokens ${max_num_tokens} \
+#    --max-batch-size ${max_batch_size} \
+#    --max-seq-len ${max_seq_len} \
+#    --disaggregation-mode ${disaggregation_mode} \
+#    --extra-engine-args ${config_file}
+
 trtllm-llmapi-launch python3 -m dynamo.trtllm \
     --model-path ${model_path} \
     --served-model-name ${model_name} \
-    --max-num-tokens ${max_num_tokens} \
-    --max-batch-size ${max_batch_size} \
-    --max-seq-len ${max_seq_len} \
     --disaggregation-mode ${disaggregation_mode} \
     --extra-engine-args ${config_file}

@@ -109,13 +109,12 @@ run_4_gpus_mtp0() {
         run_single 1 2 4 512 512 true "0.85" 0 0 "2048 3072"
         run_single 2 3 4 768 768 true "0.85" 0 0 "3072 4096"
     else
-        run_single 1 5 4 8 32 false "0.9" 3 0 "1 2 4 8 12"
-        run_single 1 4 4 16 64 false "0.9" 3 0 "16 24"
-        run_single 1 3 4 32 128 false "0.9" 3 0 "32 48"
-        run_single 2 3 4 16 64 true "0.8" 3 0 "64 96"
-        run_single 1 1 4 32 128 true "0.8" 3 0 "128 192"
-        run_single 2 1 4 64 256 true "0.8" 2 0 "256 384"
-        run_single 5 2 4 128 512 true "0.8" 1 0 "512 768"
+        run_single 1 5 4 16 16 false "0.9" 0 0 "1 2 4 8 16 24"
+        run_single 1 4 4 32 32 false "0.9" 0 0 "32 48"
+        run_single 2 5 4 64 64 false "0.9" 0 0 "64 96"
+        run_single 1 2 4 128 128 false "0.9" 0 0 "128 192"
+        run_single 1 1 4 64 64 true "0.8" 0 0 "256 384"
+        run_single 3 2 4 128 128 true "0.8" 0 0 "512 768"
     fi
 }
 
@@ -131,15 +130,14 @@ run_8_gpus_mtp0() {
         run_single 3 2 8 768 768 true "0.8" 0 0 "6144 8192"
         run_single 3 2 8 1024 1024 true "0.8" 0 0 "8192 12288"
     else
-        run_single 1 4 8 8 32 false "0.9" 3 0 "1 2 4 8 12"
-        run_single 1 3 8 16 64 false "0.9" 3 0 "16 24"
-        run_single 1 2 8 32 128 false "0.9" 3 0 "32 48"
-        run_single 1 1 8 8 32 true "0.8" 3 0 "64 96"
-        run_single 3 2 8 16 64 true "0.8" 3 0 "128 192"
-        run_single 5 2 8 32 128 true "0.8" 3 0 "256 384"
-        run_single 7 2 8 64 256 true "0.8" 2 0 "512 768"
-        run_single 5 1 8 128 256 true "0.8" 1 0 "1024 1536"
-        run_single 6 1 8 256 512 true "0.8" 1 0 "2048 3072"
+        run_single 1 4 8 16 16 false "0.9" 0 0 "1 2 4 8 16 24"
+        run_single 1 3 8 32 32 false "0.9" 0 0 "32 48"
+        run_single 1 2 8 64 64 false "0.9" 0 0 "64 96"
+        run_single 1 1 8 128 128 false "0.9" 0 0 "128 192"
+        run_single 3 2 8 32 32 true "0.8" 0 0 "256 384"
+        run_single 5 2 8 64 64 true "0.8" 0 0 "512 768"
+        run_single 4 1 8 128 128 true "0.8" 0 0 "1024 1536"
+        run_single 5 1 8 256 256 true "0.8" 0 0 "2048 3072"
     fi
 }
 
@@ -153,13 +151,12 @@ run_16_gpus_mtp0() {
         run_single 3 1 16 768 768 true "0.75" 0 256 "12288 16384"
         run_single 3 1 16 1024 1024 true "0.75" 0 288 "16384 20480"
     else
-        run_single 1 1 16 4 16 true "0.8" 3 0 "16 32 64 96" # 5
-        run_single 2 1 16 8 32 true "0.8" 3 0 "128 192"       # 6
-        run_single 4 1 16 16 64 true "0.8" 3 0 "256 384"      # 8
-        run_single 6 1 16 32 128 true "0.8" 3 0 "512 768"    # 10
-        run_single 8 1 16 64 256 true "0.8" 2 256 "1024 1536" # 13
-        run_single 10 1 16 128 256 true "0.8" 1 256 "2048 3072" # 15
-        run_single 12 1 16 256 512 true "0.8" 1 256 "4096 6144" # 16
+        run_single 1 1 16 8 8 true "0.8" 0 0 "16 32 64 128 192" # 5
+        run_single 2 1 16 16 16 true "0.8" 0 0 "256 384"        # 6
+        run_single 3 1 16 32 32 true "0.8" 0 0 "512 768"       # 7
+        run_single 6 1 16 64 64 true "0.8" 0 0 "1024 1536"     # 10
+        run_single 8 1 16 128 128 true "0.8" 0 256 "2048 3072"   # 12
+        run_single 10 1 16 256 256 true "0.8" 0 256 "4096 6144" # 14
     fi
 }
 
@@ -172,11 +169,10 @@ run_32_gpus_mtp0() {
         run_single 4 1 32 256 256 true "0.7" 0 288 "8192 12288"
         run_single 5 1 32 512 512 true "0.7" 0 288 "16384 20480"
     else
-        run_single 1 1 32 1 4 true "0.7" 3 0 "32 48" # 9
-        run_single 2 1 32 2 8 true "0.7" 3 0 "64 96" # 10
-        run_single 3 1 32 4 16 true "0.7" 3 0 "128 192" # 11
-        run_single 5 1 32 8 32 true "0.7" 3 0 "256 384" # 13
-        run_single 8 1 32 16 64 true "0.7" 3 256 "512 768" # 16
+        run_single 1 1 32 4 4 true "0.7" 0 0 "32 64 128 192"  # 9
+        run_single 2 1 32 8 8 true "0.7" 0 0 "256 384"          # 10
+        run_single 4 1 32 16 16 true "0.7" 0 0 "512 768"       # 12
+        run_single 7 1 32 32 32 true "0.7" 0 0 "1024 1536"     # 15
     fi
 }
 
