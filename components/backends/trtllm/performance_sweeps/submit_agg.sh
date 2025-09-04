@@ -78,7 +78,7 @@ isl_equal_to_osl() {
 
     max_num_tokens=$(( ((mtp+1)*max_batch+isl+128+63)/64*64 ))
     sbatch --nodes=${nodes_count} --ntasks=${tp_size} --ntasks-per-node=${NTASKS_PER_NODE} ${slurm_args} benchmark_agg.slurm ${tp_size} ${ep_size} ${max_batch} ${max_num_tokens} ${enable_attention_dp} "${concurrency_list}" ${mtp} ${common_args}
-    
+
     # tep8
     max_batch=1024
     tp_size=8

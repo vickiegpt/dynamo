@@ -24,18 +24,17 @@ fi
 
 WAIT_TIME=300
 
-model=$1
-multi_round=$2
-num_gen_servers=$3
-concurrency_list=$4
-streaming=$5
-log_path=$6
-total_gpus=$7
-artifacts_dir=$8
-model_path=$9
-isl=${10}
-osl=${11}
-kind=${12}
+model=${1}
+multi_round=${2}
+num_gen_servers=${3}
+concurrency_list=${4}
+streaming=${5}
+log_path=${6}
+total_gpus=${7}
+model_path=${8}
+isl=${9}
+osl=${10}
+kind=${11}
 
 if [ "$#" -ne 12 ]; then
     echo "Error: Expected 12 arguments, got $#"
@@ -51,7 +50,6 @@ echo "  concurrency_list: $concurrency_list"
 echo "  streaming: $streaming"
 echo "  log_path: $log_path"
 echo "  total_gpus: $total_gpus"
-echo "  artifacts_dir: $artifacts_dir"
 echo "  model_path: $model_path"
 echo "  isl: $isl"
 echo "  osl: $osl"
@@ -68,10 +66,6 @@ fi
 set -x
 config_file=${log_path}/config.yaml
 
-# Create artifacts root directory if it doesn't exist
-if [ ! -d "${artifacts_dir}" ]; then
-    mkdir -p "${artifacts_dir}"
-fi
 
 hostname=$HEAD_NODE
 port=8000
@@ -102,12 +96,12 @@ deployment_config=$(cat << EOF
 EOF
 )
 
-mkdir -p "${artifacts_dir}"
-if [ -f "${artifacts_dir}/deployment_config.json" ]; then
+mkdir -p "${log_path}"
+if [ -f "${log_path}/deployment_config.json" ]; then
   echo "Deployment configuration already exists. Overwriting..."
-  rm -f "${artifacts_dir}/deployment_config.json"
+  rm -f "${log_path}/deployment_config.json"
 fi
-echo "${deployment_config}" > "${artifacts_dir}/deployment_config.json"
+echo "${deployment_config}" > "${log_path}/deployment_config.json"
 
 # Wait for server to load (up to 50 attempts)
 failed=true
@@ -118,10 +112,14 @@ for ((i=1; i<=50; i++)); do
     body=$(echo "$response" | sed '$d')
 
     if [[ "$http_code" == "200" ]]; then
-        echo "Model check succeeded on attempt $i"
         echo "$body"
-        failed=false
-        break
+        if echo "$body" | grep -q "\"id\":\"${model}\""; then
+            echo "Model check succeeded on attempt $i"
+            failed=false
+            break
+        else
+            echo "Attempt $i: Model '${model}' not found in /v1/models response."
+        fi
     else
         echo "Attempt $i failed: /v1/models not ready (HTTP $http_code)."
     fi
