@@ -80,8 +80,5 @@ jobs:
       - name: Test Database Connection
         if: always()  # Run even if previous steps fail
         run: |
-          # Install required packages
-          pip install requests
-          
           # Run the database connection test
           python3 .github/workflows/test_db_connection.py
