@@ -125,12 +125,6 @@ NO_CACHE=""
 USE_SCCACHE=""
 SCCACHE_BUCKET=""
 SCCACHE_REGION=""
-<<<<<<< HEAD
-AWS_CONTAINER_CREDENTIALS_FULL_URI="http://169.254.170.23/v1/credentials"
-AWS_CONTAINER_AUTHORIZATION_HOST_TOKEN_FILE=/var/run/secrets/pods.eks.amazonaws.com/serviceaccount/eks-pod-identity-token
-AWS_CONTAINER_AUTHORIZATION_IMAGE_TOKEN_FILE=/run/secrets/eks-pod-identity-token
-=======
->>>>>>> 1eae07b7 (Use access keys limited to sccache to resolve DIND issues)
 
 get_options() {
     while :; do
@@ -611,7 +605,6 @@ if [ "$USE_SCCACHE" = true ]; then
     BUILD_ARGS+=" --build-arg SCCACHE_REGION=${SCCACHE_REGION}"
     BUILD_ARGS+=" --build-arg AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}"
     BUILD_ARGS+=" --build-arg AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}"
-
 fi
 
 LATEST_TAG="--tag dynamo:latest-${FRAMEWORK,,}"
