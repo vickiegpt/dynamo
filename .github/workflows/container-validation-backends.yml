@@ -57,12 +57,11 @@ jobs:
             # --use-sccache \
             # --sccache-bucket "$SCCACHE_S3_BUCKET" \
             # --sccache-region "$AWS_DEFAULT_REGION"
-      - name: Start services with docker-compose
-        working-directory: ./deploy
-        run: |
-          docker compose up -d nats-server etcd-server
       - name: Run pytest
         run: |
+          pushd deploy
+          docker compose up -d --wait
+          popd
           docker run --runtime=nvidia --rm --gpus all -w /workspace \
             --network host \
             --shm-size=10G \
