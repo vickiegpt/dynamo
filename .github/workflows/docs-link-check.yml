@@ -84,8 +84,5 @@ jobs:
           PIPELINE_INDEX: ${{ secrets.PIPELINE_INDEX }}
           JOB_INDEX: ${{ secrets.JOB_INDEX }}
         run: |
-          # Install required Python packages
-          pip install pandas requests
-          
           # Run the metrics upload script
           python .github/workflows/upload_github_metrics.py
