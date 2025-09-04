@@ -79,16 +79,18 @@ jobs:
           if-no-files-found: error
           path: |
             ${{ env.PYTEST_XML_FILE }}
-      - name: Collect and Print GitHub Actions Metrics
+      - name: Upload GitHub Actions Metrics
         if: always()  # Run even if previous steps fail
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          METRICS_PIPELINE_URL: ${{ secrets.METRICS_PIPELINE_URL }}
+          METRICS_JOB_URL: ${{ secrets.METRICS_JOB_URL }}
         run: |
           # Install required Python packages
           pip install pandas requests
           
-          # Run the metrics collection script
-          python .github/workflows/print_github_metrics.py
+          # Run the metrics upload script
+          python .github/workflows/upload_github_metrics.py
 
   event_file:
     name: "Event File"
