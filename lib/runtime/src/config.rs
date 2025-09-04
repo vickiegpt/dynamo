@@ -21,6 +21,11 @@ const DEFAULT_SYSTEM_PORT: u16 = 9090;
 const DEFAULT_SYSTEM_HEALTH_PATH: &str = "/health";
 const DEFAULT_SYSTEM_LIVE_PATH: &str = "/live";
 
+/// Default health check configuration
+pub const DEFAULT_HEALTH_CHECK_INTERVAL_SECS: u64 = 10;
+pub const DEFAULT_HEALTH_CHECK_RESPOND_STALE_THRESHOLD_SECS: u64 = 5;
+pub const DEFAULT_HEALTH_CHECK_REQUEST_TIMEOUT_SECS: u64 = 3;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerConfig {
     /// Grace shutdown period for the system server.
@@ -124,6 +129,30 @@ pub struct RuntimeConfig {
     #[builder(default = "DEFAULT_SYSTEM_LIVE_PATH.to_string()")]
     #[builder_field_attr(serde(skip_serializing_if = "Option::is_none"))]
     pub system_live_path: String,
+
+    /// Enable active health checking with payloads
+    /// Set this at runtime with environment variable DYN_HEALTH_CHECK_ENABLED
+    #[builder(default = "false")]
+    #[builder_field_attr(serde(skip_serializing_if = "Option::is_none"))]
+    pub health_check_enabled: bool,
+
+    /// Health check interval in seconds
+    /// Set this at runtime with environment variable DYN_HEALTH_CHECK_INTERVAL
+    #[builder(default = "DEFAULT_HEALTH_CHECK_INTERVAL_SECS")]
+    #[builder_field_attr(serde(skip_serializing_if = "Option::is_none"))]
+    pub health_check_interval_secs: u64,
+
+    /// Health check respond stale threshold in seconds
+    /// Set this at runtime with environment variable DYN_HEALTH_CHECK_RESPOND_STALE_THRESHOLD
+    #[builder(default = "DEFAULT_HEALTH_CHECK_RESPOND_STALE_THRESHOLD_SECS")]
+    #[builder_field_attr(serde(skip_serializing_if = "Option::is_none"))]
+    pub health_check_respond_stale_threshold_secs: u64,
+
+    /// Health check request timeout in seconds
+    /// Set this at runtime with environment variable DYN_HEALTH_CHECK_REQUEST_TIMEOUT
+    #[builder(default = "DEFAULT_HEALTH_CHECK_REQUEST_TIMEOUT_SECS")]
+    #[builder_field_attr(serde(skip_serializing_if = "Option::is_none"))]
+    pub health_check_request_timeout_secs: u64,
 }
 
 impl fmt::Display for RuntimeConfig {
@@ -150,6 +179,22 @@ impl fmt::Display for RuntimeConfig {
         )?;
         write!(f, ", system_health_path={}", self.system_health_path)?;
         write!(f, ", system_live_path={}", self.system_live_path)?;
+        write!(f, ", health_check_enabled={}", self.health_check_enabled)?;
+        write!(
+            f,
+            ", health_check_interval_secs={}",
+            self.health_check_interval_secs
+        )?;
+        write!(
+            f,
+            ", health_check_respond_stale_threshold_secs={}",
+            self.health_check_respond_stale_threshold_secs
+        )?;
+        write!(
+            f,
+            ", health_check_request_timeout_secs={}",
+            self.health_check_request_timeout_secs
+        )?;
 
         Ok(())
     }
@@ -194,6 +239,26 @@ impl RuntimeConfig {
                     _ => None,
                 }
             }))
+            .merge(Env::prefixed("DYN_HEALTH_CHECK_").filter_map(|k| {
+                let full_key = format!("DYN_HEALTH_CHECK_{}", k.as_str());
+                // filters out empty environment variables
+                match std::env::var(&full_key) {
+                    Ok(v) if !v.is_empty() => {
+                        // Map DYN_HEALTH_CHECK_* to the correct field names
+                        let mapped_key = match k.as_str() {
+                            "ENABLED" => "health_check_enabled",
+                            "INTERVAL" => "health_check_interval_secs",
+                            "RESPOND_STALE_THRESHOLD" => {
+                                "health_check_respond_stale_threshold_secs"
+                            }
+                            "REQUEST_TIMEOUT" => "health_check_request_timeout_secs",
+                            _ => k.as_str(),
+                        };
+                        Some(mapped_key.into())
+                    }
+                    _ => None,
+                }
+            }))
     }
 
     /// Load the runtime configuration from the environment and configuration files
@@ -227,6 +292,11 @@ impl RuntimeConfig {
             use_endpoint_health_status: vec![],
             system_health_path: DEFAULT_SYSTEM_HEALTH_PATH.to_string(),
             system_live_path: DEFAULT_SYSTEM_LIVE_PATH.to_string(),
+            health_check_enabled: false,
+            health_check_interval_secs: DEFAULT_HEALTH_CHECK_INTERVAL_SECS,
+            health_check_respond_stale_threshold_secs:
+                DEFAULT_HEALTH_CHECK_RESPOND_STALE_THRESHOLD_SECS,
+            health_check_request_timeout_secs: DEFAULT_HEALTH_CHECK_REQUEST_TIMEOUT_SECS,
         }
     }
 
@@ -256,6 +326,11 @@ impl Default for RuntimeConfig {
             use_endpoint_health_status: vec![],
             system_health_path: DEFAULT_SYSTEM_HEALTH_PATH.to_string(),
             system_live_path: DEFAULT_SYSTEM_LIVE_PATH.to_string(),
+            health_check_enabled: false,
+            health_check_interval_secs: DEFAULT_HEALTH_CHECK_INTERVAL_SECS,
+            health_check_respond_stale_threshold_secs:
+                DEFAULT_HEALTH_CHECK_RESPOND_STALE_THRESHOLD_SECS,
+            health_check_request_timeout_secs: DEFAULT_HEALTH_CHECK_REQUEST_TIMEOUT_SECS,
         }
     }
 }

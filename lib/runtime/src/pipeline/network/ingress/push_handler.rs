@@ -138,6 +138,21 @@ where
         Ingress::add_metrics(self, endpoint, metrics_labels)
     }
 
+    fn set_health_tracking(
+        &self,
+        endpoint_subject: String,
+        system_health: Arc<std::sync::Mutex<crate::SystemHealth>>,
+    ) -> Result<()> {
+        use crate::pipeline::network::Ingress;
+        self.endpoint_subject
+            .set(endpoint_subject)
+            .map_err(|_| anyhow::anyhow!("Endpoint subject already set"))?;
+        self.system_health
+            .set(system_health)
+            .map_err(|_| anyhow::anyhow!("System health already set"))?;
+        Ok(())
+    }
+
     async fn handle_payload(&self, payload: Bytes) -> Result<(), PipelineError> {
         let start_time = std::time::Instant::now();
 
@@ -296,6 +311,12 @@ where
                 }
                 break;
             }
+            // Track successful response time
+            if let (Some(subject), Some(health)) =
+                (self.endpoint_subject.get(), self.system_health.get())
+            {
+                health.lock().unwrap().update_last_response_time(subject);
+            }
         }
         if send_complete_final {
             let resp_wrapper = NetworkStreamWrapper::<U> {
@@ -317,6 +338,12 @@ where
                         .with_label_values(&[work_handler::error_types::PUBLISH_FINAL])
                         .inc();
                 }
+            }
+            // Track final response time
+            if let (Some(subject), Some(health)) =
+                (self.endpoint_subject.get(), self.system_health.get())
+            {
+                health.lock().unwrap().update_last_response_time(subject);
             }
         }
 

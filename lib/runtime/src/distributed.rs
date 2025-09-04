@@ -167,6 +167,31 @@ impl DistributedRuntime {
             );
         }
 
+        // Start health check manager if enabled
+        if config.health_check_enabled {
+            let health_check_config = crate::health_check::HealthCheckConfig {
+                check_interval: std::time::Duration::from_secs(config.health_check_interval_secs),
+                respond_stale_threshold: std::time::Duration::from_secs(
+                    config.health_check_respond_stale_threshold_secs,
+                ),
+                request_timeout: std::time::Duration::from_secs(
+                    config.health_check_request_timeout_secs,
+                ),
+            };
+
+            let _health_check_handle = crate::health_check::start_health_check_manager(
+                Arc::new(distributed_runtime.clone()),
+                Some(health_check_config),
+            );
+
+            tracing::info!(
+                "Health check manager started (interval: {}s, respond_stale_threshold: {}s, timeout: {}s)",
+                config.health_check_interval_secs,
+                config.health_check_respond_stale_threshold_secs,
+                config.health_check_request_timeout_secs
+            );
+        }
+
         Ok(distributed_runtime)
     }
 
