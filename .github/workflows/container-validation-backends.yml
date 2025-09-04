@@ -51,6 +51,7 @@ jobs:
           AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
           SCCACHE_S3_BUCKET:  ${{ secrets.SCCACHE_S3_BUCKET }}
         run: |
+          ls /var/run/secrets/pods.eks.amazonaws.com/serviceaccount
           ./container/build.sh --tag ${{ matrix.framework }}:latest \
             --target ${{ matrix.target }} \
             --framework ${{ matrix.framework }} \
