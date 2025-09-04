@@ -35,6 +35,8 @@ ARG ARCH_ALT=x86_64
 ARG USE_SCCACHE
 ARG SCCACHE_BUCKET=""
 ARG SCCACHE_REGION=""
+ARG AWS_CONTAINER_AUTHORIZATION_IMAGE_TOKEN_FILE=""
+ARG AWS_CONTAINER_AUTHORIZATION_IMAGE_TOKEN_BASENAME=""
 
 # NIXL configuration
 ARG NIXL_UCX_REF=v1.19.0
@@ -160,7 +162,8 @@ ENV PATH=/usr/local/bin/etcd/:$PATH
 ##################################
 
 # Build and install UCX
-RUN rm -rf /opt/hpcx/ucx && \
+RUN --mount=type=secret,id=${AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE_ID} \
+    rm -rf /opt/hpcx/ucx && \
     rm -rf /usr/local/ucx && \
     echo "Building UCX with reference $NIXL_UCX_REF" && \
     cd /usr/local/src && \

@@ -54,21 +54,15 @@ jobs:
           ./container/build.sh --tag ${{ matrix.framework }}:latest \
             --target ${{ matrix.target }} \
             --framework ${{ matrix.framework }} \
-            # --use-sccache \
-            # --sccache-bucket "$SCCACHE_S3_BUCKET" \
-            # --sccache-region "$AWS_DEFAULT_REGION"
+            --use-sccache \
+            --sccache-bucket "$SCCACHE_S3_BUCKET" \
+            --sccache-region "$AWS_DEFAULT_REGION"
       - name: Run pytest
         run: |
           pushd deploy
           docker compose up -d --wait
           popd
           docker run --runtime=nvidia --rm --gpus all -w /workspace \
-            --network host \
-            --shm-size=10G \
-            --ulimit memlock=-1 \
-            --ulimit stack=67108864 \
-            --ipc host \
-            --privileged \
             --name ${{ env.CONTAINER_ID }}_pytest \
             ${{ matrix.framework }}:latest \
             bash -c "pytest -xsv --basetemp=/tmp --junitxml=${{ env.PYTEST_XML_FILE }} -m \"${{ env.PYTEST_MARKS }}\""
