@@ -19,8 +19,21 @@ run-name: Upload metrics for workflow "${{ github.event.workflow_run.name }}" (r
 
 on:
   workflow_run:
-    # This workflow runs after ANY other workflow completes
-    workflows: ["*"]
+    # This workflow runs after these specific workflows complete
+    workflows:
+      - "Docs link check"
+      - "pre_merge"
+      - "NVIDIA Dynamo Backends Github Validation"
+      - "NVIDIA Dynamo Github Validation"
+      - "CodeQL"
+      - "Copyright Checks"
+      - "Rust pre-merge checks"
+      - "Test Report"
+      - "Close stale issues and PRs"
+      - "Lint PR"
+      - "NVIDIA Test Lab Validation"
+      - "PR Reminder Full CI Comment Bot"
+      - "Generate Documentation"
     types:
       - completed
 
@@ -35,6 +48,18 @@ jobs:
     if: github.event.workflow_run.conclusion != 'skipped'
     
     steps:
+      - name: Debug workflow_run event
+        run: |
+          echo "Triggered by workflow: ${{ github.event.workflow_run.name }}"
+          echo "Workflow run ID: ${{ github.event.workflow_run.id }}"
+          echo "Workflow conclusion: ${{ github.event.workflow_run.conclusion }}"
+          echo "Workflow status: ${{ github.event.workflow_run.status }}"
+          echo "Repository: ${{ github.event.workflow_run.repository.full_name }}"
+          echo "Head SHA: ${{ github.event.workflow_run.head_sha }}"
+          echo "Head branch: ${{ github.event.workflow_run.head_branch }}"
+          echo "Event: ${{ github.event.workflow_run.event }}"
+          echo "Actor: ${{ github.event.workflow_run.actor.login }}"
+
       - name: Check out repository
         uses: actions/checkout@v4
         with:
