@@ -125,9 +125,12 @@ NO_CACHE=""
 USE_SCCACHE=""
 SCCACHE_BUCKET=""
 SCCACHE_REGION=""
+<<<<<<< HEAD
 AWS_CONTAINER_CREDENTIALS_FULL_URI="http://169.254.170.23/v1/credentials"
 AWS_CONTAINER_AUTHORIZATION_HOST_TOKEN_FILE=/var/run/secrets/pods.eks.amazonaws.com/serviceaccount/eks-pod-identity-token
 AWS_CONTAINER_AUTHORIZATION_IMAGE_TOKEN_FILE=/run/secrets/eks-pod-identity-token
+=======
+>>>>>>> 1eae07b7 (Use access keys limited to sccache to resolve DIND issues)
 
 get_options() {
     while :; do
@@ -378,6 +381,9 @@ get_options() {
         if [ -z "$SCCACHE_REGION" ]; then
             error "ERROR: --sccache-region is required when --use-sccache is specified"
         fi
+        if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            error "ERROR: AWS credentials (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY) must be set when using --use-sccache"
+        fi
     fi
 }
 
@@ -432,6 +438,10 @@ show_help() {
     echo "  [--use-sccache enable sccache for Rust/C/C++ compilation caching]"
     echo "  [--sccache-bucket S3 bucket name for sccache (required with --use-sccache)]"
     echo "  [--sccache-region S3 region for sccache (required with --use-sccache)]"
+    echo ""
+    echo "  Note: When using --use-sccache, AWS credentials must be set:"
+    echo "        export AWS_ACCESS_KEY_ID=your_access_key"
+    echo "        export AWS_SECRET_ACCESS_KEY=your_secret_key"
     exit 0
 }
 
@@ -599,9 +609,9 @@ if [ "$USE_SCCACHE" = true ]; then
     BUILD_ARGS+=" --build-arg USE_SCCACHE=true"
     BUILD_ARGS+=" --build-arg SCCACHE_BUCKET=${SCCACHE_BUCKET}"
     BUILD_ARGS+=" --build-arg SCCACHE_REGION=${SCCACHE_REGION}"
-    BUILD_ARGS+=" --build-arg AWS_CONTAINER_CREDENTIALS_FULL_URI=${AWS_CONTAINER_CREDENTIALS_FULL_URI}"
-    BUILD_ARGS+=" --build-arg AWS_CONTAINER_AUTHORIZATION_IMAGE_TOKEN_FILE=${AWS_CONTAINER_AUTHORIZATION_IMAGE_TOKEN_FILE}"
-    BUILD_ARGS+=" --secret id=aws,src=${AWS_CONTAINER_AUTHORIZATION_HOST_TOKEN_FILE}"
+    BUILD_ARGS+=" --build-arg AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}"
+    BUILD_ARGS+=" --build-arg AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}"
+
 fi
 
 LATEST_TAG="--tag dynamo:latest-${FRAMEWORK,,}"
