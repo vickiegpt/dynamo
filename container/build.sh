@@ -513,6 +513,7 @@ fi
 # Add NIXL_REF as a build argument
 BUILD_ARGS+=" --build-arg NIXL_REF=${NIXL_REF} "
 
+<<<<<<< HEAD
 # Function to build local-dev image with header
 build_local_dev_with_header() {
     local dev_base_image="$1"
@@ -580,6 +581,18 @@ build_local_dev_with_header() {
 if [[ $TARGET == "local-dev" ]]; then
     LOCAL_DEV_BUILD=true
     TARGET_STR="--target dev"
+=======
+if [[ $TARGET == "dev" ]]; then
+    # Use provided UID/GID or default to current user
+    if [ -z "$USER_UID" ]; then
+        USER_UID=$(id -u)
+    fi
+    if [ -z "$USER_GID" ]; then
+        USER_GID=$(id -g)
+    fi
+    echo "Building dev target with USER_UID=$USER_UID USER_GID=$USER_GID"
+    BUILD_ARGS+=" --build-arg USER_UID=$USER_UID --build-arg USER_GID=$USER_GID "
+>>>>>>> bf97e7e6 (docker related changes)
 fi
 
 # BUILD DEV IMAGE
