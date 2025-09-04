@@ -9,11 +9,53 @@ import os
 import sys
 import json
 import requests
-import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from urllib.parse import urlparse
 import re
+
+# Utility functions to replace pandas datetime functionality
+def parse_iso_datetime(iso_string: str) -> datetime:
+    """Parse ISO 8601 datetime string to datetime object"""
+    if not iso_string:
+        return None
+    
+    # Remove 'Z' suffix and add UTC timezone info
+    if iso_string.endswith('Z'):
+        iso_string = iso_string[:-1] + '+00:00'
+    
+    # Parse the datetime string
+    try:
+        return datetime.fromisoformat(iso_string)
+    except ValueError:
+        # Fallback for older Python versions
+        if 'T' in iso_string and iso_string.endswith('+00:00'):
+            dt_part = iso_string[:-6]  # Remove timezone
+            dt = datetime.strptime(dt_part, '%Y-%m-%dT%H:%M:%S')
+            return dt.replace(tzinfo=timezone.utc)
+        else:
+            # Last resort - assume UTC
+            dt = datetime.strptime(iso_string, '%Y-%m-%dT%H:%M:%S')
+            return dt.replace(tzinfo=timezone.utc)
+
+def datetime_to_timestamp_ms(dt: datetime) -> int:
+    """Convert datetime to millisecond timestamp"""
+    if not dt:
+        return None
+    return int(dt.timestamp() * 1000)
+
+def calculate_duration_seconds(start_time: str, end_time: str) -> Optional[float]:
+    """Calculate duration in seconds between two ISO datetime strings"""
+    if not start_time or not end_time:
+        return None
+    
+    start_dt = parse_iso_datetime(start_time)
+    end_dt = parse_iso_datetime(end_time)
+    
+    if not start_dt or not end_dt:
+        return None
+    
+    return (end_dt - start_dt).total_seconds()
 
 # Database configuration - URLs loaded from environment variables
 PIPELINE_INDEX = os.getenv('PIPELINE_INDEX', '')
@@ -105,8 +147,8 @@ class GitHubMetricsUploader:
         if not started_at:
             return None
         try:
-            created = pd.to_datetime(created_at)
-            started = pd.to_datetime(started_at)
+            created = parse_iso_datetime(created_at)
+            started = parse_iso_datetime(started_at)
             return (started - created).total_seconds()
         except Exception as e:
             print(f"Error calculating queue time: {e}")
@@ -139,15 +181,15 @@ class GitHubMetricsUploader:
         # Timestamps
         created_at = workflow_data.get('created_at')
         if created_at:
-            db_data["ts_created"] = int(pd.to_datetime(created_at).timestamp() * 1000)
+            db_data["ts_created"] = datetime_to_timestamp_ms(parse_iso_datetime(created_at))
         
         updated_at = workflow_data.get('updated_at')
         if updated_at and workflow_data.get('status') in ['completed', 'cancelled', 'failure']:
-            db_data["ts_finished"] = int(pd.to_datetime(updated_at).timestamp() * 1000)
+            db_data["ts_finished"] = datetime_to_timestamp_ms(parse_iso_datetime(updated_at))
         
         # Duration and queue time
         if created_at and updated_at:
-            duration = (pd.to_datetime(updated_at) - pd.to_datetime(created_at)).total_seconds()
+            duration = calculate_duration_seconds(created_at, updated_at)
             db_data["d_pipeline_duration"] = duration
             
         # Queue time (time from created to run_started_at)
@@ -212,11 +254,11 @@ class GitHubMetricsUploader:
         # Timestamps
         created_at = current_job.get('created_at')
         if created_at:
-            db_data["ts_created"] = int(pd.to_datetime(created_at).timestamp() * 1000)
+            db_data["ts_created"] = datetime_to_timestamp_ms(parse_iso_datetime(created_at))
             
         completed_at = current_job.get('completed_at')
         if completed_at:
-            db_data["ts_finished"] = int(pd.to_datetime(completed_at).timestamp() * 1000)
+            db_data["ts_finished"] = datetime_to_timestamp_ms(parse_iso_datetime(completed_at))
             
         db_data["s_job_status"] = current_job.get('conclusion', current_job.get('status', 'unknown'))
         db_data["s_job_failure_reason"] = current_job.get('conclusion', '-') if current_job.get('conclusion') in ['failure', 'cancelled'] else '-'
@@ -228,7 +270,7 @@ class GitHubMetricsUploader:
         # Duration and queue time
         started_at = current_job.get('started_at')
         if created_at and completed_at:
-            duration = (pd.to_datetime(completed_at) - pd.to_datetime(created_at)).total_seconds()
+            duration = calculate_duration_seconds(created_at, completed_at)
             db_data["d_job_duration"] = duration
             
         # Queue time (time from created to started)
