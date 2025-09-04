@@ -76,3 +76,16 @@ jobs:
             --exclude-all-private --exclude 0.0.0.0 \
             $OFFLINE_FLAG \
             .
+
+      - name: Upload GitHub Actions Metrics
+        if: always()  # Run even if previous steps fail
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PIPELINE_INDEX: ${{ secrets.PIPELINE_INDEX }}
+          JOB_INDEX: ${{ secrets.JOB_INDEX }}
+        run: |
+          # Install required Python packages
+          pip install pandas requests
+          
+          # Run the metrics upload script
+          python .github/workflows/upload_github_metrics.py

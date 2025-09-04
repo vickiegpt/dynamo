@@ -72,8 +72,8 @@ jobs:
         if: always()  # Run even if previous steps fail
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          METRICS_PIPELINE_URL: ${{ secrets.METRICS_PIPELINE_URL }}
-          METRICS_JOB_URL: ${{ secrets.METRICS_JOB_URL }}
+          PIPELINE_INDEX: ${{ secrets.PIPELINE_INDEX }}
+          JOB_INDEX: ${{ secrets.JOB_INDEX }}
         run: |
           # Install required Python packages
           pip install pandas requests
