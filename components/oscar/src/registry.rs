@@ -27,6 +27,13 @@ impl ObjectMetadata {
         }
     }
 
+    /// Create object metadata from raw bytes (computes hash automatically)
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        use crate::hash::ObjectHasher;
+        let hash = ObjectHasher::hash(bytes);
+        Self::new(hash, bytes.len() as u64)
+    }
+
     /// Serialize to JSON bytes for etcd storage
     pub fn to_json_bytes(&self) -> OscarResult<Vec<u8>> {
         serde_json::to_vec(self).map_err(OscarError::Serialization)
@@ -71,14 +78,14 @@ impl ObjectRegistry {
         ObjectHasher::validate_size(&data)?;
         let content_hash = ObjectHasher::hash(&data);
 
-        // 2. Create object descriptor and generate keys
+        // 2. Create object descriptor and metadata  
         let object_descriptor = crate::v2::descriptors::ObjectDescriptor::create(
             object_name, content_hash.clone(), caller_context
         ).map_err(|e| OscarError::InvalidOperation { 
             reason: format!("Failed to create object descriptor: {}", e) 
         })?;
 
-        let metadata = ObjectMetadata::new(content_hash.clone(), data.len() as u64);
+        let metadata = ObjectMetadata::from_bytes(&data);
         let metadata_bytes = metadata.to_json_bytes()?;
 
         // 3. Generate etcd keys using v2 system
@@ -175,8 +182,7 @@ mod tests {
 
     #[test]
     fn test_object_metadata_serialization() {
-        let hash = crate::hash::ObjectHasher::hash(b"test content");
-        let metadata = ObjectMetadata::new(hash.clone(), 12);
+        let metadata = ObjectMetadata::from_bytes(b"test content");
         
         // Test serialization
         let json_bytes = metadata.to_json_bytes().unwrap();
@@ -185,8 +191,18 @@ mod tests {
         let deserialized = ObjectMetadata::from_json_bytes(&json_bytes).unwrap();
         
         assert_eq!(metadata, deserialized);
-        assert_eq!(deserialized.hash, hash.to_hex());
         assert_eq!(deserialized.size, 12);
+    }
+
+    #[test]
+    fn test_object_metadata_from_bytes() {
+        let content = b"hello world";
+        let metadata = ObjectMetadata::from_bytes(content);
+        
+        // Verify the hash matches what ObjectHasher would produce
+        let expected_hash = crate::hash::ObjectHasher::hash(content);
+        assert_eq!(metadata.hash, expected_hash.to_hex());
+        assert_eq!(metadata.size, content.len() as u64);
     }
 
     #[test]
