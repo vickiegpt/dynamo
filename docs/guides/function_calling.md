@@ -19,29 +19,29 @@ python -m dynamo.<backend> --help | grep -B 2 "dyn-tool-call-parser"
 Note: If no tool call parser is provided by the user, dynamo will try to use default tool call parsing based on `<TOOLCALL>` and `<|python_tag|>` tool tags,
 
 
-Parser to Model Mapping 
+Parser to Model Mapping
 
 | Parser Name | Supported Models                                                      |
 |-------------|-----------------------------------------------------------------------|
 | hermes      | Qwen/Qwen2.5-*, Qwen/QwQ-32B, NousResearch/Hermes-2-Pro-*, NousResearch/Hermes-2-Theta-*, NousResearch/Hermes-3-* |
 | mistral | mistralai/Mistral-7B-Instruct-v0.3, Additional mistral function-calling models are compatible as well.|
-| llama3_json | meta-llama/Llama-3.1-*, meta-llama/Llama-3.2-* | 
-| harmony | openai/gpt-oss-* | 
-| nemotron_deci | nvidia/nemotron-* | 
-| phi4 | Phi-4-* | 
-| deepseek_v3_1 | deepseek-ai/DeepSeek-V3.1 | 
-| pythonic |  meta-llama/Llama-4-* | 
+| llama3_json | meta-llama/Llama-3.1-*, meta-llama/Llama-3.2-* |
+| harmony | openai/gpt-oss-* |
+| nemotron_deci | nvidia/nemotron-* |
+| phi4 | Phi-4-* |
+| deepseek_v3_1 | deepseek-ai/DeepSeek-V3.1 |
+| pythonic |  meta-llama/Llama-4-* |
 
 
-## Examples 
+## Examples
 
-### Launch dynamo frontend and backend 
+### Launch dynamo frontend and backend
 
 ```bash
-# launch backend worker 
+# launch backend worker
 python -m dynamo.vllm --model openai/gpt-oss-20b --dyn-tool-call-parser harmony
 
-# launch frontend worker 
+# launch frontend worker
 python -m dynamo.frontend
 ```
 
@@ -75,7 +75,7 @@ tools = [{
 }]
 
 response = client.chat.completions.create(
-    model="openai/gpt-oss-20b", 
+    model="openai/gpt-oss-20b",
     messages=[{"role": "user", "content": "What's the weather like in San Francisco in Celsius?"}],
     tools=tools,
     tool_choice="auto",
@@ -115,7 +115,7 @@ response = client.chat.completions.create(
     messages=messages,
     tools=tools,
     tool_choice="auto",
-    max_tokens=100, 
+    max_tokens=100,
 )
 print(f"{response}")
 tool_call = response.choices[0].message.tool_calls[0].function
@@ -166,7 +166,7 @@ response = client.chat.completions.create(
     messages=messages,
     tools=tools,
     tool_choice="auto",
-    max_tokens=100, 
+    max_tokens=100,
 )
 print(f"{response}")
 tool_call = response.choices[0].message.tool_calls[0].function
