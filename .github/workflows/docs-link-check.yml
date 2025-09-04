@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   lychee:
-    runs-on: gitlab
+    runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -77,12 +77,3 @@ jobs:
             $OFFLINE_FLAG \
             .
 
-      - name: Upload GitHub Actions Metrics
-        if: always()  # Run even if previous steps fail
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PIPELINE_INDEX: ${{ secrets.PIPELINE_INDEX }}
-          JOB_INDEX: ${{ secrets.JOB_INDEX }}
-        run: |          
-          # Run the metrics upload script
-          python3 .github/workflows/upload_github_metrics.py
