@@ -17,24 +17,6 @@ spec:
       sharedMemory:
         size: 80Gi
       extraPodSpec:
-        tolerations:
-          - key: "dedicated"
-            operator: "Equal"
-            value: "user-workload"
-            effect: "NoSchedule"
-          - key: "dedicated"
-            operator: "Equal"
-            value: "user-workload"
-            effect: "NoExecute"
-        affinity:
-          nodeAffinity:
-            requiredDuringSchedulingIgnoredDuringExecution:
-              nodeSelectorTerms:
-                - matchExpressions:
-                    - key: nvidia.com/gpu.present
-                      operator: In
-                      values:
-                        - "true"
         mainContainer:
           args:
           - |
