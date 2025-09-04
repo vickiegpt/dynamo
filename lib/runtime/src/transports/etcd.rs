@@ -252,57 +252,67 @@ impl Client {
         }
     }
 
-    /// Atomically create an object key if it doesn't exist AND attach a lease reference.
-    /// This is used for initial object registration in Oscar service.
-    pub async fn kv_create_and_attach(
+    /// Atomically create a key if it doesn't exist AND put another key-value pair.
+    /// 
+    /// This is useful for atomic operations where creation success should trigger a secondary put.
+    /// Common use cases:
+    /// - Object registration with reference tracking
+    /// - Resource allocation with ownership records
+    /// - Any scenario requiring atomic create-then-associate operations
+    pub async fn kv_create_and_put(
         &self,
-        object_key: String,
-        object_value: Vec<u8>,
-        object_lease_id: Option<i64>,
-        lease_ref_key: String,
-        lease_ref_value: Vec<u8>,
-        lease_ref_lease_id: Option<i64>,
+        create_key: String,
+        create_value: Vec<u8>,
+        create_lease_id: Option<i64>,
+        put_key: String,
+        put_value: Vec<u8>,
+        put_lease_id: Option<i64>,
     ) -> Result<()> {
-        let (_obj_lease_id, obj_put_options) = self.resolve_lease_and_put_options(object_lease_id);
-        let (_ref_lease_id, ref_put_options) = self.resolve_lease_and_put_options(lease_ref_lease_id);
+        let (_create_lease_id, create_put_options) = self.resolve_lease_and_put_options(create_lease_id);
+        let (_put_lease_id, put_put_options) = self.resolve_lease_and_put_options(put_lease_id);
 
-        // Build transaction that creates object key only if it doesn't exist,
-        // and if successful, also creates the lease reference
+        // Build transaction that creates first key only if it doesn't exist,
+        // and if successful, also puts the second key-value pair
         let txn = Txn::new()
-            .when(vec![Compare::version(object_key.as_str(), CompareOp::Equal, 0)]) // Object key doesn't exist
+            .when(vec![Compare::version(create_key.as_str(), CompareOp::Equal, 0)]) // Create key doesn't exist
             .and_then(vec![
-                TxnOp::put(object_key.as_str(), object_value, Some(obj_put_options)), // Create object
-                TxnOp::put(lease_ref_key.as_str(), lease_ref_value, Some(ref_put_options)), // Attach lease reference
+                TxnOp::put(create_key.as_str(), create_value, Some(create_put_options)), // Create first key
+                TxnOp::put(put_key.as_str(), put_value, Some(put_put_options)), // Put second key
             ]);
 
-        self.execute_txn_with_logging(txn, "create object and attach lease reference").await
+        self.execute_txn_with_logging(txn, "create and put").await
     }
 
-    /// Validate an existing object key matches the expected value AND attach a lease reference.
-    /// This is used for subsequent object registrations in Oscar service.
-    pub async fn kv_validate_and_attach(
+    /// Validate an existing key matches the expected value AND put another key-value pair.
+    /// 
+    /// This is useful for atomic operations where validation success should trigger a secondary put.
+    /// Common use cases:
+    /// - Adding references to existing verified objects
+    /// - Conditional association based on resource state
+    /// - Any scenario requiring atomic validate-then-associate operations
+    pub async fn kv_validate_and_put(
         &self,
-        object_key: String,
-        expected_object_value: Vec<u8>,
-        lease_ref_key: String,
-        lease_ref_value: Vec<u8>,
-        lease_ref_lease_id: Option<i64>,
+        validate_key: String,
+        expected_value: Vec<u8>,
+        put_key: String,
+        put_value: Vec<u8>,
+        put_lease_id: Option<i64>,
     ) -> Result<()> {
-        let (_ref_lease_id, ref_put_options) = self.resolve_lease_and_put_options(lease_ref_lease_id);
+        let (_put_lease_id, put_put_options) = self.resolve_lease_and_put_options(put_lease_id);
 
-        // Build transaction that validates object key matches expected value,
-        // and if successful, creates the lease reference
+        // Build transaction that validates first key matches expected value,
+        // and if successful, puts the second key-value pair
         let txn = Txn::new()
             .when(vec![Compare::value(
-                object_key.as_str(),
+                validate_key.as_str(),
                 CompareOp::Equal,
-                expected_object_value,
-            )]) // Object exists and value matches
+                expected_value,
+            )]) // Validate key exists and value matches
             .and_then(vec![
-                TxnOp::put(lease_ref_key.as_str(), lease_ref_value, Some(ref_put_options)), // Attach lease reference
+                TxnOp::put(put_key.as_str(), put_value, Some(put_put_options)), // Put second key
             ]);
 
-        self.execute_txn_with_logging(txn, "validate object and attach lease reference").await
+        self.execute_txn_with_logging(txn, "validate and put").await
     }
 
     pub async fn kv_put(
@@ -842,7 +852,7 @@ mod tests {
         Ok(())
     }
 
-    async fn test_kv_create_and_validate_and_attach(drt: DistributedRuntime) -> Result<()> {
+    async fn test_kv_create_and_validate_and_put(drt: DistributedRuntime) -> Result<()> {
         let client = drt.etcd_client().expect("etcd client should be available");
         let lease_id = drt
             .primary_lease()
@@ -850,91 +860,91 @@ mod tests {
             .id();
 
         // Test data
-        let object_key = "__test_object_key";
-        let object_value = b"object_metadata_hash_size";
-        let lease_ref_key = "__test_lease_ref";
-        let lease_ref_value = b"lease_ref_value";
+        let create_key = "__test_create_key";
+        let create_value = b"create_key_value";
+        let put_key = "__test_put_key";
+        let put_value = b"put_key_value";
 
-        // Test 1: kv_create_and_attach with new object
+        // Test 1: kv_create_and_put with new create key
         let result = client
-            .kv_create_and_attach(
-                object_key.to_string(),
-                object_value.to_vec(),
+            .kv_create_and_put(
+                create_key.to_string(),
+                create_value.to_vec(),
                 Some(lease_id),
-                lease_ref_key.to_string(),
-                lease_ref_value.to_vec(),
+                put_key.to_string(),
+                put_value.to_vec(),
                 Some(lease_id),
             )
             .await;
-        assert!(result.is_ok(), "kv_create_and_attach should succeed for new object");
+        assert!(result.is_ok(), "kv_create_and_put should succeed for new create key");
 
         // Verify both keys exist
-        let object_kvs = client.kv_get(object_key, None).await?;
-        assert_eq!(object_kvs.len(), 1, "Object key should exist");
-        assert_eq!(object_kvs[0].value(), object_value, "Object value should match");
+        let create_kvs = client.kv_get(create_key, None).await?;
+        assert_eq!(create_kvs.len(), 1, "Create key should exist");
+        assert_eq!(create_kvs[0].value(), create_value, "Create key value should match");
 
-        let lease_kvs = client.kv_get(lease_ref_key, None).await?;
-        assert_eq!(lease_kvs.len(), 1, "Lease reference should exist");
-        assert_eq!(lease_kvs[0].value(), lease_ref_value, "Lease reference value should match");
+        let put_kvs = client.kv_get(put_key, None).await?;
+        assert_eq!(put_kvs.len(), 1, "Put key should exist");
+        assert_eq!(put_kvs[0].value(), put_value, "Put key value should match");
 
-        // Test 2: kv_create_and_attach should fail for existing object
+        // Test 2: kv_create_and_put should fail for existing create key
         let result2 = client
-            .kv_create_and_attach(
-                object_key.to_string(),
-                object_value.to_vec(),
+            .kv_create_and_put(
+                create_key.to_string(),
+                create_value.to_vec(),
                 Some(lease_id),
-                "__test_lease_ref2".to_string(),
-                b"different_lease".to_vec(),
+                "__test_put_key2".to_string(),
+                b"different_put".to_vec(),
                 Some(lease_id),
             )
             .await;
-        assert!(result2.is_err(), "kv_create_and_attach should fail for existing object");
+        assert!(result2.is_err(), "kv_create_and_put should fail for existing create key");
 
-        // Test 3: kv_validate_and_attach with matching value
-        let new_lease_ref_key = "__test_lease_ref3";
+        // Test 3: kv_validate_and_put with matching value
+        let new_put_key = "__test_put_key3";
         let result3 = client
-            .kv_validate_and_attach(
-                object_key.to_string(),
-                object_value.to_vec(),
-                new_lease_ref_key.to_string(),
-                b"another_lease".to_vec(),
+            .kv_validate_and_put(
+                create_key.to_string(),
+                create_value.to_vec(),
+                new_put_key.to_string(),
+                b"another_put".to_vec(),
                 Some(lease_id),
             )
             .await;
-        assert!(result3.is_ok(), "kv_validate_and_attach should succeed with matching value");
+        assert!(result3.is_ok(), "kv_validate_and_put should succeed with matching value");
 
-        // Verify the new lease reference exists
-        let new_lease_kvs = client.kv_get(new_lease_ref_key, None).await?;
-        assert_eq!(new_lease_kvs.len(), 1, "New lease reference should exist");
+        // Verify the new put key exists
+        let new_put_kvs = client.kv_get(new_put_key, None).await?;
+        assert_eq!(new_put_kvs.len(), 1, "New put key should exist");
 
-        // Test 4: kv_validate_and_attach should fail with mismatched value
+        // Test 4: kv_validate_and_put should fail with mismatched value
         let result4 = client
-            .kv_validate_and_attach(
-                object_key.to_string(),
+            .kv_validate_and_put(
+                create_key.to_string(),
                 b"wrong_value".to_vec(),
-                "__test_lease_ref4".to_string(),
+                "__test_put_key4".to_string(),
                 b"should_not_create".to_vec(),
                 Some(lease_id),
             )
             .await;
-        assert!(result4.is_err(), "kv_validate_and_attach should fail with mismatched value");
+        assert!(result4.is_err(), "kv_validate_and_put should fail with mismatched value");
 
-        // Verify the failed lease reference was not created
-        let failed_lease_kvs = client.kv_get("__test_lease_ref4", None).await?;
-        assert_eq!(failed_lease_kvs.len(), 0, "Failed lease reference should not exist");
+        // Verify the failed put key was not created
+        let failed_put_kvs = client.kv_get("__test_put_key4", None).await?;
+        assert_eq!(failed_put_kvs.len(), 0, "Failed put key should not exist");
 
         Ok(())
     }
 
     #[test]
-    fn test_kv_create_and_attach_methods() {
+    fn test_kv_create_and_put_methods() {
         let rt = Runtime::from_settings().unwrap();
         let rt_clone = rt.clone();
         let config = DistributedConfig::from_settings(false);
 
         rt_clone.primary().block_on(async move {
             let drt = DistributedRuntime::new(rt, config).await.unwrap();
-            test_kv_create_and_validate_and_attach(drt).await.unwrap();
+            test_kv_create_and_validate_and_put(drt).await.unwrap();
         });
     }
 }
