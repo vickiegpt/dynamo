@@ -84,8 +84,10 @@ jobs:
           PIPELINE_INDEX: ${{ secrets.PIPELINE_INDEX }}
           JOB_INDEX: ${{ secrets.JOB_INDEX }}
         run: |
-          # Install required Python packages
-          python3 -m pip install pandas requests
+          # Create virtual environment and install packages
+          python3 -m venv metrics_env
+          source metrics_env/bin/activate
+          pip install pandas requests
           
-          # Run the metrics upload script
-          python3 .github/workflows/upload_github_metrics.py
+          # Run the metrics upload script in the virtual environment
+          python .github/workflows/upload_github_metrics.py
