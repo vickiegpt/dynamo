@@ -77,8 +77,15 @@ jobs:
             $OFFLINE_FLAG \
             .
 
-      - name: Test Database Connection
+      - name: Upload GitHub Actions Metrics
         if: always()  # Run even if previous steps fail
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PIPELINE_INDEX: ${{ secrets.PIPELINE_INDEX }}
+          JOB_INDEX: ${{ secrets.JOB_INDEX }}
         run: |
-          # Run the database connection test
-          python3 .github/workflows/test_db_connection.py
+          # Install required Python packages
+          python3 -m pip install pandas requests
+          
+          # Run the metrics upload script
+          python3 .github/workflows/upload_github_metrics.py
