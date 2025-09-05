@@ -36,9 +36,9 @@ isl=${9}
 osl=${10}
 kind=${11}
 
-if [ "$#" -ne 12 ]; then
-    echo "Error: Expected 12 arguments, got $#"
-    echo "Usage: $0 <model> <multi_round> <num_gen_servers> <concurrency_list> <streaming> <log_path> <total_gpus> <artifacts_dir> <model_path> <isl> <osl> <kind>"
+if [ "$#" -ne 11 ]; then
+    echo "Error: Expected 11 arguments, got $#"
+    echo "Usage: $0 <model> <multi_round> <num_gen_servers> <concurrency_list> <streaming> <log_path> <total_gpus> <model_path> <isl> <osl> <kind>"
     exit 1
 fi
 
