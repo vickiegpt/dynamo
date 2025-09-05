@@ -386,6 +386,11 @@ impl Worker for KvConnectorWorker {
                 self.connector.remove_slot(request_id);
             }
         }
+        tracing::info!(
+            "maybe_finished_onboarding: {:?}, maybe_finished_offloading: {:?}",
+            self.maybe_finished_onboarding,
+            self.maybe_finished_offloading
+        );
 
         (is_finished_offloading, is_finished_onboarding)
     }
