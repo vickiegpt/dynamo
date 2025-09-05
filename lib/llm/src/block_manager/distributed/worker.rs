@@ -11,7 +11,10 @@ use zmq::*;
 
 use crate::block_manager::{
     BasicMetadata, BlockMetadata, LayoutConfigBuilder, NixlLayout, Storage,
-    block::{Block, layout_to_blocks, locality, transfer::TransferContext},
+    block::{
+        Block, layout_to_blocks, locality,
+        transfer::{TransferContext, context::v2::TransferContext as TransferContextV2},
+    },
     connector::scheduler::TransferSchedulerClient,
     layout::LayoutType,
     storage::{DeviceAllocator, DeviceStorage, DiskAllocator, PinnedAllocator, torch::TorchTensor},
@@ -570,14 +573,17 @@ impl KvbmWorker {
 
         let agent = build_agent(worker_id, leader_data.num_disk_blocks > 0)?;
 
-        let transfer_context = Arc::new(TransferContext::new(
-            Arc::new(Some(agent)),
+        let nixl_agent = Arc::new(Some(agent));
+
+        let handle = tokio::runtime::Handle::current();
+        let transfer_context = Arc::new(TransferContextV2::new(
+            nixl_agent,
             DeviceAllocator::new(config.device_id)
                 .unwrap()
                 .ctx()
                 .new_stream()
                 .unwrap(),
-            Handle::current(),
+            handle,
         ));
 
         // Build our device, host, and disk block lists.

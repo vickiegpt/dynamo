@@ -24,6 +24,7 @@ use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
+#[deprecated(note = "Use v2::TransferContext instead")]
 pub struct TransferContext {
     nixl_agent: Arc<Option<NixlAgent>>,
     stream: Arc<CudaStream>,
@@ -171,6 +172,14 @@ pub mod v2 {
                 event,
                 async_rt_handle: self.async_rt_handle.clone(),
             })
+        }
+
+        pub fn clone_with_new_stream(&self) -> Self {
+            Self {
+                nixl_agent: self.nixl_agent.clone(),
+                stream: self.stream.context().new_stream().unwrap(),
+                async_rt_handle: self.async_rt_handle.clone(),
+            }
         }
     }
 

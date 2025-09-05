@@ -35,7 +35,7 @@ use tokio::sync::oneshot;
 
 pub use crate::block_manager::storage::{CudaAccessible, Local, Remote};
 pub use async_trait::async_trait;
-pub use context::TransferContext;
+pub use context::v2::TransferContext;
 
 /// A block that can be the target of a write
 pub trait Writable {}
@@ -178,7 +178,14 @@ where
                 cuda::copy_block(src, dst, ctx.stream().as_ref(), RB::write_to_strategy())?;
             }
 
-            ctx.cuda_event(tx)?;
+            let event = ctx
+                .record_event()
+                .map_err(|e| TransferError::ExecutionError(e.to_string()))?;
+
+            ctx.async_rt_handle().spawn(async move {
+                event.synchronize().await.unwrap();
+                tx.send(()).unwrap();
+            });
             Ok(rx)
         }
         TransferStrategy::Nixl(transfer_type) => {
