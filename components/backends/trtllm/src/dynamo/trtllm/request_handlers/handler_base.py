@@ -102,8 +102,9 @@ class HandlerBase:
 
         # Check for multimodal request and process it
         if self.multimodal_processor:
+            process_multimodal = self.disaggregation_mode == DisaggregationMode.PREFILL
             processed_input = await self.multimodal_processor.process_openai_request(
-                request, embeddings
+                request, process_multimodal, embeddings
             )
 
         else:
@@ -170,6 +171,13 @@ class HandlerBase:
         model_name = request.get("model", "unknown_model")
 
         # NEW: Updated engine call to include multimodal data
+        if disaggregated_params.request_type == "generation_only":
+            logging.info("Generation only request")
+            logging.info(f"Disaggregated params: {disaggregated_params}")
+            logging.info(f"Processed input: {processed_input}")
+            logging.info(f"Sampling params: {sampling_params}")
+            logging.info(f"Streaming: {streaming}")
+
         async for res in self.engine.llm.generate_async(
             inputs=processed_input,  # Use the correctly extracted inputs
             sampling_params=sampling_params,

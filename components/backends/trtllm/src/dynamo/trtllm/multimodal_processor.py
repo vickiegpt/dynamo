@@ -110,7 +110,7 @@ class MultimodalRequestProcessor:
         return " ".join(text_parts), image_urls, embedding_paths
 
     async def process_openai_request(
-        self, request: Dict, embeddings: Any
+        self, request: Dict, process_multimodal: bool, embeddings: Any
     ) -> Optional[Any]:
         """Process OpenAI request and return with multimodal data."""
         # Reset decoded text cache for new request
@@ -142,17 +142,30 @@ class MultimodalRequestProcessor:
         loader_kwargs = {}
         if embeddings is not None:
             # EPD flow
-            loader_kwargs["mm_embeddings"] = [embeddings]
-            logging.debug(f"Using NIXL embeddings in prefill worker: {embeddings}")
+            if process_multimodal:
+                loader_kwargs["mm_embeddings"] = [embeddings]
+            else:
+                loader_kwargs["mm_embeddings"] = torch.empty(0)
+                logging.info(f"Using NIXL embeddings in prefill worker: {embeddings}")
         elif image_urls:
             # Image-only flow
-            loader_kwargs["media"] = [image_urls]
+            #            loader_kwargs["media"] = [image_urls]
+            logging.info("This should not occur")
+            loader_kwargs["mm_embeddings"] = [torch.empty(2928, 4096)]
         elif embedding_paths:
             # PD flow with no NIXL and no encoder
-            loader_kwargs["mm_embeddings"] = [
-                self.load_tensor_from_path_or_url(path) for path in embedding_paths
-            ]
-            logging.debug(f"Using embedding paths in prefill worker: {embedding_paths}")
+
+            if process_multimodal:
+                loader_kwargs["mm_embeddings"] = [
+                    self.load_tensor_from_path_or_url(path) for path in embedding_paths
+                ]
+                logging.info("Tensor Copy only once")
+                logging.debug(
+                    f"Using embedding paths in prefill worker: {embedding_paths}"
+                )
+            else:
+                loader_kwargs["mm_embeddings"] = torch.empty(0)
+                logging.info("Zero Tensor passed")
 
         # Process with default_multimodal_input_loader
         processed_inputs = default_multimodal_input_loader(
