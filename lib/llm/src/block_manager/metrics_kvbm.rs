@@ -2,12 +2,59 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::env;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant};
+use tokio::{fs, io::AsyncWriteExt};
+use tokio_util::sync::CancellationToken;
 
 use dynamo_runtime::metrics::MetricsRegistry;
 use prometheus::IntCounter;
+
+#[derive(Debug)]
+struct FlusherInner {
+    cancel: CancellationToken,
+    handle: Option<JoinHandle<()>>,
+}
+
+#[derive(Clone, Debug)]
+struct Flusher(Arc<Mutex<FlusherInner>>);
+
+impl Flusher {
+    pub fn new(cancel: CancellationToken, handle: JoinHandle<()>) -> Self {
+        Self(Arc::new(Mutex::new(FlusherInner {
+            cancel,
+            handle: Some(handle),
+        })))
+    }
+
+    pub async fn shutdown(&self) {
+        let mut inner = self.0.lock().await;
+        inner.cancel.cancel();
+        if let Some(h) = inner.handle.take() {
+            drop(inner); // release lock before await
+            let _ = h.await;
+        }
+    }
+}
+
+impl Drop for Flusher {
+    fn drop(&mut self) {
+        if let Ok(mut inner) = self.0.try_lock() {
+            inner.cancel.cancel();
+            if let Some(h) = inner.handle.take() {
+                h.abort();
+            }
+        } else {
+            // couldn't lock; at least request cancel
+            self.0.try_lock().ok();
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct KvbmMetrics {
@@ -33,6 +80,8 @@ pub struct KvbmMetrics {
     pub matched_tokens: IntCounter,
 
     pub kvbm_stats: Arc<Stats>,
+
+    flusher: Arc<Flusher>,
 }
 
 /// A struct for storing timing data for some action.
@@ -40,7 +89,8 @@ pub struct KvbmMetrics {
 /// is composed of a fixed latency, as well as some per-block latency, hence the blocks parameter.
 #[derive(Debug, Clone)]
 pub struct EventStats {
-    start_time: Instant,
+    start_instant: Instant, // for precise elapsed measurement
+    start_time: SystemTime, // wall-clock timestamp for logs/plots
     time_elapsed: Duration,
     num_blocks: usize,
 }
@@ -48,20 +98,35 @@ pub struct EventStats {
 impl EventStats {
     pub fn new(num_blocks: usize) -> Self {
         Self {
-            start_time: Instant::now(),
+            start_instant: Instant::now(),
+            start_time: SystemTime::now(),
             time_elapsed: Duration::from_secs(0),
             num_blocks,
         }
     }
 
     pub fn event_complete(&mut self) {
-        self.time_elapsed = self.start_time.elapsed();
+        self.time_elapsed = self.start_instant.elapsed();
     }
 
     pub fn match_blocks_complete(&mut self, num_blocks: usize) {
         self.num_blocks = num_blocks;
-        self.time_elapsed = self.start_time.elapsed();
+        self.time_elapsed = self.start_instant.elapsed();
     }
+
+    /// Helper: Unix epoch millis for start_time (safe for CSV)
+    pub fn start_time_millis(&self) -> u128 {
+        self.start_time
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    }
+}
+
+fn metrics_dump_dir() -> PathBuf {
+    env::var("KVBM_METRICS_DUMP_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("./kvbm_metrics"))
 }
 
 #[derive(Debug, Default)]
@@ -82,6 +147,119 @@ impl Stats {
             disk_match_latency: Arc::new(Mutex::new(HashMap::new())),
             disk_onboard_latency: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn spawn_periodic_flush(
+        self: &Arc<Self>,
+        interval: Duration,
+        cancel: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        let this = Arc::clone(self);
+        let output_dir = metrics_dump_dir();
+
+        tokio::spawn(async move {
+            let _ = tokio::fs::create_dir_all(&output_dir).await;
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        let _ = this.flush_once(&output_dir).await; // final flush
+                        break;
+                    }
+                    _ = tokio::time::sleep(interval) => {
+                        if let Err(e) = this.flush_once(&output_dir).await {
+                            eprintln!("[Stats::flush] error: {e}");
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    pub async fn flush_once(&self, output_dir: &Path) -> anyhow::Result<()> {
+        // (name, map) pairs, used to generate filenames and iterate uniformly
+        let maps: &[(&str, &Arc<Mutex<HashMap<String, EventStats>>>)] = &[
+            ("host_match_latency", &self.host_match_latency),
+            ("host_offload_latency", &self.host_offload_latency),
+            ("host_onboard_latency", &self.host_onboard_latency),
+            ("disk_match_latency", &self.disk_match_latency),
+            ("disk_onboard_latency", &self.disk_onboard_latency),
+        ];
+
+        for (name, map) in maps {
+            self.flush_one_map(name, map, output_dir).await?;
+        }
+        Ok(())
+    }
+
+    async fn flush_one_map(
+        &self,
+        name: &str,
+        map: &Arc<Mutex<HashMap<String, EventStats>>>,
+        output_dir: &Path,
+    ) -> anyhow::Result<()> {
+        // Collect completed entries (time_elapsed > 0) without holding the lock during I/O
+        let mut completed: Vec<(String, EventStats)> = {
+            let guard = map.lock().await;
+            guard
+                .iter()
+                .filter_map(|(k, v)| {
+                    if v.time_elapsed > Duration::from_millis(0) {
+                        Some((k.clone(), v.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        if completed.is_empty() {
+            return Ok(());
+        }
+
+        // File path is "<output_dir>/<field_name>.csv"
+        let mut path = output_dir.to_path_buf();
+        path.push(format!("{name}.csv"));
+
+        // Create the file if missing and write header once
+        let new_file = fs::metadata(&path).await.is_err();
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await?;
+
+        if new_file {
+            file.write_all(b"id,num_blocks,time_elapsed_ms,start_time\n")
+                .await?;
+        }
+
+        // Write all lines
+        for (id, ev) in &completed {
+            let line = format!(
+                "{},{},{},{}\n",
+                id,
+                ev.num_blocks,
+                ev.time_elapsed.as_millis(),
+                ev.start_time_millis()
+            );
+            file.write_all(line.as_bytes()).await?;
+        }
+        file.flush().await?;
+
+        // After successful write, remove only those completed entries
+        {
+            let mut guard = map.lock().await;
+            for (id, _) in completed.drain(..) {
+                // Remove if still present and still completed
+                if let std::collections::hash_map::Entry::Occupied(e) = guard.entry(id)
+                    && e.get().time_elapsed > Duration::from_millis(0)
+                {
+                    e.remove();
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -125,6 +303,14 @@ impl KvbmMetrics {
             .create_intcounter("matched_tokens", "The number of matched tokens", &[])
             .unwrap();
         let kvbm_stats = Arc::new(Stats::new());
+
+        let interval = Duration::from_secs(10);
+
+        let cancel = CancellationToken::new();
+        let handle = kvbm_stats.spawn_periodic_flush(interval, cancel.clone());
+
+        let flusher = Arc::new(Flusher::new(cancel, handle));
+
         Self {
             offload_requests,
             offload_blocks_d2h,
@@ -134,6 +320,7 @@ impl KvbmMetrics {
             save_kv_layer_requests,
             matched_tokens,
             kvbm_stats,
+            flusher,
         }
     }
 }
