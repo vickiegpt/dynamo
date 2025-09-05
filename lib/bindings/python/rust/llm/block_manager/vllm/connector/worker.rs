@@ -6,6 +6,7 @@ use dynamo_llm::block_manager::connector::scheduler::{
     Scheduler, TransferSchedulerClient, WorkerSchedulerClient,
 };
 use dynamo_llm::block_manager::metrics_kvbm::KvbmMetrics;
+use tokio::runtime::Handle;
 
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
@@ -92,9 +93,11 @@ impl KvConnectorWorker {
         )?
         .detach();
 
+        let handle: Handle = drt.runtime().primary();
+
         let kvbm_metrics = KvbmMetrics::new(
             &drt.namespace(kvbm_connector::KVBM_CONNECTOR_WORKER)
-                .unwrap(),
+                .unwrap(), &handle
         );
 
         tracing::info!(

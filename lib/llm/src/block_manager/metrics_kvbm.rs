@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use tokio::runtime::Handle;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -151,13 +152,14 @@ impl Stats {
 
     pub fn spawn_periodic_flush(
         self: &Arc<Self>,
+        rt: &Handle,
         interval: Duration,
         cancel: CancellationToken,
     ) -> tokio::task::JoinHandle<()> {
         let this = Arc::clone(self);
         let output_dir = metrics_dump_dir();
 
-        tokio::spawn(async move {
+        rt.spawn(async move {
             let _ = tokio::fs::create_dir_all(&output_dir).await;
             loop {
                 tokio::select! {
@@ -264,7 +266,7 @@ impl Stats {
 }
 
 impl KvbmMetrics {
-    pub fn new(mr: &dyn MetricsRegistry) -> Self {
+    pub fn new(mr: &dyn MetricsRegistry, rt: &Handle) -> Self {
         let offload_requests = mr
             .create_intcounter("offload_requests", "The number of offload requests", &[])
             .unwrap();
@@ -307,7 +309,7 @@ impl KvbmMetrics {
         let interval = Duration::from_secs(10);
 
         let cancel = CancellationToken::new();
-        let handle = kvbm_stats.spawn_periodic_flush(interval, cancel.clone());
+        let handle = kvbm_stats.spawn_periodic_flush(rt, interval, cancel.clone());
 
         let flusher = Arc::new(Flusher::new(cancel, handle));
 

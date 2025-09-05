@@ -104,7 +104,7 @@ impl KvConnectorLeaderRecorder {
             .namespace(kvbm_connector::KVBM_CONNECTOR_LEADER)
             .unwrap();
 
-        let kvbm_metrics = Arc::new(KvbmMetrics::new(&ns));
+        let kvbm_metrics = Arc::new(KvbmMetrics::new(&ns, &handle));
         let kvbm_metrics_clone = kvbm_metrics.clone();
 
         let token = CancellationToken::new();
