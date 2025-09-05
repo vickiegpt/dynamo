@@ -8,7 +8,7 @@
 Cargo.toml @ai-dynamo/dynamo-rust-codeowners
 
 # Python Libraries
-*.py @nnshah1 @tanmayv25 @piotrm-nvidia @ptarasiewiczNV @ryanolson @grahamking @paulhendricks @biswapanda @tmonty12 @guanluo @rmccorm4 @tedzhouhk @alec-flowers @kkranen @ai-dynamo/Devops @jthomson04 @ishandhanani @PeaBrane @hhzhang16
+*.py @nnshah1 @tanmayv25 @piotrm-nvidia @ptarasiewiczNV @ryanolson @grahamking @paulhendricks @biswapanda @tmonty12 @guanluo @rmccorm4 @tedzhouhk @alec-flowers @kkranen @ai-dynamo/Devops @ishandhanani @PeaBrane @hhzhang16
 
 # Container/Environments
 /container/ @rmccorm4 @tanmayv25 @richardhuo-nv @ptarasiewiczNV @ishandhanani @alec-flowers @nnshah1 @ai-dynamo/Devops
@@ -27,9 +27,9 @@ Cargo.toml @ai-dynamo/dynamo-rust-codeowners
 CODEOWNERS @ai-dynamo/Devops @nnshah1
 
 # Planner
-/components/planner/ @tedzhouhk @hhzhang16 @jasonqinzhou @PeaBrane @Aphoh @alec-flowers @michaelshin
-/benchmarks/profiler/ @tedzhouhk @hhzhang16 @jasonqinzhou @PeaBrane @Aphoh @alec-flowers @michaelshin
-/tests/planner/ @tedzhouhk @hhzhang16 @jasonqinzhou @PeaBrane @Aphoh @alec-flowers @michaelshin
+/components/planner/ @tedzhouhk @hhzhang16 @jasonqinzhou @PeaBrane @alec-flowers @michaelshin
+/benchmarks/profiler/ @tedzhouhk @hhzhang16 @jasonqinzhou @PeaBrane @alec-flowers @michaelshin
+/tests/planner/ @tedzhouhk @hhzhang16 @jasonqinzhou @PeaBrane @alec-flowers @michaelshin
 
 # Legal
 /ATTRIBUTIONS-Rust.md @ai-dynamo/Devops
