@@ -90,6 +90,7 @@ pub struct KvbmMetrics {
 /// is composed of a fixed latency, as well as some per-block latency, hence the blocks parameter.
 #[derive(Debug, Clone)]
 pub struct EventStats {
+    request_id: String,
     start_instant: Instant, // for precise elapsed measurement
     start_time: SystemTime, // wall-clock timestamp for logs/plots
     time_elapsed: Duration,
@@ -97,8 +98,9 @@ pub struct EventStats {
 }
 
 impl EventStats {
-    pub fn new(num_blocks: usize) -> Self {
+    pub fn new(request_id: String, num_blocks: usize) -> Self {
         Self {
+            request_id,
             start_instant: Instant::now(),
             start_time: SystemTime::now(),
             time_elapsed: Duration::from_secs(0),
@@ -231,15 +233,15 @@ impl Stats {
             .await?;
 
         if new_file {
-            file.write_all(b"id,num_blocks,time_elapsed_ms,start_time\n")
+            file.write_all(b"request_id,num_blocks,time_elapsed_ms,start_time_ms\n")
                 .await?;
         }
 
         // Write all lines
-        for (id, ev) in &completed {
+        for (_, ev) in &completed {
             let line = format!(
                 "{},{},{},{}\n",
-                id,
+                ev.request_id,
                 ev.num_blocks,
                 ev.time_elapsed.as_millis(),
                 ev.start_time_millis()

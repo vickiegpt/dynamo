@@ -773,7 +773,7 @@ impl Slot for VllmConnectorSlot {
             .kvbm_stats
             .host_match_latency
             .blocking_lock()
-            .insert(self.request_id.clone(), EventStats::new(0));
+            .insert(self.request_id.clone(), EventStats::new(self.request_id.clone(), 0));
         nvtx::range_push!("host_blocks_match");
         let mut host_blocks = self
             .block_manager
@@ -803,7 +803,7 @@ impl Slot for VllmConnectorSlot {
             .kvbm_stats
             .disk_match_latency
             .blocking_lock()
-            .insert(self.request_id.clone(), EventStats::new(0));
+            .insert(self.request_id.clone(), EventStats::new(self.request_id.clone(), 0));
         // start at host offset
         nvtx::range_push!("host_blocks_match");
         let mut disk_blocks = self
@@ -1309,15 +1309,18 @@ async fn process_offload_request(
     kvbm_metrics
         .offload_blocks_d2h
         .inc_by(offload_req.block_ids.len() as u64);
-    kvbm_metrics
-        .kvbm_stats
-        .host_offload_latency
-        .lock()
-        .await
-        .insert(
-            offload_req.request_id.clone(),
-            EventStats::new(offload_req.block_ids.len()),
-        );
+
+    {
+        kvbm_metrics
+            .kvbm_stats
+            .host_offload_latency
+            .lock()
+            .await
+            .insert(
+                offload_req.operation_id.to_string(),
+                EventStats::new(offload_req.request_id.clone(), offload_req.block_ids.len()),
+            );
+    }
 
     let request_id = &offload_req.request_id;
     let operation_id = &offload_req.operation_id;
@@ -1397,7 +1400,7 @@ async fn process_offload_request(
                 .host_offload_latency
                 .lock()
                 .await
-                .get_mut(&offload_req.request_id)
+                .get_mut(&offload_req.operation_id.to_string())
             {
                 event_stat.event_complete();
             }
@@ -1447,8 +1450,8 @@ async fn process_onboard_request(
             .lock()
             .await
             .insert(
-                onboard_req.request_id.clone(),
-                EventStats::new(onboard_req.src_blocks.len()),
+                onboard_req.operation_id.to_string(),
+                EventStats::new(onboard_req.request_id.clone(), onboard_req.src_blocks.len()),
             );
     } else if onboard_req.src_blocks.storage_pool() == BlockTransferPool::Disk {
         kvbm_metrics
@@ -1460,8 +1463,8 @@ async fn process_onboard_request(
             .lock()
             .await
             .insert(
-                onboard_req.request_id.clone(),
-                EventStats::new(onboard_req.src_blocks.len()),
+                onboard_req.operation_id.to_string(),
+                EventStats::new(onboard_req.request_id.clone(), onboard_req.src_blocks.len()),
             );
     }
 
@@ -1502,7 +1505,7 @@ async fn process_onboard_request(
                     .host_onboard_latency
                     .lock()
                     .await
-                    .get_mut(&onboard_req.request_id)
+                    .get_mut(&onboard_req.operation_id.to_string())
                 {
                     event_stat.event_complete();
                 }
@@ -1512,7 +1515,7 @@ async fn process_onboard_request(
                     .disk_onboard_latency
                     .lock()
                     .await
-                    .get_mut(&onboard_req.request_id)
+                    .get_mut(&onboard_req.operation_id.to_string())
                 {
                     event_stat.event_complete();
                 }
