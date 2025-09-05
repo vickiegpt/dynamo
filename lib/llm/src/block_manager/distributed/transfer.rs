@@ -6,6 +6,7 @@ use super::*;
 use nixl_sys::NixlDescriptor;
 use utils::*;
 use zmq::*;
+use futures::future;
 
 use BlockTransferPool::*;
 
@@ -19,6 +20,7 @@ use crate::block_manager::{
     },
     connector::scheduler::{SchedulingDecision, TransferSchedulerClient},
     storage::{DeviceStorage, DiskStorage, Local, PinnedStorage},
+    offload::MAX_TRANSFER_BATCH_SIZE,
 };
 
 use anyhow::Result;
@@ -28,6 +30,63 @@ use std::{any::Any, sync::Arc};
 type LocalBlock<S, M> = Block<S, locality::Local, M>;
 type LocalBlockDataList<S> = Vec<LocalBlockData<S>>;
 
+/// A batching wrapper for connector transfers to prevent resource exhaustion.
+/// Splits large transfers into smaller batches that can be handled by the resource pools.
+#[derive(Clone, Debug)]
+pub struct ConnectorTransferBatcher {
+    max_batch_size: usize,
+}
+
+impl ConnectorTransferBatcher {
+    pub fn new() -> Self {
+        Self { max_batch_size: MAX_TRANSFER_BATCH_SIZE }
+    }
+
+    pub fn new_with_max_batch_size(max_batch_size: usize) -> Self {
+        Self { max_batch_size }
+    }
+
+    pub async fn execute_batched_transfer(
+        &self,
+        handler: &BlockTransferHandler,
+        request: BlockTransferRequest,
+    ) -> Result<()> {
+        let blocks = request.blocks();
+        let num_blocks = blocks.len();
+
+        if num_blocks <= self.max_batch_size {
+            return handler.execute_transfer_direct(request).await;
+        }
+
+        let batches = blocks.chunks(self.max_batch_size);
+
+        let batch_futures: Vec<_> = batches.enumerate().map(|(i, batch)| {
+            let batch_request = BlockTransferRequest {
+                from_pool: *request.from_pool(),
+                to_pool: *request.to_pool(),
+                blocks: batch.to_vec(),
+                connector_req: None,
+            };
+            handler.execute_transfer_direct(batch_request)
+        }).collect();
+
+        // Execute all batches concurrently
+        tracing::debug!("Executing {} batches concurrently", batch_futures.len());
+
+        match futures::future::try_join_all(batch_futures).await {
+            Ok(_) => {
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("Batched connector transfer failed: {}", e);
+                Err(e)
+            }
+        }
+    }
+}
+
+
+
 /// A handler for all block transfers. Wraps a group of [`BlockTransferPoolManager`]s.
 #[derive(Clone)]
 pub struct BlockTransferHandler {
@@ -36,6 +95,7 @@ pub struct BlockTransferHandler {
     disk: Option<LocalBlockDataList<DiskStorage>>,
     context: Arc<TransferContext>,
     scheduler_client: Option<TransferSchedulerClient>,
+    batcher: ConnectorTransferBatcher,
     // add worker-connector scheduler client here
 }
 
@@ -55,6 +115,7 @@ impl BlockTransferHandler {
             disk: Self::get_local_data(disk_blocks),
             context,
             scheduler_client,
+            batcher: ConnectorTransferBatcher::new(),
         })
     }
 
@@ -123,7 +184,13 @@ impl BlockTransferHandler {
         }
     }
 
+    /// Execute transfer with batching to prevent resource exhaustion
     pub async fn execute_transfer(&self, request: BlockTransferRequest) -> Result<()> {
+        self.batcher.execute_batched_transfer(self, request).await
+    }
+
+    /// Execute transfer directly without batching (used by the batcher)
+    pub async fn execute_transfer_direct(&self, request: BlockTransferRequest) -> Result<()> {
         tracing::debug!(
             "Performing transfer of {} blocks from {:?} to {:?}",
             request.blocks().len(),

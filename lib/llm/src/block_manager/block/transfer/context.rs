@@ -191,7 +191,11 @@ impl TransferContext {
         let pool = if let Some(config) = config {
             if config.enable_pool {
                 let pool_size = config.max_concurrent_transfers * 2 + 2;
-                let buffer_size = config.max_transfer_batch_size
+                // Calculate buffer size for worst-case scenario
+                // In practice, transfers can be much larger than max_transfer_batch_size
+                // due to direct transfer paths bypassing the batcher
+                let max_blocks_per_transfer = config.max_transfer_batch_size; // Conservative estimate for large transfers
+                let buffer_size = max_blocks_per_transfer
                     * config.num_outer_components
                     * config.num_layers
                     * std::mem::size_of::<u64>();
@@ -202,7 +206,7 @@ impl TransferContext {
                     buffer_size / 1024,
                     config.num_layers,
                     config.num_outer_components,
-                    config.max_transfer_batch_size
+                    max_blocks_per_transfer
                 );
 
                 let total_memory_mb = (pool_size * buffer_size) / (1024 * 1024);

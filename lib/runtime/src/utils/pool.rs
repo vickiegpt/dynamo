@@ -324,11 +324,41 @@ impl<T: Returnable> SyncPool<T> {
         let mut pool = self.state.pool.lock().unwrap();
 
         while pool.is_empty() {
+            tracing::debug!("🔄 SyncPool: waiting for available resource (pool empty)");
             pool = self.state.available.wait(pool).unwrap();
+            tracing::debug!("🔄 SyncPool: woke up, checking pool again (size: {})", pool.len());
         }
 
         let value = pool.pop_front().unwrap();
+        tracing::debug!("✅ SyncPool: acquired resource, pool size now: {}", pool.len());
         SyncPoolItem::new(value, self.state.clone())
+    }
+
+    pub fn acquire_blocking_timeout(&self, timeout: std::time::Duration) -> Option<SyncPoolItem<T>> {
+        let mut pool = self.state.pool.lock().unwrap();
+        let deadline = std::time::Instant::now() + timeout;
+
+        while pool.is_empty() {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                tracing::warn!("⏰ SyncPool: acquire timeout after {:?}", timeout);
+                return None;
+            }
+
+            tracing::debug!("🔄 SyncPool: waiting for available resource (timeout in {:?})", remaining);
+            let (new_pool, timeout_result) = self.state.available.wait_timeout(pool, remaining).unwrap();
+            pool = new_pool;
+
+            if timeout_result.timed_out() {
+                tracing::warn!("⏰ SyncPool: acquire timeout after {:?}", timeout);
+                return None;
+            }
+            tracing::debug!("🔄 SyncPool: woke up, checking pool again (size: {})", pool.len());
+        }
+
+        let value = pool.pop_front().unwrap();
+        tracing::debug!("✅ SyncPool: acquired resource with timeout, pool size now: {}", pool.len());
+        Some(SyncPoolItem::new(value, self.state.clone()))
     }
 
     pub fn capacity(&self) -> usize {
@@ -380,6 +410,7 @@ impl<T: Returnable> Drop for SyncPoolItem<T> {
 
             let mut pool = self.state.pool.lock().unwrap();
             pool.push_back(value);
+            tracing::debug!("🔄 SyncPool: returned resource, pool size now: {}, notifying waiters", pool.len());
 
             self.state.available.notify_one();
         }
