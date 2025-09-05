@@ -61,7 +61,7 @@ if [ "${gen_enable_attention_dp}" = "false" ]; then
 fi
 
 full_logdir=${sub_dir}
-
+mkdir -p ${full_logdir}
 
 # Set clock
 #srun ${set_clock_cmd}
