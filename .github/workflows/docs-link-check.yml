@@ -103,6 +103,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PIPELINE_INDEX: ${{ secrets.PIPELINE_INDEX }}
           JOB_INDEX: ${{ secrets.JOB_INDEX }}
+          STEPS_INDEX: ${{ secrets.STEPS_INDEX }}
         run: |
           # Run the enhanced metrics upload script
           python3 .github/workflows/upload_complete_workflow_metrics.py
