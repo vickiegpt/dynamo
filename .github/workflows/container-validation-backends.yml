@@ -61,8 +61,8 @@ jobs:
             --sccache-region "$AWS_DEFAULT_REGION"
       - name: Run pytest
         run: |
-          docker compose up -d --wait -f ./deploy/docker-compose.yaml
           docker run --runtime=nvidia --rm --gpus all -w /workspace \
+            --network host \
             --name ${{ env.CONTAINER_ID }}_pytest \
             ${{ matrix.framework }}:latest \
             bash -c "pytest -xsv --basetemp=/tmp --junitxml=${{ env.PYTEST_XML_FILE }} -m \"${{ env.PYTEST_MARKS }}\""
