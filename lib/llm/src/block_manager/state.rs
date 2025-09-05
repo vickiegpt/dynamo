@@ -115,6 +115,7 @@ impl<R: LogicalResources, Metadata: BlockMetadata>
     KvBlockManagerState<locality::Logical<R>, Metadata>
 {
     pub async fn new(config: KvBlockManagerConfig, logical_resources: R) -> Result<Arc<Self>> {
+        let model_config = config.model.clone();
         let mut resources = Resources::new(config)?;
         let block_data_factories =
             logical::LogicalBlockFactories::new(&mut resources, logical_resources)?;
@@ -165,6 +166,7 @@ impl<R: LogicalResources, Metadata: BlockMetadata>
             resources.async_rt_handle.clone(),
             resources.metrics.clone(),
             resources.cancellation_token.clone(),
+            model_config,
         )?;
 
         let resources = Arc::new(resources);
@@ -218,6 +220,7 @@ impl<R: LogicalResources, Metadata: BlockMetadata>
 // - this will allow us to use the locality abstraction to build our factories and block pools
 impl<Metadata: BlockMetadata> KvBlockManagerState<locality::Local, Metadata> {
     pub async fn new(config: KvBlockManagerConfig) -> Result<Arc<Self>> {
+        let model_config = config.model.clone();
         let mut resources = Resources::new(config)?;
         let block_data_factories = local::LocalBlockDataFactories::new(&mut resources)?;
 
@@ -274,6 +277,7 @@ impl<Metadata: BlockMetadata> KvBlockManagerState<locality::Local, Metadata> {
             resources.async_rt_handle.clone(),
             resources.metrics.clone(),
             resources.cancellation_token.clone(),
+            model_config,
         )?;
 
         let resources = Arc::new(resources);

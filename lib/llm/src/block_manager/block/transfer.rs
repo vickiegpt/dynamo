@@ -33,7 +33,7 @@ use tokio::sync::oneshot;
 
 pub use crate::block_manager::storage::{CudaAccessible, Local, Remote};
 pub use async_trait::async_trait;
-pub use context::TransferContext;
+pub use context::{PoolConfig, TransferContext};
 
 /// A block that can be the target of a write
 pub trait Writable {}
@@ -174,7 +174,7 @@ where
         | TransferStrategy::CudaAsyncD2D => {
             tracing::debug!("Transfer: Using CUDA strategy: {:?}", RB::write_to_strategy());
             if RB::write_to_strategy() == TransferStrategy::CudaAsyncH2D || RB::write_to_strategy() == TransferStrategy::CudaAsyncD2H {
-                tracing::debug!("=== H2D TRANSFER START ===");
+                tracing::debug!("=== TRANSFER START ===");
                 tracing::debug!("H2D: sources.len() = {}, targets.len() = {}", sources.len(), targets.len());
                 tracing::debug!("H2D: RB::write_to_strategy() = {:?}", RB::write_to_strategy());
                 tracing::debug!("H2D: Strategy match confirmed, proceeding with H2D logic");
@@ -185,18 +185,13 @@ where
                 // Use simplified single kernel approach - let CUDA handle large transfers
                 let selected_stream = ctx.stream();
 
-                let cleanup_result = cuda::copy_blocks_with_customized_kernel(sources, targets, selected_stream.as_ref(), RB::write_to_strategy())?;
+                let cleanup_result = cuda::copy_blocks_with_customized_kernel(sources, targets, selected_stream.as_ref(), RB::write_to_strategy(), &ctx)?;
 
-                // 🔍 MANUAL MEMCHECK: Validate cleanup result
-                if let Some((pointers, size)) = cleanup_result {
-                    tracing::debug!("H2D: Cleanup needed: {} pointers, {} bytes", pointers.len(), size);
-                    ctx.cuda_event_with_pinned_cleanup(tx, "H2D".to_string(), worker_id, pointers)?;
-                } else {
-                    tracing::debug!("H2D: No cleanup needed");
-                    ctx.cuda_event(tx)?;
-                }
+                // Pool-based resources are automatically cleaned up via Drop
+                tracing::debug!("H2D: Using pool-based resources - no manual cleanup needed");
+                ctx.cuda_event(tx)?;
 
-                tracing::debug!("=== H2D TRANSFER COMPLETE ===");
+                tracing::debug!("=== TRANSFER COMPLETE ===");
                 return Ok(rx);
             } else {
                 // Fall back to individual copy for single H2D blocks

@@ -46,12 +46,12 @@
 
 use super::block::{
     BlockError, BlockMetadata, BlockState, ImmutableBlock, MutableBlock,
-    locality::LocalityProvider, transfer::TransferContext,
+    locality::LocalityProvider, transfer::{TransferContext, PoolConfig},
 };
 use super::metrics::{BlockManagerMetrics, PoolMetrics};
 use super::pool::{BlockPool, BlockPoolError};
 use super::storage::{Cuda, Storage};
-use super::{DeviceStorage, DiskStorage, PinnedStorage};
+use super::{DeviceStorage, DiskStorage, PinnedStorage, KvManagerModelConfig};
 use nixl_sys::Agent as NixlAgent;
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -75,8 +75,8 @@ use request::{BlockResult, OffloadRequest, OffloadRequestKey, OnboardRequest};
 
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
 
-const MAX_CONCURRENT_TRANSFERS: usize = 4;
-const MAX_TRANSFER_BATCH_SIZE: usize = 16;
+pub const MAX_CONCURRENT_TRANSFERS: usize = 4;
+pub const MAX_TRANSFER_BATCH_SIZE: usize = 16;
 
 /// The offload manager handles all block transfers between different cache levels.
 pub struct OffloadManager<Locality: LocalityProvider, Metadata: BlockMetadata> {
@@ -110,6 +110,7 @@ impl<Locality: LocalityProvider + 'static, Metadata: BlockMetadata>
         async_rt_handle: Handle,
         metrics: Arc<BlockManagerMetrics>,
         cancellation_token: CancellationToken,
+        model_config: KvManagerModelConfig,
     ) -> Result<Arc<Self>> {
         let (device_offload_tx, device_offload_rx) = mpsc::unbounded_channel();
         let (host_offload_tx, host_offload_rx) = mpsc::unbounded_channel();
@@ -130,11 +131,20 @@ impl<Locality: LocalityProvider + 'static, Metadata: BlockMetadata>
 
         let cuda_ctx = Cuda::device_or_create(0)?;
 
+        let pool_config = PoolConfig {
+            enable_pool: true,
+            max_concurrent_transfers: MAX_CONCURRENT_TRANSFERS,
+            max_transfer_batch_size: MAX_TRANSFER_BATCH_SIZE,
+            num_outer_components: model_config.outer_dim,
+            num_layers: model_config.num_layers,
+        };
+
         // We want cuda offloads to happen in parallel with host onboards, so we need to use a different stream.
         let device_offload_transfer_ctx = Arc::new(TransferContext::new(
             nixl_agent.clone(),
             cuda_ctx.new_stream()?,
             async_rt_handle.clone(),
+            Some(pool_config),
         ));
 
         let device_metrics = metrics.pool("device");
@@ -174,6 +184,7 @@ impl<Locality: LocalityProvider + 'static, Metadata: BlockMetadata>
             nixl_agent.clone(),
             cuda_ctx.new_stream()?,
             async_rt_handle.clone(),
+            None,
         ));
 
         // Host -> Disk offload
@@ -746,6 +757,14 @@ mod tests {
 
         let async_rt_handle = Handle::current();
 
+        let minimal_config = KvManagerModelConfig::builder()
+            .num_layers(config.num_layers)
+            .outer_dim(config.outer_dim)       // K and V
+            .page_size(config.page_size)       // Minimal page size
+            .inner_dim(config.inner_dim)     // Small inner dim
+            .build()
+            .expect("Failed to build minimal config");
+
         let manager = OffloadManager::new(
             disk_pool.clone(),
             host_pool.clone(),
@@ -754,6 +773,7 @@ mod tests {
             async_rt_handle,
             BlockManagerMetrics::new(&Arc::new(Registry::new()))?,
             CancellationToken::new(),
+            minimal_config,
         )?;
 
         Ok((manager, device_pool, host_pool, disk_pool))

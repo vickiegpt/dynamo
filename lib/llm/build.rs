@@ -56,7 +56,7 @@ fn find_fatbin_file() -> Option<PathBuf> {
 
     // 2. Check standard locations (priority order)
     let default_paths = [
-        "src/block_manager/block/transfer/kernels/vectorized_copy.fatbin",  // Primary: Next to transfer module
+        "./src/block_manager/block/transfer/kernels/vectorized_copy.fatbin",  // Primary: Next to transfer module
     ];
 
     for path in &default_paths {
