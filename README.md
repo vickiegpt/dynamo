@@ -120,7 +120,7 @@ Dynamo provides a simple way to spin up a local set of inference components incl
 ```
 # Start an OpenAI compatible HTTP server, a pre-processor (prompt templating and tokenization) and a router.
 # Pass the TLS certificate and key paths to use HTTPS instead of HTTP.
-python -m dynamo.frontend --http-port 8080 [--tls-cert-path cert.pem] [--tls-key-path key.pem]
+python -m dynamo.frontend --http-port 8000 [--tls-cert-path cert.pem] [--tls-key-path key.pem]
 
 # Start the SGLang engine, connecting to NATS and etcd to receive requests. You can run several of these,
 # both for the same model and for multiple models. The frontend node will discover them.
@@ -130,7 +130,7 @@ python -m dynamo.sglang.worker --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B 
 #### Send a Request
 
 ```bash
-curl localhost:8080/v1/chat/completions   -H "Content-Type: application/json"   -d '{
+curl localhost:8000/v1/chat/completions   -H "Content-Type: application/json"   -d '{
     "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
     "messages": [
     {
@@ -150,6 +150,13 @@ Rerun with `curl -N` and change `stream` in the request to `true` to get the res
 - Follow the [Quickstart Guide](docs/guides/dynamo_deploy/README.md) to deploy on Kubernetes.
 - Check out [Backends](components/backends) to deploy various workflow configurations (e.g. SGLang with router, vLLM with disaggregated serving, etc.)
 - Run some [Examples](examples) to learn about building components in Dynamo and exploring various integrations.
+
+### Benchmarking Dynamo
+
+Dynamo provides comprehensive benchmarking tools to evaluate and optimize your deployments:
+
+* **[Benchmarking Guide](docs/benchmarks/benchmarking.md)** – Compare deployment topologies (aggregated vs. disaggregated vs. vanilla vLLM) using GenAI-Perf
+* **[Pre-Deployment Profiling](docs/benchmarks/pre_deployment_profiling.md)** – Optimize configurations before deployment to meet SLA requirements
 
 # Engines
 
