@@ -101,7 +101,7 @@ class HandlerBase:
             )
 
     async def generate_locally(
-        self, request: dict, embeddings: Optional[Union[torch.Tensor, dict]] = None
+        self, request: dict, embeddings: Optional[Union[torch.Tensor, dict]] = None, context=None
     ):
         """
         Generate responses based on the disaggregation mode in the request.
@@ -109,6 +109,7 @@ class HandlerBase:
         Args:
             request: The request dictionary containing generation parameters
             embeddings: Optional tensor or dict containing embeddings for multimodal processing
+            context: Optional context object for cancellation handling
         """
         logging.debug(f"Request: {request}")
 
@@ -198,6 +199,11 @@ class HandlerBase:
             disaggregated_params=disaggregated_params,
             streaming=streaming,
         ):
+            # Check for cancellation on each iteration
+            if context and (context.is_stopped() or context.is_killed()):
+                logging.info(f"Request cancelled during TensorRT-LLM generation, request_id: {request_id}")
+                res.abort()
+                break
             # TRTLLM engine needs to start generating tokens first before stats
             # can be retrieved.
             if self.first_generation and self.publisher:
@@ -240,5 +246,6 @@ class HandlerBase:
                     DisaggregatedParamsCodec.encode(output.disaggregated_params)
                 )
             # Yield the chunk to the client and update the token count for the next iteration.
+            logging.info(f"Yielding chunk: {out}")
             yield out
             num_output_tokens_so_far = next_total_toks
