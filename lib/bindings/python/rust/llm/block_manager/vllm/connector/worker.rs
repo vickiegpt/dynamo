@@ -97,7 +97,8 @@ impl KvConnectorWorker {
 
         let kvbm_metrics = KvbmMetrics::new(
             &drt.namespace(kvbm_connector::KVBM_CONNECTOR_WORKER)
-                .unwrap(), &handle
+                .unwrap(),
+            &handle,
         );
 
         tracing::info!(
