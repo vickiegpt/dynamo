@@ -11,6 +11,7 @@ from vllm.distributed.kv_events import ZmqEventPublisher
 from vllm.usage.usage_lib import UsageContext
 from vllm.v1.engine.async_llm import AsyncLLM
 
+from dynamo import health_check
 from dynamo.llm import (
     ModelRuntimeConfig,
     ModelType,
@@ -150,6 +151,12 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
         runtime, component, engine_client, default_sampling_params
     )
 
+    # Load health check payload from environment or use default
+    health_check_payload = health_check.load_health_check_from_env()
+    if health_check_payload is None:
+        # Use default health check payload for vLLM
+        health_check_payload = health_check.get_default_health_check_payload("vllm")
+
     try:
         logger.debug("Starting serve_endpoint for prefill worker")
         await asyncio.gather(
@@ -161,6 +168,7 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
                 handler.generate,
                 graceful_shutdown=True,
                 metrics_labels=[("model", config.model)],
+                health_check_payload=health_check_payload,
             ),
             clear_endpoint.serve_endpoint(
                 handler.clear_kv_blocks, metrics_labels=[("model", config.model)]
@@ -260,6 +268,12 @@ async def init(runtime: DistributedRuntime, config: Config):
             runtime_config=runtime_config,
         )
 
+    # Load health check payload from environment or use default
+    health_check_payload = health_check.load_health_check_from_env()
+    if health_check_payload is None:
+        # Use default health check payload for vLLM
+        health_check_payload = health_check.get_default_health_check_payload("vllm")
+
     try:
         logger.debug("Starting serve_endpoint for decode worker")
         await asyncio.gather(
@@ -269,6 +283,7 @@ async def init(runtime: DistributedRuntime, config: Config):
                 handler.generate,
                 graceful_shutdown=config.migration_limit <= 0,
                 metrics_labels=[("model", config.model)],
+                health_check_payload=health_check_payload,
             ),
             clear_endpoint.serve_endpoint(
                 handler.clear_kv_blocks, metrics_labels=[("model", config.model)]
