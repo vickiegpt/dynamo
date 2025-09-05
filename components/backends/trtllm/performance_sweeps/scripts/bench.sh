@@ -177,6 +177,7 @@ for concurrency in ${concurrency_list}; do
         --random-input-len ${isl} \
         --random-output-len ${osl} \
         --random-range-ratio 0.8 \
+        --use-chat-template \ 
         --ignore-eos \
         --backend "dynamo" \
         --endpoint "/v1/chat/completions" \
