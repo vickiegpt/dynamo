@@ -11,10 +11,7 @@ use zmq::*;
 
 use crate::block_manager::{
     BasicMetadata, BlockMetadata, LayoutConfigBuilder, NixlLayout, Storage,
-    block::{
-        Block, layout_to_blocks, locality,
-        transfer::{TransferContext, context::v2::TransferContext as TransferContextV2},
-    },
+    block::{Block, layout_to_blocks, locality, transfer::TransferContext},
     connector::scheduler::TransferSchedulerClient,
     layout::LayoutType,
     storage::{DeviceAllocator, DeviceStorage, DiskAllocator, PinnedAllocator, torch::TorchTensor},
@@ -26,7 +23,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -576,7 +572,7 @@ impl KvbmWorker {
         let nixl_agent = Arc::new(Some(agent));
 
         let handle = tokio::runtime::Handle::current();
-        let transfer_context = Arc::new(TransferContextV2::new(
+        let transfer_context = Arc::new(TransferContext::new(
             nixl_agent,
             DeviceAllocator::new(config.device_id)
                 .unwrap()

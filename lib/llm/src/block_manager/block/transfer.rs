@@ -35,7 +35,7 @@ use tokio::sync::oneshot;
 
 pub use crate::block_manager::storage::{CudaAccessible, Local, Remote};
 pub use async_trait::async_trait;
-pub use context::v2::TransferContext;
+pub use context::TransferContext;
 
 /// A block that can be the target of a write
 pub trait Writable {}
