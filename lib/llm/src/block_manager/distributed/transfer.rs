@@ -50,8 +50,8 @@ impl BlockTransferHandler {
         scheduler_client: Option<TransferSchedulerClient>,
         // add worker-connector scheduler client here
     ) -> Result<Self> {
-        let h2d = Arc::new(context.clone_with_new_stream());
-        let d2h = Arc::new(context.clone_with_new_stream());
+        let h2d = Arc::new(context.clone_with_new_stream()?);
+        let d2h = Arc::new(context.clone_with_new_stream()?);
         Ok(Self {
             device: Self::get_local_data(device_blocks),
             host: Self::get_local_data(host_blocks),

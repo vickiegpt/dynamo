@@ -70,12 +70,16 @@ impl TransferContext {
         })
     }
 
-    pub fn clone_with_new_stream(&self) -> Self {
-        Self {
+    pub fn clone_with_new_stream(&self) -> Result<Self, TransferError> {
+        let stream = self.stream.context().new_stream().map_err(|e| {
+            TransferError::ExecutionError(format!("Failed to create new CUDA stream: {}", e))
+        })?;
+
+        Ok(Self {
             nixl_agent: self.nixl_agent.clone(),
-            stream: self.stream.context().new_stream().unwrap(),
+            stream,
             async_rt_handle: self.async_rt_handle.clone(),
-        }
+        })
     }
 }
 

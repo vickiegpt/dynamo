@@ -572,15 +572,13 @@ impl KvbmWorker {
         let nixl_agent = Arc::new(Some(agent));
 
         let handle = tokio::runtime::Handle::current();
-        let transfer_context = Arc::new(TransferContext::new(
-            nixl_agent,
-            DeviceAllocator::new(config.device_id)
-                .unwrap()
-                .ctx()
-                .new_stream()
-                .unwrap(),
-            handle,
-        ));
+        let device_allocator = DeviceAllocator::new(config.device_id)
+            .map_err(|e| anyhow::anyhow!("Failed to create device allocator: {}", e))?;
+        let stream = device_allocator
+            .ctx()
+            .new_stream()
+            .map_err(|e| anyhow::anyhow!("Failed to create CUDA stream: {}", e))?;
+        let transfer_context = Arc::new(TransferContext::new(nixl_agent, stream, handle));
 
         // Build our device, host, and disk block lists.
         let device_blocks = Some(Self::make_layout::<_, BasicMetadata>(
