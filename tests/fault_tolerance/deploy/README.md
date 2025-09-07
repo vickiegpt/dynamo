@@ -43,28 +43,22 @@ each client and inspected using a post-processing script.
 ```mermaid
 sequenceDiagram
     participant Tester as Test Runner
-    participant ManagedDeployment as Managed Deployment
-    participant Kubernetes as Kubernetes
+    participant DynamoKubernetes as Dynamo Kubernetes Platform
+    participant DynamoDeployment as Dynamo Deployment
     participant Clients as Client Processes
     participant Logs as Log Files
     participant Parser as Results Parser
 
-    Tester->>ManagedDeployment: Launch deployment graph
-    ManagedDeployment->>Kubernetes: Create pods/services
-    ManagedDeployment->>Tester: Signal ready when deployment is up
-    Tester->>ManagedDeployment: Start metrics collection (watcher)
-    Tester->>Clients: Spawn multiple client processes
-    loop During Test
-        Clients->>Kubernetes: Send requests via port-forwarded localhost URLs
-        Kubernetes->>Clients: Return responses (logged to files)
-        ManagedDeployment->>Logs: Collect pod logs and metrics
-    end
-    Tester->>ManagedDeployment: Inject failures (terminate pods/processes)
-    ManagedDeployment->>Kubernetes: Delete pods or send SIGKILL/SIGINT
+    Tester->>DynamoKubernetes: Deploy Dynamo graph (Frontend + Workers)
+    DynamoKubernetes->>DynamoDeployment: Create pods/services (Frontend, Workers)
+    DynamoDeployment->>Tester: Signal ready (all pods running)
+    Tester->>Clients: Launch clients (concurrent requests)
+    Clients->>DynamoDeployment: Send requests via Port Forwarding to Frontend
+    Tester->>DynamoDeployment: Inject failures (delete pods/terminate processes)
     Clients->>Logs: Log request results to files
-    ManagedDeployment->>Logs: Save final pod logs and metrics
-    Tester->>ManagedDeployment: Shutdown deployment
-    ManagedDeployment->>Kubernetes: Delete deployment resources
+    Tester->>DynamoDeployment->>Logs: Save pod logs
+    Tester->>DynamoKubernetes: Teardown deployment (delete pods/services)
+    DynamoKubernetes->>DynamoDeployment: Delete resources
     Tester->>Parser: Parse logs
     Parser->>Tester: Generate results table
 ```
