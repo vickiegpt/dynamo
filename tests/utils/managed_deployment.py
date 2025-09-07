@@ -253,6 +253,9 @@ class ManagedDeployment:
     _port_forward = None
     _deployment_name = None
 
+    def __post_init__(self):
+        self._deployment_name = self.deployment_spec.name
+
     async def _init_kubernetes(self):
         """Initialize kubernetes client"""
         try:
@@ -262,7 +265,6 @@ class ManagedDeployment:
         except Exception:
             # Fallback to kube config file (for local development)
             await config.load_kube_config()
-        self._deployment_name = self.deployment_spec.name
         k8s_client = client.ApiClient()
         self._custom_api = client.CustomObjectsApi(k8s_client)
         self._core_api = client.CoreV1Api(k8s_client)
@@ -437,23 +439,26 @@ class ManagedDeployment:
         processes = [PodProcess(pod, line) for line in lines[1:]]
         return processes
 
-    def get_pods(self, component_name=None):
+    def get_service(self, service_name=None):
+        full_service_name = f"{self._deployment_name}-{service_name.lower()}"
+
+        return kr8s_Service.get(full_service_name, namespace=self.namespace)
+
+    def get_pods(self, service_name=None):
         result = {}
 
-        component_list = []
+        service_list = []
 
-        if not component_name:
-            component_list = [
-                component.name for component in self.deployment_spec.services
-            ]
+        if not service_name:
+            service_list = [service.name for service in self.deployment_spec.services]
         else:
-            component_list = [component_name]
+            service_list = [service_name]
 
-        for component in component_list:
-            # List pods for this component using the selector label
-            # nvidia.com/selector: deployment-name-component
+        for service in service_list:
+            # List pods for this service using the selector label
+            # nvidia.com/selector: deployment-name-service
             label_selector = (
-                f"nvidia.com/selector={self._deployment_name}-{component.lower()}"
+                f"nvidia.com/selector={self._deployment_name}-{service.lower()}"
             )
 
             pods = []
@@ -463,7 +468,7 @@ class ManagedDeployment:
             ):
                 pods.append(pod)
 
-            result[component] = pods
+            result[service] = pods
 
         return result
 
@@ -488,12 +493,12 @@ class ManagedDeployment:
             ) as f:
                 f.write("\n".join(previous_logs))
         except Exception as e:
-            self._logger.error(e)
+            self._logger.debug(e)
 
         self._get_pod_metrics(pod, service, suffix)
 
-    def _get_service_logs(self, component_name=None, suffix=""):
-        service_pods = self.get_pods(component_name)
+    def _get_service_logs(self, service_name=None, suffix=""):
+        service_pods = self.get_pods(service_name)
 
         for service, pods in service_pods.items():
             for i, pod in enumerate(pods):
@@ -508,11 +513,11 @@ class ManagedDeployment:
         else:
             port = self.deployment_spec.system_port
 
-        pf = pod.portforward(remote_port=port, local_port=0, address="0.0.0.0")
-        pf.start()
+        pf = self.port_forward(pod, port)
 
-        while pf.local_port == 0:
-            time.sleep(1)
+        if not pf:
+            self._logger.error(f"Unable to get metrics for {service_name}")
+            return
 
         content = None
 
@@ -552,28 +557,42 @@ class ManagedDeployment:
             if e.status != 404:  # Ignore if already deleted
                 raise
 
-    def start_port_forward(self):
-        service_name = f"{self._deployment_name}-{self.frontend_service_name.lower()}"
-
-        frontend_service = kr8s_Service.get(service_name, namespace=self.namespace)
-
-        self._port_forward = frontend_service.portforward(
-            remote_port=self.deployment_spec.port,
-            local_port=self.deployment_spec.port,
+    def port_forward(self, pod, remote_port, max_connection_attempts=3):
+        """Attempt to connect to a pod and return the port-forward object on success."""
+        port_forward = pod.portforward(
+            remote_port=remote_port,
+            local_port=0,
             address="0.0.0.0",
         )
+        port_forward.start()
 
-        self._port_forward.start()
+        for _ in range(max_connection_attempts):
+            if port_forward.local_port == 0:
+                time.sleep(1)
+                continue
 
-    def _stop_port_forward(self):
-        if self._port_forward:
-            self._port_forward.stop()
+            test_url = f"http://localhost:{port_forward.local_port}/"
+            try:
+                # Send HEAD request to test connection
+                response = requests.head(test_url, timeout=5)
+                if response.status_code in (200, 404):  # 404 is acceptable
+                    return port_forward
+            except (requests.ConnectionError, requests.Timeout) as e:
+                self._logger.warning(f"Connection test failed for pod {pod.name}: {e}")
+
+            # Retry port-forward
+            port_forward.stop()
+            port_forward.start()
+            time.sleep(1)
+
+        # All attempts failed
+        port_forward.stop()
+        return None
 
     async def _cleanup(self):
         try:
             self._get_service_logs()
         finally:
-            self._stop_port_forward()
             await self._delete_deployment()
 
     async def __aenter__(self):

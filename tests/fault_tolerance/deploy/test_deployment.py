@@ -11,46 +11,15 @@ import pytest
 
 from tests.fault_tolerance.deploy.client import client
 from tests.fault_tolerance.deploy.parse_results import main as parse_results
-from tests.fault_tolerance.deploy.scenarios import (
-    Load,
-    deployment_specs,
-    failure_scenarios,
-)
+from tests.fault_tolerance.deploy.scenarios import scenarios
 from tests.utils.managed_deployment import ManagedDeployment
 
 multiprocessing.set_start_method("spawn")
 
 
-@pytest.fixture(params=failure_scenarios.keys())
-def failures(request):
-    return failure_scenarios[request.param]
-
-
-@pytest.fixture(params=list(deployment_specs.keys()))
-def deployment_spec(request):
-    """
-    Fixture that provides different deployment graph test configurations.
-    """
-    return deployment_specs[request.param]
-
-
-@pytest.fixture
-def load(
-    max_request_rate,
-    max_retries,
-    num_clients,
-    input_token_length,
-    output_token_length,
-    requests_per_client,
-):
-    return Load(
-        num_clients,
-        requests_per_client,
-        input_token_length,
-        output_token_length,
-        max_retries,
-        max_request_rate,
-    )
+@pytest.fixture(params=scenarios.keys())
+def scenario(request):
+    return scenarios[request.param]
 
 
 @contextmanager
@@ -134,19 +103,24 @@ global_result_list = []
 
 
 @pytest.fixture(autouse=True)
-def results_table(request, sla):
+def results_table(request, scenario):  # noqa: F811
     yield
     parse_results(
-        logs_dir=None, log_paths=[request.node.name], tablefmt="fancy_grid", sla=sla
+        logs_dir=None,
+        log_paths=[request.node.name],
+        tablefmt="fancy_grid",
+        sla=scenario.load.sla,
     )
     global_result_list.append(request.node.name)
 
 
 @pytest.fixture(autouse=True, scope="session")
-def results_summary(sla):
+def results_summary():
     yield
     parse_results(
-        logs_dir=None, log_paths=global_result_list, tablefmt="fancy_grid", sla=sla
+        logs_dir=None,
+        log_paths=global_result_list,
+        tablefmt="fancy_grid",
     )
 
 
@@ -154,50 +128,45 @@ def results_summary(sla):
 @pytest.mark.slow
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_fault_scenario(
-    deployment_spec,  # noqa: F811
+    scenario,  # noqa: F811
     request,
     image,
     namespace,
-    model,
-    failures,  # noqa: F811
-    load,
 ):
     """
     Test dynamo serve deployments with injected failures
     """
 
-    # runtime_services is used to start nats and etcd
-
     logger = logging.getLogger(request.node.name)
 
-    deployment_spec.disable_grove()
+    scenario.deployment.disable_grove()
 
-    deployment_spec.name = "fault-tolerance-test"
+    scenario.deployment.name = "fault-tolerance-test"
 
     if image:
-        deployment_spec.set_image(image)
+        scenario.deployment.set_image(image)
 
-    if model:
-        deployment_spec.set_model(model)
+    if scenario.model:
+        scenario.deployment.set_model(scenario.model)
     else:
-        model = deployment_spec["VllmDecodeWorker"].model
+        model = scenario.deployment["VllmDecodeWorker"].model
 
     async with ManagedDeployment(
         namespace=namespace,
         log_dir=request.node.name,
-        deployment_spec=deployment_spec,
+        deployment_spec=scenario.deployment,
     ) as deployment:
         with _clients(
             logger,
-            load.num_clients,
+            scenario.load.clients,
             request,
-            deployment_spec,
+            scenario.deployment,
             namespace,
             model,
-            load.requests_per_client,
-            load.input_token_length,
-            load.output_token_length,
-            load.max_retries,
-            load.max_request_rate,
+            scenario.load.requests_per_client,
+            scenario.load.input_token_length,
+            scenario.load.output_token_length,
+            scenario.load.max_retries,
+            scenario.load.max_request_rate,
         ):
-            _inject_failures(failures, logger, deployment)
+            _inject_failures(scenario.failures, logger, deployment)

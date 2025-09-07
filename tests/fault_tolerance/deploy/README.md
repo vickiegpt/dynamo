@@ -27,47 +27,46 @@ conditions.
 ## Test Architecture
 
 The fault tolerance test suite is designed as a set of pytest
-configurations that launch typical dynamo serve graph deployments and
-then inject failures by terminating processes in the graph. To test
-the recovery time and impact of failures a set number of clients are
-launched in parallel. Each client sends a set number of synchronous
-requests. Log files are stored for each dynamo process as well as for
+configurations that launch typical dynamo deployments in a Kubernetes
+environemnt and then inject failures by terminating processes or
+pods. To test the recovery time and impact of failures a set number of
+clients are launched in parallel. Each client sends a set number of
+synchronous requests. Log files are stored for each pod as well as for
 each client and inspected using a post-processing script.
 
 > [!NOTE]
 > Test pass / failure is not an indication of SLA for recovery or resilience
 > It only indicates is the test was executed and data was collected
 
-> [!NOTE]
-> The test suite currently targets single node Dynamo Serve.
-> Support for Dynamo Deploy is a work in progress.
-
 ###  Test Sequence Diagram
 
 ```mermaid
 sequenceDiagram
     participant Tester as Test Runner
-    participant Dynamo as DynamoServeProcess
-    participant Circus as CircusController
-    participant Client as Test Clients
-    participant Metrics as Metrics Collector
+    participant ManagedDeployment as Managed Deployment
+    participant Kubernetes as Kubernetes
+    participant Clients as Client Processes
+    participant Logs as Log Files
+    participant Parser as Results Parser
 
-    Tester->>Dynamo: Launch deployment graph
-    Dynamo-->>Tester: Signal ready
-    Tester->>Metrics: Start metrics collection
-    Tester->>Client: Spawn multiple clients
+    Tester->>ManagedDeployment: Launch deployment graph
+    ManagedDeployment->>Kubernetes: Create pods/services
+    ManagedDeployment->>Tester: Signal ready when deployment is up
+    Tester->>ManagedDeployment: Start metrics collection (watcher)
+    Tester->>Clients: Spawn multiple client processes
     loop During Test
-        Client->>Dynamo: Send chat completion requests
-        Dynamo-->>Client: Return responses
-        Metrics->>Dynamo: Collect runtime metrics
+        Clients->>Kubernetes: Send requests via port-forwarded localhost URLs
+        Kubernetes->>Clients: Return responses (logged to files)
+        ManagedDeployment->>Logs: Collect pod logs and metrics
     end
-    Tester->>Dynamo: Inject failures (terminate components)
-    Dynamo-->>Tester: Recover/respawn as configured
-    Client-->>Tester: Log request results
-    Metrics-->>Tester: Log metrics data
-    Tester->>Dynamo: Shutdown deployment
-    Tester->>Metrics: Stop metrics collection
-    Tester->>Tester: Parse logs and summarize results
+    Tester->>ManagedDeployment: Inject failures (terminate pods/processes)
+    ManagedDeployment->>Kubernetes: Delete pods or send SIGKILL/SIGINT
+    Clients->>Logs: Log request results to files
+    ManagedDeployment->>Logs: Save final pod logs and metrics
+    Tester->>ManagedDeployment: Shutdown deployment
+    ManagedDeployment->>Kubernetes: Delete deployment resources
+    Tester->>Parser: Parse logs
+    Parser->>Tester: Generate results table
 ```
 
 ### Failure Scenarios
