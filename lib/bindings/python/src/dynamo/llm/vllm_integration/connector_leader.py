@@ -146,7 +146,7 @@ class KvConnectorLeader:
                 request_id=req_id,
                 resumed_from_preemption=resumed_from_preemption,
                 new_token_ids=new_token_ids,
-                new_block_ids=new_block_ids[0],
+                new_block_ids=new_block_ids[0] if new_block_ids is not None else [],
                 num_computed_tokens=num_computed_tokens,
             )
 

@@ -504,15 +504,6 @@ impl Slot for VllmConnectorSlot {
             self.block_size
         );
 
-        if next_position > self.sequence.total_tokens() {
-            // vllm stopped providing tokens, so we are done
-            self.state = SlotState::Decoding;
-            tracing::debug!(
-                "connector source stopped providing tokens; no further evaluation possible"
-            );
-            return Ok(());
-        }
-
         // now we decide what we should do from the current position to the num_scheduled_tokens
         tracing::debug!(
             "applying kv cache policy at current_position: {}; num_scheduled_tokens: {}; num_evaluated_blocks: {}",
@@ -522,8 +513,6 @@ impl Slot for VllmConnectorSlot {
         );
 
         // TODO(ryan) - apply policy
-        let next_position = self.current_position + num_scheduled_tokens;
-
         debug_assert!(next_position / self.block_size >= self.evaluated_blocks);
 
         let num_candidate_blocks = (next_position / self.block_size) - self.evaluated_blocks;
