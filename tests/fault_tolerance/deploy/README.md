@@ -56,7 +56,7 @@ sequenceDiagram
     Clients->>DynamoDeployment: Send requests via Port Forwarding to Frontend
     Tester->>DynamoDeployment: Inject failures (delete pods/terminate processes)
     Clients->>Logs: Log request results to files
-    Tester->>DynamoDeployment->>Logs: Save pod logs
+    DynamoDeployment->>Logs: Save pod logs
     Tester->>DynamoKubernetes: Teardown deployment (delete pods/services)
     DynamoKubernetes->>DynamoDeployment: Delete resources
     Tester->>Parser: Parse logs
