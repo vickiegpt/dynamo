@@ -721,7 +721,7 @@ impl Slot for VllmConnectorSlot {
         num_computed_tokens: usize,
         kvbm_metrics: Arc<KvbmMetrics>,
     ) -> Result<(), SlotError> {
-        nvtx::range!("acquire_local_matches");
+        let _nvtx = nvtx::range!("acquire_local_matches");
 
         if matches!(self.state(), SlotState::OnboardStaged(_)) {
             tracing::debug!("slot is already in the OnboardStaged state; skipping lookup");
@@ -773,7 +773,10 @@ impl Slot for VllmConnectorSlot {
             .kvbm_stats
             .host_match_latency
             .blocking_lock()
-            .insert(self.request_id.clone(), EventStats::new(self.request_id.clone(), 0));
+            .insert(
+                self.request_id.clone(),
+                EventStats::new(self.request_id.clone(), 0),
+            );
         nvtx::range_push!("host_blocks_match");
         let mut host_blocks = self
             .block_manager
@@ -803,7 +806,10 @@ impl Slot for VllmConnectorSlot {
             .kvbm_stats
             .disk_match_latency
             .blocking_lock()
-            .insert(self.request_id.clone(), EventStats::new(self.request_id.clone(), 0));
+            .insert(
+                self.request_id.clone(),
+                EventStats::new(self.request_id.clone(), 0),
+            );
         // start at host offset
         nvtx::range_push!("host_blocks_match");
         let mut disk_blocks = self
@@ -1304,7 +1310,7 @@ async fn process_offload_request(
     leader: &Arc<KvbmLeader>,
     kvbm_metrics: Arc<KvbmMetrics>,
 ) -> anyhow::Result<()> {
-    nvtx::range!("process_offload_request");
+    let _nvtx = nvtx::range!("process_offload_request");
     kvbm_metrics.offload_requests.inc();
     kvbm_metrics
         .offload_blocks_d2h
@@ -1438,7 +1444,7 @@ async fn process_onboard_request(
     leader: &Arc<KvbmLeader>,
     kvbm_metrics: Arc<KvbmMetrics>,
 ) -> anyhow::Result<()> {
-    nvtx::range!("process_onboard_request");
+    let _nvtx = nvtx::range!("process_onboard_request");
     kvbm_metrics.onboard_requests.inc();
     if onboard_req.src_blocks.storage_pool() == BlockTransferPool::Host {
         kvbm_metrics

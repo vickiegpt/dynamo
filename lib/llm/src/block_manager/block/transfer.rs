@@ -30,6 +30,7 @@ use cudarc::driver::CudaStream;
 
 use nixl_sys::NixlDescriptor;
 use nixl_sys::XferOp::{Read, Write};
+use nvtx;
 use std::ops::Range;
 use tokio::sync::oneshot;
 
@@ -174,6 +175,7 @@ where
         TransferStrategy::CudaAsyncH2D
         | TransferStrategy::CudaAsyncD2H
         | TransferStrategy::CudaAsyncD2D => {
+            let _nvtx = nvtx::range!("handle_cuda_transfer");
             for (src, dst) in sources.iter().zip(targets.iter_mut()) {
                 cuda::copy_block(src, dst, ctx.stream().as_ref(), RB::write_to_strategy())?;
             }
