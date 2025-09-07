@@ -63,39 +63,65 @@ sequenceDiagram
     Parser->>Tester: Generate results table
 ```
 
-### Failure Scenarios
+### Test Scenarios
 
-The test suite includes several predefined fault injection scenarios designed to validate system resilience under various failure conditions. These scenarios are configured in `scenarios.py` and can be selected via pytest parameters. Below is a description of the available scenarios:
+The test suite is organized around three core components: **Deployments**, **Client Load**, and **Failures**. Each scenario combines these elements to simulate fault conditions and measure system resilience.
 
-| Scenario Name          | Description                                                                 | Affected Components                             | Timing Example     |
-|------------------------|-----------------------------------------------------------------------------|-------------------------------------------------|--------------------|
-| **decode_worker**      | Terminates decoder worker processes                                         | `dynamo_vllmworker`                             | 30 seconds         |
-| **prefill_worker**     | Terminates prefill worker processes                                         | `dynamo_prefillworker`                          | 30 seconds         |
-| **frontend**           | Terminates frontend processes handling client requests                      | `dynamo_frontend`                               | 30 seconds         |
-| **processor**          | Terminates processor nodes responsible for task orchestration               | `dynamo_processor`                              | 30 seconds         |
-| **vllm_worker**        | Terminates low-level VLLM worker processes                                  | `vllm_worker` (external to Dynamo)              | 30 seconds         |
-| **none**               | Baseline scenario with no failures                                          | N/A                                             | N/A                |
+#### Deployments
+
+Deployments represent specific graphs that are deployed using the Dynamo Kubernetes Platform.
+
+The following deployment configurations are defined in `scenarios.py`:
+
+| Deployment Name         | Description                                                                 |
+|-------------------------|-----------------------------------------------------------------------------|
+| `agg-tp-1-dp-1`         | Aggregated worker with 1 replica for each service (frontend, decode).                          |
+| `agg-tp-1-dp-2`         | Aggregated worker with 2 replicas for each service (frontend, decode).                   |
+| `disagg-tp-1-dp-1`      | Disaggregated deployment with 1 replica for each service (frontend, decode, prefill).                   |
+| `disagg-tp-1-dp-2`      | Disaggregated deployment with 2 replicas for each service (frontend, decode, prefill). |
 
 
-#### Key Characteristics:
-1. **Timing**: Failures are injected at predefined intervals (e.g., 30 seconds after test start)
-2. **Severity**: The number of terminated processes can be configured (default: 1)
-3. **Scope**: Failures target specific components while leaving others operational
+#### Client Load
 
-#### Configuration:
-- **Injection Timing**: Defined in `failure_scenarios` dictionary in `scenarios.py`
-- **Process Count**: Adjustable via tuple values (e.g., `("dynamo_vllmworker", 1)` terminates 1 process)
-- **Component Mapping**:
-  - `dynamo_*`: Internal Dynamo services
-  - `vllm_worker`: External VLLM model workers
+- **Concurrent Clients**: 10 clients by default, adjustable per scenario.
+- **Requests per Client**: 100 requests, simulating sustained load.
+- **Input/Output Token Length**: 100 tokens for both input prompts and generated outputs.
+- **Request Rate Limit**: Ensures clients do not overwhelm the service, with a maximum of 1 request per second per client.
+
+#### Failures
+
+Failures are injected into deployed pods either by using pod delete or
+sending signals to specified processes.
+
+The following failure types are defined in `scenarios.py`:
+
+| Failure Name             | Description                                                                 | Injection Method                           |
+|--------------------------|-----------------------------------------------------------------------------|--------------------------------------------|
+| `none`                   | No failure injection.                                                      | N/A                                        |
+| `frontend`               | Terminate frontend process/pod.                                            | `SIGINT` signal to `dynamo.frontend`.           |
+| `frontend_pod`           | Delete frontend pod.                                                       | Kubernetes API pod deletion.               |
+| `decode_worker`          | Terminate decode worker process/pod.                                        | `SIGINT` signal to `dynamo.vllm`           |
+| `decode_worker_pod`      | Delete decode worker pod.                                                  | Kubernetes API pod deletion.               |
+| `prefill_worker`         | Terminate prefill worker process/pod.                                        | `SIGINT` signal to`dynamo.vllm`           |
+| `prefill_worker_pod`     | Delete prefill worker pod.                                                 | Kubernetes API pod deletion.               |
+| `vllm_decode_engine_core`| Terminate VLLM decode engine core process.                                   | `SIGKILL` signal to `VLLM::EngineCore`        |
+| `vllm_prefill_engine_core`| Terminate VLLM prefill engine core process.                              | `SIGKILL` signal to `VLLM::EngineCore`       |
+
+
+#### Example Scenario Breakdown
+
+**Scenario**: `agg-tp-2-dp-1-decode_worker`
+
+- **Deployment**: Aggregation with 1 decoder worker replica (`agg-tp-2-dp-1`).
+- **Client Load**: 10 clients, 100 requests each, max request rate 1/sec.
+- **Failure**: Terminates 1 decoder worker process 10 seconds into the test.
 
 #### Example Scenario Execution:
 
-Run all graph configurations injecting a decode_worker failure.
+Run all aggregated deployments and failure scenarios
 
 ```bash
-cd tests/fault_tolerance
-pytest test_runner.py -k decode_worker
+pytest tests/fault_tolerance/deploy/test_deployment.py -s -v -k "agg" --namespace namespace
 ```
 
 ### Test Results Directory
@@ -103,35 +129,8 @@ pytest test_runner.py -k decode_worker
 For each test scenario a directory of log files is created and post processed to summarize the test.
 
 ```
-test_worker_failure[agg-tp-2-dp-4-none]
+test_fault_scenario[agg-tp-1-dp-1-none]
 
-.
-├── client_0.log.txt
-├── client_1.log.txt
-├── client_2.log.txt
-├── client_3.log.txt
-├── client_4.log.txt
-├── client_5.log.txt
-├── client_6.log.txt
-├── client_7.log.txt
-├── dynamo_Frontend
-│   ├── error.log
-│   └── output.log
-├── dynamo.log.txt
-├── dynamo_Planner
-│   ├── error.log
-│   └── output.log
-├── dynamo_Processor
-│   ├── error.log
-│   └── output.log
-├── dynamo_VllmWorker
-│   ├── error.log
-│   └── output.log
-├── etcd.log.txt
-├── nats-server.log.txt
-├── nvidia-smi.log.txt
-├── test.log.txt
-└── watcher.log.txt
 
 ```
 
