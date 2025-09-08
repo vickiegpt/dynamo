@@ -777,7 +777,7 @@ impl Slot for VllmConnectorSlot {
                 self.request_id.clone(),
                 EventStats::new(self.request_id.clone(), 0),
             );
-        nvtx::range_push!("host_blocks_match");
+        nvtx::range_push!("host_blocks_match.req.{}", self.request_id());
         let mut host_blocks = self
             .block_manager
             .host()
@@ -811,7 +811,7 @@ impl Slot for VllmConnectorSlot {
                 EventStats::new(self.request_id.clone(), 0),
             );
         // start at host offset
-        nvtx::range_push!("host_blocks_match");
+        nvtx::range_push!("disk_blocks_match.req.{}", self.request_id());
         let mut disk_blocks = self
             .block_manager
             .disk()
@@ -1310,7 +1310,7 @@ async fn process_offload_request(
     leader: &Arc<KvbmLeader>,
     kvbm_metrics: Arc<KvbmMetrics>,
 ) -> anyhow::Result<()> {
-    let _nvtx = nvtx::range!("process_offload_request");
+    let _nvtx = nvtx::range!("process_offload_request.req.{}", offload_req.request_id);
     kvbm_metrics.offload_requests.inc();
     kvbm_metrics
         .offload_blocks_d2h
@@ -1444,7 +1444,7 @@ async fn process_onboard_request(
     leader: &Arc<KvbmLeader>,
     kvbm_metrics: Arc<KvbmMetrics>,
 ) -> anyhow::Result<()> {
-    let _nvtx = nvtx::range!("process_onboard_request");
+    let _nvtx = nvtx::range!("process_onboard_request.req.{}", onboard_req.request_id);
     kvbm_metrics.onboard_requests.inc();
     if onboard_req.src_blocks.storage_pool() == BlockTransferPool::Host {
         kvbm_metrics
