@@ -209,7 +209,7 @@ nodes.
 #### No Redundancy
 
 To demonstrate the failure and recovery time in the case that there is
-a single instance of each process we ran a simmple "agg-tp-2-dp-1" configuration.
+a single instance of each process we ran a simmple "agg-tp-1-dp-1" configuration.
 
 ```mermaid
 graph LR
@@ -225,7 +225,6 @@ graph LR
         subgraph Decode1["Decode 1"]
             direction TB
             D1GPU0["GPU 0"]
-            D1GPU1["GPU 1"]
         end
     end
 
@@ -326,18 +325,15 @@ Test Group: agg-tp-1-dp-2
 
 To demonstrate the failure and recovery time in the case of a
 disaaggregated deployment with a single instance for each process in
-the graph we ran a simple `disagg-p-tp-2-dp-1-d-tp-4-dp-1` configuration.
+the graph we ran a simple `disagg-tp-1-dp-1` configuration.
 
 ```mermaid
 graph LR
     Client["Client"]
     Frontend["Frontend"]
-    Processor["Processor"]
-    PrefillQueue["Remote Prefill Queue"]
 
     Client --> Frontend
-    Frontend --> Processor
-    Processor <--> DecodePool
+    Frontend <--> DecodePool
 
     %% Prefill Worker Pool (horizontal layout)
     subgraph PrefillPool["Prefill Worker Pool"]
@@ -345,8 +341,7 @@ graph LR
         subgraph Prefill1["Prefill 1"]
             direction TB
             P1GPU0["GPU 0"]
-            P1GPU1["GPU 1"]
-		end
+   		end
     end
 
     %% Decode Worker Pool (vertical layout)
@@ -355,15 +350,11 @@ graph LR
         subgraph Decode1["Decode 1"]
             direction TB
             D1GPU0["GPU 0"]
-            D1GPU1["GPU 1"]
-            D1GPU2["GPU 2"]
-            D1GPU3["GPU 3"]
         end
     end
 
 
-	PrefillQueue --> PrefillPool
-    DecodePool --> PrefillQueue
+    DecodePool --> PrefillPool
     PrefillPool -.-> DecodePool
 
     %% Styling
@@ -373,57 +364,60 @@ graph LR
 
 #### Results:
 
-**Test Group:** disagg-p-tp-2-dp-1-d-tp-4-dp-1
+```
+Test Group: disagg-tp-1-dp-1
+╒══════════════════════════╤═══════════╤═══════════╤══════════╤═══════════╤══════════╤═══════════╤═══════════╤════════════╕
+│         Failure          │   Startup │   Success │   Failed │   Success │   Failed │   Latency │   Latency │   Recovery │
+│                          │           │    Before │   Before │     After │    After │    Before │     After │            │
+╞══════════════════════════╪═══════════╪═══════════╪══════════╪═══════════╪══════════╪═══════════╪═══════════╪════════════╡
+│           none           │    175.00 │   1500.00 │     0.00 │       N/A │      N/A │      1.99 │       N/A │        N/A │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│         frontend         │    182.00 │    100.00 │     0.00 │    817.00 │   583.00 │      1.91 │      2.00 │       4.28 │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│       frontend_pod       │    181.00 │     81.00 │     0.00 │   1024.00 │   395.00 │      2.31 │      1.96 │       5.53 │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│      decode_worker       │    181.00 │     82.00 │     0.00 │    560.00 │   858.00 │      2.26 │      1.98 │     155.79 │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│    decode_worker_pod     │    181.00 │     92.00 │     0.00 │    566.00 │   842.00 │      2.21 │      1.83 │     174.15 │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│      prefill_worker      │    182.00 │     84.00 │     0.00 │   1346.00 │    70.00 │      2.22 │      1.49 │     153.53 │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│    prefill_worker_pod    │    161.00 │     83.00 │     0.00 │   1362.00 │    55.00 │      2.21 │      1.51 │     154.18 │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│ vllm_decode_engine_core  │    167.00 │     81.00 │     0.00 │    569.00 │   850.00 │      2.33 │      2.12 │     153.81 │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│ vllm_prefill_engine_core │    182.00 │     83.00 │     0.00 │    568.00 │   849.00 │      2.24 │      2.00 │     153.84 │
+╘══════════════════════════╧═══════════╧═══════════╧══════════╧═══════════╧══════════╧═══════════╧═══════════╧════════════╛
 
-**Test Command:**  dynamo serve graphs.disagg:Frontend -f /workspace/tests/fault_tolerance/configs/disagg_p_tp_2_dp_1_d_tp_4_dp_1.yaml --Frontend.port 8000 in /workspace/examples/llm
-|    Failure     |   Startup Time |   Success |   Failed |   Latency Before |   Latency After |   Pending Before |   Pending After |   Violations Before |   Violations After |   Recovery Time |
-|:--------------:|---------------:|----------:|---------:|-----------------:|----------------:|-----------------:|----------------:|--------------------:|-------------------:|----------------:|
-|      none      |          83.00 |    800.00 |     0.00 |             1.19 |             N/A |             0.01 |             N/A |                0.00 |                N/A |             N/A |
-|    frontend    |          78.00 |    664.00 |   136.00 |             1.19 |            1.19 |             0.07 |            0.02 |                0.00 |               0.00 |           17.24 |
-|   processor    |          77.00 |    576.00 |   224.00 |             1.19 |            1.19 |             0.00 |            0.00 |                0.00 |               0.00 |           26.90 |
-| decode_worker  |          72.00 |    200.00 |   600.00 |             1.20 |            1.28 |             0.03 |             N/A |                0.00 |               0.00 |             N/A |
-| prefill_worker |          81.00 |    798.00 |     2.00 |             1.19 |            1.22 |             0.05 |            0.05 |                0.00 |               0.00 |           42.31 |
-|  vllm_worker   |          83.00 |    797.00 |     3.00 |             1.19 |            1.22 |             0.00 |            0.03 |                0.00 |               8.00 |             N/A |
+```
 
 #### Summary:
 
 
-1. Dynamo does not currently detect and recover from direct vllm
-   worker sub process failure. In this example the vllm sub process
-   failure targets a prefill worker and has the same overall impact.
-   (WIP)
+1. Prefill worker engine failure causes decode engine failure.
 
-2. Prefill worker failure causes request timeout (30 sec) and in
-   addition during recovery time prefill requests are queued in the
-   prefill queue.
-
-3. Decode worker failure is currently permanent in the disaggregated
-   case as the prefill worker holds references to memory and which are
-   not freed. This leads to total failure after fault injection.
+2. When prefill workers fail gracefully, decode workers will automatically do prefill as well.
 
 
 #### Redundant Workers
 
 To demonstrate the failure and recovery time in the case that there
 are multiple instances of each process (except for the frontend and
-decode worker) we ran a simple "disagg-p-tp-2-dp-2-d-tp-4-dp-1"
+decode worker) we ran a simple "disagg-tp-1-dp-2"
 configuration.
 
 
 ```mermaid
 graph LR
     Client["Client"]
-    Frontend["Frontend"]
-    Processor_1["Processor 1"]
-	Processor_2["Processor 2"]
-    PrefillQueue["Remote Prefill Queue"]
+    Frontend_1["Frontend 1"]
+	Frontend_2["Frontend 2"]
 
-    Client --> Frontend
-    Frontend --> Processor_1
-    Frontend --> Processor_2
+    Client --> Frontend_1
+    Client --> Frontend_2
 
-    Processor_1 <--> DecodePool
-	Processor_2 <--> DecodePool
+    Frontend_1 <--> DecodePool
+	Frontend_2 <--> DecodePool
 
     %% Prefill Worker Pool (horizontal layout)
     subgraph PrefillPool["Prefill Worker Pool"]
@@ -431,12 +425,10 @@ graph LR
         subgraph Prefill1["Prefill 1"]
             direction TB
             P1GPU0["GPU 0"]
-            P1GPU1["GPU 1"]
 		end
         subgraph Prefill2["Prefill 2"]
             direction TB
             P2GPU0["GPU 0"]
-            P2GPU1["GPU 1"]
 		end
 
     end
@@ -447,15 +439,11 @@ graph LR
         subgraph Decode1["Decode 1"]
             direction TB
             D1GPU0["GPU 0"]
-            D1GPU1["GPU 1"]
-            D1GPU2["GPU 2"]
-            D1GPU3["GPU 3"]
         end
     end
 
 
-	PrefillQueue --> PrefillPool
-    DecodePool --> PrefillQueue
+	DecodePool --> PrefillPool
     PrefillPool -.-> DecodePool
 
     %% Styling
@@ -465,31 +453,76 @@ graph LR
 
 #### Results:
 
-**Test Group:** disagg-p-tp-2-dp-2-d-tp-4-dp-1
+```
+Test Group: disagg-tp-1-dp-2
+╒══════════════════════════╤═══════════╤═══════════╤══════════╤═══════════╤══════════╤═══════════╤═══════════╤════════════╕
+│         Failure          │   Startup │   Success │   Failed │   Success │   Failed │   Latency │   Latency │   Recovery │
+│                          │           │    Before │   Before │     After │    After │    Before │     After │            │
+╞══════════════════════════╪═══════════╪═══════════╪══════════╪═══════════╪══════════╪═══════════╪═══════════╪════════════╡
+│           none           │    181.00 │   1500.00 │     0.00 │       N/A │      N/A │      1.47 │       N/A │        N/A │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│         frontend         │    182.00 │    100.00 │     0.00 │   1390.00 │    10.00 │      1.75 │      1.43 │       4.32 │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│       frontend_pod       │    182.00 │     91.00 │     0.00 │   1409.00 │     0.00 │      1.78 │      1.43 │       5.48 │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│      decode_worker       │    182.00 │     94.00 │     0.00 │   1404.00 │     2.00 │      1.78 │      1.58 │     154.30 │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│    decode_worker_pod     │    181.00 │    100.00 │     0.00 │   1394.00 │     6.00 │      1.75 │      1.57 │     153.00 │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│      prefill_worker      │    172.00 │     90.00 │     0.00 │   1408.00 │     2.00 │      1.78 │      1.44 │     154.68 │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│    prefill_worker_pod    │    174.00 │    100.00 │     0.00 │   1398.00 │     2.00 │      1.74 │      1.41 │     155.59 │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│ vllm_decode_engine_core  │    181.00 │     91.00 │     0.00 │   1403.00 │     6.00 │      1.79 │      1.56 │     157.54 │
+├──────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│ vllm_prefill_engine_core │    181.00 │     94.00 │     0.00 │   1404.00 │     2.00 │      1.77 │      1.43 │     154.10 │
+╘══════════════════════════╧═══════════╧═══════════╧══════════╧═══════════╧══════════╧═══════════╧═══════════╧════════════╛
 
-**Test Command:**  dynamo serve graphs.disagg:Frontend -f /workspace/tests/fault_tolerance/configs/disagg_p_tp_2_dp_2_d_tp_4_dp_1.yaml --Frontend.port 8000 in /workspace/examples/llm
-
-|    Failure     |   Startup Time |   Success |   Failed |   Latency Before |   Latency After |   Pending Before |   Pending After |   Violations Before |   Violations After |   Recovery Time |
-|:--------------:|---------------:|----------:|---------:|-----------------:|----------------:|-----------------:|----------------:|--------------------:|-------------------:|----------------:|
-|      none      |          83.00 |    800.00 |     0.00 |             1.19 |             N/A |             0.00 |             N/A |                1.00 |                N/A |             N/A |
-|    frontend    |          82.00 |    704.00 |    96.00 |             1.19 |            1.17 |             0.00 |            0.01 |                1.00 |               0.00 |           12.95 |
-|   processor    |          78.00 |    795.00 |     5.00 |             1.20 |            1.18 |             0.02 |            0.01 |                1.00 |               0.00 |           25.91 |
-| decode_worker  |          78.00 |    199.00 |   601.00 |             1.21 |             nan |             0.00 |             N/A |                1.00 |               0.00 |             N/A |
-| prefill_worker |          77.00 |    800.00 |     0.00 |             1.22 |            1.18 |             0.00 |            0.01 |                1.00 |               1.00 |           45.14 |
-|  vllm_worker   |          77.00 |    799.00 |     1.00 |             1.20 |            1.16 |             0.02 |            0.00 |                1.00 |               1.00 |             N/A |
+```
 
 #### Summary:
 
-1. Dynamo does not currently detect and recover from direct vllm
-   worker sub process failure. In this example the vllm sub process
-   failure targets a prefill worker and has the same overall impact.
-   Since the prefill workers are redundant - a failure has low impact.
 
-2. Redundant prefill workers are able to absorb the load and no
-   additional queing is needed.
+1. Redundant prefill workers are able to absorb the load.
 
-3. Decode worker failure is currently permanent in the disaggregated
-   case as the prefill worker holds references to memory and which are
-   not freed. This leads to total failure after fault injection.
+2. When prefill workers go down, decode workers can also do prefill locally.
 
-4. Redundant processors work in this case.
+## Quick Start
+
+### Install Dynamo Platform
+
+Follow the instructions to install `Dynamo` in your Kubernetes cluster.
+
+[https://github.com/ai-dynamo/dynamo/blob/main/docs/guides/dynamo_deploy/installation_guide.md]
+
+### Mount Workspace and Kube Config
+
+Ensure you are able to run a `Dynamo` deployment directly from your host.
+
+Then run the development container mounting the workspace and your kube config.
+
+```
+./container/run.sh --mount-workspace -it -v ~/.kube:/root/.kube
+```
+
+### Run the tests
+
+```
+pytest tests/fault_tolerance/deploy/test_deployment.py -s -v --namespace ${NAMESPACE} --image ${IMAGE}
+```
+
+
+### Note on Running with Additional Credentials
+
+When running on an cluster that requires additional authentication (such as `AKS`) in addition you will need
+to authenticate and install cli as appropriate in to the container. As an example, before running the tests you
+in an `AKS` cluster you would need to do the following:
+
+```
+# In case you have multiple configs
+export KUBECONFIG=~/.kube/dynamo-kubeconfig
+
+curl -sL https://aka.ms/InstallAzureCLIDeb
+az aks install-cli
+az login
+```
