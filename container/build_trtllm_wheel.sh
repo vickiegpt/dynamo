@@ -58,6 +58,7 @@ cd TensorRT-LLM
 
 # Checkout the specified commit.
 # Switch to the main branch to pull the latest changes.
+git config filter.lfs.smudge "git-lfs smudge --skip -- %f"
 git checkout rihuo/add_llmargs
 
 # Update the submodules.
