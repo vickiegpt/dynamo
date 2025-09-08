@@ -118,10 +118,10 @@ The following failure types are defined in `scenarios.py`:
 
 #### Example Scenario Execution:
 
-Run all aggregated deployments and failure scenarios
+Run all deployments and failure scenarios
 
 ```bash
-pytest tests/fault_tolerance/deploy/test_deployment.py -s -v -k "agg" --namespace namespace
+pytest tests/fault_tolerance/deploy/test_deployment.py -s -v --namespace ${NAMESPACE}
 ```
 
 ### Test Results Directory
@@ -130,58 +130,79 @@ For each test scenario a directory of log files is created and post processed to
 
 ```
 test_fault_scenario[agg-tp-1-dp-1-none]
-
+.
+├── client_0.log.txt
+├── client_1.log.txt
+├── client_2.log.txt
+├── client_3.log.txt
+├── client_4.log.txt
+├── client_5.log.txt
+├── client_6.log.txt
+├── client_7.log.txt
+├── client_8.log.txt
+├── client_9.log.txt
+├── Frontend
+│   ├── fault-tolerance-test-frontend-576bd784dc-jv68q.log
+│   ├── fault-tolerance-test-frontend-576bd784dc-jv68q.metrics.log
+│   ├── fault-tolerance-test-frontend-576bd784dc-jv68q.previous.log
+│   └── fault-tolerance-test-frontend-576bd784dc-jv68q.yaml
+├── test.log.txt
+└── VllmDecodeWorker
+    ├── fault-tolerance-test-vllmdecodeworker-56b7bdf447-6tzqq.log
+    ├── fault-tolerance-test-vllmdecodeworker-56b7bdf447-6tzqq.metrics.log
+    ├── fault-tolerance-test-vllmdecodeworker-56b7bdf447-6tzqq.previous.log
+    └── fault-tolerance-test-vllmdecodeworker-56b7bdf447-6tzqq.yaml
 
 ```
 
 | File/Directory Name                | Description                                                                                      |
 |------------------------------------|------------------------------------------------------------------------------------------------|
 | **client_*.log.txt**               | Request/response logs for each client instance (contains JSON-formatted request details)        |
-| **dynamo_*/error.log**             | Error logs for specific Dynamo components (e.g., Frontend, Processor, VllmWorker)               |
-| **dynamo_*/output.log**            | Standard output logs for Dynamo components (service startup/shutdown messages)                |
-| **dynamo.log.txt**                 | Aggregate logs for Dynamo services (orchestration and initialization)                           |
-| **etcd.log.txt**                   | Logs for etcd, the distributed key-value store used for service coordination                    |
-| **nats-server.log.txt**            | Logs for NATS message broker, handling inter-service communication                             |
-| **nvidia-smi.log.txt**             | GPU monitoring logs (records utilization statistics during test execution)                      |
+| **{Service}/*.log                  | Container log for pod at end of test (Frontend, VllmDecodeWroer, etc.)                                                                         |
+| **{Service}/*.previous.log**       | Previous container log for pod in case of crash / exit. (Frontend, VllmDecodeWroer, etc.). Empty if N/A.               |
+| **{Service}/*.metrics.log**        | Metrics as reported by `/metrics` for the service                           |
+| **{Service}/*.yaml**               | yaml for pod including status transitions                    |
 | **test.log.txt**                   | Primary test execution log (contains fault injection timing, process management, and test status)|
-| **watcher.log.txt**                | Metrics collected by the watcher service (e.g., pending requests, active workers)               |
 
 ### Summary Results
 
 Results are presented in table format after each test providing summary statistics.
-
-**Test Group:** agg-tp-2-dp-1
-
-**Test Command:**  dynamo serve graphs.agg:Frontend -f /workspace/tests/fault_tolerance/configs/agg_tp_2_dp_1.yaml --Frontend.port 8000 in /workspace/examples/llm
-
-|    Failure    |   Startup Time |   Success |   Failed |   Latency Before |   Latency After |   Pending Before |   Pending After |   Violations Before |   Violations After |   Recovery Time |
-|:-------------:|---------------:|----------:|---------:|-----------------:|----------------:|-----------------:|----------------:|--------------------:|-------------------:|----------------:|
-|     none      |          56.00 |    800.00 |     0.00 |             1.97 |             N/A |             0.00 |             N/A |                8.00 |                N/A |             N/A |
-|   frontend    |          56.00 |    656.00 |   144.00 |             1.96 |            1.96 |             0.00 |            0.00 |                0.00 |               0.00 |           17.53 |
-|   processor   |          57.00 |    584.00 |   216.00 |             1.96 |            1.96 |             0.00 |            0.00 |                0.00 |               0.00 |           25.96 |
-| decode_worker |          80.00 |    520.00 |   280.00 |             2.01 |            1.98 |             0.00 |            0.00 |                8.00 |               8.00 |           37.99 |
-|  vllm_worker  |          58.00 |    120.00 |   680.00 |             1.98 |             nan |             0.00 |            0.00 |                0.00 |               0.00 |             N/A |
+```
+Test Group: agg-tp-1-dp-1
+╒═════════════════════════╤═══════════╤═══════════╤══════════╤═══════════╤══════════╤═══════════╤═══════════╤════════════╕
+│         Failure         │   Startup │   Success │   Failed │   Success │   Failed │   Latency │   Latency │   Recovery │
+│                         │           │    Before │   Before │     After │    After │    Before │     After │            │
+╞═════════════════════════╪═══════════╪═══════════╪══════════╪═══════════╪══════════╪═══════════╪═══════════╪════════════╡
+│          none           │    180.00 │   1500.00 │     0.00 │       N/A │      N/A │      1.19 │       N/A │        N/A │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│        frontend         │    181.00 │    153.00 │     0.00 │    820.00 │   527.00 │      1.21 │      1.18 │       3.36 │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│      frontend_pod       │    169.00 │    140.00 │     0.00 │    785.00 │   305.00 │      1.20 │      1.18 │       5.39 │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│      decode_worker      │    161.00 │    140.00 │     0.00 │    510.00 │   850.00 │      1.21 │      1.18 │     154.11 │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│    decode_worker_pod    │    181.00 │    140.00 │     0.00 │    511.00 │   849.00 │      1.22 │      1.18 │     156.47 │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│ vllm_decode_engine_core │    181.00 │    140.00 │     0.00 │    524.00 │   836.00 │      1.21 │      1.19 │     152.52 │
+╘═════════════════════════╧═══════════╧═══════════╧══════════╧═══════════╧══════════╧═══════════╧═══════════╧════════════╛
+```
 
 
 | Column Name           | Description                                                                 |
 |-----------------------|-----------------------------------------------------------------------------|
 | **Failure**           | Type of fault injection applied during the test (or 'none' for baseline)     |
-| **Startup Time**      | Time (seconds) taken for the service to become ready after initialization    |
-| **Success**           | Number of client requests that succeeded                                    |
-| **Failed**            | Number of client requests that failed or were invalid                       |
-| **Latency Before**    | Average request latency (seconds) for successful requests before fault injection |
-| **Latency After**     | Average request latency (seconds) for successful requests after fault injection (N/A if no fault) |
-| **Pending Before**    | Average number of pending requests observed before fault injection          |
-| **Pending After**     | Average number of pending requests observed after fault injection (N/A if no fault) |
-| **Violations Before** | Number of successful requests exceeding SLA latency before fault injection  |
-| **Violations After**  | Number of successful requests exceeding SLA latency after fault injection (N/A if no fault) |
+| **Startup**      | Time (seconds) taken for the service to become ready after initialization    |
+| **Succes/nBefore**   | Numoer of client requests that succeeded before fault injection                                   |
+| **Failed/nBefore**    | Number of client requests that failed or were invalid before fault injection                      |
+| **Success/nAftere**   | Number of client requests that  succeeded after fault injection |
+| **Latency Before**     | Average request latency (seconds) for successful requests before fault injection |
+| **Latency After**     | Average request latency (seconds) for successful requests after fault injection |
 | **Recovery Time**     | Time (seconds) taken for failed components to recover after fault injection  |
 
 ## Example Results
 
-The following results were obtained running on a single node with 8
-L40 GPUs using "deepseek-ai/DeepSeek-R1-Distill-Llama-8B" with 8
-concurrent clients each sending 100 requests.
+The following results were obtained running on a cluster of A100
+nodes.
 
 ### Aggregated Workers
 
@@ -194,11 +215,9 @@ a single instance of each process we ran a simmple "agg-tp-2-dp-1" configuration
 graph LR
     Client["Client"]
     Frontend["Frontend"]
-    Processor["Processor"]
 
     Client --> Frontend
-    Frontend --> Processor
-    Processor --> DecodePool
+    Frontend --> DecodePool
 
     %% Decode Worker Pool (vertical layout)
     subgraph DecodePool["Decode Worker Pool"]
@@ -216,187 +235,90 @@ graph LR
 
 #### Results:
 
-**Test Group: agg-tp-2-dp-1**
-
-**Test Command:**  dynamo serve graphs.agg:Frontend -f /workspace/tests/fault_tolerance/configs/agg_tp_2_dp_1.yaml --Frontend.port 8000 in /workspace/examples/llm
-
-|    Failure    |   Startup Time |   Success |   Failed |   Latency Before |   Latency After |   Pending Before |   Pending After |   Violations Before |   Violations After |   Recovery Time |
-|:-------------:|---------------:|----------:|---------:|-----------------:|----------------:|-----------------:|----------------:|--------------------:|-------------------:|----------------:|
-|     none      |          56.00 |    800.00 |     0.00 |             1.97 |             N/A |             0.00 |             N/A |                8.00 |                N/A |             N/A |
-|   frontend    |          56.00 |    656.00 |   144.00 |             1.96 |            1.96 |             0.00 |            0.00 |                0.00 |               0.00 |           17.53 |
-|   processor   |          57.00 |    584.00 |   216.00 |             1.96 |            1.96 |             0.00 |            0.00 |                0.00 |               0.00 |           25.96 |
-| decode_worker |          80.00 |    520.00 |   280.00 |             2.01 |            1.98 |             0.00 |            0.00 |                8.00 |               8.00 |           37.99 |
-|  vllm_worker  |          58.00 |    120.00 |   680.00 |             1.98 |             nan |             0.00 |            0.00 |                0.00 |               0.00 |             N/A |
-
+```
+Test Group: agg-tp-1-dp-1
+╒═════════════════════════╤═══════════╤═══════════╤══════════╤═══════════╤══════════╤═══════════╤═══════════╤════════════╕
+│         Failure         │   Startup │   Success │   Failed │   Success │   Failed │   Latency │   Latency │   Recovery │
+│                         │           │    Before │   Before │     After │    After │    Before │     After │            │
+╞═════════════════════════╪═══════════╪═══════════╪══════════╪═══════════╪══════════╪═══════════╪═══════════╪════════════╡
+│          none           │    180.00 │   1500.00 │     0.00 │       N/A │      N/A │      1.19 │       N/A │        N/A │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│        frontend         │    181.00 │    153.00 │     0.00 │    820.00 │   527.00 │      1.21 │      1.18 │       3.36 │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│      frontend_pod       │    169.00 │    140.00 │     0.00 │    785.00 │   305.00 │      1.20 │      1.18 │       5.39 │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│      decode_worker      │    161.00 │    140.00 │     0.00 │    510.00 │   850.00 │      1.21 │      1.18 │     154.11 │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│    decode_worker_pod    │    181.00 │    140.00 │     0.00 │    511.00 │   849.00 │      1.22 │      1.18 │     156.47 │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│ vllm_decode_engine_core │    181.00 │    140.00 │     0.00 │    524.00 │   836.00 │      1.21 │      1.19 │     152.52 │
+╘═════════════════════════╧═══════════╧═══════════╧══════════╧═══════════╧══════════╧═══════════╧═══════════╧════════════╛
+```
 
 #### Summary:
 
-1. Dynamo does not currently detect and recover from direct vllm worker sub process failure. (WIP)
-2. Recovery time for the decode worker itself is the largest and a decode worker failure has the largest impact (as expected)
-3. Overall failure count is roughly equal to recovery time multiplied by number of clients (as expected).
-
+1. Recovery time for the decode worker itself is the largest and a decode worker failure has the largest impact (as expected)
+2. Recovery time doesn't include time for the ready probe to return `ready` so even if the process is recovered early (as in the case of the Frontend) requests may fail until the pod is probed.
 
 #### Redundant Workers (Over Provisoned)
 
 To demonstrate the failure and recovery time in the case that there
 are multiple instances of each process (except for the frontend) we
-ran a simple "agg-tp-2-dp-4" configuration.
-
-In this case we also consider the system to be "over provisioned" for
-the workload as multiple workers are not needed to maintain SLA for
-the 8 clients.
+ran a simple "agg-tp-1-dp-2" configuration.
 
 ```mermaid
 graph LR
     Client["Client"]
-    Frontend["Frontend"]
-    Processor_1["Processor 1"]
-    Processor_2["Processor 2"]
+    Frontend_1["Frontend_1"]
+    Frontend_2["Frontend_2"]
 
-    Client --> Frontend
-    Frontend --> Processor_1
-    Frontend --> Processor_2
+    Client --> Frontend_1
+    Client --> Frontend_2
+
+    Frontend_1 --> DecodePool
+    Frontend_2 --> DecodePool
 
     subgraph DecodePool["Decode Worker Pool"]
         direction LR
         subgraph Decode1["Decode 1"]
             direction TB
             D1GPU0["GPU 0"]
-            D1GPU1["GPU 1"]
         end
         subgraph Decode2["Decode 2"]
             direction TB
             D2GPU0["GPU 0"]
-            D2GPU1["GPU 1"]
-        end
-        subgraph Decode3["Decode 3"]
-            direction TB
-            D3GPU0["GPU 0"]
-            D3GPU1["GPU 1"]
-        end
-        subgraph Decode4["Decode 4"]
-            direction TB
-            D4GPU0["GPU 0"]
-            D4GPU1["GPU 1"]
         end
     end
-
-    Processor_1 --> DecodePool
-    Processor_2 --> DecodePool
 
     style DecodePool stroke:#000,stroke-width:2px
 ```
 
 #### Results:
-
-**Test Group:** agg-tp-2-dp-4
-
-**Test Command:**  dynamo serve graphs.agg:Frontend -f /workspace/tests/fault_tolerance/configs/agg_tp_2_dp_4.yaml --Frontend.port 8000 in /workspace/examples/llm
-
-|    Failure    |   Startup Time |   Success |   Failed |   Latency Before |   Latency After |   Pending Before |   Pending After |   Violations Before |   Violations After |   Recovery Time |
-|:-------------:|---------------:|----------:|---------:|-----------------:|----------------:|-----------------:|----------------:|--------------------:|-------------------:|----------------:|
-|     none      |          57.00 |    800.00 |     0.00 |             1.76 |             N/A |             0.00 |             N/A |                0.00 |                N/A |             N/A |
-|   frontend    |          57.00 |    672.00 |   128.00 |             1.77 |            1.74 |             0.00 |            0.00 |                0.00 |               0.00 |           16.65 |
-|   processor   |          52.00 |    680.00 |   120.00 |             1.79 |            1.78 |             0.00 |            0.00 |                0.00 |               0.00 |           21.25 |
-| decode_worker |          56.00 |    796.00 |     4.00 |             1.82 |            1.78 |             0.00 |            0.00 |                0.00 |               0.00 |           44.88 |
-|  vllm_worker  |          52.00 |    634.00 |   166.00 |             1.78 |            1.78 |             0.00 |            0.00 |                0.00 |               0.00 |             N/A |
+```
+Test Group: agg-tp-1-dp-2
+╒═════════════════════════╤═══════════╤═══════════╤══════════╤═══════════╤══════════╤═══════════╤═══════════╤════════════╕
+│         Failure         │   Startup │   Success │   Failed │   Success │   Failed │   Latency │   Latency │   Recovery │
+│                         │           │    Before │   Before │     After │    After │    Before │     After │            │
+╞═════════════════════════╪═══════════╪═══════════╪══════════╪═══════════╪══════════╪═══════════╪═══════════╪════════════╡
+│          none           │    181.00 │   1500.00 │     0.00 │       N/A │      N/A │      1.18 │       N/A │        N/A │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│        frontend         │    181.00 │    121.00 │     0.00 │   1373.00 │     6.00 │      1.21 │      1.17 │       4.37 │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│      frontend_pod       │    182.00 │    122.00 │     0.00 │   1378.00 │     0.00 │      1.21 │      1.17 │       5.24 │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│      decode_worker      │    169.00 │    121.00 │     0.00 │   1374.00 │     5.00 │      1.20 │      1.18 │     153.09 │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│    decode_worker_pod    │    181.00 │    125.00 │     0.00 │   1369.00 │     6.00 │      1.21 │      1.18 │     152.72 │
+├─────────────────────────┼───────────┼───────────┼──────────┼───────────┼──────────┼───────────┼───────────┼────────────┤
+│ vllm_decode_engine_core │    182.00 │    120.00 │     0.00 │   1375.00 │     5.00 │      1.20 │      1.18 │     154.75 │
+╘═════════════════════════╧═══════════╧═══════════╧══════════╧═══════════╧══════════╧═══════════╧═══════════╧════════════╛
+```
 
 #### Summary:
 
-1. Dynamo does not currently detect and recover from direct vllm
-   worker sub process failure. In the case of redundant workers this
-   results in roughtly 1/4 the requests failing after the initial 30
-   seconds. (WIP)
-2. By immediately detecting a decode worker failure, Dynamo can limit
+1. By immediately detecting a decode worker failure, Dynamo can limit
    the failures and reroute requests to healthy workers with minimal
    impact.
-3. While the processor was configured with redundancy - the system was
-   unable to instantiate two processors successfully leading to
-   failure when the processor was terminated. (WIP)
-
-
-#### Redundant Workers (Exact Provisioning)
-
-To demonstrate the failure and recovery time in the case that there
-are multiple instances of each process (except for the frontend) we
-ran a simple "agg-tp-2-dp-4" configuration.
-
-In this case we also consider the system to be "exact provisioned" for
-the workload as we limit the max-num-seqs for each decode worker to
-exactly 2. This artificially creates a scenario that results in queing
-when a failur occurs before a worker is recovered.
-
-
-```mermaid
-graph LR
-    Client["Client"]
-    Frontend["Frontend"]
-    Processor_1["Processor 1"]
-    Processor_2["Processor 2"]
-
-    Client --> Frontend
-    Frontend --> Processor_1
-    Frontend --> Processor_2
-
-    subgraph DecodePool["Decode Worker Pool"]
-        direction LR
-        subgraph Decode1["Decode 1 (max 2 seq)"]
-            direction TB
-            D1GPU0["GPU 0"]
-            D1GPU1["GPU 1"]
-        end
-        subgraph Decode2["Decode 2 (max 2 seq)"]
-            direction TB
-            D2GPU0["GPU 0"]
-            D2GPU1["GPU 1"]
-        end
-        subgraph Decode3["Decode 3 (max 2 seq)"]
-            direction TB
-            D3GPU0["GPU 0"]
-            D3GPU1["GPU 1"]
-        end
-        subgraph Decode4["Decode 4 (max 2 seq)"]
-            direction TB
-            D4GPU0["GPU 0"]
-            D4GPU1["GPU 1"]
-        end
-    end
-
-    Processor_1 --> DecodePool
-    Processor_2 --> DecodePool
-
-    style DecodePool stroke:#000,stroke-width:2px
-```
-
-#### Results:
-
-**Test Group:** agg-tp-2-dp-4
-
-**Test Command:**  dynamo serve graphs.agg:Frontend -f /workspace/tests/fault_tolerance/configs/agg_tp_2_dp_4.yaml --Frontend.port 8000 --VllmWorker.max_num_seqs 2 in /workspace/examples/llm
-
-|    Failure    |   Startup Time |   Success |   Failed |   Latency Before |   Latency After |   Pending Before |   Pending After |   Violations Before |   Violations After |   Recovery Time |
-|:-------------:|---------------:|----------:|---------:|-----------------:|----------------:|-----------------:|----------------:|--------------------:|-------------------:|----------------:|
-|     none      |          57.00 |    800.00 |     0.00 |             1.77 |             N/A |             0.01 |             N/A |                0.00 |                N/A |             N/A |
-|   frontend    |          56.00 |    664.00 |   136.00 |             1.80 |            1.77 |             0.00 |            0.00 |                0.00 |               0.00 |           17.22 |
-|   processor   |          56.00 |    649.00 |   151.00 |             1.76 |            1.77 |             0.01 |            0.00 |                0.00 |               0.00 |           25.79 |
-| decode_worker |          56.00 |    798.00 |     2.00 |             1.77 |            1.89 |             0.00 |            0.13 |                0.00 |              84.00 |           44.57 |
-|  vllm_worker  |          56.00 |    632.00 |   168.00 |             1.80 |            2.23 |             0.00 |            0.38 |                0.00 |             232.00 |             N/A |
-
-#### Summary:
-
-1. Dynamo does not currently detect and recover from direct vllm
-   worker sub process failure. In the case of redundant workers this
-   results in roughtly 1/4 the requests failing after the initial 30
-   seconds. All requests after the initial 30 seconds would also be
-   subject to queing as a result and we see increased SLA
-   violations. (WIP)
-2. By immediately detecting a decode worker failure, Dynamo can limit
-   the failures and reroute requests to healthy workers with minimal
-   impact. However during the recovery period requests are subject to
-   queing and as a results we see increased SLA violations.
-3. While the processor was configured with redundancy - the system was
-   unable to instantiate two processors successfully leading to
-   failure when the processor was terminated. (WIP)
 
 ### Disaggregated Workers
 

@@ -96,7 +96,6 @@ def _inject_failures(failures, logger, deployment: ManagedDeployment):  # noqa: 
                             f"Terminating {failure.pod_name} Pid {process.pid} Command {process.command}"
                         )
                         process.kill(failure.signal)
-                        process.wait()
 
 
 global_result_list = []
@@ -148,6 +147,7 @@ async def test_fault_scenario(
 
     if scenario.model:
         scenario.deployment.set_model(scenario.model)
+        model = scenario.model
     else:
         model = scenario.deployment["VllmDecodeWorker"].model
 

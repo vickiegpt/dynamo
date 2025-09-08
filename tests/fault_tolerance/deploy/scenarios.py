@@ -21,7 +21,7 @@ from tests.utils.managed_deployment import DeploymentSpec
 @dataclass
 class Load:
     clients: int = 10
-    requests_per_client: int = 100
+    requests_per_client: int = 150
     input_token_length: int = 100
     output_token_length: int = 100
     max_retries: int = 1
@@ -88,9 +88,9 @@ deployment_specs["disagg-tp-1-dp-2"]["VllmPrefillWorker"].replicas = 2
 failures = {
     "frontend": [Failure(30, "Frontend", "dynamo.frontend")],
     "frontend_pod": [Failure(30, "Frontend", "delete_pod")],
-    "decode_worker": [Failure(30, "VllmDecodeWorker", "dynamo.vllm")],
+    "decode_worker": [Failure(30, "VllmDecodeWorker", "dynamo.vllm", "SIGKILL")],
     "decode_worker_pod": [Failure(30, "VllmDecodeWorker", "delete_pod")],
-    "prefill_worker": [Failure(30, "VllmPrefillWorker", "dynamo.vllm")],
+    "prefill_worker": [Failure(30, "VllmPrefillWorker", "dynamo.vllm", "SIGKILL")],
     "prefill_worker_pod": [Failure(30, "VllmPrefillWorker", "delete_pod")],
     "vllm_decode_engine_core": [
         Failure(30, "VllmDecodeWorker", "VLLM::EngineCore", "SIGKILL")
@@ -103,6 +103,10 @@ failures = {
 
 load = Load()
 
+# model = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+
+model = None
+
 # Populate Scenarios
 
 scenarios = {}
@@ -112,5 +116,5 @@ for deployment_name, deployment_spec in deployment_specs.items():
         if "prefill" in failure_name and "disagg" not in deployment_name:
             continue
         scenarios[f"{deployment_name}-{failure_name}"] = Scenario(
-            deployment=deployment_spec, load=load, failures=failure, model=None
+            deployment=deployment_spec, load=load, failures=failure, model=model
         )
