@@ -153,7 +153,6 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
 
     # Get health check payload (checks env var and falls back to vLLM default)
     health_check_payload = VllmHealthCheckPayload().to_dict()
-    logger.info(f"TzuLing Health check payload: {health_check_payload}")
 
     try:
         logger.debug("Starting serve_endpoint for prefill worker")
@@ -268,7 +267,6 @@ async def init(runtime: DistributedRuntime, config: Config):
 
     # Get health check payload (checks env var and falls back to vLLM default)
     health_check_payload = VllmHealthCheckPayload().to_dict()
-    logger.info(f"TzuLing Health check payload: {health_check_payload}")
 
     try:
         logger.debug("Starting serve_endpoint for decode worker")
