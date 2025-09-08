@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 
 from sglang.srt.server_args import ServerArgs
 
+from dynamo._core import get_reasoning_parser_names, get_tool_parser_names
 from dynamo.sglang import __version__
 
 DEFAULT_ENDPOINT = "dyn://dynamo.backend.generate"
@@ -28,6 +29,20 @@ DYNAMO_ARGS: Dict[str, Dict[str, Any]] = {
         "type": int,
         "default": 0,
         "help": "Maximum number of times a request may be migrated to a different engine worker",
+    },
+    "tool-call-parser": {
+        "flags": ["--dyn-tool-call-parser"],
+        "type": str,
+        "default": None,
+        "choices": get_tool_parser_names(),
+        "help": "Tool call parser name for the model.",
+    },
+    "reasoning-parser": {
+        "flags": ["--dyn-reasoning-parser"],
+        "type": str,
+        "default": None,
+        "choices": get_reasoning_parser_names(),
+        "help": "Reasoning parser name for the model.",
     },
 }
 
@@ -75,20 +90,6 @@ def parse_args(args: list[str]) -> Config:
         "--version", action="version", version=f"Dynamo Backend SGLang {__version__}"
     )
 
-    # To avoid name conflicts with different backends, adoped prefix "dyn-" for dynamo specific args
-    parser.add_argument(
-        "--dyn-tool-call-parser",
-        type=str,
-        default=None,
-        help="Tool call parser name for the model. Available options: 'hermes', 'nemotron_deci', 'llama3_json', 'mistral', 'phi4'.",
-    )
-    parser.add_argument(
-        "--dyn-reasoning-parser",
-        type=str,
-        default=None,
-        help="Reasoning parser name for the model. Available options: 'basic', 'deepseek_r1', 'gpt_oss'.",
-    )
-
     # Dynamo args
     for info in DYNAMO_ARGS.values():
         parser.add_argument(
@@ -96,6 +97,7 @@ def parse_args(args: list[str]) -> Config:
             type=info["type"],
             default=info["default"] if "default" in info else None,
             help=info["help"],
+            choices=info.get("choices", None),
         )
 
     # SGLang args
@@ -113,7 +115,7 @@ def parse_args(args: list[str]) -> Config:
     # Dynamo argument processing
     # If an endpoint is provided, validate and use it
     # otherwise fall back to default endpoints
-    namespace = os.environ.get("DYNAMO_NAMESPACE", "dynamo")
+    namespace = os.environ.get("DYN_NAMESPACE", "dynamo")
 
     endpoint = parsed_args.endpoint
     if endpoint is None:

@@ -49,7 +49,7 @@ PYTHON_PACKAGE_VERSION=${current_tag:-$latest_tag.dev+$commit_id}
 # dependencies are specified in the /container/deps folder and
 # installed within framework specific sections of the Dockerfile.
 
-declare -A FRAMEWORKS=(["VLLM"]=1 ["TRTLLM"]=2 ["NONE"]=3 ["SGLANG"]=4 ["KVBM"]=5)
+declare -A FRAMEWORKS=(["VLLM"]=1 ["TRTLLM"]=2 ["NONE"]=3 ["SGLANG"]=4)
 
 DEFAULT_FRAMEWORK=VLLM
 
@@ -443,7 +443,6 @@ error() {
 
 get_options "$@"
 
-
 # Automatically set ARCH and ARCH_ALT if PLATFORM is linux/arm64
 ARCH="amd64"
 if [[ "$PLATFORM" == *"linux/arm64"* ]]; then
@@ -460,8 +459,6 @@ elif [[ $FRAMEWORK == "NONE" ]]; then
     DOCKERFILE=${SOURCE_DIR}/Dockerfile
 elif [[ $FRAMEWORK == "SGLANG" ]]; then
     DOCKERFILE=${SOURCE_DIR}/Dockerfile.sglang
-elif [[ $FRAMEWORK == "KVBM" ]]; then
-    DOCKERFILE=${SOURCE_DIR}/Dockerfile.kvbm
 fi
 
 # Add NIXL_REF as a build argument
@@ -582,6 +579,11 @@ if [  ! -z ${RELEASE_BUILD} ]; then
     BUILD_ARGS+=" --build-arg RELEASE_BUILD=${RELEASE_BUILD} "
 fi
 
+if [[ $FRAMEWORK == "VLLM" ]]; then
+    echo "Forcing enable_kvbm to true in vLLM image build"
+    ENABLE_KVBM=true
+fi
+
 if [  ! -z ${ENABLE_KVBM} ]; then
     echo "Enabling the KVBM in the ai-dynamo-runtime"
     BUILD_ARGS+=" --build-arg ENABLE_KVBM=${ENABLE_KVBM} "
@@ -596,8 +598,6 @@ if [ "$USE_SCCACHE" = true ]; then
     BUILD_ARGS+=" --build-arg USE_SCCACHE=true"
     BUILD_ARGS+=" --build-arg SCCACHE_BUCKET=${SCCACHE_BUCKET}"
     BUILD_ARGS+=" --build-arg SCCACHE_REGION=${SCCACHE_REGION}"
-
-
 fi
 
 LATEST_TAG="--tag dynamo:latest-${FRAMEWORK,,}"

@@ -99,7 +99,7 @@ We have public images available on [NGC Catalog](https://catalog.ngc.nvidia.com/
 
 ### Pre-Deployment Profiling (SLA Planner Only)
 
-If using the SLA Planner deployment (`disagg_planner.yaml`), follow the [pre-deployment profiling guide](../../../../docs/architecture/pre_deployment_profiling.md) to run pre-deployment profiling. The results will be saved to the `profiling-pvc` PVC and queried by the SLA Planner.
+If using the SLA Planner deployment (`disagg_planner.yaml`), follow the [pre-deployment profiling guide](../../../../docs/benchmarks/pre_deployment_profiling.md) to run pre-deployment profiling. The results will be saved to the `dynamo-pvc` PVC and queried by the SLA Planner.
 
 ## Usage
 
@@ -186,7 +186,6 @@ spec:
 
 vLLM workers are configured through command-line arguments. Key parameters include:
 
-- `--endpoint`: Dynamo endpoint in format `dyn://namespace.component.endpoint`
 - `--model`: Model to serve (e.g., `Qwen/Qwen3-0.6B`)
 - `--is-prefill-worker`: Enable prefill-only mode for disaggregated serving
 - `--metrics-endpoint-port`: Port for publishing KV metrics to Dynamo
@@ -198,7 +197,7 @@ See the [vLLM CLI documentation](https://docs.vllm.ai/en/v0.9.2/configuration/se
 Send a test request to verify your deployment:
 
 ```bash
-curl localhost:8080/v1/chat/completions \
+curl localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "Qwen/Qwen3-0.6B",
