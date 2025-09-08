@@ -86,17 +86,17 @@ deployment_specs["disagg-tp-1-dp-2"]["VllmPrefillWorker"].replicas = 2
 # terminates 1 prefill worker after 30 seconds
 
 failures = {
-    "frontend": [Failure(10, "Frontend", "dynamo.frontend")],
-    "frontend_pod": [Failure(10, "Frontend", "delete_pod")],
-    "decode_worker": [Failure(10, "VllmDecodeWorker", "dynamo.vllm")],
-    "decode_worker_pod": [Failure(10, "VllmDecodeWorker", "delete_pod")],
-    "prefill_worker": [Failure(10, "VllmPrefillWorker", "dynamo.vllm")],
-    "prefill_worker_pod": [Failure(10, "VllmPrefillWorker", "delete_pod")],
+    "frontend": [Failure(30, "Frontend", "dynamo.frontend")],
+    "frontend_pod": [Failure(30, "Frontend", "delete_pod")],
+    "decode_worker": [Failure(30, "VllmDecodeWorker", "dynamo.vllm")],
+    "decode_worker_pod": [Failure(30, "VllmDecodeWorker", "delete_pod")],
+    "prefill_worker": [Failure(30, "VllmPrefillWorker", "dynamo.vllm")],
+    "prefill_worker_pod": [Failure(30, "VllmPrefillWorker", "delete_pod")],
     "vllm_decode_engine_core": [
-        Failure(10, "VllmDecodeWorker", "VLLM::EngineCore", "SIGKILL")
+        Failure(30, "VllmDecodeWorker", "VLLM::EngineCore", "SIGKILL")
     ],
     "vllm_prefill_engine_core": [
-        Failure(10, "VllmPrefillWorker", "VLLM::EngineCore", "SIGKILL")
+        Failure(30, "VllmPrefillWorker", "VLLM::EngineCore", "SIGKILL")
     ],
     "none": [],
 }

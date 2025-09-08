@@ -79,9 +79,18 @@ def parse_client_logs(test_dir, expected_length=100):
                             and result["result"]["choices"]
                         ):
                             log_entry["success"] = True
-                            content = result["result"]["choices"][0]["message"][
-                                "content"
-                            ]
+                            if "content" in result["result"]["choices"][0]["message"]:
+                                content = result["result"]["choices"][0]["message"][
+                                    "content"
+                                ]
+                            elif (
+                                "reasoning_content"
+                                in result["result"]["choices"][0]["message"]
+                            ):
+                                content = result["result"]["choices"][0]["message"][
+                                    "reasoning_content"
+                                ]
+
                             if not content or len(content) < expected_length:
                                 log_entry["success"] = False
                         else:
@@ -237,7 +246,8 @@ def calculate_recovery_time(test_dir, failure_type, fault_time):
                 recovery_time = (start_time - fault_time).total_seconds()
                 if recovery_time > last_recovery_time:
                     last_recovery_time = recovery_time
-
+    if last_recovery_time == 0:
+        return None
     return last_recovery_time
 
 
