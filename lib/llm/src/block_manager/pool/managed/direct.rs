@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use crate::block_manager::pool::{BlockPoolError, BlockPoolResult, ResetBlocksResponse};
 use std::sync::{Arc, Mutex};
@@ -42,18 +45,63 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> DirectAccess<S, L, M> {
         state.inactive.add_blocks(blocks);
     }
 
-    /// Try to return a block to the pool.
-    pub fn try_return_block(&self, block: Vec<Block<S, L, M>>) -> BlockPoolResult<()> {
-        if block.is_empty() {
+    /// Internal helper to return blocks to the pool.
+    fn return_blocks_internal(&self, blocks: Vec<Block<S, L, M>>) -> BlockPoolResult<()> {
+        if blocks.is_empty() {
             return Ok(());
         }
 
         let mut state = self.state.lock().unwrap();
-        for b in block {
-            state.return_block(b);
+        for block in blocks {
+            state.return_block(block);
         }
 
         Ok(())
+    }
+
+    /// Try to return mutable blocks to the pool.
+    ///
+    /// This method takes ownership of the MutableBlocks, extracts their inner Block,
+    /// and returns them to the pool.
+    pub fn try_return_mutable_blocks(
+        &self,
+        blocks: Vec<MutableBlock<S, L, M>>,
+    ) -> BlockPoolResult<()> {
+        if blocks.is_empty() {
+            return Ok(());
+        }
+
+        let mut raw_blocks = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            if let Some(raw_block) = block.try_take_block(private::PrivateToken) {
+                raw_blocks.extend(raw_block);
+            }
+        }
+
+        self.return_blocks_internal(raw_blocks)
+    }
+
+    /// Try to return immutable blocks to the pool.
+    ///
+    /// This method takes ownership of the ImmutableBlocks and attempts to return
+    /// their inner blocks to the pool. Note that blocks may not be returnable if
+    /// there are still other references to them.
+    pub fn try_return_immutable_blocks(
+        &self,
+        blocks: Vec<ImmutableBlock<S, L, M>>,
+    ) -> BlockPoolResult<()> {
+        if blocks.is_empty() {
+            return Ok(());
+        }
+
+        let mut raw_blocks = Vec::new();
+        for block in blocks {
+            if let Some(extracted_blocks) = block.try_take_block(private::PrivateToken) {
+                raw_blocks.extend(extracted_blocks);
+            }
+        }
+
+        self.return_blocks_internal(raw_blocks)
     }
 
     /// Get the current status of the block pool.
