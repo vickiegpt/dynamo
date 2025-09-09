@@ -47,6 +47,7 @@ use super::*;
 
 pub mod active;
 pub mod controller;
+pub mod direct;
 pub mod inactive;
 pub mod priority_key;
 pub mod state;

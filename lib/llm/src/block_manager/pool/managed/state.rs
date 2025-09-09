@@ -371,11 +371,11 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
         self.inactive.return_block(block);
     }
 
-    fn publisher(&self) -> Publisher {
+    pub fn publisher(&self) -> Publisher {
         Publisher::new(self.event_manager.clone())
     }
 
-    fn status(&self) -> BlockPoolStatus {
+    pub fn status(&self) -> BlockPoolStatus {
         let active = self.active.status();
         let (inactive, empty) = self.inactive.status();
         BlockPoolStatus {
@@ -385,7 +385,7 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
         }
     }
 
-    fn try_reset_blocks(&mut self, sequence_hashes: &[SequenceHash]) -> ResetBlocksResponse {
+    pub fn try_reset_blocks(&mut self, sequence_hashes: &[SequenceHash]) -> ResetBlocksResponse {
         let mut reset_blocks = Vec::new();
         let mut not_found = Vec::new();
         let mut not_reset = Vec::new();
