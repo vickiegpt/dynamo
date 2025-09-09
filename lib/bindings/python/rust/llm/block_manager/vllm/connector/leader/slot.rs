@@ -16,6 +16,10 @@ use dynamo_llm::{
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
 use nvtx;
 use tokio_util::sync::CancellationToken;
+use tokio::{sync::{mpsc, Semaphore}, task::JoinSet};
+
+const MAX_ONBOARD_CONCURRENCY: usize = 64;
+const MAX_OFFLOAD_CONCURRENCY: usize = 64;
 
 use super::*;
 
@@ -1207,18 +1211,55 @@ impl LocalTransferEngine {
 
         let onboard_task = CriticalTaskExecutionHandle::new_with_runtime(
             |cancellation_token_onboard| async move {
-                while let Some(req) = onboard_rx.recv().await {
-                    if cancellation_token_onboard.is_cancelled() {
-                        tracing::debug!("LocalOnboardTask: received cancellation signal");
-                        break;
-                    }
-                    if let Err(e) =
-                        process_onboard_request(req, &leader_onboard, kvbm_metrics_onboard.clone())
-                            .await
-                    {
-                        tracing::error!("LocalOnboardTask: error processing request: {:?}", e);
+                let sem = Arc::new(Semaphore::new(MAX_ONBOARD_CONCURRENCY));
+                let mut joinset = JoinSet::new();
+
+                loop {
+                    tokio::select! {
+                        _ = cancellation_token_onboard.cancelled() => {
+                            tracing::debug!("LocalOnboardTask: received cancellation signal");
+                            break;
+                        }
+                        maybe_req = onboard_rx.recv() => {
+                            let Some(req) = maybe_req else { break; };
+
+                            // clone what we need into the task
+                            let leader = leader_onboard.clone();
+                            let metrics = kvbm_metrics_onboard.clone();
+                            let token = cancellation_token_onboard.clone();
+                            let sem = sem.clone();
+
+                            // Spawn per-request task (background, parallel)
+                            joinset.spawn(async move {
+                                // bounded concurrency
+                                let _permit = sem.acquire().await.expect("semaphore closed");
+
+                                // cooperative cancellation at the task boundary
+                                tokio::select! {
+                                    _ = token.cancelled() => {
+                                        // task cancelled before starting
+                                    }
+                                    res = process_onboard_request(req, &leader, metrics) => {
+                                        if let Err(e) = res {
+                                            tracing::error!("LocalOnboardTask: error processing request: {:?}", e);
+                                        }
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
+
+                // cancel all remaining in-flight tasks
+                joinset.abort_all();
+
+                // ensure all aborted tasks are joined to avoid leaks
+                while let Some(res) = joinset.join_next().await {
+                    if let Err(join_err) = res {
+                        tracing::debug!("LocalOnboardTask: task aborted: {:?}", join_err);
+                    }
+                }
+
                 Ok(())
             },
             drt.primary_token(),
@@ -1228,22 +1269,51 @@ impl LocalTransferEngine {
         .unwrap();
         let offload_task = CriticalTaskExecutionHandle::new_with_runtime(
             |cancellation_token_offload| async move {
-                while let Some(req) = offload_rx.recv().await {
-                    if cancellation_token_offload.is_cancelled() {
-                        tracing::debug!("LocalOffloadTask: received cancellation signal");
-                        break;
-                    }
-                    if let Err(e) = process_offload_request(
-                        req,
-                        &block_manager_offload,
-                        &leader_offload,
-                        kvbm_metrics_offload.clone(),
-                    )
-                    .await
-                    {
-                        tracing::error!("LocalOffloadTask: error processing request: {:?}", e);
+                let sem = Arc::new(Semaphore::new(MAX_OFFLOAD_CONCURRENCY));
+                let mut joinset = JoinSet::new();
+
+                loop {
+                    tokio::select! {
+                        _ = cancellation_token_offload.cancelled() => {
+                            tracing::debug!("LocalOffloadTask: received cancellation signal");
+                            break;
+                        }
+                        maybe_req = offload_rx.recv() => {
+                            let Some(req) = maybe_req else { break; };
+
+                            let bm = block_manager_offload.clone();
+                            let leader = leader_offload.clone();
+                            let metrics = kvbm_metrics_offload.clone();
+                            let token = cancellation_token_offload.clone();
+                            let sem = sem.clone();
+
+                            joinset.spawn(async move {
+                                let _permit = sem.acquire().await.expect("semaphore closed");
+
+                                tokio::select! {
+                                    _ = token.cancelled() => {
+                                        // task cancelled before starting
+                                    }
+                                    res = process_offload_request(req, &bm, &leader, metrics) => {
+                                        if let Err(e) = res {
+                                            tracing::error!("LocalOffloadTask: error processing request: {:?}", e);
+                                        }
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
+
+                // cancel all remaining in-flight tasks
+                joinset.abort_all();
+
+                while let Some(res) = joinset.join_next().await {
+                    if let Err(join_err) = res {
+                        tracing::error!("LocalOffloadTask: join error: {:?}", join_err);
+                    }
+                }
+
                 Ok(())
             },
             drt_clone.primary_token(),
