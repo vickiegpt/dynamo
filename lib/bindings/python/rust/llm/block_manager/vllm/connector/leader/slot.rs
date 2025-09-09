@@ -1159,6 +1159,7 @@ impl LocalTransferEngine {
 
         let onboard_task = CriticalTaskExecutionHandle::new_with_runtime(
             |cancellation_token_onboard| async move {
+                tracing::debug!("LocalOnboardTask: run concurrently");
                 let sem = Arc::new(Semaphore::new(MAX_ONBOARD_CONCURRENCY));
                 let mut joinset = JoinSet::new();
 
@@ -1217,6 +1218,7 @@ impl LocalTransferEngine {
         .unwrap();
         let offload_task = CriticalTaskExecutionHandle::new_with_runtime(
             |cancellation_token_offload| async move {
+                tracing::debug!("LocalOffloadTask: run concurrently");
                 let sem = Arc::new(Semaphore::new(MAX_OFFLOAD_CONCURRENCY));
                 let mut joinset = JoinSet::new();
 
