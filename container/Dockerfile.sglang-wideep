@@ -63,7 +63,7 @@ RUN mkdir -p /deps && cd /deps \
 RUN ln -sf /usr/lib/x86_64-linux-gnu/libmlx5.so.1 /usr/lib/x86_64-linux-gnu/libmlx5.so
 
 FROM ubuntu:24.04 AS local_src
-ARG SGLANG_TAG=v0.5.0rc2
+ARG SGLANG_COMMIT=ff1f68252c2b5b343aa6ef2aa14e6d4753ae4871
 
 RUN apt update -y \
     && DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends \
@@ -79,8 +79,8 @@ RUN apt update -y \
 
 RUN git clone --depth=1 https://github.com/sgl-project/sglang.git /src \
     && cd /src \
-    && git pull --tags \
-    && git checkout ${SGLANG_TAG}
+    && git fetch --depth=1 origin ${SGLANG_COMMIT} \
+    && git checkout ${SGLANG_COMMIT}
 
 FROM base AS build-image
 # Install SGLang
@@ -105,10 +105,10 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel html5li
  && python3 -m pip install --no-cache-dir nvidia-nccl-cu12==2.27.6 --force-reinstall --no-deps \
  && python3 -m flashinfer --download-cubin \
  && if [ "$CUDA_VERSION" = "12.8.1" ]; then \
-      python3 -m pip install --no-cache-dir https://github.com/sgl-project/whl/releases/download/v0.3.8/sgl_kernel-0.3.8+cu128-cp310-abi3-manylinux2014_x86_64.whl --force-reinstall --no-deps ; \
+      python3 -m pip install --no-cache-dir https://github.com/sgl-project/whl/releases/download/v0.3.8/sgl_kernel-0.3.4+cu128-cp310-abi3-manylinux2014_x86_64.whl --force-reinstall --no-deps ; \
     fi \
  && if [ "$CUDA_VERSION" = "12.9.1" ]; then \
-      python3 -m pip install --no-cache-dir https://github.com/sgl-project/whl/releases/download/v0.3.8/sgl_kernel-0.3.8+cu129-cp310-abi3-manylinux2014_x86_64.whl --force-reinstall --no-deps ; \
+      python3 -m pip install --no-cache-dir https://github.com/sgl-project/whl/releases/download/v0.3.8/sgl_kernel-0.3.4+cu129-cp310-abi3-manylinux2014_x86_64.whl --force-reinstall --no-deps ; \
     fi
 
 # Download source files
@@ -301,7 +301,6 @@ ENV LD_LIBRARY_PATH=/usr/lib:/usr/local/ucx/lib:$LD_LIBRARY_PATH
 
 # Dynamo
 WORKDIR /sgl-workspace
-RUN git clone https://github.com/ai-dynamo/dynamo.git
 
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -321,6 +320,7 @@ RUN wget --tries=3 --waitretry=5 \
 ARG CARGO_BUILD_JOBS
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
+COPY . ./dynamo
 RUN cd dynamo && cargo build --release
 
 RUN cd dynamo/lib/bindings/python && \
@@ -345,29 +345,6 @@ etcd-${ETCD_VERSION}-linux-${ARCH}.tar.gz -O /tmp/etcd.tar.gz && \
     rm /tmp/etcd.tar.gz
 
 ENV PATH=/usr/local/bin/etcd:$PATH
-
-# GenAI Perf
-RUN apt-get purge -y cmake
-
-RUN mkdir /sgl-workspace/cmake_build && \
-    cd /sgl-workspace/cmake_build && \
-    wget https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/\
-cmake-${CMAKE_VERSION}-linux-$(uname -m).tar.gz && \
-    tar -xzf cmake-${CMAKE_VERSION}-linux-$(uname -m).tar.gz && \
-    mv cmake-${CMAKE_VERSION}-linux-$(uname -m) custom_cmake && \
-    rm cmake-${CMAKE_VERSION}-linux-$(uname -m).tar.gz
-
-ENV PATH=/sgl-workspace/cmake_build/custom_cmake/bin:$PATH
-RUN cmake --version
-
-RUN git clone --depth=1 \
-      https://github.com/triton-inference-server/perf_analyzer.git && \
-    mkdir perf_analyzer/build && \
-    cmake -B perf_analyzer/build -S perf_analyzer && \
-    cmake --build perf_analyzer/build -- -j$(nproc)
-
-ENV PATH=/sgl-workspace/perf_analyzer/build/perf_analyzer/src/perf-analyzer-build:$PATH
-RUN pip install --break-system-packages genai-perf
 
 # Enable forceful shutdown of inflight requests
 ENV SGL_FORCE_SHUTDOWN=1
