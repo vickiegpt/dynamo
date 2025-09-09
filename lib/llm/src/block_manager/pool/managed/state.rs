@@ -201,7 +201,7 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
                 let immutable = if duplication_setting
                     == BlockRegistrationDuplicationSetting::Allowed
                 {
-                    immutable.with_duplicate(block.into()).expect("incompatible immutable block; only primary should be returned from match_sequence_hash")
+                    ImmutableBlock::from_duplicate(block, immutable).expect("incompatible immutable block; only primary should be returned from match_sequence_hash")
                 } else {
                     // immediate return the block to the pool if duplicates are disabled
                     if let Some(blocks) = block.try_take_block(private::PrivateToken) {
@@ -260,8 +260,7 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
             match duplication_setting {
                 BlockRegistrationDuplicationSetting::Allowed => {
                     if let Some(duplicate) = duplicate {
-                        immutable = immutable
-                            .with_duplicate(duplicate.into())
+                        immutable = ImmutableBlock::from_duplicate(duplicate, immutable)
                             .expect("incompatible immutable block; only primary should be returned from ActiveBlockPool::register");
                     }
                 }

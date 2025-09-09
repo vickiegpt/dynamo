@@ -198,6 +198,8 @@ pub struct Block<S: Storage, L: LocalityProvider, M: BlockMetadata> {
     metadata: M,
     state: BlockState,
     manager: Option<Arc<BlockManager<L, M>>>,
+    /// If this is Some, then the current block is a duplicate holding a reference to the primary
+    registered_block: Option<Arc<MutableBlock<S, L, M>>>,
 }
 
 impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Block<S, L, M> {
@@ -208,6 +210,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Block<S, L, M> {
             metadata,
             state: BlockState::Reset,
             manager: None,
+            registered_block: None,
         })
     }
 
@@ -219,6 +222,50 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Block<S, L, M> {
                 "Block is not complete nor registered.".to_string(),
             )),
         }
+    }
+
+    /// Returns true if this block is a duplicate (holds a reference to a primary block)
+    pub fn is_duplicate(&self) -> bool {
+        self.registered_block.is_some()
+    }
+
+    /// Marks this block as a duplicate, storing a reference to the primary block.
+    /// The block must be in Complete state and have matching sequence hash with the primary.
+    pub(crate) fn mark_as_duplicate(
+        &mut self,
+        primary_block: Arc<MutableBlock<S, L, M>>,
+    ) -> Result<(), BlockError> {
+        // Validate the block is in Complete state
+        match self.state() {
+            BlockState::Complete(state) => {
+                let sequence_hash = state.token_block().sequence_hash();
+                if sequence_hash != primary_block.sequence_hash()? {
+                    return Err(BlockError::InvalidState(
+                        "duplicate blocks must have the same sequence hash".to_string(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(BlockError::InvalidState(
+                    "duplicate blocks must be in the complete state on creation".to_string(),
+                ));
+            }
+        }
+
+        // Ensure this block isn't already a duplicate
+        if self.is_duplicate() {
+            return Err(BlockError::InvalidState(
+                "block is already marked as duplicate".to_string(),
+            ));
+        }
+
+        self.registered_block = Some(primary_block);
+        Ok(())
+    }
+
+    /// Detaches and returns the registered block reference if this is a duplicate
+    pub(crate) fn detach_registered_block(&mut self) -> Option<Arc<MutableBlock<S, L, M>>> {
+        self.registered_block.take()
     }
 
     pub fn parent_sequence_hash(&self) -> Result<Option<SequenceHash>, BlockError> {
@@ -235,6 +282,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Block<S, L, M> {
     pub fn reset(&mut self) {
         self.state = BlockState::Reset;
         self.metadata.reset_metadata();
+        self.registered_block = None;
     }
 
     /// Initialize a sequence on the block using a [SaltHash]
@@ -635,6 +683,20 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> MutableBlock<S, L, M> {
     pub fn set_parent(&mut self, parent: Arc<MutableBlock<S, L, M>>) {
         self.parent = Some(parent);
     }
+
+    /// Marks the underlying block as a duplicate with reference to the primary block
+    pub(crate) fn mark_as_duplicate(
+        &mut self,
+        primary_block: Arc<MutableBlock<S, L, M>>,
+    ) -> Result<(), BlockError> {
+        if let Some(ref mut block) = self.block {
+            block.mark_as_duplicate(primary_block)
+        } else {
+            Err(BlockError::InvalidState(
+                "MutableBlock has no underlying block".to_string(),
+            ))
+        }
+    }
 }
 
 impl<S: Storage, L: LocalityProvider, M: BlockMetadata> std::fmt::Debug for MutableBlock<S, L, M> {
@@ -808,17 +870,25 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> ImmutableBlock<S, L, M> 
         }
     }
 
-    /// Attempts to add a duplicate block to the ImmutableBlock.
-    pub(crate) fn with_duplicate(
-        self,
-        duplicate: Arc<MutableBlock<S, L, M>>,
+    /// Creates an ImmutableBlock from a duplicate block attached to an existing primary.
+    /// This makes the relationship clear: we're creating a block representation from a duplicate
+    /// by attaching it to the existing primary ImmutableBlock.
+    pub(crate) fn from_duplicate(
+        mut duplicate: MutableBlock<S, L, M>,
+        primary: ImmutableBlock<S, L, M>,
     ) -> Result<Self, BlockError> {
-        if self.duplicate.is_some() {
+        // Validate that the primary is not itself a duplicate
+        if primary.duplicate.is_some() {
             return Err(BlockError::IncompatibleImmutableBlock);
         }
+
+        // Mark the duplicate block as a duplicate with reference to the primary
+        duplicate.mark_as_duplicate(primary.block.clone())?;
+
         Ok(Self {
-            duplicate: Some(duplicate),
-            ..self
+            block: primary.block,
+            sequence_hash: primary.sequence_hash,
+            duplicate: Some(Arc::new(duplicate)),
         })
     }
 
@@ -925,20 +995,38 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> MaybeReturnableBlock<S, 
         }
     }
 
-    fn try_take_block(mut self, token: private::PrivateToken) -> Option<Vec<Block<S, L, M>>> {
-        let blocks = [
-            Arc::try_unwrap(self.block).ok(),
-            self.duplicate
-                .take()
-                .and_then(|duplicate| Arc::try_unwrap(duplicate).ok()),
-        ];
+    fn try_take_block(mut self, _token: private::PrivateToken) -> Option<Vec<Block<S, L, M>>> {
+        let mut blocks = Vec::new();
 
-        let blocks = blocks
-            .into_iter()
-            .flatten()
-            .filter_map(|block| block.try_take_block(token))
-            .flatten()
-            .collect::<Vec<_>>();
+        // If we have a duplicate, we need to handle it specially
+        if let Some(duplicate_arc) = self.duplicate.take() {
+            // First unwrap the duplicate and detach its reference to the primary
+            if let Ok(mut duplicate_mutable) = Arc::try_unwrap(duplicate_arc) {
+                // Extract the duplicate block
+                if let Some(mut duplicate_block) = duplicate_mutable.block.take() {
+                    // The duplicate block holds a reference to the primary
+                    // Detach it so we can unwrap the primary
+                    duplicate_block.detach_registered_block();
+                    // Add the duplicate block
+                    blocks.push(duplicate_block);
+                }
+            }
+
+            // Now try to unwrap the primary from self.block
+            // This should work now that the duplicate's reference has been detached
+            if let Ok(mut primary_mutable) = Arc::try_unwrap(self.block) {
+                if let Some(primary_block) = primary_mutable.block.take() {
+                    blocks.push(primary_block);
+                }
+            }
+        } else {
+            // No duplicate, just try to unwrap the primary normally
+            if let Ok(mut primary_mutable) = Arc::try_unwrap(self.block) {
+                if let Some(primary_block) = primary_mutable.block.take() {
+                    blocks.push(primary_block);
+                }
+            }
+        }
 
         if blocks.is_empty() {
             None
