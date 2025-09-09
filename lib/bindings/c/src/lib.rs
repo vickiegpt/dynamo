@@ -349,6 +349,8 @@ fn convert_to_kv_router_config(config: DynamoKvRouterConfig) -> KvRouterConfig {
         Some(config.use_kv_events),
         Some(config.router_replica_sync),
         Some(config.max_num_batched_tokens),
+        Some(Some(10000)), // router_snapshot_threshold - use default
+        Some(false),       // router_reset_states - use default
     )
 }
 
@@ -456,6 +458,7 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
             kv_block_size,
             None,
             Some(kv_router_config),
+            format!("c_bindings_{}", component_name), // consumer_uuid
         )
         .await
         {
@@ -488,7 +491,7 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                                 }
 
                                 // Create preprocessor
-                                match OpenAIPreprocessor::new(mdc).await {
+                                match OpenAIPreprocessor::new(mdc) {
                                     Ok(preprocessor) => {
                                         match PREPROCESSOR
                                             .get_or_init(async move { preprocessor })
@@ -633,7 +636,7 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
         let num_tokens = tokens.len();
 
         // This replicates the exact logic from the if query_instance_id block (no config override):
-        match router.find_best_match(context_id, tokens, None).await {
+        match router.find_best_match(context_id, tokens, None, false).await {
             Ok((instance_id, _overlap_amount)) => {
                 // Return worker_instance_id
                 unsafe {
@@ -747,7 +750,7 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id_with_config(
         };
 
         // Find best match with optional config override
-        match router.find_best_match(context_id, tokens, router_config_override.as_ref()).await {
+        match router.find_best_match(context_id, tokens, router_config_override.as_ref(), false).await {
             Ok((instance_id, _overlap_amount)) => {
                 // Return worker_instance_id
                 unsafe {
