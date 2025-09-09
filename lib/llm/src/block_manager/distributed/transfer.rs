@@ -120,13 +120,27 @@ impl BlockTransferHandler {
             .collect();
 
         // Perform the transfer, and return the notifying channel.
-        match sources.write_to(&mut targets, context) {
-            Ok(channel) => Ok(channel),
-            Err(e) => {
-                tracing::error!("Failed to write to blocks: {:?}", e);
-                Err(e.into())
+        let result_channel = sources.write_to(&mut targets, context.clone())?;
+
+        // Create a new channel that unwraps the inner Result
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            match result_channel.await {
+                Ok(Ok(())) => {
+                    let _ = tx.send(());
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("Transfer failed with error: {:?}", e);
+                    // Channel will be dropped, causing recv to error
+                }
+                Err(_) => {
+                    tracing::error!("Transfer channel was dropped");
+                    // Channel will be dropped, causing recv to error
+                }
             }
-        }
+        });
+
+        Ok(rx)
     }
 
     pub async fn execute_transfer(&self, request: BlockTransferRequest) -> Result<()> {
