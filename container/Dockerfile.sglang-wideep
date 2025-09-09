@@ -52,12 +52,12 @@ RUN echo 'tzdata tzdata/Areas select America' | debconf-set-selections \
  && apt-get clean
 
 # GDRCopy installation
-RUN mkdir -p /tmp/gdrcopy && cd /tmp \
+RUN mkdir -p /deps && cd /deps \
  && git clone https://github.com/NVIDIA/gdrcopy.git -b v2.4.4 \
  && cd gdrcopy/packages \
  && CUDA=/usr/local/cuda ./build-deb-packages.sh \
  && dpkg -i gdrdrv-dkms_*.deb libgdrapi_*.deb gdrcopy-tests_*.deb gdrcopy_*.deb \
- && cd / && rm -rf /tmp/gdrcopy
+ && cd /
 
 # Fix DeepEP IBGDA symlink
 RUN ln -sf /usr/lib/x86_64-linux-gnu/libmlx5.so.1 /usr/lib/x86_64-linux-gnu/libmlx5.so
@@ -118,7 +118,7 @@ RUN wget https://developer.download.nvidia.com/compute/redist/nvshmem/3.3.9/sour
     cd .. && \
     tar -xf nvshmem_src_cuda12-all-all-3.3.9.tar.gz && \
     mv nvshmem_src nvshmem && \
-    rm -f /sgl-workspace/nvshmem_src_cuda12-all-all-3.3.9.tar.gz
+    mv /sgl-workspace/nvshmem_src_cuda12-all-all-3.3.9.tar.gz /deps
 
 # Build and install NVSHMEM
 RUN cd /sgl-workspace/nvshmem && \
@@ -215,10 +215,6 @@ RUN python3 -m pip install --no-cache-dir --break-system-packages \
     pandas \
     matplotlib \
     tabulate
-
-# Install diff-so-fancy
-RUN curl -LSso /usr/local/bin/diff-so-fancy https://github.com/so-fancy/diff-so-fancy/releases/download/v1.4.4/diff-so-fancy \
-    && chmod +x /usr/local/bin/diff-so-fancy
 
 # Install clang-format
 RUN curl -LSso /usr/local/bin/clang-format https://github.com/muttleyxd/clang-tools-static-binaries/releases/download/master-32d3ac78/clang-format-16_linux-amd64 \
