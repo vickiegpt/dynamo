@@ -29,7 +29,6 @@ Please refer to the general prerequisites required for running Dynamo. The clust
 The Dynamo GitHub repository will be leveraged extensively throughout this walkthrough. Pull the repository using:
 
 ```bash
-
 # clone Dynamo GitHub repo
 git clone https://github.com/ai-dynamo/dynamo.git
 
@@ -63,7 +62,11 @@ ssh -o "StrictHostKeyChecking no" -i $(minikube ssh-key) docker@$(minikube ip) "
 
 ### Accessing GPU Resources In Kubernetes
 
-In the event that NVIDIA drivers are preinstalled on the target compute instance we'll be running Dynamo related workloads on, specifying the GPU flags in the `minikube start` command will automatically bring up NVIDIA device plugin pods. The [NVIDIA device plugin](https://github.com/NVIDIA/k8s-device-plugin) lets Kubernetes detect and allocate NVIDIA GPUs to pods, enabling GPU-accelerated workloads. Without it, Kubernetes can't schedule GPUs for containers.
+In the event that NVIDIA drivers are preinstalled on the target compute instance we'll be running Dynamo related workloads on, specifying the GPU flags in the `minikube start` command should typically bring up NVIDIA device plugin pods. The [NVIDIA device plugin](https://github.com/NVIDIA/k8s-device-plugin) lets Kubernetes detect and allocate NVIDIA GPUs to pods, enabling GPU-accelerated workloads. Without it, Kubernetes can't schedule GPUs for containers. If the device plugin pod is not enabled, you can install via the `minikube addon` function:
+
+```bash
+minikube addons enable nvidia-device-plugin
+```
 
 Once the device plugin pods are in a running state we can proceed with running GPU workloads in the minikube cluster. Please note depending on your cluster setup, you might manually have to install the NVIDIA device plugin, or the [NVIDIA GPU Operator](https://github.com/NVIDIA/gpu-operator) which is preferred over just the NVIDIA device plugin especially for production or large-scale Kubernetes environments, as the GPU Operator automates the installation and management of GPU drivers, the device plugin, monitoring, and other GPU software on Kubernetes nodes. We can verify the device plugin pods are running by checking pod status in the `kube-system` namespace:
 
@@ -95,30 +98,6 @@ NAME                                        READY   STATUS      RESTARTS   AGE
 ingress-nginx-admission-create-wnv5m        0/1     Completed   0          1d
 ingress-nginx-admission-patch-977pp         0/1     Completed   0          1d
 ingress-nginx-controller-768f948f8f-gg8vd   1/1     Running     0          1d
-```
-
----
-
-### Setup Istio For Service Mesh Functionality
-
-Dynamo Cloud requires Istio for service mesh capabilities. You can set up Istio via the minikube addons feature. Install Istio and verify pods are running:
-
-```bash
-# Enable required addons
-minikube addons enable istio-provisioner
-minikube addons enable istio
-
-# verify pods are running
-kubectl get pods -n istio-operator
-kubectl get pods -n istio-system
-
-# Output should be similar
-NAME                             READY   STATUS    RESTARTS   AGE
-istio-operator-b88fb5f65-9tj8d   1/1     Running   0          34s
-
-NAME                                    READY   STATUS    RESTARTS   AGE
-istio-ingressgateway-64887df48f-98l2n   1/1     Running   0          19s
-istiod-65c5bcc875-ktcnc                 1/1     Running   0          26s
 ```
 
 ---
@@ -173,7 +152,7 @@ Please make sure to take note of the resulting Dynamo container image that is de
 
 Before deploying Dynamo cloud, we'll need to create the secrets that both Dynamo cloud, and the underlying inference graphs that will be deployed, will leverage. We'll create an image pull secret for pulling containers and assets from NGC, and a Huggingface secret that can be leveraged for pulling model specific weights and assets from Huggingface hub.
 
-Before proceeding, please make sure you have access to both an [NGC API Key](https://org.ngc.nvidia.com/setup/api-key) and a [huggingface access token.](https://huggingface.co/docs/hub/en/security-tokens) We'll need to make sure that the created secrets are applied to the same namespace the underlying Dynamo Cloud service will be deployed in:
+Before proceeding, please make sure you have access to both an [NGC API Key](https://org.ngc.nvidia.com/setup/api-key) and a [huggingface access token.](https://huggingface.co/docs/hub/en/security-tokens) We'll need to make sure that the created secrets are applied to the same namespace the underlying Dynamo Cloud service will be deployed in. This secret will be leveraged by the Dynamo platform deployment to pull secrets from NGC, this will be set in the `helm install` command further down in the document:
 
 ```bash
 # export env for namespace dynamo platform will be deployed
@@ -241,7 +220,7 @@ Once we've verified the charts have been pulled successfully, we'll install the 
 
 ```bash
 # install dynamo crd's chart in default namespace (CRD's exposed from this chart aren't namespace scoped)
-helm install dynamo-crds dynamo-crds-${RELEASE_VERSION}.tgz \
+helm install dynamo-crds dynamo-crds-0.4.0.tgz \
   --namespace default \
   --wait \
   --atomic
