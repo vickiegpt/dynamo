@@ -45,8 +45,8 @@
 //! of the [`OffloadManager::offload_worker`] and [`OffloadManager::onboard_worker`] methods.
 
 use super::block::{
-    BlockError, BlockMetadata, ImmutableBlock, MutableBlock,
-    locality::LocalityProvider, transfer::TransferContext,
+    BlockError, BlockMetadata, ImmutableBlock, MutableBlock, locality::LocalityProvider,
+    transfer::TransferContext,
 };
 use super::metrics::{BlockManagerMetrics, PoolMetrics};
 use super::pool::{BlockPool, BlockPoolError};

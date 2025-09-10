@@ -292,7 +292,10 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Block<S, L, M> {
 
     /// Returns true if the block is in the complete or registered state
     pub fn is_complete(&self) -> bool {
-        matches!(self.state, BlockState::Complete(_) | BlockState::Registered(_, _))
+        matches!(
+            self.state,
+            BlockState::Complete(_) | BlockState::Registered(_, _)
+        )
     }
 
     /// Returns true if the block is in the registered state
@@ -973,7 +976,6 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> ImmutableBlock<S, L, M> 
             .as_ref()
             .map_or(self.block.block_id(), |duplicate| duplicate.block_id())
     }
-
 }
 
 impl<S: Storage, L: LocalityProvider, M: BlockMetadata> StorageTypeProvider
