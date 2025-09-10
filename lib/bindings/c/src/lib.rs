@@ -23,7 +23,10 @@ use dynamo_llm::kv_router::{
     KvRouter, KvRouterConfig, RouterConfigOverride, indexer::compute_block_hash_for_seq,
     protocols::*, publisher::KvEventPublisher,
 };
-use dynamo_llm::{discovery::ModelEntry, preprocessor::OpenAIPreprocessor};
+use dynamo_llm::{
+    discovery::{MODEL_ROOT_PATH, ModelEntry},
+    preprocessor::OpenAIPreprocessor,
+};
 use dynamo_runtime::{DistributedRuntime, Worker};
 use std::sync::Arc;
 static WK: OnceCell<Worker> = OnceCell::new();
@@ -467,7 +470,7 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                         };
 
                          // Use the correct discovery pattern: fetch all ModelEntry records and filter in memory
-                         match etcd_client.kv_get_prefix("models/").await {
+                         match etcd_client.kv_get_prefix(MODEL_ROOT_PATH).await {
                              Ok(kvs) => {
                                  let mut matching_entry: Option<ModelEntry> = None;
 
@@ -529,7 +532,7 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                                              namespace, component_name
                                          );
                                          // Log available entries for debugging
-                                         match etcd_client.kv_get_prefix("models").await {
+                                         match etcd_client.kv_get_prefix(MODEL_ROOT_PATH).await {
                                              Ok(debug_kvs) => {
                                                  for debug_kv in debug_kvs.iter().take(5) {
                                                      if let Ok(debug_entry) = serde_json::from_slice::<ModelEntry>(debug_kv.value()) {
