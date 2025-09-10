@@ -67,8 +67,6 @@ In the event that NVIDIA drivers are preinstalled on the target compute instance
 
 Once the device plugin pods are in a running state we can proceed with running GPU workloads in the minikube cluster. Please note depending on your cluster setup, you might manually have to install the NVIDIA device plugin, or the [NVIDIA GPU Operator](https://github.com/NVIDIA/gpu-operator) which is preferred over just the NVIDIA device plugin especially for production or large-scale Kubernetes environments, as the GPU Operator automates the installation and management of GPU drivers, the device plugin, monitoring, and other GPU software on Kubernetes nodes. We can verify the device plugin pods are running by checking pod status in the `kube-system` namespace:
 
-
-
 ```bash
 # check status of device plugin pod
 kubectl get pods -n kube-system
@@ -146,9 +144,10 @@ The Dynamo Cloud Platform consists of several key components:
 
 - **Dynamo Operator**: Manages the lifecycle of Dynamo inference graphs.
 - **Custom Resources**: Kubernetes custom resources for defining and managing Dynamo services.
-- **Required Dynamo Services**: Deploys NATs & ETCD services that are leveraged by Dynamo 
+- **Required Dynamo Services**: Deploys NATs & ETCD services that are leveraged by Dynamo
 
 ---
+
 ### Leveraging Dynamo Container Runtimes In Dynamo Cloud
 
 Dynamo, is a high-throughput, low-latency inference framework designed for serving generative AI and reasoning models in multi-node distributed environments. Dynamo specializes in taking a given runtime (TRT-LLM, vLLM, SGLang, etc) and creating a highly scalable distributed runtime. It's important to verify which Dynamo runtime you'll want to leverage in your deployments, as each runtime will have slightly different implementations for optimizing a given workload with Dynamo.
@@ -169,9 +168,10 @@ echo ${DYNAMO_IMAGE}
 Please make sure to take note of the resulting Dynamo container image that is defined - this will be leveraged later for deployment of Dynamo inference graphs.
 
 ---
+
 ### Create Secrets That Will Be Leveraged In Dynamo Cloud
 
-Before deploying Dynamo cloud, we'll need to create the secrets that both Dynamo cloud, and the underlying inference graphs that will be deployed, will leverage. We'll create an image pull secret for pulling containers and assets from NGC, and a Huggingface secret that can be leveraged for pulling model specific weights and assets from Huggingface hub. 
+Before deploying Dynamo cloud, we'll need to create the secrets that both Dynamo cloud, and the underlying inference graphs that will be deployed, will leverage. We'll create an image pull secret for pulling containers and assets from NGC, and a Huggingface secret that can be leveraged for pulling model specific weights and assets from Huggingface hub.
 
 Before proceeding, please make sure you have access to both an [NGC API Key](https://org.ngc.nvidia.com/setup/api-key) and a [huggingface access token.](https://huggingface.co/docs/hub/en/security-tokens) We'll need to make sure that the created secrets are applied to the same namespace the underlying Dynamo Cloud service will be deployed in:
 
@@ -294,6 +294,7 @@ dynamo-platform-etcd-0                                            1/1     Runnin
 dynamo-platform-nats-0                                            2/2     Running   0          15m
 dynamo-platform-nats-box-5dbf45c748-7nckv                         1/1     Running   0          15m
 ```
+
 Once the CRD's have been exposed, and the platform pods are running, Dynamo Cloud has been deployed successfully.
 
 ---
@@ -308,7 +309,6 @@ cd components/backends/vllm/deploy
 Now that we're in the corresponding directory, we can view the manifests that are present here. For example, in the `agg_router.yaml` manifest, we'll see a `DynamoGraphDeployment` resource that is referenced - this will correspond to one of the CRD's that were exposed in the Dynamo helm deployment. This serves as a reference example we can leverage to facilitate the inference graph deployment.
 
 Before we can apply this manifest to our cluster, we'll need to update the `extraPodSpec.mainContainer.image` path to point to the vLLM Dynamo container we configured in the earlier step (`echo ${DYNAMO_IMAGE}`). We'll also need to configure the `dynamoNamespace` field to point to the namespace we've deployed Dynamo cloud in (`echo ${NAMESPACE}`). You'll need to make sure these changes are in place for any `DynamoGraphDeployment` resource you want deployed.
-
 
 By default, the Dynamo deployment will pull the Qwen3 0.6B's relevant model weights from huggingface, but the model invoked can be changed by updating the `args` commmand `python3 -m dynamo.vllm --model Qwen/Qwen3-0.6B` under `spec.VllmDecodeWorker.extraPodSpec.mainContainer.args` . Once those updates have been made, we can apply the manifest in the Dynamo cloud namespace:
 
