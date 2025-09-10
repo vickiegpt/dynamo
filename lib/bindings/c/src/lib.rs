@@ -49,6 +49,7 @@ fn initialize_tracing() {
 }
 
 #[repr(u32)]
+#[derive(Debug)]
 pub enum DynamoLlmResult {
     OK = 0,
     ERR = 1,
