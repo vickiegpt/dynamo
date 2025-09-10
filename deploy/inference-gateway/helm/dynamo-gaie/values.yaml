@@ -60,12 +60,8 @@ epp:
   extraEnv:
   - name: DYNAMO_NAMESPACE
     value: "vllm-agg"  # Your dynamoNamespace
-  - name: ETCD_ENDPOINTS
-    value: "http://dynamo-platform-etcd:2379"
-  - name: NATS_SERVER
-    value: "nats://dynamo-platform-nats:4222"
   - name: DYNAMO_COMPONENT
-    value: "qwen"  # Your model.shortName
+    value: "qwen"  # Match actual DGD service name
   - name: DYNAMO_KV_BLOCK_SIZE
     value: "32"    # Check your worker configuration
   # If you ever want to completely override args, supply a list here.
@@ -78,30 +74,3 @@ eppAware:
   # Optional: override EPP image when epp-aware=true
   eppImage:  gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/epp-lib-1
 
-  # Sidecar (frontend-router)
-  sidecar:
-    # Container name for the sidecar
-    name: frontend-router
-    # Sidecar image
-    image: gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/dynamo:tokeni-log
-    # Image pull policy for the sidecar
-    imagePullPolicy: IfNotPresent
-    # Command and args for running the frontend in router mode.
-    command: ["/bin/sh", "-c"]
-    args: ["python3 -m dynamo.frontend --http-port 8000 --router-mode kv"]
-    # Environment variables for the sidecar.
-    env:
-      - name: DYNAMO_NAMESPACE
-        valueFromDynamoNamespace: true
-      - name: ETCD_ENDPOINTS
-        value: "http://dynamo-platform-etcd:2379"
-      - name: NATS_SERVER
-        value: "nats://dynamo-platform-nats:4222"
-    # Resource requests/limits for the sidecar container.
-    resources:
-      requests:
-        cpu: "1"
-        memory: "2Gi"
-    # Ports exposed by the sidecar container.
-    ports:
-      - containerPort: 8000

@@ -71,6 +71,12 @@ spec:
               readOnly: true
         {{- end }}
         env:
+        {{- if .Values.eppAware.enabled }}
+          - name: ETCD_ENDPOINTS
+            value: "dynamo-platform-etcd.{{ .Release.Namespace }}:2379"  # Dynamic namespace from Helm
+          - name: NATS_SERVER
+            value: "nats://dynamo-platform-nats.{{ .Release.Namespace }}:4222"  # Dynamic namespace from Helm
+        {{- end }}
         {{- range .Values.epp.extraEnv }}
           - name: {{ .name }}
             value: {{ .value | quote }}
@@ -93,6 +99,7 @@ spec:
           initialDelaySeconds: 5
           periodSeconds: 10
 
+      {{- if .Values.eppAware.enabled }}
       volumes:
         - name: epp-config
           configMap:
@@ -100,3 +107,4 @@ spec:
             items:
               - key: epp-config-dynamo.yaml
                 path: epp-config-dynamo.yaml
+      {{- end }}
