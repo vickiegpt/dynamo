@@ -53,7 +53,7 @@ If your machine has NVIDIA drivers, run the optional command below. Start the cl
 
 ```bash
 # Start Minikube cluster with GPUs, NOTE: Potentially add --force flag to force minikube to use all available gpus
-minikube start --driver=docker --container-runtime=docker --gpus=all 
+minikube start --driver=docker --container-runtime=docker --gpus=all
 
 # Optional: Unmount /proc/driver/nvidia if machine has preinstalled drivers
 ssh -o "StrictHostKeyChecking no" -i $(minikube ssh-key) docker@$(minikube ip) "sudo umount -R /proc/driver/nvidia"
@@ -254,8 +254,8 @@ Once we've installed the Dynamo CRD's chart, we can view the status of the deplo
 helm list --filter dynamo-crds -n default
 
 # output should be similar
-NAME            NAMESPACE       REVISION        UPDATED                                 STATUS          CHART                   APP VERSION
-dynamo-crds     default         1               2025-07-31 20:29:17.598324415 +0000 UTC deployed        dynamo-crds-0.4.0    
+NAME            NAMESPACE       REVISION        UPDATED                                 STATUS          CHART
+dynamo-crds     default         1               2025-07-31 20:29:17.598324415 +0000 UTC deployed        dynamo-crds-0.4.0
 
 # verify creation of CRD's
 kubectl get crd | grep "dynamo"
@@ -281,8 +281,8 @@ helm install dynamo-platform dynamo-platform-${RELEASE_VERSION}.tgz \
 helm list --filter dynamo-platform -n ${NAMESPACE}
 
 # output should be similar
-NAME            NAMESPACE       REVISION        UPDATED                                 STATUS          CHART                   APP VERSION
-dynamo-platform dynamo-cloud    1               2025-07-31 20:28:48.31568394 +0000 UTC  deployed        dynamo-platform-0.4.1     
+NAME            NAMESPACE       REVISION        UPDATED                                 STATUS          CHART
+dynamo-platform dynamo-cloud    1               2025-07-31 20:28:48.31568394 +0000 UTC  deployed        dynamo-platform-0.4.1
 
 # verify dynamo platform pods are running
 kubectl get pods -n ${NAMESPACE}
@@ -348,7 +348,7 @@ vllm-agg-router-frontend        ClusterIP   10.110.255.115   <none>        8000/
 Once we've verified service details, we'll create an Ingress resource to expose the service and run inference on it. Use the following ingress configuration, which will be exposed via NGINX:
 
 ```yaml
-cat <<EOF > vllm_agg_router_ingress.yaml 
+cat <<EOF > vllm_agg_router_ingress.yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
