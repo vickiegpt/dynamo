@@ -145,7 +145,9 @@ class PrefillHandler(HandlerBase):
         prefill_request = copy.deepcopy(request)
         prefill_response = None
         response_count = 0
-        async for res in self.generate_locally(prefill_request, embeddings_tensor, context=context):
+        async for res in self.generate_locally(
+            prefill_request, embeddings_tensor, context=context
+        ):
             prefill_response = res
             response_count += 1
             if response_count > 1:
