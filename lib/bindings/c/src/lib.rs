@@ -23,13 +23,8 @@ use dynamo_llm::kv_router::{
     KvRouter, KvRouterConfig, RouterConfigOverride, indexer::compute_block_hash_for_seq,
     protocols::*, publisher::KvEventPublisher,
 };
-use dynamo_llm::{
-    discovery::ModelEntry,
-    preprocessor::OpenAIPreprocessor,
-};
-use dynamo_runtime::{
-    DistributedRuntime, Worker,
-};
+use dynamo_llm::{discovery::ModelEntry, preprocessor::OpenAIPreprocessor};
+use dynamo_runtime::{DistributedRuntime, Worker};
 use std::sync::Arc;
 static WK: OnceCell<Worker> = OnceCell::new();
 static DRT: AsyncOnceCell<DistributedRuntime> = AsyncOnceCell::new();
@@ -471,8 +466,8 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                             return DynamoLlmResult::ERR;
                         };
 
-                         // Use the real discovery pattern: fetch all ModelEntry records and filter in memory
-                         match etcd_client.kv_get_prefix("models").await {
+                         // Use the correct discovery pattern: fetch all ModelEntry records and filter in memory
+                         match etcd_client.kv_get_prefix("models/").await {
                              Ok(kvs) => {
                                  let mut matching_entry: Option<ModelEntry> = None;
 

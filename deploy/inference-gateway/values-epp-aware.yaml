@@ -24,3 +24,9 @@ epp:
   extraEnv:
     - name: USE_STREAMING
       value: "true"
+    - name: DYNAMO_NAMESPACE
+      value: "dynamo"
+    - name: DYNAMO_COMPONENT
+      value: "backend"
+    - name: DYNAMO_KV_BLOCK_SIZE
+      value: "16"
