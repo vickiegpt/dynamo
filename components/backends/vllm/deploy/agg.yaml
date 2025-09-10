@@ -18,7 +18,10 @@ spec:
       envFromSecret: hf-token-secret
       dynamoNamespace: vllm-agg
       componentType: worker
-      replicas: 1
+      replicas:
+      envs:
+        - name: RUST_LOG
+          value: "debug"
       resources:
         limits:
           gpu: "1"

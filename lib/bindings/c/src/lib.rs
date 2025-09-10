@@ -24,13 +24,11 @@ use dynamo_llm::kv_router::{
     protocols::*, publisher::KvEventPublisher,
 };
 use dynamo_llm::{
-    model_card::{ModelDeploymentCard, ROOT_PATH as MDC_ROOT_PATH},
+    discovery::ModelEntry,
     preprocessor::OpenAIPreprocessor,
 };
 use dynamo_runtime::{
     DistributedRuntime, Worker,
-    slug::Slug,
-    storage::key_value_store::{EtcdStorage, KeyValueStore, KeyValueStoreManager},
 };
 use std::sync::Arc;
 static WK: OnceCell<Worker> = OnceCell::new();
@@ -423,7 +421,7 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
             }
         };
 
-        let namespace_obj = match drt.namespace(namespace) {
+         let namespace_obj = match drt.namespace(namespace.clone()) {
             Ok(ns) => ns,
             Err(e) => {
                 eprintln!("Failed to get namespace: {:?}", e);
@@ -473,16 +471,34 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                             return DynamoLlmResult::ERR;
                         };
 
-                        let kvstore: Box<dyn KeyValueStore> =
-                            Box::new(EtcdStorage::new(etcd_client.clone()));
-                        let card_store = Arc::new(KeyValueStoreManager::new(kvstore));
-                        let card_key = Slug::from_string(&component_name);
+                         // Use the real discovery pattern: fetch all ModelEntry records and filter in memory
+                         match etcd_client.kv_get_prefix("models").await {
+                             Ok(kvs) => {
+                                 let mut matching_entry: Option<ModelEntry> = None;
 
-                        match card_store
-                            .load::<ModelDeploymentCard>(MDC_ROOT_PATH, &card_key)
-                            .await
-                        {
-                            Ok(Some(mut mdc)) => {
+                                 // Parse each KV pair and find matching namespace/component
+                                 for kv in kvs {
+                                     match serde_json::from_slice::<ModelEntry>(kv.value()) {
+                                         Ok(model_entry) => {
+                                             // Filter by namespace and component
+                                             if model_entry.endpoint_id.namespace == namespace
+                                                && model_entry.endpoint_id.component == component_name {
+                                                 matching_entry = Some(model_entry);
+                                                 break;
+                                             }
+                                         }
+                                         Err(e) => {
+                                             tracing::warn!("Failed to parse ModelEntry: {:?}", e);
+                                             continue;
+                                         }
+                                     }
+                                 }
+
+                                 match matching_entry {
+                                     Some(model_entry) => {
+                                         // Load the actual ModelDeploymentCard using the model_entry
+                                         match model_entry.load_mdc(&etcd_client).await {
+                                             Ok(mut mdc) => {
                                 // Download any remote files in the MDC
                                 if let Err(e) = mdc.move_from_nats(drt.nats_client().clone()).await
                                 {
@@ -505,19 +521,40 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                                         DynamoLlmResult::ERR
                                     }
                                 }
-                            }
-                            Ok(None) => {
-                                eprintln!(
-                                    "No ModelDeploymentCard found for component: {}",
-                                    component_name
-                                );
-                                DynamoLlmResult::ERR
-                            }
-                            Err(e) => {
-                                eprintln!("Failed to load ModelDeploymentCard: {:?}", e);
-                                DynamoLlmResult::ERR
-                            }
-                        }
+                                             }
+                                             Err(e) => {
+                                                 eprintln!("Failed to load ModelDeploymentCard from model entry: {:?}", e);
+                                                 DynamoLlmResult::ERR
+                                             }
+                                         }
+                                     }
+                                     None => {
+                                         eprintln!(
+                                             "No ModelEntry found for namespace='{}' component='{}'. Available entries:",
+                                             namespace, component_name
+                                         );
+                                         // Log available entries for debugging
+                                         match etcd_client.kv_get_prefix("models").await {
+                                             Ok(debug_kvs) => {
+                                                 for debug_kv in debug_kvs.iter().take(5) {
+                                                     if let Ok(debug_entry) = serde_json::from_slice::<ModelEntry>(debug_kv.value()) {
+                                                         eprintln!("  - namespace='{}' component='{}'",
+                                                                   debug_entry.endpoint_id.namespace,
+                                                                   debug_entry.endpoint_id.component);
+                                                     }
+                                                 }
+                                             }
+                                             Err(_) => {}
+                                         }
+                                         DynamoLlmResult::ERR
+                                     }
+                                 }
+                             }
+                             Err(e) => {
+                                 eprintln!("Failed to fetch ModelEntry records from etcd: {:?}", e);
+                                 DynamoLlmResult::ERR
+                             }
+                         }
                     }
                 }
             }
