@@ -286,6 +286,10 @@ RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/la
     echo "cat ~/.launch_screen" >> ~/.bashrc && \
     echo "source $VIRTUAL_ENV/bin/activate" >> ~/.bashrc
 
+# Set PYTHONPATH to include all component paths and benchmarks/profiler for utils module access
+# This is a generic PYTHONPATH which works for all the frameworks, so some paths may not be relevant for this particular framework.
+ENV PYTHONPATH=/workspace/components/metrics/src:/workspace/components/frontend/src:/workspace/components/planner/src:/workspace/components/backends/mocker/src:/workspace/components/backends/trtllm/src:/workspace/components/backends/vllm/src:/workspace/components/backends/sglang/src:/workspace/components/backends/llama_cpp/src:/workspace/benchmarks/profiler:$PYTHONPATH
+
 ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
 CMD []
 
@@ -516,9 +520,7 @@ COPY --from=runtime ${VIRTUAL_ENV} ${VIRTUAL_ENV}
 # so we can use maturin develop
 RUN uv pip install maturin[patchelf]
 
-# Make sure to sync this with the one specified on README.md.
-# This is a generic PYTHONPATH which works for all the frameworks, so some paths may not be relevant for this particular framework.
-ENV PYTHONPATH=${WORKSPACE_DIR}/components/metrics/src:${WORKSPACE_DIR}/components/frontend/src:${WORKSPACE_DIR}/components/planner/src:${WORKSPACE_DIR}/components/backends/mocker/src:${WORKSPACE_DIR}/components/backends/trtllm/src:${WORKSPACE_DIR}/components/backends/vllm/src:${WORKSPACE_DIR}/components/backends/sglang/src:${WORKSPACE_DIR}/components/backends/llama_cpp/src
+# PYTHONPATH is inherited from the runtime stage
 
 ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
 CMD []

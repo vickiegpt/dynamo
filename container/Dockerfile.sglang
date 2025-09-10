@@ -247,7 +247,7 @@ COPY components/backends/sglang /workspace/components/backends/sglang
 # Copy attribution files
 COPY ATTRIBUTION* LICENSE /workspace/
 
-ENV PYTHONPATH=/workspace/examples/sglang/utils:$PYTHONPATH
+ENV PYTHONPATH=/workspace/examples/sglang/utils:/workspace/benchmarks/profiler:$PYTHONPATH
 
 ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
 CMD []
@@ -320,7 +320,7 @@ RUN uv pip install maturin[patchelf]
 
 # Make sure to sync this with the one specified on README.md.
 # This is a generic PYTHONPATH which works for all the frameworks, so some paths may not be relevant for this particular framework.
-ENV PYTHONPATH=${WORKSPACE_DIR}/components/metrics/src:${WORKSPACE_DIR}/components/frontend/src:${WORKSPACE_DIR}/components/planner/src:${WORKSPACE_DIR}/components/backends/mocker/src:${WORKSPACE_DIR}/components/backends/trtllm/src:${WORKSPACE_DIR}/components/backends/vllm/src:${WORKSPACE_DIR}/components/backends/sglang/src:${WORKSPACE_DIR}/components/backends/llama_cpp/src
+ENV PYTHONPATH=${WORKSPACE_DIR}/components/metrics/src:${WORKSPACE_DIR}/components/frontend/src:${WORKSPACE_DIR}/components/planner/src:${WORKSPACE_DIR}/components/backends/mocker/src:${WORKSPACE_DIR}/components/backends/trtllm/src:${WORKSPACE_DIR}/components/backends/vllm/src:${WORKSPACE_DIR}/components/backends/sglang/src:${WORKSPACE_DIR}/components/backends/llama_cpp/src:${WORKSPACE_DIR}/benchmarks/profiler
 
 ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
 CMD []
