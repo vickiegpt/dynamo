@@ -612,31 +612,68 @@ pub extern "C" fn dynamo_kv_router_init(
     )
 }
 
-// Below are the bindings used by the Inference Gateway Endpoint Picker ort any other client which only needs routing.
+// Below are the bindings used by the Inference Gateway Endpoint Picker when it needs routing.
 // The EPP workflow
-// func routeRequest(contextID, prompt string) (int64, error) {
-//     // Get routing decision
-//     workerID, tokensPtr, tokenCount := dynamo_kv_router_query_instance_id(contextID, prompt)
 
-//     // Convert to Go slice for use
-//     tokens := convertCArrayToGoSlice(tokensPtr, tokenCount)
+// // Uses FFI to get (worker_instance_id, tokens) in-process.
+// // Use this as an alternative to making the call over HTTP with the k.callFrontEndForWorker
+// func (k *KVAwareScorer) callDynamoRouter(
+// 	ctx context.Context,
+// 	req *schedtypes.LLMRequest,
+// ) (string, []int64, error) {
+// 	logger := log.FromContext(ctx)
 
-//     // Free C memory immediately after copying
-//     dynamo_kv_router_free_tokens(tokensPtr)  // ← Essential!
+// 	if err := initFFI(); err != nil {
+// 		logger.V(logutil.DEFAULT).Error(err, "FFI init failed")
+// 		return "", nil, err
+// 	}
 
-//     // Use the Go slice
-//     return sendToWorker(workerID, tokens)
+// 	// contextID should be unique per request. If your framework has one, use it.
+// 	// Otherwise fall back to a deterministic hash or a random UUID.
+// 	contextID := req.RequestId
+// 	if contextID == "" {
+// 		contextID = "gaie-epp" // TODO: replace with your request-id/trace-id
+// 	}
+// 	prompt := req.Prompt
+
+// 	cCtx := C.CString(contextID)
+// 	cPrm := C.CString(prompt)
+// 	defer C.free(unsafe.Pointer(cCtx))
+// 	defer C.free(unsafe.Pointer(cPrm))
+
+// 	var cWorker C.longlong
+// 	var cTokens *C.uint
+// 	var cCount C.ulong // uintptr_t in header; maps to C.ulong here
+
+// 	cfg := defaultRouterOverride()
+// 	rc := C.dynamo_kv_router_query_instance_id_with_config(
+// 		cCtx,
+// 		cPrm,
+// 		cfg,
+// 		&cWorker,
+// 		&cTokens,
+// 		&cCount,
+// 	)
+// 	if rc != C.OK {
+// 		return "", nil, fmt.Errorf("dynamo_kv_router_query_instance_id failed")
+// 	}
+
+// 	// Copy tokens into Go memory then free C memory immediately
+// 	count := int(uintptr(cCount))
+// 	var tokens64 []int64
+// 	if count > 0 && cTokens != nil {
+// 		src := unsafe.Slice((*uint32)(unsafe.Pointer(cTokens)), count)
+// 		tokens64 = make([]int64, count)
+// 		for i := 0; i < count; i++ {
+// 			tokens64[i] = int64(src[i])
+// 		}
+// 		C.dynamo_kv_router_free_tokens((*C.uint)(cTokens))
+// 	}
+
+// 	workerID := fmt.Sprintf("%d", int64(cWorker))
+// 	return workerID, tokens64, nil
 // }
 
-/// Query the best worker instance for a given prompt (stateless probing)
-/// This function takes a text prompt, tokenizes it using the same tokenizer as Dynamo,
-/// and returns the best worker instance ID along with the tokenized prompt.
-///
-/// This is a pure query operation that automatically cleans up after itself,
-/// making it suitable for probing/routing decisions without lifecycle management.
-///
-/// Equivalent to: curl -d '{"prompt": "...", "nvext": {"annotations": ["query_instance_id"]}}'
-///
 /// Returns the worker_instance_id and tokenized prompt
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
