@@ -54,7 +54,7 @@ pub async fn from_hf(name: impl AsRef<Path>, ignore_weights: bool) -> anyhow::Re
                 {
                     Ok(()) => {
                         tracing::info!("Server download succeeded for model: {model_name}");
-                        get_mx_model_path_from_cache(&model_name)
+                        client.get_model_path(&model_name).await
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -206,21 +206,7 @@ fn is_image_file(filename: &str) -> bool {
         || filename.ends_with("JPEG")
 }
 
-#[cfg(feature = "modelexpress")]
-fn get_mx_model_path_from_cache(model_name: &str) -> anyhow::Result<PathBuf> {
-    let cache_dir = get_model_express_cache_dir();
-    let model_dir = cache_dir.join(model_name);
-
-    if !model_dir.exists() {
-        return Err(anyhow::anyhow!(
-            "Model '{model_name}' was downloaded but directory not found at expected location: {}",
-            model_dir.display()
-        ));
-    }
-
-    Ok(model_dir)
-}
-
+// TODO: remove
 #[cfg(feature = "modelexpress")]
 fn get_model_express_cache_dir() -> PathBuf {
     if let Ok(cache_path) = env::var("HF_HUB_CACHE") {
