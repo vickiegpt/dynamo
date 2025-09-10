@@ -14,7 +14,7 @@
 // limitations under the License.
 
 use crate::block_manager::{
-    block::{BlockState, PrivateBlockExt, registry::BlockRegistrationError},
+    block::{PrivateBlockExt, registry::BlockRegistrationError},
     events::Publisher,
 };
 
@@ -135,8 +135,7 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
         return_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Block<S, L, M>>,
     ) -> Block<S, L, M> {
         while let Some(block) = return_rx.recv().await {
-            if matches!(block.state(), BlockState::Registered(handle, _) if handle.sequence_hash() == sequence_hash)
-            {
+            if block.is_registered() && block.sequence_hash().ok() == Some(sequence_hash) {
                 return block;
             }
             self.handle_return_block(block);
@@ -219,7 +218,7 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
             let (mutable, duplicate) =
                 if let Some(raw_block) = self.inactive.match_sequence_hash(sequence_hash) {
                     // We already have a match, so our block is a duplicate.
-                    assert!(matches!(raw_block.state(), BlockState::Registered(_, _)));
+                    assert!(raw_block.is_registered());
                     (
                         MutableBlock::new(raw_block, self.return_tx.clone()),
                         Some(block),
@@ -319,7 +318,7 @@ impl<S: Storage, L: LocalityProvider + 'static, M: BlockMetadata> State<S, L, M>
                 };
 
             // this assert allows us to skip the error checking on the active pool registration step
-            assert!(matches!(raw_block.state(), BlockState::Registered(_, _)));
+            assert!(raw_block.is_registered());
 
             let mutable = MutableBlock::new(raw_block, self.return_tx.clone());
 

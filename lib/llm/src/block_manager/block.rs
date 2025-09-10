@@ -215,7 +215,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Block<S, L, M> {
     }
 
     pub fn sequence_hash(&self) -> Result<SequenceHash, BlockError> {
-        match self.state() {
+        match &self.state {
             BlockState::Complete(state) => Ok(state.token_block().sequence_hash()),
             BlockState::Registered(state, _) => Ok(state.sequence_hash()),
             _ => Err(BlockError::InvalidState(
@@ -236,7 +236,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Block<S, L, M> {
         primary_block: Arc<MutableBlock<S, L, M>>,
     ) -> Result<(), BlockError> {
         // Validate the block is in Complete state
-        match self.state() {
+        match &self.state {
             BlockState::Complete(state) => {
                 let sequence_hash = state.token_block().sequence_hash();
                 if sequence_hash != primary_block.sequence_hash()? {
@@ -269,7 +269,7 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Block<S, L, M> {
     }
 
     pub fn parent_sequence_hash(&self) -> Result<Option<SequenceHash>, BlockError> {
-        match self.state() {
+        match &self.state {
             BlockState::Complete(state) => Ok(state.token_block().parent_sequence_hash()),
             BlockState::Registered(state, _) => Ok(state.parent_sequence_hash()),
             _ => Err(BlockError::InvalidState(
@@ -283,6 +283,30 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Block<S, L, M> {
         self.state = BlockState::Reset;
         self.metadata.reset_metadata();
         self.registered_block = None;
+    }
+
+    /// Returns true if the block is in the reset state
+    pub fn is_reset(&self) -> bool {
+        matches!(self.state, BlockState::Reset)
+    }
+
+    /// Returns true if the block is in the complete or registered state
+    pub fn is_complete(&self) -> bool {
+        matches!(self.state, BlockState::Complete(_) | BlockState::Registered(_, _))
+    }
+
+    /// Returns true if the block is in the registered state
+    pub fn is_registered(&self) -> bool {
+        matches!(self.state, BlockState::Registered(_, _))
+    }
+
+    /// Get the registration handle if this block is registered
+    pub fn registration_handle(&self) -> Option<Arc<RegistrationHandle>> {
+        if let BlockState::Registered(ref handle, _) = self.state {
+            Some(handle.clone())
+        } else {
+            None
+        }
     }
 
     /// Initialize a sequence on the block using a [SaltHash]
@@ -398,16 +422,6 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> Block<S, L, M> {
     #[allow(dead_code)]
     pub(crate) fn update_state(&mut self, state: BlockState) {
         self.state = state;
-    }
-
-    /// Get a reference to the state of the block
-    pub fn state(&self) -> &BlockState {
-        &self.state
-    }
-
-    /// Get a mutable reference to the state of the block
-    pub fn state_mut(&mut self) -> &mut BlockState {
-        &mut self.state
     }
 
     /// Get the number of blocks in the block
@@ -900,6 +914,58 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> ImmutableBlock<S, L, M> 
         self.sequence_hash
     }
 
+    /// Returns true if this block is registered (either as primary or duplicate)
+    pub fn is_registered(&self) -> bool {
+        // If this is a duplicate, check if it has a registered primary
+        if let Some(ref duplicate_arc) = self.duplicate
+            && let Some(ref block) = duplicate_arc.block
+            && let Some(ref registered_block) = block.registered_block
+        {
+            // Check the primary's state
+            return registered_block.is_registered();
+        }
+        // Otherwise check the primary block's state
+        self.block.is_registered()
+    }
+
+    /// Returns true if this is a duplicate block
+    pub fn is_duplicate(&self) -> bool {
+        self.duplicate.is_some()
+    }
+
+    /// Returns true if this block is in reset state
+    pub fn is_reset(&self) -> bool {
+        // Duplicates are never reset (they're Complete with a registered primary)
+        if self.is_duplicate() {
+            false
+        } else {
+            self.block.is_reset()
+        }
+    }
+
+    /// Returns true if this block is complete (including registered)
+    pub fn is_complete(&self) -> bool {
+        // Duplicates present as registered (which is a form of complete)
+        if self.is_duplicate() {
+            true
+        } else {
+            self.block.is_complete()
+        }
+    }
+
+    /// Get the registration handle if this block is registered
+    pub fn registration_handle(&self) -> Option<Arc<RegistrationHandle>> {
+        // If this is a duplicate, check the primary's registration
+        if let Some(ref duplicate_arc) = self.duplicate
+            && let Some(ref block) = duplicate_arc.block
+            && let Some(ref registered_block) = block.registered_block
+        {
+            return registered_block.registration_handle();
+        }
+        // Check if the primary is registered
+        self.block.registration_handle()
+    }
+
     /// If the ImmutableBlock is a duplicate, returns the block ID of the duplicate;
     /// otherwise, returns the block ID of the primary block.
     pub fn block_id(&self) -> BlockId {
@@ -908,11 +974,6 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> ImmutableBlock<S, L, M> 
             .map_or(self.block.block_id(), |duplicate| duplicate.block_id())
     }
 
-    /// Returns true if the ImmutableBlock holds a duplicate block.
-    #[allow(unused)]
-    pub(crate) fn is_duplicate(&self) -> bool {
-        self.duplicate.is_some()
-    }
 }
 
 impl<S: Storage, L: LocalityProvider, M: BlockMetadata> StorageTypeProvider
@@ -1491,7 +1552,7 @@ mod tests {
     #[test]
     fn test_block_state_transitions_and_ops() {
         let mut block = create_reset_block();
-        assert!(matches!(block.state(), BlockState::Reset));
+        assert!(block.is_reset());
 
         // --- Reset State --- //
         assert!(block.add_token(1).is_err(), "Append on Reset should fail");
@@ -1508,7 +1569,7 @@ mod tests {
 
         // --- Reset -> Partial (via init_sequence) --- //
         assert!(block.init_sequence(SALT_HASH).is_ok());
-        assert!(matches!(block.state(), BlockState::Partial(_)));
+        assert!(!block.is_reset() && !block.is_complete() && !block.is_registered());
 
         // --- Partial State --- //
         let invalid_block = create_full_token_block();
@@ -1557,7 +1618,7 @@ mod tests {
 
         // --- Partial -> Complete (via commit) --- //
         assert!(block.commit().is_ok());
-        assert!(matches!(block.state(), BlockState::Complete(_)));
+        assert!(block.is_complete());
         assert_eq!(block.tokens().unwrap().as_ref(), &[1, 2, 3, 4]);
 
         // --- Complete State --- //
@@ -1587,12 +1648,12 @@ mod tests {
 
         // --- Complete -> Reset (via reset) --- //
         block.reset();
-        assert!(matches!(block.state(), BlockState::Reset));
+        assert!(block.is_reset());
 
         // --- Reset -> Complete (via apply_token_block) --- //
         let full_block = create_full_token_block();
         assert!(block.apply_token_block(full_block.clone()).is_ok());
-        assert!(matches!(block.state(), BlockState::Complete(_)));
+        assert!(block.is_complete());
         let applied_tokens = block.tokens().unwrap();
         assert_eq!(applied_tokens, full_block.tokens());
 
