@@ -105,47 +105,18 @@ RUN cd /sgl-workspace/DeepEP && \
 RUN python3 -m pip install --no-cache-dir --break-system-packages \
         datamodel_code_generator \
         mooncake-transfer-engine==0.3.5 \
-        pre-commit \
-        pytest \
-        black \
-        isort \
-        icdiff \
-        wheel \
         scikit-build-core
 
 # Install development tools and utilities
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    gdb \
-    ninja-build \
-    wget \
-    curl \
-    locales \
-    lsof \
-    git \
-    git-lfs \
-    tree \
-    silversearcher-ag \
-    cloc \
-    unzip \
-    pkg-config \
-    libssl-dev \
-    bear \
-    ccache \
-    less \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        rdma-core infiniband-diags openssh-server perftest ibverbs-providers libibumad3 libibverbs1 libnl-3-200 libnl-route-3-200 librdmacm1 \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
-
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/arm64/cuda-keyring_1.1-1_all.deb \
     && dpkg -i cuda-keyring_1.1-1_all.deb \
     && rm cuda-keyring_1.1-1_all.deb \
     && apt-get update -y \
-    # && DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends gnupg \
-    # && echo "deb http://developer.download.nvidia.com/devtools/repos/ubuntu2404/$(if [ "$(uname -m)" = "aarch64" ]; then echo "arm64"; else echo "amd64"; fi) /" | tee /etc/apt/sources.list.d/nvidia-devtools.list \
-    # && apt-key adv --fetch-keys http://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/$(if [ "$(uname -m)" = "aarch64" ]; then echo "arm64"; else echo "x86_64"; fi)/3bf863cc.pub \
-    # && apt-get update -y \
-    && DEBIAN_FRONTEND=noninteractive apt install nsight-systems-cli -y
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        nsight-systems-cli\
+        locales \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # Set up locale
 RUN locale-gen en_US.UTF-8
@@ -153,41 +124,67 @@ ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
 
-# Install minimal Python packages
-RUN python3 -m pip install --no-cache-dir --break-system-packages \
-    pytest \
-    black \
-    isort \
-    icdiff \
-    scikit_build_core \
-    pre-commit \
-    pandas \
-    matplotlib \
-    tabulate
-
-# Install clang-format
-RUN curl -LSso /usr/local/bin/clang-format https://github.com/muttleyxd/clang-tools-static-binaries/releases/download/master-32d3ac78/clang-format-16_linux-amd64 \
-    && chmod +x /usr/local/bin/clang-format
-
-# Install clangd -- dev tool for language server protocol support
-# RUN curl -L https://github.com/clangd/clangd/releases/download/18.1.3/clangd-linux-18.1.3.zip -o clangd.zip \
-#     && unzip clangd.zip \
-#     && cp -r clangd_18.1.3/bin/* /usr/local/bin/ \
-#     && cp -r clangd_18.1.3/lib/* /usr/local/lib/ \
-#     && rm -rf clangd_18.1.3 clangd.zip
-
-# Install CMake
-# RUN CMAKE_VERSION=3.31.1 \
-#     && ARCH=$(uname -m) \
-#     && CMAKE_INSTALLER="cmake-${CMAKE_VERSION}-linux-${ARCH}" \
-#     && wget "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/${CMAKE_INSTALLER}.tar.gz" \
-#     && tar -xzf "${CMAKE_INSTALLER}.tar.gz" \
-#     && cp -r "${CMAKE_INSTALLER}/bin/"* /usr/local/bin/ \
-#     && cp -r "${CMAKE_INSTALLER}/share/"* /usr/local/share/ \
-#     && rm -rf "${CMAKE_INSTALLER}" "${CMAKE_INSTALLER}.tar.gz"
-
 # Set workspace directory
 WORKDIR /sgl-workspace/sglang
+
+##################################
+##### Wheel Build Image ##########
+##################################
+
+FROM quay.io/pypa/manylinux_2_28_aarch64 AS wheel_builder
+
+RUN dnf update -y \
+    && dnf install -y llvm-toolset protobuf-compiler python3.12-devel wget \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Create virtual environment
+RUN mkdir -p /opt/dynamo/venv && \
+    uv venv /opt/dynamo/venv --python 3.12
+
+# Activate virtual environment
+ENV VIRTUAL_ENV=/opt/dynamo/venv \
+    RUSTUP_HOME=/usr/local/rustup \
+    RUST_VERSION=1.89.0 \
+    CARGO_HOME=/usr/local/cargo \
+    CARGO_TARGET_DIR=/opt/dynamo/target \
+    PATH="/usr/local/cargo/bin:/opt/dynamo/venv/bin:${PATH}"
+
+RUN wget --tries=3 --waitretry=5 \
+    "https://static.rust-lang.org/rustup/archive/1.28.1/aarch64-unknown-linux-gnu/rustup-init" \
+    && chmod +x rustup-init \
+    &&./rustup-init -y \
+        --no-modify-path \
+        --profile minimal \
+        --default-toolchain $RUST_VERSION \
+        --default-host $(uname -m)-unknown-linux-gnu \
+    && rm rustup-init \
+    && chmod -R a+w $RUSTUP_HOME $CARGO_HOME
+
+RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requirements.txt \
+    uv pip install --requirement /tmp/requirements.txt
+
+WORKDIR /opt/dynamo
+
+# Copy configuration files first for better layer caching
+COPY pyproject.toml README.md LICENSE Cargo.toml Cargo.lock rust-toolchain.toml hatch_build.py /opt/dynamo/
+
+# Copy source code
+COPY lib/ /opt/dynamo/lib/
+COPY components/ /opt/dynamo/components/
+
+ARG CARGO_BUILD_JOBS
+# Set CARGO_BUILD_JOBS to 16 if not provided
+# This is to prevent cargo from building $(nproc) jobs in parallel,
+# which might exceed the number of opened files limit.
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-16}
+
+# # Build dynamo wheel
+RUN uv build --wheel --out-dir /opt/dynamo/dist  && \
+    cd /opt/dynamo/lib/bindings/python && \
+    uv pip install maturin[patchelf] && \
+    maturin build --release --out /opt/dynamo/dist 
 
 FROM build-image AS sglang-wideep
 
@@ -206,21 +203,6 @@ RUN apt-get update -y && \
       build-essential protobuf-compiler libssl-dev pkg-config \
       clang libclang-dev git rapidjson-dev zlib1g-dev && \
     pip install --break-system-packages meson meson-python wheel build
-
-ENV RUSTUP_HOME=/usr/local/rustup \
-    CARGO_HOME=/usr/local/cargo \
-    PATH=/usr/local/cargo/bin:$PATH
-
-RUN wget --tries=3 --waitretry=5 \
-    "https://static.rust-lang.org/rustup/archive/1.28.1/$(uname -m)-unknown-linux-gnu/rustup-init" \
-    && chmod +x rustup-init \
-    &&./rustup-init -y \
-        --no-modify-path \
-        --profile minimal \
-        --default-toolchain $RUST_VERSION \
-        --default-host $(uname -m)-unknown-linux-gnu \
-    && rm rustup-init \
-    && chmod -R a+w $RUSTUP_HOME $CARGO_HOME
 
 RUN wget --tries=3 --waitretry=5 \
       https://github.com/nats-io/nats-server/releases/download/v2.10.28/\
@@ -279,16 +261,16 @@ ENV LD_LIBRARY_PATH=/usr/lib:/usr/local/ucx/lib:$LD_LIBRARY_PATH
 # Dynamo
 WORKDIR /sgl-workspace
 
-ARG CARGO_BUILD_JOBS
-ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
+ENV CARGO_TARGET_DIR=/opt/dynamo/target 
 
-COPY . ./dynamo
-RUN cd dynamo && cargo build --release
+COPY --from=wheel_builder /opt/dynamo/dist/*.whl /opt/dynamo/wheelhouse/
+COPY --from=wheel_builder $CARGO_TARGET_DIR $CARGO_TARGET_DIR
 
-RUN cd dynamo/lib/bindings/python \
-    && pip install --break-system-packages -e . \
-    && cd /sgl-workspace/dynamo \
-    && pip install --break-system-packages .
+RUN python3 -m pip install --no-cache-dir --break-system-packages \
+        /opt/dynamo/wheelhouse/ai_dynamo_runtime*cp312*.whl \
+        /opt/dynamo/wheelhouse/ai_dynamo*any.whl
+
+COPY /components/backends/sglang ./dynamo/components/backends/sglang
 
 # Enable forceful shutdown of inflight requests
 ENV SGL_FORCE_SHUTDOWN=1
