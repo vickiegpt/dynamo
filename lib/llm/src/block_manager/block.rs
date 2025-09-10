@@ -1014,17 +1014,17 @@ impl<S: Storage, L: LocalityProvider, M: BlockMetadata> MaybeReturnableBlock<S, 
 
             // Now try to unwrap the primary from self.block
             // This should work now that the duplicate's reference has been detached
-            if let Ok(mut primary_mutable) = Arc::try_unwrap(self.block) {
-                if let Some(primary_block) = primary_mutable.block.take() {
-                    blocks.push(primary_block);
-                }
+            if let Ok(mut primary_mutable) = Arc::try_unwrap(self.block)
+                && let Some(primary_block) = primary_mutable.block.take()
+            {
+                blocks.push(primary_block);
             }
         } else {
             // No duplicate, just try to unwrap the primary normally
-            if let Ok(mut primary_mutable) = Arc::try_unwrap(self.block) {
-                if let Some(primary_block) = primary_mutable.block.take() {
-                    blocks.push(primary_block);
-                }
+            if let Ok(mut primary_mutable) = Arc::try_unwrap(self.block)
+                && let Some(primary_block) = primary_mutable.block.take()
+            {
+                blocks.push(primary_block);
             }
         }
 
