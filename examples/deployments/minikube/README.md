@@ -182,7 +182,7 @@ export NAMESPACE=dynamo-cloud
 # export environment variables needed to fetch helm chart
 export NGC_API_KEY=<YOUR_NGC_API_KEY>
 
-# create dynamo cloud namespace 
+# create dynamo cloud namespace
 kubectl create namespace ${NAMESPACE}
 
 # create NGC image pull secrets
@@ -228,7 +228,7 @@ helm fetch https://helm.ngc.nvidia.com/nvidia/ai-dynamo/charts/dynamo-platform-$
 # verify charts were fetched
 ls -l *.tgz
 
-# output shoudl be similar 
+# output should be similar
 -rw-r--r-- 1 ubuntu ubuntu 13342 Jul 31 20:13 dynamo-crds-0.4.0.tgz
 -rw-r--r-- 1 ubuntu ubuntu 89682 Jul 31 20:13 dynamo-platform-0.4.1.tgz
 ```
