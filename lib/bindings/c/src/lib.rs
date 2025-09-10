@@ -501,15 +501,27 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                                              Ok(mut mdc) => {
                                 // Download any remote files in the MDC
                                 eprintln!("About to download MDC files from NATS...");
-                                if let Err(e) = mdc.move_from_nats(drt.nats_client().clone()).await
-                                {
-                                    eprintln!("Failed to download MDC files: {:?}", e);
-                                    return DynamoLlmResult::ERR;
-                                }
-                                eprintln!("Successfully downloaded MDC files from NATS");
+                                eprintln!("MDC before download: tokenizer={:?}", mdc.tokenizer);
+                                let _temp_dir = match mdc.move_from_nats(drt.nats_client().clone()).await {
+                                    Ok(temp_dir) => {
+                                        eprintln!("Successfully downloaded MDC files from NATS to temp dir: {:?}", temp_dir.path());
+                                        temp_dir
+                                    },
+                                    Err(e) => {
+                                        eprintln!("Failed to download MDC files: {:?}", e);
+                                        return DynamoLlmResult::ERR;
+                                    }
+                                };
+                                eprintln!("MDC after download: tokenizer={:?}", mdc.tokenizer);
 
-                                // Create preprocessor
+                                // Check if files actually exist before creating preprocessor
                                 eprintln!("About to create OpenAI preprocessor...");
+                                if let Some(ref prompt_formatter) = mdc.prompt_formatter {
+                                    eprintln!("Prompt formatter: {:?}", prompt_formatter);
+                                    // Note: The actual file path check depends on the PromptFormatterArtifact structure
+                                    // which we'd need to examine further, but this shows what's available
+                                }
+
                                 match OpenAIPreprocessor::new(mdc) {
                                     Ok(preprocessor) => {
                                         eprintln!("Successfully created preprocessor, storing in static...");

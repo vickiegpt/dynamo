@@ -50,7 +50,7 @@ httpRoute:
 
 extension:
   # default (non-epp-aware) EPP image for the GAIE extension
-  image: gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/epp-lib-4
+  image: gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/7
 
 # generic knobs you may want in both modes
 imagePullSecrets: []     # e.g. ["docker-imagepullsecret"]
@@ -72,5 +72,5 @@ epp:
 eppAware:
   enabled: false
   # Optional: override EPP image when epp-aware=true
-  eppImage:  gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/epp-lib-4
+  eppImage:  gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/epp-lib-7
 
