@@ -13,7 +13,7 @@ spec:
       replicas: 1
       extraPodSpec:
         mainContainer:
-          image: gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/dynamo:off-main
+          image: gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/dynamo:fresh-main
     VllmDecodeWorker:
       envFromSecret: hf-token-secret
       dynamoNamespace: vllm-agg
@@ -27,7 +27,7 @@ spec:
           gpu: "1"
       extraPodSpec:
         mainContainer:
-          image: gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/dynamo:off-main
+          image: gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/dynamo:fresh-main
           workingDir: /workspace/components/backends/vllm
           command:
             - /bin/sh

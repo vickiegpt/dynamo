@@ -411,6 +411,7 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
     };
 
     let result = wk.runtime().secondary().block_on(async {
+        eprintln!("Starting KV router initialization for namespace='{}' component='{}'...", namespace, component_name);
         let drt = match DRT.get() {
             Some(drt) => drt,
             None => {
@@ -498,20 +499,27 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                                          match model_entry.load_mdc(&etcd_client).await {
                                              Ok(mut mdc) => {
                                 // Download any remote files in the MDC
+                                eprintln!("About to download MDC files from NATS...");
                                 if let Err(e) = mdc.move_from_nats(drt.nats_client().clone()).await
                                 {
                                     eprintln!("Failed to download MDC files: {:?}", e);
                                     return DynamoLlmResult::ERR;
                                 }
+                                eprintln!("Successfully downloaded MDC files from NATS");
 
                                 // Create preprocessor
+                                eprintln!("About to create OpenAI preprocessor...");
                                 match OpenAIPreprocessor::new(mdc) {
                                     Ok(preprocessor) => {
+                                        eprintln!("Successfully created preprocessor, storing in static...");
                                         match PREPROCESSOR
                                             .get_or_init(async move { preprocessor })
                                             .await
                                         {
-                                            _preprocessor_ref => DynamoLlmResult::OK,
+                                            _preprocessor_ref => {
+                                                eprintln!("Preprocessor successfully stored in static!");
+                                                DynamoLlmResult::OK
+                                            }
                                         }
                                     }
                                     Err(e) => {
@@ -563,7 +571,16 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
         }
     });
 
-    result
+    match result {
+        DynamoLlmResult::OK => {
+            eprintln!("KV router initialization completed successfully!");
+            DynamoLlmResult::OK
+        }
+        err => {
+            eprintln!("KV router initialization failed with result: {:?}", err);
+            err
+        }
+    }
 }
 
 /// Initialize the KV router with default configuration (backward compatibility)

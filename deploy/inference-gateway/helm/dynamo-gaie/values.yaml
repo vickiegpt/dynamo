@@ -59,7 +59,7 @@ epp:
   # Add env in name/value pairs
   extraEnv:
   - name: DYNAMO_NAMESPACE
-    value: "dynamo"  # Your dynamoNamespace
+    value: "vllm-agg"
   - name: DYNAMO_COMPONENT
     value: "backend"  # Match actual DGD service name
   - name: DYNAMO_KV_BLOCK_SIZE
