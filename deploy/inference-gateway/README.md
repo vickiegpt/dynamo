@@ -150,7 +150,7 @@ export EPP_DIR=/path/to/gateway-api-inference-extension-dynamo
 ```
 
 Under the hood the script applies the Dynamo Patch to the EPP code base; creates a Dynamo Router static library and builds a custom EPP image with it.
-
+Retag the freshly built image and push it to your registry.
 
 ##### 2. Deploy through helm #####
 
