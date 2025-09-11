@@ -901,34 +901,3 @@ pub unsafe extern "C" fn dynamo_kv_router_free_tokens(tokens_ptr: *mut u32) {
         }
     }
 }
-
-// Need to setup etcd and nats to run these tests
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use std::ffi::CString;
-
-//     #[test]
-//     fn test_dynamo_llm_init() {
-//         // Create C-compatible strings
-//         let namespace = CString::new("test_namespace").unwrap();
-//         let component = CString::new("test_component").unwrap();
-
-//         // Call the init function
-//         let result = unsafe {
-//             dynamo_llm_init(
-//                 namespace.as_ptr(),
-//                 component.as_ptr(),
-//                 1,  // worker_id
-//                 32, // kv_block_size
-//             )
-//         };
-
-//         assert_eq!(result as u32, DynamoLlmResult::OK as u32);
-
-//         assert!(WK.get().is_some());
-
-//         let shutdown_result = dynamo_llm_shutdown();
-//         assert_eq!(shutdown_result as u32, DynamoLlmResult::OK as u32);
-//     }
-// }
