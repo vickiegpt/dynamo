@@ -105,6 +105,9 @@ kubectl create secret generic hf-token-secret \
   -n ${NAMESPACE}
 ```
 
+Create a model configuraiont file similar to the vllm_agg_qwen.yaml for you model.
+This file demonstrates the values needed for the Vllm Agg setup in [agg.yaml](../../components/backends/vllm/deploy/agg.yaml)
+
 
 ### 4. Install Dynamo GAIE helm chart ###
 
@@ -171,8 +174,7 @@ helm upgrade --install dynamo-gaie ./helm/dynamo-gaie \
   -f ./vllm_agg_qwen.yaml \
   -f ./values-epp-aware.yaml \
   --set eppAware.enabled=true \
-  --set-string eppAware.eppImage=$EPP_IMAGE \
-  --set-string eppAware.sidecar.image=$DYNAMO_IMAGE
+  --set-string eppAware.eppImage=$EPP_IMAGE
 ```
 
 

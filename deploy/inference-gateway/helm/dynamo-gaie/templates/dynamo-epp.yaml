@@ -76,6 +76,8 @@ spec:
             value: "dynamo-platform-etcd.{{ .Release.Namespace }}:2379"  # Dynamic namespace from Helm
           - name: NATS_SERVER
             value: "nats://dynamo-platform-nats.{{ .Release.Namespace }}:4222"  # Dynamic namespace from Helm
+          - name: DYNAMO_NAMESPACE
+            value: "{{ .Values.dynamoNamespace }}"  # Reference from model file i.e. vllm_agg_qwen.yaml
         {{- end }}
         {{- range .Values.epp.extraEnv }}
           - name: {{ .name }}
