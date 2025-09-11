@@ -47,7 +47,12 @@ class PrefillWorkerHandler(BaseWorkerHandler):
                 end = addr.find("]")
                 host_core = addr[1:end] if end != -1 else addr.strip("[]")
             else:
-                host_core = addr.rsplit(":", 1)[0] if ":" in addr else addr
+                # Only treat single ':' with numeric suffix as host:port; otherwise it's an IPv6/FQDN host.
+                if addr.count(":") == 1:
+                    host_candidate, maybe_port = addr.rsplit(":", 1)
+                    host_core = host_candidate if maybe_port.isdigit() else addr
+                else:
+                    host_core = addr
             try:
                 infos = socket.getaddrinfo(
                     host_core,
