@@ -379,12 +379,12 @@ fn convert_to_router_config_override(config: DynamoRouterConfigOverride) -> Rout
 
 // KV Router functions
 /// Initialize the KV router with configuration
+/// Block size is auto-discovered from the worker's ModelDeploymentCard
 /// This must be called after dynamo_llm_init() and before any router operations
 #[unsafe(no_mangle)]
 pub extern "C" fn dynamo_kv_router_init_with_config(
     namespace_c_str: *const c_char,
     component_c_str: *const c_char,
-    kv_block_size: u32,
     config: *const DynamoKvRouterConfig,
 ) -> DynamoLlmResult {
     let namespace = match unsafe { CStr::from_ptr(namespace_c_str) }.to_str() {
@@ -450,26 +450,11 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
             return DynamoLlmResult::ERR;
         }
 
-        // Try to create the router
-        match KvRouter::new(
-            component.clone(),
-            kv_block_size,
-            None,
-            Some(kv_router_config),
-            format!("c_bindings_{}", component_name), // consumer_uuid
-        )
-        .await
-        {
-            Ok(router) => {
-                // Try to initialize the static router
-                match KV_ROUTER.get_or_init(async move { router }).await {
-                    _router_ref => {
-                        // Router successfully stored, now initialize preprocessor
-                        // Load MDC from etcd to create preprocessor
-                        let Some(etcd_client) = drt.etcd_client() else {
-                            eprintln!("No etcd client available for loading MDC");
-                            return DynamoLlmResult::ERR;
-                        };
+        // Load MDC from etcd to get actual block size and create preprocessor
+        let Some(etcd_client) = drt.etcd_client() else {
+            eprintln!("No etcd client available for loading MDC");
+            return DynamoLlmResult::ERR;
+        };
 
                          // Use the correct discovery pattern: fetch all ModelEntry records and filter in memory
                          match etcd_client.kv_get_prefix(MODEL_ROOT_PATH).await {
@@ -499,6 +484,10 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                                          // Load the actual ModelDeploymentCard using the model_entry
                                          match model_entry.load_mdc(&etcd_client).await {
                                              Ok(mut mdc) => {
+                                // Auto-discover the actual KV block size from the worker's ModelDeploymentCard
+                                let actual_kv_block_size = mdc.kv_cache_block_size;
+                                eprintln!("Auto-discovered KV block size from ModelDeploymentCard: {}", actual_kv_block_size);
+
                                 // Download any remote files in the MDC
                                 eprintln!("About to download MDC files from NATS...");
                                 eprintln!("MDC before download: tokenizer={:?}", mdc.tokenizer);
@@ -531,7 +520,31 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                                         {
                                             _preprocessor_ref => {
                                                 eprintln!("Preprocessor successfully stored in static!");
-                                                DynamoLlmResult::OK
+
+                                                // Now create the router with the auto-discovered block size
+                                                match KvRouter::new(
+                                                    component.clone(),
+                                                    actual_kv_block_size,  // Use actual value from ModelDeploymentCard
+                                                    None,
+                                                    Some(kv_router_config.clone()),
+                                                    format!("c_bindings_{}", component_name), // consumer_uuid
+                                                )
+                                                .await
+                                                {
+            Ok(router) => {
+                                                        // Store the router
+                match KV_ROUTER.get_or_init(async move { router }).await {
+                    _router_ref => {
+                                                                eprintln!("KV Router successfully initialized with block size: {}", actual_kv_block_size);
+                        DynamoLlmResult::OK
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to create KV router: {:?}", e);
+                                                        DynamoLlmResult::ERR
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -571,14 +584,6 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
                              }
                              Err(e) => {
                                  eprintln!("Failed to fetch ModelEntry records from etcd: {:?}", e);
-                                 DynamoLlmResult::ERR
-                             }
-                         }
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to create KV router: {:?}", e);
                 DynamoLlmResult::ERR
             }
         }
@@ -596,18 +601,17 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
     }
 }
 
-/// Initialize the KV router with default configuration (backward compatibility)
+/// Initialize the KV router with default configuration
+/// Block size is auto-discovered from the worker's ModelDeploymentCard
 /// This must be called after dynamo_llm_init() and before any router operations
 #[unsafe(no_mangle)]
 pub extern "C" fn dynamo_kv_router_init(
     namespace_c_str: *const c_char,
     component_c_str: *const c_char,
-    kv_block_size: u32,
 ) -> DynamoLlmResult {
     dynamo_kv_router_init_with_config(
         namespace_c_str,
         component_c_str,
-        kv_block_size,
         std::ptr::null(),
     )
 }
@@ -878,9 +882,9 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id_with_config(
                 );
 
                 // Auto-cleanup: Free the request since this is just a query/probe
-                router.free(context_id).await;
+        router.free(context_id).await;
 
-                DynamoLlmResult::OK
+        DynamoLlmResult::OK
             }
             Err(e) => {
                 eprintln!("Failed to find best match: {:?}", e);
