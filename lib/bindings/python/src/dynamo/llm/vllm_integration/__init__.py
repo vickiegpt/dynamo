@@ -3,8 +3,14 @@
 
 # Import connector classes to make them available at the expected paths for vLLM
 from .connector.dynamo_connector import DynamoConnector, DynamoConnectorMetadata
+from .scheduler import DynamoScheduler
 
 # Create module-level alias for backward compatibility
 dynamo_connector = DynamoConnector
 
-__all__ = ["DynamoConnector", "DynamoConnectorMetadata", "dynamo_connector"]
+__all__ = [
+    "DynamoConnector",
+    "DynamoConnectorMetadata",
+    "dynamo_connector",
+    "DynamoScheduler",
+]

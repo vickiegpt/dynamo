@@ -31,6 +31,7 @@ use crate::to_pyerr;
 mod block_list;
 mod connector;
 mod request;
+// mod scheduler;  // TODO: Fix PyO3 bindings
 mod slot;
 
 pub use block_list::{BlockListType, BlockState, BlockStates, KvbmBlockList};
@@ -53,6 +54,15 @@ fn _vllm_integration(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // TODO: use TRTLLM own integration module
     m.add_class::<connector::trtllm_worker::PyTrtllmKvConnectorWorker>()?;
     m.add_class::<connector::trtllm_leader::PyTrtllmKvConnectorLeader>()?;
+
+    // Add scheduler recorder and conversion functions
+    // TODO: Fix PyO3 bindings for these types
+    // m.add_class::<scheduler::recorder_bindings::PySchedulerRecorder>()?;
+    // m.add_function(wrap_pyfunction!(scheduler::scheduler_types::convert_scheduler_output, m)?)?;
+    // m.add_function(wrap_pyfunction!(scheduler::scheduler_types::convert_model_runner_output, m)?)?;
+    // m.add_function(wrap_pyfunction!(scheduler::scheduler_types::convert_engine_core_outputs, m)?)?;
+    // m.add_function(wrap_pyfunction!(scheduler::recorder_bindings::load_scheduler_trace, m)?)?;
+
     Ok(())
 }
 
