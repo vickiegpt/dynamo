@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import json
 import logging
 import os
 import signal
 import sys
 
 import uvloop
-from tensorrt_llm import SamplingParams
 from tensorrt_llm.llmapi import (
     BuildConfig,
     CapacitySchedulerPolicy,
@@ -16,13 +16,15 @@ from tensorrt_llm.llmapi import (
     KvCacheConfig,
     SchedulerConfig,
 )
+from tensorrt_llm.llmapi.llm import SamplingParams
 from tensorrt_llm.llmapi.llm_utils import update_llm_args_with_extra_options
 from tensorrt_llm.llmapi.tokenizer import tokenizer_factory
 from torch.cuda import device_count
 from transformers import AutoConfig
 
 import dynamo.nixl_connect as nixl_connect
-from dynamo.llm import ModelRuntimeConfig, ModelType, register_llm
+from benchmarks.profiler.utils.config import deep_update
+from dynamo.llm import ModelInput, ModelRuntimeConfig, ModelType, register_llm
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 from dynamo.runtime.logging import configure_dynamo_logging
 from dynamo.trtllm.engine import TensorRTLLMEngine, get_llm_engine
@@ -192,6 +194,17 @@ async def init(runtime: DistributedRuntime, config: Config):
     if config.extra_engine_args != "":
         # TODO: Support extra engine args from json file as well.
         arg_map = update_llm_args_with_extra_options(arg_map, config.extra_engine_args)
+
+    # Apply override_engine_args if provided
+    if config.override_engine_args != "":
+        try:
+            overrides = json.loads(config.override_engine_args)
+            logging.info(f"Applying engine arg overrides: {overrides}")
+
+            deep_update(arg_map, overrides)
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to parse override_engine_args as JSON: {e}")
+            sys.exit(1)
     if config.publish_events_and_metrics:
         # 'event_buffer_max_size' is required to enable TRTLLM to publish kv cache events.
         kv_cache_config = None
@@ -223,7 +236,8 @@ async def init(runtime: DistributedRuntime, config: Config):
     default_sampling_params = SamplingParams()
     default_sampling_params._setup(tokenizer)
     default_sampling_params.stop = None
-    modelType = ModelType.Backend
+    model_input = ModelInput.Tokens
+    model_type = ModelType.Chat | ModelType.Completions
     multimodal_processor = None
 
     if os.getenv("DYNAMO_ENABLE_TEST_LOGITS_PROCESSOR") == "1":
@@ -234,7 +248,7 @@ async def init(runtime: DistributedRuntime, config: Config):
 
     if modality == "multimodal":
         engine_args["skip_tokenizer_init"] = False
-        modelType = ModelType.Chat
+        model_input = ModelInput.Text
         model_config = AutoConfig.from_pretrained(
             config.model_path, trust_remote_code=True
         )
@@ -292,12 +306,14 @@ async def init(runtime: DistributedRuntime, config: Config):
         if is_first_worker(config):
             # Register the model with runtime config
             await register_llm(
-                modelType,
+                model_input,
+                model_type,
                 endpoint,
                 config.model_path,
                 config.served_model_name,
                 kv_cache_block_size=config.kv_block_size,
                 migration_limit=config.migration_limit,
+                runtime_config=runtime_config,
             )
 
         if config.publish_events_and_metrics and is_first_worker(config):

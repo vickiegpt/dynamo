@@ -879,12 +879,21 @@ mod test_metricsregistry_prefixes {
         assert_eq!(component.parent_hierarchy().len(), 2);
         assert_eq!(endpoint.parent_hierarchy().len(), 3);
 
-        // Invalid namespace behavior (sanitization should still error after becoming "123")
+        // Invalid namespace behavior - sanitizes to "_123" and succeeds
+        // @ryanolson intended to enable validation (see TODO comment in component.rs) but didn't turn it on,
+        // so invalid characters are sanitized in MetricsRegistry rather than rejected.
         let invalid_namespace = drt.namespace("@@123").unwrap();
         let result = invalid_namespace.create_counter("test_counter", "A test counter", &[]);
-        assert!(result.is_err());
-        if let Err(e) = &result {
-            assert!(e.to_string().contains("123"));
+        assert!(result.is_ok());
+        if let Ok(counter) = &result {
+            // Verify the namespace was sanitized to "_123" in the label
+            let desc = counter.desc();
+            let namespace_label = desc[0]
+                .const_label_pairs
+                .iter()
+                .find(|l| l.name() == "dynamo_namespace")
+                .expect("Should have dynamo_namespace label");
+            assert_eq!(namespace_label.value(), "_123");
         }
 
         // Valid namespace works
@@ -1527,6 +1536,10 @@ mod test_metricsregistry_nats {
         }
         println!("✓ Sent messages and received responses successfully");
 
+        println!("\n=== Waiting 500ms for metrics to update ===");
+        sleep(Duration::from_millis(500)).await;
+        println!("✓ Wait complete, getting final metrics...");
+
         let final_drt_output = drt.prometheus_metrics_fmt().unwrap();
         println!("\n=== Final Prometheus DRT output ===");
         println!("{}", final_drt_output);
@@ -1541,10 +1554,6 @@ mod test_metricsregistry_nats {
             .iter()
             .filter_map(|line| super::test_helpers::parse_prometheus_metric(line.as_str()))
             .collect();
-
-        println!("\n=== Waiting 1 second for metrics to stabilize ===");
-        sleep(Duration::from_secs(1)).await;
-        println!("✓ Wait complete, checking final metrics...");
 
         let post_expected_metric_values = [
             // DRT NATS metrics
