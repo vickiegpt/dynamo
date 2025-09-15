@@ -16,10 +16,11 @@ pub mod tools;
 
 use anyhow::Result;
 use dynamo_async_openai::types::EncodingFormat;
+use futures::Stream;
 use futures::stream::{self, StreamExt};
 use prompt::OAIPromptFormatter;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, pin::Pin, sync::Arc};
 use tracing;
 
 use crate::model_card::{ModelDeploymentCard, ModelInfo};
@@ -414,32 +415,39 @@ impl OpenAIPreprocessor {
         Ok((builder.build()?, annotations))
     }
 
-    pub fn transform_postprocessor_stream<Resp: Send + Sync + 'static + std::fmt::Debug>(
-        stream: ManyOut<Annotated<BackendOutput>>,
+    pub fn transform_postprocessor_stream<S, Resp>(
+        stream: S,
         generator: Box<dyn DeltaGeneratorExt<Resp>>,
-    ) -> ManyOut<Annotated<Resp>> {
-        let context = stream.context();
-
-        struct State<Resp: Send + Sync + 'static + std::fmt::Debug> {
-            response_stream: ManyOut<Annotated<BackendOutput>>,
+        context: Arc<dyn AsyncEngineContext>,
+    ) -> impl Stream<Item = Annotated<Resp>> + Send
+    where
+        S: Stream<Item = Annotated<BackendOutput>> + Send + 'static,
+        Resp: Send + Sync + 'static + std::fmt::Debug,
+    {
+        struct State<Resp>
+        where
+            Resp: Send + Sync + 'static + std::fmt::Debug,
+        {
+            response_stream: Pin<Box<dyn Stream<Item = Annotated<BackendOutput>> + Send>>,
             response_generator: Box<dyn DeltaGeneratorExt<Resp>>,
             context: Arc<dyn AsyncEngineContext>,
             cancelled: bool,
             cumulative_output_tokens: usize,
-            finished: bool, // Add this flag to track if stream is finished
+            finished: bool,
         }
 
         let state = State {
-            response_stream: stream,
+            response_stream: Box::pin(stream),
             response_generator: generator,
             context: context.clone(),
             cancelled: false,
             cumulative_output_tokens: 0,
-            finished: false, // Initialize as not finished
+            finished: false,
         };
 
         // transform the common response stream into a chat response stream
-        let stream = stream::unfold(state, |mut inner| {
+
+        stream::unfold(state, |mut inner| {
             async move {
                 // If already finished, return None immediately
                 if inner.finished {
@@ -520,19 +528,18 @@ impl OpenAIPreprocessor {
                     None
                 }
             }
-        });
-
-        ResponseStream::new(Box::pin(stream), context)
+        })
     }
 
     /// Transform engine embedding output stream to OpenAI embedding response stream
-    pub fn transform_embedding_postprocessor_stream(
-        stream: ManyOut<Annotated<EmbeddingsEngineOutput>>,
+    pub fn transform_embedding_postprocessor_stream<S>(
+        stream: S,
         original_request: NvCreateEmbeddingRequest,
-    ) -> ManyOut<Annotated<NvCreateEmbeddingResponse>> {
-        let context = stream.context();
-
-        let transformed_stream = stream.map(move |output| {
+    ) -> impl Stream<Item = Annotated<NvCreateEmbeddingResponse>> + Send
+    where
+        S: Stream<Item = Annotated<EmbeddingsEngineOutput>> + Send + 'static,
+    {
+        stream.map(move |output| {
             output.map_data(|engine_output| {
                 // Convert engine output to OpenAI response format
                 let embeddings: Vec<dynamo_async_openai::types::Embedding> = engine_output
@@ -560,33 +567,26 @@ impl OpenAIPreprocessor {
 
                 Ok(response)
             })
-        });
-
-        ResponseStream::new(Box::pin(transformed_stream), context)
+        })
     }
 
     /// Apply tool calling jail to the stream using the preprocessor's tool call parser
-    /// Only applies jail if tool_call_parser is configured
-    pub fn apply_tool_calling_jail_with_parser(
-        &self,
-        stream: ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>,
-    ) -> ManyOut<Annotated<NvCreateChatCompletionStreamResponse>> {
-        // Only apply jail if we have a tool call parser configured
-        if let Some(ref parser) = self.tool_call_parser {
-            let context = stream.context();
-
+    /// Returns impl Stream to avoid boxing
+    pub fn apply_tool_calling_jail_if_needed<S>(
+        tool_call_parser: Option<String>,
+        stream: S,
+    ) -> impl Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send
+    where
+        S: Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send + 'static,
+    {
+        if let Some(parser) = tool_call_parser {
             // Create and apply the jailed stream
-            let jail = JailedStream::builder()
-                .tool_call_parser(parser.clone())
-                .build();
+            let jail = JailedStream::builder().tool_call_parser(parser).build();
 
-            let jailed_stream = jail.apply(stream);
-
-            // Re-wrap with context
-            ResponseStream::new(Box::pin(jailed_stream), context)
+            futures::future::Either::Left(jail.apply(stream))
         } else {
             // No parser configured, return stream as-is
-            stream
+            futures::future::Either::Right(stream)
         }
     }
 }
@@ -638,16 +638,23 @@ impl
         // forward the common completion request to the next operator
         let response_stream = next.generate(common_request).await?;
 
-        // transform the postprocessor stream
-        let stream = Self::transform_postprocessor_stream(response_stream, response_generator);
+        // Extract context once
+        let context = response_stream.context();
 
-        let stream = self.apply_tool_calling_jail_with_parser(stream);
-        let context = stream.context();
+        // transform the postprocessor stream (no boxing yet)
+        let stream = Self::transform_postprocessor_stream(
+            response_stream,
+            response_generator,
+            context.clone(),
+        );
+
+        // Apply jail if configured (returns impl Stream)
+        let stream = Self::apply_tool_calling_jail_if_needed(self.tool_call_parser.clone(), stream);
 
         // prepend the annotations to the response stream
         let stream = annotations_stream.chain(stream);
 
-        // return the response stream
+        // return the response stream - single boxing at the end
         Ok(ResponseStream::new(Box::pin(stream), context))
     }
 }
@@ -695,14 +702,20 @@ impl
         // forward the common completion request to the next operator
         let response_stream = next.generate(common_request).await?;
 
-        // transform the postprocessor stream
-        let stream = Self::transform_postprocessor_stream(response_stream, response_generator);
-        let context = stream.context();
+        // Extract context once
+        let context = response_stream.context();
+
+        // transform the postprocessor stream (no boxing yet)
+        let stream = Self::transform_postprocessor_stream(
+            response_stream,
+            response_generator,
+            context.clone(),
+        );
 
         // prepend the annotations to the response stream
         let stream = annotations_stream.chain(stream);
 
-        // return the response stream
+        // return the response stream - single boxing at the end
         Ok(ResponseStream::new(Box::pin(stream), context))
     }
 }
@@ -738,9 +751,11 @@ impl
         let preprocessed_request = context.map(|_| preprocessed_request);
         let response_stream = next.generate(preprocessed_request).await?;
 
-        // Transform response stream back to OpenAI format
+        // Extract context once
+        let context = response_stream.context();
+
+        // Transform response stream back to OpenAI format (no boxing yet)
         let stream = Self::transform_embedding_postprocessor_stream(response_stream, request);
-        let context = stream.context();
 
         // Prepend annotations
         let annotations_stream = stream::iter(
@@ -750,6 +765,7 @@ impl
                 .collect::<Vec<_>>(),
         );
 
+        // Chain and box once at the end
         let combined_stream = annotations_stream.chain(stream);
         Ok(ResponseStream::new(Box::pin(combined_stream), context))
     }
