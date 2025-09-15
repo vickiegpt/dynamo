@@ -9,13 +9,14 @@ in a format suitable for replay by a Rust scheduler implementation.
 """
 
 import json
+import os
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .scheduler import DynamoScheduler
+from vllm.v1.core.sched.interface import SchedulerInterface
 
 
 @dataclass
@@ -29,7 +30,7 @@ class RecordedIteration:
     timestamp: float
 
 
-class RecordingScheduler(DynamoScheduler):
+class RecordingScheduler(SchedulerInterface):
     """
     Scheduler that records all operations for later replay.
 
@@ -50,9 +51,28 @@ class RecordingScheduler(DynamoScheduler):
         Args:
             enable_recording: Whether to enable recording
             recording_path: Path to save the recording (defaults to .sandbox/recordings/)
-            *args, **kwargs: Passed to DynamoScheduler
+            *args, **kwargs: Passed to the underlying scheduler
         """
-        super().__init__(*args, **kwargs)
+        # Determine which scheduler to use based on environment variable
+        scheduler_type = os.getenv("DYN_VLLM_RECORD_SCHEDULER_CLS", "dynamo").lower()
+
+        if scheduler_type == "vllm":
+            # Use vLLM's default scheduler directly
+            from vllm.v1.core.sched.scheduler import Scheduler
+
+            self._wrapped_scheduler = Scheduler(*args, **kwargs)
+            print("RecordingScheduler: Using vLLM Scheduler")
+        elif scheduler_type == "dynamo":
+            # Use DynamoScheduler (which wraps vLLM scheduler)
+            from .scheduler import DynamoScheduler
+
+            self._wrapped_scheduler = DynamoScheduler(*args, **kwargs)
+            print("RecordingScheduler: Using DynamoScheduler")
+        else:
+            raise ValueError(
+                f"Invalid scheduler type: {scheduler_type}. "
+                f"DYN_VLLM_RECORD_SCHEDULER_CLS must be 'dynamo' or 'vllm'"
+            )
 
         self.enable_recording = enable_recording
         self.iteration = 0
@@ -72,7 +92,7 @@ class RecordingScheduler(DynamoScheduler):
 
     def schedule(self):
         """Schedule requests and record the output."""
-        output = super().schedule()
+        output = self._wrapped_scheduler.schedule()
 
         if self.enable_recording:
             # Convert SchedulerOutput to dict
@@ -82,7 +102,9 @@ class RecordingScheduler(DynamoScheduler):
 
     def update_from_output(self, scheduler_output, model_runner_output):
         """Update from model output and record."""
-        result = super().update_from_output(scheduler_output, model_runner_output)
+        result = self._wrapped_scheduler.update_from_output(
+            scheduler_output, model_runner_output
+        )
 
         if self.enable_recording and self.current_schedule_output:
             # Record the complete iteration
@@ -225,4 +247,36 @@ class RecordingScheduler(DynamoScheduler):
         """Save recording and shutdown."""
         if self.enable_recording and self.recordings:
             self.save_recording()
-        super().shutdown()
+        self._wrapped_scheduler.shutdown()
+
+    def add_request(self, request) -> None:
+        """Add a new request to the scheduler."""
+        self._wrapped_scheduler.add_request(request)
+
+    def finish_requests(self, request_ids, finished_status) -> None:
+        """Mark requests as finished."""
+        self._wrapped_scheduler.finish_requests(request_ids, finished_status)
+
+    def get_num_unfinished_requests(self) -> int:
+        """Get the number of unfinished requests."""
+        return self._wrapped_scheduler.get_num_unfinished_requests()
+
+    def has_finished_requests(self) -> bool:
+        """Check if there are any finished requests."""
+        return self._wrapped_scheduler.has_finished_requests()
+
+    def reset_prefix_cache(self) -> bool:
+        """Reset the prefix cache."""
+        return self._wrapped_scheduler.reset_prefix_cache()
+
+    def get_request_counts(self):
+        """Get counts of requests in different states."""
+        return self._wrapped_scheduler.get_request_counts()
+
+    def make_stats(self):
+        """Generate statistics about the scheduler's current state."""
+        return self._wrapped_scheduler.make_stats()
+
+    def update_draft_token_ids(self, draft_token_ids) -> None:
+        """Update draft token IDs for scheduled requests."""
+        return self._wrapped_scheduler.update_draft_token_ids(draft_token_ids)
