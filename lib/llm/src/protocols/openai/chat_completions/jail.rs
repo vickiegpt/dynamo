@@ -59,18 +59,24 @@ impl JailedStream {
                         if let Some(choice) = chat_response.choices.first()
                             && let Some(ref content) = choice.delta.content
                         {
-                                // Check for jail start sequences
-                                let should_jail = if !self.jail_start_sequences.is_empty() {
-                                    // Check configured start sequences
-                                    self.jail_start_sequences.iter().any(|seq| content.contains(seq))
-                                } else {
-                                    // Fall back to tool call detection if no sequences configured
-                                    detect_tool_call_start(content, self.tool_call_parser.as_deref())
-                                        .unwrap_or(false)
-                                };
+                                // Check for jail start - two paths (evaluate both, not if/else)
+                                // Path 1: Check configured start sequences
+                                let sequence_match = !self.jail_start_sequences.is_empty()
+                                    && self.jail_start_sequences.iter().any(|seq| content.contains(seq));
+
+                                // Path 2: Check for tool call start pattern
+                                let tool_call_match = self.tool_call_parser.is_some()
+                                    && detect_tool_call_start(content, self.tool_call_parser.as_deref())
+                                        .unwrap_or(false);
+
+                                // Jail if either condition is true
+                                let should_jail = sequence_match || tool_call_match;
 
                                 if should_jail {
-                                    tracing::debug!("Jail triggered, starting accumulation");
+                                    tracing::debug!(
+                                        "Jail triggered (sequence: {}, tool_call: {}), starting accumulation",
+                                        sequence_match, tool_call_match
+                                    );
                                     is_jailed = true;
 
                                     // Store metadata only when we actually jail
@@ -102,15 +108,22 @@ impl JailedStream {
                                         .push_str(content);
                                     buffered_content.push_str(content);
 
-                                    // Check for jail end sequences
-                                    let should_unjail = if !self.jail_end_sequences.is_empty() {
-                                        self.jail_end_sequences.iter().any(|seq| buffered_content.contains(seq))
-                                    } else {
-                                        false
-                                    };
+                                    // Check for jail end - two paths
+                                    // Path 1: End sequence detected
+                                    let sequence_end = !self.jail_end_sequences.is_empty()
+                                        && self.jail_end_sequences.iter().any(|seq| buffered_content.contains(seq));
+
+                                    // Path 2: Complete tool call(s) can be parsed (early exit)
+                                    let early_exit = self.should_exit_jail_early(&buffered_content);
+
+                                    // Unjail if either condition is true
+                                    let should_unjail = sequence_end || early_exit;
 
                                     if should_unjail {
-                                        tracing::debug!("Jail end sequence detected, releasing accumulated content");
+                                        tracing::debug!(
+                                            "Jail exit detected (sequence: {}, early: {}), releasing accumulated content",
+                                            sequence_end, early_exit
+                                        );
                                         is_jailed = false;
 
                                         // Process and release accumulated content
@@ -145,6 +158,18 @@ impl JailedStream {
                 }
             }
         }
+    }
+
+    /// Check if accumulated content contains complete tool calls that can be parsed
+    /// Returns true if we should exit the jail early
+    fn should_exit_jail_early(&self, accumulated: &str) -> bool {
+        if let Some(ref parser) = self.tool_call_parser {
+            // Try to parse - if successful and we have complete tool calls, exit early
+            if let Ok((tool_calls, _)) = try_tool_call_parse_aggregate(accumulated, Some(parser)) {
+                return !tool_calls.is_empty();
+            }
+        }
+        false
     }
 
     /// Create a response with accumulated content, potentially parsing tool calls
@@ -474,6 +499,78 @@ mod tests {
                 Some("get_weather")
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_dual_entry_paths() {
+        // Test that BOTH sequence AND tool call detection can trigger jail
+        let chunks = vec![
+            create_mock_response_chunk("Normal text ".to_string(), 0),
+            create_mock_response_chunk("<jail><TOOLCALL>".to_string(), 0), // Both triggers
+            create_mock_response_chunk("Jailed content".to_string(), 0),
+            create_mock_response_chunk("</jail>".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        // Configure with both sequences AND tool call parser
+        let jail = JailedStream::builder()
+            .jail_start_sequence("<jail>")
+            .jail_end_sequence("</jail>")
+            .tool_call_parser("nemotron_deci")
+            .build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // First chunk should pass through
+        assert_eq!(
+            results[0].data.as_ref().unwrap().choices[0]
+                .delta
+                .content
+                .as_deref(),
+            Some("Normal text ")
+        );
+
+        // Jail should trigger and accumulate
+        assert!(results.len() >= 2);
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_early_exit() {
+        // Test early exit when complete tool call is detected
+        let chunks = vec![
+            create_mock_response_chunk("<TOOLCALL>".to_string(), 0),
+            create_mock_response_chunk("[{\"name\": \"test\", ".to_string(), 0),
+            create_mock_response_chunk("\"arguments\": {}}]".to_string(), 0),
+            create_mock_response_chunk("</TOOLCALL>More text".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        let jail = JailedStream::builder()
+            .tool_call_parser("nemotron_deci")
+            .build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should detect complete tool call and exit early
+        assert!(!results.is_empty());
+
+        // Check if tool calls were parsed
+        let has_tool_calls = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tc| !tc.is_empty())
+                .unwrap_or(false)
+        });
+        assert!(
+            has_tool_calls,
+            "Should have parsed tool calls with early exit"
+        );
     }
 
     #[tokio::test]
