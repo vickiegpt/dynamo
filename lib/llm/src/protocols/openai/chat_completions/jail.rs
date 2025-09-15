@@ -8,16 +8,12 @@ use dynamo_async_openai::types::{
     ChatChoiceStream, ChatCompletionMessageToolCallChunk, ChatCompletionStreamResponseDelta,
     FinishReason, FunctionCallStream, Role,
 };
-use std::pin::Pin;
 
 use dynamo_parsers::tool_calling::{detect_tool_call_start, try_tool_call_parse_aggregate};
-use dynamo_runtime::engine::{AsyncEngineContextProvider, ResponseStream};
 use dynamo_runtime::protocols::annotated::Annotated;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 
 use super::NvCreateChatCompletionStreamResponse;
-
-type ManyOut<T> = Pin<Box<ResponseStream<T>>>;
 
 /// A stream transformer that can "jail" tokens based on configurable start/end sequences
 /// When jailed, tokens are accumulated rather than yielded immediately
@@ -36,22 +32,23 @@ impl JailedStream {
 
     /// Apply the jail transformation to a stream of chat completion responses
     /// Consumes self and returns the transformed stream
-    pub fn apply(
+    pub fn apply<S>(
         self,
-        stream: ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>,
-    ) -> ManyOut<Annotated<NvCreateChatCompletionStreamResponse>> {
-        let context = stream.context();
-
+        stream: S,
+    ) -> impl Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send
+    where
+        S: Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send + 'static,
+    {
         // Use the stream! macro for cleaner async stream processing
-        let jailed_stream = stream! {
+        stream! {
             // State variables
             let mut is_jailed = false;
             let mut accumulated_content: HashMap<u32, String> = HashMap::new();
             let mut last_response_metadata: Option<NvCreateChatCompletionStreamResponse> = None;
             let mut buffered_content = String::new();
 
-            // Pin the stream for iteration
-            let mut stream = Box::pin(stream);
+            // Pin the stream for iteration (stack pinning is more efficient)
+            tokio::pin!(stream);
 
             // Process each item in the stream
             while let Some(response) = stream.next().await {
@@ -147,9 +144,7 @@ impl JailedStream {
                     yield final_response;
                 }
             }
-        };
-
-        ResponseStream::new(Box::pin(jailed_stream), context)
+        }
     }
 
     /// Create a response with accumulated content, potentially parsing tool calls
@@ -298,73 +293,12 @@ impl Default for JailedStreamBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dynamo_runtime::engine::{AsyncEngineContext, ResponseStream};
+    use futures::StreamExt;
     use futures::stream;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
 
     // Test utilities module - shared test infrastructure
     pub(crate) mod test_utils {
         use super::*;
-        use async_trait::async_trait;
-
-        /// Mock async engine context for testing
-        #[derive(Debug)]
-        pub struct MockAsyncEngineContext {
-            id: String,
-            stopped: AtomicBool,
-        }
-
-        impl MockAsyncEngineContext {
-            pub fn new(id: String) -> Self {
-                Self {
-                    id,
-                    stopped: AtomicBool::new(false),
-                }
-            }
-        }
-
-        #[async_trait]
-        impl AsyncEngineContext for MockAsyncEngineContext {
-            fn id(&self) -> &str {
-                &self.id
-            }
-
-            fn stop(&self) {
-                self.stopped
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-
-            fn stop_generating(&self) {
-                self.stopped
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-
-            fn kill(&self) {
-                self.stopped
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-
-            fn is_stopped(&self) -> bool {
-                self.stopped.load(std::sync::atomic::Ordering::Relaxed)
-            }
-
-            fn is_killed(&self) -> bool {
-                self.stopped.load(std::sync::atomic::Ordering::Relaxed)
-            }
-
-            async fn stopped(&self) {
-                // No-op for testing
-            }
-
-            async fn killed(&self) {
-                // No-op for testing
-            }
-
-            fn link_child(&self, _: Arc<dyn AsyncEngineContext>) {
-                // No-op for testing
-            }
-        }
 
         /// Helper function to create a mock chat response chunk
         pub fn create_mock_response_chunk(
@@ -448,8 +382,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_jailed_stream_with_start_end_sequences() {
-        let mock_context = Arc::new(MockAsyncEngineContext::new("test-1".to_string()));
-
         // Create chunks with jail start/end markers
         let chunks = vec![
             create_mock_response_chunk("Hello ".to_string(), 0),
@@ -461,7 +393,6 @@ mod tests {
         ];
 
         let input_stream = stream::iter(chunks);
-        let response_stream = ResponseStream::new(Box::pin(input_stream), mock_context.clone());
 
         // Create JailedStream with start/end sequences
         let jail = JailedStream::builder()
@@ -469,7 +400,7 @@ mod tests {
             .jail_end_sequence("</jail>")
             .build();
 
-        let jailed_stream = jail.apply(response_stream);
+        let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
         // We should only get 3 chunks now:
@@ -509,8 +440,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_jailed_stream_with_tool_calls() {
-        let mock_context = Arc::new(MockAsyncEngineContext::new("test-2".to_string()));
-
         // Create chunks representing a tool call
         let chunks = vec![
             create_mock_response_chunk("<TOOLCALL>".to_string(), 0),
@@ -522,14 +451,13 @@ mod tests {
         ];
 
         let input_stream = stream::iter(chunks);
-        let response_stream = ResponseStream::new(Box::pin(input_stream), mock_context.clone());
 
         // Create JailedStream with tool call parser
         let jail = JailedStream::builder()
             .tool_call_parser("nemotron_deci")
             .build();
 
-        let jailed_stream = jail.apply(response_stream);
+        let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
         // Should have jailed the content and parsed tool calls at the end
@@ -550,8 +478,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_jailed_stream_no_jailing() {
-        let mock_context = Arc::new(MockAsyncEngineContext::new("test-3".to_string()));
-
         // Create normal content chunks
         let chunks = vec![
             create_mock_response_chunk("Hello ".to_string(), 0),
@@ -560,14 +486,13 @@ mod tests {
         ];
 
         let input_stream = stream::iter(chunks);
-        let response_stream = ResponseStream::new(Box::pin(input_stream), mock_context.clone());
 
         // Create JailedStream with sequences that won't match
         let jail = JailedStream::builder()
             .jail_start_sequence("<NOTPRESENT>")
             .build();
 
-        let jailed_stream = jail.apply(response_stream);
+        let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
         // All chunks should pass through unchanged

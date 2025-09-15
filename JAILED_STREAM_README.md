@@ -23,13 +23,23 @@ The `JailedStream` is a standalone implementation for handling "jail" detection 
 
 ```rust
 use crate::protocols::openai::chat_completions::jail::JailedStream;
+use dynamo_runtime::engine::{AsyncEngineContextProvider, ResponseStream};
 
-// Basic usage with tool call parser
+// Get your ResponseStream with context
+let response_stream: Pin<Box<ResponseStream<_>>> = get_stream_from_engine();
+
+// Extract context BEFORE passing to apply
+let context = response_stream.context();
+
+// Apply jail transformation (ResponseStream implements Stream)
 let jail = JailedStream::builder()
     .tool_call_parser("nemotron_deci")
     .build();
 
-let jailed_stream = jail.apply(token_response_stream);
+let jailed_stream = jail.apply(response_stream);
+
+// Re-wrap with context when needed for engine consumption
+let final_stream = ResponseStream::new(Box::pin(jailed_stream), context);
 ```
 
 ### Advanced Configuration
@@ -80,7 +90,16 @@ cargo test -p dynamo-llm jail --lib
 3. **Flexible**: Supports multiple jail detection strategies
 4. **Maintainable**: Uses `stream!` macro for cleaner async code
 5. **Testable**: Comprehensive test suite with shared utilities
-6. **Observable**: Preserves annotations throughout the process
+6. **Efficient**: No unnecessary boxing or context handling in the library
+7. **Composable**: Can chain multiple stream transformers before re-adding context
+
+## Performance Optimizations
+
+- **No Boxing in Library**: Returns `impl Stream` instead of `Pin<Box<ResponseStream>>`
+- **Stack Pinning**: Uses `tokio::pin!()` instead of `Box::pin()` for better performance
+- **No Context Overhead**: JailedStream doesn't manage AsyncEngineContext
+- **Lazy Evaluation**: Only processes what's needed
+- **Efficient State Management**: Minimal cloning, only when entering jail state
 
 ## Integration Options
 
