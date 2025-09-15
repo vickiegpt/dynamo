@@ -29,7 +29,7 @@ use dynamo_llm::{
 };
 use dynamo_runtime::{DistributedRuntime, Worker};
 use std::sync::Arc;
-static WK: OnceCell<Worker> = OnceCell::new();
+static WORKER: OnceCell<Worker> = OnceCell::new();
 static DRT: AsyncOnceCell<DistributedRuntime> = AsyncOnceCell::new();
 // [FIXME] shouldn't the publisher be instance passing between API calls?
 static KV_PUB: OnceCell<KvEventPublisher> = OnceCell::new();
@@ -65,7 +65,7 @@ pub unsafe extern "C" fn dynamo_llm_init(
     kv_block_size: u32,
 ) -> DynamoLlmResult {
     initialize_tracing();
-    let wk = match WK.get_or_try_init(Worker::from_settings) {
+    let wk = match WORKER.get_or_try_init(Worker::from_settings) {
         Ok(wk) => wk.clone(),
         Err(e) => {
             eprintln!("Failed to initialize runtime: {:?}", e);
@@ -119,7 +119,7 @@ pub unsafe extern "C" fn dynamo_llm_init(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn dynamo_llm_shutdown() -> DynamoLlmResult {
-    let wk = match WK.get() {
+    let wk = match WORKER.get() {
         Some(wk) => wk,
         None => {
             eprintln!("Runtime not initialized");
@@ -355,10 +355,10 @@ fn convert_to_kv_router_config(config: DynamoKvRouterConfig) -> KvRouterConfig {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct DynamoRouterConfigOverride {
-    pub has_overlap_score_weight: bool,
     pub overlap_score_weight: f64,
-    pub has_router_temperature: bool,
     pub router_temperature: f64,
+    pub has_overlap_score_weight: bool,
+    pub has_router_temperature: bool,
 }
 
 // Helper function to convert DynamoRouterConfigOverride to RouterConfigOverride
@@ -403,7 +403,7 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
         }
     };
 
-    let wk = match WK.get() {
+    let wk = match WORKER.get() {
         Some(wk) => wk,
         None => {
             eprintln!("Runtime not initialized - call dynamo_llm_init first");
@@ -609,11 +609,7 @@ pub extern "C" fn dynamo_kv_router_init(
     namespace_c_str: *const c_char,
     component_c_str: *const c_char,
 ) -> DynamoLlmResult {
-    dynamo_kv_router_init_with_config(
-        namespace_c_str,
-        component_c_str,
-        std::ptr::null(),
-    )
+    dynamo_kv_router_init_with_config(namespace_c_str, component_c_str, std::ptr::null())
 }
 
 // Below are the bindings used by the Inference Gateway Endpoint Picker when it needs routing.
@@ -703,7 +699,7 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
         }
     };
 
-    let wk = match WK.get() {
+    let wk = match WORKER.get() {
         Some(wk) => wk,
         None => {
             eprintln!("Runtime not initialized");
