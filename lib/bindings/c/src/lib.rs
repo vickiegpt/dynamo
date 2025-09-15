@@ -412,7 +412,11 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
     };
 
     let result = wk.runtime().secondary().block_on(async {
-        eprintln!("Starting KV router initialization for namespace='{}' component='{}'...", namespace, component_name);
+        eprintln!(
+            "Starting KV router initialization for namespace='{}' component='{}'...",
+            namespace, component_name
+        );
+
         let drt = match DRT.get() {
             Some(drt) => drt,
             None => {
@@ -421,7 +425,7 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
             }
         };
 
-         let namespace_obj = match drt.namespace(namespace.clone()) {
+        let namespace_obj = match drt.namespace(namespace.clone()) {
             Ok(ns) => ns,
             Err(e) => {
                 eprintln!("Failed to get namespace: {:?}", e);
@@ -444,146 +448,140 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
             convert_to_kv_router_config(config)
         };
 
-        // Check if router is already initialized
         if KV_ROUTER.get().is_some() {
             eprintln!("KV Router already initialized");
             return DynamoLlmResult::ERR;
         }
 
-        // Load MDC from etcd to get actual block size and create preprocessor
         let Some(etcd_client) = drt.etcd_client() else {
             eprintln!("No etcd client available for loading MDC");
             return DynamoLlmResult::ERR;
         };
 
-        // Use the correct discovery pattern: fetch all ModelEntry records and filter in memory
         match etcd_client.kv_get_prefix(MODEL_ROOT_PATH).await {
-                             Ok(kvs) => {
-                                 let mut matching_entry: Option<ModelEntry> = None;
+            Ok(kvs) => {
+                let mut matching_entry: Option<ModelEntry> = None;
 
-                                 // Parse each KV pair and find matching namespace/component
-                                 for kv in kvs {
-                                     match serde_json::from_slice::<ModelEntry>(kv.value()) {
-                                         Ok(model_entry) => {
-                                             // Filter by namespace and component
-                                             if model_entry.endpoint_id.namespace == namespace
-                                                && model_entry.endpoint_id.component == component_name {
-                                                 matching_entry = Some(model_entry);
-                                                 break;
-                                             }
-                                         }
-                                         Err(e) => {
-                                             tracing::warn!("Failed to parse ModelEntry: {:?}", e);
-                                             continue;
-                                         }
-                                     }
-                                 }
+                for kv in kvs {
+                    match serde_json::from_slice::<ModelEntry>(kv.value()) {
+                        Ok(model_entry)
+                            if model_entry.endpoint_id.namespace == namespace
+                                && model_entry.endpoint_id.component == component_name =>
+                        {
+                            matching_entry = Some(model_entry);
+                            break;
+                        }
+                        Ok(_) => continue,
+                        Err(e) => {
+                            tracing::warn!("Failed to parse ModelEntry: {:?}", e);
+                            continue;
+                        }
+                    }
+                }
 
-                                 match matching_entry {
-                                     Some(model_entry) => {
-                                         // Load the actual ModelDeploymentCard using the model_entry
-                                         match model_entry.load_mdc(&etcd_client).await {
-                                             Ok(mut mdc) => {
-                                // Auto-discover the actual KV block size from the worker's ModelDeploymentCard
-                                let actual_kv_block_size = mdc.kv_cache_block_size;
-                                eprintln!("Auto-discovered KV block size from ModelDeploymentCard: {}", actual_kv_block_size);
+                match matching_entry {
+                    Some(model_entry) => match model_entry.load_mdc(&etcd_client).await {
+                        Ok(mut mdc) => {
+                            let actual_kv_block_size = mdc.kv_cache_block_size;
+                            eprintln!(
+                                "Auto-discovered KV block size from MDC: {}",
+                                actual_kv_block_size
+                            );
 
-                                // Download any remote files in the MDC
-                                eprintln!("About to download MDC files from NATS...");
-                                eprintln!("MDC before download: tokenizer={:?}", mdc.tokenizer);
-                                let _temp_dir = match mdc.move_from_nats(drt.nats_client().clone()).await {
-                                    Ok(temp_dir) => {
-                                        eprintln!("Successfully downloaded MDC files from NATS to temp dir: {:?}", temp_dir.path());
-                                        temp_dir
-                                    },
+                            eprintln!("Downloading MDC files from NATS...");
+                            let _temp_dir =
+                                match mdc.move_from_nats(drt.nats_client().clone()).await {
+                                    Ok(temp_dir) => temp_dir,
                                     Err(e) => {
                                         eprintln!("Failed to download MDC files: {:?}", e);
                                         return DynamoLlmResult::ERR;
                                     }
                                 };
-                                eprintln!("MDC after download: tokenizer={:?}", mdc.tokenizer);
 
-                                // Check if files actually exist before creating preprocessor
-                                eprintln!("About to create OpenAI preprocessor...");
-                                if let Some(ref prompt_formatter) = mdc.prompt_formatter {
-                                    eprintln!("Prompt formatter: {:?}", prompt_formatter);
-                                    // Note: The actual file path check depends on the PromptFormatterArtifact structure
-                                    // which we'd need to examine further, but this shows what's available
-                                }
-
-                                match OpenAIPreprocessor::new(mdc) {
-                                    Ok(preprocessor) => {
-                                        eprintln!("Successfully created preprocessor, storing in static...");
-                                        match PREPROCESSOR
-                                            .get_or_init(async move { preprocessor })
+                            eprintln!("Creating OpenAI preprocessor...");
+                            match OpenAIPreprocessor::new(mdc) {
+                                Ok(preprocessor) => {
+                                    eprintln!("Preprocessor created, storing...");
+                                    match PREPROCESSOR
+                                        .get_or_init(async move { preprocessor })
+                                        .await
+                                    {
+                                        _ => {
+                                            eprintln!(
+                                                "Preprocessor stored; creating KV Router..."
+                                            );
+                                            match KvRouter::new(
+                                                component.clone(),
+                                                actual_kv_block_size,
+                                                None,
+                                                Some(kv_router_config.clone()),
+                                                format!(
+                                                    "c_bindings_{}",
+                                                    component_name
+                                                ),
+                                            )
                                             .await
-                                        {
-                                            _preprocessor_ref => {
-                                                eprintln!("Preprocessor successfully stored in static!");
-
-                                                // Now create the router with the auto-discovered block size
-                                                match KvRouter::new(
-                                                    component.clone(),
-                                                    actual_kv_block_size,  // Use actual value from ModelDeploymentCard
-                                                    None,
-                                                    Some(kv_router_config.clone()),
-                                                    format!("c_bindings_{}", component_name), // consumer_uuid
-                                                )
-                                                .await
-                                                {
-            Ok(router) => {
-                                                        // Store the router
-                match KV_ROUTER.get_or_init(async move { router }).await {
-                    _router_ref => {
-                                                                eprintln!("KV Router successfully initialized with block size: {}", actual_kv_block_size);
-                        DynamoLlmResult::OK
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to create KV router: {:?}", e);
-                                                        DynamoLlmResult::ERR
+                                            {
+                                                Ok(router) => {
+                                                    match KV_ROUTER
+                                                        .get_or_init(async move { router })
+                                                        .await
+                                                    {
+                                                        _ => {
+                                                            eprintln!(
+                                                                "KV Router initialized (block size={})",
+                                                                actual_kv_block_size
+                                                            );
+                                                            DynamoLlmResult::OK
+                                                        }
                                                     }
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("Failed to create KV router: {:?}", e);
+                                                    DynamoLlmResult::ERR
                                                 }
                                             }
                                         }
                                     }
-                                    Err(e) => {
-                                        eprintln!("Failed to create preprocessor: {:?}", e);
-                                        DynamoLlmResult::ERR
-                                    }
                                 }
-                                             }
-                                             Err(e) => {
-                                                 eprintln!("Failed to load ModelDeploymentCard from model entry: {:?}", e);
-                                                 DynamoLlmResult::ERR
-                                             }
-                                         }
-                                     }
-                                     None => {
-                                         eprintln!(
-                                             "No ModelEntry found for namespace='{}' component='{}'. Available entries:",
-                                             namespace, component_name
-                                         );
-                                         // Log available entries for debugging
-                                         match etcd_client.kv_get_prefix(MODEL_ROOT_PATH).await {
-                                             Ok(debug_kvs) => {
-                                                 for debug_kv in debug_kvs.iter().take(5) {
-                                                     if let Ok(debug_entry) = serde_json::from_slice::<ModelEntry>(debug_kv.value()) {
-                                                         eprintln!("  - namespace='{}' component='{}'",
-                                                                   debug_entry.endpoint_id.namespace,
-                                                                   debug_entry.endpoint_id.component);
-                                                     }
-                                                 }
-                                             }
-                                             Err(_) => {}
-                                         }
-                                         DynamoLlmResult::ERR
-                                     }
-                                 }
-                             }
-                             Err(e) => {
-                                 eprintln!("Failed to fetch ModelEntry records from etcd: {:?}", e);
+                                Err(e) => {
+                                    eprintln!("Failed to create preprocessor: {:?}", e);
+                                    DynamoLlmResult::ERR
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "Failed to load ModelDeploymentCard from model entry: {:?}",
+                                e
+                            );
+                            DynamoLlmResult::ERR
+                        }
+                    },
+                    None => {
+                        eprintln!(
+                            "No ModelEntry found for namespace='{}' component='{}'. Available entries:",
+                            namespace, component_name
+                        );
+                        if let Ok(debug_kvs) = etcd_client.kv_get_prefix(MODEL_ROOT_PATH).await {
+                            for debug_kv in debug_kvs.iter().take(5) {
+                                if let Ok(debug_entry) =
+                                    serde_json::from_slice::<ModelEntry>(debug_kv.value())
+                                {
+                                    eprintln!(
+                                        "  - namespace='{}' component='{}'",
+                                        debug_entry.endpoint_id.namespace,
+                                        debug_entry.endpoint_id.component
+                                    );
+                                }
+                            }
+                        }
+                        DynamoLlmResult::ERR
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to fetch ModelEntry records from etcd: {:?}", e);
                 DynamoLlmResult::ERR
             }
         }
