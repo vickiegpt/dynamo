@@ -16,7 +16,6 @@ use dynamo_runtime::protocols::annotated::Annotated;
 use futures::StreamExt;
 
 use super::NvCreateChatCompletionStreamResponse;
-use crate::preprocessor::PossibleToolCallAnnotation;
 
 type ManyOut<T> = Pin<Box<ResponseStream<T>>>;
 
@@ -58,10 +57,7 @@ impl JailedStream {
             while let Some(response) = stream.next().await {
                 // Handle non-jailed state
                 if !is_jailed {
-                    if let Some(ref chat_response) = response.data {
-                        // Store metadata for potential use later
-                        last_response_metadata = Some(chat_response.clone());
-
+                    if let Some(chat_response) = response.data.as_ref() {
                         // Check if we should jail based on content
                         if let Some(choice) = chat_response.choices.first()
                             && let Some(ref content) = choice.delta.content
@@ -80,33 +76,14 @@ impl JailedStream {
                                     tracing::debug!("Jail triggered, starting accumulation");
                                     is_jailed = true;
 
+                                    // Store metadata only when we actually jail
+                                    last_response_metadata = response.data.clone();
+
                                     // Start accumulating for this choice
                                     accumulated_content.insert(choice.index, content.clone());
                                     buffered_content = content.clone();
 
-                                    // Create annotation for observability
-                                    let annotation = PossibleToolCallAnnotation {
-                                        possible_tokens: 1,
-                                        possible_content: content.clone(),
-                                        parser_used: self.tool_call_parser.clone(),
-                                    };
-
-                                    // Create annotated response with empty content
-                                    let mut annotated_response = response.clone();
-                                    if let Ok(annotated) = annotation.to_annotation::<NvCreateChatCompletionStreamResponse>() {
-                                        annotated_response.event = annotated.event;
-                                        annotated_response.comment = annotated.comment;
-                                    }
-
-                                    // Clear content but preserve structure
-                                    annotated_response = annotated_response.map_data(|mut chat_response| {
-                                        for choice in &mut chat_response.choices {
-                                            choice.delta.content = Some(String::new());
-                                        }
-                                        Ok(chat_response)
-                                    });
-
-                                    yield annotated_response;
+                                    // Don't yield anything while jailed - just continue accumulating
                                     continue;
                             }
                         }
@@ -152,27 +129,7 @@ impl JailedStream {
                                         }
                                     }
 
-                                    // Still jailed, send empty annotated response
-                                    let annotation = PossibleToolCallAnnotation {
-                                        possible_tokens: 1,
-                                        possible_content: content.clone(),
-                                        parser_used: self.tool_call_parser.clone(),
-                                    };
-
-                                    let mut annotated_response = response.clone();
-                                    if let Ok(annotated) = annotation.to_annotation::<NvCreateChatCompletionStreamResponse>() {
-                                        annotated_response.event = annotated.event;
-                                        annotated_response.comment = annotated.comment;
-                                    }
-
-                                    annotated_response = annotated_response.map_data(|mut chat_response| {
-                                        for choice in &mut chat_response.choices {
-                                            choice.delta.content = Some(String::new());
-                                        }
-                                        Ok(chat_response)
-                                    });
-
-                                    yield annotated_response;
+                                    // Still jailed, just continue accumulating without yielding
                             }
                         }
                     }
@@ -341,7 +298,6 @@ impl Default for JailedStreamBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::preprocessor::ANNOTATION_POSSIBLE_TOOL_CALL;
     use dynamo_runtime::engine::{AsyncEngineContext, ResponseStream};
     use futures::stream;
     use std::sync::Arc;
@@ -516,6 +472,12 @@ mod tests {
         let jailed_stream = jail.apply(response_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
+        // We should only get 3 chunks now:
+        // 1. "Hello " (before jail)
+        // 2. Accumulated jailed content when jail ends
+        // 3. " World" (after jail)
+        assert_eq!(results.len(), 3);
+
         // First chunk should pass through
         assert_eq!(
             results[0].data.as_ref().unwrap().choices[0]
@@ -525,51 +487,19 @@ mod tests {
             Some("Hello ")
         );
 
-        // Jail start chunk should have empty content but annotation
-        assert!(
-            results[1].data.as_ref().unwrap().choices[0]
-                .delta
-                .content
-                .as_ref()
-                .unwrap()
-                .is_empty()
-        );
-        assert_eq!(
-            results[1].event.as_deref(),
-            Some(ANNOTATION_POSSIBLE_TOOL_CALL)
-        );
-
-        // Middle jailed chunks should also be empty with annotations
-        assert!(
-            results[2].data.as_ref().unwrap().choices[0]
-                .delta
-                .content
-                .as_ref()
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            results[3].data.as_ref().unwrap().choices[0]
-                .delta
-                .content
-                .as_ref()
-                .unwrap()
-                .is_empty()
-        );
-
         // When jail ends, accumulated content should be released
-        let unjailed_content = &results[4].data.as_ref().unwrap().choices[0].delta.content;
+        let unjailed_content = &results[1].data.as_ref().unwrap().choices[0].delta.content;
         assert!(unjailed_content.is_some());
         assert!(
             unjailed_content
                 .as_ref()
                 .unwrap()
-                .contains("This is jailed content")
+                .contains("<jail>This is jailed content</jail>")
         );
 
         // Last chunk should pass through normally
         assert_eq!(
-            results[5].data.as_ref().unwrap().choices[0]
+            results[2].data.as_ref().unwrap().choices[0]
                 .delta
                 .content
                 .as_deref(),
