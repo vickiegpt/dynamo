@@ -34,6 +34,7 @@ pub mod local_model;
 pub mod model_card;
 pub mod nats;
 pub mod preprocessor;
+pub mod vllm_scheduler;
 
 #[cfg(feature = "block-manager")]
 pub mod block_manager;

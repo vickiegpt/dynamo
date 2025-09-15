@@ -87,6 +87,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::entrypoint::KvRouterConfig>()?;
     m.add_class::<llm::kv::WorkerMetricsPublisher>()?;
     m.add_class::<llm::model_card::ModelDeploymentCard>()?;
+    m.add_class::<llm::vllm_scheduler::RustSchedulerState>()?;
     m.add_class::<llm::local_model::ModelRuntimeConfig>()?;
     m.add_class::<llm::preprocessor::OAIChatPreprocessor>()?;
     m.add_class::<llm::backend::Backend>()?;

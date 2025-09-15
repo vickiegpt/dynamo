@@ -28,6 +28,7 @@ use tokenizers::Token;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
@@ -1526,6 +1527,135 @@ impl RequestPreloadState {
 }
 
 pub struct SchedulerState {}
+
+// ========================================================================
+// Rust Scheduler State for tracking requests in parallel with vLLM
+// ========================================================================
+
+/// Compute a deterministic u64 hash from a string cache_salt.
+/// This ensures consistent hashing between Python and Rust.
+pub fn compute_salt_hash(cache_salt: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    let mut hasher = DefaultHasher::new();
+    cache_salt.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Initial request data available at add_request time.
+/// This is a simplified version that only contains data we have
+/// before any scheduling decisions are made.
+#[derive(Clone, Debug)]
+pub struct InitialRequestData {
+    pub request_id: String,
+    pub prompt_token_ids: Vec<i32>,
+    pub salt_hash: Option<u64>,
+    pub lora_int_id: Option<i64>,
+    pub priority: i32,
+    pub arrival_time: f64,
+}
+
+/// The Rust scheduler state that tracks requests in parallel with vLLM.
+/// This allows us to build up Rust-side state while vLLM continues to
+/// drive the actual scheduling decisions.
+#[derive(Debug)]
+pub struct RustSchedulerState {
+    /// Map of request_id to initial request data
+    requests: Arc<Mutex<HashMap<String, InitialRequestData>>>,
+}
+
+impl RustSchedulerState {
+    /// Create a new empty scheduler state.
+    pub fn new() -> Self {
+        Self {
+            requests: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Add a new request to the scheduler state.
+    /// Called when DynamoScheduler.add_request() is invoked.
+    pub fn add_request(
+        &self,
+        request_id: String,
+        prompt_token_ids: Vec<i32>,
+        cache_salt: Option<String>,
+        lora_int_id: Option<i64>,
+        priority: i32,
+        arrival_time: f64,
+    ) -> Result<(), String> {
+        // Convert cache_salt string to u64 hash
+        let salt_hash = cache_salt.as_ref().map(|s| compute_salt_hash(s));
+
+        let request_data = InitialRequestData {
+            request_id: request_id.clone(),
+            prompt_token_ids,
+            salt_hash,
+            lora_int_id,
+            priority,
+            arrival_time,
+        };
+
+        let mut requests = self.requests.lock().unwrap();
+        requests.insert(request_id.clone(), request_data);
+
+        // Log for debugging
+        println!(
+            "Rust scheduler: Added request {} with {} prompt tokens",
+            request_id,
+            requests.get(&request_id).unwrap().prompt_token_ids.len()
+        );
+
+        Ok(())
+    }
+
+    /// Mark requests as finished without removing them.
+    /// The actual removal happens when the scheduler reports them as finished.
+    /// This is called when finish_requests is invoked externally (e.g., client disconnect).
+    pub fn mark_as_finished(&self, request_ids: Vec<String>) -> Result<(), String> {
+        // TODO: When we track request states, update the state to finished here.
+        // For now, this is a no-op as we don't track states yet.
+        // The request will be removed when update_from_output reports it as finished.
+        for req_id in &request_ids {
+            println!("Rust scheduler: Marked request {} as finished (no-op for now)", req_id);
+        }
+        Ok(())
+    }
+
+    /// Remove finished requests from the scheduler state.
+    /// This should only be called when the scheduler reports requests as finished
+    /// via scheduler_output.finished_req_ids in update_from_output.
+    pub fn remove_finished_requests(&self, request_ids: Vec<String>) -> Result<(), String> {
+        let mut requests = self.requests.lock().unwrap();
+
+        for req_id in &request_ids {
+            if requests.remove(req_id).is_some() {
+                println!("Rust scheduler: Removed finished request {}", req_id);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get the current number of tracked requests.
+    pub fn num_requests(&self) -> usize {
+        self.requests.lock().unwrap().len()
+    }
+
+    /// Check if a request is being tracked.
+    pub fn has_request(&self, request_id: &str) -> bool {
+        self.requests.lock().unwrap().contains_key(request_id)
+    }
+
+    /// Get all currently tracked request IDs.
+    pub fn get_request_ids(&self) -> Vec<String> {
+        self.requests.lock().unwrap().keys().cloned().collect()
+    }
+}
+
+impl Default for RustSchedulerState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 pub struct LogicalBlock {
     block_id: usize,

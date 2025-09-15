@@ -125,7 +125,7 @@ impl SchedulerRecorder {
     /// Move to the next iteration
     pub fn next_iteration(&mut self) {
         // Finalize current record if complete
-        if let Some(mut record) = self.current_record.take() {
+        if let Some(record) = self.current_record.take() {
             if record.schedule_output.is_some()
                 && record.model_runner_output.is_some()
                 && record.engine_core_outputs.is_some()
@@ -223,11 +223,7 @@ impl SchedulerRecorder {
         let mut file = File::create(path)?;
         file.write_all(json.as_bytes())?;
 
-        println!(
-            "Saved {} iterations to {:?}",
-            self.recordings.len(),
-            path
-        );
+        println!("Saved {} iterations to {:?}", self.recordings.len(), path);
         Ok(())
     }
 

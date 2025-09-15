@@ -16,6 +16,12 @@ from typing import TYPE_CHECKING, Dict, Iterable, Optional, Tuple, Union
 from vllm.v1.core.sched.interface import SchedulerInterface
 from vllm.v1.core.sched.scheduler import Scheduler
 
+try:
+    from dynamo._core import RustSchedulerState
+except ImportError:
+    RustSchedulerState = None
+    print("Warning: Could not import RustSchedulerState from dynamo._core")
+
 if TYPE_CHECKING:
     from vllm.config import VllmConfig
     from vllm.multimodal import MultiModalRegistry
@@ -72,6 +78,13 @@ class DynamoScheduler(SchedulerInterface):
             log_stats=log_stats,
         )
 
+        # Initialize Rust scheduler state if available
+        if RustSchedulerState is not None:
+            self._rust_scheduler = RustSchedulerState()
+            print("DynamoScheduler: Rust scheduler state initialized")
+        else:
+            self._rust_scheduler = None
+
     def schedule(self) -> "SchedulerOutput":
         """
         Schedule requests for the next model forward pass.
@@ -96,7 +109,27 @@ class DynamoScheduler(SchedulerInterface):
         Returns:
             Dictionary mapping request IDs to engine core outputs
         """
-        return self._scheduler.update_from_output(scheduler_output, model_runner_output)
+        result = self._scheduler.update_from_output(
+            scheduler_output, model_runner_output
+        )
+
+        # Remove finished requests from Rust scheduler
+        if self._rust_scheduler is not None and hasattr(
+            scheduler_output, "finished_req_ids"
+        ):
+            try:
+                finished_ids = list(scheduler_output.finished_req_ids)
+                if finished_ids:
+                    self._rust_scheduler.remove_finished_requests(finished_ids)
+                    print(
+                        f"DynamoScheduler: Removed {len(finished_ids)} finished requests from Rust scheduler"
+                    )
+            except Exception as e:
+                print(
+                    f"DynamoScheduler: Error removing finished requests from Rust scheduler: {e}"
+                )
+
+        return result
 
     def update_draft_token_ids(
         self,
@@ -117,6 +150,38 @@ class DynamoScheduler(SchedulerInterface):
         Args:
             request: Request object to add to the scheduler
         """
+        # Pass request to Rust scheduler if available
+        if self._rust_scheduler is not None:
+            try:
+                # Extract data available at add_request time
+                request_id = request.request_id
+                prompt_token_ids = request.prompt_token_ids
+
+                # Pass cache_salt as string - Rust will handle the hashing
+                cache_salt = getattr(request, "cache_salt", None)
+
+                # Extract LoRA ID if present
+                lora_int_id = None
+                if hasattr(request, "lora_request") and request.lora_request:
+                    lora_int_id = request.lora_request.lora_int_id
+
+                # Get priority and arrival time
+                priority = getattr(request, "priority", 0)
+                arrival_time = getattr(request, "arrival_time", 0.0)
+
+                # Add to Rust scheduler (cache_salt is now passed as string)
+                self._rust_scheduler.add_request(
+                    request_id=request_id,
+                    prompt_token_ids=list(prompt_token_ids),  # Convert to list
+                    cache_salt=cache_salt,  # Pass as string, Rust converts to u64
+                    lora_int_id=lora_int_id,
+                    priority=priority,
+                    arrival_time=arrival_time,
+                )
+            except Exception as e:
+                print(f"DynamoScheduler: Error adding request to Rust scheduler: {e}")
+
+        # Always add to vLLM scheduler
         self._scheduler.add_request(request)
 
     def finish_requests(
@@ -131,6 +196,25 @@ class DynamoScheduler(SchedulerInterface):
             request_ids: Request ID(s) to mark as finished
             finished_status: The finish status for the requests
         """
+        # Mark as finished in Rust scheduler (doesn't remove them yet)
+        if self._rust_scheduler is not None:
+            try:
+                # Ensure request_ids is a list
+                if isinstance(request_ids, str):
+                    ids_list = [request_ids]
+                else:
+                    ids_list = list(request_ids)
+
+                self._rust_scheduler.mark_as_finished(ids_list)
+                print(
+                    f"DynamoScheduler: Marked {len(ids_list)} requests as finished in Rust scheduler"
+                )
+            except Exception as e:
+                print(
+                    f"DynamoScheduler: Error marking requests as finished in Rust scheduler: {e}"
+                )
+
+        # Always call vLLM scheduler to handle the actual state transitions
         self._scheduler.finish_requests(request_ids, finished_status)
 
     def get_num_unfinished_requests(self) -> int:
