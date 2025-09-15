@@ -456,8 +456,8 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
             return DynamoLlmResult::ERR;
         };
 
-                         // Use the correct discovery pattern: fetch all ModelEntry records and filter in memory
-                         match etcd_client.kv_get_prefix(MODEL_ROOT_PATH).await {
+        // Use the correct discovery pattern: fetch all ModelEntry records and filter in memory
+        match etcd_client.kv_get_prefix(MODEL_ROOT_PATH).await {
                              Ok(kvs) => {
                                  let mut matching_entry: Option<ModelEntry> = None;
 
