@@ -268,16 +268,36 @@ class WorkflowMetricsUploader:
         """Upload complete workflow metrics including workflow, jobs, and steps in one operation"""
         print(f"Uploading complete metrics for workflow '{self.workflow_name}' (run {self.run_id})")
         
-        # Get workflow and jobs data from GitHub API
-        workflow_data = self.get_github_api_data(f"/repos/{self.repo}/actions/runs/{self.run_id}")
-        if not workflow_data:
-            print("Could not fetch workflow data from GitHub API")
-            return
+        # Wait for workflow to complete before uploading metrics
+        import time
+        max_retries = 5
+        retry_delay = 10  # seconds
+        
+        for attempt in range(max_retries):
+            # Get workflow and jobs data from GitHub API
+            workflow_data = self.get_github_api_data(f"/repos/{self.repo}/actions/runs/{self.run_id}")
+            if not workflow_data:
+                print("Could not fetch workflow data from GitHub API")
+                return
+                
+            jobs_data = self.get_github_api_data(f"/repos/{self.repo}/actions/runs/{self.run_id}/jobs")
+            if not jobs_data or 'jobs' not in jobs_data:
+                print("Could not fetch jobs data from GitHub API")
+                return
             
-        jobs_data = self.get_github_api_data(f"/repos/{self.repo}/actions/runs/{self.run_id}/jobs")
-        if not jobs_data or 'jobs' not in jobs_data:
-            print("Could not fetch jobs data from GitHub API")
-            return
+            # Check if workflow is completed
+            workflow_status = workflow_data.get('status', '')
+            workflow_conclusion = workflow_data.get('conclusion')
+            
+            if workflow_status == 'completed' or workflow_conclusion:
+                print(f"Workflow completed with status: {workflow_status}, conclusion: {workflow_conclusion}")
+                break
+            elif attempt < max_retries - 1:
+                print(f"Workflow still {workflow_status}, waiting {retry_delay}s before retry {attempt + 1}/{max_retries}")
+                time.sleep(retry_delay)
+            else:
+                print(f"Workflow still {workflow_status} after {max_retries} attempts, uploading current state")
+                break
         
         # Upload workflow metrics
         try:
@@ -450,7 +470,12 @@ class WorkflowMetricsUploader:
         # Schema fields
         db_data[FIELD_JOB_ID] = str(job_id)
         db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
-        db_data[FIELD_STATUS] = job_data.get('conclusion', job_data.get('status', 'unknown'))
+        # Handle job status - prefer conclusion for completed jobs, fallback to status
+        job_status = job_data.get('conclusion') or job_data.get('status', 'unknown')
+        # Don't upload jobs with null/None status as they cause Grafana filtering issues
+        if job_status is None:
+            job_status = 'in_progress'
+        db_data[FIELD_STATUS] = job_status
         db_data[FIELD_BRANCH] = self.ref_name
         db_data[FIELD_RUNNER_INFO] = job_data.get('runner_name', 'unknown')
         
@@ -514,7 +539,6 @@ class WorkflowMetricsUploader:
     def _upload_single_step_metrics(self, step_data: Dict[str, Any], job_data: Dict[str, Any], step_index: int) -> None:
         """Extract and post metrics for a single step"""
         # Extract step metrics using standardized functions
-        return
         db_data = {}
         job_id = job_data['id']
         job_name = job_data['name']
