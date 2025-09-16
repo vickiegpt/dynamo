@@ -15,7 +15,7 @@ pub mod prompt;
 pub mod tools;
 
 use anyhow::Result;
-use dynamo_async_openai::types::EncodingFormat;
+use dynamo_async_openai::types::{ChatCompletionToolChoiceOption, EncodingFormat};
 use futures::Stream;
 use futures::stream::{self, StreamExt};
 use prompt::OAIPromptFormatter;
@@ -570,24 +570,49 @@ impl OpenAIPreprocessor {
         })
     }
 
-    /// Apply tool calling jail to the stream using the preprocessor's tool call parser
-    /// Returns impl Stream to avoid boxing
-    pub fn apply_tool_calling_jail_if_needed<S>(
-        tool_call_parser: Option<String>,
+    /// Determine if we should apply the tool calling jail based on configuration
+    /// Returns Ok(true) if jail should be applied, Ok(false) if not, or Err if invalid config
+    pub fn should_apply_tool_jail(
+        tool_call_parser: Option<&String>,
+        tool_choice: Option<&ChatCompletionToolChoiceOption>,
+        has_tools: bool,
+    ) -> Result<bool, Error> {
+        match (tool_call_parser, tool_choice, has_tools) {
+            // No parser but tools requested - error cases
+            (None, Some(ChatCompletionToolChoiceOption::Required), true) => Err(anyhow::anyhow!(
+                "Tool choice 'required' specified but no tool parser configured"
+            )),
+            (None, Some(ChatCompletionToolChoiceOption::Auto), true) => Err(anyhow::anyhow!(
+                "Tool choice 'auto' specified but no tool parser configured"
+            )),
+            (None, Some(ChatCompletionToolChoiceOption::Named(_)), _) => Err(anyhow::anyhow!(
+                "Named tool choice specified but no tool parser configured"
+            )),
+
+            // Parser exists and tools might be called
+            (Some(_), Some(ChatCompletionToolChoiceOption::None), _) => {
+                Ok(false) // Explicitly disabled
+            }
+            (Some(_), Some(_), true) => Ok(true), // Any other tool_choice with tools
+            (Some(_), None, true) => Ok(true),    // Default behavior when tools present
+
+            // No tools or no parser
+            _ => Ok(false),
+        }
+    }
+
+    /// Apply tool calling jail to the stream if needed
+    pub fn apply_tool_calling_jail<S>(
+        tool_call_parser: String,
         stream: S,
     ) -> impl Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send
     where
         S: Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send + 'static,
     {
-        if let Some(parser) = tool_call_parser {
-            // Create and apply the jailed stream
-            let jail = JailedStream::builder().tool_call_parser(parser).build();
-
-            futures::future::Either::Left(jail.apply(stream))
-        } else {
-            // No parser configured, return stream as-is
-            futures::future::Either::Right(stream)
-        }
+        let jail = JailedStream::builder()
+            .tool_call_parser(tool_call_parser)
+            .build();
+        jail.apply(stream)
     }
 }
 
@@ -648,8 +673,27 @@ impl
             context.clone(),
         );
 
-        // Apply jail if configured (returns impl Stream)
-        let stream = Self::apply_tool_calling_jail_if_needed(self.tool_call_parser.clone(), stream);
+        // Check if tools are present and if we should apply jail
+        let has_tools =
+            request.inner.tools.is_some() && !request.inner.tools.as_ref().unwrap().is_empty();
+
+        // Determine if we should apply jail (do this before moving request)
+        let should_jail = Self::should_apply_tool_jail(
+            self.tool_call_parser.as_ref(),
+            request.inner.tool_choice.as_ref(),
+            has_tools,
+        )?;
+
+        // Apply jail conditionally
+        let stream: Pin<Box<dyn Stream<Item = _> + Send>> = if should_jail {
+            if let Some(parser) = self.tool_call_parser.clone() {
+                Box::pin(Self::apply_tool_calling_jail(parser, stream))
+            } else {
+                Box::pin(stream) // Should not happen due to should_jail check
+            }
+        } else {
+            Box::pin(stream)
+        };
 
         // prepend the annotations to the response stream
         let stream = annotations_stream.chain(stream);
