@@ -853,16 +853,16 @@ impl
     }
 }
 
-#[allow(deprecated)]
+#[allow(deprecated, dead_code)]
 #[cfg(test)]
 mod tests {
     use super::*;
     use dynamo_async_openai::types::{
         ChatChoiceStream, ChatCompletionStreamResponseDelta, FinishReason as OAIFinishReason, Role,
     };
-    use dynamo_runtime::pipeline::ResponseStream;
+
     use dynamo_runtime::protocols::annotated::Annotated;
-    use futures::stream::{self, StreamExt};
+
     use std::sync::Arc;
 
     // Helper function to create a mock chat response chunk
