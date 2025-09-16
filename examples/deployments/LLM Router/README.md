@@ -221,7 +221,7 @@ graph TB
 </div>
 
 ```bash
-# Code generation task → Routes to llama-3.3-nemotron-super-49b-v1
+# Code generation task → Routes to meta-llama/Llama-3.1-70B-Instruct
 curl -X POST http://llm-router.local/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
@@ -243,7 +243,7 @@ curl -X POST http://llm-router.local/v1/chat/completions \
 </div>
 
 ```bash
-# Complex reasoning task → Routes to llama-3.3-nemotron-super-49b-v1
+# Complex reasoning task → Routes to meta-llama/Llama-3.1-70B-Instruct
 curl -X POST http://llm-router.local/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
@@ -262,7 +262,7 @@ curl -X POST http://llm-router.local/v1/chat/completions \
 
 The key insight is that Dynamo provides a **single gateway endpoint** that routes to different models based on the `model` parameter in the OpenAI-compatible API request:
 
-1. **Single Endpoint**: `http://dynamo-llm-service.dynamo-cloud.svc.cluster.local:8000/v1`
+1. **Single Endpoint**: `http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1`
 2. **Model-Based Routing**: Dynamo routes internally based on the `model` field in requests
 3. **OpenAI Compatibility**: Standard OpenAI API format with model selection
 
@@ -367,7 +367,9 @@ Set the required environment variables for deployment:
 | `HF_TOKEN` | Hugging Face access token | `your_hf_token` | Yes | Model access |
 | `NGC_API_KEY` | NVIDIA NGC API key | `your-ngc-api-key` | No | Private images |
 | `DYNAMO_API_BASE` | Dynamo service endpoint URL | `http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000` | Yes | LLM Router |
-| `DYNAMO_API_KEY` | Dynamo API authentication key | `your-dynamo-api-key-here` | No | LLM Router auth |
+| `DYNAMO_API_KEY` | Dynamo API authentication key | `""` (empty) | Yes* | LLM Router auth |
+
+*Required for router configuration but can be empty for local deployments
 
 ### Model Size Recommendations
 
@@ -400,20 +402,6 @@ For optimal deployment experience, consider model size vs. resources:
 - **TensorRT-LLM Runtime**: `nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.4.1`
 - **Dynamo Kubernetes Operator**: `nvcr.io/nvidia/ai-dynamo/dynamo-operator:latest`
 - **Dynamo Deployment API**: `nvcr.io/nvidia/ai-dynamo/dynamo-api-store:latest`
-
-### Configuration Variables
-
-The deployment uses a configurable `api_base` variable for flexible endpoint management:
-
-| Variable | File | Description | Default Value |
-|----------|------|-------------|---------------|
-| `dynamo.api_base` | `llm-router-values-override.yaml` | Dynamo LLM endpoint URL | `http://dynamo-llm-service.dynamo-cloud.svc.cluster.local:8000` |
-| `${DYNAMO_API_BASE}` | `router-config-dynamo.yaml` | Template variable substituted during deployment | Derived from `dynamo.api_base` |
-
-This approach allows you to:
-- **Switch environments** by changing only the `dynamo.api_base` value
-- **Override during deployment** with `--set dynamo.api_base=http://new-endpoint:8000`
-- **Use different values files** for different environments (dev/staging/prod)
 
 ### Resource Requirements
 
@@ -596,17 +584,23 @@ export NAMESPACE=dynamo-kubernetes
 export DYNAMO_VERSION=0.4.1  # Choose your Dynamo version from NGC catalog
 export DYNAMO_IMAGE=nvcr.io/nvidia/ai-dynamo/vllm-runtime:${DYNAMO_VERSION}
 
-# Model deployment variables
-export MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct  # Choose your model (see recommendations above)
-export MODEL_SUFFIX=llama-8b  # Kubernetes-compatible deployment suffix (lowercase, alphanumeric, hyphens only)
+# Model deployment variables (deploy all three models)
+export MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct  # Start with this model
+export MODEL_SUFFIX=llama-8b  # Kubernetes-compatible deployment suffix
 export HF_TOKEN=your_hf_token
+
+# Deploy other models by changing MODEL_NAME and MODEL_SUFFIX:
+# export MODEL_NAME=meta-llama/Llama-3.1-70B-Instruct
+# export MODEL_SUFFIX=llama-70b
+# export MODEL_NAME=mistralai/Mixtral-8x22B-Instruct-v0.1
+# export MODEL_SUFFIX=mixtral-8x22b
 
 # Optional variables
 export NGC_API_KEY=your-ngc-api-key  # Optional for public images
 
 # LLM Router variables (set during router deployment)
 export DYNAMO_API_BASE="http://vllm-frontend-frontend.${NAMESPACE}.svc.cluster.local:8000"
-export DYNAMO_API_KEY="your-dynamo-api-key-here"  # Optional for local deployments
+export DYNAMO_API_KEY=""  # Empty for local deployments (no authentication required)
 ```
 
 ### Validate Environment Variables
@@ -620,7 +614,7 @@ echo "DYNAMO_IMAGE: ${DYNAMO_IMAGE:-'NOT SET'}"
 echo "HF_TOKEN: ${HF_TOKEN:-'NOT SET'}"
 echo "NGC_API_KEY: ${NGC_API_KEY:-'NOT SET (optional for public images)'}"
 echo "DYNAMO_API_BASE: ${DYNAMO_API_BASE:-'NOT SET (set during router deployment)'}"
-echo "DYNAMO_API_KEY: ${DYNAMO_API_KEY:-'NOT SET (optional for local deployments)'}"
+echo "DYNAMO_API_KEY: ${DYNAMO_API_KEY:-'NOT SET (can be empty for local deployments)'}"
 ```
 
 ## Deployment Guide
@@ -725,19 +719,27 @@ envsubst < frontend.yaml | kubectl apply -f - -n ${NAMESPACE}
 
 Choose your worker deployment approach:
 
-**Option A: Using agg.yaml (aggregated workers)**
+**Deploy Model 1 (Llama 8B - Simple Tasks):**
 ```bash
-# Deploy model workers only (frontend extracted to frontend.yaml)
+# Deploy Llama 8B model for simple tasks
 export MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
 export MODEL_SUFFIX=llama-8b
 envsubst < agg.yaml | kubectl apply -f - -n ${NAMESPACE}
 ```
 
-**Option B: Using disagg.yaml (disaggregated workers)**
+**Deploy Model 2 (Llama 70B - Complex Tasks):**
 ```bash
-# Deploy separate prefill and decode workers (frontend extracted to frontend.yaml)
+# Deploy Llama 70B model for complex tasks
 export MODEL_NAME=meta-llama/Llama-3.1-70B-Instruct
 export MODEL_SUFFIX=llama-70b
+envsubst < disagg.yaml | kubectl apply -f - -n ${NAMESPACE}
+```
+
+**Deploy Model 3 (Mixtral - Creative Tasks):**
+```bash
+# Deploy Mixtral model for creative/conversational tasks
+export MODEL_NAME=mistralai/Mixtral-8x22B-Instruct-v0.1
+export MODEL_SUFFIX=mixtral-8x22b
 envsubst < disagg.yaml | kubectl apply -f - -n ${NAMESPACE}
 ```
 
@@ -803,7 +805,7 @@ kubectl get svc -n ${NAMESPACE} | grep frontend
 
 ```bash
 # Forward the shared frontend service port
-kubectl port-forward svc/frontend-service 8000:8000 -n ${NAMESPACE} &
+kubectl port-forward svc/vllm-frontend-frontend 8000:8000 -n ${NAMESPACE} &
 
 # Test different models through the same endpoint by specifying the model name
 
@@ -817,11 +819,11 @@ curl localhost:8000/v1/chat/completions \
     "max_tokens": 30
   }' | jq
 
-# Test Model 2 (e.g., different model if deployed)
+# Test Model 2 (e.g., Llama-3.1-70B if deployed)
 curl localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "microsoft/Phi-3-mini-128k-instruct",
+    "model": "meta-llama/Llama-3.1-70B-Instruct",
     "messages": [{"role": "user", "content": "Explain quantum computing briefly"}],
     "stream": false,
     "max_tokens": 100
@@ -848,10 +850,10 @@ curl localhost:8000/v1/models | jq
 # 1. Create the LLM Router namespace
 kubectl create namespace llm-router
 
-# 2. Create secret for Dynamo API key (if authentication is required)
-# Note: For local Dynamo deployments, API keys may not be required
+# 2. Create secret for Dynamo API key (empty for local deployments)
+# Note: For local Dynamo deployments, API keys are not required
 kubectl create secret generic dynamo-api-secret \
-  --from-literal=DYNAMO_API_KEY="your-dynamo-api-key-here" \
+  --from-literal=DYNAMO_API_KEY="" \
   --namespace=llm-router
 
 # 3. (Optional) Create image pull secret for private registries (only if using private container registry)
@@ -944,7 +946,7 @@ kubectl delete pod model-uploader -n llm-router
 
 # 4. Create placeholder API key secret (required by router controller)
 kubectl create secret generic llm-api-keys \
-  --from-literal=nvidia_api_key="not-needed" \
+  --from-literal=nvidia_api_key="" \
   --namespace=llm-router \
   --dry-run=client -o yaml | kubectl apply -f -
 
@@ -1031,41 +1033,43 @@ The LLM Router controller:
 2. Replaces `${DYNAMO_API_KEY}` placeholders in the configuration
 3. Uses the actual API key value for authentication with Dynamo services
 
-**Security Note**: Never use empty strings (`""`) for API keys. Always use proper Kubernetes secrets with environment variable references.
+**Security Note**: For local Dynamo deployments, empty strings (`""`) are acceptable since no authentication is required. For production deployments with authentication, always use proper API keys stored in Kubernetes secrets.
 
 ### Router Configuration
 
 The `router-config-dynamo.yaml` configures routing policies to our deployed models. 
 
 **Current Setup**: The configuration routes to different models based on task complexity and type:
-- `meta-llama/Llama-3.1-8B-Instruct` - Fast model for simple tasks
-- `meta-llama/Llama-3.1-70B-Instruct` - Powerful model for complex tasks  
-- `mistralai/Mixtral-8x22B-Instruct-v0.1` - Creative model for conversational tasks
+- `meta-llama/Llama-3.1-8B-Instruct` - Fast model for simple tasks (8B parameters)
+- `meta-llama/Llama-3.1-70B-Instruct` - Powerful model for complex tasks (70B parameters)  
+- `mistralai/Mixtral-8x22B-Instruct-v0.1` - Creative model for conversational tasks (8x22B parameters)
+
+**Note**: This guide shows the full 3-model production setup. For testing/development, you can start with fewer models (e.g., just Llama-8B + Qwen-0.6B) and add more as needed. The router will work with any subset of the configured models.
 
 **Note**: All routing goes through the shared frontend service which handles model selection:
 
 | **Task Router** | **Model** | **Shared Frontend** | **Use Case** |
 |-----------------|-----------|--------------|--------------|
-| Brainstorming | `meta-llama/Llama-3.1-70B-Instruct` | `http://frontend-service.${NAMESPACE}:8000/v1` | Creative ideation |
-| Chatbot | `mistralai/Mixtral-8x22B-Instruct-v0.1` | `http://frontend-service.${NAMESPACE}:8000/v1` | Conversational AI |
-| Code Generation | `meta-llama/Llama-3.1-70B-Instruct` | `http://frontend-service.${NAMESPACE}:8000/v1` | Programming tasks |
-| Summarization | `meta-llama/Llama-3.1-8B-Instruct` | `http://frontend-service.${NAMESPACE}:8000/v1` | Text summarization |
-| Text Generation | `mistralai/Mixtral-8x22B-Instruct-v0.1` | `http://frontend-service.${NAMESPACE}:8000/v1` | General text creation |
-| Open QA | `meta-llama/Llama-3.1-70B-Instruct` | `http://frontend-service.${NAMESPACE}:8000/v1` | Complex questions |
-| Closed QA | `meta-llama/Llama-3.1-8B-Instruct` | `http://frontend-service.${NAMESPACE}:8000/v1` | Simple Q&A |
-| Classification | `meta-llama/Llama-3.1-8B-Instruct` | `http://frontend-service.${NAMESPACE}:8000/v1` | Text classification |
-| Extraction | `meta-llama/Llama-3.1-8B-Instruct` | `http://frontend-service.${NAMESPACE}:8000/v1` | Information extraction |
-| Rewrite | `meta-llama/Llama-3.1-8B-Instruct` | `http://frontend-service.${NAMESPACE}:8000/v1` | Text rewriting |
+| Brainstorming | `meta-llama/Llama-3.1-70B-Instruct` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Creative ideation |
+| Chatbot | `mistralai/Mixtral-8x22B-Instruct-v0.1` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Conversational AI |
+| Code Generation | `meta-llama/Llama-3.1-70B-Instruct` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Programming tasks |
+| Summarization | `meta-llama/Llama-3.1-8B-Instruct` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Text summarization |
+| Text Generation | `mistralai/Mixtral-8x22B-Instruct-v0.1` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | General text creation |
+| Open QA | `meta-llama/Llama-3.1-70B-Instruct` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Complex questions |
+| Closed QA | `meta-llama/Llama-3.1-8B-Instruct` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Simple Q&A |
+| Classification | `meta-llama/Llama-3.1-8B-Instruct` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Text classification |
+| Extraction | `meta-llama/Llama-3.1-8B-Instruct` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Information extraction |
+| Rewrite | `meta-llama/Llama-3.1-8B-Instruct` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Text rewriting |
 
 | **Complexity Router** | **Model** | **Shared Frontend** | **Use Case** |
 |----------------------|-----------|--------------|--------------|
-| Creativity | `meta-llama/Llama-3.1-70B-Instruct` | `http://frontend-service.${NAMESPACE}:8000/v1` | Creative tasks |
-| Reasoning | `meta-llama/Llama-3.1-70B-Instruct` | `http://frontend-service.${NAMESPACE}:8000/v1` | Complex reasoning |
-| Contextual-Knowledge | `meta-llama/Llama-3.1-8B-Instruct` | `http://frontend-service.${NAMESPACE}:8000/v1` | Knowledge-intensive |
-| Few-Shot | `meta-llama/Llama-3.1-70B-Instruct` | `http://frontend-service.${NAMESPACE}:8000/v1` | Few-shot learning |
-| Domain-Knowledge | `mistralai/Mixtral-8x22B-Instruct-v0.1` | `http://frontend-service.${NAMESPACE}:8000/v1` | Specialized domains |
-| No-Label-Reason | `meta-llama/Llama-3.1-8B-Instruct` | `http://frontend-service.${NAMESPACE}:8000/v1` | Simple reasoning |
-| Constraint | `meta-llama/Llama-3.1-8B-Instruct` | `http://frontend-service.${NAMESPACE}:8000/v1` | Constrained tasks |
+| Creativity | `meta-llama/Llama-3.1-70B-Instruct` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Creative tasks |
+| Reasoning | `meta-llama/Llama-3.1-70B-Instruct` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Complex reasoning |
+| Contextual-Knowledge | `meta-llama/Llama-3.1-8B-Instruct` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Knowledge-intensive |
+| Few-Shot | `meta-llama/Llama-3.1-70B-Instruct` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Few-shot learning |
+| Domain-Knowledge | `mistralai/Mixtral-8x22B-Instruct-v0.1` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Specialized domains |
+| No-Label-Reason | `meta-llama/Llama-3.1-8B-Instruct` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Simple reasoning |
+| Constraint | `meta-llama/Llama-3.1-8B-Instruct` | `http://vllm-frontend-frontend.${NAMESPACE}:8000/v1` | Constrained tasks |
 
 **Intelligent Routing Strategy**:
 - **Simple tasks** → `meta-llama/Llama-3.1-8B-Instruct` (fast, efficient)
@@ -1118,7 +1122,7 @@ curl -X POST http://localhost:8084/v1/chat/completions \
 kubectl logs -f deployment/llm-router-router-controller -n llm-router
 
 # Monitor Dynamo inference logs
-kubectl logs -f deployment/llm-deployment-frontend -n dynamo-cloud
+kubectl logs -f deployment/vllm-frontend-frontend -n ${NAMESPACE}
 ```
 
 

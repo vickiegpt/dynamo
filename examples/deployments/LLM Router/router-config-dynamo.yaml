@@ -46,55 +46,55 @@ policies:
       
       # Simple tasks → Fast 8B model
       - name: "Closed QA"
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-8B-Instruct
       - name: Classification
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-8B-Instruct
       - name: Extraction
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-8B-Instruct
       - name: Rewrite
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-8B-Instruct
       - name: Summarization
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-8B-Instruct
       - name: Unknown
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-8B-Instruct
         
       # Complex tasks → Powerful 70B model
       - name: Brainstorming
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-70B-Instruct
       - name: "Code Generation"
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-70B-Instruct
       - name: "Open QA"
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-70B-Instruct
       - name: Other
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: mistralai/Mixtral-8x22B-Instruct-v0.1
         
       # Creative/Conversational tasks → Mixtral model
       - name: Chatbot
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: mistralai/Mixtral-8x22B-Instruct-v0.1
       - name: "Text Generation"
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: mistralai/Mixtral-8x22B-Instruct-v0.1
 
@@ -106,34 +106,34 @@ policies:
       
       # Simple complexity → Fast 8B model
       - name: "Contextual-Knowledge"
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-8B-Instruct
       - name: "No-Label-Reason"
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-8B-Instruct
       - name: Constraint
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-8B-Instruct
         
       # High complexity → Powerful 70B model
       - name: Creativity
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-70B-Instruct
       - name: Reasoning
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-70B-Instruct
       - name: "Few-Shot"
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-70B-Instruct
         
       # Creative/Domain complexity → Mixtral model
       - name: "Domain-Knowledge"
-        api_base: http://vllm-frontend-frontend.dynamo-kubernetes.svc.cluster.local:8000/v1
+        api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: mistralai/Mixtral-8x22B-Instruct-v0.1 
