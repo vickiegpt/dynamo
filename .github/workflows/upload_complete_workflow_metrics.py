@@ -188,7 +188,7 @@ class WorkflowMetricsUploader:
 
     def post_to_db(self, url: str, data: Dict[str, Any]) -> None:
         """Push json data to the database/OpenSearch URL"""
-        print(f"Posting metrics to database...")
+        print(f"Posting metrics to database... with data: {data} and url: {url}")
         try:
             response = requests.post(url, data=json.dumps(data), headers=self.headers, timeout=30)
             if not (200 <= response.status_code < 300):
@@ -203,7 +203,7 @@ class WorkflowMetricsUploader:
         """Fetch data from GitHub API"""
         token = os.getenv('GITHUB_TOKEN')
         if not token:
-            print("Warning: GITHUB_TOKEN not set, skipping API calls")
+            print("Error: No GitHub token found. Set GITHUB_TOKEN environment variable or repository secret.")
             return None
             
         headers = {
@@ -506,6 +506,7 @@ class WorkflowMetricsUploader:
     def _upload_single_step_metrics(self, step_data: Dict[str, Any], job_data: Dict[str, Any], step_index: int) -> None:
         """Extract and post metrics for a single step"""
         # Extract step metrics using standardized functions
+        return
         db_data = {}
         job_id = job_data['id']
         job_name = job_data['name']
