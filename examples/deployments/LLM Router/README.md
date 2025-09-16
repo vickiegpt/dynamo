@@ -46,33 +46,33 @@ graph TB
         subgraph "Ingress Layer"
             LB[Load Balancer/Ingress]
         end
-        
+
         subgraph "LLM Router (Helm)"
             RC[Router Controller]
             RS[Router Server + GPU]
         end
-        
+
         subgraph "Dynamo Platform - Shared Frontend Architecture"
             FE[Shared Frontend Service]
             PR[Processor]
-            
+
             subgraph "Model 1 Workers"
                 VW1[VllmDecodeWorker-8B + GPU]
                 PW1[VllmPrefillWorker-8B + GPU]
             end
-            
+
             subgraph "Model 2 Workers"
                 VW2[VllmDecodeWorker-70B + GPU]
                 PW2[VllmPrefillWorker-70B + GPU]
             end
-            
+
             subgraph "Model 3 Workers"
                 VW3[VllmDecodeWorker-Mixtral + GPU]
                 PW3[VllmPrefillWorker-Mixtral + GPU]
             end
         end
     end
-    
+
     LB --> RC
     RC --> RS
     RS --> FE
@@ -83,7 +83,7 @@ graph TB
     PR --> PW1
     PR --> PW2
     PR --> PW3
-    
+
     style LB fill:#e1f5fe
     style RC fill:#f3e5f5
     style RS fill:#f3e5f5
@@ -331,7 +331,7 @@ The deployment now uses a **shared frontend architecture** that splits the origi
 
 **Key Advantages:**
 - **Resource Efficiency**: Single frontend serves all models, reducing CPU and memory overhead
-- **Simplified Operations**: One service to monitor, scale, and maintain instead of multiple frontends  
+- **Simplified Operations**: One service to monitor, scale, and maintain instead of multiple frontends
 - **Better Load Distribution**: Intelligent request routing across all available model workers
 - **Cost Optimization**: Fewer running services means lower infrastructure costs
 - **Unified API Gateway**: Single endpoint for all models with consistent OpenAI API interface
@@ -641,7 +641,7 @@ graph LR
     C --> D[Setup Router]
     D --> E[Configure Access]
     E --> F[Test Integration]
-    
+
     style A fill:#e3f2fd
     style B fill:#f3e5f5
     style C fill:#e8f5e8
@@ -747,7 +747,7 @@ envsubst < disagg.yaml | kubectl apply -f - -n ${NAMESPACE}
 
 **Current Setup**: We deploy 3 models that cover most use cases:
 - **Llama-3.1-8B**: Fast model for simple tasks
-- **Llama-3.1-70B**: Powerful model for complex tasks  
+- **Llama-3.1-70B**: Powerful model for complex tasks
 - **Mixtral-8x22B**: Creative model for conversational tasks
 
 **To add more models**, follow this pattern:
@@ -762,7 +762,7 @@ export MODEL_SUFFIX=phi-3-mini
 # Deploy using aggregated workers
 envsubst < agg.yaml | kubectl apply -f - -n ${NAMESPACE}
 
-# OR deploy using disaggregated workers  
+# OR deploy using disaggregated workers
 envsubst < disagg.yaml | kubectl apply -f - -n ${NAMESPACE}
 ```
 
@@ -894,7 +894,7 @@ nano ../examples/deployments/LLM\ Router/llm-router-values-override.yaml
 # Update line ~34: Replace "YOUR_REGISTRY_HERE/" with your actual registry:
 # Examples:
 # - "nvcr.io/nvidia/" (if you have access to NVIDIA's public registry)
-# - "your-company-registry.com/llm-router/" (for private registries)  
+# - "your-company-registry.com/llm-router/" (for private registries)
 # - "docker.io/your-username/" (for Docker Hub)
 
 # Also update imagePullSecrets name to match your registry credentials
@@ -1050,11 +1050,11 @@ The LLM Router controller:
 
 ### Router Configuration
 
-The `router-config-dynamo.yaml` configures routing policies to our deployed models. 
+The `router-config-dynamo.yaml` configures routing policies to our deployed models.
 
 **Current Setup**: The configuration routes to different models based on task complexity and type:
 - `meta-llama/Llama-3.1-8B-Instruct` - Fast model for simple tasks (8B parameters)
-- `meta-llama/Llama-3.1-70B-Instruct` - Powerful model for complex tasks (70B parameters)  
+- `meta-llama/Llama-3.1-70B-Instruct` - Powerful model for complex tasks (70B parameters)
 - `mistralai/Mixtral-8x22B-Instruct-v0.1` - Creative model for conversational tasks (8x22B parameters)
 
 **Note**: This guide shows the full 3-model production setup. For testing/development, you can start with fewer models (e.g., just Llama-8B + Qwen-0.6B) and add more as needed. The router will work with any subset of the configured models.
@@ -1101,7 +1101,7 @@ curl -X POST http://localhost:8084/v1/chat/completions \
   -d '{
     "messages": [
       {
-        "role": "user", 
+        "role": "user",
         "content": "Write a Python function to calculate fibonacci numbers"
       }
     ],
@@ -1119,7 +1119,7 @@ curl -X POST http://localhost:8084/v1/chat/completions \
   -d '{
     "messages": [
       {
-        "role": "user", 
+        "role": "user",
         "content": "Explain quantum computing in simple terms"
       }
     ],
@@ -1220,4 +1220,4 @@ docker compose -f deploy/metrics/docker-compose.yml down
 - [LLM Router GitHub Repository](https://github.com/NVIDIA-AI-Blueprints/llm-router)
 - [LLM Router Helm Chart](https://github.com/NVIDIA-AI-Blueprints/llm-router/tree/main/deploy/helm/llm-router)
 - [Kubernetes Documentation](https://kubernetes.io/docs/)
-- [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/overview.html) 
+- [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/overview.html)
