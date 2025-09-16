@@ -58,7 +58,6 @@ use crate::protocols::common::llm_backend::EmbeddingsEngineOutput;
 pub const ANNOTATION_FORMATTED_PROMPT: &str = "formatted_prompt";
 pub const ANNOTATION_TOKEN_IDS: &str = "token_ids";
 pub const ANNOTATION_LLM_METRICS: &str = "llm_metrics";
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LLMMetricAnnotation {
     pub input_tokens: usize,
@@ -433,6 +432,8 @@ impl OpenAIPreprocessor {
             context: Arc<dyn AsyncEngineContext>,
             cancelled: bool,
             cumulative_output_tokens: usize,
+            finish_reason_sent: bool,
+            usage_chunk_sent: bool,
             finished: bool,
         }
 
@@ -442,6 +443,8 @@ impl OpenAIPreprocessor {
             context: context.clone(),
             cancelled: false,
             cumulative_output_tokens: 0,
+            finish_reason_sent: false,
+            usage_chunk_sent: false,
             finished: false,
         };
 
@@ -469,6 +472,13 @@ impl OpenAIPreprocessor {
                         "Processing common response: {:?}",
                         response
                     );
+
+                    // Check if this response has a finish_reason
+                    let has_finish_reason = response
+                        .data
+                        .as_ref()
+                        .map(|d| d.finish_reason.is_some())
+                        .unwrap_or(false);
 
                     let (chunk_tokens, isl) = if let Some(ref backend_output) = response.data {
                         let chunk_tokens = backend_output.token_ids.len();
@@ -514,6 +524,11 @@ impl OpenAIPreprocessor {
                         }
                     }
 
+                    // Mark if we've seen a finish_reason
+                    if has_finish_reason {
+                        inner.finish_reason_sent = true;
+                    }
+
                     tracing::trace!(
                         request_id = inner.context.id(),
                         "OpenAI NvCreateChatCompletionStreamResponse: {:?}",
@@ -522,10 +537,34 @@ impl OpenAIPreprocessor {
 
                     Some((response, inner))
                 } else {
-                    // stream closed with out graceful closure
-                    // we did not detect an is_finished/completed message
-                    inner.finished = true; // Mark as finished
-                    None
+                    // Stream has ended - check if we need to send a usage chunk
+                    if inner.response_generator.is_usage_enabled()
+                        && inner.finish_reason_sent
+                        && !inner.usage_chunk_sent
+                        && !inner.finished
+                    {
+                        inner.usage_chunk_sent = true;
+
+                        // Create the final usage chunk
+                        let usage_chunk = inner.response_generator.create_usage_chunk();
+                        let annotated_usage = Annotated::<Resp> {
+                            id: None,
+                            data: Some(usage_chunk),
+                            event: Some(ANNOTATION_LLM_METRICS.to_string()),
+                            comment: None,
+                        };
+
+                        tracing::trace!(
+                            request_id = inner.context.id(),
+                            "Sending final usage chunk for OpenAI compliance"
+                        );
+
+                        Some((annotated_usage, inner))
+                    } else {
+                        // stream closed
+                        inner.finished = true; // Mark as finished
+                        None
+                    }
                 }
             }
         })
@@ -642,10 +681,10 @@ impl
 
         // create a response generator
         let response_generator = request.response_generator(context.id().to_string());
-        let mut response_generator = Box::new(response_generator);
 
-        // convert the chat completion request to a common completion request
+        // preprocess the request into a common request
         let (common_request, annotations) = self.preprocess_request(&request)?;
+        let mut response_generator = Box::new(response_generator);
 
         // update isl
         response_generator.update_isl(common_request.token_ids.len() as u32);
@@ -749,7 +788,7 @@ impl
         // Extract context once
         let context = response_stream.context();
 
-        // transform the postprocessor stream (no boxing yet)
+        // transform the postprocessor stream
         let stream = Self::transform_postprocessor_stream(
             response_stream,
             response_generator,
@@ -759,7 +798,7 @@ impl
         // prepend the annotations to the response stream
         let stream = annotations_stream.chain(stream);
 
-        // return the response stream - single boxing at the end
+        // return the response stream
         Ok(ResponseStream::new(Box::pin(stream), context))
     }
 }
@@ -798,7 +837,7 @@ impl
         // Extract context once
         let context = response_stream.context();
 
-        // Transform response stream back to OpenAI format (no boxing yet)
+        // Transform response stream back to OpenAI format
         let stream = Self::transform_embedding_postprocessor_stream(response_stream, request);
 
         // Prepend annotations
@@ -809,7 +848,6 @@ impl
                 .collect::<Vec<_>>(),
         );
 
-        // Chain and box once at the end
         let combined_stream = annotations_stream.chain(stream);
         Ok(ResponseStream::new(Box::pin(combined_stream), context))
     }
