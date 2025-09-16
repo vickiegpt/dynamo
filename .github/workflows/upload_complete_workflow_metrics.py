@@ -29,7 +29,7 @@ FIELD_EVENT = "event"
 FIELD_CREATION_TIME = "creationTime"
 FIELD_START_TIME = "startTime"
 FIELD_END_TIME = "endTime"
-FIELD_QUEUE_TIME_SEC = "queueTimeSec"
+FIELD_QUEUE_TIME_SEC = "queueTimeSeconds"
 FIELD_DURATION_SEC = "durationSec"
 
 # Workflow-specific fields
