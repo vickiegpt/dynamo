@@ -29,7 +29,7 @@ FIELD_EVENT = "event"
 FIELD_CREATION_TIME = "creationTime"
 FIELD_START_TIME = "startTime"
 FIELD_END_TIME = "endTime"
-FIELD_QUEUE_TIME_SEC = "queueTimeSeconds"
+FIELD_QUEUE_TIME_SEC = "queueTime"
 FIELD_DURATION_SEC = "durationSec"
 
 # Workflow-specific fields
@@ -296,7 +296,7 @@ class WorkflowMetricsUploader:
     def _upload_workflow_metrics(self, workflow_data: Dict[str, Any], jobs_data: Dict[str, Any]) -> None:
         """Internal method to upload workflow metrics"""
         db_data = {}
-        db_data[FIELD_ID] = f"github_{self.run_id}_{self.repo.replace('/', '_')}"
+        db_data[FIELD_ID] = f"real-workflow-{self.run_id}_{self.repo.replace('/', '_')}"
         
         # Schema fields
         db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
@@ -365,7 +365,7 @@ class WorkflowMetricsUploader:
             
         # Extract workflow metrics using standardized functions
         db_data = {}
-        db_data[FIELD_ID] = f"github_{self.run_id}_{self.repo.replace('/', '_')}"
+        db_data[FIELD_ID] = f"real-workflow-{self.run_id}_{self.repo.replace('/', '_')}"
         
         # Schema fields
         db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
@@ -438,7 +438,7 @@ class WorkflowMetricsUploader:
         job_id = job_data['id']
         job_name = job_data['name']
         
-        db_data[FIELD_ID] = f"github_{job_id}_{self.repo.replace('/', '_')}"
+        db_data[FIELD_ID] = f"real-workflow-{job_id}_{self.repo.replace('/', '_')}"
         
         # Schema fields
         db_data[FIELD_JOB_ID] = str(job_id)
@@ -516,7 +516,7 @@ class WorkflowMetricsUploader:
         
         # Create unique step ID and use standardized ID generation
         step_id = f"{job_id}_{step_number}"
-        db_data[FIELD_ID] = f"github_step_{step_id}_{self.repo.replace('/', '_')}"
+        db_data[FIELD_ID] = f"real-workflow-step_{step_id}_{self.repo.replace('/', '_')}"
         
         # Schema-compliant fields
         db_data[FIELD_STEP_ID] = str(step_id)
