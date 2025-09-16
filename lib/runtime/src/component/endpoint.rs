@@ -85,6 +85,34 @@ impl EndpointConfigBuilder {
         // Add metrics to the handler. The endpoint provides additional information to the handler.
         handler.add_metrics(&endpoint, metrics_labels.as_deref())?;
 
+        // Check if handler has a type-erased engine for local registry
+        // Note: This requires the handler to implement as_any_engine() with proper bounds
+        let local_engine_key = if let Some(any_engine) = handler.as_any_engine() {
+            use crate::v2::entity::{ComponentDescriptor, EndpointDescriptor, NamespaceDescriptor};
+
+            // Create the descriptor for this endpoint
+            let namespace_desc =
+                NamespaceDescriptor::new(&[endpoint.component.namespace.name.as_str()])
+                    .map_err(|e| anyhow::anyhow!("Invalid namespace: {}", e))?;
+            let component_desc = namespace_desc
+                .component(&endpoint.component.name)
+                .map_err(|e| anyhow::anyhow!("Invalid component: {}", e))?;
+            let endpoint_desc = component_desc
+                .endpoint(&endpoint.name)
+                .map_err(|e| anyhow::anyhow!("Invalid endpoint: {}", e))?;
+
+            // Register using the path string as key
+            let key = endpoint_desc.to_string(); // Uses Display impl which calls path_string()
+            tracing::debug!("Registering local engine for endpoint: {}", key);
+            endpoint
+                .drt()
+                .register_local_engine(key.clone(), any_engine)
+                .await?;
+            Some(key)
+        } else {
+            None
+        };
+
         // get the group
         let group = registry
             .services
@@ -180,6 +208,8 @@ impl EndpointConfigBuilder {
         let namespace_name_for_task = namespace_name.clone();
         let component_name_for_task = component_name.clone();
         let endpoint_name_for_task = endpoint_name.clone();
+        let drt_for_cleanup = endpoint.drt().clone();
+        let local_engine_key_for_task = local_engine_key.clone();
 
         let task = tokio::spawn(async move {
             let result = push_endpoint
@@ -197,6 +227,12 @@ impl EndpointConfigBuilder {
             if let Some(tracker) = tracker_clone {
                 tracing::debug!("Unregistering endpoint from graceful shutdown tracker");
                 tracker.unregister_endpoint();
+            }
+
+            // Unregister from local engine registry if it was registered
+            if let Some(key) = local_engine_key_for_task {
+                tracing::debug!("Unregistering local engine for endpoint: {}", key);
+                drt_for_cleanup.unregister_local_engine(&key).await;
             }
 
             result

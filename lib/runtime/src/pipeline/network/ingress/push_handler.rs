@@ -138,6 +138,12 @@ where
         Ingress::add_metrics(self, endpoint, metrics_labels)
     }
 
+    fn as_any_engine(&self) -> Option<Arc<dyn crate::engine::AnyAsyncEngine>> {
+        use crate::pipeline::network::Ingress;
+        // Return the pre-stored type-erased engine
+        Ingress::any_engine(self)
+    }
+
     async fn handle_payload(&self, payload: Bytes) -> Result<(), PipelineError> {
         let start_time = std::time::Instant::now();
 

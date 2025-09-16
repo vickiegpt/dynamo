@@ -64,11 +64,13 @@ mod client;
 #[allow(clippy::module_inception)]
 mod component;
 mod endpoint;
+mod local_client;
 mod namespace;
 mod registry;
 pub mod service;
 
 pub use client::{Client, InstanceSource};
+pub use local_client::{LocalClient, register_local_engine};
 
 /// The root etcd path where each instance registers itself in etcd.
 /// An instance is namespace+component+endpoint+lease_id and must be unique.
