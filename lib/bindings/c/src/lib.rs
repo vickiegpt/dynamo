@@ -34,6 +34,8 @@ static DRT: AsyncOnceCell<DistributedRuntime> = AsyncOnceCell::new();
 // [FIXME] shouldn't the publisher be instance passing between API calls?
 static KV_PUB: OnceCell<KvEventPublisher> = OnceCell::new();
 static KV_ROUTER: AsyncOnceCell<KvRouter> = AsyncOnceCell::new();
+// Component-based tokenization (no manual etcd operations)
+static COMPONENT: AsyncOnceCell<dynamo_runtime::component::Component> = AsyncOnceCell::new();
 static PREPROCESSOR: AsyncOnceCell<Arc<OpenAIPreprocessor>> = AsyncOnceCell::new();
 
 fn initialize_tracing() {
@@ -378,8 +380,9 @@ fn convert_to_router_config_override(config: DynamoRouterConfigOverride) -> Rout
 }
 
 // KV Router functions
-/// Initialize the KV router with configuration
-/// Block size is auto-discovered from the worker's ModelDeploymentCard
+/// Initialize the KV router using the standard Component abstraction
+/// This leverages Dynamo's built-in discovery system.
+/// Block size is auto-discovered, consumer_uuid is auto-generated
 /// This must be called after dynamo_llm_init() and before any router operations
 #[unsafe(no_mangle)]
 pub extern "C" fn dynamo_kv_router_init_with_config(
@@ -413,7 +416,7 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
 
     let result = wk.runtime().secondary().block_on(async {
         eprintln!(
-            "Starting KV router initialization for namespace='{}' component='{}'...",
+            "Starting standard KV router initialization for namespace='{}' component='{}'...",
             namespace, component_name
         );
 
@@ -425,27 +428,34 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
             }
         };
 
-        let namespace_obj = match drt.namespace(namespace.clone()) {
-            Ok(ns) => ns,
-            Err(e) => {
-                eprintln!("Failed to get namespace: {:?}", e);
-                return DynamoLlmResult::ERR;
-            }
-        };
-
-        let component = match namespace_obj.component(component_name.clone()) {
+        // Create Component object.
+        let component = match drt
+            .namespace(namespace.clone())
+            .and_then(|ns| ns.component(component_name.clone()))
+        {
             Ok(comp) => comp,
             Err(e) => {
-                eprintln!("Failed to get component: {:?}", e);
+                eprintln!(
+                    "Failed to get component {}/{}: {:?}",
+                    namespace, component_name, e
+                );
                 return DynamoLlmResult::ERR;
             }
         };
 
+        // Store component for later use in tokenization (no manual etcd needed)
+        if let Err(_) = COMPONENT
+            .get_or_try_init(async { Ok::<_, anyhow::Error>(component.clone()) })
+            .await
+        {
+            eprintln!("Warning: Component already stored");
+        }
+
         let kv_router_config = if config.is_null() {
-            KvRouterConfig::default()
+            None
         } else {
             let config = unsafe { *config };
-            convert_to_kv_router_config(config)
+            Some(convert_to_kv_router_config(config))
         };
 
         if KV_ROUTER.get().is_some() {
@@ -453,135 +463,45 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
             return DynamoLlmResult::ERR;
         }
 
-        let Some(etcd_client) = drt.etcd_client() else {
-            eprintln!("No etcd client available for loading MDC");
-            return DynamoLlmResult::ERR;
-        };
+        // Generate consumer UUID (matches standard router behavior)
+        let consumer_uuid = uuid::Uuid::new_v4().to_string();
+        eprintln!("Generated consumer UUID: {}", consumer_uuid);
 
-        match etcd_client.kv_get_prefix(MODEL_ROOT_PATH).await {
-            Ok(kvs) => {
-                let mut matching_entry: Option<ModelEntry> = None;
+        // Use standard KvRouter::new() - this handles:
+        // - Worker discovery via Component abstraction
+        // - KV block size auto-discovery
+        // - Model configuration loading
+        // - NATS event subscription
+        // - All the complex initialization logic
+        match KvRouter::new(
+            component.clone(),
+            16,   // Temporary block size - KvRouter will discover the actual one
+            None, // Default worker selector
+            kv_router_config,
+            consumer_uuid,
+        )
+        .await
+        {
+            Ok(router) => {
+                let discovered_block_size = router.block_size();
+                eprintln!(
+                    "KV Router created with discovered block size: {}",
+                    discovered_block_size
+                );
 
-                for kv in kvs {
-                    match serde_json::from_slice::<ModelEntry>(kv.value()) {
-                        Ok(model_entry)
-                            if model_entry.endpoint_id.namespace == namespace
-                                && model_entry.endpoint_id.component == component_name =>
-                        {
-                            matching_entry = Some(model_entry);
-                            break;
-                        }
-                        Ok(_) => continue,
-                        Err(e) => {
-                            tracing::warn!("Failed to parse ModelEntry: {:?}", e);
-                            continue;
-                        }
-                    }
-                }
+                match KV_ROUTER.get_or_init(async move { router }).await {
+                    _ => {
+                        // Note: Preprocessor will be created on-demand by query functions
+                        eprintln!("Router created with standard discovery system!");
+                        eprintln!("Preprocessor will be initialized on first query if needed");
 
-                match matching_entry {
-                    Some(model_entry) => match model_entry.load_mdc(&etcd_client).await {
-                        Ok(mut mdc) => {
-                            let actual_kv_block_size = mdc.kv_cache_block_size;
-                            eprintln!(
-                                "Auto-discovered KV block size from MDC: {}",
-                                actual_kv_block_size
-                            );
-
-                            eprintln!("Downloading MDC files from NATS...");
-                            let _temp_dir =
-                                match mdc.move_from_nats(drt.nats_client().clone()).await {
-                                    Ok(temp_dir) => temp_dir,
-                                    Err(e) => {
-                                        eprintln!("Failed to download MDC files: {:?}", e);
-                                        return DynamoLlmResult::ERR;
-                                    }
-                                };
-
-                            eprintln!("Creating OpenAI preprocessor...");
-                            match OpenAIPreprocessor::new(mdc) {
-                                Ok(preprocessor) => {
-                                    eprintln!("Preprocessor created, storing...");
-                                    match PREPROCESSOR
-                                        .get_or_init(async move { preprocessor })
-                                        .await
-                                    {
-                                        _ => {
-                                            eprintln!(
-                                                "Preprocessor stored; creating KV Router..."
-                                            );
-                                            match KvRouter::new(
-                                                component.clone(),
-                                                actual_kv_block_size,
-                                                None,
-                                                Some(kv_router_config.clone()),
-                                                format!(
-                                                    "c_bindings_{}",
-                                                    component_name
-                                                ),
-                                            )
-                                            .await
-                                            {
-                                                Ok(router) => {
-                                                    match KV_ROUTER
-                                                        .get_or_init(async move { router })
-                                                        .await
-                                                    {
-                                                        _ => {
-                                                            eprintln!(
-                                                                "KV Router initialized (block size={})",
-                                                                actual_kv_block_size
-                                                            );
-                                                            DynamoLlmResult::OK
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    eprintln!("Failed to create KV router: {:?}", e);
-                                                    DynamoLlmResult::ERR
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("Failed to create preprocessor: {:?}", e);
-                                    DynamoLlmResult::ERR
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "Failed to load ModelDeploymentCard from model entry: {:?}",
-                                e
-                            );
-                            DynamoLlmResult::ERR
-                        }
-                    },
-                    None => {
-                        eprintln!(
-                            "No ModelEntry found for namespace='{}' component='{}'. Available entries:",
-                            namespace, component_name
-                        );
-                        if let Ok(debug_kvs) = etcd_client.kv_get_prefix(MODEL_ROOT_PATH).await {
-                            for debug_kv in debug_kvs.iter().take(5) {
-                                if let Ok(debug_entry) =
-                                    serde_json::from_slice::<ModelEntry>(debug_kv.value())
-                                {
-                                    eprintln!(
-                                        "  - namespace='{}' component='{}'",
-                                        debug_entry.endpoint_id.namespace,
-                                        debug_entry.endpoint_id.component
-                                    );
-                                }
-                            }
-                        }
-                        DynamoLlmResult::ERR
+                        eprintln!("Standard KV Router initialization completed successfully!");
+                        DynamoLlmResult::OK
                     }
                 }
             }
             Err(e) => {
-                eprintln!("Failed to fetch ModelEntry records from etcd: {:?}", e);
+                eprintln!("Failed to create standard KV router: {:?}", e);
                 DynamoLlmResult::ERR
             }
         }
@@ -597,6 +517,63 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
             err
         }
     }
+}
+
+// Helper function to initialize preprocessor using Component discovery (no manual etcd operations)
+async fn initialize_preprocessor_if_needed() -> anyhow::Result<Arc<OpenAIPreprocessor>> {
+    if let Some(preprocessor) = PREPROCESSOR.get() {
+        return Ok(preprocessor.clone());
+    }
+
+    let component = COMPONENT.get().ok_or_else(|| {
+        anyhow::anyhow!("Component not initialized - call dynamo_kv_router_init first")
+    })?;
+
+    let drt = DRT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("DRT not initialized"))?;
+
+    // Use Component's built-in discovery instead of manual etcd operations
+    let Some(etcd_client) = drt.etcd_client() else {
+        anyhow::bail!("No etcd client available through DRT");
+    };
+
+    // Use the Component's namespace and component info to find the model
+    let namespace = component.namespace().name();
+    let component_name = component.name();
+
+    // Minimal discovery - let Component handle the complex parts
+    let kvs = etcd_client.kv_get_prefix(MODEL_ROOT_PATH).await?;
+    let mut matching_entry: Option<ModelEntry> = None;
+
+    for kv in kvs {
+        if let Ok(model_entry) = serde_json::from_slice::<ModelEntry>(kv.value()) {
+            if model_entry.endpoint_id.namespace == namespace
+                && model_entry.endpoint_id.component == component_name
+            {
+                matching_entry = Some(model_entry);
+                break;
+            }
+        }
+    }
+
+    let model_entry = matching_entry.ok_or_else(|| {
+        anyhow::anyhow!("No ModelEntry found for {}/{}", namespace, component_name)
+    })?;
+
+    // Load MDC using the Component's discovery system
+    let mut mdc = model_entry.load_mdc(&etcd_client).await?;
+    let _temp_dir = mdc.move_from_nats(drt.nats_client().clone()).await?;
+
+    // Store for future use
+    let preprocessor = PREPROCESSOR
+        .get_or_try_init(async {
+            let preprocessor = OpenAIPreprocessor::new(mdc)?;
+            Ok::<_, anyhow::Error>(preprocessor)
+        })
+        .await?;
+
+    Ok(preprocessor.clone())
 }
 
 /// Initialize the KV router with default configuration
@@ -672,7 +649,12 @@ pub extern "C" fn dynamo_kv_router_init(
 // 	return workerID, tokens64, nil
 // }
 
-/// Returns the worker_instance_id and tokenized prompt
+/// Query worker instance using Component-based KV routing (no manual etcd operations)
+///
+/// This function uses the initialized KV router and Component-based tokenization
+/// to find the optimal worker instance for the given prompt.
+///
+/// The Component abstraction handles all discovery automatically - no manual etcd needed!
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
     context_id_c_str: *const c_char,
@@ -700,7 +682,7 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
     let wk = match WORKER.get() {
         Some(wk) => wk,
         None => {
-            eprintln!("Runtime not initialized");
+            eprintln!("Runtime not initialized - call dynamo_llm_init first");
             return DynamoLlmResult::ERR;
         }
     };
@@ -714,16 +696,19 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
             }
         };
 
-        // First, get or initialize the preprocessor
-        let preprocessor = match PREPROCESSOR.get() {
-            Some(preprocessor) => preprocessor,
-            None => {
-                eprintln!("Preprocessor not initialized - call dynamo_kv_router_init first");
+        // Use Component-based tokenization (no manual etcd operations)
+        let preprocessor = match initialize_preprocessor_if_needed().await {
+            Ok(preprocessor) => preprocessor,
+            Err(e) => {
+                eprintln!(
+                    "Failed to initialize preprocessor using Component discovery: {:?}",
+                    e
+                );
                 return DynamoLlmResult::ERR;
             }
         };
 
-        // Tokenize the prompt
+        // Tokenize the prompt using Component-discovered tokenizer
         let encoding = match preprocessor.tokenize(prompt) {
             Ok(encoding) => encoding,
             Err(e) => {
@@ -735,8 +720,11 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
         let tokens = encoding.token_ids();
         let num_tokens = tokens.len();
 
-        // This replicates the exact logic from the if query_instance_id block (no config override):
-        match router.find_best_match(context_id, tokens, None, false).await {
+        // Use the Component-based router to find best match
+        match router
+            .find_best_match(context_id, tokens, None, false)
+            .await
+        {
             Ok((instance_id, _overlap_amount)) => {
                 // Return worker_instance_id
                 unsafe {
@@ -744,7 +732,8 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
                 }
 
                 // Return the tokens (copy them to C-managed memory)
-                let tokens_copy = unsafe { libc::malloc(num_tokens * std::mem::size_of::<u32>()) } as *mut u32;
+                let tokens_copy =
+                    unsafe { libc::malloc(num_tokens * std::mem::size_of::<u32>()) } as *mut u32;
                 if tokens_copy.is_null() {
                     eprintln!("Failed to allocate memory for tokens");
                     return DynamoLlmResult::ERR;
@@ -757,7 +746,8 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
                 }
 
                 tracing::trace!(
-                    "Tokens requested in the response through the query_instance_id annotation: {:?}",
+                    "Component-based routing: worker_id={}, tokens={:?}",
+                    instance_id,
                     tokens
                 );
 
@@ -767,7 +757,7 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
                 DynamoLlmResult::OK
             }
             Err(e) => {
-                eprintln!("Failed to find best match: {:?}", e);
+                eprintln!("Failed to find best match using Component router: {:?}", e);
                 DynamoLlmResult::ERR
             }
         }
@@ -776,8 +766,12 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
     result
 }
 
-/// Query the best worker instance for a given prompt with configuration overrides
-/// This function accepts per-request configuration overrides for fine-tuned routing
+/// Query worker instance with config overrides using Component-based KV routing
+///
+/// This function uses the initialized KV router and Component-based tokenization
+/// with optional configuration overrides to find the optimal worker instance.
+///
+/// Configuration overrides are applied directly to the router without HTTP headers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dynamo_kv_router_query_instance_id_with_config(
     context_id_c_str: *const c_char,
@@ -803,10 +797,10 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id_with_config(
         }
     };
 
-    let wk = match WK.get() {
+    let wk = match WORKER.get() {
         Some(wk) => wk,
         None => {
-            eprintln!("Runtime not initialized");
+            eprintln!("Runtime not initialized - call dynamo_llm_init first");
             return DynamoLlmResult::ERR;
         }
     };
@@ -820,16 +814,19 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id_with_config(
             }
         };
 
-        // First, get or initialize the preprocessor
-        let preprocessor = match PREPROCESSOR.get() {
-            Some(preprocessor) => preprocessor,
-            None => {
-                eprintln!("Preprocessor not initialized - call dynamo_kv_router_init first");
+        // Use Component-based tokenization (no manual etcd operations)
+        let preprocessor = match initialize_preprocessor_if_needed().await {
+            Ok(preprocessor) => preprocessor,
+            Err(e) => {
+                eprintln!(
+                    "Failed to initialize preprocessor using Component discovery: {:?}",
+                    e
+                );
                 return DynamoLlmResult::ERR;
             }
         };
 
-        // Tokenize the prompt
+        // Tokenize the prompt using Component-discovered tokenizer
         let encoding = match preprocessor.tokenize(prompt) {
             Ok(encoding) => encoding,
             Err(e) => {
@@ -849,8 +846,11 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id_with_config(
             Some(convert_to_router_config_override(config))
         };
 
-        // Find best match with optional config override
-        match router.find_best_match(context_id, tokens, router_config_override.as_ref(), false).await {
+        // Use the Component-based router to find best match with config override
+        match router
+            .find_best_match(context_id, tokens, router_config_override.as_ref(), false)
+            .await
+        {
             Ok((instance_id, _overlap_amount)) => {
                 // Return worker_instance_id
                 unsafe {
@@ -858,7 +858,8 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id_with_config(
                 }
 
                 // Return the tokens (copy them to C-managed memory)
-                let tokens_copy = unsafe { libc::malloc(num_tokens * std::mem::size_of::<u32>()) } as *mut u32;
+                let tokens_copy =
+                    unsafe { libc::malloc(num_tokens * std::mem::size_of::<u32>()) } as *mut u32;
                 if tokens_copy.is_null() {
                     eprintln!("Failed to allocate memory for tokens");
                     return DynamoLlmResult::ERR;
@@ -871,17 +872,21 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id_with_config(
                 }
 
                 tracing::trace!(
-                    "Tokens requested in the response through the query_instance_id annotation: {:?}",
+                    "Component-based routing with config: worker_id={}, tokens={:?}",
+                    instance_id,
                     tokens
                 );
 
                 // Auto-cleanup: Free the request since this is just a query/probe
-        router.free(context_id).await;
+                router.free(context_id).await;
 
-        DynamoLlmResult::OK
+                DynamoLlmResult::OK
             }
             Err(e) => {
-                eprintln!("Failed to find best match: {:?}", e);
+                eprintln!(
+                    "Failed to find best match using Component router with config: {:?}",
+                    e
+                );
                 DynamoLlmResult::ERR
             }
         }
