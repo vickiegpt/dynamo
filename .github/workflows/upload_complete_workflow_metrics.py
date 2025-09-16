@@ -50,7 +50,7 @@ FIELD_STEPS = "steps"
 # Step-specific fields
 FIELD_STEP_ID = "stepId"
 FIELD_NAME = "stepName"
-FIELD_ORDER = "order"
+FIELD_STEP_NUMBER = "stepNumber"
 FIELD_COMMAND = "command"
 FIELD_JOB_LABELS = "jobLabels"
 
@@ -240,9 +240,10 @@ class WorkflowMetricsUploader:
             metric_type: Type of metric ("workflow", "job", "step") for field naming consistency
         """
         # Store original ISO timestamps
-        db_data[FIELD_START_TIME] = start_time or ''
-        db_data[FIELD_END_TIME] = end_time or ''
-        db_data[FIELD_CREATION_TIME] = creation_time or ''
+        db_data[FIELD_START_TIME] = start_time or 'None'
+        db_data[FIELD_END_TIME] = end_time or 'None'
+        if creation_time: #Don't add for steps
+            db_data[FIELD_CREATION_TIME] = creation_time
         
         # Duration in integer seconds (consistent across all types)
         db_data[FIELD_DURATION_SEC] = TimingProcessor.calculate_time_diff(start_time, end_time)
@@ -520,7 +521,7 @@ class WorkflowMetricsUploader:
         db_data[FIELD_JOB_ID] = str(job_id)
         db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
         db_data[FIELD_NAME] = step_name
-        db_data[FIELD_ORDER] = step_number
+        db_data[FIELD_STEP_NUMBER] = step_number
         db_data[FIELD_STATUS] = step_data.get('conclusion', step_data.get('status', 'unknown'))
         db_data[FIELD_JOB_NAME] = job_name
         
