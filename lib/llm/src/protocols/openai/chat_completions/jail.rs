@@ -118,36 +118,101 @@ impl JailedStream {
 
                                     // Check for jail end - two paths
                                     // Path 1: End sequence detected
-                                    let sequence_end = !self.jail_end_sequences.is_empty()
-                                        && self.jail_end_sequences.iter().any(|seq| buffered_content.contains(seq));
+                                    let end_marker_info = if !self.jail_end_sequences.is_empty() {
+                                        self.jail_end_sequences.iter()
+                                            .find_map(|seq| {
+                                                buffered_content.find(seq).map(|pos| (pos + seq.len(), seq.clone()))
+                                            })
+                                    } else { None };
 
                                     // Path 2: Complete tool call(s) can be parsed (early exit)
                                     let early_exit = self.should_exit_jail_early(&buffered_content);
 
-                                    // Unjail if either condition is true
-                                    let should_unjail = sequence_end || early_exit;
+                                    // Determine split position for content
+                                    let (should_unjail, split_pos) = if let Some((end_pos, _)) = end_marker_info {
+                                        (true, end_pos)
+                                    } else if early_exit {
+                                        // For early exit, we need to find where the complete tool call ends
+                                        // This is more complex as we need to parse and find the exact end
+                                        if let Some(parser) = &self.tool_call_parser {
+                                            if let Ok((_, _)) = try_tool_call_parse_aggregate(&buffered_content, Some(parser)) {
+                                                // Find the end of the tool call structure
+                                                let split_pos = self.find_tool_call_end_position(&buffered_content, parser);
+                                                (true, split_pos)
+                                            } else {
+                                                (false, buffered_content.len())
+                                            }
+                                        } else {
+                                            (false, buffered_content.len())
+                                        }
+                                    } else {
+                                        (false, buffered_content.len())
+                                    };
 
                                     if should_unjail {
                                         tracing::debug!(
-                                            "Jail exit detected (sequence: {}, early: {}), releasing accumulated content",
-                                            sequence_end, early_exit
+                                            "Jail exit detected (end_marker: {}, early: {}), releasing accumulated content",
+                                            end_marker_info.is_some(), early_exit
                                         );
                                         is_jailed = false;
 
-                                        // Process and release accumulated content
-                                        if let Some(base_response) = last_response_metadata.take() {
+                                        // Split content at the exact position
+                                        let (jailed_part, trailing_part) = buffered_content.split_at(split_pos);
+
+                                        // Update accumulated_content to only include the jailed part
+                                        let mut jailed_accumulated_content = HashMap::new();
+                                        for (choice_index, full_content) in &accumulated_content {
+                                            // Calculate how much of this choice's content is in the jailed part
+                                            let jailed_content = if full_content.len() <= jailed_part.len() {
+                                                full_content.clone()
+                                            } else {
+                                                // This choice has more content than fits in jailed part
+                                                // We need to truncate it proportionally
+                                                let ratio = jailed_part.len() as f64 / buffered_content.len() as f64;
+                                                let jailed_len = (full_content.len() as f64 * ratio) as usize;
+                                                full_content.chars().take(jailed_len).collect()
+                                            };
+                                            jailed_accumulated_content.insert(*choice_index, jailed_content);
+                                        }
+
+                                        // Process and release jailed content
+                                        if let Some(base_response) = last_response_metadata.clone() {
                                             let final_response = self.create_unjailed_response(
                                                 base_response,
-                                                &accumulated_content,
+                                                &jailed_accumulated_content,
                                                 last_annotated_id.clone(),
                                                 last_annotated_event.clone(),
                                                 last_annotated_comment.clone(),
                                             );
-                                            accumulated_content.clear();
-                                            buffered_content.clear();
                                             yield final_response;
-                                            continue;
                                         }
+
+                                        // Emit trailing content if any exists
+                                        if !trailing_part.is_empty()
+                                            && let Some(mut base_response) = last_response_metadata.take() {
+                                                // Create a pass-through chunk with trailing content
+                                                for choice in &mut base_response.choices {
+                                                    if accumulated_content.contains_key(&choice.index) {
+                                                        choice.delta.content = Some(trailing_part.to_string());
+                                                        choice.delta.tool_calls = None;
+                                                        choice.finish_reason = None;
+                                                        break; // Only set for the first choice
+                                                    }
+                                                }
+
+                                                let trailing_response = Annotated {
+                                                    data: Some(base_response),
+                                                    id: last_annotated_id.clone(),
+                                                    event: last_annotated_event.clone(),
+                                                    comment: last_annotated_comment.clone(),
+                                                };
+                                                yield trailing_response;
+                                            }
+
+                                        // Clear state
+                                        accumulated_content.clear();
+                                        buffered_content.clear();
+                                        continue;
                                     }
 
                                     // Still jailed, just continue accumulating without yielding
@@ -184,6 +249,63 @@ impl JailedStream {
             }
         }
         false
+    }
+
+    /// Find the exact position where the tool call ends for splitting content
+    /// This handles the early exit case where we have trailing content after the tool call
+    fn find_tool_call_end_position(&self, content: &str, parser: &str) -> usize {
+        match parser {
+            "hermes" => {
+                // For Hermes, look for </tool_call> marker
+                if let Some(pos) = content.find("</tool_call>") {
+                    pos + "</tool_call>".len()
+                } else {
+                    content.len()
+                }
+            }
+            "nemotron_deci" => {
+                // For Nemotron, look for </TOOLCALL> marker
+                if let Some(pos) = content.find("</TOOLCALL>") {
+                    pos + "</TOOLCALL>".len()
+                } else {
+                    content.len()
+                }
+            }
+            "mistral" => {
+                // For Mistral, look for [/TOOL_CALLS] marker or end of JSON array
+                if let Some(pos) = content.find("[/TOOL_CALLS]") {
+                    pos + "[/TOOL_CALLS]".len()
+                } else if let Some(pos) = content.rfind(']') {
+                    // Find the last ] which should be the end of the tool calls array
+                    pos + 1
+                } else {
+                    content.len()
+                }
+            }
+            "phi4" => {
+                // For Phi4, look for <|tool_call|> end marker
+                if let Some(pos) = content.rfind("<|tool_call|>") {
+                    // Look for the next occurrence after this position
+                    if let Some(end_pos) = content[pos..].find(">") {
+                        pos + end_pos + 1
+                    } else {
+                        content.len()
+                    }
+                } else {
+                    content.len()
+                }
+            }
+            "llama3_json" => {
+                // For Llama3 JSON, there's no explicit end marker
+                // The end is determined by complete JSON parsing
+                // Return full content length to avoid early splitting
+                content.len()
+            }
+            _ => {
+                // Unknown parser, default to full content
+                content.len()
+            }
+        }
     }
 
     /// Create a response with accumulated content, potentially parsing tool calls
@@ -1533,6 +1655,141 @@ mod tests {
         assert_eq!(
             tool_call_chunk.comment, None,
             "Should preserve None comment"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_trailing_content_same_chunk() {
+        // Regression test for GitHub issue: trailing content after end marker in same chunk
+        let chunks = vec![
+            create_mock_response_chunk("I'll help you. ".to_string(), 0),
+            create_mock_response_chunk("<tool_call>".to_string(), 0),
+            create_mock_response_chunk("{\"name\": \"search\", \"arguments\": {}}".to_string(), 0),
+            // This chunk contains both the end marker AND trailing content
+            create_mock_response_chunk(
+                "</tool_call>trailing text that should not be lost".to_string(),
+                0,
+            ),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        let jail = JailedStream::builder().tool_call_parser("hermes").build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should get: initial text, tool call response, trailing text
+        assert!(
+            results.len() >= 3,
+            "Should have at least 3 chunks, got {}",
+            results.len()
+        );
+
+        // Find the tool call response
+        let tool_call_chunk = results
+            .iter()
+            .find(|r| {
+                r.data
+                    .as_ref()
+                    .and_then(|d| d.choices.first())
+                    .map(|c| c.finish_reason == Some(FinishReason::ToolCalls))
+                    .unwrap_or(false)
+            })
+            .expect("Should have a tool call response chunk");
+
+        // Verify tool call was parsed correctly
+        let tool_calls = &tool_call_chunk.data.as_ref().unwrap().choices[0]
+            .delta
+            .tool_calls;
+        assert!(tool_calls.is_some(), "Should have tool calls");
+        assert_eq!(
+            tool_calls.as_ref().unwrap().len(),
+            1,
+            "Should have exactly one tool call"
+        );
+
+        // CRITICAL: Verify trailing content is preserved in a separate chunk
+        let trailing_chunk = results
+            .iter()
+            .find(|r| {
+                r.data
+                    .as_ref()
+                    .and_then(|d| d.choices.first())
+                    .and_then(|c| c.delta.content.as_ref())
+                    .map(|content| content.contains("trailing text that should not be lost"))
+                    .unwrap_or(false)
+            })
+            .expect("Should have a chunk with trailing content");
+
+        // Verify the trailing content is exactly what we expect
+        let trailing_content = &trailing_chunk.data.as_ref().unwrap().choices[0]
+            .delta
+            .content;
+        assert_eq!(
+            trailing_content.as_deref(),
+            Some("trailing text that should not be lost"),
+            "Trailing content should be preserved exactly"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_early_exit_with_trailing() {
+        // Test early exit (complete tool call detected) with trailing content
+        let chunks = vec![
+            create_mock_response_chunk("Starting task: ".to_string(), 0),
+            create_mock_response_chunk(
+                "<tool_call>{\"name\": \"complete_task\", \"arguments\": {}}".to_string(),
+                0,
+            ),
+            // Early exit should happen here, but we also have trailing content
+            create_mock_response_chunk("</tool_call> Task completed successfully.".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        let jail = JailedStream::builder().tool_call_parser("hermes").build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should get: initial text, tool call response, trailing text
+        assert!(
+            results.len() >= 3,
+            "Should have at least 3 chunks, got {}",
+            results.len()
+        );
+
+        // Verify we have a tool call response
+        let has_tool_call = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .map(|c| c.finish_reason == Some(FinishReason::ToolCalls))
+                .unwrap_or(false)
+        });
+        assert!(has_tool_call, "Should have a tool call response");
+
+        // CRITICAL: Verify trailing content after early exit is preserved
+        let trailing_chunk = results
+            .iter()
+            .find(|r| {
+                r.data
+                    .as_ref()
+                    .and_then(|d| d.choices.first())
+                    .and_then(|c| c.delta.content.as_ref())
+                    .map(|content| content.contains("Task completed successfully"))
+                    .unwrap_or(false)
+            })
+            .expect("Should have a chunk with trailing content after early exit");
+
+        let trailing_content = &trailing_chunk.data.as_ref().unwrap().choices[0]
+            .delta
+            .content;
+        assert_eq!(
+            trailing_content.as_deref(),
+            Some(" Task completed successfully."),
+            "Trailing content after early exit should be preserved"
         );
     }
 }
