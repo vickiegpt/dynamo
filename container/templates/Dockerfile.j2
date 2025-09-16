@@ -1,6 +1,4 @@
-# syntax=docker/dockerfile:1.10.0
-# SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
+{% include 'Dockerfile._header_comment.j2' %}
 
 ##################################
 ########## Build Arguments ########
@@ -366,5 +364,4 @@ RUN --mount=type=bind,source=./container/launch_message.txt,target=/opt/dynamo/l
     sed '/^#\s/d' /opt/dynamo/launch_message.txt > ~/.launch_screen && \
     echo "cat ~/.launch_screen" >> ~/.bashrc
 
-ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
-CMD []
+{% include 'Dockerfile._entrypoint.j2' %}

@@ -1,6 +1,4 @@
-# syntax=docker/dockerfile:1.10.0
-# SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
+{% include 'Dockerfile._header_comment.j2' %}
 
 ARG BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
 # TODO OPS-612: NCCL will hang with 25.03, so use 25.01 for now
@@ -251,8 +249,7 @@ COPY ATTRIBUTION* LICENSE /workspace/
 
 ENV PYTHONPATH=/workspace/examples/sglang/utils:$PYTHONPATH
 
-ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
-CMD []
+{% include 'Dockerfile._entrypoint.j2' %}
 
 ###########################################################
 ########## Development (run.sh, runs as root user) ########
@@ -272,34 +269,7 @@ FROM runtime AS dev
 # Don't want ubuntu to be editable, just change uid and gid.
 ARG WORKSPACE_DIR=/workspace
 
-# Install utilities as root
-RUN apt-get update -y && \
-    apt-get install -y --no-install-recommends  \
-    # Install utilities
-    nvtop \
-    wget \
-    tmux \
-    vim \
-    git \
-    openssh-client \
-    iproute2 \
-    rsync \
-    zip \
-    unzip \
-    htop \
-    # Build Dependencies
-    autoconf \
-    automake \
-    cmake \
-    libtool \
-    meson \
-    net-tools \
-    pybind11-dev \
-    # Rust build dependencies
-    clang \
-    libclang-dev \
-    protobuf-compiler && \
-    rm -rf /var/lib/apt/lists/*
+{% include 'Dockerfile._dev_utils.j2' %}
 
 COPY --from=runtime /usr/local/bin /usr/local/bin
 
@@ -324,5 +294,4 @@ RUN uv pip install maturin[patchelf]
 # This is a generic PYTHONPATH which works for all the frameworks, so some paths may not be relevant for this particular framework.
 ENV PYTHONPATH=${WORKSPACE_DIR}/components/metrics/src:${WORKSPACE_DIR}/components/frontend/src:${WORKSPACE_DIR}/components/planner/src:${WORKSPACE_DIR}/components/backends/mocker/src:${WORKSPACE_DIR}/components/backends/trtllm/src:${WORKSPACE_DIR}/components/backends/vllm/src:${WORKSPACE_DIR}/components/backends/sglang/src:${WORKSPACE_DIR}/components/backends/llama_cpp/src
 
-ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
-CMD []
+{% include 'Dockerfile._entrypoint.j2' %}
