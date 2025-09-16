@@ -25,6 +25,7 @@ use dynamo_llm::kv_router::{
 };
 use dynamo_llm::{
     discovery::{MODEL_ROOT_PATH, ModelEntry},
+    model_card::ModelDeploymentCard,
     preprocessor::OpenAIPreprocessor,
 };
 use dynamo_runtime::{DistributedRuntime, Worker};
@@ -380,9 +381,81 @@ fn convert_to_router_config_override(config: DynamoRouterConfigOverride) -> Rout
 }
 
 // KV Router functions
+
+// Below are the bindings used by the Inference Gateway Endpoint Picker when it needs routing.
+// The EPP workflow will be as below:
+
+// func (k *KVAwareScorer) callDynamoRouter(
+//     ctx context.Context,
+//     req *schedtypes.LLMRequest,
+// ) (string, []int64, error) {
+//     logger := log.FromContext(ctx)
+
+//     if err := k.initComponentBasedRouter(); err != nil {
+//         logger.V(logutil.DEFAULT).Error(err, "Component-based router init failed")
+//         return "", nil, err
+//     }
+
+//     contextID := req.RequestId
+//     if contextID == "" {
+//         contextID = "gaie-epp"
+//     }
+
+//     cCtx := C.CString(contextID)
+//     cPrm := C.CString(req.Prompt)
+//     defer C.free(unsafe.Pointer(cCtx))
+//     defer C.free(unsafe.Pointer(cPrm))
+
+//     var cWorker C.longlong
+//     var cTokens *C.uint
+//     var cCount C.ulong
+
+//     // Simple version - uses default config from router initialization
+//     rc := C.dynamo_kv_router_query_instance_id(
+//         cCtx,
+//         cPrm,
+//         &cWorker,
+//         &cTokens,
+//         &cCount,
+//     )
+
+//     if rc != C.OK {
+//         return "", nil, fmt.Errorf("dynamo_kv_router_query_instance_id failed")
+//     }
+
+//     // Same token handling as before...
+//     count := int(uintptr(cCount))
+//     var tokens64 []int64
+//     if count > 0 && cTokens != nil {
+//         src := unsafe.Slice((*uint32)(unsafe.Pointer(cTokens)), count)
+//         tokens64 = make([]int64, count)
+//         for i := 0; i < count; i++ {
+//             tokens64[i] = int64(src[i])
+//         }
+//         C.dynamo_kv_router_free_tokens((*C.uint)(cTokens))
+//     }
+
+//     workerID := fmt.Sprintf("%d", int64(cWorker))
+//     return workerID, tokens64, nil
+// }
+
+/////////
+
 /// Initialize the KV router using the standard Component abstraction
-/// This leverages Dynamo's built-in discovery system.
-/// Block size is auto-discovered, consumer_uuid is auto-generated
+///
+/// This leverages Dynamo's built-in discovery system for router initialization
+/// and model discovery for tokenization. Tokenization requires downloading
+/// tokenizer files from NATS, which is an inherent requirement for tokenization.
+///
+/// Features:
+/// - KV block size: auto-discovered from ModelDeploymentCard
+/// - Consumer UUID: auto-generated for router instance identification
+/// - Model discovery: Component-based
+/// - Tokenizer files: downloaded from NATS
+/// nats - related function are used in initialize_preprocessor_if_needed
+/// etcd - related functions are used discover_model_deployment_card_for_component
+/// for the query but not for the router init.
+///
 /// This must be called after dynamo_llm_init() and before any router operations
 #[unsafe(no_mangle)]
 pub extern "C" fn dynamo_kv_router_init_with_config(
@@ -519,7 +592,10 @@ pub extern "C" fn dynamo_kv_router_init_with_config(
     }
 }
 
-// Helper function to initialize preprocessor using Component discovery (no manual etcd operations)
+// Helper function to initialize preprocessor using Component-based model discovery
+//
+// NOTE: This function requires NATS file downloads because tokenizer files are stored in NATS.
+// The Component abstraction handles service discovery, but tokenizer files must still be downloaded.
 async fn initialize_preprocessor_if_needed() -> anyhow::Result<Arc<OpenAIPreprocessor>> {
     if let Some(preprocessor) = PREPROCESSOR.get() {
         return Ok(preprocessor.clone());
@@ -529,20 +605,54 @@ async fn initialize_preprocessor_if_needed() -> anyhow::Result<Arc<OpenAIPreproc
         anyhow::anyhow!("Component not initialized - call dynamo_kv_router_init first")
     })?;
 
+    // Use Component-based model discovery (same pattern as standard Dynamo frontend)
+    tracing::info!("Initializing tokenizer for component: {}", component);
+
+    let mdc = discover_model_deployment_card_for_component(component).await?;
+
+    // Download tokenizer files from NATS
+    tracing::debug!("Downloading tokenizer files from NATS...");
+    let mut mdc = mdc;
+    let drt = DRT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("DRT not initialized"))?;
+    let _temp_dir = mdc.move_from_nats(drt.nats_client().clone()).await?;
+    tracing::debug!("Successfully downloaded tokenizer files");
+
+    // Store for future use
+    let preprocessor = PREPROCESSOR
+        .get_or_try_init(async {
+            let preprocessor = OpenAIPreprocessor::new(mdc)?;
+            Ok::<_, anyhow::Error>(preprocessor)
+        })
+        .await?;
+
+    Ok(preprocessor.clone())
+}
+
+// Component-based model discovery helper. Uses etcd.
+async fn discover_model_deployment_card_for_component(
+    component: &dynamo_runtime::component::Component,
+) -> anyhow::Result<ModelDeploymentCard> {
     let drt = DRT
         .get()
         .ok_or_else(|| anyhow::anyhow!("DRT not initialized"))?;
 
-    // Use Component's built-in discovery instead of manual etcd operations
     let Some(etcd_client) = drt.etcd_client() else {
         anyhow::bail!("No etcd client available through DRT");
     };
 
-    // Use the Component's namespace and component info to find the model
+    // Use Component's namespace and component info for discovery
     let namespace = component.namespace().name();
     let component_name = component.name();
 
-    // Minimal discovery - let Component handle the complex parts
+    tracing::debug!(
+        "Discovering model for component {}/{}",
+        namespace,
+        component_name
+    );
+
+    // Find the matching ModelEntry (similar to standard watcher.rs pattern)
     let kvs = etcd_client.kv_get_prefix(MODEL_ROOT_PATH).await?;
     let mut matching_entry: Option<ModelEntry> = None;
 
@@ -561,19 +671,11 @@ async fn initialize_preprocessor_if_needed() -> anyhow::Result<Arc<OpenAIPreproc
         anyhow::anyhow!("No ModelEntry found for {}/{}", namespace, component_name)
     })?;
 
-    // Load MDC using the Component's discovery system
-    let mut mdc = model_entry.load_mdc(&etcd_client).await?;
-    let _temp_dir = mdc.move_from_nats(drt.nats_client().clone()).await?;
+    // Load MDC using standard discovery system
+    let mdc = model_entry.load_mdc(&etcd_client).await?;
+    tracing::debug!("Successfully discovered MDC for component {}", component);
 
-    // Store for future use
-    let preprocessor = PREPROCESSOR
-        .get_or_try_init(async {
-            let preprocessor = OpenAIPreprocessor::new(mdc)?;
-            Ok::<_, anyhow::Error>(preprocessor)
-        })
-        .await?;
-
-    Ok(preprocessor.clone())
+    Ok(mdc)
 }
 
 /// Initialize the KV router with default configuration
@@ -587,74 +689,9 @@ pub extern "C" fn dynamo_kv_router_init(
     dynamo_kv_router_init_with_config(namespace_c_str, component_c_str, std::ptr::null())
 }
 
-// Below are the bindings used by the Inference Gateway Endpoint Picker when it needs routing.
-// The EPP workflow
-
-// // Uses FFI to get (worker_instance_id, tokens) in-process.
-// // Use this as an alternative to making the call over HTTP with the k.callFrontEndForWorker
-// func (k *KVAwareScorer) callDynamoRouter(
-// 	ctx context.Context,
-// 	req *schedtypes.LLMRequest,
-// ) (string, []int64, error) {
-// 	logger := log.FromContext(ctx)
-
-// 	if err := initFFI(); err != nil {
-// 		logger.V(logutil.DEFAULT).Error(err, "FFI init failed")
-// 		return "", nil, err
-// 	}
-
-// 	// contextID should be unique per request. If your framework has one, use it.
-// 	// Otherwise fall back to a deterministic hash or a random UUID.
-// 	contextID := req.RequestId
-// 	if contextID == "" {
-// 		contextID = "gaie-epp" // TODO: replace with your request-id/trace-id
-// 	}
-// 	prompt := req.Prompt
-
-// 	cCtx := C.CString(contextID)
-// 	cPrm := C.CString(prompt)
-// 	defer C.free(unsafe.Pointer(cCtx))
-// 	defer C.free(unsafe.Pointer(cPrm))
-
-// 	var cWorker C.longlong
-// 	var cTokens *C.uint
-// 	var cCount C.ulong // uintptr_t in header; maps to C.ulong here
-
-// 	cfg := defaultRouterOverride()
-// 	rc := C.dynamo_kv_router_query_instance_id_with_config(
-// 		cCtx,
-// 		cPrm,
-// 		cfg,
-// 		&cWorker,
-// 		&cTokens,
-// 		&cCount,
-// 	)
-// 	if rc != C.OK {
-// 		return "", nil, fmt.Errorf("dynamo_kv_router_query_instance_id failed")
-// 	}
-
-// 	// Copy tokens into Go memory then free C memory immediately
-// 	count := int(uintptr(cCount))
-// 	var tokens64 []int64
-// 	if count > 0 && cTokens != nil {
-// 		src := unsafe.Slice((*uint32)(unsafe.Pointer(cTokens)), count)
-// 		tokens64 = make([]int64, count)
-// 		for i := 0; i < count; i++ {
-// 			tokens64[i] = int64(src[i])
-// 		}
-// 		C.dynamo_kv_router_free_tokens((*C.uint)(cTokens))
-// 	}
-
-// 	workerID := fmt.Sprintf("%d", int64(cWorker))
-// 	return workerID, tokens64, nil
-// }
-
-/// Query worker instance using Component-based KV routing (no manual etcd operations)
+/// Query worker instance
 ///
-/// This function uses the initialized KV router and Component-based tokenization
-/// to find the optimal worker instance for the given prompt.
-///
-/// The Component abstraction handles all discovery automatically - no manual etcd needed!
+/// This function finds the optimal worker instance for the given prompt.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
     context_id_c_str: *const c_char,
@@ -696,7 +733,7 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
             }
         };
 
-        // Use Component-based tokenization (no manual etcd operations)
+        // Use Component-based tokenization
         let preprocessor = match initialize_preprocessor_if_needed().await {
             Ok(preprocessor) => preprocessor,
             Err(e) => {
