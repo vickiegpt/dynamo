@@ -332,7 +332,8 @@ RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/la
     echo "cat ~/.launch_screen" >> ~/.bashrc
 
 # FIXME: May want a modification with dynamo banner on entry
-{% include 'Dockerfile._entrypoint.j2' %}
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+CMD []
 
 ####################################
 ########## Runtime Image ###########
@@ -499,4 +500,5 @@ RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/la
     sed '/^#\s/d' /workspace/launch_message.txt > ~/.launch_screen && \
     echo "cat ~/.launch_screen" >> ~/.bashrc
 
-{% include 'Dockerfile._entrypoint.j2' %}
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+CMD []

@@ -249,7 +249,8 @@ COPY ATTRIBUTION* LICENSE /workspace/
 
 ENV PYTHONPATH=/workspace/examples/sglang/utils:$PYTHONPATH
 
-{% include 'Dockerfile._entrypoint.j2' %}
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+CMD []
 
 ###########################################################
 ########## Development (run.sh, runs as root user) ########
@@ -294,4 +295,5 @@ RUN uv pip install maturin[patchelf]
 # This is a generic PYTHONPATH which works for all the frameworks, so some paths may not be relevant for this particular framework.
 ENV PYTHONPATH=${WORKSPACE_DIR}/components/metrics/src:${WORKSPACE_DIR}/components/frontend/src:${WORKSPACE_DIR}/components/planner/src:${WORKSPACE_DIR}/components/backends/mocker/src:${WORKSPACE_DIR}/components/backends/trtllm/src:${WORKSPACE_DIR}/components/backends/vllm/src:${WORKSPACE_DIR}/components/backends/sglang/src:${WORKSPACE_DIR}/components/backends/llama_cpp/src
 
-{% include 'Dockerfile._entrypoint.j2' %}
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+CMD []

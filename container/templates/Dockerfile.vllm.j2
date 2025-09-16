@@ -284,7 +284,8 @@ RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/la
     echo "cat ~/.launch_screen" >> ~/.bashrc && \
     echo "source $VIRTUAL_ENV/bin/activate" >> ~/.bashrc
 
-{% include 'Dockerfile._entrypoint.j2' %}
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+CMD []
 
 #######################################################################
 ########## Development (Dev Container only) ###########################
@@ -374,7 +375,8 @@ RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=$HOME/.comman
 
 RUN mkdir -p /home/$USERNAME/.cache/
 
-{% include 'Dockerfile._entrypoint.j2' %}
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+CMD []
 
 
 ###########################################################
@@ -422,4 +424,5 @@ RUN uv pip install maturin[patchelf]
 # This is a generic PYTHONPATH which works for all the frameworks, so some paths may not be relevant for this particular framework.
 ENV PYTHONPATH=${WORKSPACE_DIR}/components/metrics/src:${WORKSPACE_DIR}/components/frontend/src:${WORKSPACE_DIR}/components/planner/src:${WORKSPACE_DIR}/components/backends/mocker/src:${WORKSPACE_DIR}/components/backends/trtllm/src:${WORKSPACE_DIR}/components/backends/vllm/src:${WORKSPACE_DIR}/components/backends/sglang/src:${WORKSPACE_DIR}/components/backends/llama_cpp/src
 
-{% include 'Dockerfile._entrypoint.j2' %}
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+CMD []
