@@ -98,6 +98,9 @@ The `gen_dockerfiles.py` script processes `.j2` template files and generates cor
 # Generate all Dockerfiles and compare with originals (default output-dir: /tmp)
 python3 gen_dockerfiles.py --compare-ignore-whitespaces
 
+# Generate and perform strict comparison with detailed differences
+python3 gen_dockerfiles.py --compare-strict --show-differences
+
 # Generate to specific output directory
 python3 gen_dockerfiles.py --output-dir /path/to/output
 
@@ -152,11 +155,25 @@ Templates use Jinja2 conditionals for dynamic content:
 
 ## Comparison Logic
 
-The `--compare-ignore-whitespaces` flag performs comparison that:
-- Normalizes whitespace and blank lines
+The script provides two comparison modes:
+
+### `--compare-ignore-whitespaces` (Lenient Comparison)
+- Normalizes all whitespace and removes blank lines
 - Ignores template header comments (`# TEMPLATE:` lines)
+- Ideal for verifying content equivalence regardless of formatting
 - Uses Unix `diff` for detailed output when files differ
-- Provides clear success/failure indicators
+
+### `--compare-strict` (Strict Comparison)
+- Preserves all whitespace differences (spaces, tabs, newlines)
+- Only ignores template header comments (`# TEMPLATE:` lines)
+- Detects formatting differences like missing newlines at end of files
+- Useful for ensuring exact file formatting matches
+
+### Common Features
+- Both modes filter out auto-generated `# TEMPLATE:` header comments
+- Provide clear success/failure indicators with colored output
+- Support `--show-differences` flag for detailed diff output
+- When both flags are used together, `--compare-strict` takes precedence
 
 ## File Filtering
 
@@ -166,7 +183,13 @@ The generator automatically skips template fragments (files containing `._` in t
 
 To modify Dockerfiles:
 1. Edit the corresponding `.j2` template file
-2. Run `python3 gen_dockerfiles.py --compare-ignore-whitespaces` to verify
-3. Copy generated files from `/tmp` to `container/` if needed
-4. Commit both template and generated files
+2. Run `python3 gen_dockerfiles.py --compare-ignore-whitespaces` to verify content changes
+3. Optionally run `python3 gen_dockerfiles.py --compare-strict --show-differences` to check formatting
+4. Copy generated files from `/tmp` to `container/` if needed
+5. Commit both template and generated files
+
+### Comparison Workflow Recommendations
+- Use `--compare-ignore-whitespaces` for content verification during development
+- Use `--compare-strict --show-differences` before final commits to see exact formatting differences
+- The `--show-differences` flag is especially useful with strict comparison to identify specific whitespace issues
 

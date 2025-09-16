@@ -9,11 +9,12 @@ This script processes all .j2 template files in the current directory and genera
 corresponding Dockerfiles in the specified output directory (/tmp by default).
 
 Usage:
-    python gen_dockerfiles.py [--output-dir OUTPUT_DIR] [--compare-ignore-whitespaces]
+    python gen_dockerfiles.py [--output-dir OUTPUT_DIR] [--compare-ignore-whitespaces] [--compare-strict]
 
 Options:
     --output-dir DIR                Output directory for generated files (default: /tmp)
     --compare-ignore-whitespaces    Compare generated files with originals, ignoring whitespace differences
+    --compare-strict                Compare generated files with originals, including all whitespace differences
 
 The script will:
 1. Find all *.j2 template files in the current directory
@@ -32,26 +33,51 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
 
-def normalize_content_for_comparison(content: str) -> str:
-    """Normalize content by removing blank lines, extra whitespace, and TEMPLATE comments for comparison."""
+def normalize_content_for_comparison(
+    content: str, strip_whitespace: bool = True
+) -> str:
+    """Normalize content by removing TEMPLATE comments and optionally whitespace for comparison.
+
+    Args:
+        content: The content to normalize
+        strip_whitespace: If True, strip all whitespace and blank lines (default behavior)
+                         If False, preserve whitespace but still remove TEMPLATE comments
+
+    Returns:
+        Normalized content string
+    """
     lines = []
     for line in content.split("\n"):
-        # Strip all whitespace from each line (including tabs and spaces)
-        stripped = line.strip()
-        # Skip TEMPLATE comment lines and empty lines
-        if stripped and not stripped.startswith("# TEMPLATE:"):
-            lines.append(stripped)
+        # Always skip TEMPLATE comment lines
+        if line.strip().startswith("# TEMPLATE:"):
+            continue
+
+        if strip_whitespace:
+            # Strip all whitespace from each line (including tabs and spaces)
+            stripped = line.strip()
+            # Skip empty lines when stripping whitespace
+            if stripped:
+                lines.append(stripped)
+        else:
+            # Preserve the line as-is (including whitespace)
+            lines.append(line)
+
     return "\n".join(lines)
 
 
-def compare_files_ignore_whitespace(
-    original_path: Path, generated_path: Path, show_differences: bool = False
+def compare_files(
+    original_path: Path,
+    generated_path: Path,
+    strict_whitespace: bool = False,
+    show_differences: bool = False,
 ) -> tuple[bool, str]:
-    """Compare two files ignoring whitespace differences.
+    """Compare two files with configurable whitespace handling.
 
     Args:
         original_path: Path to original file
         generated_path: Path to generated file
+        strict_whitespace: If True, include all whitespace differences in comparison
+                          If False, ignore whitespace differences
         show_differences: If True, return the diff output
 
     Returns:
@@ -70,24 +96,43 @@ def compare_files_ignore_whitespace(
         with open(generated_path, "r", encoding="utf-8") as f:
             generated_content = f.read()
 
-        # Normalize content for comparison (ignore all whitespace and blank lines)
-        original_normalized = normalize_content_for_comparison(original_content)
-        generated_normalized = normalize_content_for_comparison(generated_content)
+        # Normalize content based on comparison mode
+        strip_whitespace = not strict_whitespace
+        original_normalized = normalize_content_for_comparison(
+            original_content, strip_whitespace=strip_whitespace
+        )
+        generated_normalized = normalize_content_for_comparison(
+            generated_content, strip_whitespace=strip_whitespace
+        )
+
+        # Determine success message based on comparison mode
+        if strict_whitespace:
+            success_msg = "Files are identical (ignoring TEMPLATE comments only)"
+            diff_msg_prefix = (
+                "Content differs (strict comparison, ignoring TEMPLATE comments only)"
+            )
+            file_suffix = ".filtered"
+        else:
+            success_msg = "Files are identical (ignoring whitespace and blank lines)"
+            diff_msg_prefix = (
+                "Content differs (after normalizing whitespace and blank lines)"
+            )
+            file_suffix = ".normalized"
 
         if original_normalized == generated_normalized:
-            return True, "Files are identical (ignoring whitespace and blank lines)"
+            return True, success_msg
 
-        # If not identical after normalization, show diff for debugging
+        # If not identical, show diff for debugging
         if show_differences:
-            # Create temporary normalized files for better diff output
+            # Create temporary files for better diff output
             with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".normalized", delete=False
+                mode="w", suffix=file_suffix, delete=False
             ) as orig_temp:
                 orig_temp.write(original_normalized)
                 orig_temp_path = orig_temp.name
 
             with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".normalized", delete=False
+                mode="w", suffix=file_suffix, delete=False
             ) as gen_temp:
                 gen_temp.write(generated_normalized)
                 gen_temp_path = gen_temp.name
@@ -107,12 +152,12 @@ def compare_files_ignore_whitespace(
                 if result.returncode == 1:
                     return (
                         False,
-                        f"Content differs (after normalizing whitespace and blank lines)\n{result.stdout}",
+                        f"{diff_msg_prefix}\n{result.stdout}",
                     )
                 else:
                     return (
                         False,
-                        "Content differs (after normalizing whitespace and blank lines)",
+                        diff_msg_prefix,
                     )
             finally:
                 # Clean up temporary files
@@ -121,11 +166,35 @@ def compare_files_ignore_whitespace(
         else:
             return (
                 False,
-                "Content differs (after normalizing whitespace and blank lines)",
+                diff_msg_prefix,
             )
 
     except Exception as e:
         return False, f"Error comparing files: {e}"
+
+
+def compare_files_strict(
+    original_path: Path, generated_path: Path, show_differences: bool = False
+) -> tuple[bool, str]:
+    """Compare two files strictly including all whitespace differences."""
+    return compare_files(
+        original_path,
+        generated_path,
+        strict_whitespace=True,
+        show_differences=show_differences,
+    )
+
+
+def compare_files_ignore_whitespace(
+    original_path: Path, generated_path: Path, show_differences: bool = False
+) -> tuple[bool, str]:
+    """Compare two files ignoring whitespace differences."""
+    return compare_files(
+        original_path,
+        generated_path,
+        strict_whitespace=False,
+        show_differences=show_differences,
+    )
 
 
 def find_template_files(templates_dir: Path) -> list[Path]:
@@ -197,6 +266,11 @@ def main():
         help="Compare generated files in output dir with originals in container/, ignoring whitespace differences",
     )
     parser.add_argument(
+        "--compare-strict",
+        action="store_true",
+        help="Compare generated files with originals in container/, including all whitespace differences",
+    )
+    parser.add_argument(
         "--show-differences",
         action="store_true",
         help="Show detailed differences when comparing files",
@@ -253,11 +327,16 @@ def main():
             print(f"- {output_path.name}")
 
         # Compare with originals if requested
-        if args.compare_ignore_whitespaces:
+        if args.compare_ignore_whitespaces or args.compare_strict:
             print("\n" + "=" * 80)
-            print(
-                f"COMPARISON: {output_dir}/* vs {original_dir}/* (WHITESPACE DIFFERENCES IGNORED)"
-            )
+            if args.compare_strict:
+                print(
+                    f"COMPARISON: {output_dir}/* vs {original_dir}/* (STRICT - INCLUDING WHITESPACE)"
+                )
+            else:
+                print(
+                    f"COMPARISON: {output_dir}/* vs {original_dir}/* (WHITESPACE DIFFERENCES IGNORED)"
+                )
             print("=" * 80)
 
             all_identical = True
@@ -267,9 +346,15 @@ def main():
                 original_path = original_dir / original_filename
 
                 if original_path.exists():
-                    files_match, diff_output = compare_files_ignore_whitespace(
-                        original_path, generated_path, args.show_differences
-                    )
+                    if args.compare_strict:
+                        files_match, diff_output = compare_files_strict(
+                            original_path, generated_path, args.show_differences
+                        )
+                    else:
+                        files_match, diff_output = compare_files_ignore_whitespace(
+                            original_path, generated_path, args.show_differences
+                        )
+
                     if files_match:
                         status = "✅ IDENTICAL"
                         print(f"{original_filename}: {status}")
@@ -294,13 +379,23 @@ def main():
                     f"\n🎉 All generated files in {output_dir}/ are identical to their originals in {original_dir}/!"
                 )
             else:
+                comparison_type = (
+                    "strict comparison"
+                    if args.compare_strict
+                    else "ignoring whitespace"
+                )
                 print(
-                    f"\n⚠️  Some files differ between {output_dir}/ and {original_dir}/ (ignoring whitespace)"
+                    f"\n⚠️  Some files differ between {output_dir}/ and {original_dir}/ ({comparison_type})"
                 )
 
-            print(
-                f"\nNote: Comparison between {output_dir}/* and {original_dir}/* ignores all whitespace differences, blank lines, and TEMPLATE comments"
-            )
+            if args.compare_strict:
+                print(
+                    f"\nNote: Strict comparison between {output_dir}/* and {original_dir}/* includes all whitespace differences (ignoring TEMPLATE comments only)"
+                )
+            else:
+                print(
+                    f"\nNote: Comparison between {output_dir}/* and {original_dir}/* ignores all whitespace differences, blank lines, and TEMPLATE comments"
+                )
 
     except Exception as e:
         print(f"Error generating Dockerfiles: {e}")
