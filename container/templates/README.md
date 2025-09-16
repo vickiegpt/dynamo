@@ -9,61 +9,54 @@ flowchart TB
     %% Template Compositions (showing internal structure)
     subgraph DFJ[Dockerfile.j2]
         direction TB
-        DFJ_H[_header_comment.j2]
-        DFJ_BODY["main content<br/>(366 lines)<br/><br/><br/><br/><br/><br/>"]
-        DFJ_E[_entrypoint.j2]
+        DFJ_H[_header_comment_2024_2025.j2]
+        DFJ_BODY["main content<br/>(366 lines)"]
+        DFJ_E[_entrypoint_cmd.j2]
         DFJ_H --> DFJ_BODY --> DFJ_E
     end
 
     subgraph DVJ[Dockerfile.vllm.j2]
         direction TB
-        DVJ_H[_header_comment.j2]
-        DVJ_BODY["vllm content<br/>(425 lines)<br/><br/><br/><br/><br/><br/><br/>"]
-        DVJ_E1[_entrypoint.j2]
-        DVJ_D1[_dev_utils.j2]
-        DVJ_E2[_entrypoint.j2]
-        DVJ_D2[_dev_utils.j2]
-        DVJ_E3[_entrypoint.j2]
-        DVJ_H --> DVJ_BODY --> DVJ_E1 --> DVJ_D1 --> DVJ_E2 --> DVJ_D2 --> DVJ_E3
+        DVJ_H[_header_comment_vllm.j2]
+        DVJ_BODY["vllm content<br/>(425 lines)"]
+        DVJ_D[_dev_utils.j2]
+        DVJ_E[_entrypoint_cmd.j2]
+        DVJ_H --> DVJ_BODY --> DVJ_D --> DVJ_E
     end
 
     subgraph DSJ[Dockerfile.sglang.j2]
         direction TB
-        DSJ_H[_header_comment.j2]
-        DSJ_BODY["sglang content<br/>(297 lines)<br/><br/><br/><br/><br/>"]
-        DSJ_E1[_entrypoint.j2]
+        DSJ_H[_header_comment_2024_2025_no_syntax.j2]
+        DSJ_BODY["sglang content<br/>(297 lines)"]
         DSJ_D[_dev_utils.j2]
-        DSJ_E2[_entrypoint.j2]
-        DSJ_H --> DSJ_BODY --> DSJ_E1 --> DSJ_D --> DSJ_E2
+        DSJ_E[_entrypoint_cmd.j2]
+        DSJ_H --> DSJ_BODY --> DSJ_D --> DSJ_E
     end
 
     subgraph DTJ[Dockerfile.trtllm.j2]
         direction TB
-        DTJ_H[_header_comment.j2]
-        DTJ_BODY["trtllm content<br/>(502 lines)<br/><br/><br/><br/><br/><br/><br/><br/>"]
-        DTJ_E1[_entrypoint.j2]
-        DTJ_E2[_entrypoint.j2]
-        DTJ_H --> DTJ_BODY --> DTJ_E1 --> DTJ_E2
+        DTJ_H[_header_comment_2025.j2]
+        DTJ_BODY["trtllm content<br/>(502 lines)"]
+        DTJ_E[_entrypoint_cmd.j2]
+        DTJ_H --> DTJ_BODY --> DTJ_E
     end
 
     subgraph DPJ[Dockerfile.trtllm_prebuilt.j2]
         direction TB
-        DPJ_H[_header_comment.j2]
-        DPJ_BODY["prebuilt content<br/>(77 lines)<br/>"]
-        DPJ_H --> DPJ_BODY
+        DPJ_BODY["prebuilt content<br/>(77 lines)<br/>no header"]
     end
 
     subgraph DDJ[Dockerfile.docs.j2]
         direction TB
-        DDJ_H[_header_comment.j2]
-        DDJ_BODY["docs content<br/>(41 lines)<br/>"]
+        DDJ_H[_header_comment_2025.j2]
+        DDJ_BODY["docs content<br/>(41 lines)"]
         DDJ_H --> DDJ_BODY
     end
 
     subgraph DSWJ[Dockerfile.sglang-wideep.j2]
         direction TB
-        DSWJ_H[_header_comment.j2]
-        DSWJ_BODY["sglang-wideep content<br/>(131 lines)<br/><br/><br/>"]
+        DSWJ_H[_header_comment_2025.j2]
+        DSWJ_BODY["sglang-wideep content<br/>(131 lines)"]
         DSWJ_H --> DSWJ_BODY
     end
 
@@ -83,7 +76,7 @@ flowchart TB
     classDef dockerfile fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
 
     class DFJ,DVJ,DSJ,DTJ,DPJ,DDJ,DSWJ templateBox
-    class DFJ_H,DFJ_E,DVJ_H,DVJ_D1,DVJ_E1,DVJ_D2,DVJ_E2,DVJ_E3,DSJ_H,DSJ_E1,DSJ_D,DSJ_E2,DTJ_H,DTJ_E1,DTJ_E2,DPJ_H,DDJ_H,DSWJ_H sharedFragment
+    class DFJ_H,DFJ_E,DVJ_H,DVJ_D,DVJ_E,DSJ_H,DSJ_D,DSJ_E,DTJ_H,DTJ_E,DDJ_H,DSWJ_H sharedFragment
     class DFJ_BODY,DVJ_BODY,DSJ_BODY,DTJ_BODY,DPJ_BODY,DDJ_BODY,DSWJ_BODY mainContent
     class DF,DV,DS,DT,DP,DD,DSW dockerfile
 ```
@@ -122,8 +115,15 @@ python3 gen_dockerfiles.py
 ### Template Fragments
 Template fragments (files with `._` in the name) are reusable components that are included by main templates but not generated as standalone Dockerfiles:
 
-- `Dockerfile._header_comment.j2` - Standardized header with syntax directive and SPDX license
+#### Header Variants
+- `Dockerfile._header_comment_2024_2025.j2` - Full header with syntax directive and 2024-2025 copyright
+- `Dockerfile._header_comment_2024_2025_no_syntax.j2` - Header without syntax directive, 2024-2025 copyright
+- `Dockerfile._header_comment_2025.j2` - Header without syntax directive, 2025 copyright only
+- `Dockerfile._header_comment_vllm.j2` - Full header with syntax directive and 2024-2025 copyright (vllm variant)
+
+#### Utility Fragments
 - `Dockerfile._dev_utils.j2` - Common development utilities installation
+- `Dockerfile._entrypoint_cmd.j2` - Standard ENTRYPOINT and CMD pair
 
 ### Master Template (Future)
 - `Dockerfile_master.j2` - Conditional template that can generate different variants based on `dockerfile_type` variable
@@ -131,18 +131,35 @@ Template fragments (files with `._` in the name) are reusable components that ar
 ## Template Features
 
 ### Standardized Headers
-All templates include the standardized header via:
+Templates include appropriate headers based on their requirements:
 ```jinja2
-{% include 'Dockerfile._header_comment.j2' %}
+{% include 'Dockerfile._header_comment_2024_2025.j2' %}          # Full header with syntax directive
+{% include 'Dockerfile._header_comment_2024_2025_no_syntax.j2' %} # Header without syntax directive
+{% include 'Dockerfile._header_comment_2025.j2' %}               # 2025 copyright only
 ```
 
-This ensures consistent syntax directives and SPDX license headers across all generated Dockerfiles.
+This ensures consistent SPDX license headers while accommodating different copyright years and syntax directive requirements. Some templates (like `trtllm_prebuilt`) have no header at all to match their original format.
 
 ### Modular Components
 Common sections are extracted into reusable fragments:
 ```jinja2
 {% include 'Dockerfile._dev_utils.j2' %}
+{% include 'Dockerfile._entrypoint_cmd.j2' %}
 ```
+
+### Shared Components
+The standard ENTRYPOINT/CMD combination is now shared via:
+```jinja2
+{% include 'Dockerfile._entrypoint_cmd.j2' %}
+```
+
+This generates:
+```dockerfile
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+CMD []
+```
+
+Note: `Dockerfile.trtllm_prebuilt.j2` only uses ENTRYPOINT (no CMD) so it includes this directly rather than using the fragment.
 
 ### Conditional Logic
 Templates use Jinja2 conditionals for dynamic content:

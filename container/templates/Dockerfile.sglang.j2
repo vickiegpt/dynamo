@@ -1,4 +1,4 @@
-{% include 'Dockerfile._header_comment.j2' %}
+{% include 'Dockerfile._header_comment_2024_2025_no_syntax.j2' %}
 
 ARG BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
 # TODO OPS-612: NCCL will hang with 25.03, so use 25.01 for now
@@ -249,8 +249,7 @@ COPY ATTRIBUTION* LICENSE /workspace/
 
 ENV PYTHONPATH=/workspace/examples/sglang/utils:$PYTHONPATH
 
-ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
-CMD []
+{% include 'Dockerfile._entrypoint_cmd.j2' %}
 
 ###########################################################
 ########## Development (run.sh, runs as root user) ########
@@ -295,5 +294,5 @@ RUN uv pip install maturin[patchelf]
 # This is a generic PYTHONPATH which works for all the frameworks, so some paths may not be relevant for this particular framework.
 ENV PYTHONPATH=${WORKSPACE_DIR}/components/metrics/src:${WORKSPACE_DIR}/components/frontend/src:${WORKSPACE_DIR}/components/planner/src:${WORKSPACE_DIR}/components/backends/mocker/src:${WORKSPACE_DIR}/components/backends/trtllm/src:${WORKSPACE_DIR}/components/backends/vllm/src:${WORKSPACE_DIR}/components/backends/sglang/src:${WORKSPACE_DIR}/components/backends/llama_cpp/src
 
-ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
-CMD []
+{% include 'Dockerfile._entrypoint_cmd.j2' %}
+

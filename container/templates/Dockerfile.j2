@@ -1,4 +1,4 @@
-{% include 'Dockerfile._header_comment.j2' %}
+{% include 'Dockerfile._header_comment_2024_2025.j2' %}
 
 ##################################
 ########## Build Arguments ########
@@ -364,5 +364,4 @@ RUN --mount=type=bind,source=./container/launch_message.txt,target=/opt/dynamo/l
     sed '/^#\s/d' /opt/dynamo/launch_message.txt > ~/.launch_screen && \
     echo "cat ~/.launch_screen" >> ~/.bashrc
 
-ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
-CMD []
+{% include 'Dockerfile._entrypoint_cmd.j2' %}

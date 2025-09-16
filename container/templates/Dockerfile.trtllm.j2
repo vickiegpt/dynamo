@@ -1,4 +1,4 @@
-{% include 'Dockerfile._header_comment.j2' %}
+{% include 'Dockerfile._header_comment_2025.j2' %}
 
 ARG BASE_IMAGE="nvcr.io/nvidia/pytorch"
 ARG BASE_IMAGE_TAG="25.06-py3"
@@ -332,8 +332,7 @@ RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/la
     echo "cat ~/.launch_screen" >> ~/.bashrc
 
 # FIXME: May want a modification with dynamo banner on entry
-ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
-CMD []
+{% include 'Dockerfile._entrypoint_cmd.j2' %}
 
 ####################################
 ########## Runtime Image ###########
@@ -500,5 +499,5 @@ RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/la
     sed '/^#\s/d' /workspace/launch_message.txt > ~/.launch_screen && \
     echo "cat ~/.launch_screen" >> ~/.bashrc
 
-ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
-CMD []
+{% include 'Dockerfile._entrypoint_cmd.j2' %}
+
