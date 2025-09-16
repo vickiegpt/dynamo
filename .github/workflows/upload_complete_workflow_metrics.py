@@ -240,8 +240,8 @@ class WorkflowMetricsUploader:
             metric_type: Type of metric ("workflow", "job", "step") for field naming consistency
         """
         # Store original ISO timestamps
-        db_data[FIELD_START_TIME] = start_time or 'None'
-        db_data[FIELD_END_TIME] = end_time or 'None'
+        db_data[FIELD_START_TIME] = start_time or ''
+        db_data[FIELD_END_TIME] = end_time or ''
         if creation_time: #Don't add for steps
             db_data[FIELD_CREATION_TIME] = creation_time
         
@@ -257,7 +257,8 @@ class WorkflowMetricsUploader:
         if end_time:
             db_data['@timestamp'] = end_time
         else:
-            db_data['@timestamp'] = datetime.now(timezone.utc).isoformat()
+            # Use Z format to match 24h script format
+            db_data['@timestamp'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
     def post_all_metrics(self) -> None:
         """Upload complete workflow metrics including workflow, jobs, and steps in one operation"""
