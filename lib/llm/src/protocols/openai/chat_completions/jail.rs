@@ -609,4 +609,658 @@ mod tests {
             Some("World")
         );
     }
+
+    #[tokio::test]
+    async fn test_jailed_stream_hermes_parser() {
+        // Test Hermes parser with <tool_call> markers
+        let chunks = vec![
+            create_mock_response_chunk("I'll help you with that. ".to_string(), 0),
+            create_mock_response_chunk("<tool_call>".to_string(), 0),
+            create_mock_response_chunk("{\"name\": \"search_web\", ".to_string(), 0),
+            create_mock_response_chunk(
+                "\"arguments\": {\"query\": \"weather today\"}}".to_string(),
+                0,
+            ),
+            create_mock_response_chunk("</tool_call>".to_string(), 0),
+            create_mock_response_chunk(" Let me search for that.".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        // Create JailedStream with Hermes parser
+        let jail = JailedStream::builder().tool_call_parser("hermes").build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should have initial text, tool call result, and final text
+        assert!(!results.is_empty());
+
+        // Check if tool calls were parsed correctly
+        let has_tool_calls = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tc| !tc.is_empty())
+                .unwrap_or(false)
+        });
+        assert!(has_tool_calls, "Should have parsed Hermes tool calls");
+
+        // Check that we have the search_web function
+        let has_search_web = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tcs| {
+                    tcs.iter().any(|tc| {
+                        tc.function
+                            .as_ref()
+                            .and_then(|f| f.name.as_deref())
+                            .map(|name| name == "search_web")
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        });
+        assert!(has_search_web, "Should have parsed search_web function");
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_mistral_parser() {
+        // Test Mistral parser with [{ pattern
+        let chunks = vec![
+            create_mock_response_chunk("Sure, I can help. ".to_string(), 0),
+            create_mock_response_chunk("[{".to_string(), 0),
+            create_mock_response_chunk("\"name\": \"calculate\", ".to_string(), 0),
+            create_mock_response_chunk("\"arguments\": {\"expression\": \"2+2\"}".to_string(), 0),
+            create_mock_response_chunk("}]".to_string(), 0),
+            create_mock_response_chunk(" The calculation is done.".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        // Create JailedStream with Mistral parser
+        let jail = JailedStream::builder().tool_call_parser("mistral").build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should have initial text, tool call result, and final text
+        assert!(!results.is_empty());
+
+        // Check if tool calls were parsed correctly
+        let has_tool_calls = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tc| !tc.is_empty())
+                .unwrap_or(false)
+        });
+        assert!(has_tool_calls, "Should have parsed Mistral tool calls");
+
+        // Check that we have the calculate function
+        let has_calculate = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tcs| {
+                    tcs.iter().any(|tc| {
+                        tc.function
+                            .as_ref()
+                            .and_then(|f| f.name.as_deref())
+                            .map(|name| name == "calculate")
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        });
+        assert!(has_calculate, "Should have parsed calculate function");
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_mistral_parser_with_tool_calls_marker() {
+        // Test Mistral parser with [TOOL_CALLS] marker
+        let chunks = vec![
+            create_mock_response_chunk("Let me check that for you. ".to_string(), 0),
+            create_mock_response_chunk("[TOOL_CALLS]".to_string(), 0),
+            create_mock_response_chunk("[{\"name\": \"get_time\", ".to_string(), 0),
+            create_mock_response_chunk("\"arguments\": {\"timezone\": \"UTC\"}}]".to_string(), 0),
+            create_mock_response_chunk(" Here's the time.".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        // Create JailedStream with Mistral parser
+        let jail = JailedStream::builder().tool_call_parser("mistral").build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should have initial text, tool call result, and final text
+        assert!(!results.is_empty());
+
+        // Check if tool calls were parsed correctly
+        let has_tool_calls = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tc| !tc.is_empty())
+                .unwrap_or(false)
+        });
+        assert!(
+            has_tool_calls,
+            "Should have parsed Mistral [TOOL_CALLS] format"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_phi4_parser() {
+        // Test Phi4 parser with functools[ pattern
+        let chunks = vec![
+            create_mock_response_chunk("I'll analyze this data. ".to_string(), 0),
+            create_mock_response_chunk("functools[".to_string(), 0),
+            create_mock_response_chunk("{\"name\": \"analyze_data\", ".to_string(), 0),
+            create_mock_response_chunk(
+                "\"arguments\": {\"dataset\": \"sales_data\"}}".to_string(),
+                0,
+            ),
+            create_mock_response_chunk("]".to_string(), 0),
+            create_mock_response_chunk(" Analysis complete.".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        // Create JailedStream with Phi4 parser
+        let jail = JailedStream::builder().tool_call_parser("phi4").build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should have initial text, tool call result, and final text
+        assert!(!results.is_empty());
+
+        // Check if tool calls were parsed correctly
+        let has_tool_calls = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tc| !tc.is_empty())
+                .unwrap_or(false)
+        });
+        assert!(has_tool_calls, "Should have parsed Phi4 tool calls");
+
+        // Check that we have the analyze_data function
+        let has_analyze_data = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tcs| {
+                    tcs.iter().any(|tc| {
+                        tc.function
+                            .as_ref()
+                            .and_then(|f| f.name.as_deref())
+                            .map(|name| name == "analyze_data")
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        });
+        assert!(has_analyze_data, "Should have parsed analyze_data function");
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_llama3_json_parser() {
+        // Test llama3_json parser with <|python_tag|> pattern
+        let chunks = vec![
+            create_mock_response_chunk("Let me run some code. ".to_string(), 0),
+            create_mock_response_chunk("<|python_tag|>".to_string(), 0),
+            create_mock_response_chunk("{\"name\": \"execute_code\", ".to_string(), 0),
+            create_mock_response_chunk(
+                "\"arguments\": {\"code\": \"print('Hello')\"}}".to_string(),
+                0,
+            ),
+            create_mock_response_chunk(" Done executing.".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        // Create JailedStream with llama3_json parser
+        let jail = JailedStream::builder()
+            .tool_call_parser("llama3_json")
+            .build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should have initial text, tool call result, and final text
+        assert!(!results.is_empty());
+
+        // Check if tool calls were parsed correctly
+        let has_tool_calls = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tc| !tc.is_empty())
+                .unwrap_or(false)
+        });
+        assert!(has_tool_calls, "Should have parsed llama3_json tool calls");
+
+        // Check that we have the execute_code function
+        let has_execute_code = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tcs| {
+                    tcs.iter().any(|tc| {
+                        tc.function
+                            .as_ref()
+                            .and_then(|f| f.name.as_deref())
+                            .map(|name| name == "execute_code")
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        });
+        assert!(has_execute_code, "Should have parsed execute_code function");
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_false_positive_json() {
+        // Test with text that looks like it might contain tool calls but doesn't match parser patterns
+        let chunks = vec![
+            create_mock_response_chunk("I can explain JSON format. ".to_string(), 0),
+            create_mock_response_chunk("Here's an example: { \"key\": \"value\" }".to_string(), 0),
+            create_mock_response_chunk(" is a simple JSON object. ".to_string(), 0),
+            create_mock_response_chunk("Hope that helps!".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        // Create JailedStream with mistral parser (which specifically looks for [{ or [TOOL_CALLS] patterns)
+        let jail = JailedStream::builder().tool_call_parser("mistral").build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should pass through all chunks since no mistral-specific patterns are present
+        assert!(!results.is_empty());
+
+        // Verify no tool calls were detected
+        let has_tool_calls = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tc| !tc.is_empty())
+                .unwrap_or(false)
+        });
+        assert!(
+            !has_tool_calls,
+            "Should not detect tool calls in JSON explanation text"
+        );
+
+        // Verify content is preserved correctly
+        let has_json_content = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.content.as_ref())
+                .map(|content| {
+                    content.contains("JSON format") || content.contains("simple JSON object")
+                })
+                .unwrap_or(false)
+        });
+        assert!(has_json_content, "Should preserve JSON explanation content");
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_malformed_tool_call() {
+        // Test with malformed JSON in tool calls
+        let chunks = vec![
+            create_mock_response_chunk("Let me call a function. ".to_string(), 0),
+            create_mock_response_chunk("<TOOLCALL>".to_string(), 0),
+            create_mock_response_chunk("[{\"name\": \"broken_func\", ".to_string(), 0),
+            create_mock_response_chunk("\"arguments\": {\"param\": incomplete".to_string(), 0), // Malformed JSON
+            create_mock_response_chunk("</TOOLCALL>".to_string(), 0),
+            create_mock_response_chunk(" Function call attempt finished.".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        // Create JailedStream with nemotron_deci parser
+        let jail = JailedStream::builder()
+            .tool_call_parser("nemotron_deci")
+            .build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should not panic and should handle malformed JSON gracefully
+        assert!(!results.is_empty());
+
+        // Should still process the content even if JSON is malformed
+        let has_content = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.content.as_ref())
+                .map(|content| !content.is_empty())
+                .unwrap_or(false)
+        });
+        assert!(
+            has_content,
+            "Should still have content even with malformed JSON"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_partial_tool_call() {
+        // Test stream that ends mid-tool call
+        let chunks = vec![
+            create_mock_response_chunk("Starting function call. ".to_string(), 0),
+            create_mock_response_chunk("<TOOLCALL>".to_string(), 0),
+            create_mock_response_chunk("[{\"name\": \"incomplete_func\", ".to_string(), 0),
+            create_mock_response_chunk("\"arguments\": {".to_string(), 0),
+            // Stream ends abruptly without closing the tool call
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        // Create JailedStream with nemotron_deci parser
+        let jail = JailedStream::builder()
+            .tool_call_parser("nemotron_deci")
+            .build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should handle partial tool call gracefully
+        assert!(!results.is_empty());
+
+        // First chunk should pass through
+        assert!(
+            results
+                .first()
+                .and_then(|r| r.data.as_ref())
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.content.as_ref())
+                .map(|content| content.contains("Starting function call"))
+                .unwrap_or(false)
+        );
+
+        // Should release accumulated content when stream ends
+        let has_accumulated_content = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.content.as_ref())
+                .map(|content| {
+                    content.contains("<TOOLCALL>") || content.contains("incomplete_func")
+                })
+                .unwrap_or(false)
+        });
+        assert!(
+            has_accumulated_content,
+            "Should release accumulated partial tool call content"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_empty_stream() {
+        // Test with completely empty input stream
+        let chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> = vec![];
+        let input_stream = stream::iter(chunks);
+
+        // Create JailedStream
+        let jail = JailedStream::builder()
+            .tool_call_parser("nemotron_deci")
+            .jail_start_sequence("<jail>")
+            .jail_end_sequence("</jail>")
+            .build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should handle empty stream gracefully without panicking
+        assert!(results.is_empty(), "Empty stream should produce no results");
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_multiple_tool_calls() {
+        // Test multiple sequential tool calls
+        let chunks = vec![
+            create_mock_response_chunk("I'll help with multiple tasks. ".to_string(), 0),
+            // First tool call
+            create_mock_response_chunk("<TOOLCALL>".to_string(), 0),
+            create_mock_response_chunk(
+                "[{\"name\": \"get_weather\", \"arguments\": {\"city\": \"NYC\"}}]".to_string(),
+                0,
+            ),
+            create_mock_response_chunk("</TOOLCALL>".to_string(), 0),
+            create_mock_response_chunk(" Now let me get the time. ".to_string(), 0),
+            // Second tool call
+            create_mock_response_chunk("<TOOLCALL>".to_string(), 0),
+            create_mock_response_chunk(
+                "[{\"name\": \"get_time\", \"arguments\": {\"timezone\": \"EST\"}}]".to_string(),
+                0,
+            ),
+            create_mock_response_chunk("</TOOLCALL>".to_string(), 0),
+            create_mock_response_chunk(" Both tasks completed!".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        // Create JailedStream
+        let jail = JailedStream::builder()
+            .tool_call_parser("nemotron_deci")
+            .build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should have processed multiple tool calls
+        assert!(!results.is_empty());
+
+        // Count the number of tool calls detected
+        let tool_call_count = results
+            .iter()
+            .filter(|r| {
+                r.data
+                    .as_ref()
+                    .and_then(|d| d.choices.first())
+                    .and_then(|c| c.delta.tool_calls.as_ref())
+                    .map(|tc| !tc.is_empty())
+                    .unwrap_or(false)
+            })
+            .count();
+
+        assert!(tool_call_count > 0, "Should detect multiple tool calls");
+
+        // Check that both function names are present in results
+        let has_weather = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tcs| {
+                    tcs.iter().any(|tc| {
+                        tc.function
+                            .as_ref()
+                            .and_then(|f| f.name.as_deref())
+                            .map(|name| name == "get_weather")
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        });
+
+        let has_time = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tcs| {
+                    tcs.iter().any(|tc| {
+                        tc.function
+                            .as_ref()
+                            .and_then(|f| f.name.as_deref())
+                            .map(|name| name == "get_time")
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        });
+
+        assert!(has_weather, "Should have get_weather function");
+        assert!(has_time, "Should have get_time function");
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_tool_call_across_many_chunks() {
+        // Split a tool call across many small chunks
+        let chunks = vec![
+            create_mock_response_chunk("I'll process your request. ".to_string(), 0),
+            create_mock_response_chunk("<".to_string(), 0),
+            create_mock_response_chunk("T".to_string(), 0),
+            create_mock_response_chunk("O".to_string(), 0),
+            create_mock_response_chunk("O".to_string(), 0),
+            create_mock_response_chunk("L".to_string(), 0),
+            create_mock_response_chunk("C".to_string(), 0),
+            create_mock_response_chunk("A".to_string(), 0),
+            create_mock_response_chunk("L".to_string(), 0),
+            create_mock_response_chunk("L".to_string(), 0),
+            create_mock_response_chunk(">".to_string(), 0),
+            create_mock_response_chunk("[".to_string(), 0),
+            create_mock_response_chunk("{".to_string(), 0),
+            create_mock_response_chunk("\"".to_string(), 0),
+            create_mock_response_chunk("n".to_string(), 0),
+            create_mock_response_chunk("a".to_string(), 0),
+            create_mock_response_chunk("m".to_string(), 0),
+            create_mock_response_chunk("e".to_string(), 0),
+            create_mock_response_chunk("\"".to_string(), 0),
+            create_mock_response_chunk(":".to_string(), 0),
+            create_mock_response_chunk(" ".to_string(), 0),
+            create_mock_response_chunk("\"".to_string(), 0),
+            create_mock_response_chunk("p".to_string(), 0),
+            create_mock_response_chunk("r".to_string(), 0),
+            create_mock_response_chunk("o".to_string(), 0),
+            create_mock_response_chunk("c".to_string(), 0),
+            create_mock_response_chunk("e".to_string(), 0),
+            create_mock_response_chunk("s".to_string(), 0),
+            create_mock_response_chunk("s".to_string(), 0),
+            create_mock_response_chunk("_".to_string(), 0),
+            create_mock_response_chunk("d".to_string(), 0),
+            create_mock_response_chunk("a".to_string(), 0),
+            create_mock_response_chunk("t".to_string(), 0),
+            create_mock_response_chunk("a".to_string(), 0),
+            create_mock_response_chunk("\"".to_string(), 0),
+            create_mock_response_chunk(",".to_string(), 0),
+            create_mock_response_chunk(" ".to_string(), 0),
+            create_mock_response_chunk("\"".to_string(), 0),
+            create_mock_response_chunk("a".to_string(), 0),
+            create_mock_response_chunk("r".to_string(), 0),
+            create_mock_response_chunk("g".to_string(), 0),
+            create_mock_response_chunk("u".to_string(), 0),
+            create_mock_response_chunk("m".to_string(), 0),
+            create_mock_response_chunk("e".to_string(), 0),
+            create_mock_response_chunk("n".to_string(), 0),
+            create_mock_response_chunk("t".to_string(), 0),
+            create_mock_response_chunk("s".to_string(), 0),
+            create_mock_response_chunk("\"".to_string(), 0),
+            create_mock_response_chunk(":".to_string(), 0),
+            create_mock_response_chunk(" ".to_string(), 0),
+            create_mock_response_chunk("{".to_string(), 0),
+            create_mock_response_chunk("}".to_string(), 0),
+            create_mock_response_chunk("}".to_string(), 0),
+            create_mock_response_chunk("]".to_string(), 0),
+            create_mock_response_chunk("<".to_string(), 0),
+            create_mock_response_chunk("/".to_string(), 0),
+            create_mock_response_chunk("T".to_string(), 0),
+            create_mock_response_chunk("O".to_string(), 0),
+            create_mock_response_chunk("O".to_string(), 0),
+            create_mock_response_chunk("L".to_string(), 0),
+            create_mock_response_chunk("C".to_string(), 0),
+            create_mock_response_chunk("A".to_string(), 0),
+            create_mock_response_chunk("L".to_string(), 0),
+            create_mock_response_chunk("L".to_string(), 0),
+            create_mock_response_chunk(">".to_string(), 0),
+            create_mock_response_chunk(" Processing complete!".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        // Create JailedStream
+        let jail = JailedStream::builder()
+            .tool_call_parser("nemotron_deci")
+            .build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should handle tool call split across many chunks
+        assert!(!results.is_empty());
+
+        // Should detect the tool call despite fragmentation
+        let has_tool_calls = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tc| !tc.is_empty())
+                .unwrap_or(false)
+        });
+        assert!(
+            has_tool_calls,
+            "Should detect tool call across many fragments"
+        );
+
+        // Should have the process_data function
+        let has_process_data = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tcs| {
+                    tcs.iter().any(|tc| {
+                        tc.function
+                            .as_ref()
+                            .and_then(|f| f.name.as_deref())
+                            .map(|name| name == "process_data")
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        });
+        assert!(has_process_data, "Should have parsed process_data function");
+
+        // Verify initial and final text are preserved
+        let has_initial_text = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.content.as_ref())
+                .map(|content| content.contains("I'll process your request"))
+                .unwrap_or(false)
+        });
+        assert!(has_initial_text, "Should preserve initial text");
+
+        let has_final_text = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.content.as_ref())
+                .map(|content| content.contains("Processing complete"))
+                .unwrap_or(false)
+        });
+        assert!(has_final_text, "Should preserve final text");
+    }
 }
