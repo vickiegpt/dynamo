@@ -259,7 +259,8 @@ class WorkflowMetricsUploader:
         # Add @timestamp field for Grafana/OpenSearch indexing (CRITICAL FIX!)
         # Use the end_time if available, otherwise use current time
         if end_time:
-            db_data['@timestamp'] = end_time
+            # Ensure timestamp is in proper ISO format for OpenSearch date detection
+            db_data['@timestamp'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ') #end_time
         else:
             # Use Z format to match 24h script format
             db_data['@timestamp'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -270,8 +271,8 @@ class WorkflowMetricsUploader:
         
         # Wait for workflow to complete before uploading metrics
         import time
-        max_retries = 5
-        retry_delay = 10  # seconds
+        max_retries = 10
+        retry_delay = 15  # seconds
         
         for attempt in range(max_retries):
             # Get workflow and jobs data from GitHub API
@@ -326,10 +327,10 @@ class WorkflowMetricsUploader:
         # Schema fields
         db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
         # Use conclusion for completed workflows, fallback to status
-        db_data[FIELD_STATUS] = workflow_data.get('conclusion') or workflow_data.get('status', 'unknown')
-        db_data[FIELD_BRANCH] = workflow_data.get('head_branch', self.ref_name)
-        db_data[FIELD_COMMIT_SHA] = workflow_data.get('head_sha', self.sha)
-        db_data[FIELD_EVENT] = workflow_data.get('event', self.event_name)
+        db_data[FIELD_STATUS] = str(workflow_data.get('conclusion') or workflow_data.get('status', 'unknown'))
+        db_data[FIELD_BRANCH] = str(workflow_data.get('head_branch', self.ref_name))
+        db_data[FIELD_COMMIT_SHA] = str(workflow_data.get('head_sha', self.sha))
+        db_data[FIELD_EVENT] = str(workflow_data.get('event', self.event_name))
         
         # Timing fields - Fix parameter order for correct duration/queue time calculation
         created_at = workflow_data.get('created_at')
@@ -347,11 +348,13 @@ class WorkflowMetricsUploader:
             db_data[FIELD_USER_ALIAS] = actor.get('login')
         
         # Add jobs list
+        """
         if jobs_data and 'jobs' in jobs_data:
             job_ids = [str(job['id']) for job in jobs_data['jobs']]
             db_data[FIELD_JOBS] = job_ids
         else:
-            db_data[FIELD_JOBS] = []
+        """
+        db_data[FIELD_JOBS] = []
         
         self.post_to_db(self.workflow_index, db_data)
 
@@ -539,6 +542,7 @@ class WorkflowMetricsUploader:
     def _upload_single_step_metrics(self, step_data: Dict[str, Any], job_data: Dict[str, Any], step_index: int) -> None:
         """Extract and post metrics for a single step"""
         # Extract step metrics using standardized functions
+        return
         db_data = {}
         job_id = job_data['id']
         job_name = job_data['name']
