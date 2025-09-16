@@ -188,7 +188,7 @@ class WorkflowMetricsUploader:
 
     def post_to_db(self, url: str, data: Dict[str, Any]) -> None:
         """Push json data to the database/OpenSearch URL"""
-        print(f"Posting metrics to database... with data: {data} and url: {url}")
+        print(f"Posting metrics to database... with data: {data}")
         try:
             response = requests.post(url, data=json.dumps(data), headers=self.headers, timeout=30)
             if not (200 <= response.status_code < 300):
