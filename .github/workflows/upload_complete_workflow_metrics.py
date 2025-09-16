@@ -248,9 +248,13 @@ class WorkflowMetricsUploader:
         # Duration in integer seconds (consistent across all types)
         db_data[FIELD_DURATION_SEC] = TimingProcessor.calculate_time_diff(start_time, end_time)
         
-        # Queue time in integer seconds only for workflows/jobs
+        # Queue time - use the field name that Grafana expects (HH:MM:SS format)
         if metric_type != "step":
-            db_data[FIELD_QUEUE_TIME_SEC] = TimingProcessor.calculate_time_diff(creation_time, start_time)
+            queue_seconds = TimingProcessor.calculate_time_diff(creation_time, start_time)
+            # Convert to HH:MM:SS format like the working script
+            hours, remainder = divmod(queue_seconds, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            db_data['queueTime'] = f'{hours:02d}:{minutes:02d}:{seconds:02d}'
         
         # Add @timestamp field for Grafana/OpenSearch indexing (CRITICAL FIX!)
         # Use the end_time if available, otherwise use current time
