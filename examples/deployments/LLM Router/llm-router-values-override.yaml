@@ -1,4 +1,4 @@
-## 
+##
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 ##
@@ -23,11 +23,11 @@ routerController:
     repository: llm-router-controller  # Will be prefixed with global.imageRegistry
     tag: latest
     pullPolicy: IfNotPresent
-  
+
   service:
     type: ClusterIP
     port: 8084
-  
+
   # Dynamo-specific environment variables
   env:
     - name: LOG_LEVEL
@@ -41,7 +41,7 @@ routerController:
         secretKeyRef:
           name: dynamo-api-secret
           key: DYNAMO_API_KEY
-  
+
   # STRATEGY 1: External ConfigMap (Official Support)
   # Uses the official Helm chart's external ConfigMap feature
   config:
@@ -113,4 +113,4 @@ app:
     tag: latest
     pullPolicy: IfNotPresent
   service:
-    type: ClusterIP  
+    type: ClusterIP
