@@ -29,7 +29,7 @@ FIELD_EVENT = "event"
 FIELD_CREATION_TIME = "creationTime"
 FIELD_START_TIME = "startTime"
 FIELD_END_TIME = "endTime"
-FIELD_QUEUE_TIME_SEC = "queueTime"
+FIELD_QUEUE_TIME_SEC = "queueTimeSec"
 FIELD_DURATION_SEC = "durationSec"
 
 # Workflow-specific fields
@@ -298,6 +298,7 @@ class WorkflowMetricsUploader:
         db_data = {}
         db_data[FIELD_ID] = f"real-workflow-{self.run_id}"
         
+        
         # Schema fields
         db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
         # Use conclusion for completed workflows, fallback to status
@@ -369,17 +370,19 @@ class WorkflowMetricsUploader:
         
         # Schema fields
         db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
-        db_data[FIELD_STATUS] = workflow_data.get('status', 'unknown')
+        # Use conclusion for completed workflows, fallback to status
+        db_data[FIELD_STATUS] = workflow_data.get('conclusion') or workflow_data.get('status', 'unknown')
         db_data[FIELD_BRANCH] = workflow_data.get('head_branch', self.ref_name)
         db_data[FIELD_COMMIT_SHA] = workflow_data.get('head_sha', self.sha)
         db_data[FIELD_EVENT] = workflow_data.get('event', self.event_name)
         
         # Timestamps and timing using standardized method
         created_at = workflow_data.get('created_at')
-        updated_at = workflow_data.get('updated_at')
         run_started_at = workflow_data.get('run_started_at')
+        # Use completed_at if available, otherwise updated_at
+        end_time = workflow_data.get('completed_at') or workflow_data.get('updated_at')
         
-        self.add_standardized_timing_fields(db_data, created_at, updated_at, run_started_at, "workflow")
+        self.add_standardized_timing_fields(db_data, created_at, run_started_at, end_time, "workflow")
         
         # Add common context fields
         self.add_common_context_fields(db_data)
