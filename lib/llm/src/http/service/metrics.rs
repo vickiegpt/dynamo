@@ -23,6 +23,7 @@ pub struct Metrics {
     output_sequence_length: HistogramVec,
     time_to_first_token: HistogramVec,
     inter_token_latency: HistogramVec,
+    kv_cache_transfer_duration: HistogramVec,
 }
 
 /// RAII object for inflight gauge and request counters
@@ -101,6 +102,7 @@ impl Metrics {
     /// - `{prefix}_output_sequence_tokens` - HistogramVec for output sequence length in tokens
     /// - `{prefix}_time_to_first_token_seconds` - HistogramVec for time to first token in seconds
     /// - `{prefix}_inter_token_latency_seconds` - HistogramVec for inter-token latency in seconds
+    /// - `{prefix}_kv_cache_transfer_duration_seconds` - HistogramVec for inter-token latency in seconds
     pub fn new() -> Self {
         let raw_prefix = std::env::var(frontend_service::METRICS_PREFIX_ENV)
             .unwrap_or_else(|_| name_prefix::FRONTEND.to_string());
@@ -195,6 +197,18 @@ impl Metrics {
         )
         .unwrap();
 
+        let kv_cache_transfer_duration = HistogramVec::new(
+            HistogramOpts::new(
+                frontend_metric_name(frontend_service::KV_CACHE_TRANSFER_DURATION),
+                "KV cache transfer duration in seconds",
+            )
+            .buckets(vec![
+                0.0, 0.001, 0.005, 0.01, 0.015, 0.02, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0,
+            ]),
+            &["model"],
+        )
+        .unwrap();
+
         Metrics {
             request_counter,
             inflight_gauge,
@@ -203,6 +217,7 @@ impl Metrics {
             output_sequence_length,
             time_to_first_token,
             inter_token_latency,
+            kv_cache_transfer_duration,
         }
     }
 
@@ -271,6 +286,7 @@ impl Metrics {
         registry.register(Box::new(self.output_sequence_length.clone()))?;
         registry.register(Box::new(self.time_to_first_token.clone()))?;
         registry.register(Box::new(self.inter_token_latency.clone()))?;
+        registry.register(Box::new(self.kv_cache_transfer_duration.clone()))?;
         Ok(())
     }
 

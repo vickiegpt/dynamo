@@ -63,6 +63,9 @@ pub mod frontend_service {
     /// Inter-token latency in seconds
     pub const INTER_TOKEN_LATENCY_SECONDS: &str = "inter_token_latency_seconds";
 
+    /// Inter-token latency in seconds
+    pub const KV_CACHE_TRANSFER_DURATION: &str = "kv_cache_transfer_duration";
+
     /// Status label values
     pub mod status {
         /// Value for successful requests
