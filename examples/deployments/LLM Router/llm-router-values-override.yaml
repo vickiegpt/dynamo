@@ -1,13 +1,19 @@
+## 
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+##
+
 # LLM Router Helm Values for NVIDIA Dynamo Cloud Platform Integration
 # Based on official sample: https://github.com/NVIDIA-AI-Blueprints/llm-router/blob/main/deploy/helm/llm-router/values.override.yaml.sample
 # Uses official External ConfigMap strategy for custom configuration
 
 # Global configuration (following official sample structure)
+# NOTE: Update imageRegistry and imagePullSecrets before deployment (see README Step 6)
 global:
   storageClass: "standard"
-  imageRegistry: "nvcr.io/nvidian/sae/"
+  imageRegistry: "YOUR_REGISTRY_HERE/"  # REPLACE with your Docker registry
   imagePullSecrets:
-    - name: nvcr-secret
+    - name: nvcr-secret  # UPDATE to match your registry credentials
 
 # Router Controller Configuration
 routerController:

@@ -562,8 +562,8 @@ docker pull $DYNAMO_IMAGE
 ### Validate Configuration Files
 
 ```bash
-# Navigate to the customization directory
-cd customizations/LLM\ Router
+# Navigate to the deployment directory
+cd examples/deployments/LLM\ Router
 
 # Check that required files exist
 ls -la frontend.yaml agg.yaml disagg.yaml router-config-dynamo.yaml llm-router-values-override.yaml
@@ -704,7 +704,7 @@ kubectl create secret generic hf-token-secret \
   -n ${NAMESPACE}
 
 # 2. Navigate to your LLM Router directory (where agg.yaml/disagg.yaml are located)
-cd "customizations/LLM Router/"
+cd "examples/deployments/LLM Router/"
 ```
 
 #### Shared Frontend Deployment
@@ -884,9 +884,22 @@ kubectl get secrets -n llm-router
 git clone https://github.com/NVIDIA-AI-Blueprints/llm-router.git
 cd llm-router
 
-# 2. Use official NVIDIA LLM Router images (no building required)
-# Our values file is configured to use the official images from nvcr.io/nvidian/sae/
-# If you need custom images, build and push them to your registry:
+# 2. Configure Docker Registry (REQUIRED)
+# IMPORTANT: Update the imageRegistry in llm-router-values-override.yaml before deployment
+# The file contains a placeholder "YOUR_REGISTRY_HERE/" that MUST be replaced.
+
+# Edit the values file:
+nano ../examples/deployments/LLM\ Router/llm-router-values-override.yaml
+
+# Update line ~34: Replace "YOUR_REGISTRY_HERE/" with your actual registry:
+# Examples:
+# - "nvcr.io/nvidia/" (if you have access to NVIDIA's public registry)
+# - "your-company-registry.com/llm-router/" (for private registries)  
+# - "docker.io/your-username/" (for Docker Hub)
+
+# Also update imagePullSecrets name to match your registry credentials
+
+# If you need to build custom images, use:
 # docker build -t <your-registry>/router-server:latest -f src/router-server/router-server.dockerfile .
 # docker build -t <your-registry>/router-controller:latest -f src/router-controller/router-controller.dockerfile .
 # docker push <your-registry>/router-server:latest
@@ -896,7 +909,7 @@ cd llm-router
 # 3. Create router configuration ConfigMap using official External ConfigMap strategy
 # The official Helm chart now supports external ConfigMaps natively
 kubectl create configmap router-config-dynamo \
-  --from-file=config.yaml=router-config-dynamo.yaml \
+  --from-file=config.yaml=../examples/deployments/LLM\ Router/router-config-dynamo.yaml \
   --namespace=llm-router
 
 # 4. Prepare router models (download from NGC)
@@ -954,7 +967,7 @@ kubectl create secret generic llm-api-keys \
 cd deploy/helm/llm-router
 helm upgrade --install llm-router . \
   --namespace llm-router \
-  --values ../../../llm-router-values-override.yaml \
+  --values ../../../../examples/deployments/LLM\ Router/llm-router-values-override.yaml \
   --wait --timeout=10m
 
 # 6. Verify LLM Router deployment

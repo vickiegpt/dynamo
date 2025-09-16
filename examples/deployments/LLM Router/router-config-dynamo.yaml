@@ -41,45 +41,31 @@ policies:
   - name: "task_router"
     url: http://llm-router-router-server.llm-router.svc.cluster.local:8000/v2/models/task_router_ensemble/infer
     llms:
-      # === INTELLIGENT ROUTING STRATEGY ===
-      # Route to appropriate models based on task complexity
-      
-      # Simple tasks → Fast 8B model
-      - name: "Closed QA"
-        api_base: ${DYNAMO_API_BASE}
-        api_key: ${DYNAMO_API_KEY}
-        model: meta-llama/Llama-3.1-8B-Instruct
-      - name: Classification
-        api_base: ${DYNAMO_API_BASE}
-        api_key: ${DYNAMO_API_KEY}
-        model: meta-llama/Llama-3.1-8B-Instruct
-      - name: Extraction
-        api_base: ${DYNAMO_API_BASE}
-        api_key: ${DYNAMO_API_KEY}
-        model: meta-llama/Llama-3.1-8B-Instruct
-      - name: Rewrite
-        api_base: ${DYNAMO_API_BASE}
-        api_key: ${DYNAMO_API_KEY}
-        model: meta-llama/Llama-3.1-8B-Instruct
-      - name: Summarization
-        api_base: ${DYNAMO_API_BASE}
-        api_key: ${DYNAMO_API_KEY}
-        model: meta-llama/Llama-3.1-8B-Instruct
-      - name: Unknown
-        api_base: ${DYNAMO_API_BASE}
-        api_key: ${DYNAMO_API_KEY}
-        model: meta-llama/Llama-3.1-8B-Instruct
-        
-      # Complex tasks → Powerful 70B model
       - name: Brainstorming
         api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-70B-Instruct
-      - name: "Code Generation"
+      - name: Chatbot
+        api_base: ${DYNAMO_API_BASE}
+        api_key: ${DYNAMO_API_KEY}
+        model: mistralai/Mixtral-8x22B-Instruct-v0.1
+      - name: Classification
+        api_base: ${DYNAMO_API_BASE}
+        api_key: ${DYNAMO_API_KEY}
+        model: meta-llama/Llama-3.1-8B-Instruct
+      - name: Closed QA
         api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-70B-Instruct
-      - name: "Open QA"
+      - name: Code Generation
+        api_base: ${DYNAMO_API_BASE}
+        api_key: ${DYNAMO_API_KEY}
+        model: meta-llama/Llama-3.1-70B-Instruct
+      - name: Extraction
+        api_base: ${DYNAMO_API_BASE}
+        api_key: ${DYNAMO_API_KEY}
+        model: meta-llama/Llama-3.1-8B-Instruct
+      - name: Open QA
         api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-70B-Instruct
@@ -87,38 +73,25 @@ policies:
         api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: mistralai/Mixtral-8x22B-Instruct-v0.1
-        
-      # Creative/Conversational tasks → Mixtral model
-      - name: Chatbot
+      - name: Rewrite
+        api_base: ${DYNAMO_API_BASE}
+        api_key: ${DYNAMO_API_KEY}
+        model: meta-llama/Llama-3.1-8B-Instruct
+      - name: Summarization
+        api_base: ${DYNAMO_API_BASE}
+        api_key: ${DYNAMO_API_KEY}
+        model: meta-llama/Llama-3.1-70B-Instruct
+      - name: Text Generation
         api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: mistralai/Mixtral-8x22B-Instruct-v0.1
-      - name: "Text Generation"
+      - name: Unknown
         api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
-        model: mistralai/Mixtral-8x22B-Instruct-v0.1
-
+        model: meta-llama/Llama-3.1-8B-Instruct
   - name: "complexity_router"
     url: http://llm-router-router-server.llm-router.svc.cluster.local:8000/v2/models/complexity_router_ensemble/infer
     llms:
-      # === INTELLIGENT COMPLEXITY ROUTING ===
-      # Route to appropriate models based on complexity level
-      
-      # Simple complexity → Fast 8B model
-      - name: "Contextual-Knowledge"
-        api_base: ${DYNAMO_API_BASE}
-        api_key: ${DYNAMO_API_KEY}
-        model: meta-llama/Llama-3.1-8B-Instruct
-      - name: "No-Label-Reason"
-        api_base: ${DYNAMO_API_BASE}
-        api_key: ${DYNAMO_API_KEY}
-        model: meta-llama/Llama-3.1-8B-Instruct
-      - name: Constraint
-        api_base: ${DYNAMO_API_BASE}
-        api_key: ${DYNAMO_API_KEY}
-        model: meta-llama/Llama-3.1-8B-Instruct
-        
-      # High complexity → Powerful 70B model
       - name: Creativity
         api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
@@ -127,13 +100,23 @@ policies:
         api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-70B-Instruct
-      - name: "Few-Shot"
+      - name: Contextual-Knowledge
+        api_base: ${DYNAMO_API_BASE}
+        api_key: ${DYNAMO_API_KEY}
+        model: meta-llama/Llama-3.1-8B-Instruct
+      - name: Few-Shot
         api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
         model: meta-llama/Llama-3.1-70B-Instruct
-        
-      # Creative/Domain complexity → Mixtral model
-      - name: "Domain-Knowledge"
+      - name: Domain-Knowledge
         api_base: ${DYNAMO_API_BASE}
         api_key: ${DYNAMO_API_KEY}
-        model: mistralai/Mixtral-8x22B-Instruct-v0.1 
+        model: mistralai/Mixtral-8x22B-Instruct-v0.1
+      - name: No-Label-Reason
+        api_base: ${DYNAMO_API_BASE}
+        api_key: ${DYNAMO_API_KEY}
+        model: meta-llama/Llama-3.1-8B-Instruct
+      - name: Constraint
+        api_base: ${DYNAMO_API_BASE}
+        api_key: ${DYNAMO_API_KEY}
+        model: meta-llama/Llama-3.1-8B-Instruct 
