@@ -140,6 +140,78 @@ pub extern "C" fn dynamo_llm_load_publisher_create() -> DynamoLlmResult {
     DynamoLlmResult::OK
 }
 
+/// The code below exposes Router functionality .
+/// These bindings are used by the Inference Gateway Endpoint Picker when it needs routing.
+// The EPP workflow will be as below:
+
+// func (r *DynamoKVRouter) QueryWorkerInstance(
+// 	contextID, prompt string,
+// 	temperature *float64,
+// 	overlapWeight *float64,
+// ) (int64, []uint32, error) {
+// 	if !r.initialized {
+// 		return 0, nil, fmt.Errorf("router not initialized - call Initialize() first")
+// 	}
+
+// 	// Convert Go strings to C strings
+// 	cContextID := C.CString(contextID)
+// 	cPrompt := C.CString(prompt)
+// 	defer C.free(unsafe.Pointer(cContextID))
+// 	defer C.free(unsafe.Pointer(cPrompt))
+
+// 	// Prepare configuration override
+// 	var configOverride *C.DynamoRouterConfigOverride
+// 	if temperature != nil || overlapWeight != nil {
+// 		config := C.DynamoRouterConfigOverride{}
+
+// 		if temperature != nil {
+// 			config.has_router_temperature = C.bool(true)
+// 			config.router_temperature = C.float(*temperature)
+// 		}
+
+// 		if overlapWeight != nil {
+// 			config.has_overlap_score_weight = C.bool(true)
+// 			config.overlap_score_weight = C.float(*overlapWeight)
+// 		}
+
+// 		configOverride = &config
+// 	}
+
+// 	// Prepare output variables
+// 	var workerID C.int64_t
+// 	var tokens *C.uint32_t
+// 	var tokenCount C.uintptr_t
+
+// 	// Call the Component-based router with optional config overrides
+// 	result := C.dynamo_kv_router_query_instance_id(
+// 		cContextID,
+// 		cPrompt,
+// 		configOverride,
+// 		&workerID,
+// 		&tokens,
+// 		&tokenCount,
+// 	)
+
+// 	if result != C.OK {
+// 		return 0, nil, fmt.Errorf("failed to query worker instance: %v", result)
+// 	}
+
+// 	// Convert C tokens to Go slice
+// 	goTokens := make([]uint32, int(tokenCount))
+// 	if tokenCount > 0 && tokens != nil {
+// 		tokensSlice := (*[1 << 20]C.uint32_t)(unsafe.Pointer(tokens))[:tokenCount:tokenCount]
+// 		for i, token := range tokensSlice {
+// 			goTokens[i] = uint32(token)
+// 		}
+
+// 		// Free C-allocated memory
+// 		C.dynamo_kv_router_free_tokens(tokens)
+// 	}
+
+// 	return int64(workerID), goTokens, nil
+// }
+
+///
 // instantiate a kv publisher
 // this will bring up the task to publish and the channels to await publishing events
 // the [`dynamo_kv_publish_store_event`] call will use a handle to the publisher to send events
@@ -379,67 +451,6 @@ fn convert_to_router_config_override(config: DynamoRouterConfigOverride) -> Rout
         },
     }
 }
-
-// KV Router functions
-
-// Below are the bindings used by the Inference Gateway Endpoint Picker when it needs routing.
-// The EPP workflow will be as below:
-
-// func (k *KVAwareScorer) callDynamoRouter(
-//     ctx context.Context,
-//     req *schedtypes.LLMRequest,
-// ) (string, []int64, error) {
-//     logger := log.FromContext(ctx)
-
-//     if err := k.initComponentBasedRouter(); err != nil {
-//         logger.V(logutil.DEFAULT).Error(err, "Component-based router init failed")
-//         return "", nil, err
-//     }
-
-//     contextID := req.RequestId
-//     if contextID == "" {
-//         contextID = "gaie-epp"
-//     }
-
-//     cCtx := C.CString(contextID)
-//     cPrm := C.CString(req.Prompt)
-//     defer C.free(unsafe.Pointer(cCtx))
-//     defer C.free(unsafe.Pointer(cPrm))
-
-//     var cWorker C.longlong
-//     var cTokens *C.uint
-//     var cCount C.ulong
-
-//     // Simple version - uses default config from router initialization
-//     rc := C.dynamo_kv_router_query_instance_id(
-//         cCtx,
-//         cPrm,
-//         &cWorker,
-//         &cTokens,
-//         &cCount,
-//     )
-
-//     if rc != C.OK {
-//         return "", nil, fmt.Errorf("dynamo_kv_router_query_instance_id failed")
-//     }
-
-//     // Same token handling as before...
-//     count := int(uintptr(cCount))
-//     var tokens64 []int64
-//     if count > 0 && cTokens != nil {
-//         src := unsafe.Slice((*uint32)(unsafe.Pointer(cTokens)), count)
-//         tokens64 = make([]int64, count)
-//         for i := 0; i < count; i++ {
-//             tokens64[i] = int64(src[i])
-//         }
-//         C.dynamo_kv_router_free_tokens((*C.uint)(cTokens))
-//     }
-
-//     workerID := fmt.Sprintf("%d", int64(cWorker))
-//     return workerID, tokens64, nil
-// }
-
-/////////
 
 /// Initialize the KV router using the standard Component abstraction
 ///
@@ -689,128 +700,15 @@ pub extern "C" fn dynamo_kv_router_init(
     dynamo_kv_router_init_with_config(namespace_c_str, component_c_str, std::ptr::null())
 }
 
-/// Query worker instance
-///
-/// This function finds the optimal worker instance for the given prompt.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
-    context_id_c_str: *const c_char,
-    prompt_c_str: *const c_char,
-    worker_instance_id_out: *mut i64,
-    token_ids_out: *mut *mut u32,
-    token_count_out: *mut usize,
-) -> DynamoLlmResult {
-    let context_id = match unsafe { CStr::from_ptr(context_id_c_str) }.to_str() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to convert context_id C string: {:?}", e);
-            return DynamoLlmResult::ERR;
-        }
-    };
-
-    let prompt = match unsafe { CStr::from_ptr(prompt_c_str) }.to_str() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to convert prompt C string: {:?}", e);
-            return DynamoLlmResult::ERR;
-        }
-    };
-
-    let wk = match WORKER.get() {
-        Some(wk) => wk,
-        None => {
-            eprintln!("Runtime not initialized - call dynamo_llm_init first");
-            return DynamoLlmResult::ERR;
-        }
-    };
-
-    let result = wk.runtime().secondary().block_on(async {
-        let router = match KV_ROUTER.get() {
-            Some(router) => router,
-            None => {
-                eprintln!("KV Router not initialized - call dynamo_kv_router_init first");
-                return DynamoLlmResult::ERR;
-            }
-        };
-
-        // Use Component-based tokenization
-        let preprocessor = match initialize_preprocessor_if_needed().await {
-            Ok(preprocessor) => preprocessor,
-            Err(e) => {
-                eprintln!(
-                    "Failed to initialize preprocessor using Component discovery: {:?}",
-                    e
-                );
-                return DynamoLlmResult::ERR;
-            }
-        };
-
-        // Tokenize the prompt using Component-discovered tokenizer
-        let encoding = match preprocessor.tokenize(prompt) {
-            Ok(encoding) => encoding,
-            Err(e) => {
-                eprintln!("Failed to tokenize prompt: {:?}", e);
-                return DynamoLlmResult::ERR;
-            }
-        };
-
-        let tokens = encoding.token_ids();
-        let num_tokens = tokens.len();
-
-        // Use the Component-based router to find best match
-        match router
-            .find_best_match(context_id, tokens, None, false)
-            .await
-        {
-            Ok((instance_id, _overlap_amount)) => {
-                // Return worker_instance_id
-                unsafe {
-                    *worker_instance_id_out = instance_id;
-                }
-
-                // Return the tokens (copy them to C-managed memory)
-                let tokens_copy =
-                    unsafe { libc::malloc(num_tokens * std::mem::size_of::<u32>()) } as *mut u32;
-                if tokens_copy.is_null() {
-                    eprintln!("Failed to allocate memory for tokens");
-                    return DynamoLlmResult::ERR;
-                }
-
-                unsafe {
-                    std::ptr::copy_nonoverlapping(tokens.as_ptr(), tokens_copy, num_tokens);
-                    *token_ids_out = tokens_copy;
-                    *token_count_out = num_tokens;
-                }
-
-                tracing::trace!(
-                    "Component-based routing: worker_id={}, tokens={:?}",
-                    instance_id,
-                    tokens
-                );
-
-                // Auto-cleanup: Free the request since this is just a query/probe
-                router.free(context_id).await;
-
-                DynamoLlmResult::OK
-            }
-            Err(e) => {
-                eprintln!("Failed to find best match using Component router: {:?}", e);
-                DynamoLlmResult::ERR
-            }
-        }
-    });
-
-    result
-}
-
-/// Query worker instance with config overrides using Component-based KV routing
+/// Query worker instance with optional config overrides using Component-based KV routing
 ///
 /// This function uses the initialized KV router and Component-based tokenization
 /// with optional configuration overrides to find the optimal worker instance.
 ///
 /// Configuration overrides are applied directly to the router without HTTP headers.
+/// Pass NULL for config_override to use default configuration.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn dynamo_kv_router_query_instance_id_with_config(
+pub unsafe extern "C" fn dynamo_kv_router_query_instance_id(
     context_id_c_str: *const c_char,
     prompt_c_str: *const c_char,
     config_override: *const DynamoRouterConfigOverride,
@@ -909,9 +807,14 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id_with_config(
                 }
 
                 tracing::trace!(
-                    "Component-based routing with config: worker_id={}, tokens={:?}",
+                    "Component-based routing: worker_id={}, tokens={:?}, config_override={:?}",
                     instance_id,
-                    tokens
+                    tokens,
+                    if config_override.is_null() {
+                        "None"
+                    } else {
+                        "Some"
+                    }
                 );
 
                 // Auto-cleanup: Free the request since this is just a query/probe
@@ -920,10 +823,7 @@ pub unsafe extern "C" fn dynamo_kv_router_query_instance_id_with_config(
                 DynamoLlmResult::OK
             }
             Err(e) => {
-                eprintln!(
-                    "Failed to find best match using Component router with config: {:?}",
-                    e
-                );
+                eprintln!("Failed to find best match using Component router: {:?}", e);
                 DynamoLlmResult::ERR
             }
         }
