@@ -46,6 +46,10 @@ impl JailedStream {
             let mut accumulated_content: HashMap<u32, String> = HashMap::new();
             let mut last_response_metadata: Option<NvCreateChatCompletionStreamResponse> = None;
             let mut buffered_content = String::new();
+            // Track Annotated metadata for preservation
+            let mut last_annotated_id: Option<String> = None;
+            let mut last_annotated_event: Option<String> = None;
+            let mut last_annotated_comment: Option<Vec<String>> = None;
 
             // Pin the stream for iteration (stack pinning is more efficient)
             tokio::pin!(stream);
@@ -81,6 +85,10 @@ impl JailedStream {
 
                                     // Store metadata only when we actually jail
                                     last_response_metadata = response.data.clone();
+                                    // Preserve Annotated metadata for correlation
+                                    last_annotated_id = response.id.clone();
+                                    last_annotated_event = response.event.clone();
+                                    last_annotated_comment = response.comment.clone();
 
                                     // Start accumulating for this choice
                                     accumulated_content.insert(choice.index, content.clone());
@@ -131,6 +139,9 @@ impl JailedStream {
                                             let final_response = self.create_unjailed_response(
                                                 base_response,
                                                 &accumulated_content,
+                                                last_annotated_id.clone(),
+                                                last_annotated_event.clone(),
+                                                last_annotated_comment.clone(),
                                             );
                                             accumulated_content.clear();
                                             buffered_content.clear();
@@ -153,6 +164,9 @@ impl JailedStream {
                     let final_response = self.create_unjailed_response(
                         base_response,
                         &accumulated_content,
+                        last_annotated_id.clone(),
+                        last_annotated_event.clone(),
+                        last_annotated_comment.clone(),
                     );
                     yield final_response;
                 }
@@ -177,6 +191,9 @@ impl JailedStream {
         &self,
         mut base_response: NvCreateChatCompletionStreamResponse,
         accumulated_content: &HashMap<u32, String>,
+        id: Option<String>,
+        event: Option<String>,
+        comment: Option<Vec<String>>,
     ) -> Annotated<NvCreateChatCompletionStreamResponse> {
         // Try to parse tool calls from accumulated content
         for (choice_index, accumulated_text) in accumulated_content {
@@ -237,9 +254,9 @@ impl JailedStream {
 
         Annotated {
             data: Some(base_response),
-            id: None,
-            event: None,
-            comment: None,
+            id,
+            event,
+            comment,
         }
     }
 }
@@ -399,6 +416,48 @@ mod tests {
                 id: None,
                 event: None,
                 comment: None,
+            }
+        }
+
+        /// Helper function to create a mock chat response chunk with metadata
+        pub fn create_annotated_chunk(
+            content: String,
+            index: u32,
+            id: Option<String>,
+            event: Option<String>,
+            comment: Option<Vec<String>>,
+        ) -> Annotated<NvCreateChatCompletionStreamResponse> {
+            #[allow(deprecated)]
+            let choice = ChatChoiceStream {
+                index,
+                delta: ChatCompletionStreamResponseDelta {
+                    role: Some(Role::Assistant),
+                    content: Some(content),
+                    tool_calls: None,
+                    function_call: None,
+                    refusal: None,
+                    reasoning_content: None,
+                },
+                finish_reason: None,
+                logprobs: None,
+            };
+
+            let response = NvCreateChatCompletionStreamResponse {
+                id: "test-id".to_string(),
+                choices: vec![choice],
+                created: 1234567890,
+                model: "test-model".to_string(),
+                system_fingerprint: Some("test-fingerprint".to_string()),
+                object: "chat.completion.chunk".to_string(),
+                usage: None,
+                service_tier: None,
+            };
+
+            Annotated {
+                data: Some(response),
+                id,
+                event,
+                comment,
             }
         }
     }
@@ -1262,5 +1321,218 @@ mod tests {
                 .unwrap_or(false)
         });
         assert!(has_final_text, "Should preserve final text");
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_preserves_metadata() {
+        // Test metadata preservation through jail processing
+        let test_id = Some("correlation-id-123".to_string());
+        let test_event = Some("request-processing".to_string());
+        let test_comment = Some(vec![
+            "upstream-correlation".to_string(),
+            "debug-info".to_string(),
+        ]);
+
+        // Create chunks with specific metadata for the jail trigger
+        let chunks = vec![
+            create_annotated_chunk(
+                "I'll help you with that. ".to_string(),
+                0,
+                None, // No metadata on first chunk
+                None,
+                None,
+            ),
+            create_annotated_chunk(
+                "<tool_call>".to_string(),
+                0,
+                test_id.clone(), // Metadata on jail trigger chunk
+                test_event.clone(),
+                test_comment.clone(),
+            ),
+            create_mock_response_chunk("{\"name\": \"search_web\", ".to_string(), 0),
+            create_mock_response_chunk("\"arguments\": {\"query\": \"test\"}}".to_string(), 0),
+            create_mock_response_chunk("</tool_call>".to_string(), 0),
+            create_mock_response_chunk(" Processing complete.".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        // Create JailedStream with Hermes parser
+        let jail = JailedStream::builder().tool_call_parser("hermes").build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should get 3 chunks: before jail, tool call response, after jail
+        assert!(
+            results.len() >= 3,
+            "Should have at least 3 chunks, got {}",
+            results.len()
+        );
+
+        // Find the synthesized tool call response chunk
+        let tool_call_chunk = results
+            .iter()
+            .find(|r| {
+                r.data
+                    .as_ref()
+                    .and_then(|d| d.choices.first())
+                    .map(|c| c.finish_reason == Some(FinishReason::ToolCalls))
+                    .unwrap_or(false)
+            })
+            .expect("Should have a tool call response chunk");
+
+        // Verify metadata is preserved
+        assert_eq!(
+            tool_call_chunk.id, test_id,
+            "ID should be preserved from jail trigger chunk"
+        );
+        assert_eq!(
+            tool_call_chunk.event, test_event,
+            "Event should be preserved from jail trigger chunk"
+        );
+        assert_eq!(
+            tool_call_chunk.comment, test_comment,
+            "Comment should be preserved from jail trigger chunk"
+        );
+
+        // Verify tool call was parsed correctly
+        let tool_calls = &tool_call_chunk.data.as_ref().unwrap().choices[0]
+            .delta
+            .tool_calls;
+        assert!(tool_calls.is_some(), "Should have tool calls");
+        let tool_calls = tool_calls.as_ref().unwrap();
+        assert_eq!(tool_calls.len(), 1, "Should have exactly one tool call");
+        assert_eq!(
+            tool_calls[0]
+                .function
+                .as_ref()
+                .unwrap()
+                .name
+                .as_ref()
+                .unwrap(),
+            "search_web"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_preserves_metadata_on_stream_end() {
+        // Test metadata preservation when stream ends while jailed
+        let test_id = Some("end-correlation-456".to_string());
+        let test_event = Some("stream-termination".to_string());
+        let test_comment = Some(vec!["incomplete-processing".to_string()]);
+
+        // Create chunks that end while jailed (no explicit end marker)
+        let chunks = vec![
+            create_mock_response_chunk("Starting function call: ".to_string(), 0),
+            create_annotated_chunk(
+                "<tool_call>".to_string(), // This chunk triggers jail and has metadata
+                0,
+                test_id.clone(),
+                test_event.clone(),
+                test_comment.clone(),
+            ),
+            create_mock_response_chunk(
+                "{\"name\": \"incomplete_call\"".to_string(), // No closing brace
+                0,
+            ),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        // Create JailedStream with Hermes parser
+        let jail = JailedStream::builder().tool_call_parser("hermes").build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should get 2 chunks: first chunk passes through, stream end releases accumulated
+        assert_eq!(results.len(), 2, "Should have exactly 2 chunks");
+
+        // The second chunk is the accumulated content released when stream ended
+        let accumulated_chunk = &results[1];
+
+        // Verify metadata is preserved from the jail trigger
+        assert_eq!(
+            accumulated_chunk.id, test_id,
+            "ID should be preserved when stream ends while jailed"
+        );
+        assert_eq!(
+            accumulated_chunk.event, test_event,
+            "Event should be preserved when stream ends while jailed"
+        );
+        assert_eq!(
+            accumulated_chunk.comment, test_comment,
+            "Comment should be preserved when stream ends while jailed"
+        );
+
+        // Verify accumulated content is returned
+        let content = &accumulated_chunk.data.as_ref().unwrap().choices[0]
+            .delta
+            .content;
+        assert!(content.is_some(), "Should have accumulated content");
+        let content = content.as_ref().unwrap();
+        assert!(
+            content.contains("<tool_call>"),
+            "Should contain jail start marker in accumulated content"
+        );
+        assert!(
+            content.contains("incomplete_call"),
+            "Should contain accumulated incomplete content"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_metadata_edge_cases() {
+        // Test edge cases: empty metadata, partial metadata, etc.
+        let chunks = vec![
+            create_annotated_chunk(
+                "Text with ".to_string(),
+                0,
+                Some("".to_string()), // Empty string ID
+                None,                 // No event
+                Some(vec![]),         // Empty comment vector
+            ),
+            create_annotated_chunk(
+                "<tool_call>".to_string(),
+                0,
+                None,                                 // No ID
+                Some("partial-metadata".to_string()), // Only event
+                None,                                 // No comment
+            ),
+            create_mock_response_chunk("{\"name\": \"test\", \"arguments\": {}}".to_string(), 0),
+            create_mock_response_chunk("</tool_call>".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        let jail = JailedStream::builder().tool_call_parser("hermes").build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Find the tool call response
+        let tool_call_chunk = results
+            .iter()
+            .find(|r| {
+                r.data
+                    .as_ref()
+                    .and_then(|d| d.choices.first())
+                    .map(|c| c.finish_reason == Some(FinishReason::ToolCalls))
+                    .unwrap_or(false)
+            })
+            .expect("Should have a tool call response chunk");
+
+        // Verify partial metadata is preserved correctly
+        assert_eq!(tool_call_chunk.id, None, "Should preserve None ID");
+        assert_eq!(
+            tool_call_chunk.event,
+            Some("partial-metadata".to_string()),
+            "Should preserve event"
+        );
+        assert_eq!(
+            tool_call_chunk.comment, None,
+            "Should preserve None comment"
+        );
     }
 }
