@@ -29,8 +29,8 @@ FIELD_EVENT = "event"
 FIELD_CREATION_TIME = "creationTime"
 FIELD_START_TIME = "startTime"
 FIELD_END_TIME = "endTime"
-FIELD_QUEUE_TIME_SEC = "queueTime"
-FIELD_DURATION_SEC = "duration"
+FIELD_QUEUE_TIME_SEC = "queueTimeSec"
+FIELD_DURATION_SEC = "durationSec"
 
 # Workflow-specific fields
 FIELD_WORKFLOW_ID = "workflowId"
@@ -90,20 +90,20 @@ class TimingProcessor:
         return dt.strftime('%H:%M:%S') if dt else None
     
     @staticmethod
-    def calculate_time_diff(start_time: str, end_time: str) -> str:
-        """Calculate duration/queue time using built-in datetime subtraction"""
+    def calculate_time_diff(start_time: str, end_time: str) -> int:
+        """Calculate duration/queue time in integer seconds"""
         if not start_time or not end_time:
-            return "00:00:00"
+            return 0
         
         start_dt = TimingProcessor._parse_iso(start_time)
         end_dt = TimingProcessor._parse_iso(end_time)
         
         if not start_dt or not end_dt:
-            return "00:00:00"
+            return 0
         
-        # Use built-in timedelta.total_seconds()
+        # Return integer seconds directly
         duration = end_dt - start_dt
-        return TimingProcessor._seconds_to_hms(duration.total_seconds())
+        return max(0, int(duration.total_seconds()))
 
 
 def mask_sensitive_urls(error_msg: str, url: str) -> str:
@@ -239,17 +239,24 @@ class WorkflowMetricsUploader:
             end_time: ISO datetime string for end time  
             metric_type: Type of metric ("workflow", "job", "step") for field naming consistency
         """
-        # Creation, Start, End time in HH:MM:SS format
-        db_data[FIELD_CREATION_TIME] = TimingProcessor.to_time_format(creation_time)
-        db_data[FIELD_START_TIME] = TimingProcessor.to_time_format(start_time)
-        db_data[FIELD_END_TIME] = TimingProcessor.to_time_format(end_time)
+        # Store original ISO timestamps
+        db_data[FIELD_START_TIME] = start_time or ''
+        db_data[FIELD_END_TIME] = end_time or ''
+        db_data[FIELD_CREATION_TIME] = creation_time or ''
         
-        # Duration in HH:MM:SS format (consistent across all types)
+        # Duration in integer seconds (consistent across all types)
         db_data[FIELD_DURATION_SEC] = TimingProcessor.calculate_time_diff(start_time, end_time)
         
-        # Queue time in HH:MM:SS format only for workflows/jobs
+        # Queue time in integer seconds only for workflows/jobs
         if metric_type != "step":
             db_data[FIELD_QUEUE_TIME_SEC] = TimingProcessor.calculate_time_diff(creation_time, start_time)
+        
+        # Add @timestamp field for Grafana/OpenSearch indexing (CRITICAL FIX!)
+        # Use the end_time if available, otherwise use current time
+        if end_time:
+            db_data['@timestamp'] = end_time
+        else:
+            db_data['@timestamp'] = datetime.now(timezone.utc).isoformat()
 
     def post_all_metrics(self) -> None:
         """Upload complete workflow metrics including workflow, jobs, and steps in one operation"""
@@ -291,16 +298,18 @@ class WorkflowMetricsUploader:
         
         # Schema fields
         db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
-        db_data[FIELD_STATUS] = workflow_data.get('status', 'unknown')
+        # Use conclusion for completed workflows, fallback to status
+        db_data[FIELD_STATUS] = workflow_data.get('conclusion') or workflow_data.get('status', 'unknown')
         db_data[FIELD_BRANCH] = workflow_data.get('head_branch', self.ref_name)
         db_data[FIELD_COMMIT_SHA] = workflow_data.get('head_sha', self.sha)
         db_data[FIELD_EVENT] = workflow_data.get('event', self.event_name)
         
-        # Timing fields
+        # Timing fields - Fix parameter order for correct duration/queue time calculation
         created_at = workflow_data.get('created_at')
-        updated_at = workflow_data.get('updated_at')
         run_started_at = workflow_data.get('run_started_at')
-        self.add_standardized_timing_fields(db_data, created_at, updated_at, run_started_at, "workflow")
+        # Use completed_at if available, otherwise updated_at
+        end_time = workflow_data.get('completed_at') or workflow_data.get('updated_at')
+        self.add_standardized_timing_fields(db_data, created_at, run_started_at, end_time, "workflow")
         
         # Common context fields
         self.add_common_context_fields(db_data)
@@ -439,18 +448,18 @@ class WorkflowMetricsUploader:
         db_data[FIELD_WORKFLOW_SOURCE] = self.event_name
         db_data[FIELD_JOB_NAME] = job_name
         
-        # Timing fields using standardized method
+        # Timing fields using standardized method - Fix parameter order
         created_at = job_data.get('created_at')
-        completed_at = job_data.get('completed_at')
         started_at = job_data.get('started_at')
+        completed_at = job_data.get('completed_at')
         
-        self.add_standardized_timing_fields(db_data, created_at, completed_at, started_at, "job")
+        self.add_standardized_timing_fields(db_data, created_at, started_at, completed_at, "job")
         
         # Labels
         runner_labels = job_data.get('labels', [])
         db_data[FIELD_LABELS] = runner_labels if runner_labels else ['-']
         
-        # Add steps list (get step IDs)
+        # Add steps list (get step IDs) 
         steps = job_data.get('steps', [])
         if steps:
             step_ids = [f"{job_id}_{step.get('number', i+1)}" for i, step in enumerate(steps)]
@@ -515,11 +524,12 @@ class WorkflowMetricsUploader:
         db_data[FIELD_STATUS] = step_data.get('conclusion', step_data.get('status', 'unknown'))
         db_data[FIELD_JOB_NAME] = job_name
         
-        # Timing fields using standardized method
+        # Timing fields using standardized method - Fix parameter order for steps
         started_at = step_data.get('started_at')
         completed_at = step_data.get('completed_at')
         
-        self.add_standardized_timing_fields(db_data, started_at, completed_at, None, "step")
+        # For steps: creation_time=None (no queue time), start_time=started_at, end_time=completed_at
+        self.add_standardized_timing_fields(db_data, None, started_at, completed_at, "step")
         
         # Command/script executed (GitHub API doesn't always provide this, but we can infer)
         command = ""
