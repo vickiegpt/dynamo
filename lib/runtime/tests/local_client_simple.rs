@@ -3,34 +3,48 @@
 
 //! Simple test to demonstrate LocalClient functionality
 
-use dynamo_runtime::DistributedRuntime;
-use dynamo_runtime::component::{LocalClient, register_local_engine};
-use dynamo_runtime::engine::{AsyncEngine, async_trait};
+use dynamo_runtime::component::LocalClient;
+use dynamo_runtime::engine::{AsyncEngine, AsyncEngineContextProvider, async_trait};
+use dynamo_runtime::pipeline::network::Ingress;
+use dynamo_runtime::pipeline::{Context, ManyOut, ResponseStream, SingleIn};
+use dynamo_runtime::protocols::annotated::Annotated;
+use dynamo_runtime::{DistributedRuntime, Runtime, distributed::DistributedConfig};
+use futures::StreamExt;
 use std::sync::Arc;
 
 /// Simple test engine that echoes strings
 struct SimpleEchoEngine;
 
 #[async_trait]
-impl AsyncEngine<String, String, String> for SimpleEchoEngine {
-    async fn generate(&self, request: String) -> Result<String, String> {
-        Ok(format!("Echo: {}", request))
+impl AsyncEngine<SingleIn<String>, ManyOut<Annotated<String>>, anyhow::Error> for SimpleEchoEngine {
+    async fn generate(
+        &self,
+        request: SingleIn<String>,
+    ) -> Result<ManyOut<Annotated<String>>, anyhow::Error> {
+        let response = Annotated {
+            data: Some(format!("Echo: {}", *request)),
+            id: None,
+            event: None,
+            comment: None,
+        };
+        let context = request.context();
+
+        // Create a simple stream that yields the response once
+        let stream = futures::stream::once(async move { response });
+        Ok(ResponseStream::new(Box::pin(stream), context))
     }
 }
 
 #[tokio::test]
 async fn test_local_client_basic() -> Result<(), Box<dyn std::error::Error>> {
     // Create runtime and DRT
-    let runtime = dynamo_runtime::Runtime::builder()
-        .app_name("test")
-        .build()
-        .await?;
+    let runtime = Runtime::from_current()?;
 
-    let config = dynamo_runtime::DistributedConfig::builder()
-        .etcd_config(Default::default())
-        .nats_config(Default::default())
-        .is_static(true)
-        .build()?;
+    let config = DistributedConfig {
+        etcd_config: Default::default(),
+        nats_config: Default::default(),
+        is_static: true,
+    };
 
     let drt = DistributedRuntime::new(runtime, config).await?;
 
@@ -40,26 +54,36 @@ async fn test_local_client_basic() -> Result<(), Box<dyn std::error::Error>> {
     let service = component.service_builder().create().await?;
     let endpoint = service.endpoint("test-endpoint");
 
-    // Create and register an engine
-    let engine: Arc<dyn AsyncEngine<String, String, String>> = Arc::new(SimpleEchoEngine);
+    // Create an engine and configure the endpoint with it
+    let engine: Arc<dyn AsyncEngine<SingleIn<String>, ManyOut<Annotated<String>>, anyhow::Error>> =
+        Arc::new(SimpleEchoEngine);
 
-    // Register the engine for local access
-    let key = register_local_engine(&endpoint, engine.clone()).await?;
-    println!("✓ Registered engine with key: {}", key);
+    // Wrap the engine in an Ingress to make it a PushWorkHandler
+    let ingress = Ingress::for_engine(engine)?;
+
+    // Create the endpoint instance with the ingress as handler (setup phase)
+    let endpoint_instance = endpoint
+        .endpoint_builder()
+        .handler(ingress)
+        .create()
+        .await?;
+    println!("✓ Created endpoint instance with local engine registered");
 
     // Create a LocalClient using the endpoint's convenience method
-    let local_client: LocalClient<String, String, String> = endpoint.local_client().await?;
+    let local_client: LocalClient<SingleIn<String>, ManyOut<Annotated<String>>, anyhow::Error> =
+        endpoint.local_client().await?;
     println!("✓ Created LocalClient successfully");
 
-    // Test the local client with direct invocation
-    let response = local_client
-        .generate("Hello, LocalClient!".to_string())
-        .await?;
-    assert_eq!(response, "Echo: Hello, LocalClient!");
-    println!("✓ LocalClient test passed: received '{}'", response);
+    // Test the local client with context
+    let request = Context::new("Hello, LocalClient!".to_string());
 
-    // Note: We can't unregister manually since the registry methods are now internal
-    // This is fine for tests as they'll be cleaned up when the test ends
+    let mut response_stream = local_client.generate(request).await?;
+    let response = response_stream.next().await.expect("Expected response");
+    assert_eq!(response.data, Some("Echo: Hello, LocalClient!".to_string()));
+    println!("✓ LocalClient test passed: received '{:?}'", response.data);
+
+    // Note: We don't need to start the endpoint for local client testing
+    // The engine is registered during create() and available for local access
 
     Ok(())
 }
@@ -67,16 +91,13 @@ async fn test_local_client_basic() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::test]
 async fn test_local_client_type_safety() -> Result<(), Box<dyn std::error::Error>> {
     // Create runtime and DRT
-    let runtime = dynamo_runtime::Runtime::builder()
-        .app_name("test")
-        .build()
-        .await?;
+    let runtime = Runtime::from_current()?;
 
-    let config = dynamo_runtime::DistributedConfig::builder()
-        .etcd_config(Default::default())
-        .nats_config(Default::default())
-        .is_static(true)
-        .build()?;
+    let config = DistributedConfig {
+        etcd_config: Default::default(),
+        nats_config: Default::default(),
+        is_static: true,
+    };
 
     let drt = DistributedRuntime::new(runtime, config).await?;
 
@@ -86,13 +107,20 @@ async fn test_local_client_type_safety() -> Result<(), Box<dyn std::error::Error
     let service = component.service_builder().create().await?;
     let endpoint = service.endpoint("test-endpoint2");
 
-    // Register an engine with String types
-    let engine: Arc<dyn AsyncEngine<String, String, String>> = Arc::new(SimpleEchoEngine);
-    let key = register_local_engine(&endpoint, engine).await?;
-    println!("✓ Registered String engine");
+    // Create an endpoint instance with a String engine
+    let engine: Arc<dyn AsyncEngine<SingleIn<String>, ManyOut<Annotated<String>>, anyhow::Error>> =
+        Arc::new(SimpleEchoEngine);
+    let ingress = Ingress::for_engine(engine)?;
+    let _endpoint_instance = endpoint
+        .endpoint_builder()
+        .handler(ingress)
+        .create()
+        .await?;
+    println!("✓ Created endpoint with String engine");
 
     // Try to create a LocalClient with different types (this should fail)
-    let result: Result<LocalClient<i32, i32, String>, _> = endpoint.local_client().await;
+    let result: Result<LocalClient<SingleIn<i32>, ManyOut<Annotated<i32>>, anyhow::Error>, _> =
+        endpoint.local_client().await;
     assert!(result.is_err(), "Expected type mismatch error");
 
     if let Err(e) = result {
