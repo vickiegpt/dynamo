@@ -47,9 +47,8 @@ async fn test_local_client_basic() -> Result<(), Box<dyn std::error::Error>> {
     let key = register_local_engine(&endpoint, engine.clone()).await?;
     println!("✓ Registered engine with key: {}", key);
 
-    // Create a LocalClient and retrieve the engine
-    let local_client: LocalClient<String, String, String> =
-        LocalClient::from_endpoint(&endpoint).await?;
+    // Create a LocalClient using the endpoint's convenience method
+    let local_client: LocalClient<String, String, String> = endpoint.local_client().await?;
     println!("✓ Created LocalClient successfully");
 
     // Test the local client with direct invocation
@@ -59,17 +58,8 @@ async fn test_local_client_basic() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(response, "Echo: Hello, LocalClient!");
     println!("✓ LocalClient test passed: received '{}'", response);
 
-    // Cleanup: unregister the engine
-    drt.unregister_local_engine(&key).await;
-    println!("✓ Unregistered engine");
-
-    // Verify it's gone
-    let result = LocalClient::<String, String, String>::from_endpoint(&endpoint).await;
-    assert!(
-        result.is_err(),
-        "Expected error when retrieving unregistered engine"
-    );
-    println!("✓ Verified engine is no longer accessible");
+    // Note: We can't unregister manually since the registry methods are now internal
+    // This is fine for tests as they'll be cleaned up when the test ends
 
     Ok(())
 }
@@ -102,15 +92,12 @@ async fn test_local_client_type_safety() -> Result<(), Box<dyn std::error::Error
     println!("✓ Registered String engine");
 
     // Try to create a LocalClient with different types (this should fail)
-    let result = LocalClient::<i32, i32, String>::from_endpoint(&endpoint).await;
+    let result: Result<LocalClient<i32, i32, String>, _> = endpoint.local_client().await;
     assert!(result.is_err(), "Expected type mismatch error");
 
     if let Err(e) = result {
         println!("✓ Got expected error for type mismatch: {}", e);
     }
-
-    // Cleanup
-    drt.unregister_local_engine(&key).await;
 
     Ok(())
 }

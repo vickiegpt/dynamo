@@ -50,9 +50,9 @@ async fn test_local_client_registration_and_retrieval() -> Result<(), Box<dyn st
     let key = register_local_engine(&endpoint, engine.clone()).await?;
     println!("Registered engine with key: {}", key);
 
-    // Create a LocalClient and retrieve the engine
+    // Create a LocalClient using the endpoint's convenience method
     let local_client: LocalClient<SingleIn<String>, ManyOut<String>, anyhow::Error> =
-        LocalClient::from_endpoint(&endpoint).await?;
+        endpoint.local_client().await?;
 
     // Test the local client
     let context = Arc::new(dynamo_runtime::pipeline::context::BaseContext::new(
@@ -66,17 +66,8 @@ async fn test_local_client_registration_and_retrieval() -> Result<(), Box<dyn st
     assert_eq!(response, "Hello, LocalClient!");
     println!("LocalClient test passed: received '{}'", response);
 
-    // Cleanup: unregister the engine
-    drt.unregister_local_engine(&key).await;
-
-    // Verify it's gone
-    let result =
-        LocalClient::<SingleIn<String>, ManyOut<String>, anyhow::Error>::from_endpoint(&endpoint)
-            .await;
-    assert!(
-        result.is_err(),
-        "Expected error when retrieving unregistered engine"
-    );
+    // Note: We can't unregister manually since the registry methods are now internal
+    // This is fine for tests as they'll be cleaned up when the test ends
 
     Ok(())
 }
@@ -112,9 +103,9 @@ async fn test_local_client_with_ingress() -> Result<(), Box<dyn std::error::Erro
         Arc::new(EchoEngine);
     let key = register_local_engine(&endpoint, test_engine).await?;
 
-    // Now we can create a LocalClient
+    // Now we can create a LocalClient using the convenience method
     let local_client: LocalClient<SingleIn<String>, ManyOut<String>, anyhow::Error> =
-        LocalClient::from_endpoint(&endpoint).await?;
+        endpoint.local_client().await?;
 
     // Test the local client
     let context = Arc::new(dynamo_runtime::pipeline::context::BaseContext::new(
@@ -131,8 +122,7 @@ async fn test_local_client_with_ingress() -> Result<(), Box<dyn std::error::Erro
         response
     );
 
-    // Cleanup
-    drt.unregister_local_engine(&key).await;
+    // Note: We can't unregister manually since the registry methods are now internal
 
     Ok(())
 }
@@ -160,16 +150,15 @@ async fn test_local_client_type_mismatch() -> Result<(), Box<dyn std::error::Err
     let key = register_local_engine(&endpoint, engine).await?;
 
     // Try to create a LocalClient with different types (this should fail)
-    let result =
-        LocalClient::<SingleIn<i32>, ManyOut<i32>, anyhow::Error>::from_endpoint(&endpoint).await;
+    let result: Result<LocalClient<SingleIn<i32>, ManyOut<i32>, anyhow::Error>, _> =
+        endpoint.local_client().await;
 
     assert!(result.is_err(), "Expected type mismatch error");
     if let Err(e) = result {
         println!("Got expected error for type mismatch: {}", e);
     }
 
-    // Cleanup
-    drt.unregister_local_engine(&key).await;
+    // Note: We can't unregister manually since the registry methods are now internal
 
     Ok(())
 }

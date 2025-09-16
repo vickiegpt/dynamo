@@ -18,6 +18,22 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 
+/// Extract the full namespace hierarchy from a Namespace
+fn get_namespace_hierarchy(namespace: &super::Namespace) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current: Option<&super::Namespace> = Some(namespace);
+
+    // Walk up the parent chain to collect all namespace segments
+    while let Some(ns) = current {
+        segments.push(ns.name.clone());
+        current = ns.parent.as_deref();
+    }
+
+    // Reverse to get root-to-leaf order
+    segments.reverse();
+    segments
+}
+
 pub use async_nats::service::endpoint::Stats as EndpointStats;
 
 #[derive(Educe, Builder, Dissolve)]
@@ -85,15 +101,29 @@ impl EndpointConfigBuilder {
         // Add metrics to the handler. The endpoint provides additional information to the handler.
         handler.add_metrics(&endpoint, metrics_labels.as_deref())?;
 
-        // Check if handler has a type-erased engine for local registry
-        // Note: This requires the handler to implement as_any_engine() with proper bounds
-        let local_engine_key = if let Some(any_engine) = handler.as_any_engine() {
+        // Check if local registry is enabled and handler has a type-erased engine
+        let enable_local_registry = registry
+            .service_enable_local_registry
+            .get(&endpoint.component.service_name())
+            .copied()
+            .unwrap_or(true);
+
+        let local_engine_key = if enable_local_registry
+            && let Some(any_engine) = handler.as_any_engine()
+        {
             use crate::v2::entity::{ComponentDescriptor, EndpointDescriptor, NamespaceDescriptor};
 
+            // Extract the full namespace hierarchy
+            let namespace_segments = get_namespace_hierarchy(&endpoint.component.namespace);
+
             // Create the descriptor for this endpoint
-            let namespace_desc =
-                NamespaceDescriptor::new(&[endpoint.component.namespace.name.as_str()])
-                    .map_err(|e| anyhow::anyhow!("Invalid namespace: {}", e))?;
+            let namespace_desc = NamespaceDescriptor::new(
+                &namespace_segments
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|e| anyhow::anyhow!("Invalid namespace: {}", e))?;
             let component_desc = namespace_desc
                 .component(&endpoint.component.name)
                 .map_err(|e| anyhow::anyhow!("Invalid component: {}", e))?;

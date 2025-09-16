@@ -322,7 +322,7 @@ impl DistributedRuntime {
     }
 
     /// Register a local engine for direct access without network overhead
-    pub async fn register_local_engine(
+    pub(crate) async fn register_local_engine(
         &self,
         key: String,
         engine: Arc<dyn crate::engine::AnyAsyncEngine>,
@@ -333,7 +333,7 @@ impl DistributedRuntime {
     }
 
     /// Retrieve a local engine by key
-    pub async fn get_local_engine(
+    pub(crate) async fn get_local_engine(
         &self,
         key: &str,
     ) -> Option<Arc<dyn crate::engine::AnyAsyncEngine>> {
@@ -342,7 +342,7 @@ impl DistributedRuntime {
     }
 
     /// Unregister a local engine
-    pub async fn unregister_local_engine(
+    pub(crate) async fn unregister_local_engine(
         &self,
         key: &str,
     ) -> Option<Arc<dyn crate::engine::AnyAsyncEngine>> {

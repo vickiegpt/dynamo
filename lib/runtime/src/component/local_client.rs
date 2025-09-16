@@ -55,10 +55,18 @@ where
 
     /// Create a LocalClient from an endpoint
     pub async fn from_endpoint(endpoint: &Endpoint) -> Result<Self> {
+        // Extract the full namespace hierarchy
+        let namespace_segments = Self::get_namespace_hierarchy(&endpoint.component.namespace);
+
         // Create the descriptor for this endpoint
-        let namespace_desc =
-            NamespaceDescriptor::new(&[endpoint.component.namespace.name.as_str()])
-                .map_err(|e| error!("Invalid namespace: {}", e))?;
+        let namespace_desc = NamespaceDescriptor::new(
+            &namespace_segments
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|e| error!("Invalid namespace: {}", e))?;
+
         let component_desc = namespace_desc
             .component(&endpoint.component.name)
             .map_err(|e| error!("Invalid component: {}", e))?;
@@ -67,6 +75,22 @@ where
             .map_err(|e| error!("Invalid endpoint: {}", e))?;
 
         Self::from_descriptor(endpoint, endpoint_desc).await
+    }
+
+    /// Extract the full namespace hierarchy from a Namespace
+    fn get_namespace_hierarchy(namespace: &super::Namespace) -> Vec<String> {
+        let mut segments = Vec::new();
+        let mut current: Option<&super::Namespace> = Some(namespace);
+
+        // Walk up the parent chain to collect all namespace segments
+        while let Some(ns) = current {
+            segments.push(ns.name.clone());
+            current = ns.parent.as_deref();
+        }
+
+        // Reverse to get root-to-leaf order
+        segments.reverse();
+        segments
     }
 
     /// Generate a response using the local engine directly
@@ -85,6 +109,22 @@ where
     }
 }
 
+/// Extract the full namespace hierarchy from a Namespace
+fn get_namespace_hierarchy(namespace: &super::Namespace) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current: Option<&super::Namespace> = Some(namespace);
+
+    // Walk up the parent chain to collect all namespace segments
+    while let Some(ns) = current {
+        segments.push(ns.name.clone());
+        current = ns.parent.as_deref();
+    }
+
+    // Reverse to get root-to-leaf order
+    segments.reverse();
+    segments
+}
+
 /// Helper to register a local engine with proper type erasure
 pub async fn register_local_engine<Req, Resp, E>(
     endpoint: &Endpoint,
@@ -97,9 +137,18 @@ where
 {
     use crate::engine::AsAnyAsyncEngine;
 
+    // Extract the full namespace hierarchy
+    let namespace_segments = get_namespace_hierarchy(&endpoint.component.namespace);
+
     // Create the descriptor for this endpoint
-    let namespace_desc = NamespaceDescriptor::new(&[endpoint.component.namespace.name.as_str()])
-        .map_err(|e| error!("Invalid namespace: {}", e))?;
+    let namespace_desc = NamespaceDescriptor::new(
+        &namespace_segments
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|e| error!("Invalid namespace: {}", e))?;
+
     let component_desc = namespace_desc
         .component(&endpoint.component.name)
         .map_err(|e| error!("Invalid component: {}", e))?;
