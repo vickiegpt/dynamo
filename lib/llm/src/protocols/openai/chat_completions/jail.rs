@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use async_stream::stream;
 use dynamo_async_openai::types::{
@@ -14,6 +14,49 @@ use dynamo_runtime::protocols::annotated::Annotated;
 use futures::{Stream, StreamExt};
 
 use super::NvCreateChatCompletionStreamResponse;
+
+/// Represents what a choice wants to emit after processing content
+#[derive(Debug, Clone)]
+pub enum ChoiceEmission {
+    /// Pass through content unchanged (choice is not jailed)
+    PassThrough(ChatChoiceStream),
+    /// Emit parsed tool calls (choice finished jailing with tool calls)
+    ToolCall(ChatChoiceStream),
+    /// Emit accumulated content (choice finished jailing without tool calls)
+    Content(ChatChoiceStream),
+    /// Emit trailing content after tool call end (choice has trailing after unjail)
+    Trailing(ChatChoiceStream),
+}
+
+impl ChoiceEmission {
+    /// Extract the ChatChoiceStream from any emission type
+    pub fn into_choice(self) -> ChatChoiceStream {
+        match self {
+            ChoiceEmission::PassThrough(choice) => choice,
+            ChoiceEmission::ToolCall(choice) => choice,
+            ChoiceEmission::Content(choice) => choice,
+            ChoiceEmission::Trailing(choice) => choice,
+        }
+    }
+
+    /// Get the choice index
+    pub fn index(&self) -> u32 {
+        match self {
+            ChoiceEmission::PassThrough(choice) => choice.index,
+            ChoiceEmission::ToolCall(choice) => choice.index,
+            ChoiceEmission::Content(choice) => choice.index,
+            ChoiceEmission::Trailing(choice) => choice.index,
+        }
+    }
+}
+
+/// Configuration for jail detection and parsing
+#[derive(Debug, Clone)]
+pub struct JailConfig<'a> {
+    pub jail_start_sequences: &'a [String],
+    pub jail_end_sequences: &'a [String],
+    pub tool_call_parser: Option<&'a str>,
+}
 
 /// State tracking for an individual choice during jail processing
 #[derive(Debug, Clone)]
@@ -58,6 +101,132 @@ impl ChoiceJailState {
     /// Clear accumulated content without ending jail
     fn clear(&mut self) {
         self.accumulated_content.clear();
+    }
+
+    /// Process incoming content and return what should be emitted (if anything)
+    fn process_content(
+        &mut self,
+        choice: &ChatChoiceStream,
+        content: &str,
+        jail_stream: &JailedStream,
+    ) -> Vec<ChoiceEmission> {
+        let mut emissions = Vec::new();
+
+        if !self.is_jailed {
+            // Not jailed - check if we should start jailing
+            if jail_stream.should_start_jail(content) {
+                tracing::debug!(
+                    "Choice {} jail triggered, starting accumulation",
+                    choice.index
+                );
+                self.start_jail(content);
+                // Don't emit anything when starting to jail
+            } else {
+                // Pass through content unchanged
+                let pass_through_choice = ChatChoiceStream {
+                    index: choice.index,
+                    delta: choice.delta.clone(),
+                    finish_reason: choice.finish_reason,
+                    logprobs: choice.logprobs.clone(),
+                };
+                emissions.push(ChoiceEmission::PassThrough(pass_through_choice));
+            }
+        } else {
+            // Already jailed - accumulate and check for unjail
+            self.accumulate(content);
+
+            let (should_unjail, split_pos) = jail_stream.should_end_jail(&self.accumulated_content);
+
+            if should_unjail {
+                tracing::debug!(
+                    "Choice {} jail exit detected, releasing accumulated content",
+                    choice.index
+                );
+
+                // Split the content
+                let (jailed_part, trailing_part) = self.accumulated_content.split_at(split_pos);
+
+                // Create the unjailed choice
+                let unjailed_choice =
+                    jail_stream.create_tool_call_choice(choice.index, jailed_part, choice);
+
+                // Determine emission type based on whether tool calls were parsed
+                if unjailed_choice.delta.tool_calls.is_some() {
+                    emissions.push(ChoiceEmission::ToolCall(unjailed_choice));
+                } else {
+                    emissions.push(ChoiceEmission::Content(unjailed_choice));
+                }
+
+                // Handle trailing content if any
+                if !trailing_part.is_empty() {
+                    #[allow(deprecated)]
+                    let trailing_choice = ChatChoiceStream {
+                        index: choice.index,
+                        delta: ChatCompletionStreamResponseDelta {
+                            role: choice.delta.role,
+                            content: Some(trailing_part.to_string()),
+                            tool_calls: None,
+                            function_call: None,
+                            refusal: None,
+                            reasoning_content: None,
+                        },
+                        finish_reason: None,
+                        logprobs: choice.logprobs.clone(),
+                    };
+                    emissions.push(ChoiceEmission::Trailing(trailing_choice));
+                }
+
+                // End jailing
+                self.end_jail();
+            }
+            // If not unjailing, don't emit anything (still accumulating)
+        }
+
+        emissions
+    }
+
+    /// Finalize any remaining content when stream ends
+    fn finalize(&mut self, jail_stream: &JailedStream) -> Option<ChoiceEmission> {
+        if self.is_jailed && !self.accumulated_content.is_empty() {
+            tracing::debug!(
+                "Choice {} stream ended while jailed, releasing accumulated content",
+                self.index
+            );
+
+            // Create a dummy choice for the method call
+            #[allow(deprecated)]
+            let dummy_choice = ChatChoiceStream {
+                index: self.index,
+                delta: ChatCompletionStreamResponseDelta {
+                    role: Some(Role::Assistant),
+                    content: None,
+                    tool_calls: None,
+                    function_call: None,
+                    refusal: None,
+                    reasoning_content: None,
+                },
+                finish_reason: None,
+                logprobs: None,
+            };
+
+            let final_choice = jail_stream.create_tool_call_choice(
+                self.index,
+                &self.accumulated_content,
+                &dummy_choice,
+            );
+
+            // End jailing
+            self.end_jail();
+
+            // Determine emission type
+            if final_choice.delta.tool_calls.is_some() {
+                Some(ChoiceEmission::ToolCall(final_choice))
+            } else {
+                Some(ChoiceEmission::Content(final_choice))
+            }
+        } else {
+            None
+        }
     }
 }
 
@@ -174,10 +343,8 @@ impl JailedStream {
     {
         // Use the stream! macro for cleaner async stream processing
         stream! {
-            // State variables - using new deterministic choice state management
+            // State variables - clean architecture with choice state collection
             let mut choice_states = ChoiceJailStateCollection::new();
-            let mut last_response_metadata: Option<NvCreateChatCompletionStreamResponse> = None;
-            let mut buffered_content = String::new();
             // Track Annotated metadata for preservation
             let mut last_annotated_id: Option<String> = None;
             let mut last_annotated_event: Option<String> = None;
@@ -189,199 +356,73 @@ impl JailedStream {
             // Process each item in the stream
             while let Some(response) = stream.next().await {
                 if let Some(chat_response) = response.data.as_ref() {
-                    let mut any_choices_jailed = false;
-                    let mut any_choices_unjailed = false;
-                    let mut unjailed_choice_indices = HashSet::new();
+                    let mut all_emissions = Vec::new();
 
-                    // Process each choice independently
+                    // Process each choice independently using the new architecture
                     for choice in &chat_response.choices {
                         if let Some(ref content) = choice.delta.content {
                             let choice_state = choice_states.get_or_create_state(choice.index);
 
-                            // Check if this choice should start jailing
-                            if !choice_state.is_jailed {
-                                // Check for jail start - two paths (evaluate both, not if/else)
-                                // Path 1: Check configured start sequences
-                                let sequence_match = !self.jail_start_sequences.is_empty()
-                                    && self.jail_start_sequences.iter().any(|seq| content.contains(seq));
-
-                                // Path 2: Check for tool call start pattern
-                                let tool_call_match = self.tool_call_parser.is_some()
-                                    && detect_tool_call_start(content, self.tool_call_parser.as_deref())
-                                        .unwrap_or(false);
-
-                                // Jail if either condition is true
-                                let should_jail = sequence_match || tool_call_match;
-
-                                if should_jail {
-                                    tracing::debug!(
-                                        "Choice {} jail triggered (sequence: {}, tool_call: {}), starting accumulation",
-                                        choice.index, sequence_match, tool_call_match
-                                    );
-
-                                    // Store metadata only when we actually jail (first time)
-                                    if last_response_metadata.is_none() {
-                                        last_response_metadata = response.data.clone();
-                                        // Preserve Annotated metadata for correlation
-                                        last_annotated_id = response.id.clone();
-                                        last_annotated_event = response.event.clone();
-                                        last_annotated_comment = response.comment.clone();
-                                    }
-
-                                    // Start accumulating for this choice
-                                    choice_state.start_jail(content);
-                                    if choice.index == 0 {
-                                        buffered_content = content.clone();
-                                    }
-                                    any_choices_jailed = true;
+                            // Store metadata when any choice becomes jailed (first time only)
+                            if !choice_state.is_jailed && self.should_start_jail(content)
+                                && last_annotated_id.is_none() {
+                                    last_annotated_id = response.id.clone();
+                                    last_annotated_event = response.event.clone();
+                                    last_annotated_comment = response.comment.clone();
                                 }
-                            } else {
-                                // Choice is already jailed, accumulate content
-                                choice_state.accumulate(content);
-                                if choice.index == 0 {
-                                    buffered_content.push_str(content);
-                                }
-                                any_choices_jailed = true;
 
-                                // Check for jail end - two paths
-                                // Path 1: End sequence detected
-                                let end_marker_info = if !self.jail_end_sequences.is_empty() {
-                                    self.jail_end_sequences.iter()
-                                        .find_map(|seq| {
-                                            choice_state.accumulated_content.find(seq).map(|pos| (pos + seq.len(), seq.clone()))
-                                        })
-                                } else { None };
-
-                                // Path 2: Complete tool call(s) can be parsed (early exit)
-                                let early_exit = self.should_exit_jail_early(&choice_state.accumulated_content);
-
-                                // Determine if this choice should unjail
-                                if end_marker_info.is_some() || early_exit {
-                                    tracing::debug!(
-                                        "Choice {} jail exit detected (end_marker: {}, early: {}), releasing accumulated content",
-                                        choice.index, end_marker_info.is_some(), early_exit
-                                    );
-
-                                    // Determine split position for content
-                                    let split_pos = if let Some((end_pos, _)) = end_marker_info {
-                                        end_pos
-                                    } else if early_exit {
-                                        // For early exit, find where the complete tool call ends
-                                        if let Some(parser) = &self.tool_call_parser {
-                                            if let Ok((_, _)) = try_tool_call_parse_aggregate(&choice_state.accumulated_content, Some(parser)) {
-                                                self.find_tool_call_end_position(&choice_state.accumulated_content, parser)
-                                            } else {
-                                                choice_state.accumulated_content.len()
-                                            }
-                                        } else {
-                                            choice_state.accumulated_content.len()
-                                        }
-                                    } else {
-                                        choice_state.accumulated_content.len()
-                                    };
-
-                                    // Split the content for this choice
-                                    let (jailed_part, trailing_part) = choice_state.accumulated_content.split_at(split_pos);
-
-                                    // Store the content to be emitted
-                                    let jailed_content = jailed_part.to_string();
-                                    let trailing_content = if !trailing_part.is_empty() {
-                                        Some(trailing_part.to_string())
-                                    } else {
-                                        None
-                                    };
-
-                                    // End jailing for this choice
-                                    choice_state.end_jail();
-
-                                    // Emit the unjailed content for this choice
-                                    if let Some(base_response) = last_response_metadata.as_ref() {
-                                        // Create a HashMap with just this choice for emission
-                                        let mut single_choice_content = HashMap::new();
-                                        single_choice_content.insert(choice.index, jailed_content);
-
-                                        let unjailed_response = self.create_unjailed_response(
-                                            base_response.clone(),
-                                            &single_choice_content,
-                                            last_annotated_id.clone(),
-                                            last_annotated_event.clone(),
-                                            last_annotated_comment.clone(),
-                                        );
-                                        yield unjailed_response;
-
-                                        // Emit trailing content if any exists
-                                        if let Some(trailing) = trailing_content {
-                                            let mut trailing_response = base_response.clone();
-                                            // Find the choice in the response and update its content
-                                            for response_choice in &mut trailing_response.choices {
-                                                if response_choice.index == choice.index {
-                                                    response_choice.delta.content = Some(trailing);
-                                                    response_choice.delta.tool_calls = None;
-                                                    response_choice.finish_reason = None;
-                                                    break;
-                                                }
-                                            }
-
-                                            let trailing_annotated = Annotated {
-                                                data: Some(trailing_response),
-                                                id: last_annotated_id.clone(),
-                                                event: last_annotated_event.clone(),
-                                                comment: last_annotated_comment.clone(),
-                                            };
-                                            yield trailing_annotated;
-                                        }
-                                    }
-
-                                    any_choices_unjailed = true;
-                                    unjailed_choice_indices.insert(choice.index);
-                                }
-                            }
+                            // Process this choice and get emissions
+                            let emissions = choice_state.process_content(choice, content, &self);
+                            all_emissions.extend(emissions);
+                        } else {
+                            // Handle choices without content (e.g., final chunks with finish_reason)
+                            // These should always pass through
+                            let pass_through_choice = ChatChoiceStream {
+                                index: choice.index,
+                                delta: choice.delta.clone(),
+                                finish_reason: choice.finish_reason,
+                                logprobs: choice.logprobs.clone(),
+                            };
+                            all_emissions.push(ChoiceEmission::PassThrough(pass_through_choice));
                         }
                     }
 
-                    // Determine what to emit based on jail states
-                    if !any_choices_jailed {
-                        // No choices are jailed, emit according to emission mode
-                        let metadata = (response.id.clone(), response.event.clone(), response.comment.clone());
-                        let responses = self.emit_response(chat_response.choices.clone(), chat_response, metadata);
-                        for emitted_response in responses {
-                            yield emitted_response;
-                        }
-                    } else if any_choices_unjailed {
-                        // Some choices have finished jailing and been emitted above
-                        // Now handle any remaining non-jailed choices in this chunk
+                    // Emit all results based on emission mode
+                    if !all_emissions.is_empty() {
+                        // Use preserved metadata for unjailed content, current metadata for pass-through
+                        let mut unjailed_emissions = Vec::new();
+                        let mut passthrough_emissions = Vec::new();
 
-                        // Create a response with only the non-jailed choices from this chunk
-                        // Exclude choices that unjailed in this chunk to avoid double emission
-                        let mut pass_through_choices = Vec::new();
-                        for choice in &chat_response.choices {
-                            // Skip choices that just unjailed in this chunk
-                            if unjailed_choice_indices.contains(&choice.index) {
-                                continue;
-                            }
-
-                            if let Some(choice_state) = choice_states.get_state(choice.index) {
-                                if !choice_state.is_jailed {
-                                    // This choice is not jailed, include it in pass-through
-                                    pass_through_choices.push(choice.clone());
+                        for emission in all_emissions {
+                            match emission {
+                                ChoiceEmission::PassThrough(_) => passthrough_emissions.push(emission),
+                                ChoiceEmission::ToolCall(_) | ChoiceEmission::Content(_) | ChoiceEmission::Trailing(_) => {
+                                    unjailed_emissions.push(emission);
                                 }
-                            } else {
-                                // No state means this choice was never jailed, include it
-                                pass_through_choices.push(choice.clone());
                             }
                         }
 
-                        // Emit non-jailed choices if any
-                        if !pass_through_choices.is_empty() {
-                            let metadata = (response.id.clone(), response.event.clone(), response.comment.clone());
-                            let responses = self.emit_response(pass_through_choices, chat_response, metadata);
+                        // Emit unjailed content with preserved metadata
+                        if !unjailed_emissions.is_empty() {
+                            let preserved_metadata = (
+                                last_annotated_id.clone(),
+                                last_annotated_event.clone(),
+                                last_annotated_comment.clone(),
+                            );
+                            let responses = self.emit_choice_emissions(unjailed_emissions, chat_response, preserved_metadata);
                             for emitted_response in responses {
                                 yield emitted_response;
                             }
                         }
-                    } else {
-                        // All jailed choices are still accumulating, don't yield anything
-                        continue;
+
+                        // Emit pass-through content with current metadata
+                        if !passthrough_emissions.is_empty() {
+                            let current_metadata = (response.id.clone(), response.event.clone(), response.comment.clone());
+                            let responses = self.emit_choice_emissions(passthrough_emissions, chat_response, current_metadata);
+                            for emitted_response in responses {
+                                yield emitted_response;
+                            }
+                        }
                     }
                 } else {
                     // No response data, pass through as-is
@@ -389,22 +430,191 @@ impl JailedStream {
                 }
             }
 
-            // Stream ended - if any choices are still jailed, release accumulated content
-            if choice_states.has_jailed_choices() {
-                tracing::debug!("Stream ended while jailed, releasing accumulated content");
-                if let Some(base_response) = last_response_metadata.take() {
-                    // Convert to HashMap for compatibility with existing create_unjailed_response method
-                    let accumulated_content = choice_states.to_hashmap();
-                    let final_response = self.create_unjailed_response(
-                        base_response,
-                        &accumulated_content,
-                        last_annotated_id.clone(),
-                        last_annotated_event.clone(),
-                        last_annotated_comment.clone(),
-                    );
-                    yield final_response;
+            // Stream ended - finalize any remaining jailed choices
+            let mut final_emissions = Vec::new();
+            for state in choice_states.states.iter_mut() {
+                if let Some(emission) = state.finalize(&self) {
+                    final_emissions.push(emission);
                 }
             }
+
+            if !final_emissions.is_empty() {
+                tracing::debug!("Stream ended while jailed, releasing accumulated content");
+                // Create a dummy response for finalization
+                let dummy_response = NvCreateChatCompletionStreamResponse {
+                    id: "stream-end".to_string(),
+                    object: "chat.completion.chunk".to_string(),
+                    created: 0,
+                    model: "unknown".to_string(),
+                    choices: Vec::new(),
+                    usage: None,
+                    service_tier: None,
+                    system_fingerprint: None,
+                };
+
+                let final_metadata = (last_annotated_id, last_annotated_event, last_annotated_comment);
+                let responses = self.emit_choice_emissions(final_emissions, &dummy_response, final_metadata);
+                for emitted_response in responses {
+                    yield emitted_response;
+                }
+            }
+        }
+    }
+
+    /// Emit choice emissions based on the configured emission mode
+    fn emit_choice_emissions(
+        &self,
+        emissions: Vec<ChoiceEmission>,
+        base_response: &NvCreateChatCompletionStreamResponse,
+        annotated_metadata: (Option<String>, Option<String>, Option<Vec<String>>),
+    ) -> Vec<Annotated<NvCreateChatCompletionStreamResponse>> {
+        if emissions.is_empty() {
+            return Vec::new();
+        }
+
+        let (id, event, comment) = annotated_metadata;
+
+        match self.emission_mode {
+            EmissionMode::Packed => {
+                // Pack all choices into a single response
+                let mut response = base_response.clone();
+                response.choices = emissions.into_iter().map(|e| e.into_choice()).collect();
+
+                vec![Annotated {
+                    data: Some(response),
+                    id,
+                    event,
+                    comment,
+                }]
+            }
+            EmissionMode::SingleChoicePerChunk => {
+                // Emit each choice in a separate response
+                emissions
+                    .into_iter()
+                    .map(|emission| {
+                        let mut response = base_response.clone();
+                        response.choices = vec![emission.into_choice()];
+
+                        Annotated {
+                            data: Some(response),
+                            id: id.clone(),
+                            event: event.clone(),
+                            comment: comment.clone(),
+                        }
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// Check if content matches any jail start patterns
+    fn should_start_jail(&self, content: &str) -> bool {
+        // Path 1: Check configured start sequences
+        let sequence_match = !self.jail_start_sequences.is_empty()
+            && self
+                .jail_start_sequences
+                .iter()
+                .any(|seq| content.contains(seq));
+
+        // Path 2: Check for tool call start pattern
+        let tool_call_match = self.tool_call_parser.is_some()
+            && detect_tool_call_start(content, self.tool_call_parser.as_deref()).unwrap_or(false);
+
+        sequence_match || tool_call_match
+    }
+
+    /// Check if accumulated content should end jail
+    fn should_end_jail(&self, accumulated_content: &str) -> (bool, usize) {
+        // Path 1: End sequence detected
+        let end_marker_info = if !self.jail_end_sequences.is_empty() {
+            self.jail_end_sequences.iter().find_map(|seq| {
+                accumulated_content
+                    .find(seq)
+                    .map(|pos| (pos + seq.len(), seq.clone()))
+            })
+        } else {
+            None
+        };
+
+        // Path 2: Complete tool call(s) can be parsed (early exit)
+        let early_exit = self.should_exit_jail_early(accumulated_content);
+
+        if let Some((end_pos, _)) = end_marker_info {
+            (true, end_pos)
+        } else if early_exit {
+            // For early exit, find where the complete tool call ends
+            if let Some(parser) = &self.tool_call_parser {
+                if let Ok((_, _)) = try_tool_call_parse_aggregate(accumulated_content, Some(parser))
+                {
+                    let split_pos = self.find_tool_call_end_position(accumulated_content, parser);
+                    (true, split_pos)
+                } else {
+                    (false, accumulated_content.len())
+                }
+            } else {
+                (false, accumulated_content.len())
+            }
+        } else {
+            (false, accumulated_content.len())
+        }
+    }
+
+    /// Parse tool calls from accumulated content and create choice
+    fn create_tool_call_choice(
+        &self,
+        choice_index: u32,
+        accumulated_content: &str,
+        base_choice: &ChatChoiceStream,
+    ) -> ChatChoiceStream {
+        if let Ok((tool_calls, normal_text)) =
+            try_tool_call_parse_aggregate(accumulated_content, self.tool_call_parser.as_deref())
+            && !tool_calls.is_empty() {
+                // Convert to streaming format
+                let tool_call_chunks: Vec<ChatCompletionMessageToolCallChunk> = tool_calls
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, tool_call)| ChatCompletionMessageToolCallChunk {
+                        index: idx as u32,
+                        id: Some(tool_call.id),
+                        r#type: Some(tool_call.r#type),
+                        function: Some(FunctionCallStream {
+                            name: Some(tool_call.function.name),
+                            arguments: Some(tool_call.function.arguments),
+                        }),
+                    })
+                    .collect();
+
+                // Create choice with tool calls
+                #[allow(deprecated)]
+                return ChatChoiceStream {
+                    index: choice_index,
+                    delta: ChatCompletionStreamResponseDelta {
+                        role: Some(Role::Assistant),
+                        content: normal_text.filter(|t| !t.is_empty()),
+                        tool_calls: Some(tool_call_chunks),
+                        function_call: None,
+                        refusal: None,
+                        reasoning_content: None,
+                    },
+                    finish_reason: Some(FinishReason::ToolCalls),
+                    logprobs: None,
+                };
+            }
+
+        // No tool calls found or parsing failed, return content choice
+        #[allow(deprecated)]
+        ChatChoiceStream {
+            index: choice_index,
+            delta: ChatCompletionStreamResponseDelta {
+                role: Some(Role::Assistant),
+                content: Some(accumulated_content.to_string()),
+                tool_calls: None,
+                function_call: None,
+                refusal: None,
+                reasoning_content: None,
+            },
+            finish_reason: None,
+            logprobs: base_choice.logprobs.clone(),
         }
     }
 
@@ -2095,7 +2305,7 @@ mod tests {
             create_multi_choice_chunk(vec![
                 (", \"arguments\": {}}</tool_call>".to_string(), 0), // Choice 0 unjails
                 ("Final B. ".to_string(), 1),                        // Choice 1 continues
-                ("{\"name\": \"tool_c\"}".to_string(), 2),           // Choice 2 still jailed
+                ("{\"name\": \"tool_c\", \"arguments\": {}}".to_string(), 2), // Choice 2 still jailed
             ]),
             // Chunk 5: Choice 2 finishes tool call
             create_multi_choice_chunk(vec![
