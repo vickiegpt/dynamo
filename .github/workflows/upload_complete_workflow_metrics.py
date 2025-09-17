@@ -622,6 +622,10 @@ class WorkflowMetricsUploader:
         
         # Upload to container index
         try:
+            print(f"🔍 Debug: Container data being uploaded:")
+            print(f"   Endpoint: {container_index}")
+            print(f"   Data: {container_data}")
+            
             self.post_to_db(container_index, container_data)
             print(f"✅ Container metrics uploaded successfully")
             print(f"   Framework: {build_metrics.get('framework', 'N/A')}")
@@ -630,6 +634,7 @@ class WorkflowMetricsUploader:
             print(f"   Build Duration: {build_metrics.get('build_duration_sec', 'N/A')} seconds")
         except Exception as e:
             print(f"❌ Failed to upload container metrics: {e}")
+            print(f"🔍 Debug: Container data that failed: {container_data}")
 
     def _upload_job_step_metrics(self, job_data: Dict[str, Any]) -> int:
         """Extract and post metrics for all steps in a job"""
