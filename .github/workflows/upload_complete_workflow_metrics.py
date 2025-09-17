@@ -492,19 +492,20 @@ class WorkflowMetricsUploader:
         
         self.add_standardized_timing_fields(db_data, created_at, started_at, completed_at, "job")
         
-        # Labels
-        #runner_labels = job_data.get('labels', [])
-        #db_data[FIELD_LABELS] = runner_labels if runner_labels else ['-']
+        # Labels - Convert array to comma-separated string to avoid indexing issues
+        runner_labels = job_data.get('labels', [])
+        if runner_labels:
+            db_data[FIELD_LABELS] = ','.join(runner_labels)
+        else:
+            db_data[FIELD_LABELS] = 'unknown'
         
-        # Add steps list (get step IDs) 
+        # Add steps list (get step IDs) - Convert to string to avoid array issues
         steps = job_data.get('steps', [])
-        """
         if steps:
             step_ids = [f"{job_id}_{step.get('number', i+1)}" for i, step in enumerate(steps)]
-            db_data[FIELD_STEPS] = step_ids
+            db_data[FIELD_STEPS] = ','.join(step_ids)  # Convert array to comma-separated string
         else:
-            db_data[FIELD_STEPS] = []
-        """
+            db_data[FIELD_STEPS] = ''
         
         # Runner info
         runner_id = job_data.get('runner_id')
@@ -580,13 +581,16 @@ class WorkflowMetricsUploader:
         # Add common context fields
         self.add_common_context_fields(db_data)
         
-        # Job context
-        db_data[FIELD_RUNNER_NAME] = job_data.get('runner_name')
-        db_data[FIELD_RUNNER_ID] = str(job_data.get('runner_id')) if job_data.get('runner_id') else None
+        # Job context - Ensure all fields are strings
+        db_data[FIELD_RUNNER_NAME] = str(job_data.get('runner_name', ''))
+        db_data[FIELD_RUNNER_ID] = str(job_data.get('runner_id')) if job_data.get('runner_id') is not None else ''
         
-        # Job labels (separate from step labels)
+        # Job labels (separate from step labels) - Convert array to string
         runner_labels = job_data.get('labels', [])
-        db_data[FIELD_JOB_LABELS] = runner_labels if runner_labels else ['-']
+        if runner_labels:
+            db_data[FIELD_JOB_LABELS] = ','.join(runner_labels)
+        else:
+            db_data[FIELD_JOB_LABELS] = 'unknown'
         
         self.post_to_db(self.steps_index, db_data)
         print(f"Uploaded metrics for step: {step_name} (step {step_number})")
