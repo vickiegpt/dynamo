@@ -18,15 +18,32 @@ from tests.utils.engine_process import FRONTEND_PORT, EngineConfig, EngineProces
 logger = logging.getLogger(__name__)
 
 
-@dataclass
 class TRTLLMConfig(EngineConfig):
     """Configuration for TRTLLM cancellation test scenarios"""
-
-    stragglers: list[str] = field(default_factory=lambda: ["TRTLLM:EngineCore"])
-    models_port: int = FRONTEND_PORT
-    request_payloads: list = field(
-        default_factory=list
-    )  # Not used in cancellation tests but required by EngineConfig
+    
+    def __init__(self, name: str, directory: str, script_name: str = None, 
+                 command: list = None, marks: list = None, 
+                 request_payloads: list = None, model: str = "Qwen/Qwen3-0.6B", 
+                 **kwargs):
+        # Set TRTLLM-specific defaults
+        if marks is None:
+            marks = []
+        if request_payloads is None:
+            request_payloads = []
+        
+        # Initialize the parent EngineConfig with all required fields
+        super().__init__(
+            name=name,
+            directory=directory,
+            marks=marks,
+            request_payloads=request_payloads,
+            model=model,
+            script_name=script_name,
+            command=command,
+            models_port=kwargs.get('models_port', FRONTEND_PORT),
+            stragglers=kwargs.get('stragglers', ["TRTLLM:EngineCore"]),
+            **{k: v for k, v in kwargs.items() if k not in ['models_port', 'stragglers']}
+        )
 
 
 def verify_request_cancelled_trtllm_simple(
@@ -82,9 +99,10 @@ def test_request_cancellation_trtllm_aggregated(request, runtime_services):
     trtllm_config = TRTLLMConfig(
         name="aggregated_cancellation_test",
         directory=trtllm_dir,
-        script_name="agg.sh",
-        model="Qwen/Qwen3-0.6B",
         marks=[],
+        request_payloads=[],
+        model="Qwen/Qwen3-0.6B",
+        script_name="agg.sh",
     )
 
     # Start TRTLLM aggregated backend
@@ -152,9 +170,10 @@ def test_request_cancellation_trtllm_disaggregated_decode_first(
     trtllm_config = TRTLLMConfig(
         name="disaggregated_decode_first_cancellation_test",
         directory=trtllm_dir,
-        script_name="disagg.sh",
-        model="Qwen/Qwen3-0.6B",
         marks=[],
+        request_payloads=[],
+        model="Qwen/Qwen3-0.6B",
+        script_name="disagg.sh",
     )
 
     # Start TRTLLM disaggregated backend with decode_first strategy
@@ -229,9 +248,10 @@ def test_request_cancellation_trtllm_disaggregated_prefill_first(
     trtllm_config = TRTLLMConfig(
         name="disaggregated_prefill_first_cancellation_test",
         directory=trtllm_dir,
-        script_name="disagg.sh",
-        model="Qwen/Qwen3-0.6B",
         marks=[],
+        request_payloads=[],
+        model="Qwen/Qwen3-0.6B",
+        script_name="disagg.sh",
     )
 
     # Start TRTLLM disaggregated backend with prefill_first strategy
