@@ -58,6 +58,79 @@ FIELD_STEP_NUMBER = "l_step_number"
 FIELD_COMMAND = "s_command"
 #FIELD_JOB_LABELS = "s_job_labels"  # Comma-separated labels
 
+# Build-specific fields (Docker image build metrics)
+FIELD_BUILD_DURATION_SEC = "l_build_duration_sec"  # Docker build time in seconds
+FIELD_IMAGE_SIZE_BYTES = "l_image_size_bytes"      # Docker image size in bytes
+FIELD_IMAGE_SIZE_MB = "l_image_size_mb"            # Docker image size in MB
+FIELD_BUILD_START_TIME = "ts_build_start_time"     # Build start timestamp
+FIELD_BUILD_END_TIME = "ts_build_end_time"         # Build end timestamp
+FIELD_BUILD_FRAMEWORK = "s_build_framework"        # Framework (e.g., vllm)
+FIELD_BUILD_TARGET = "s_build_target"              # Build target (e.g., runtime)
+
+# Container-specific fields for CONTAINER_INDEX (only truly unique fields)
+# All common fields (s_step_id, s_job_id, etc.) and build timing fields are reused
+CONTAINER_FIELD_FRAMEWORK = "s_framework"          # Framework (vllm, etc.)
+CONTAINER_FIELD_SIZE_MB = "l_size_mb"              # Container size in MB  
+CONTAINER_FIELD_CACHE_HIT_RATE = "l_cache_hit_rate" # Cache hit rate percentage
+
+class BuildMetricsReader:
+    """Reader for Docker build metrics from environment variables and artifacts"""
+    
+    @staticmethod
+    def get_build_metrics() -> Optional[Dict[str, Any]]:
+        """Get build metrics from environment variables and/or JSON file"""
+        metrics = {}
+        
+        # Try to read from environment variables first
+        env_metrics = {
+            'build_duration_sec': os.getenv('BUILD_DURATION_SEC'),
+            'image_size_bytes': os.getenv('IMAGE_SIZE_BYTES'),
+            'image_size_mb': os.getenv('IMAGE_SIZE_MB'),
+            'build_start_time': os.getenv('BUILD_START_TIME'),
+            'build_end_time': os.getenv('BUILD_END_TIME'),
+            'cache_hit_rate': os.getenv('CACHE_HIT_RATE'),
+            'framework': os.getenv('BUILD_FRAMEWORK'),
+            'target': os.getenv('BUILD_TARGET')
+        }
+        
+        # Filter out None values and convert to appropriate types
+        for key, value in env_metrics.items():
+            if value is not None:
+                if key in ['build_duration_sec', 'image_size_bytes', 'image_size_mb', 'cache_hit_rate']:
+                    try:
+                        metrics[key] = int(value)
+                    except (ValueError, TypeError):
+                        print(f"⚠️  Invalid numeric value for {key}: {value}")
+                elif key in ['build_start_time', 'build_end_time']:
+                    try:
+                        # Convert Unix timestamp to ISO format
+                        metrics[key] = datetime.fromtimestamp(int(value), tz=timezone.utc).isoformat()
+                    except (ValueError, TypeError):
+                        print(f"⚠️  Invalid timestamp for {key}: {value}")
+                else:
+                    metrics[key] = str(value)
+        
+        # Try to read from JSON file as fallback
+        json_file_path = "build-metrics/metrics.json"
+        if os.path.exists(json_file_path):
+            try:
+                with open(json_file_path, 'r') as f:
+                    json_metrics = json.load(f)
+                    # Merge JSON data, preferring environment variables
+                    for key, value in json_metrics.items():
+                        if key not in metrics and value is not None:
+                            metrics[key] = value
+                print(f"📁 Loaded additional metrics from {json_file_path}")
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"⚠️  Could not read build metrics JSON: {e}")
+        
+        if metrics:
+            print(f"📊 Build metrics loaded: {list(metrics.keys())}")
+            return metrics
+        else:
+            print("ℹ️  No build metrics available")
+            return None
+
 class TimingProcessor:
     """Centralized processor for all datetime and duration conversions using Python built-ins"""
     
@@ -449,7 +522,7 @@ class WorkflowMetricsUploader:
         #db_data[FIELD_RUNNER_INFO] = str(job_data.get('runner_name', 'unknown'))
         
         db_data[FIELD_JOB_NAME] = str(job_name)
-        
+                
         # Timing fields using standardized method - Fix parameter order
         created_at = job_data.get('created_at')
         started_at = job_data.get('started_at')
@@ -486,6 +559,77 @@ class WorkflowMetricsUploader:
         
         self.post_to_db(self.jobs_index, db_data)
         print(f"Uploaded metrics for job: {job_name}")
+        
+        # Upload container metrics if this is the target job and metrics are available
+        if job_name == TARGET_JOB_NAME:
+            self._upload_container_metrics(job_data)
+
+    def _upload_container_metrics(self, job_data: Dict[str, Any], build_metrics: Optional[Dict[str, Any]] = None) -> None:
+        """Upload container-specific metrics to CONTAINER_INDEX"""
+        container_index = os.getenv('CONTAINER_INDEX')
+        if not container_index:
+            print("⚠️  CONTAINER_INDEX not configured, skipping container metrics upload")
+            return
+        
+        # Get build metrics if not provided
+        if build_metrics is None:
+            build_metrics = BuildMetricsReader.get_build_metrics()
+        
+        if not build_metrics:
+            print("⚠️  No build metrics available for container upload")
+            return
+        
+        print(f"📦 Uploading container metrics to {container_index}")
+        
+        # Create container metrics payload
+        container_data = {}
+        
+        # Identity & Context - using common field names
+        job_id = str(job_data['id'])
+        container_data[FIELD_ID] = f"github-container-{job_id}-{build_metrics.get('framework', 'unknown')}"
+        container_data[FIELD_JOB_ID] = job_id
+        container_data[FIELD_WORKFLOW_ID] = str(self.run_id)
+        container_data[FIELD_REPO] = self.repo
+        container_data[FIELD_WORKFLOW_NAME] = self.workflow_name
+        container_data[FIELD_BRANCH] = self.branch
+        
+        # Find the "Build image" step ID
+        build_step_id = None
+        steps = job_data.get('steps', [])
+        for step in steps:
+            if 'build' in step.get('name', '').lower() and 'image' in step.get('name', '').lower():
+                build_step_id = f"{job_id}_{step.get('number', 1)}"
+                break
+                
+        # Status & Events - using common field names
+        container_data[FIELD_STATUS] = str(job_data.get('conclusion') or job_data.get('status', 'unknown'))
+        container_data[FIELD_GITHUB_EVENT] = self.event_name
+        
+        # Container Info (only truly container-specific fields)
+        container_data[CONTAINER_FIELD_FRAMEWORK] = build_metrics.get('framework', 'unknown')
+        container_data[CONTAINER_FIELD_SIZE_MB] = build_metrics.get('image_size_mb', 0)
+        container_data[CONTAINER_FIELD_CACHE_HIT_RATE] = build_metrics.get('cache_hit_rate', 0)
+        
+        # Timing (reusing existing build timing fields)
+        if 'build_start_time' in build_metrics:
+            container_data[FIELD_BUILD_START_TIME] = build_metrics['build_start_time']
+        if 'build_end_time' in build_metrics:
+            container_data[FIELD_BUILD_END_TIME] = build_metrics['build_end_time']
+        container_data[FIELD_BUILD_DURATION_SEC] = build_metrics.get('build_duration_sec', 0)
+        
+        # Add @timestamp for time-series data
+        container_data['@timestamp'] = build_metrics.get('build_end_time', datetime.now(timezone.utc).isoformat())
+        
+        # Upload to container index
+        try:
+            self.post_to_db(container_index, container_data)
+            print(f"✅ Container metrics uploaded successfully")
+            print(f"   Framework: {build_metrics.get('framework', 'N/A')}")
+            print(f"   Size: {build_metrics.get('image_size_mb', 'N/A')} MB")
+            print(f"   Cache Hit Rate: {build_metrics.get('cache_hit_rate', 'N/A')}%")
+            print(f"   Build Duration: {build_metrics.get('build_duration_sec', 'N/A')} seconds")
+        except Exception as e:
+            print(f"❌ Failed to upload container metrics: {e}")
 
     def _upload_job_step_metrics(self, job_data: Dict[str, Any]) -> int:
         """Extract and post metrics for all steps in a job"""
