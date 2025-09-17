@@ -4,7 +4,6 @@
 import logging
 import os
 import time
-from dataclasses import dataclass, field
 
 import pytest
 
@@ -20,17 +19,24 @@ logger = logging.getLogger(__name__)
 
 class TRTLLMConfig(EngineConfig):
     """Configuration for TRTLLM cancellation test scenarios"""
-    
-    def __init__(self, name: str, directory: str, script_name: str = None, 
-                 command: list = None, marks: list = None, 
-                 request_payloads: list = None, model: str = "Qwen/Qwen3-0.6B", 
-                 **kwargs):
+
+    def __init__(
+        self,
+        name: str,
+        directory: str,
+        script_name: str = None,
+        command: list = None,
+        marks: list = None,
+        request_payloads: list = None,
+        model: str = "Qwen/Qwen3-0.6B",
+        **kwargs,
+    ):
         # Set TRTLLM-specific defaults
         if marks is None:
             marks = []
         if request_payloads is None:
             request_payloads = []
-        
+
         # Initialize the parent EngineConfig with all required fields
         super().__init__(
             name=name,
@@ -40,9 +46,13 @@ class TRTLLMConfig(EngineConfig):
             model=model,
             script_name=script_name,
             command=command,
-            models_port=kwargs.get('models_port', FRONTEND_PORT),
-            stragglers=kwargs.get('stragglers', ["TRTLLM:EngineCore"]),
-            **{k: v for k, v in kwargs.items() if k not in ['models_port', 'stragglers']}
+            models_port=kwargs.get("models_port", FRONTEND_PORT),
+            stragglers=kwargs.get("stragglers", ["TRTLLM:EngineCore"]),
+            **{
+                k: v
+                for k, v in kwargs.items()
+                if k not in ["models_port", "stragglers"]
+            },
         )
 
 
