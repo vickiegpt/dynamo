@@ -172,7 +172,11 @@ def send_completion_request(
 
 
 def send_chat_completion_request(
-    prompt: str, max_tokens: int, timeout: int = 120, stream: bool = False, model: str = None
+    prompt: str,
+    max_tokens: int,
+    timeout: int = 120,
+    stream: bool = False,
+    model: str = None,
 ) -> requests.Response:
     """Send a chat completion request to the frontend"""
     payload = {
@@ -207,7 +211,9 @@ def send_chat_completion_request(
         raise
 
 
-def send_request_and_cancel(request_type: str = "completion", timeout: int = 1, model: str = None):
+def send_request_and_cancel(
+    request_type: str = "completion", timeout: int = 1, model: str = None
+):
     """Send a request with short timeout to trigger cancellation"""
     logger.info(f"Sending {request_type} request to be cancelled...")
 

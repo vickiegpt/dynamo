@@ -3,22 +3,17 @@
 
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass, field
 
 import pytest
-import requests
 
 from tests.fault_tolerance.test_request_cancellation import (
-    send_completion_request,
-    send_chat_completion_request, 
-    send_request_and_cancel,
     read_log_content,
-    strip_ansi_codes
+    send_request_and_cancel,
+    strip_ansi_codes,
 )
-from tests.utils.engine_process import FRONTEND_PORT, EngineProcess, EngineConfig
-from tests.utils.payloads import check_health_generate, check_models_api
+from tests.utils.engine_process import FRONTEND_PORT, EngineConfig, EngineProcess
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +24,9 @@ class TRTLLMConfig(EngineConfig):
 
     stragglers: list[str] = field(default_factory=lambda: ["TRTLLM:EngineCore"])
     models_port: int = FRONTEND_PORT
-    request_payloads: list = field(default_factory=list)  # Not used in cancellation tests but required by EngineConfig
+    request_payloads: list = field(
+        default_factory=list
+    )  # Not used in cancellation tests but required by EngineConfig
 
 
 def verify_request_cancelled_trtllm_simple(
@@ -97,7 +94,9 @@ def test_request_cancellation_trtllm_aggregated(request, runtime_services):
         "SERVED_MODEL_NAME": trtllm_config.model,
         "DYN_LOG": "debug",
     }
-    with EngineProcess.from_config(trtllm_config, request, extra_env=extra_env) as trtllm_process:
+    with EngineProcess.from_config(
+        trtllm_config, request, extra_env=extra_env
+    ) as trtllm_process:
         logger.info("TRTLLM aggregated backend started successfully")
 
         # Test request cancellation scenarios
@@ -132,7 +131,9 @@ def test_request_cancellation_trtllm_aggregated(request, runtime_services):
 @pytest.mark.gpu_2
 @pytest.mark.trtllm_marker
 @pytest.mark.slow
-def test_request_cancellation_trtllm_disaggregated_decode_first(request, runtime_services):
+def test_request_cancellation_trtllm_disaggregated_decode_first(
+    request, runtime_services
+):
     """
     End-to-end test for request cancellation functionality with TRTLLM disaggregated backend
     using decode_first strategy.
@@ -164,7 +165,9 @@ def test_request_cancellation_trtllm_disaggregated_decode_first(request, runtime
         "DYN_LOG": "debug",
         "DISAGGREGATION_STRATEGY": "decode_first",
     }
-    with EngineProcess.from_config(trtllm_config, request, extra_env=extra_env) as trtllm_process:
+    with EngineProcess.from_config(
+        trtllm_config, request, extra_env=extra_env
+    ) as trtllm_process:
         logger.info("TRTLLM disaggregated backend (decode_first) started successfully")
 
         # Test request cancellation scenarios
@@ -180,7 +183,9 @@ def test_request_cancellation_trtllm_disaggregated_decode_first(request, runtime
         trtllm_log_offset = 0
 
         for i, (request_type, description) in enumerate(test_scenarios, 1):
-            logger.info(f"Testing {description.lower()} with TRTLLM disaggregated (decode_first)...")
+            logger.info(
+                f"Testing {description.lower()} with TRTLLM disaggregated (decode_first)..."
+            )
             send_request_and_cancel(request_type, timeout=1, model="Qwen/Qwen3-0.6B")
 
             logger.info("Checking for cancellation messages in TRTLLM logs...")
@@ -203,7 +208,9 @@ def test_request_cancellation_trtllm_disaggregated_decode_first(request, runtime
 @pytest.mark.gpu_2
 @pytest.mark.trtllm_marker
 @pytest.mark.slow
-def test_request_cancellation_trtllm_disaggregated_prefill_first(request, runtime_services):
+def test_request_cancellation_trtllm_disaggregated_prefill_first(
+    request, runtime_services
+):
     """
     End-to-end test for request cancellation functionality with TRTLLM disaggregated backend
     using prefill_first strategy.
@@ -235,7 +242,9 @@ def test_request_cancellation_trtllm_disaggregated_prefill_first(request, runtim
         "DYN_LOG": "debug",
         "DISAGGREGATION_STRATEGY": "prefill_first",
     }
-    with EngineProcess.from_config(trtllm_config, request, extra_env=extra_env) as trtllm_process:
+    with EngineProcess.from_config(
+        trtllm_config, request, extra_env=extra_env
+    ) as trtllm_process:
         logger.info("TRTLLM disaggregated backend (prefill_first) started successfully")
 
         # Test request cancellation scenarios
@@ -251,7 +260,9 @@ def test_request_cancellation_trtllm_disaggregated_prefill_first(request, runtim
         trtllm_log_offset = 0
 
         for i, (request_type, description) in enumerate(test_scenarios, 1):
-            logger.info(f"Testing {description.lower()} with TRTLLM disaggregated (prefill_first)...")
+            logger.info(
+                f"Testing {description.lower()} with TRTLLM disaggregated (prefill_first)..."
+            )
             send_request_and_cancel(request_type, timeout=1, model="Qwen/Qwen3-0.6B")
 
             logger.info("Checking for cancellation messages in TRTLLM logs...")
