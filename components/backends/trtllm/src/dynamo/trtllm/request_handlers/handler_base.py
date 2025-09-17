@@ -100,6 +100,8 @@ class HandlerBase:
                 result["finish_reason"] == "stop" or result["finish_reason"] == "error"
             )
 
+    def calculate_bytes_per_second(self, bytes, start, end):
+        pass
     def request_perf_metrics_to_json(self, perf_metrics):
         timing_metrics = perf_metrics.timing_metrics
         kv_cache_metrics = perf_metrics.kv_cache_metrics
@@ -246,7 +248,12 @@ class HandlerBase:
                 final_out = {}
                 output = res.outputs[0]
                 if output.request_perf_metrics:
-                    json_perf_metrics = self.request_perf_metrics_to_json(output.request_perf_metrics)
+                    request_perf_metrics = output.request_perf_metrics
+                    json_perf_metrics = self.request_perf_metrics_to_json(request_perf_metrics)
+                    bytes_per_second = self.calculate_bytes_per_second(request_perf_metrics.timing_metrics.kv_cache_size,
+                                                                       request_perf_metrics.timing_metrics.kv_cache_transfer_start.total_seconds(),
+                                                                       request_perf_metrics.timing_metrics.kv_cache_transfer_end.total_seconds())
+                    logging.info(f"bytes_per_second_for_request={bytes_per_second}")
                     final_out["request_perf_metrics"] = json_perf_metrics
                     logging.debug(f"Request perf metrics: {json_perf_metrics}")
                 if output.disaggregated_params:
