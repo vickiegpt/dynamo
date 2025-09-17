@@ -100,6 +100,18 @@ impl OpenAISamplingOptionsProvider for NvCreateResponse {
     fn nvext(&self) -> Option<&NvExt> {
         self.nvext.as_ref()
     }
+
+    fn get_seed(&self) -> Option<i64> {
+        None // TODO setting as None for now
+    }
+
+    fn get_n(&self) -> Option<u8> {
+        None // TODO setting as None for now
+    }
+
+    fn get_best_of(&self) -> Option<u8> {
+        None // TODO setting as None for now
+    }
 }
 
 /// Implements `OpenAIStopConditionsProvider` for `NvCreateResponse`,
