@@ -347,4 +347,86 @@ mod tests {
             panic!("Expected partial match for <tool_call>");
         }
     }
+
+    #[test]
+    fn test_multiple_partial_matches_edge_case() {
+        // Test scenario: Multiple patterns where one looks like a prefix but isn't valid
+        // Patterns: ["FooBar", "<TOOLCALL>"]
+        // Input: "This is FooBaz which is a no, but <TOO"
+        // Key insight: "FooBa" from "FooBaz" is NOT a valid partial because the 'z'
+        // doesn't match the expected 'r' in "FooBar"
+        // Expected: Hold "<TOO" as partial, emit "This is FooBaz which is a no, but "
+        let patterns = vec!["FooBar".to_string(), "<TOOLCALL>".to_string()];
+        let matcher = MarkerMatcher::new(patterns).unwrap();
+
+        let result = matcher.process_chunk("This is FooBaz which is a no, but <TOO", "");
+
+        if let MatchResult::Partial {
+            prefix,
+            partial,
+            possible_patterns,
+        } = result
+        {
+            // The algorithm correctly skips "FooBaz" (not a valid prefix) and finds "<TOO"
+            assert_eq!(partial, "<TOO");
+            assert_eq!(prefix, "This is FooBaz which is a no, but ");
+            assert!(possible_patterns.contains(&"<TOOLCALL>".to_string()));
+        } else {
+            panic!("Expected partial match for '<TOO>', got: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_earliest_valid_partial_match() {
+        // Test that the algorithm finds the earliest VALID partial match
+        // Patterns: ["FooBar", "<TOOLCALL>"]
+        // Input: "Some text FooBa and then <TO"
+        // Analysis: "FooBa and then <TO" is not a valid prefix of "FooBar" because
+        // after "FooBa" we have " " (space) but "FooBar" expects "r"
+        // Expected: Skip invalid "FooBa..." and find valid "<TO" partial
+        let patterns = vec!["FooBar".to_string(), "<TOOLCALL>".to_string()];
+        let matcher = MarkerMatcher::new(patterns).unwrap();
+
+        let result = matcher.process_chunk("Some text FooBa and then <TO", "");
+
+        if let MatchResult::Partial {
+            prefix,
+            partial,
+            possible_patterns,
+        } = result
+        {
+            // Should find "<TO" as the valid partial match
+            assert_eq!(partial, "<TO");
+            assert_eq!(prefix, "Some text FooBa and then ");
+            assert!(possible_patterns.contains(&"<TOOLCALL>".to_string()));
+        } else {
+            panic!("Expected partial match for '<TO>', got: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_partial_at_exact_end() {
+        // Test case where a valid partial is exactly at the end
+        // Patterns: ["FooBar", "<TOOLCALL>"]
+        // Input: "Some text ending with FooBa"
+        // Expected: Hold "FooBa" as partial (valid prefix of "FooBar")
+        let patterns = vec!["FooBar".to_string(), "<TOOLCALL>".to_string()];
+        let matcher = MarkerMatcher::new(patterns).unwrap();
+
+        let result = matcher.process_chunk("Some text ending with FooBa", "");
+
+        if let MatchResult::Partial {
+            prefix,
+            partial,
+            possible_patterns,
+        } = result
+        {
+            // Should find "FooBa" as a valid partial match at the end
+            assert_eq!(partial, "FooBa");
+            assert_eq!(prefix, "Some text ending with ");
+            assert!(possible_patterns.contains(&"FooBar".to_string()));
+        } else {
+            panic!("Expected partial match for 'FooBa', got: {:?}", result);
+        }
+    }
 }
