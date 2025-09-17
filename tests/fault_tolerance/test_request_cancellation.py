@@ -22,7 +22,7 @@ class DynamoFrontendProcess(ManagedProcess):
     """Process manager for Dynamo frontend"""
 
     def __init__(self, request):
-        command = ["python", "-m", "dynamo.frontend", "--http-port=8000"]
+        command = ["python", "-m", "dynamo.frontend", f"--http-port={FRONTEND_PORT}"]
 
         # Set debug logging environment
         env = os.environ.copy()
@@ -138,11 +138,11 @@ class DynamoWorkerProcess(ManagedProcess):
 
 
 def send_completion_request(
-    prompt: str, max_tokens: int, timeout: int = 120
+    prompt: str, max_tokens: int, timeout: int = 120, model: str = None
 ) -> requests.Response:
     """Send a completion request to the frontend"""
     payload = {
-        "model": FAULT_TOLERANCE_MODEL_NAME,
+        "model": model or FAULT_TOLERANCE_MODEL_NAME,
         "prompt": prompt,
         "max_tokens": max_tokens,
     }
@@ -156,7 +156,7 @@ def send_completion_request(
     session = requests.Session()
     try:
         response = session.post(
-            "http://localhost:8000/v1/completions",
+            f"http://localhost:{FRONTEND_PORT}/v1/completions",
             headers=headers,
             json=payload,
             timeout=timeout,
@@ -172,11 +172,11 @@ def send_completion_request(
 
 
 def send_chat_completion_request(
-    prompt: str, max_tokens: int, timeout: int = 120, stream: bool = False
+    prompt: str, max_tokens: int, timeout: int = 120, stream: bool = False, model: str = None
 ) -> requests.Response:
     """Send a chat completion request to the frontend"""
     payload = {
-        "model": FAULT_TOLERANCE_MODEL_NAME,
+        "model": model or FAULT_TOLERANCE_MODEL_NAME,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "stream": stream,
@@ -191,7 +191,7 @@ def send_chat_completion_request(
     session = requests.Session()
     try:
         response = session.post(
-            "http://localhost:8000/v1/chat/completions",
+            f"http://localhost:{FRONTEND_PORT}/v1/chat/completions",
             headers=headers,
             json=payload,
             timeout=timeout,
@@ -207,18 +207,18 @@ def send_chat_completion_request(
         raise
 
 
-def send_request_and_cancel(request_type: str = "completion", timeout: int = 1):
+def send_request_and_cancel(request_type: str = "completion", timeout: int = 1, model: str = None):
     """Send a request with short timeout to trigger cancellation"""
     logger.info(f"Sending {request_type} request to be cancelled...")
 
     prompt = "Tell me a very long and detailed story about the history of artificial intelligence, including all major milestones, researchers, and breakthroughs?"
     try:
         if request_type == "completion":
-            response = send_completion_request(prompt, 8000, timeout)
+            response = send_completion_request(prompt, 8000, timeout, model)
         elif request_type == "chat_completion":
-            response = send_chat_completion_request(prompt, 8000, timeout, False)
+            response = send_chat_completion_request(prompt, 8000, timeout, False, model)
         elif request_type == "chat_completion_stream":
-            response = send_chat_completion_request(prompt, 8000, timeout, True)
+            response = send_chat_completion_request(prompt, 8000, timeout, True, model)
             # Read a few responses and then disconnect
             if response.status_code == 200:
                 itr_count, max_itr = 0, 5
