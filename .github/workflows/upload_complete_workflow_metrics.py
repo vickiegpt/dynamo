@@ -478,9 +478,9 @@ class WorkflowMetricsUploader:
         # Don't upload jobs with null/None status as they cause Grafana filtering issues
         if job_status is None:
             job_status = 'in_progress'
-        db_data[FIELD_STATUS] = job_status
-        db_data[FIELD_BRANCH] = self.ref_name
-        db_data[FIELD_RUNNER_INFO] = job_data.get('runner_name', 'unknown')
+        db_data[FIELD_STATUS] = str(job_status)
+        db_data[FIELD_BRANCH] = str(self.ref_name)
+        db_data[FIELD_RUNNER_INFO] = str(job_data.get('runner_name', 'unknown'))
         
         db_data[FIELD_WORKFLOW_SOURCE] = self.event_name
         db_data[FIELD_JOB_NAME] = job_name
@@ -493,16 +493,18 @@ class WorkflowMetricsUploader:
         self.add_standardized_timing_fields(db_data, created_at, started_at, completed_at, "job")
         
         # Labels
-        runner_labels = job_data.get('labels', [])
-        db_data[FIELD_LABELS] = runner_labels if runner_labels else ['-']
+        #runner_labels = job_data.get('labels', [])
+        #db_data[FIELD_LABELS] = runner_labels if runner_labels else ['-']
         
         # Add steps list (get step IDs) 
         steps = job_data.get('steps', [])
+        """
         if steps:
             step_ids = [f"{job_id}_{step.get('number', i+1)}" for i, step in enumerate(steps)]
             db_data[FIELD_STEPS] = step_ids
         else:
             db_data[FIELD_STEPS] = []
+        """
         
         # Runner info
         runner_name = job_data.get('runner_name')
