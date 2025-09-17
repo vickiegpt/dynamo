@@ -144,7 +144,9 @@ pub fn validate_power_of_2(alignment: usize) -> Result<(), ValidationError> {
 
 /// Helper to align a value up to the nearest multiple of alignment.
 /// Alignment must be a power of 2.
+#[inline(always)]
 pub fn align_up(value: usize, alignment: usize) -> usize {
+    debug_assert!(alignment.is_power_of_two(), "Alignment must be a power of 2");
     (value + alignment - 1) & !(alignment - 1)
 }
 
@@ -191,6 +193,7 @@ pub fn validate_storage<S: Storage, C: BlockLayoutConfig>(
     Ok(base_offset)
 }
 
+/// Validate that the provided indices are within bounds for the given layout configuration
 pub fn validate_indices<C: BlockLayoutConfig>(
     config: &C,
     block_idx: usize,
