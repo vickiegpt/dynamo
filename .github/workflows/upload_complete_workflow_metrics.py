@@ -271,7 +271,7 @@ class WorkflowMetricsUploader:
         
         # Wait for workflow to complete before uploading metrics
         import time
-        max_retries = 10
+        max_retries = 1
         retry_delay = 15  # seconds
         
         for attempt in range(max_retries):
@@ -507,10 +507,9 @@ class WorkflowMetricsUploader:
         """
         
         # Runner info
-        runner_name = job_data.get('runner_name')
         runner_id = job_data.get('runner_id')
-        db_data[FIELD_RUNNER_ID] = str(runner_id) if runner_id else None
-        db_data[FIELD_RUNNER_NAME] = runner_name
+        db_data[FIELD_RUNNER_ID] = str(runner_id) if runner_id is not None else ''
+        db_data[FIELD_RUNNER_NAME] = str(job_data.get('runner_name', ''))
         
         # Add common context fields
         self.add_common_context_fields(db_data)
@@ -544,7 +543,6 @@ class WorkflowMetricsUploader:
     def _upload_single_step_metrics(self, step_data: Dict[str, Any], job_data: Dict[str, Any], step_index: int) -> None:
         """Extract and post metrics for a single step"""
         # Extract step metrics using standardized functions
-        return
         db_data = {}
         job_id = job_data['id']
         job_name = job_data['name']
