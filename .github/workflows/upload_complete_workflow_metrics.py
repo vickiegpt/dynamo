@@ -19,12 +19,13 @@ import re
 
 # Common fields across all metric types
 FIELD_ID = "_id"
-FIELD_USER_ALIAS = "s_user_alias"
+FIELD_USER_ALIAS = "s_user_alias" #extra you can maybe delete or test
 FIELD_REPO = "s_repo"
 FIELD_WORKFLOW_NAME = "s_workflow_name"
 FIELD_GITHUB_EVENT = "s_github_event"
-FIELD_BRANCH = "s_branch"
-FIELD_STATUS = "s_status"
+FIELD_BRANCH = "s_branch" #extra you can maybe delete or test
+FIELD_STATUS = "s_status" #duplicate you can maybe consolidate to the common metric adding
+FIELD_WORKFLOW_ID = "s_workflow_id"
 
 # Timing fields
 FIELD_CREATION_TIME = "ts_creation_time"
@@ -34,26 +35,24 @@ FIELD_QUEUE_TIME = "l_queue_time_sec"  # Integer seconds as long
 FIELD_DURATION_SEC = "l_duration_sec"
 
 # Workflow-specific fields
-FIELD_WORKFLOW_ID = "s_workflow_id"
 FIELD_COMMIT_SHA = "s_commit_sha"
-FIELD_JOBS = "s_jobs"  # Comma-separated job IDs
+#FIELD_JOBS = "s_jobs"  # Comma-separated job IDs
 
 # Job-specific fields
 FIELD_JOB_ID = "s_job_id"
 FIELD_JOB_NAME = "s_job_name"
-FIELD_RUNNER_INFO = "s_runner_info"
+#FIELD_RUNNER_INFO = "s_runner_info"
 FIELD_RUNNER_ID = "s_runner_id"
 FIELD_RUNNER_NAME = "s_runner_name"
-FIELD_WORKFLOW_SOURCE = "s_workflow_source"
-FIELD_LABELS = "s_labels"  # Comma-separated labels
-FIELD_STEPS = "s_steps"  # Comma-separated step IDs
+#FIELD_LABELS = "s_labels"  # Comma-separated labels
+#FIELD_STEPS = "s_steps"  # Comma-separated step IDs
 
 # Step-specific fields
 FIELD_STEP_ID = "s_step_id"
 FIELD_NAME = "s_step_name"
 FIELD_STEP_NUMBER = "l_step_number"
 FIELD_COMMAND = "s_command"
-FIELD_JOB_LABELS = "s_job_labels"  # Comma-separated labels
+#FIELD_JOB_LABELS = "s_job_labels"  # Comma-separated labels
 
 class TimingProcessor:
     """Centralized processor for all datetime and duration conversions using Python built-ins"""
@@ -209,6 +208,7 @@ class WorkflowMetricsUploader:
         db_data[FIELD_WORKFLOW_NAME] = self.workflow_name
         db_data[FIELD_GITHUB_EVENT] = self.event_name
         db_data[FIELD_BRANCH] = self.ref_name
+        db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
 
     def add_standardized_timing_fields(self, db_data: Dict[str, Any], creation_time: str, start_time: str, end_time: str, 
                                      metric_type: str = "workflow") -> None:
@@ -232,8 +232,7 @@ class WorkflowMetricsUploader:
         
         # Queue time in integer seconds (using l_ prefix for long type)
         if metric_type != "step":
-            queue_seconds = TimingProcessor.calculate_time_diff(creation_time, start_time)
-            db_data[FIELD_QUEUE_TIME] = queue_seconds
+            db_data[FIELD_QUEUE_TIME] = TimingProcessor.calculate_time_diff(creation_time, start_time)
         
         # Add @timestamp field for Grafana/OpenSearch indexing (CRITICAL FIX!)
         # Use the end_time if available, otherwise use current time
@@ -300,14 +299,14 @@ class WorkflowMetricsUploader:
     def _upload_workflow_metrics(self, workflow_data: Dict[str, Any], jobs_data: Dict[str, Any]) -> None:
         """Internal method to upload workflow metrics"""
         db_data = {}
-        db_data[FIELD_ID] = f"real-workflow-{self.run_id}"
+        db_data[FIELD_ID] = f"github-workflow-{self.run_id}"
         
         
         # Schema fields
-        db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
         # Use conclusion for completed workflows, fallback to status
         db_data[FIELD_STATUS] = str(workflow_data.get('conclusion') or workflow_data.get('status', 'unknown'))
-        db_data[FIELD_BRANCH] = str(workflow_data.get('head_branch', self.ref_name))
+        #db_data[FIELD_BRANCH] = str(workflow_data.get('head_branch', self.ref_name))
+        print(f"Checking branch: {str(workflow_data.get('head_branch'))}")
         db_data[FIELD_COMMIT_SHA] = str(workflow_data.get('head_sha', self.sha))        
         # Timing fields - Fix parameter order for correct duration/queue time calculation
         created_at = workflow_data.get('created_at')
@@ -320,16 +319,22 @@ class WorkflowMetricsUploader:
         self.add_common_context_fields(db_data)
         
         # Override userAlias with actor from API if available
+        """
         actor = workflow_data.get('actor', {})
         if actor and actor.get('login'):
             db_data[FIELD_USER_ALIAS] = actor.get('login')
+        """
+        actor = workflow_data.get('actor', {})
+        print(f"Checking actor: {actor.get('login')}")
         
         # Add jobs list as comma-separated string (using s_ prefix)
+        """
         if jobs_data and 'jobs' in jobs_data:
             job_ids = [str(job['id']) for job in jobs_data['jobs']]
             db_data[FIELD_JOBS] = ','.join(job_ids)
         else:
             db_data[FIELD_JOBS] = ''
+        """
         
         self.post_to_db(self.workflow_index, db_data)
 
@@ -393,21 +398,18 @@ class WorkflowMetricsUploader:
         job_id = job_data['id']
         job_name = job_data['name']
         
-        db_data[FIELD_ID] = f"real-job-{job_id}"
+        db_data[FIELD_ID] = f"github-job-{job_id}"
         
         # Schema fields
         db_data[FIELD_JOB_ID] = str(job_id)
-        db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
         # Handle job status - prefer conclusion for completed jobs, fallback to status
-        job_status = job_data.get('conclusion') or job_data.get('status', 'unknown')
+        job_status = str(job_data.get('conclusion') or job_data.get('status', 'unknown'))
         # Don't upload jobs with null/None status as they cause Grafana filtering issues
         if job_status is None:
             job_status = 'in_progress'
         db_data[FIELD_STATUS] = str(job_status)
-        db_data[FIELD_BRANCH] = str(self.ref_name)
-        db_data[FIELD_RUNNER_INFO] = str(job_data.get('runner_name', 'unknown'))
+        #db_data[FIELD_RUNNER_INFO] = str(job_data.get('runner_name', 'unknown'))
         
-        db_data[FIELD_WORKFLOW_SOURCE] = str(self.event_name)
         db_data[FIELD_JOB_NAME] = str(job_name)
         
         # Timing fields using standardized method - Fix parameter order
@@ -418,19 +420,23 @@ class WorkflowMetricsUploader:
         self.add_standardized_timing_fields(db_data, created_at, started_at, completed_at, "job")
         
         # Labels - Convert array to comma-separated string to avoid indexing issues
+        """
         runner_labels = job_data.get('labels', [])
         if runner_labels:
             db_data[FIELD_LABELS] = ','.join(runner_labels)
         else:
             db_data[FIELD_LABELS] = 'unknown'
+        """
         
         # Add steps list (get step IDs) - Convert to string to avoid array issues
+        """
         steps = job_data.get('steps', [])
         if steps:
             step_ids = [f"{job_id}_{step.get('number', i+1)}" for i, step in enumerate(steps)]
             db_data[FIELD_STEPS] = ','.join(step_ids)  # Convert array to comma-separated string
         else:
             db_data[FIELD_STEPS] = ''
+        """
         
         # Runner info
         runner_id = job_data.get('runner_id')
@@ -477,12 +483,11 @@ class WorkflowMetricsUploader:
         
         # Create unique step ID and use standardized ID generation
         step_id = f"{job_id}_{step_number}"
-        db_data[FIELD_ID] = f"real-step-{step_id}"
+        db_data[FIELD_ID] = f"github-step-{step_id}"
         
         # Schema-compliant fields
         db_data[FIELD_STEP_ID] = str(step_id)
         db_data[FIELD_JOB_ID] = str(job_id)
-        db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
         db_data[FIELD_NAME] = str(step_name)
         db_data[FIELD_STEP_NUMBER] = int(step_number)  # Using l_ prefix, should be integer
         db_data[FIELD_STATUS] = str(step_data.get('conclusion', step_data.get('status', 'unknown')))
@@ -507,15 +512,17 @@ class WorkflowMetricsUploader:
         self.add_common_context_fields(db_data)
         
         # Job context - Ensure all fields are strings
-        db_data[FIELD_RUNNER_NAME] = str(job_data.get('runner_name', ''))
-        db_data[FIELD_RUNNER_ID] = str(job_data.get('runner_id')) if job_data.get('runner_id') is not None else ''
+        #db_data[FIELD_RUNNER_NAME] = str(job_data.get('runner_name', ''))
+        #db_data[FIELD_RUNNER_ID] = str(job_data.get('runner_id')) if job_data.get('runner_id') is not None else ''
         
         # Job labels (separate from step labels) - Convert array to string
+        """
         runner_labels = job_data.get('labels', [])
         if runner_labels:
             db_data[FIELD_JOB_LABELS] = ','.join(runner_labels)
         else:
             db_data[FIELD_JOB_LABELS] = 'unknown'
+        """
         
         self.post_to_db(self.steps_index, db_data)
         print(f"Uploaded metrics for step: {step_name} (step {step_number})")
