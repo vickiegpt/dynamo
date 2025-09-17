@@ -12,6 +12,14 @@ on:
 jobs:
   build-test:
     runs-on: gpu-l40-runners
+    outputs:
+      build-duration-sec: ${{ steps.build-image.outputs.build-duration-sec }}
+      image-size-bytes: ${{ steps.build-image.outputs.image-size-bytes }}
+      image-size-mb: ${{ steps.build-image.outputs.image-size-mb }}
+      build-start-time: ${{ steps.build-image.outputs.build-start-time }}
+      build-end-time: ${{ steps.build-image.outputs.build-end-time }}
+      framework: ${{ matrix.framework }}
+      target: ${{ matrix.target }}
     strategy:
       matrix:
         framework: [vllm]
@@ -51,23 +59,75 @@ jobs:
           sudo dmesg | grep -i nvrm || true
           nvidia-smi
       - name: Build image
+        id: build-image
         env:
           GITHUB_TOKEN: ${{ secrets.CI_TOKEN }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
           SCCACHE_S3_BUCKET:  ${{ secrets.SCCACHE_S3_BUCKET }}
         run: |
+          # Capture build start time
+          BUILD_START_TIME=$(date +%s)
+          echo "Build started at: $(date -u -d @$BUILD_START_TIME)"
+          
+          # Run the build
           ./container/build.sh --tag ${{ matrix.framework }}:latest \
             --target ${{ matrix.target }} \
             --framework ${{ matrix.framework }} \
             --use-sccache \
             --sccache-bucket "$SCCACHE_S3_BUCKET" \
             --sccache-region "$AWS_DEFAULT_REGION"
+          
+          # Capture build end time and calculate duration
+          BUILD_END_TIME=$(date +%s)
+          BUILD_DURATION=$((BUILD_END_TIME - BUILD_START_TIME))
+          echo "Build completed at: $(date -u -d @$BUILD_END_TIME)"
+          echo "Build duration: ${BUILD_DURATION} seconds"
+          
+          # Get Docker image size
+          IMAGE_SIZE_BYTES=$(docker image inspect ${{ matrix.framework }}:latest --format='{{.Size}}')
+          IMAGE_SIZE_MB=$((IMAGE_SIZE_BYTES / 1024 / 1024))
+          echo "Docker image size: ${IMAGE_SIZE_MB} MB (${IMAGE_SIZE_BYTES} bytes)"
+          
+          # Set outputs for other jobs to use
+          echo "build-duration-sec=${BUILD_DURATION}" >> $GITHUB_OUTPUT
+          echo "image-size-bytes=${IMAGE_SIZE_BYTES}" >> $GITHUB_OUTPUT
+          echo "image-size-mb=${IMAGE_SIZE_MB}" >> $GITHUB_OUTPUT
+          echo "build-start-time=${BUILD_START_TIME}" >> $GITHUB_OUTPUT
+          echo "build-end-time=${BUILD_END_TIME}" >> $GITHUB_OUTPUT
+          
+          # Also save to file for artifacts (backup method)
+          mkdir -p build-metrics
+          cat > build-metrics/metrics.json << EOF
+          {
+            "build_duration_sec": ${BUILD_DURATION},
+            "image_size_bytes": ${IMAGE_SIZE_BYTES},
+            "image_size_mb": ${IMAGE_SIZE_MB},
+            "build_start_time": ${BUILD_START_TIME},
+            "build_end_time": ${BUILD_END_TIME},
+            "framework": "${{ matrix.framework }}",
+            "target": "${{ matrix.target }}"
+          }
+          EOF
+          
+          echo "📊 Build Metrics Summary:"
+          echo "  Framework: ${{ matrix.framework }}"
+          echo "  Target: ${{ matrix.target }}"
+          echo "  Duration: ${BUILD_DURATION}s"
+          echo "  Image Size: ${IMAGE_SIZE_MB} MB"
       - name: Run pytest
         run: |
           docker run --rm --gpus all -w /workspace \
             --name ${{ env.CONTAINER_ID }}_pytest \
             ${{ matrix.framework }}:latest \
             bash -c "pytest -xsv --basetemp=/tmp --junitxml=${{ env.PYTEST_XML_FILE }} -m \"${{ env.PYTEST_MARKS }}\""
+      
+      - name: Upload build metrics
+        uses: actions/upload-artifact@v4
+        if: always()  # Upload even if tests fail
+        with:
+          name: build-metrics-${{ matrix.framework }}
+          path: build-metrics/metrics.json
+          retention-days: 7
 
   
   # Upload metrics for this workflow and all its jobs
@@ -91,12 +151,42 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
+      - name: Download build metrics
+        uses: actions/download-artifact@v4
+        with:
+          name: build-metrics-vllm
+          path: build-metrics/
+        continue-on-error: true  # Don't fail if artifact doesn't exist
+
       - name: Upload Complete Workflow Metrics
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WORKFLOW_INDEX: ${{ secrets.WORKFLOW_INDEX }}
           JOB_INDEX: ${{ secrets.JOB_INDEX }}
           STEPS_INDEX: ${{ secrets.STEPS_INDEX }}
+          # Pass build metrics as environment variables
+          BUILD_DURATION_SEC: ${{ needs.build-test.outputs.build-duration-sec }}
+          IMAGE_SIZE_BYTES: ${{ needs.build-test.outputs.image-size-bytes }}
+          IMAGE_SIZE_MB: ${{ needs.build-test.outputs.image-size-mb }}
+          BUILD_START_TIME: ${{ needs.build-test.outputs.build-start-time }}
+          BUILD_END_TIME: ${{ needs.build-test.outputs.build-end-time }}
+          BUILD_FRAMEWORK: ${{ needs.build-test.outputs.framework }}
+          BUILD_TARGET: ${{ needs.build-test.outputs.target }}
         run: |
+          # Show build metrics for debugging
+          echo "📊 Build Metrics Available:"
+          echo "  Duration: ${BUILD_DURATION_SEC} seconds"
+          echo "  Image Size: ${IMAGE_SIZE_MB} MB (${IMAGE_SIZE_BYTES} bytes)"
+          echo "  Framework: ${BUILD_FRAMEWORK}"
+          echo "  Target: ${BUILD_TARGET}"
+          
+          # Check if build metrics file exists
+          if [ -f "build-metrics/metrics.json" ]; then
+            echo "📁 Build metrics file found:"
+            cat build-metrics/metrics.json
+          else
+            echo "⚠️  Build metrics file not found, using job outputs only"
+          fi
+          
           # Run the enhanced metrics upload script
           python3 .github/workflows/upload_complete_workflow_metrics.py
