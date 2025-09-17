@@ -41,6 +41,10 @@ pub struct NvCreateChatCompletionRequest {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nvext: Option<NvExt>,
+
+    /// Extra args to pass to the chat template rendering context
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_template_args: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 /// A response structure for unary chat completion responses, embedding OpenAI's
