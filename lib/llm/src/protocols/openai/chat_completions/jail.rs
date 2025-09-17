@@ -1361,7 +1361,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_jailed_stream_early_exit() {
-        // Test early exit when complete tool call is detected
+        // Tests detection of complete tool call with unjail in same chunk as the end marker
+        // Input: "<TOOLCALL>" + "[{\"name\": \"test\", " + "\"arguments\": {}}]" + "</TOOLCALL>More text"
+        // Expected output: 2 chunks [ToolCall(), Content()]
         let chunks = vec![
             create_mock_response_chunk("<TOOLCALL>".to_string(), 0),
             create_mock_response_chunk("[{\"name\": \"test\", ".to_string(), 0),
@@ -1378,22 +1380,20 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should detect complete tool call and exit early
-        assert!(!results.is_empty());
-
-        // Check if tool calls were parsed
-        let has_tool_calls = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tc| !tc.is_empty())
-                .unwrap_or(false)
-        });
-        assert!(
-            has_tool_calls,
-            "Should have parsed tool calls with early exit"
+        // Should have exactly 2 chunks: tool call + trailing content
+        assert_eq!(
+            results.len(),
+            2,
+            "Should have tool call and trailing content"
         );
+
+        // Verify exact output structure: [ToolCall(), Content()]
+        test_utils::assert_tool_call(&results[0], "test", serde_json::json!({}));
+        test_utils::assert_content(&results[1], "More text");
+
+        // Verify content reconstruction excludes tool calls
+        let reconstructed = test_utils::reconstruct_content(&results);
+        assert_eq!(reconstructed, "More text");
     }
 
     #[tokio::test]
@@ -1454,7 +1454,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_jailed_stream_hermes_parser() {
-        // Test Hermes parser with <tool_call> markers
+        // Tests Hermes format tool call parsing with <tool_call> markers
+        // Input: "I'll help you with that. " + "<tool_call>{\"name\": \"search_web\", \"arguments\": {\"query\": \"weather today\"}}</tool_call>" + " Let me search for that."
+        // Expected output: 3 chunks [Content(), ToolCall(), Content()]
         let chunks = vec![
             create_mock_response_chunk("I'll help you with that. ".to_string(), 0),
             create_mock_response_chunk("<tool_call>".to_string(), 0),
@@ -1475,43 +1477,35 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should have initial text, tool call result, and final text
-        assert!(!results.is_empty());
+        // Should have exactly 3 chunks: content + tool call + content
+        assert_eq!(
+            results.len(),
+            3,
+            "Should have content, tool call, and trailing content"
+        );
 
-        // Check if tool calls were parsed correctly
-        let has_tool_calls = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tc| !tc.is_empty())
-                .unwrap_or(false)
-        });
-        assert!(has_tool_calls, "Should have parsed Hermes tool calls");
+        // Verify exact output structure: [Content(), ToolCall(), Content()]
+        test_utils::assert_content(&results[0], "I'll help you with that. ");
+        test_utils::assert_tool_call(
+            &results[1],
+            "search_web",
+            serde_json::json!({"query": "weather today"}),
+        );
+        test_utils::assert_content(&results[2], " Let me search for that.");
 
-        // Check that we have the search_web function
-        let has_search_web = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tcs| {
-                    tcs.iter().any(|tc| {
-                        tc.function
-                            .as_ref()
-                            .and_then(|f| f.name.as_deref())
-                            .map(|name| name == "search_web")
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false)
-        });
-        assert!(has_search_web, "Should have parsed search_web function");
+        // Verify content reconstruction excludes tool calls
+        let reconstructed = test_utils::reconstruct_content(&results);
+        assert_eq!(
+            reconstructed,
+            "I'll help you with that.  Let me search for that."
+        );
     }
 
     #[tokio::test]
     async fn test_jailed_stream_mistral_parser() {
-        // Test Mistral parser with [{ pattern
+        // Tests Mistral format tool call parsing with [{ pattern
+        // Input: "Sure, I can help. " + "[{\"name\": \"calculate\", \"arguments\": {\"expression\": \"2+2\"}}]" + " The calculation is done."
+        // Expected output: 3 chunks [Content(), ToolCall(), Content()]
         let chunks = vec![
             create_mock_response_chunk("Sure, I can help. ".to_string(), 0),
             create_mock_response_chunk("[{".to_string(), 0),
@@ -1529,43 +1523,32 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should have initial text, tool call result, and final text
-        assert!(!results.is_empty());
+        // Should have exactly 3 chunks: content + tool call + content
+        assert_eq!(
+            results.len(),
+            3,
+            "Should have content, tool call, and trailing content"
+        );
 
-        // Check if tool calls were parsed correctly
-        let has_tool_calls = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tc| !tc.is_empty())
-                .unwrap_or(false)
-        });
-        assert!(has_tool_calls, "Should have parsed Mistral tool calls");
+        // Verify exact output structure: [Content(), ToolCall(), Content()]
+        test_utils::assert_content(&results[0], "Sure, I can help. ");
+        test_utils::assert_tool_call(
+            &results[1],
+            "calculate",
+            serde_json::json!({"expression": "2+2"}),
+        );
+        test_utils::assert_content(&results[2], " The calculation is done.");
 
-        // Check that we have the calculate function
-        let has_calculate = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tcs| {
-                    tcs.iter().any(|tc| {
-                        tc.function
-                            .as_ref()
-                            .and_then(|f| f.name.as_deref())
-                            .map(|name| name == "calculate")
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false)
-        });
-        assert!(has_calculate, "Should have parsed calculate function");
+        // Verify content reconstruction excludes tool calls
+        let reconstructed = test_utils::reconstruct_content(&results);
+        assert_eq!(reconstructed, "Sure, I can help.  The calculation is done.");
     }
 
     #[tokio::test]
     async fn test_jailed_stream_mistral_parser_with_tool_calls_marker() {
-        // Test Mistral parser with [TOOL_CALLS] marker
+        // Tests Mistral format tool call parsing with explicit [TOOL_CALLS] marker
+        // Input: "Let me check that for you. " + "[TOOL_CALLS][{\"name\": \"get_time\", \"arguments\": {\"timezone\": \"UTC\"}}]" + " Here's the time."
+        // Expected output: 3 chunks [Content(), ToolCall(), Content()]
         let chunks = vec![
             create_mock_response_chunk("Let me check that for you. ".to_string(), 0),
             create_mock_response_chunk("[TOOL_CALLS]".to_string(), 0),
@@ -1582,27 +1565,35 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should have initial text, tool call result, and final text
-        assert!(!results.is_empty());
+        // Should have exactly 3 chunks: content + tool call + content
+        assert_eq!(
+            results.len(),
+            3,
+            "Should have content, tool call, and trailing content"
+        );
 
-        // Check if tool calls were parsed correctly
-        let has_tool_calls = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tc| !tc.is_empty())
-                .unwrap_or(false)
-        });
-        assert!(
-            has_tool_calls,
-            "Should have parsed Mistral [TOOL_CALLS] format"
+        // Verify exact output structure: [Content(), ToolCall(), Content()]
+        test_utils::assert_content(&results[0], "Let me check that for you. ");
+        test_utils::assert_tool_call(
+            &results[1],
+            "get_time",
+            serde_json::json!({"timezone": "UTC"}),
+        );
+        test_utils::assert_content(&results[2], " Here's the time.");
+
+        // Verify content reconstruction excludes tool calls
+        let reconstructed = test_utils::reconstruct_content(&results);
+        assert_eq!(
+            reconstructed,
+            "Let me check that for you.  Here's the time."
         );
     }
 
     #[tokio::test]
     async fn test_jailed_stream_phi4_parser() {
-        // Test Phi4 parser with functools[ pattern
+        // Tests Phi4 format tool call parsing with functools[ pattern
+        // Input: "I'll analyze this data. " + "functools[{\"name\": \"analyze_data\", \"arguments\": {\"dataset\": \"sales_data\"}}]" + " Analysis complete."
+        // Expected output: 3 chunks [Content(), ToolCall(), Content()]
         let chunks = vec![
             create_mock_response_chunk("I'll analyze this data. ".to_string(), 0),
             create_mock_response_chunk("functools[".to_string(), 0),
@@ -1623,43 +1614,32 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should have initial text, tool call result, and final text
-        assert!(!results.is_empty());
+        // Should have exactly 3 chunks: content + tool call + content
+        assert_eq!(
+            results.len(),
+            3,
+            "Should have content, tool call, and trailing content"
+        );
 
-        // Check if tool calls were parsed correctly
-        let has_tool_calls = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tc| !tc.is_empty())
-                .unwrap_or(false)
-        });
-        assert!(has_tool_calls, "Should have parsed Phi4 tool calls");
+        // Verify exact output structure: [Content(), ToolCall(), Content()]
+        test_utils::assert_content(&results[0], "I'll analyze this data. ");
+        test_utils::assert_tool_call(
+            &results[1],
+            "analyze_data",
+            serde_json::json!({"dataset": "sales_data"}),
+        );
+        test_utils::assert_content(&results[2], " Analysis complete.");
 
-        // Check that we have the analyze_data function
-        let has_analyze_data = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tcs| {
-                    tcs.iter().any(|tc| {
-                        tc.function
-                            .as_ref()
-                            .and_then(|f| f.name.as_deref())
-                            .map(|name| name == "analyze_data")
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false)
-        });
-        assert!(has_analyze_data, "Should have parsed analyze_data function");
+        // Verify content reconstruction excludes tool calls
+        let reconstructed = test_utils::reconstruct_content(&results);
+        assert_eq!(reconstructed, "I'll analyze this data.  Analysis complete.");
     }
 
     #[tokio::test]
     async fn test_jailed_stream_llama3_json_parser() {
-        // Test llama3_json parser with <|python_tag|> pattern
+        // Tests Llama3 JSON format tool call parsing with <|python_tag|> pattern
+        // Input: "Let me run some code. " + "<|python_tag|>{\"name\": \"execute_code\", \"arguments\": {\"code\": \"print('Hello')\"}}" + " Done executing."
+        // Expected output: 3 chunks [Content(), ToolCall(), Content()]
         let chunks = vec![
             create_mock_response_chunk("Let me run some code. ".to_string(), 0),
             create_mock_response_chunk("<|python_tag|>".to_string(), 0),
@@ -1681,43 +1661,32 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should have initial text, tool call result, and final text
-        assert!(!results.is_empty());
+        // Should have exactly 3 chunks: content + tool call + content
+        assert_eq!(
+            results.len(),
+            3,
+            "Should have content, tool call, and trailing content"
+        );
 
-        // Check if tool calls were parsed correctly
-        let has_tool_calls = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tc| !tc.is_empty())
-                .unwrap_or(false)
-        });
-        assert!(has_tool_calls, "Should have parsed llama3_json tool calls");
+        // Verify exact output structure: [Content(), ToolCall(), Content()]
+        test_utils::assert_content(&results[0], "Let me run some code. ");
+        test_utils::assert_tool_call(
+            &results[1],
+            "execute_code",
+            serde_json::json!({"code": "print('Hello')"}),
+        );
+        test_utils::assert_content(&results[2], " Done executing.");
 
-        // Check that we have the execute_code function
-        let has_execute_code = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tcs| {
-                    tcs.iter().any(|tc| {
-                        tc.function
-                            .as_ref()
-                            .and_then(|f| f.name.as_deref())
-                            .map(|name| name == "execute_code")
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false)
-        });
-        assert!(has_execute_code, "Should have parsed execute_code function");
+        // Verify content reconstruction excludes tool calls
+        let reconstructed = test_utils::reconstruct_content(&results);
+        assert_eq!(reconstructed, "Let me run some code.  Done executing.");
     }
 
     #[tokio::test]
     async fn test_jailed_stream_false_positive_json() {
-        // Test with text that looks like it might contain tool calls but doesn't match parser patterns
+        // Tests that JSON-like content doesn't trigger false positive tool call detection
+        // Input: "I can explain JSON format. " + "Here's an example: { \"key\": \"value\" }" + " is a simple JSON object. " + "Hope that helps!"
+        // Expected output: 4 chunks [Content(), Content(), Content(), Content()] - no jailing
         let chunks = vec![
             create_mock_response_chunk("I can explain JSON format. ".to_string(), 0),
             create_mock_response_chunk("Here's an example: { \"key\": \"value\" }".to_string(), 0),
@@ -1733,40 +1702,32 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should pass through all chunks since no mistral-specific patterns are present
-        assert!(!results.is_empty());
-
-        // Verify no tool calls were detected
-        let has_tool_calls = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tc| !tc.is_empty())
-                .unwrap_or(false)
-        });
-        assert!(
-            !has_tool_calls,
-            "Should not detect tool calls in JSON explanation text"
+        // Should pass through all 4 chunks unchanged since no mistral-specific patterns are present
+        assert_eq!(
+            results.len(),
+            4,
+            "Should pass through all chunks without jailing"
         );
 
-        // Verify content is preserved correctly
-        let has_json_content = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.content.as_ref())
-                .map(|content| {
-                    content.contains("JSON format") || content.contains("simple JSON object")
-                })
-                .unwrap_or(false)
-        });
-        assert!(has_json_content, "Should preserve JSON explanation content");
+        // Verify exact output structure: all content chunks, no tool calls
+        test_utils::assert_content(&results[0], "I can explain JSON format. ");
+        test_utils::assert_content(&results[1], "Here's an example: { \"key\": \"value\" }");
+        test_utils::assert_content(&results[2], " is a simple JSON object. ");
+        test_utils::assert_content(&results[3], "Hope that helps!");
+
+        // Verify no tool calls were detected and all content preserved
+        let reconstructed = test_utils::reconstruct_content(&results);
+        assert_eq!(
+            reconstructed,
+            "I can explain JSON format. Here's an example: { \"key\": \"value\" } is a simple JSON object. Hope that helps!"
+        );
     }
 
     #[tokio::test]
     async fn test_jailed_stream_malformed_tool_call() {
-        // Test with malformed JSON in tool calls
+        // Tests graceful handling of malformed JSON within tool call markers
+        // Input: "Let me call a function. " + "<TOOLCALL>[{\"name\": \"broken_func\", \"arguments\": {\"param\": incomplete</TOOLCALL>" + " Function call attempt finished."
+        // Expected output: 3 chunks [Content(), Content(malformed), Content()] - parser fails gracefully
         let chunks = vec![
             create_mock_response_chunk("Let me call a function. ".to_string(), 0),
             create_mock_response_chunk("<TOOLCALL>".to_string(), 0),
@@ -1786,27 +1747,30 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should not panic and should handle malformed JSON gracefully
-        assert!(!results.is_empty());
+        // Should gracefully handle malformed JSON and not panic
+        assert_eq!(results.len(), 3, "Should handle malformed JSON gracefully");
 
-        // Should still process the content even if JSON is malformed
-        let has_content = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.content.as_ref())
-                .map(|content| !content.is_empty())
-                .unwrap_or(false)
-        });
-        assert!(
-            has_content,
-            "Should still have content even with malformed JSON"
+        // Verify exact output structure: [Content(), Content(malformed), Content()]
+        test_utils::assert_content(&results[0], "Let me call a function. ");
+        test_utils::assert_content(
+            &results[1],
+            "[{\"name\": \"broken_func\", \"arguments\": {\"param\": incomplete",
+        );
+        test_utils::assert_content(&results[2], " Function call attempt finished.");
+
+        // Verify malformed content is preserved as text
+        let reconstructed = test_utils::reconstruct_content(&results);
+        assert_eq!(
+            reconstructed,
+            "Let me call a function. [{\"name\": \"broken_func\", \"arguments\": {\"param\": incomplete Function call attempt finished."
         );
     }
 
     #[tokio::test]
     async fn test_jailed_stream_partial_tool_call() {
-        // Test stream that ends mid-tool call
+        // Tests handling of incomplete tool call when stream ends abruptly
+        // Input: "Starting function call. " + "<TOOLCALL>[{\"name\": \"incomplete_func\", \"arguments\": {" (no end marker)
+        // Expected output: 2 chunks [Content(), Content(partial)] - partial accumulated content released on stream end
         let chunks = vec![
             create_mock_response_chunk("Starting function call. ".to_string(), 0),
             create_mock_response_chunk("<TOOLCALL>".to_string(), 0),
@@ -1825,34 +1789,25 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should handle partial tool call gracefully
-        assert!(!results.is_empty());
-
-        // First chunk should pass through
-        assert!(
-            results
-                .first()
-                .and_then(|r| r.data.as_ref())
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.content.as_ref())
-                .map(|content| content.contains("Starting function call"))
-                .unwrap_or(false)
+        // Should handle partial tool call gracefully - releases accumulated content on stream end
+        assert_eq!(
+            results.len(),
+            2,
+            "Should handle partial tool call and release content"
         );
 
-        // Should release accumulated content when stream ends
-        let has_accumulated_content = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.content.as_ref())
-                .map(|content| {
-                    content.contains("<TOOLCALL>") || content.contains("incomplete_func")
-                })
-                .unwrap_or(false)
-        });
-        assert!(
-            has_accumulated_content,
-            "Should release accumulated partial tool call content"
+        // Verify exact output structure: [Content(), Content(accumulated partial)]
+        test_utils::assert_content(&results[0], "Starting function call. ");
+        test_utils::assert_content(
+            &results[1],
+            "<TOOLCALL>[{\"name\": \"incomplete_func\", \"arguments\": {",
+        );
+
+        // Verify partial content is preserved as text since no valid tool call could be parsed
+        let reconstructed = test_utils::reconstruct_content(&results);
+        assert_eq!(
+            reconstructed,
+            "Starting function call. <TOOLCALL>[{\"name\": \"incomplete_func\", \"arguments\": {"
         );
     }
 
@@ -1955,7 +1910,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_jailed_stream_tool_call_across_many_chunks() {
-        // Split a tool call across many small chunks
+        // Tests extreme fragmentation: tool call split across 65 individual character chunks
+        // Input: "I'll process your request. " + "<TOOLCALL>[{"name": "process_data", "arguments": {}}]</TOOLCALL>" + " Processing complete!"
+        // Expected output: 3 chunks [Content(), ToolCall(), Content()]
         let chunks = vec![
             create_mock_response_chunk("I'll process your request. ".to_string(), 0),
             create_mock_response_chunk("<".to_string(), 0),
@@ -2035,62 +1992,26 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should handle tool call split across many chunks
-        assert!(!results.is_empty());
-
-        // Should detect the tool call despite fragmentation
-        let has_tool_calls = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tc| !tc.is_empty())
-                .unwrap_or(false)
-        });
-        assert!(
-            has_tool_calls,
-            "Should detect tool call across many fragments"
+        // Should consolidate extreme fragmentation into 3 clean chunks
+        // Input: "I'll process your request. " + 54-char tool call + " Processing complete!"
+        // Expected output: [Content(), ToolCall(), Content()]
+        assert_eq!(
+            results.len(),
+            3,
+            "Should consolidate fragments into 3 chunks"
         );
 
-        // Should have the process_data function
-        let has_process_data = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tcs| {
-                    tcs.iter().any(|tc| {
-                        tc.function
-                            .as_ref()
-                            .and_then(|f| f.name.as_deref())
-                            .map(|name| name == "process_data")
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false)
-        });
-        assert!(has_process_data, "Should have parsed process_data function");
+        // Verify exact output structure
+        test_utils::assert_content(&results[0], "I'll process your request. ");
+        test_utils::assert_tool_call(&results[1], "process_data", serde_json::json!({}));
+        test_utils::assert_content(&results[2], " Processing complete!");
 
-        // Verify initial and final text are preserved
-        let has_initial_text = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.content.as_ref())
-                .map(|content| content.contains("I'll process your request"))
-                .unwrap_or(false)
-        });
-        assert!(has_initial_text, "Should preserve initial text");
-
-        let has_final_text = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.content.as_ref())
-                .map(|content| content.contains("Processing complete"))
-                .unwrap_or(false)
-        });
-        assert!(has_final_text, "Should preserve final text");
+        // Verify content reconstruction excludes tool calls
+        let reconstructed = test_utils::reconstruct_content(&results);
+        assert_eq!(
+            reconstructed,
+            "I'll process your request.  Processing complete!"
+        );
     }
 
     #[tokio::test]
@@ -2359,7 +2280,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_jailed_stream_early_exit_with_trailing() {
-        // Test early exit (complete tool call detected) with trailing content
+        // Tests early exit when complete tool call is detected in chunk that also contains trailing content
+        // Input: "Starting task: " + "<tool_call>{\"name\": \"complete_task\", \"arguments\": {}}" + "</tool_call> Task completed successfully."
+        // Expected output: 3 chunks [Content(), ToolCall(), Content()]
         let chunks = vec![
             create_mock_response_chunk("Starting task: ".to_string(), 0),
             create_mock_response_chunk(
@@ -2377,43 +2300,23 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should get: initial text, tool call response, trailing text
-        assert!(
-            results.len() >= 3,
-            "Should have at least 3 chunks, got {}",
-            results.len()
+        // Should have exactly 3 chunks: content + tool call + trailing
+        assert_eq!(
+            results.len(),
+            3,
+            "Should have content, tool call, and trailing content"
         );
 
-        // Verify we have a tool call response
-        let has_tool_call = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .map(|c| c.finish_reason == Some(FinishReason::ToolCalls))
-                .unwrap_or(false)
-        });
-        assert!(has_tool_call, "Should have a tool call response");
+        // Verify exact output structure: [Content(), ToolCall(), Content()]
+        test_utils::assert_content(&results[0], "Starting task: ");
+        test_utils::assert_tool_call(&results[1], "complete_task", serde_json::json!({}));
+        test_utils::assert_content(&results[2], " Task completed successfully.");
 
-        // CRITICAL: Verify trailing content after early exit is preserved
-        let trailing_chunk = results
-            .iter()
-            .find(|r| {
-                r.data
-                    .as_ref()
-                    .and_then(|d| d.choices.first())
-                    .and_then(|c| c.delta.content.as_ref())
-                    .map(|content| content.contains("Task completed successfully"))
-                    .unwrap_or(false)
-            })
-            .expect("Should have a chunk with trailing content after early exit");
-
-        let trailing_content = &trailing_chunk.data.as_ref().unwrap().choices[0]
-            .delta
-            .content;
+        // Verify content reconstruction excludes tool calls but preserves trailing
+        let reconstructed = test_utils::reconstruct_content(&results);
         assert_eq!(
-            trailing_content.as_deref(),
-            Some(" Task completed successfully."),
-            "Trailing content after early exit should be preserved"
+            reconstructed,
+            "Starting task:  Task completed successfully."
         );
     }
 
