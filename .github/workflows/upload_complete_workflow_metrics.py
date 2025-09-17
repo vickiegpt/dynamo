@@ -25,7 +25,6 @@ FIELD_WORKFLOW_NAME = "s_workflow_name"
 FIELD_GITHUB_EVENT = "s_github_event"
 FIELD_BRANCH = "s_branch"
 FIELD_STATUS = "s_status"
-FIELD_EVENT = "s_event"
 
 # Timing fields
 FIELD_CREATION_TIME = "ts_creation_time"
@@ -71,25 +70,6 @@ class TimingProcessor:
             return datetime.fromisoformat(iso_string)
         except ValueError:
             return None
-    
-    @staticmethod
-    def _seconds_to_hms(total_seconds: float) -> str:
-        """Convert seconds to HH:MM:SS using built-in divmod"""
-        if total_seconds is None or total_seconds < 0:
-            return "00:00:00"
-        
-        # Use divmod for clean hour/minute/second calculation
-        hours, remainder = divmod(int(total_seconds), 3600)
-        minutes, seconds = divmod(remainder, 60)
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-    
-    @staticmethod
-    def to_time_format(iso_string: str) -> str:
-        """Convert ISO datetime string to HH:MM:SS format"""
-        if not iso_string:
-            return None
-        dt = TimingProcessor._parse_iso(iso_string)
-        return dt.strftime('%H:%M:%S') if dt else None
     
     @staticmethod
     def calculate_time_diff(start_time: str, end_time: str) -> int:
@@ -259,7 +239,7 @@ class WorkflowMetricsUploader:
         # Use the end_time if available, otherwise use current time
         if end_time:
             # Ensure timestamp is in proper ISO format for OpenSearch date detection
-            db_data['@timestamp'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ') #end_time
+            db_data['@timestamp'] = end_time
         else:
             # Use Z format to match 24h script format
             db_data['@timestamp'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -328,9 +308,7 @@ class WorkflowMetricsUploader:
         # Use conclusion for completed workflows, fallback to status
         db_data[FIELD_STATUS] = str(workflow_data.get('conclusion') or workflow_data.get('status', 'unknown'))
         db_data[FIELD_BRANCH] = str(workflow_data.get('head_branch', self.ref_name))
-        db_data[FIELD_COMMIT_SHA] = str(workflow_data.get('head_sha', self.sha))
-        db_data[FIELD_EVENT] = str(workflow_data.get('event', self.event_name))
-        
+        db_data[FIELD_COMMIT_SHA] = str(workflow_data.get('head_sha', self.sha))        
         # Timing fields - Fix parameter order for correct duration/queue time calculation
         created_at = workflow_data.get('created_at')
         run_started_at = workflow_data.get('run_started_at')
@@ -376,56 +354,6 @@ class WorkflowMetricsUploader:
                 continue
         
         return jobs_processed, steps_processed
-
-    def post_workflow_metrics(self) -> Optional[Dict[str, Any]]:
-        """Extract and post workflow metrics"""
-        print(f"Uploading workflow metrics for run {self.run_id}")
-        
-        # Get workflow run data from GitHub API
-        workflow_data = self.get_github_api_data(f"/repos/{self.repo}/actions/runs/{self.run_id}")
-        print(f"Workflow data: {workflow_data}")
-        if not workflow_data:
-            print("Could not fetch workflow data from GitHub API")
-            return None
-            
-        # Extract workflow metrics using standardized functions
-        db_data = {}
-        db_data[FIELD_ID] = f"real-workflow-{self.run_id}"
-        
-        # Schema fields
-        db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
-        # Use conclusion for completed workflows, fallback to status
-        db_data[FIELD_STATUS] = workflow_data.get('conclusion') or workflow_data.get('status', 'unknown')
-        db_data[FIELD_BRANCH] = workflow_data.get('head_branch', self.ref_name)
-        db_data[FIELD_COMMIT_SHA] = workflow_data.get('head_sha', self.sha)
-        db_data[FIELD_EVENT] = workflow_data.get('event', self.event_name)
-        
-        # Timestamps and timing using standardized method
-        created_at = workflow_data.get('created_at')
-        run_started_at = workflow_data.get('run_started_at')
-        # Use completed_at if available, otherwise updated_at
-        end_time = workflow_data.get('completed_at') or workflow_data.get('updated_at')
-        
-        self.add_standardized_timing_fields(db_data, created_at, run_started_at, end_time, "workflow")
-        
-        # Add common context fields
-        self.add_common_context_fields(db_data)
-        
-        # Override userAlias with actor from API if available
-        actor = workflow_data.get('actor', {})
-        if actor and actor.get('login'):
-            db_data[FIELD_USER_ALIAS] = actor.get('login')
-        
-        # Get jobs data from API (will be reused for job metrics)
-        jobs_data = self.get_github_api_data(f"/repos/{self.repo}/actions/runs/{self.run_id}/jobs")
-        if jobs_data and 'jobs' in jobs_data:
-            job_ids = [str(job['id']) for job in jobs_data['jobs']]
-            db_data[FIELD_JOBS] = job_ids
-        else:
-            db_data[FIELD_JOBS] = []
-        
-        self.post_to_db(self.workflow_index, db_data)
-        return jobs_data
 
     def post_all_job_metrics(self, jobs_data: Optional[Dict[str, Any]] = None) -> None:
         """Extract and post metrics for all jobs in the current workflow"""
