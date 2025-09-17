@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
-
 use async_stream::stream;
 use dynamo_async_openai::types::{
     ChatChoiceStream, ChatCompletionMessageToolCallChunk, ChatCompletionStreamResponseDelta,
@@ -96,11 +94,6 @@ impl ChoiceJailState {
     fn end_jail(&mut self) -> String {
         self.is_jailed = false;
         std::mem::take(&mut self.accumulated_content)
-    }
-
-    /// Clear accumulated content without ending jail
-    fn clear(&mut self) {
-        self.accumulated_content.clear();
     }
 
     /// Process incoming content and return what should be emitted (if anything)
@@ -259,46 +252,6 @@ impl ChoiceJailStateCollection {
             }
         }
     }
-
-    /// Get state for a choice index if it exists
-    fn get_state(&self, index: u32) -> Option<&ChoiceJailState> {
-        self.states.iter().find(|s| s.index == index)
-    }
-
-    /// Get mutable state for a choice index if it exists
-    fn get_state_mut(&mut self, index: u32) -> Option<&mut ChoiceJailState> {
-        self.states.iter_mut().find(|s| s.index == index)
-    }
-
-    /// Check if any choice is jailed
-    fn has_jailed_choices(&self) -> bool {
-        self.states.iter().any(|s| s.is_jailed)
-    }
-
-    /// Get all jailed states in deterministic order (sorted by index)
-    fn jailed_states(&self) -> impl Iterator<Item = &ChoiceJailState> {
-        self.states.iter().filter(|s| s.is_jailed)
-    }
-
-    /// Get all jailed states mutably in deterministic order
-    fn jailed_states_mut(&mut self) -> impl Iterator<Item = &mut ChoiceJailState> {
-        self.states.iter_mut().filter(|s| s.is_jailed)
-    }
-
-    /// Clear all states
-    fn clear(&mut self) {
-        self.states.clear();
-    }
-
-    /// Create HashMap compatible with existing create_unjailed_response method
-    /// TODO: Remove this once we refactor create_unjailed_response to use the new structure
-    fn to_hashmap(&self) -> HashMap<u32, String> {
-        self.states
-            .iter()
-            .filter(|s| s.is_jailed && !s.accumulated_content.is_empty())
-            .map(|s| (s.index, s.accumulated_content.clone()))
-            .collect()
-    }
 }
 
 /// Emission mode for handling multiple choices
@@ -389,27 +342,44 @@ impl JailedStream {
 
                     // Emit all results based on emission mode
                     if !all_emissions.is_empty() {
-                        // Use preserved metadata for unjailed content, current metadata for pass-through
-                        let mut unjailed_emissions = Vec::new();
+                        // Group emissions by type for proper ordering and separation
+                        let mut tool_content_emissions = Vec::new();
+                        let mut trailing_emissions = Vec::new();
                         let mut passthrough_emissions = Vec::new();
 
                         for emission in all_emissions {
                             match emission {
                                 ChoiceEmission::PassThrough(_) => passthrough_emissions.push(emission),
-                                ChoiceEmission::ToolCall(_) | ChoiceEmission::Content(_) | ChoiceEmission::Trailing(_) => {
-                                    unjailed_emissions.push(emission);
+                                ChoiceEmission::ToolCall(_) | ChoiceEmission::Content(_) => {
+                                    tool_content_emissions.push(emission);
+                                }
+                                ChoiceEmission::Trailing(_) => {
+                                    trailing_emissions.push(emission);
                                 }
                             }
                         }
 
-                        // Emit unjailed content with preserved metadata
-                        if !unjailed_emissions.is_empty() {
+                        // Emit tool calls and content with preserved metadata
+                        if !tool_content_emissions.is_empty() {
                             let preserved_metadata = (
                                 last_annotated_id.clone(),
                                 last_annotated_event.clone(),
                                 last_annotated_comment.clone(),
                             );
-                            let responses = self.emit_choice_emissions(unjailed_emissions, chat_response, preserved_metadata);
+                            let responses = self.emit_choice_emissions(tool_content_emissions, chat_response, preserved_metadata);
+                            for emitted_response in responses {
+                                yield emitted_response;
+                            }
+                        }
+
+                        // Emit trailing content separately (always as individual chunks)
+                        if !trailing_emissions.is_empty() {
+                            let preserved_metadata = (
+                                last_annotated_id.clone(),
+                                last_annotated_event.clone(),
+                                last_annotated_comment.clone(),
+                            );
+                            let responses = self.emit_choice_emissions(trailing_emissions, chat_response, preserved_metadata);
                             for emitted_response in responses {
                                 yield emitted_response;
                             }
@@ -568,38 +538,39 @@ impl JailedStream {
     ) -> ChatChoiceStream {
         if let Ok((tool_calls, normal_text)) =
             try_tool_call_parse_aggregate(accumulated_content, self.tool_call_parser.as_deref())
-            && !tool_calls.is_empty() {
-                // Convert to streaming format
-                let tool_call_chunks: Vec<ChatCompletionMessageToolCallChunk> = tool_calls
-                    .into_iter()
-                    .enumerate()
-                    .map(|(idx, tool_call)| ChatCompletionMessageToolCallChunk {
-                        index: idx as u32,
-                        id: Some(tool_call.id),
-                        r#type: Some(tool_call.r#type),
-                        function: Some(FunctionCallStream {
-                            name: Some(tool_call.function.name),
-                            arguments: Some(tool_call.function.arguments),
-                        }),
-                    })
-                    .collect();
+            && !tool_calls.is_empty()
+        {
+            // Convert to streaming format
+            let tool_call_chunks: Vec<ChatCompletionMessageToolCallChunk> = tool_calls
+                .into_iter()
+                .enumerate()
+                .map(|(idx, tool_call)| ChatCompletionMessageToolCallChunk {
+                    index: idx as u32,
+                    id: Some(tool_call.id),
+                    r#type: Some(tool_call.r#type),
+                    function: Some(FunctionCallStream {
+                        name: Some(tool_call.function.name),
+                        arguments: Some(tool_call.function.arguments),
+                    }),
+                })
+                .collect();
 
-                // Create choice with tool calls
-                #[allow(deprecated)]
-                return ChatChoiceStream {
-                    index: choice_index,
-                    delta: ChatCompletionStreamResponseDelta {
-                        role: Some(Role::Assistant),
-                        content: normal_text.filter(|t| !t.is_empty()),
-                        tool_calls: Some(tool_call_chunks),
-                        function_call: None,
-                        refusal: None,
-                        reasoning_content: None,
-                    },
-                    finish_reason: Some(FinishReason::ToolCalls),
-                    logprobs: None,
-                };
-            }
+            // Create choice with tool calls
+            #[allow(deprecated)]
+            return ChatChoiceStream {
+                index: choice_index,
+                delta: ChatCompletionStreamResponseDelta {
+                    role: Some(Role::Assistant),
+                    content: normal_text.filter(|t| !t.is_empty()),
+                    tool_calls: Some(tool_call_chunks),
+                    function_call: None,
+                    refusal: None,
+                    reasoning_content: None,
+                },
+                finish_reason: Some(FinishReason::ToolCalls),
+                logprobs: None,
+            };
+        }
 
         // No tool calls found or parsing failed, return content choice
         #[allow(deprecated)]
@@ -684,122 +655,6 @@ impl JailedStream {
                 // Unknown parser, default to full content
                 content.len()
             }
-        }
-    }
-
-    /// Emit a response based on the configured emission mode
-    fn emit_response(
-        &self,
-        choices: Vec<ChatChoiceStream>,
-        base_response: &NvCreateChatCompletionStreamResponse,
-        annotated_metadata: (Option<String>, Option<String>, Option<Vec<String>>),
-    ) -> Vec<Annotated<NvCreateChatCompletionStreamResponse>> {
-        let (id, event, comment) = annotated_metadata;
-
-        match self.emission_mode {
-            EmissionMode::Packed => {
-                // Pack all choices into a single response
-                let mut response = base_response.clone();
-                response.choices = choices;
-
-                vec![Annotated {
-                    data: Some(response),
-                    id,
-                    event,
-                    comment,
-                }]
-            }
-            EmissionMode::SingleChoicePerChunk => {
-                // Emit each choice in a separate response
-                choices
-                    .into_iter()
-                    .map(|choice| {
-                        let mut response = base_response.clone();
-                        response.choices = vec![choice];
-
-                        Annotated {
-                            data: Some(response),
-                            id: id.clone(),
-                            event: event.clone(),
-                            comment: comment.clone(),
-                        }
-                    })
-                    .collect()
-            }
-        }
-    }
-
-    /// Create a response with accumulated content, potentially parsing tool calls
-    fn create_unjailed_response(
-        &self,
-        mut base_response: NvCreateChatCompletionStreamResponse,
-        accumulated_content: &HashMap<u32, String>,
-        id: Option<String>,
-        event: Option<String>,
-        comment: Option<Vec<String>>,
-    ) -> Annotated<NvCreateChatCompletionStreamResponse> {
-        // Try to parse tool calls from accumulated content
-        for (choice_index, accumulated_text) in accumulated_content {
-            if let Ok((tool_calls, normal_text)) =
-                try_tool_call_parse_aggregate(accumulated_text, self.tool_call_parser.as_deref())
-            {
-                if !tool_calls.is_empty() {
-                    tracing::debug!(
-                        "Parsed {} tool calls from accumulated content",
-                        tool_calls.len()
-                    );
-
-                    // Convert to streaming format
-                    let tool_call_chunks: Vec<ChatCompletionMessageToolCallChunk> = tool_calls
-                        .into_iter()
-                        .enumerate()
-                        .map(|(idx, tool_call)| ChatCompletionMessageToolCallChunk {
-                            index: idx as u32,
-                            id: Some(tool_call.id),
-                            r#type: Some(tool_call.r#type),
-                            function: Some(FunctionCallStream {
-                                name: Some(tool_call.function.name),
-                                arguments: Some(tool_call.function.arguments),
-                            }),
-                        })
-                        .collect();
-
-                    // Create choice with tool calls
-                    #[allow(deprecated)]
-                    let final_choice = ChatChoiceStream {
-                        index: *choice_index,
-                        delta: ChatCompletionStreamResponseDelta {
-                            role: Some(Role::Assistant),
-                            content: normal_text.filter(|t| !t.is_empty()),
-                            tool_calls: Some(tool_call_chunks),
-                            function_call: None,
-                            refusal: None,
-                            reasoning_content: None,
-                        },
-                        finish_reason: Some(FinishReason::ToolCalls),
-                        logprobs: None,
-                    };
-
-                    base_response.choices = vec![final_choice];
-                } else {
-                    // No tool calls found, return accumulated text as normal content
-                    if let Some(choice) = base_response.choices.get_mut(*choice_index as usize) {
-                        choice.delta.content = Some(accumulated_text.clone());
-                    }
-                }
-            } else {
-                // Parse failed, return accumulated text as normal content
-                if let Some(choice) = base_response.choices.get_mut(*choice_index as usize) {
-                    choice.delta.content = Some(accumulated_text.clone());
-                }
-            }
-        }
-
-        Annotated {
-            data: Some(base_response),
-            id,
-            event,
-            comment,
         }
     }
 }
