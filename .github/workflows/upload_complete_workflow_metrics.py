@@ -14,6 +14,10 @@ from typing import Dict, Any, Optional, List
 from urllib.parse import urlparse
 import re
 
+# FILTERING CONFIGURATION - Only upload data for specific workflow/job combinations
+TARGET_WORKFLOW_NAME = "NVIDIA Dynamo Backends Github Validation"
+TARGET_JOB_NAME = "Build and Test - vllm"
+
 # NEW STANDARDIZED FIELD SCHEMA - Using consistent prefixes for OpenSearch mapping
 # Using prefixes: s_ for strings, l_ for longs, ts_ for timestamps
 
@@ -264,6 +268,29 @@ class WorkflowMetricsUploader:
                 print("Could not fetch jobs data from GitHub API")
                 return
             
+            # FILTER: Only upload data for specific workflow and job
+            workflow_name = workflow_data.get('name', '')
+            
+            if workflow_name != TARGET_WORKFLOW_NAME:
+                print(f"❌ Skipping upload - Workflow '{workflow_name}' does not match target '{TARGET_WORKFLOW_NAME}'")
+                return
+            
+            # Check if target job exists in this workflow
+            target_job_found = False
+            for job in jobs_data.get('jobs', []):
+                if job.get('name') == TARGET_JOB_NAME:
+                    target_job_found = True
+                    break
+            
+            if not target_job_found:
+                print(f"❌ Skipping upload - Target job '{TARGET_JOB_NAME}' not found in workflow")
+                print(f"   Available jobs: {[job.get('name') for job in jobs_data.get('jobs', [])]}")
+                return
+            
+            print(f"✅ Workflow and job match criteria - proceeding with upload")
+            print(f"   Workflow: '{workflow_name}'")
+            print(f"   Target job found: '{TARGET_JOB_NAME}'")
+            
             # Check if workflow is completed
             workflow_status = workflow_data.get('status', '')
             workflow_conclusion = workflow_data.get('conclusion')
@@ -343,8 +370,19 @@ class WorkflowMetricsUploader:
         jobs_processed = 0
         steps_processed = 0
         
+        # Use the configured target job name
+        
         for job in jobs_data['jobs']:
             try:
+                job_name = job.get('name', '')
+                
+                # FILTER: Only upload the target job
+                if job_name != TARGET_JOB_NAME:
+                    print(f"⏭️  Skipping job '{job_name}' - not target job '{TARGET_JOB_NAME}'")
+                    continue
+                
+                print(f"📤 Uploading target job: '{job_name}'")
+                
                 # Upload job metrics
                 self._upload_single_job_metrics(job)
                 jobs_processed += 1
