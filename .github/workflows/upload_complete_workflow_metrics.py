@@ -14,45 +14,47 @@ from typing import Dict, Any, Optional, List
 from urllib.parse import urlparse
 import re
 
-# Schema Field Constants - Centralized field names for consistency
+# NEW STANDARDIZED FIELD SCHEMA - Using consistent prefixes for OpenSearch mapping
+# Using prefixes: s_ for strings, l_ for longs, ts_ for timestamps
+
 # Common fields across all metric types
 FIELD_ID = "_id"
-FIELD_USER_ALIAS = "userAlias"
-FIELD_REPO = "repo"
-FIELD_WORKFLOW_NAME = "workflowName"
-FIELD_GITHUB_EVENT = "githubEvent"
-FIELD_BRANCH = "branch"
-FIELD_STATUS = "status"
-FIELD_EVENT = "event"
+FIELD_USER_ALIAS = "s_user_alias"
+FIELD_REPO = "s_repo"
+FIELD_WORKFLOW_NAME = "s_workflow_name"
+FIELD_GITHUB_EVENT = "s_github_event"
+FIELD_BRANCH = "s_branch"
+FIELD_STATUS = "s_status"
+FIELD_EVENT = "s_event"
 
 # Timing fields
-FIELD_CREATION_TIME = "creationTime"
-FIELD_START_TIME = "startTime"
-FIELD_END_TIME = "endTime"
-FIELD_QUEUE_TIME_SEC = "queueTimeSec"
-FIELD_DURATION_SEC = "durationSec"
+FIELD_CREATION_TIME = "ts_creation_time"
+FIELD_START_TIME = "ts_start_time"
+FIELD_END_TIME = "ts_end_time"
+FIELD_QUEUE_TIME = "l_queue_time_sec"  # Integer seconds as long
+FIELD_DURATION_SEC = "l_duration_sec"
 
 # Workflow-specific fields
-FIELD_WORKFLOW_ID = "workflowId"
-FIELD_COMMIT_SHA = "commitSha"
-FIELD_JOBS = "jobs"
+FIELD_WORKFLOW_ID = "s_workflow_id"
+FIELD_COMMIT_SHA = "s_commit_sha"
+FIELD_JOBS = "s_jobs"  # Comma-separated job IDs
 
 # Job-specific fields
-FIELD_JOB_ID = "jobId"
-FIELD_JOB_NAME = "jobName"
-FIELD_RUNNER_INFO = "runnerInfo"
-FIELD_RUNNER_ID = "runnerId"
-FIELD_RUNNER_NAME = "runnerName"
-FIELD_WORKFLOW_SOURCE = "workflowSource"
-FIELD_LABELS = "labels"
-FIELD_STEPS = "steps"
+FIELD_JOB_ID = "s_job_id"
+FIELD_JOB_NAME = "s_job_name"
+FIELD_RUNNER_INFO = "s_runner_info"
+FIELD_RUNNER_ID = "s_runner_id"
+FIELD_RUNNER_NAME = "s_runner_name"
+FIELD_WORKFLOW_SOURCE = "s_workflow_source"
+FIELD_LABELS = "s_labels"  # Comma-separated labels
+FIELD_STEPS = "s_steps"  # Comma-separated step IDs
 
 # Step-specific fields
-FIELD_STEP_ID = "stepId"
-FIELD_NAME = "stepName"
-FIELD_STEP_NUMBER = "stepNumber"
-FIELD_COMMAND = "command"
-FIELD_JOB_LABELS = "jobLabels"
+FIELD_STEP_ID = "s_step_id"
+FIELD_NAME = "s_step_name"
+FIELD_STEP_NUMBER = "l_step_number"
+FIELD_COMMAND = "s_command"
+FIELD_JOB_LABELS = "s_job_labels"  # Comma-separated labels
 
 class TimingProcessor:
     """Centralized processor for all datetime and duration conversions using Python built-ins"""
@@ -245,16 +247,13 @@ class WorkflowMetricsUploader:
         if creation_time: #Don't add for steps
             db_data[FIELD_CREATION_TIME] = creation_time
         
-        # Duration in integer seconds (consistent across all types)
+        # Duration in integer seconds (using l_ prefix for long type)
         db_data[FIELD_DURATION_SEC] = TimingProcessor.calculate_time_diff(start_time, end_time)
         
-        # Queue time - use the field name that Grafana expects (HH:MM:SS format)
+        # Queue time in integer seconds (using l_ prefix for long type)
         if metric_type != "step":
             queue_seconds = TimingProcessor.calculate_time_diff(creation_time, start_time)
-            # Convert to HH:MM:SS format like the working script
-            hours, remainder = divmod(queue_seconds, 3600)
-            minutes, seconds = divmod(remainder, 60)
-            db_data['queueTime'] = f'{hours:02d}:{minutes:02d}:{seconds:02d}'
+            db_data[FIELD_QUEUE_TIME] = queue_seconds
         
         # Add @timestamp field for Grafana/OpenSearch indexing (CRITICAL FIX!)
         # Use the end_time if available, otherwise use current time
@@ -347,14 +346,12 @@ class WorkflowMetricsUploader:
         if actor and actor.get('login'):
             db_data[FIELD_USER_ALIAS] = actor.get('login')
         
-        # Add jobs list
-        """
+        # Add jobs list as comma-separated string (using s_ prefix)
         if jobs_data and 'jobs' in jobs_data:
             job_ids = [str(job['id']) for job in jobs_data['jobs']]
-            db_data[FIELD_JOBS] = job_ids
+            db_data[FIELD_JOBS] = ','.join(job_ids)
         else:
-        """
-        db_data[FIELD_JOBS] = []
+            db_data[FIELD_JOBS] = ''
         
         self.post_to_db(self.workflow_index, db_data)
 
@@ -482,8 +479,8 @@ class WorkflowMetricsUploader:
         db_data[FIELD_BRANCH] = str(self.ref_name)
         db_data[FIELD_RUNNER_INFO] = str(job_data.get('runner_name', 'unknown'))
         
-        db_data[FIELD_WORKFLOW_SOURCE] = self.event_name
-        db_data[FIELD_JOB_NAME] = job_name
+        db_data[FIELD_WORKFLOW_SOURCE] = str(self.event_name)
+        db_data[FIELD_JOB_NAME] = str(job_name)
         
         # Timing fields using standardized method - Fix parameter order
         created_at = job_data.get('created_at')
@@ -558,10 +555,10 @@ class WorkflowMetricsUploader:
         db_data[FIELD_STEP_ID] = str(step_id)
         db_data[FIELD_JOB_ID] = str(job_id)
         db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
-        db_data[FIELD_NAME] = step_name
-        db_data[FIELD_STEP_NUMBER] = step_number
-        db_data[FIELD_STATUS] = step_data.get('conclusion', step_data.get('status', 'unknown'))
-        db_data[FIELD_JOB_NAME] = job_name
+        db_data[FIELD_NAME] = str(step_name)
+        db_data[FIELD_STEP_NUMBER] = int(step_number)  # Using l_ prefix, should be integer
+        db_data[FIELD_STATUS] = str(step_data.get('conclusion', step_data.get('status', 'unknown')))
+        db_data[FIELD_JOB_NAME] = str(job_name)
         
         # Timing fields using standardized method - Fix parameter order for steps
         started_at = step_data.get('started_at')
