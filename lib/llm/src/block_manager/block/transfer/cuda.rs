@@ -305,6 +305,80 @@ where
                 stream,
             )?;
         }
+    } else if !src_data.is_fully_contiguous() && dst_data.is_fully_contiguous() {
+        // Special case: non-contiguous source (LayerSeparate) → contiguous destination (FullyContiguous)
+        // We need to copy each layer sequentially to create a contiguous layout
+
+        assert_eq!(src_data.num_layers(), dst_data.num_layers());
+
+        // Get the full contiguous destination view
+        let mut dst_block_view = dst_data.block_view_mut()?;
+        let dst_base_ptr = unsafe { dst_block_view.as_mut_ptr() };
+
+        let mut dst_offset = 0;
+
+        for layer_idx in 0..src_data.num_layers() {
+            for outer_idx in 0..src_data.num_outer_dims() {
+                // Get the source layer view (this has the correct LayerSeparate layout)
+                let src_view = src_data.layer_view(layer_idx, outer_idx)?;
+                let layer_size = src_view.size();
+
+                // Copy to sequential position in contiguous destination
+                unsafe {
+                    memcpy_fn(
+                        src_view.as_ptr(),
+                        dst_base_ptr.add(dst_offset),
+                        layer_size,
+                        stream,
+                    )?;
+                }
+
+                dst_offset += layer_size;
+            }
+        }
+
+        // Verify we filled the entire destination block
+        debug_assert_eq!(dst_offset, dst_block_view.size(),
+            "Destination offset mismatch: filled {} bytes but destination has {} bytes",
+            dst_offset, dst_block_view.size());
+
+    } else if src_data.is_fully_contiguous() && !dst_data.is_fully_contiguous() {
+        // Special case: contiguous source (FullyContiguous) → non-contiguous destination (LayerSeparate)
+        // We need to map the contiguous source data to the layered destination structure
+
+        assert_eq!(src_data.num_layers(), dst_data.num_layers());
+
+        // Get the full contiguous source view
+        let src_block_view = src_data.block_view()?;
+        let src_base_ptr = unsafe { src_block_view.as_ptr() };
+
+        let mut src_offset = 0;
+
+        for layer_idx in 0..src_data.num_layers() {
+            for outer_idx in 0..src_data.num_outer_dims() {
+                // Get the destination layer view (this has the correct LayerSeparate layout)
+                let mut dst_view = dst_data.layer_view_mut(layer_idx, outer_idx)?;
+                let layer_size = dst_view.size();
+
+                // Copy from sequential position in contiguous source
+                unsafe {
+                    memcpy_fn(
+                        src_base_ptr.add(src_offset),
+                        dst_view.as_mut_ptr(),
+                        layer_size,
+                        stream,
+                    )?;
+                }
+
+                src_offset += layer_size;
+            }
+        }
+
+        // Verify we consumed the entire source block
+        debug_assert_eq!(src_offset, src_block_view.size(),
+            "Source offset mismatch: consumed {} bytes but source has {} bytes",
+            src_offset, src_block_view.size());
+
     } else {
         assert_eq!(src_data.num_layers(), dst_data.num_layers());
         copy_layers(
@@ -681,6 +755,371 @@ mod tests {
             let ptr = host.as_ptr();
             let slice = std::slice::from_raw_parts(ptr, 1024);
             assert!(slice.iter().all(|&x| x == 42));
+        }
+    }
+
+    // ============================================================================
+    // CUDA TRANSFER TESTS FOR LAYOUT COMPATIBILITY
+    // ============================================================================
+
+    mod layout_transfer_tests {
+        use super::*;
+        use crate::block_manager::layout::{FullyContiguous, LayerSeparate, LayoutConfig, LayoutType, GenericBlockLayout};
+        use crate::block_manager::storage::{DeviceStorage, PinnedStorage, SystemStorage};
+
+        const TEST_NUM_BLOCKS: usize = 4;
+        const TEST_NUM_LAYERS: usize = 3;
+        const TEST_OUTER_DIM: usize = 2;
+        const TEST_PAGE_SIZE: usize = 8;
+        const TEST_INNER_DIM: usize = 16;
+        const TEST_DTYPE_WIDTH_BYTES: usize = 2;
+
+        fn create_test_config() -> LayoutConfig {
+            LayoutConfig {
+                num_blocks: TEST_NUM_BLOCKS,
+                num_layers: TEST_NUM_LAYERS,
+                outer_dim: TEST_OUTER_DIM,
+                page_size: TEST_PAGE_SIZE,
+                inner_dim: TEST_INNER_DIM,
+                alignment: 256, // GPU-friendly alignment
+                dtype_width_bytes: TEST_DTYPE_WIDTH_BYTES,
+            }
+        }
+
+        /// Test H2D transfers between FullyContiguous host and LayerSeparate device layouts
+        #[test]
+        fn test_h2d_fc_host_to_ls_device() {
+            let device_allocator = DeviceAllocator::default();
+            let pinned_allocator = PinnedAllocator::default();
+            let ctx = device_allocator.ctx().clone();
+            let stream = ctx.new_stream().unwrap();
+
+            let config = create_test_config();
+
+            // Create FullyContiguous host layout
+            let host_layout = FullyContiguous::allocate(config.clone(), &pinned_allocator).unwrap();
+
+            // Create LayerSeparate device layout
+            let device_layout = LayerSeparate::allocate(config, &device_allocator, true).unwrap();
+
+            // Test data transfer for each memory region
+            for block_idx in 0..TEST_NUM_BLOCKS {
+                for layer_idx in 0..TEST_NUM_LAYERS {
+                    for outer_idx in 0..TEST_OUTER_DIM {
+                        let host_region = host_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let device_region = device_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+
+                        // Verify regions have same size
+                        assert_eq!(host_region.size(), device_region.size(),
+                            "Region size mismatch at ({}, {}, {})", block_idx, layer_idx, outer_idx);
+
+                        // Create test pattern
+                        let pattern = ((block_idx as u8) << 4) | ((layer_idx as u8) << 2) | (outer_idx as u8);
+
+                        // Fill host memory with pattern
+                        unsafe {
+                            let host_slice = std::slice::from_raw_parts_mut(
+                                host_region.addr() as *mut u8, host_region.size()
+                            );
+                            host_slice.fill(pattern);
+                        }
+
+                        // Transfer H2D
+                        unsafe {
+                            cuda_memcpy_h2d(
+                                host_region.addr() as *const u8,
+                                device_region.addr() as *mut u8,
+                                host_region.size(),
+                                stream.as_ref()
+                            ).unwrap();
+                        }
+                    }
+                }
+            }
+
+            stream.synchronize().unwrap();
+
+            // Verify transfers by copying back and checking patterns
+            for block_idx in 0..TEST_NUM_BLOCKS {
+                for layer_idx in 0..TEST_NUM_LAYERS {
+                    for outer_idx in 0..TEST_OUTER_DIM {
+                        let host_region = host_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let device_region = device_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+
+                        let expected_pattern = ((block_idx as u8) << 4) | ((layer_idx as u8) << 2) | (outer_idx as u8);
+
+                        // Create temporary verification buffer
+                        let mut verify_buffer = pinned_allocator.allocate(host_region.size()).unwrap();
+
+                        // Copy back from device
+                        unsafe {
+                            cuda_memcpy_d2h(
+                                device_region.addr() as *const u8,
+                                verify_buffer.as_mut_ptr(),
+                                host_region.size(),
+                                stream.as_ref()
+                            ).unwrap();
+                        }
+                        stream.synchronize().unwrap();
+
+                        // Verify pattern
+                        unsafe {
+                            let verify_slice = std::slice::from_raw_parts(
+                                verify_buffer.as_ptr(), host_region.size()
+                            );
+                            assert!(verify_slice.iter().all(|&x| x == expected_pattern),
+                                "Pattern mismatch at ({}, {}, {}) - expected {}, got {:?}",
+                                block_idx, layer_idx, outer_idx, expected_pattern,
+                                &verify_slice[0..std::cmp::min(8, verify_slice.len())]);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Test D2H transfers from LayerSeparate device to FullyContiguous host
+        #[test]
+        fn test_d2h_ls_device_to_fc_host() {
+            let device_allocator = DeviceAllocator::default();
+            let pinned_allocator = PinnedAllocator::default();
+            let ctx = device_allocator.ctx().clone();
+            let stream = ctx.new_stream().unwrap();
+
+            let config = create_test_config();
+
+            // Create LayerSeparate device layout (block contiguous)
+            let device_layout = LayerSeparate::allocate(config.clone(), &device_allocator, false).unwrap();
+
+            // Create FullyContiguous host layout
+            let host_layout = FullyContiguous::allocate(config, &pinned_allocator).unwrap();
+
+            // Initialize device memory with patterns using a temporary host buffer
+            for block_idx in 0..TEST_NUM_BLOCKS {
+                for layer_idx in 0..TEST_NUM_LAYERS {
+                    for outer_idx in 0..TEST_OUTER_DIM {
+                        let device_region = device_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let pattern = ((block_idx as u8) << 4) | ((layer_idx as u8) << 2) | (outer_idx as u8) | 0x80;
+
+                        // Create temp buffer with pattern
+                        let mut temp_buffer = pinned_allocator.allocate(device_region.size()).unwrap();
+                        unsafe {
+                            let temp_slice = std::slice::from_raw_parts_mut(
+                                temp_buffer.as_mut_ptr(), device_region.size()
+                            );
+                            temp_slice.fill(pattern);
+                        }
+
+                        // Copy pattern to device
+                        unsafe {
+                            cuda_memcpy_h2d(
+                                temp_buffer.as_ptr(),
+                                device_region.addr() as *mut u8,
+                                device_region.size(),
+                                stream.as_ref()
+                            ).unwrap();
+                        }
+                    }
+                }
+            }
+            stream.synchronize().unwrap();
+
+            // Clear host layout
+            for block_idx in 0..TEST_NUM_BLOCKS {
+                for layer_idx in 0..TEST_NUM_LAYERS {
+                    for outer_idx in 0..TEST_OUTER_DIM {
+                        let host_region = host_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        unsafe {
+                            let host_slice = std::slice::from_raw_parts_mut(
+                                host_region.addr() as *mut u8, host_region.size()
+                            );
+                            host_slice.fill(0);
+                        }
+                    }
+                }
+            }
+
+            // Transfer D2H
+            for block_idx in 0..TEST_NUM_BLOCKS {
+                for layer_idx in 0..TEST_NUM_LAYERS {
+                    for outer_idx in 0..TEST_OUTER_DIM {
+                        let device_region = device_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let host_region = host_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+
+                        unsafe {
+                            cuda_memcpy_d2h(
+                                device_region.addr() as *const u8,
+                                host_region.addr() as *mut u8,
+                                device_region.size(),
+                                stream.as_ref()
+                            ).unwrap();
+                        }
+                    }
+                }
+            }
+            stream.synchronize().unwrap();
+
+            // Verify patterns in host layout
+            for block_idx in 0..TEST_NUM_BLOCKS {
+                for layer_idx in 0..TEST_NUM_LAYERS {
+                    for outer_idx in 0..TEST_OUTER_DIM {
+                        let host_region = host_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let expected_pattern = ((block_idx as u8) << 4) | ((layer_idx as u8) << 2) | (outer_idx as u8) | 0x80;
+
+                        unsafe {
+                            let host_slice = std::slice::from_raw_parts(
+                                host_region.addr() as *const u8, host_region.size()
+                            );
+                            assert!(host_slice.iter().all(|&x| x == expected_pattern),
+                                "Pattern mismatch at ({}, {}, {}) - expected {}, got {:?}",
+                                block_idx, layer_idx, outer_idx, expected_pattern,
+                                &host_slice[0..std::cmp::min(8, host_slice.len())]);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Test bidirectional transfers with layout compatibility verification
+        #[test]
+        fn test_bidirectional_layout_transfers() {
+            let device_allocator = DeviceAllocator::default();
+            let pinned_allocator = PinnedAllocator::default();
+            let ctx = device_allocator.ctx().clone();
+            let stream = ctx.new_stream().unwrap();
+
+            let config = create_test_config();
+
+            // Create both layout types
+            let host_fc = FullyContiguous::allocate(config.clone(), &pinned_allocator).unwrap();
+            let device_ls_outer = LayerSeparate::allocate(config.clone(), &device_allocator, true).unwrap();
+            let device_ls_block = LayerSeparate::allocate(config, &device_allocator, false).unwrap();
+
+            // Test round-trip: Host FC -> Device LS (outer) -> Device LS (block) -> Host FC
+            for block_idx in 0..TEST_NUM_BLOCKS {
+                for layer_idx in 0..TEST_NUM_LAYERS {
+                    for outer_idx in 0..TEST_OUTER_DIM {
+                        let original_pattern = ((block_idx as u8) << 4) | ((layer_idx as u8) << 2) | (outer_idx as u8) | 0x40;
+
+                        // Step 1: Initialize host FC with pattern
+                        let host_region = host_fc.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        unsafe {
+                            let host_slice = std::slice::from_raw_parts_mut(
+                                host_region.addr() as *mut u8, host_region.size()
+                            );
+                            host_slice.fill(original_pattern);
+                        }
+
+                        // Step 2: Transfer to device LS outer
+                        let device_outer_region = device_ls_outer.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        unsafe {
+                            cuda_memcpy_h2d(
+                                host_region.addr() as *const u8,
+                                device_outer_region.addr() as *mut u8,
+                                host_region.size(),
+                                stream.as_ref()
+                            ).unwrap();
+                        }
+
+                        // Step 3: Transfer between device layouts (D2D)
+                        let device_block_region = device_ls_block.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        unsafe {
+                            cuda_memcpy_d2d(
+                                device_outer_region.addr() as *const u8,
+                                device_block_region.addr() as *mut u8,
+                                device_outer_region.size(),
+                                stream.as_ref()
+                            ).unwrap();
+                        }
+
+                        stream.synchronize().unwrap();
+
+                        // Step 4: Clear host and transfer back
+                        unsafe {
+                            let host_slice = std::slice::from_raw_parts_mut(
+                                host_region.addr() as *mut u8, host_region.size()
+                            );
+                            host_slice.fill(0);
+                        }
+
+                        unsafe {
+                            cuda_memcpy_d2h(
+                                device_block_region.addr() as *const u8,
+                                host_region.addr() as *mut u8,
+                                device_block_region.size(),
+                                stream.as_ref()
+                            ).unwrap();
+                        }
+                        stream.synchronize().unwrap();
+
+                        // Step 5: Verify pattern survived the round trip
+                        unsafe {
+                            let host_slice = std::slice::from_raw_parts(
+                                host_region.addr() as *const u8, host_region.size()
+                            );
+                            assert!(host_slice.iter().all(|&x| x == original_pattern),
+                                "Round-trip pattern mismatch at ({}, {}, {}) - expected {}, got {:?}",
+                                block_idx, layer_idx, outer_idx, original_pattern,
+                                &host_slice[0..std::cmp::min(8, host_slice.len())]);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Test transfer performance and alignment impact
+        #[test]
+        fn test_layout_transfer_alignment_performance() {
+            let device_allocator = DeviceAllocator::default();
+            let pinned_allocator = PinnedAllocator::default();
+            let ctx = device_allocator.ctx().clone();
+            let stream = ctx.new_stream().unwrap();
+
+            // Test different alignments
+            for alignment in [1, 64, 256, 512] {
+                let config = LayoutConfig {
+                    num_blocks: 2,
+                    num_layers: 2,
+                    outer_dim: 1,
+                    page_size: 1024,
+                    inner_dim: 256,
+                    alignment,
+                    dtype_width_bytes: 4,
+                };
+
+                let host_layout = FullyContiguous::allocate(config.clone(), &pinned_allocator).unwrap();
+                let device_layout = FullyContiguous::allocate(config, &device_allocator).unwrap();
+
+                // Measure transfer time (basic timing)
+                let start = std::time::Instant::now();
+
+                for block_idx in 0..2 {
+                    for layer_idx in 0..2 {
+                        let host_region = host_layout.memory_region(block_idx, layer_idx, 0).unwrap();
+                        let device_region = device_layout.memory_region(block_idx, layer_idx, 0).unwrap();
+
+                        unsafe {
+                            cuda_memcpy_h2d(
+                                host_region.addr() as *const u8,
+                                device_region.addr() as *mut u8,
+                                host_region.size(),
+                                stream.as_ref()
+                            ).unwrap();
+                        }
+                    }
+                }
+                stream.synchronize().unwrap();
+
+                let duration = start.elapsed();
+
+                // Verify alignment was applied correctly
+                let region = host_layout.memory_region(0, 0, 0).unwrap();
+                if alignment > 1 {
+                    assert_eq!(region.addr() % alignment, 0,
+                        "Memory not aligned to {} bytes", alignment);
+                }
+
+                println!("Transfer with alignment {} took {:?}", alignment, duration);
+            }
         }
     }
 }

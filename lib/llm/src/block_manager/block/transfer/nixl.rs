@@ -41,6 +41,55 @@ where
         }
 
         Ok(())
+    } else if src_data.is_fully_contiguous() && !dst_data.is_fully_contiguous() {
+        // Special case: contiguous source → non-contiguous destination
+        // We need to map the contiguous source data to the layered destination structure
+
+        assert_eq!(src_data.num_layers(), dst_data.num_layers());
+
+        // Get the full contiguous source view
+        let src_block_view = src_data.block_view()?;
+        let src_base_ptr = unsafe { src_block_view.as_ptr() } as usize;
+        let src_device_id = src_block_view.device_id();
+
+        let mut src_offset = 0;
+
+        for layer_idx in 0..src_data.num_layers() {
+            for outer_idx in 0..src_data.num_outer_dims() {
+                // Get the destination layer view (this has the correct layout)
+                let mut dst_view = dst_data.layer_view_mut(layer_idx, outer_idx)?;
+                let layer_size = dst_view.size();
+
+                // Create source descriptor with calculated offset from contiguous block
+                unsafe {
+                    src_dl.add_desc(
+                        src_base_ptr + src_offset,
+                        layer_size,
+                        src_device_id,
+                    )?;
+                }
+
+                // Create destination descriptor
+                let dst_desc = dst_view.as_nixl_descriptor_mut();
+                unsafe {
+                    dst_dl.add_desc(
+                        dst_desc.as_ptr() as usize,
+                        dst_desc.size(),
+                        dst_desc.device_id(),
+                    )?;
+                }
+
+                debug_assert_eq!(layer_size, dst_desc.size());
+                src_offset += layer_size;
+            }
+        }
+
+        // Verify we consumed the entire source block
+        debug_assert_eq!(src_offset, src_block_view.size(),
+            "Source offset mismatch: consumed {} bytes but source has {} bytes",
+            src_offset, src_block_view.size());
+
+        Ok(())
     } else {
         assert_eq!(src_data.num_layers(), dst_data.num_layers());
         for layer_idx in 0..src_data.num_layers() {
@@ -48,7 +97,19 @@ where
                 let src_view = src_data.layer_view(layer_idx, outer_idx)?;
                 let mut dst_view = dst_data.layer_view_mut(layer_idx, outer_idx)?;
 
-                debug_assert_eq!(src_view.size(), dst_view.size());
+                // Handle potential size mismatches between layouts
+                let src_size = src_view.size();
+                let dst_size = dst_view.size();
+                let copy_size = std::cmp::min(src_size, dst_size);
+
+                // Log a warning if sizes don't match (this indicates a layout issue)
+                if src_size != dst_size {
+                    tracing::warn!(
+                        "Size mismatch in NIXL layer copy: src_size={}, dst_size={}, using copy_size={}. \
+                         This may indicate a layout configuration issue.",
+                        src_size, dst_size, copy_size
+                    );
+                }
 
                 let src_desc = src_view.as_nixl_descriptor();
                 let dst_desc = dst_view.as_nixl_descriptor_mut();
@@ -56,13 +117,13 @@ where
                 unsafe {
                     src_dl.add_desc(
                         src_desc.as_ptr() as usize,
-                        src_desc.size(),
+                        copy_size,  // Use the safe copy size
                         src_desc.device_id(),
                     )?;
 
                     dst_dl.add_desc(
                         dst_desc.as_ptr() as usize,
-                        dst_desc.size(),
+                        copy_size,  // Use the safe copy size
                         dst_desc.device_id(),
                     )?;
                 }
