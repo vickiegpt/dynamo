@@ -1092,8 +1092,140 @@ mod tests {
                 comment: None,
             }
         }
+
+        /// Helper to assert content in a result
+        pub fn assert_content(
+            result: &Annotated<NvCreateChatCompletionStreamResponse>,
+            expected: &str,
+        ) {
+            let content = result
+                .data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.content.as_ref())
+                .expect("Expected content in result");
+
+            assert_eq!(
+                content, expected,
+                "Content mismatch: expected '{}', got '{}'",
+                expected, content
+            );
+        }
+
+        /// Helper to assert a tool call in a result
+        pub fn assert_tool_call(
+            result: &Annotated<NvCreateChatCompletionStreamResponse>,
+            name: &str,
+            args: serde_json::Value,
+        ) {
+            let tool_calls = result
+                .data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .expect("Expected tool calls in result");
+
+            assert!(!tool_calls.is_empty(), "Expected at least one tool call");
+
+            let tool_call = &tool_calls[0];
+            let function = tool_call
+                .function
+                .as_ref()
+                .expect("Expected function in tool call");
+
+            assert_eq!(
+                function.name.as_deref(),
+                Some(name),
+                "Tool call name mismatch: expected '{}', got '{:?}'",
+                name,
+                function.name
+            );
+
+            if let Some(arguments_str) = &function.arguments {
+                let parsed_args: serde_json::Value = serde_json::from_str(arguments_str)
+                    .expect("Tool call arguments should be valid JSON");
+                assert_eq!(
+                    parsed_args, args,
+                    "Tool call arguments mismatch: expected {}, got {}",
+                    args, parsed_args
+                );
+            } else if !args.is_null() {
+                panic!("Expected tool call arguments {} but got None", args);
+            }
+        }
+
+        /// Helper to assert no content or tool calls (for accumulated chunks)
+        pub fn assert_empty_emission(result: &Annotated<NvCreateChatCompletionStreamResponse>) {
+            if let Some(data) = &result.data {
+                if let Some(choice) = data.choices.first() {
+                    assert!(
+                        choice.delta.content.is_none()
+                            || choice.delta.content.as_ref().unwrap().is_empty(),
+                        "Expected no content but got: {:?}",
+                        choice.delta.content
+                    );
+                    assert!(
+                        choice.delta.tool_calls.is_none()
+                            || choice.delta.tool_calls.as_ref().unwrap().is_empty(),
+                        "Expected no tool calls but got: {:?}",
+                        choice.delta.tool_calls
+                    );
+                }
+            }
+        }
+
+        /// Helper to reconstruct all content from results
+        pub fn reconstruct_content(
+            results: &[Annotated<NvCreateChatCompletionStreamResponse>],
+        ) -> String {
+            results
+                .iter()
+                .filter_map(|r| {
+                    r.data
+                        .as_ref()
+                        .and_then(|d| d.choices.first())
+                        .and_then(|c| c.delta.content.as_ref())
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("")
+        }
+
+        /// Helper to extract content from a single result (for negative assertions)
+        pub fn extract_content(result: &Annotated<NvCreateChatCompletionStreamResponse>) -> String {
+            result
+                .data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.content.as_ref())
+                .cloned()
+                .unwrap_or_default()
+        }
+
+        /// Helper to check if result contains a tool call
+        pub fn has_tool_call(result: &Annotated<NvCreateChatCompletionStreamResponse>) -> bool {
+            result
+                .data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tc| !tc.is_empty())
+                .unwrap_or(false)
+        }
+
+        /// Helper to check if result contains content
+        pub fn has_content(result: &Annotated<NvCreateChatCompletionStreamResponse>) -> bool {
+            result
+                .data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.content.as_ref())
+                .map(|content| !content.is_empty())
+                .unwrap_or(false)
+        }
     }
 
+    use serde_json::json;
     use test_utils::*;
 
     #[tokio::test]
@@ -1266,7 +1398,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_jailed_stream_no_jailing() {
-        // Create normal content chunks
+        // Input chunks:
+        // [0] "Hello "
+        // [1] "World"
+        // [2] [final chunk]
+        //
+        // Expected output (pass-through):
+        // [0] Content("Hello ")
+        // [1] Content("World")
+        // [2] [final chunk]
         let chunks = vec![
             create_mock_response_chunk("Hello ".to_string(), 0),
             create_mock_response_chunk("World".to_string(), 0),
@@ -1283,21 +1423,32 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // All chunks should pass through unchanged
-        assert_eq!(results.len(), 3);
+        // === Verify chunk count ===
         assert_eq!(
-            results[0].data.as_ref().unwrap().choices[0]
-                .delta
-                .content
-                .as_deref(),
-            Some("Hello ")
+            results.len(),
+            3,
+            "Should pass through all 3 chunks unchanged"
         );
+
+        // === Verify individual chunks ===
+        assert_content(&results[0], "Hello ");
+        assert_content(&results[1], "World");
+        // results[2] is the final chunk - no content to verify
+
+        // === Verify negative assertions ===
+        for (i, result) in results.iter().take(2).enumerate() {
+            assert!(
+                !has_tool_call(result),
+                "Chunk {} should not contain tool calls when no patterns match",
+                i
+            );
+        }
+
+        // === Verify content reconstruction ===
         assert_eq!(
-            results[1].data.as_ref().unwrap().choices[0]
-                .delta
-                .content
-                .as_deref(),
-            Some("World")
+            reconstruct_content(&results),
+            "Hello World",
+            "Content should pass through unchanged when no jailing occurs"
         );
     }
 
@@ -1707,7 +1858,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_jailed_stream_empty_stream() {
-        // Test with completely empty input stream
+        // Input chunks: []
+        //
+        // Expected output: []
         let chunks: Vec<Annotated<NvCreateChatCompletionStreamResponse>> = vec![];
         let input_stream = stream::iter(chunks);
 
@@ -1721,13 +1874,31 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should handle empty stream gracefully without panicking
-        assert!(results.is_empty(), "Empty stream should produce no results");
+        // === Verify chunk count ===
+        assert_eq!(
+            results.len(),
+            0,
+            "Empty stream should produce exactly 0 results"
+        );
+
+        // === Verify content reconstruction ===
+        assert_eq!(
+            reconstruct_content(&results),
+            "",
+            "Empty stream should reconstruct to empty string"
+        );
     }
 
     #[tokio::test]
     async fn test_jailed_stream_multiple_tool_calls() {
-        // Test multiple sequential tool calls
+        // Input chunks: 9 chunks for 2 tool calls with content between
+        //
+        // Expected output:
+        // [0] Content("I'll help with multiple tasks. ")
+        // [1] ToolCall("get_weather", {"city": "NYC"})
+        // [2] Content(" Now let me get the time. ")
+        // [3] ToolCall("get_time", {"timezone": "EST"})
+        // [4] Content(" Both tasks completed!")
         let chunks = vec![
             create_mock_response_chunk("I'll help with multiple tasks. ".to_string(), 0),
             // First tool call
@@ -1758,61 +1929,28 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should have processed multiple tool calls
-        assert!(!results.is_empty());
+        // === Verify chunk count ===
+        assert_eq!(
+            results.len(),
+            5,
+            "Should emit exactly 5 chunks as documented above"
+        );
 
-        // Count the number of tool calls detected
-        let tool_call_count = results
-            .iter()
-            .filter(|r| {
-                r.data
-                    .as_ref()
-                    .and_then(|d| d.choices.first())
-                    .and_then(|c| c.delta.tool_calls.as_ref())
-                    .map(|tc| !tc.is_empty())
-                    .unwrap_or(false)
-            })
-            .count();
+        // === Verify individual chunks ===
+        assert_content(&results[0], "I'll help with multiple tasks. ");
+        assert_tool_call(&results[1], "get_weather", json!({"city": "NYC"}));
+        assert_content(&results[2], " Now let me get the time. ");
+        assert_tool_call(&results[3], "get_time", json!({"timezone": "EST"}));
+        assert_content(&results[4], " Both tasks completed!");
 
-        assert!(tool_call_count > 0, "Should detect multiple tool calls");
-
-        // Check that both function names are present in results
-        let has_weather = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tcs| {
-                    tcs.iter().any(|tc| {
-                        tc.function
-                            .as_ref()
-                            .and_then(|f| f.name.as_deref())
-                            .map(|name| name == "get_weather")
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false)
-        });
-
-        let has_time = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tcs| {
-                    tcs.iter().any(|tc| {
-                        tc.function
-                            .as_ref()
-                            .and_then(|f| f.name.as_deref())
-                            .map(|name| name == "get_time")
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false)
-        });
-
-        assert!(has_weather, "Should have get_weather function");
-        assert!(has_time, "Should have get_time function");
+        // === Verify content reconstruction ===
+        let expected_content =
+            "I'll help with multiple tasks.  Now let me get the time.  Both tasks completed!";
+        assert_eq!(
+            reconstruct_content(&results),
+            expected_content,
+            "Content reconstruction should exclude tool calls and preserve text flow"
+        );
     }
 
     #[tokio::test]
@@ -2170,7 +2308,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_jailed_stream_trailing_content_same_chunk() {
-        // Regression test for GitHub issue: trailing content after end marker in same chunk
+        // Input chunks:
+        // [0] "I'll help you. "
+        // [1] "<tool_call>"
+        // [2] "{\"name\": \"search\", \"arguments\": {}}"
+        // [3] "</tool_call>trailing text that should not be lost"
+        //
+        // Expected output:
+        // [0] Content("I'll help you. ")
+        // [1] ToolCall("search", {})
+        // [2] Content("trailing text that should not be lost")
         let chunks = vec![
             create_mock_response_chunk("I'll help you. ".to_string(), 0),
             create_mock_response_chunk("<tool_call>".to_string(), 0),
@@ -2189,57 +2336,24 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should get: initial text, tool call response, trailing text
-        assert!(
-            results.len() >= 3,
-            "Should have at least 3 chunks, got {}",
-            results.len()
+        // === Verify chunk count ===
+        assert_eq!(
+            results.len(),
+            3,
+            "Should emit exactly 3 chunks as documented above"
         );
 
-        // Find the tool call response
-        let tool_call_chunk = results
-            .iter()
-            .find(|r| {
-                r.data
-                    .as_ref()
-                    .and_then(|d| d.choices.first())
-                    .map(|c| c.finish_reason == Some(FinishReason::ToolCalls))
-                    .unwrap_or(false)
-            })
-            .expect("Should have a tool call response chunk");
+        // === Verify individual chunks ===
+        assert_content(&results[0], "I'll help you. ");
+        assert_tool_call(&results[1], "search", json!({}));
+        assert_content(&results[2], "trailing text that should not be lost");
 
-        // Verify tool call was parsed correctly
-        let tool_calls = &tool_call_chunk.data.as_ref().unwrap().choices[0]
-            .delta
-            .tool_calls;
-        assert!(tool_calls.is_some(), "Should have tool calls");
+        // === Verify content reconstruction ===
+        let expected_content = "I'll help you. trailing text that should not be lost";
         assert_eq!(
-            tool_calls.as_ref().unwrap().len(),
-            1,
-            "Should have exactly one tool call"
-        );
-
-        // CRITICAL: Verify trailing content is preserved in a separate chunk
-        let trailing_chunk = results
-            .iter()
-            .find(|r| {
-                r.data
-                    .as_ref()
-                    .and_then(|d| d.choices.first())
-                    .and_then(|c| c.delta.content.as_ref())
-                    .map(|content| content.contains("trailing text that should not be lost"))
-                    .unwrap_or(false)
-            })
-            .expect("Should have a chunk with trailing content");
-
-        // Verify the trailing content is exactly what we expect
-        let trailing_content = &trailing_chunk.data.as_ref().unwrap().choices[0]
-            .delta
-            .content;
-        assert_eq!(
-            trailing_content.as_deref(),
-            Some("trailing text that should not be lost"),
-            "Trailing content should be preserved exactly"
+            reconstruct_content(&results),
+            expected_content,
+            "Content reconstruction should preserve initial and trailing text"
         );
     }
 
@@ -2516,7 +2630,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_partial_matching_false_positive_prevention() {
-        // Test the key functionality: "n < 5" should NOT trigger jailing
+        // Input chunks:
+        // [0] "n "
+        // [1] "<"
+        // [2] " 5"
+        //
+        // Expected output:
+        // [0] Content("n ")
+        // [1] Content("< 5")  // "<" held as partial, then combined with " 5" when pattern doesn't match
         let chunks = vec![
             create_mock_response_chunk("n ".to_string(), 0),
             create_mock_response_chunk("<".to_string(), 0),
@@ -2533,45 +2654,44 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should have results
-        assert!(!results.is_empty(), "Should have results");
-
-        // Verify NO tool calls were detected
-        let has_tool_calls = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tc| !tc.is_empty())
-                .unwrap_or(false)
-        });
-        assert!(
-            !has_tool_calls,
-            "Should NOT detect tool calls in mathematical expression"
+        // === Verify chunk count ===
+        assert_eq!(
+            results.len(),
+            2,
+            "Should emit exactly 2 chunks: 'n ' and '< 5'"
         );
 
-        // Verify all content is preserved - should see "n", "<", " 5" somewhere
-        let all_content: String = results
-            .iter()
-            .filter_map(|r| {
-                r.data
-                    .as_ref()
-                    .and_then(|d| d.choices.first())
-                    .and_then(|c| c.delta.content.as_ref())
-            })
-            .cloned()
-            .collect();
+        // === Verify individual chunks ===
+        assert_content(&results[0], "n ");
+        assert_content(&results[1], "< 5");
 
-        assert!(
-            all_content.contains("n") && all_content.contains("<") && all_content.contains("5"),
-            "Should preserve all content: 'n < 5', got: '{}'",
-            all_content
+        // === Verify negative assertions ===
+        // Verify NO tool calls were detected
+        for (i, result) in results.iter().enumerate() {
+            assert!(
+                !has_tool_call(result),
+                "Chunk {} should not contain tool calls in mathematical expression",
+                i
+            );
+        }
+
+        // === Verify content reconstruction ===
+        assert_eq!(
+            reconstruct_content(&results),
+            "n < 5",
+            "Content reconstruction should preserve the complete mathematical expression"
         );
     }
 
     #[tokio::test]
     async fn test_partial_matching_suffix_detection() {
-        // Test the key case: "text<TO" should detect "<TO" as partial match for "<TOOLCALL>"
+        // Input chunks:
+        // [0] "text<TO"
+        // [1] "OLCALL>[{\"name\": \"test\", \"arguments\": {}}]</TOOLCALL>"
+        //
+        // Expected output:
+        // [0] Content("text")  // "<TO" held as partial
+        // [1] ToolCall("test", {})
         let chunks = vec![
             create_mock_response_chunk("text<TO".to_string(), 0),
             create_mock_response_chunk(
@@ -2590,32 +2710,30 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should have detected the tool call
-        let has_tool_calls = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.tool_calls.as_ref())
-                .map(|tc| !tc.is_empty())
-                .unwrap_or(false)
-        });
-        assert!(
-            has_tool_calls,
-            "Should detect tool call even when split with prefix"
+        // === Verify chunk count ===
+        assert_eq!(
+            results.len(),
+            2,
+            "Should emit exactly 2 chunks: [0] 'text' content, [1] tool call"
         );
 
-        // Should have emitted "text" before the tool call
-        let has_text_prefix = results.iter().any(|r| {
-            r.data
-                .as_ref()
-                .and_then(|d| d.choices.first())
-                .and_then(|c| c.delta.content.as_ref())
-                .map(|content| content.contains("text"))
-                .unwrap_or(false)
-        });
+        // === Verify individual chunks ===
+        assert_content(&results[0], "text");
+        assert_tool_call(&results[1], "test", json!({}));
+
+        // === Verify negative assertions ===
+        // Verify '<' was not emitted in first chunk (held as partial)
+        let first_content = extract_content(&results[0]);
         assert!(
-            has_text_prefix,
-            "Should emit 'text' prefix before tool call"
+            !first_content.contains('<'),
+            "First chunk should not contain '<' as it's part of partial match '<TO'"
+        );
+
+        // === Verify content reconstruction ===
+        assert_eq!(
+            reconstruct_content(&results),
+            "text",
+            "Content reconstruction should only include 'text' (tool call parsed separately)"
         );
     }
 }
