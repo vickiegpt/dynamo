@@ -7,9 +7,12 @@ use dynamo_async_openai::types::{
     FinishReason, FunctionCallStream, Role,
 };
 
+use dynamo_parsers::tool_calling::parsers::get_tool_parser_map;
 use dynamo_parsers::tool_calling::{detect_tool_call_start, try_tool_call_parse_aggregate};
 use dynamo_runtime::protocols::annotated::Annotated;
 use futures::{Stream, StreamExt};
+
+use crate::utils::{MarkerMatcher, MatchResult};
 
 use super::NvCreateChatCompletionStreamResponse;
 
@@ -65,6 +68,8 @@ struct ChoiceJailState {
     is_jailed: bool,
     /// Accumulated content for this choice while jailed
     accumulated_content: String,
+    /// Buffer for partial marker matches across chunks
+    partial_match_buffer: String,
 }
 
 impl ChoiceJailState {
@@ -74,13 +79,8 @@ impl ChoiceJailState {
             index,
             is_jailed: false,
             accumulated_content: String::new(),
+            partial_match_buffer: String::new(),
         }
-    }
-
-    /// Start jailing this choice with initial content
-    fn start_jail(&mut self, initial_content: &str) {
-        self.is_jailed = true;
-        self.accumulated_content = initial_content.to_string();
     }
 
     /// Add content to this choice's accumulation
@@ -106,23 +106,149 @@ impl ChoiceJailState {
         let mut emissions = Vec::new();
 
         if !self.is_jailed {
-            // Not jailed - check if we should start jailing
-            if jail_stream.should_start_jail(content) {
-                tracing::debug!(
-                    "Choice {} jail triggered, starting accumulation",
-                    choice.index
-                );
-                self.start_jail(content);
-                // Don't emit anything when starting to jail
-            } else {
-                // Pass through content unchanged
-                let pass_through_choice = ChatChoiceStream {
-                    index: choice.index,
-                    delta: choice.delta.clone(),
-                    finish_reason: choice.finish_reason,
-                    logprobs: choice.logprobs.clone(),
-                };
-                emissions.push(ChoiceEmission::PassThrough(pass_through_choice));
+            // Use the marker matcher to detect complete/partial markers
+            match jail_stream
+                .marker_matcher
+                .process_chunk(content, &self.partial_match_buffer)
+            {
+                MatchResult::Complete {
+                    prefix,
+                    marker,
+                    suffix,
+                    ..
+                } => {
+                    // Emit prefix if any
+                    if !prefix.is_empty() {
+                        #[allow(deprecated)]
+                        let prefix_choice = ChatChoiceStream {
+                            index: choice.index,
+                            delta: ChatCompletionStreamResponseDelta {
+                                role: choice.delta.role,
+                                content: Some(prefix),
+                                tool_calls: None,
+                                function_call: None,
+                                refusal: None,
+                                reasoning_content: None,
+                            },
+                            finish_reason: None,
+                            logprobs: choice.logprobs.clone(),
+                        };
+                        emissions.push(ChoiceEmission::PassThrough(prefix_choice));
+                    }
+
+                    // Build the potential full content
+                    let full_content = format!("{}{}", marker, suffix);
+
+                    // Check if this already contains the end marker
+                    let (should_unjail, split_pos) = jail_stream.should_end_jail(&full_content);
+
+                    if should_unjail {
+                        // Complete tool call found in this chunk
+                        tracing::debug!(
+                            "Choice {} complete tool call detected in single chunk",
+                            choice.index
+                        );
+
+                        let (jailed_part, trailing_part) = full_content.split_at(split_pos);
+
+                        // Create the tool call choice
+                        let tool_choice =
+                            jail_stream.create_tool_call_choice(choice.index, jailed_part, choice);
+
+                        if tool_choice.delta.tool_calls.is_some() {
+                            emissions.push(ChoiceEmission::ToolCall(tool_choice));
+                        } else {
+                            emissions.push(ChoiceEmission::Content(tool_choice));
+                        }
+
+                        // Handle trailing content if any
+                        if !trailing_part.is_empty() {
+                            #[allow(deprecated)]
+                            let trailing_choice = ChatChoiceStream {
+                                index: choice.index,
+                                delta: ChatCompletionStreamResponseDelta {
+                                    role: choice.delta.role,
+                                    content: Some(trailing_part.to_string()),
+                                    tool_calls: None,
+                                    function_call: None,
+                                    refusal: None,
+                                    reasoning_content: None,
+                                },
+                                finish_reason: None,
+                                logprobs: choice.logprobs.clone(),
+                            };
+                            emissions.push(ChoiceEmission::Trailing(trailing_choice));
+                        }
+                    } else {
+                        // Start jailing with the marker and suffix
+                        tracing::debug!(
+                            "Choice {} start marker '{}' detected, starting jail",
+                            choice.index,
+                            marker
+                        );
+                        self.is_jailed = true;
+                        self.accumulated_content = full_content;
+                    }
+
+                    self.partial_match_buffer.clear();
+                }
+
+                MatchResult::Partial {
+                    prefix,
+                    partial,
+                    possible_patterns,
+                } => {
+                    // Emit the safe prefix
+                    if !prefix.is_empty() {
+                        #[allow(deprecated)]
+                        let prefix_choice = ChatChoiceStream {
+                            index: choice.index,
+                            delta: ChatCompletionStreamResponseDelta {
+                                role: choice.delta.role,
+                                content: Some(prefix),
+                                tool_calls: None,
+                                function_call: None,
+                                refusal: None,
+                                reasoning_content: None,
+                            },
+                            finish_reason: None,
+                            logprobs: choice.logprobs.clone(),
+                        };
+                        emissions.push(ChoiceEmission::PassThrough(prefix_choice));
+                    }
+
+                    // Hold the partial for next chunk
+                    self.partial_match_buffer = partial;
+
+                    tracing::trace!(
+                        "Choice {} holding partial '{}' for patterns: {:?}",
+                        choice.index,
+                        self.partial_match_buffer,
+                        possible_patterns
+                    );
+                }
+
+                MatchResult::None { content } => {
+                    // No markers - emit everything
+                    if !content.is_empty() {
+                        #[allow(deprecated)]
+                        let pass_through_choice = ChatChoiceStream {
+                            index: choice.index,
+                            delta: ChatCompletionStreamResponseDelta {
+                                role: choice.delta.role,
+                                content: Some(content),
+                                tool_calls: None,
+                                function_call: None,
+                                refusal: None,
+                                reasoning_content: None,
+                            },
+                            finish_reason: None,
+                            logprobs: choice.logprobs.clone(),
+                        };
+                        emissions.push(ChoiceEmission::PassThrough(pass_through_choice));
+                    }
+                    self.partial_match_buffer.clear();
+                }
             }
         } else {
             // Already jailed - accumulate and check for unjail
@@ -277,6 +403,7 @@ pub struct JailedStream {
     jail_end_sequences: Vec<String>,
     tool_call_parser: Option<String>,
     emission_mode: EmissionMode,
+    marker_matcher: MarkerMatcher,
 }
 
 impl JailedStream {
@@ -736,11 +863,54 @@ impl JailedStreamBuilder {
 
     /// Build the configured JailedStream
     pub fn build(self) -> JailedStream {
+        // Collect all possible marker patterns for the MarkerMatcher
+        let mut all_patterns = Vec::new();
+
+        // Add configured start sequences
+        all_patterns.extend(self.jail_start_sequences.clone());
+
+        // Add patterns from tool call parser if configured
+        if let Some(ref parser_name) = self.tool_call_parser {
+            let parser_map = get_tool_parser_map();
+            if let Some(config) = parser_map.get(parser_name.as_str()) {
+                // Add start tokens from the parser config
+                all_patterns.extend(config.json.tool_call_start_tokens.clone());
+            }
+        }
+
+        // Add common tool call markers to ensure we detect all formats
+        let common_markers = vec![
+            "<TOOLCALL>".to_string(),
+            "<tool_call>".to_string(),
+            "[TOOL_CALLS]".to_string(),
+            "<|python_tag|>".to_string(),
+            "functools[".to_string(),
+            // Add JSON start patterns for Mistral-style tool calls
+            "[{".to_string(),
+            "{".to_string(),
+        ];
+        for marker in common_markers {
+            if !all_patterns.contains(&marker) {
+                all_patterns.push(marker);
+            }
+        }
+
+        // Create the marker matcher (fallback to empty patterns if none configured)
+        let marker_matcher = if all_patterns.is_empty() {
+            // If no patterns, create a dummy matcher that never matches
+            MarkerMatcher::new(vec!["__NEVER_MATCH__".to_string()])
+                .expect("Failed to create dummy MarkerMatcher")
+        } else {
+            MarkerMatcher::new(all_patterns)
+                .expect("Failed to create MarkerMatcher with configured patterns")
+        };
+
         JailedStream {
             jail_start_sequences: self.jail_start_sequences,
             jail_end_sequences: self.jail_end_sequences,
             tool_call_parser: self.tool_call_parser,
             emission_mode: self.emission_mode,
+            marker_matcher,
         }
     }
 }
@@ -2342,5 +2512,110 @@ mod tests {
 
         // For now, just verify we got some results
         assert!(!results.is_empty(), "Should have some results");
+    }
+
+    #[tokio::test]
+    async fn test_partial_matching_false_positive_prevention() {
+        // Test the key functionality: "n < 5" should NOT trigger jailing
+        let chunks = vec![
+            create_mock_response_chunk("n ".to_string(), 0),
+            create_mock_response_chunk("<".to_string(), 0),
+            create_mock_response_chunk(" 5".to_string(), 0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        // Use nemotron parser which has <TOOLCALL> as a pattern
+        let jail = JailedStream::builder()
+            .tool_call_parser("nemotron_deci")
+            .build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should have results
+        assert!(!results.is_empty(), "Should have results");
+
+        // Verify NO tool calls were detected
+        let has_tool_calls = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tc| !tc.is_empty())
+                .unwrap_or(false)
+        });
+        assert!(
+            !has_tool_calls,
+            "Should NOT detect tool calls in mathematical expression"
+        );
+
+        // Verify all content is preserved - should see "n", "<", " 5" somewhere
+        let all_content: String = results
+            .iter()
+            .filter_map(|r| {
+                r.data
+                    .as_ref()
+                    .and_then(|d| d.choices.first())
+                    .and_then(|c| c.delta.content.as_ref())
+            })
+            .cloned()
+            .collect();
+
+        assert!(
+            all_content.contains("n") && all_content.contains("<") && all_content.contains("5"),
+            "Should preserve all content: 'n < 5', got: '{}'",
+            all_content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_partial_matching_suffix_detection() {
+        // Test the key case: "text<TO" should detect "<TO" as partial match for "<TOOLCALL>"
+        let chunks = vec![
+            create_mock_response_chunk("text<TO".to_string(), 0),
+            create_mock_response_chunk(
+                "OLCALL>[{\"name\": \"test\", \"arguments\": {}}]</TOOLCALL>".to_string(),
+                0,
+            ),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        let jail = JailedStream::builder()
+            .tool_call_parser("nemotron_deci")
+            .jail_end_sequence("</TOOLCALL>")
+            .build();
+
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should have detected the tool call
+        let has_tool_calls = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.tool_calls.as_ref())
+                .map(|tc| !tc.is_empty())
+                .unwrap_or(false)
+        });
+        assert!(
+            has_tool_calls,
+            "Should detect tool call even when split with prefix"
+        );
+
+        // Should have emitted "text" before the tool call
+        let has_text_prefix = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.content.as_ref())
+                .map(|content| content.contains("text"))
+                .unwrap_or(false)
+        });
+        assert!(
+            has_text_prefix,
+            "Should emit 'text' prefix before tool call"
+        );
     }
 }
