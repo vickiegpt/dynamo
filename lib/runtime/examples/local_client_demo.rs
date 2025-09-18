@@ -3,19 +3,38 @@
 
 //! Example demonstrating LocalClient functionality
 
-use dynamo_runtime::DistributedRuntime;
-use dynamo_runtime::component::register_local_engine;
-use dynamo_runtime::engine::{AsyncEngine, async_trait};
+use dynamo_runtime::component::LocalClient;
+use dynamo_runtime::engine::{AsyncEngine, AsyncEngineContextProvider, async_trait};
+use dynamo_runtime::pipeline::network::Ingress;
+use dynamo_runtime::pipeline::{Context, ManyOut, ResponseStream, SingleIn};
+use dynamo_runtime::protocols::annotated::Annotated;
+use dynamo_runtime::{DistributedRuntime, Runtime, distributed::DistributedConfig};
+use futures::StreamExt;
 use std::sync::Arc;
 
 /// Simple test engine that echoes strings
 struct SimpleEchoEngine;
 
 #[async_trait]
-impl AsyncEngine<String, String, String> for SimpleEchoEngine {
-    async fn generate(&self, request: String) -> Result<String, String> {
-        println!("Engine received: {}", request);
-        Ok(format!("Echo: {}", request))
+impl AsyncEngine<SingleIn<String>, ManyOut<Annotated<String>>, anyhow::Error> for SimpleEchoEngine {
+    async fn generate(
+        &self,
+        request: SingleIn<String>,
+    ) -> Result<ManyOut<Annotated<String>>, anyhow::Error> {
+        println!("Engine received: {}", *request);
+
+        let response = Annotated {
+            data: Some(format!("Echo: {}", *request)),
+            id: None,
+            event: None,
+            comment: None,
+        };
+
+        let context = request.context();
+
+        // Create a simple stream that yields the response once
+        let stream = futures::stream::once(async move { response });
+        Ok(ResponseStream::new(Box::pin(stream), context))
     }
 }
 
@@ -28,16 +47,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create runtime and DRT
     println!("1. Creating runtime...");
-    let runtime = dynamo_runtime::Runtime::builder()
-        .app_name("local-client-demo")
-        .build()
-        .await?;
+    let runtime = Runtime::from_current()?;
 
-    let config = dynamo_runtime::DistributedConfig::builder()
-        .etcd_config(Default::default())
-        .nats_config(Default::default())
-        .is_static(true)
-        .build()?;
+    let config = DistributedConfig {
+        etcd_config: Default::default(),
+        nats_config: Default::default(),
+        is_static: true,
+    };
 
     let drt = DistributedRuntime::new(runtime, config).await?;
     println!("   ✓ Runtime created\n");
@@ -52,40 +68,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create and register an engine
     println!("3. Creating and registering engine...");
-    let engine: Arc<dyn AsyncEngine<String, String, String>> = Arc::new(SimpleEchoEngine);
+    let engine: Arc<dyn AsyncEngine<SingleIn<String>, ManyOut<Annotated<String>>, anyhow::Error>> =
+        Arc::new(SimpleEchoEngine);
 
-    // Register the engine for local access
-    let key = register_local_engine(&endpoint, engine.clone()).await?;
-    println!("   ✓ Registered engine with key: {}\n", key);
+    // Wrap the engine in an Ingress to make it a PushWorkHandler
+    let ingress = Ingress::for_engine(engine)?;
 
-    // Demonstrate direct local invocation
-    println!("4. Testing direct local invocation...");
+    // Create the endpoint instance with the ingress as handler (setup phase)
+    let _endpoint_instance = endpoint
+        .endpoint_builder()
+        .handler(ingress)
+        .create()
+        .await?;
+    println!("   ✓ Engine registered automatically during endpoint creation\n");
+
+    // Create a LocalClient using the endpoint's convenience method
+    println!("4. Creating LocalClient...");
+    let local_client: LocalClient<SingleIn<String>, ManyOut<Annotated<String>>, anyhow::Error> =
+        endpoint.local_client().await?;
+    println!("   ✓ LocalClient created successfully\n");
+
+    // Demonstrate local client usage
+    println!("5. Testing LocalClient invocation...");
     println!("   (This bypasses all network layers and invokes the engine directly)");
 
-    // Direct invocation through the registered engine
-    let response = engine
-        .generate("Hello from direct call!".to_string())
-        .await?;
-    println!("   Response: {}\n", response);
+    // Create a request with context
+    let request = Context::new("Hello from LocalClient!".to_string());
 
-    // Show what LocalClient would do
-    println!("5. LocalClient usage (conceptual):");
-    println!("   - LocalClient::from_endpoint(&endpoint) would retrieve the engine");
-    println!("   - local_client.generate(request) would call the engine directly");
-    println!("   - No network overhead, no etcd watching, no instance discovery\n");
+    // Generate response using the local client
+    let mut response_stream = local_client.generate(request).await?;
+    let response = response_stream.next().await.expect("Expected response");
 
-    // Show the registered engines
-    println!("6. Registry information:");
-    println!("   - Key format: namespace/component/endpoint");
-    println!("   - Registered key: {}", key);
-    println!("   - Engine is type-erased as AnyAsyncEngine");
-    println!("   - LocalClient downcasts back to specific types\n");
+    println!("   Request: Hello from LocalClient!");
+    if let Some(data) = &response.data {
+        println!("   Response: {}", data);
+    }
+    println!();
 
-    // Cleanup
-    println!("7. Cleanup...");
-    drt.unregister_local_engine(&key).await;
-    println!("   ✓ Unregistered engine\n");
+    // Show the benefits
+    println!("6. LocalClient Benefits:");
+    println!("   ✓ No network overhead");
+    println!("   ✓ No etcd watching required");
+    println!("   ✓ No instance discovery needed");
+    println!("   ✓ Direct in-process engine invocation");
+    println!("   ✓ Perfect for testing and local development\n");
 
-    println!("=== Demo Complete ===");
+    println!("Demo completed successfully!");
     Ok(())
 }

@@ -5,6 +5,7 @@
 
 use crate::engine::{
     AnyAsyncEngine, AsyncEngine, AsyncEngineContextProvider, Data, DowncastAnyAsyncEngine,
+    StreamData,
 };
 use crate::traits::DistributedRuntimeProvider;
 use crate::v2::entity::{ComponentDescriptor, EndpointDescriptor, NamespaceDescriptor};
@@ -18,7 +19,7 @@ use super::Endpoint;
 pub struct LocalClient<Req, Resp, E>
 where
     Req: Data,
-    Resp: Data + AsyncEngineContextProvider,
+    Resp: StreamData + AsyncEngineContextProvider,
     E: Data,
 {
     engine: Arc<dyn AsyncEngine<Req, Resp, E>>,
@@ -28,7 +29,7 @@ where
 impl<Req, Resp, E> LocalClient<Req, Resp, E>
 where
     Req: Data,
-    Resp: Data + AsyncEngineContextProvider,
+    Resp: StreamData + AsyncEngineContextProvider,
     E: Data,
 {
     /// Create a LocalClient from an endpoint descriptor
@@ -47,7 +48,7 @@ where
 
         // Downcast to the specific types
         let engine = any_engine
-            .downcast::<Req, Resp, E>()
+            .downcast_stream::<Req, Resp, E>()
             .ok_or_else(|| error!("Type mismatch when downcasting local engine for: {}", key))?;
 
         Ok(Self { engine, descriptor })

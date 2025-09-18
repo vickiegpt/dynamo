@@ -62,7 +62,7 @@ async fn test_local_client_basic() -> Result<(), Box<dyn std::error::Error>> {
     let ingress = Ingress::for_engine(engine)?;
 
     // Create the endpoint instance with the ingress as handler (setup phase)
-    let endpoint_instance = endpoint
+    let _endpoint_instance = endpoint
         .endpoint_builder()
         .handler(ingress)
         .create()
@@ -119,8 +119,8 @@ async fn test_local_client_type_safety() -> Result<(), Box<dyn std::error::Error
     println!("✓ Created endpoint with String engine");
 
     // Try to create a LocalClient with different types (this should fail)
-    let result: Result<LocalClient<SingleIn<i32>, ManyOut<Annotated<i32>>, anyhow::Error>, _> =
-        endpoint.local_client().await;
+    type TestLocalClient = LocalClient<SingleIn<i32>, ManyOut<Annotated<i32>>, anyhow::Error>;
+    let result: Result<TestLocalClient, _> = endpoint.local_client().await;
     assert!(result.is_err(), "Expected type mismatch error");
 
     if let Err(e) = result {

@@ -443,7 +443,7 @@ impl Endpoint {
     ) -> Result<local_client::LocalClient<Req, Resp, E>>
     where
         Req: crate::engine::Data,
-        Resp: crate::engine::Data + crate::engine::AsyncEngineContextProvider,
+        Resp: crate::engine::StreamData + crate::engine::AsyncEngineContextProvider,
         E: crate::engine::Data,
     {
         local_client::LocalClient::from_endpoint(self).await

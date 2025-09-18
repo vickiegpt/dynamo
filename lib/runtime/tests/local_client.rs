@@ -78,7 +78,7 @@ async fn test_local_client_registration_and_retrieval() -> Result<(), Box<dyn st
     let response = response_stream.next().await.expect("Expected response");
 
     assert_eq!(response.data, Some("Hello, LocalClient!".to_string()));
-    println!("LocalClient test passed: received '{}'", response);
+    println!("LocalClient test passed: received '{:?}'", response);
 
     // Note: We don't need to start the endpoint for local client testing
     // The engine is registered during create() and available for local access
@@ -128,7 +128,7 @@ async fn test_local_client_with_ingress() -> Result<(), Box<dyn std::error::Erro
 
     assert_eq!(response.data, Some("Test with Ingress".to_string()));
     println!(
-        "LocalClient with Ingress test passed: received '{}'",
+        "LocalClient with Ingress test passed: received '{:?}'",
         response
     );
 
@@ -166,8 +166,8 @@ async fn test_local_client_type_mismatch() -> Result<(), Box<dyn std::error::Err
     println!("Created endpoint with String engine");
 
     // Try to create a LocalClient with different types (this should fail)
-    let result: Result<LocalClient<SingleIn<i32>, ManyOut<Annotated<i32>>, anyhow::Error>, _> =
-        endpoint.local_client().await;
+    type TestLocalClient = LocalClient<SingleIn<i32>, ManyOut<Annotated<i32>>, anyhow::Error>;
+    let result: Result<TestLocalClient, _> = endpoint.local_client().await;
 
     assert!(result.is_err(), "Expected type mismatch error");
     if let Err(e) = result {
