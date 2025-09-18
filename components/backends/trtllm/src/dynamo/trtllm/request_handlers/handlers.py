@@ -179,7 +179,9 @@ class PrefillHandler(HandlerBase):
             async for res in self.remote_decode(request, context):
                 # Check for cancellation during remote decode (following vLLM pattern)
                 if context and (context.is_stopped() or context.is_killed()):
-                    logging.debug(f"Aborted Request ID: {request.get('id', 'unknown-id')}")
+                    logging.debug(
+                        f"Aborted Request ID: {request.get('id', 'unknown-id')}"
+                    )
                     break
                 yield res
         else:
@@ -221,7 +223,9 @@ class DecodeHandler(HandlerBase):
             async for res in self.remote_prefill(request, context):
                 # Check for cancellation during remote prefill (following vLLM pattern)
                 if context and (context.is_stopped() or context.is_killed()):
-                    logging.debug(f"Aborted Request ID: {request.get('id', 'unknown-id')}")
+                    logging.debug(
+                        f"Aborted Request ID: {request.get('id', 'unknown-id')}"
+                    )
                     break
                 prefill_response = res
                 response_count += 1
