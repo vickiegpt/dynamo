@@ -213,7 +213,7 @@ fn get_model_express_cache_dir() -> PathBuf {
         return PathBuf::from(cache_path);
     }
 
-    if let Ok(cache_path) = env::var("MODEL_EXPRESS_PATH") {
+    if let Ok(cache_path) = env::var("MODEL_EXPRESS_CACHE_PATH") {
         return PathBuf::from(cache_path);
     }
     let home = env::var("HOME")
