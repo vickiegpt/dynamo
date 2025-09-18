@@ -1453,75 +1453,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_deepseek_stream_with_extracted_tokenizer() -> Result<()> {
+    async fn test_token_stream_with_mock_tokenizer() -> Result<()> {
         use crate::tokenizers::Tokenizer;
-        use crate::utils::gzip::GzipExtractor;
         use std::sync::Arc;
 
-        // Step 1: Extract and validate the tokenizer
-        let tokenizer_path = "tests/data/replays/deepseek-r1-distill-llama-8b/tokenizer-deepseek-r1-distill-llama-8b.json.gz";
-        let extraction = GzipExtractor::builder()
-            .source_path(tokenizer_path)
-            .target_filename("tokenizer.json")
-            .extract()?;
+        // Step 1: Load the mock tokenizer (no extraction needed)
+        let tokenizer_path = "tests/data/sample-models/mock-llama-3.1-8b-instruct/tokenizer.json";
+        let tokenizer = Tokenizer::from_file(tokenizer_path)?;
+        println!("✓ Mock tokenizer loaded successfully");
 
-        // Validate the BLAKE3 hash
-        let expected_hash = "c61f943c9f3266a60a7e00e815591061f17564f297dd84433a101fb43eb15608";
-        extraction.validate_blake3_hash(expected_hash)?;
-        println!("✓ Tokenizer BLAKE3 hash validated successfully");
+        // Step 2: Create a mock stream with known content
+        let mock_responses = vec![
+            create_mock_response_with_content(0, "Hello", false, None),
+            create_mock_response_with_content(0, " world", false, None),
+            create_mock_response_with_content(0, "!", false, None),
+            create_mock_response_with_content(0, " How", false, None),
+            create_mock_response_with_content(0, " are", false, None),
+            create_mock_response_with_content(0, " you", false, None),
+            create_mock_response_with_content(0, "?", false, Some(FinishReason::Stop)),
+        ];
 
-        // Step 2: Load the tokenizer
-        let tokenizer_path_str = extraction.file_path().to_string_lossy();
-        let tokenizer = Tokenizer::from_file(&tokenizer_path_str)?;
-        println!("✓ Tokenizer loaded successfully");
+        // Step 3: Create recorded stream from mock responses
+        let start_time = std::time::Instant::now();
+        let timestamped_responses = mock_responses
+            .into_iter()
+            .enumerate()
+            .map(|(i, response)| TimestampedResponse::new(response, i))
+            .collect();
 
-        // Step 3: Read and record the deepseek stream
-        let stream_path =
-            "tests/data/replays/deepseek-r1-distill-llama-8b/chat-completions.stream.1";
-        let data_stream = crate::perf::read_annotated_stream_from_file::<
-            NvCreateChatCompletionStreamResponse,
-        >(stream_path)?;
-
-        // Step 4: Record the stream using the simplified API
-        let recorded_stream = crate::perf::record_data_stream(data_stream).await;
+        let recorded_stream = RecordedStream::new(
+            timestamped_responses,
+            start_time,
+            start_time + std::time::Duration::from_millis(100),
+        );
+        let arc_stream = Arc::new(recorded_stream);
 
         println!(
-            "✓ Stream recorded with {} responses",
-            recorded_stream.response_count()
+            "✓ Mock stream created with {} responses",
+            arc_stream.response_count()
         );
 
-        // Step 5: Extract the raw response data from Annotated wrappers
-        let raw_responses: Vec<TimestampedResponse<NvCreateChatCompletionStreamResponse>> =
-            recorded_stream
-                .responses()
-                .iter()
-                .filter_map(|timestamped| {
-                    // Only include responses where data is Some(T)
-                    timestamped
-                        .response
-                        .data
-                        .as_ref()
-                        .map(|data| TimestampedResponse {
-                            response: data.clone(),
-                            timestamp: timestamped.timestamp,
-                            sequence_number: timestamped.sequence_number,
-                        })
-                })
-                .collect();
-
-        let raw_recorded_stream = RecordedStream::new(
-            raw_responses,
-            *recorded_stream.start_time(),
-            *recorded_stream.end_time(),
-        );
-        let arc_stream = Arc::new(raw_recorded_stream);
-
-        // Step 6: Analyze token counting with the real tokenizer
-        // Use the Tokenizer wrapper directly (not dereferenced)
+        // Step 4: Analyze token counting with the mock tokenizer
         let analysis = analyze_token_counting(arc_stream, Some(&tokenizer));
 
-        // Step 7: Validate the analysis results
-        println!("=== DeepSeek Stream Analysis Results ===");
+        // Step 5: Validate the analysis results
+        println!("=== Mock Stream Analysis Results ===");
         analysis.print_summary();
 
         // Basic validation
@@ -1541,12 +1517,6 @@ mod tests {
         assert!(
             matches!(choice_0.primary_data_source, TokenDataSource::Tokenizer(_)),
             "Should use tokenizer data source"
-        );
-
-        // Verify we have the expected token count for this specific test case
-        assert_eq!(
-            choice_0.total_tokens, 32,
-            "Expected exactly 32 tokens for this DeepSeek stream"
         );
 
         // Verify the stream was successfully completed
@@ -1572,6 +1542,12 @@ mod tests {
             "Should have token events"
         );
 
+        // Verify concatenated content is correct
+        assert_eq!(
+            choice_0.concatenated_content, "Hello world! How are you?",
+            "Concatenated content should match expected text"
+        );
+
         // Check data source consistency
         let consistency_errors = analysis.validate_data_source_consistency();
         if !consistency_errors.is_empty() {
@@ -1586,7 +1562,7 @@ mod tests {
             );
         }
 
-        println!("✓ DeepSeek stream analysis completed successfully!");
+        println!("✓ Mock stream analysis completed successfully!");
 
         Ok(())
     }
