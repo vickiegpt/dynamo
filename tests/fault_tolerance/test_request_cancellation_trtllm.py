@@ -4,7 +4,6 @@
 import logging
 import os
 import time
-from typing import Optional
 
 import pytest
 
@@ -14,7 +13,7 @@ from tests.fault_tolerance.test_request_cancellation import (
     strip_ansi_codes,
 )
 from tests.serve.test_trtllm import TRTLLMConfig
-from tests.utils.engine_process import FRONTEND_PORT, EngineProcess
+from tests.utils.engine_process import EngineProcess
 
 logger = logging.getLogger(__name__)
 
