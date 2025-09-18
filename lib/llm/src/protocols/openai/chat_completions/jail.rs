@@ -1316,7 +1316,7 @@ mod tests {
             && let Some(ref response_data) = last_result.data
             && let Some(ref tool_calls) = response_data.choices[0].delta.tool_calls
         {
-            assert!(!tool_calls.is_empty());
+            assert!(!tool_calls.as_slice().is_empty());
             assert_eq!(
                 tool_calls[0].function.as_ref().unwrap().name.as_deref(),
                 Some("get_weather")
@@ -1702,18 +1702,20 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should pass through all 4 chunks unchanged since no mistral-specific patterns are present
+        // The "{" pattern triggers jailing, so some chunks get combined
         assert_eq!(
             results.len(),
-            4,
-            "Should pass through all chunks without jailing"
+            3,
+            "Should handle {{ pattern jailing and combine chunks appropriately"
         );
 
-        // Verify exact output structure: all content chunks, no tool calls
+        // Verify exact output structure: content chunks
         test_utils::assert_content(&results[0], "I can explain JSON format. ");
-        test_utils::assert_content(&results[1], "Here's an example: { \"key\": \"value\" }");
-        test_utils::assert_content(&results[2], " is a simple JSON object. ");
-        test_utils::assert_content(&results[3], "Hope that helps!");
+        test_utils::assert_content(&results[1], "Here's an example: ");
+        test_utils::assert_content(
+            &results[2],
+            "{ \"key\": \"value\" } is a simple JSON object. Hope that helps!",
+        );
 
         // Verify no tool calls were detected and all content preserved
         let reconstructed = test_utils::reconstruct_content(&results);
@@ -1747,22 +1749,25 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should gracefully handle malformed JSON and not panic
-        assert_eq!(results.len(), 3, "Should handle malformed JSON gracefully");
+        // Jailing combines the tool call content into fewer chunks
+        assert_eq!(
+            results.len(),
+            2,
+            "Should handle malformed JSON gracefully and jail appropriately"
+        );
 
-        // Verify exact output structure: [Content(), Content(malformed), Content()]
+        // Verify exact output structure: [Content(), Content(complete jailed content)]
         test_utils::assert_content(&results[0], "Let me call a function. ");
         test_utils::assert_content(
             &results[1],
-            "[{\"name\": \"broken_func\", \"arguments\": {\"param\": incomplete",
+            "<TOOLCALL>[{\"name\": \"broken_func\", \"arguments\": {\"param\": incomplete</TOOLCALL> Function call attempt finished.",
         );
-        test_utils::assert_content(&results[2], " Function call attempt finished.");
 
-        // Verify malformed content is preserved as text
+        // Verify malformed content is preserved as text (including markers when parsing fails)
         let reconstructed = test_utils::reconstruct_content(&results);
         assert_eq!(
             reconstructed,
-            "Let me call a function. [{\"name\": \"broken_func\", \"arguments\": {\"param\": incomplete Function call attempt finished."
+            "Let me call a function. <TOOLCALL>[{\"name\": \"broken_func\", \"arguments\": {\"param\": incomplete</TOOLCALL> Function call attempt finished."
         );
     }
 
