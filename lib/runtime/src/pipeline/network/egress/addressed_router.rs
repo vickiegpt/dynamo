@@ -1,24 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use async_nats::client::Client;
+use async_nats::{HeaderMap, HeaderValue};
 use tracing as log;
 
 use super::*;
-use crate::{protocols::maybe_error::MaybeError, Result};
-use tokio_stream::{wrappers::ReceiverStream, StreamExt, StreamNotifyClose};
+use crate::logging::DistributedTraceContext;
+use crate::logging::get_distributed_tracing_context;
+use crate::{Result, protocols::maybe_error::MaybeError};
+use tokio_stream::{StreamExt, StreamNotifyClose, wrappers::ReceiverStream};
+use tracing::Instrument;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -148,17 +140,35 @@ where
 
         log::trace!(request_id, "enqueueing two-part message to nats");
 
+        // Insert Trace Context into Headers
+        // Enables span to be created in push_endpoint before
+        // payload is parsed
+
+        let mut headers = HeaderMap::new();
+        if let Some(trace_context) = get_distributed_tracing_context() {
+            headers.insert("traceparent", trace_context.create_traceparent());
+            if let Some(tracestate) = trace_context.tracestate {
+                headers.insert("tracestate", tracestate);
+            }
+            if let Some(x_request_id) = trace_context.x_request_id {
+                headers.insert("x-request-id", x_request_id);
+            }
+            if let Some(x_dynamo_request_id) = trace_context.x_dynamo_request_id {
+                headers.insert("x-dynamo-request-id", x_dynamo_request_id);
+            }
+        }
+
         // we might need to add a timeout on this if there is no subscriber to the subject; however, I think nats
         // will handle this for us
         let _response = self
             .req_transport
-            .request(address.to_string(), buffer)
+            .request_with_headers(address.to_string(), headers, buffer)
             .await?;
 
         log::trace!(request_id, "awaiting transport handshake");
         let response_stream = response_stream_provider
             .await
-            .map_err(|_| PipelineError::DetatchedStreamReceiver)?
+            .map_err(|_| PipelineError::DetachedStreamReceiver)?
             .map_err(PipelineError::ConnectionFailed)?;
 
         // TODO: Detect end-of-stream using Server-Sent Events (SSE)

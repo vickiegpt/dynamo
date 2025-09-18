@@ -1,24 +1,41 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 //! Scoring functions for the KV router.
 
+use super::protocols::{ForwardPassMetrics, LoadMetrics};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::kv_router::scheduler::Endpoint;
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LoadEvent {
+    pub worker_id: i64,
+    pub data: ForwardPassMetrics,
+}
+
+/// [gluo FIXME] exactly the same as EndpointInfo except that 'data'
+/// is cleaned (not optional)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Endpoint {
+    pub name: String,
+    pub subject: String,
+    pub data: LoadMetrics,
+}
+
+impl Endpoint {
+    pub fn worker_id(&self) -> i64 {
+        i64::from_str_radix(
+            self.subject
+                .split("-")
+                .last()
+                .expect("invalid subject")
+                .to_string()
+                .as_str(),
+            16,
+        )
+        .expect("invalid worker id")
+    }
+}
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ProcessedEndpoints {

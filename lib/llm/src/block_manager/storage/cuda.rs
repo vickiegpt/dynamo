@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 //! # CUDA Storage Support
 //!
@@ -52,7 +40,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use cudarc::driver::{sys, CudaContext};
+use cudarc::driver::{CudaContext, sys};
 
 /// Trait for [Storage] types that can be accessed by CUDA
 pub trait CudaAccessible: Storage {}
@@ -269,6 +257,17 @@ impl StorageAllocator<PinnedStorage> for PinnedAllocator {
     }
 }
 
+/// An enum indicating the type of device storage.
+/// This is needed to ensure ownership of memory is correctly handled.
+/// When building a [`DeviceStorage`] from a torch tensor, we need to ensure that
+/// the torch tensor is not GCed until the [`DeviceStorage`] is dropped.
+/// Because of this, we need to store a reference to the torch tensor in the [`DeviceStorage`]
+#[derive(Debug)]
+enum DeviceStorageType {
+    Owned,                                   // Memory that we allocated ourselves.
+    Torch { _tensor: Arc<dyn TorchTensor> }, // Memory that came from a torch tensor.
+}
+
 /// CUDA device memory storage
 #[derive(Debug)]
 pub struct DeviceStorage {
@@ -276,6 +275,7 @@ pub struct DeviceStorage {
     size: usize,
     ctx: Arc<CudaContext>,
     handles: RegistrationHandles,
+    _storage_type: DeviceStorageType,
 }
 
 impl Local for DeviceStorage {}
@@ -292,6 +292,35 @@ impl DeviceStorage {
             size,
             ctx: ctx.clone(),
             handles: RegistrationHandles::new(),
+            _storage_type: DeviceStorageType::Owned,
+        })
+    }
+
+    pub fn new_from_torch(
+        ctx: &Arc<CudaContext>,
+        tensor: Arc<dyn TorchTensor>,
+    ) -> Result<Self, StorageError> {
+        let device = tensor.device();
+
+        let TorchDevice::Cuda(device_id) = device else {
+            return Err(StorageError::InvalidConfig("Tensor is not CUDA!".into()));
+        };
+
+        if device_id != ctx.cu_device() as usize {
+            return Err(StorageError::InvalidConfig(
+                "Tensor is not on the same device as the context!".into(),
+            ));
+        }
+
+        let data_ptr = tensor.data_ptr();
+        let size = tensor.size_bytes();
+
+        Ok(Self {
+            ptr: data_ptr,
+            size,
+            ctx: ctx.clone(),
+            handles: RegistrationHandles::new(),
+            _storage_type: DeviceStorageType::Torch { _tensor: tensor },
         })
     }
 
@@ -332,7 +361,14 @@ impl CudaContextProivder for DeviceStorage {
 impl Drop for DeviceStorage {
     fn drop(&mut self) {
         self.handles.release();
-        unsafe { cudarc::driver::result::free_sync(self.ptr as _) }.unwrap();
+        match &self._storage_type {
+            DeviceStorageType::Owned => {
+                unsafe { cudarc::driver::result::free_sync(self.ptr as _) }.unwrap()
+            }
+            DeviceStorageType::Torch { _tensor } => {
+                // Do nothing. The torch storage is resposible for cleaning up itself.
+            }
+        }
     }
 }
 
@@ -383,5 +419,102 @@ impl DeviceAllocator {
 impl StorageAllocator<DeviceStorage> for DeviceAllocator {
     fn allocate(&self, size: usize) -> Result<DeviceStorage, StorageError> {
         DeviceStorage::new(&self.ctx, size)
+    }
+}
+
+#[cfg(all(test, feature = "testing-cuda"))]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Clone)]
+    struct MockTensor {
+        device: TorchDevice,
+        data_ptr: u64,
+        size_bytes: usize,
+    }
+
+    impl MockTensor {
+        pub fn new(device: TorchDevice, data_ptr: u64, size_bytes: usize) -> Self {
+            Self {
+                device,
+                data_ptr,
+                size_bytes,
+            }
+        }
+    }
+
+    impl TorchTensor for MockTensor {
+        fn device(&self) -> TorchDevice {
+            self.device.clone()
+        }
+
+        fn data_ptr(&self) -> u64 {
+            self.data_ptr
+        }
+
+        fn size_bytes(&self) -> usize {
+            self.size_bytes
+        }
+
+        fn shape(&self) -> Vec<usize> {
+            vec![self.size_bytes]
+        }
+
+        fn stride(&self) -> Vec<usize> {
+            vec![1]
+        }
+    }
+
+    #[test]
+    fn test_device_storage_from_torch_valid_tensor() {
+        let ctx = Cuda::device_or_create(0).expect("Failed to create CUDA context");
+        let size_bytes = 1024;
+
+        let actual_storage =
+            std::mem::ManuallyDrop::new(DeviceStorage::new(&ctx, size_bytes).unwrap());
+
+        let tensor = MockTensor::new(TorchDevice::Cuda(0), actual_storage.addr(), size_bytes);
+
+        let storage = DeviceStorage::new_from_torch(&ctx, Arc::new(tensor)).unwrap();
+
+        assert_eq!(storage.size(), size_bytes);
+        assert_eq!(storage.storage_type(), StorageType::Device(0));
+        assert_eq!(storage.addr(), actual_storage.addr());
+    }
+
+    #[test]
+    fn test_device_storage_from_torch_cpu_tensor_fails() {
+        let ctx = Cuda::device_or_create(0).expect("Failed to create CUDA context");
+        let size_bytes = 1024;
+
+        let actual_storage = DeviceStorage::new(&ctx, size_bytes).unwrap();
+
+        let tensor = MockTensor::new(
+            TorchDevice::Other("cpu".to_string()),
+            actual_storage.addr(),
+            size_bytes,
+        );
+
+        let result = DeviceStorage::new_from_torch(&ctx, Arc::new(tensor));
+        assert!(result.is_err());
+
+        if let Err(StorageError::InvalidConfig(msg)) = result {
+            assert!(msg.contains("Tensor is not CUDA"));
+        } else {
+            panic!("Expected InvalidConfig error for CPU tensor");
+        }
+    }
+
+    #[test]
+    fn test_device_storage_wrong_device() {
+        let ctx = Cuda::device_or_create(0).expect("Failed to create CUDA context");
+        let size_bytes = 1024;
+
+        let actual_storage = DeviceStorage::new(&ctx, size_bytes).unwrap();
+
+        let tensor = MockTensor::new(TorchDevice::Cuda(1), actual_storage.addr(), size_bytes);
+
+        let result = DeviceStorage::new_from_torch(&ctx, Arc::new(tensor));
+        assert!(result.is_err());
     }
 }

@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -19,7 +7,7 @@ use futures::stream::StreamExt;
 use futures::{Stream, TryStreamExt};
 
 use super::*;
-
+use crate::metrics::MetricsRegistry;
 use crate::traits::events::{EventPublisher, EventSubscriber};
 
 #[async_trait]
@@ -78,6 +66,28 @@ impl EventSubscriber for Namespace {
     }
 }
 
+impl MetricsRegistry for Namespace {
+    fn basename(&self) -> String {
+        self.name.clone()
+    }
+
+    fn parent_hierarchy(&self) -> Vec<String> {
+        // Build as: [ "" (DRT), non-empty parent basenames from root -> leaf ]
+        let mut names = vec![String::new()]; // Start with empty string for DRT
+
+        // Collect parent basenames from root to leaf
+        let parent_names: Vec<String> =
+            std::iter::successors(self.parent.as_deref(), |ns| ns.parent.as_deref())
+                .map(|ns| ns.basename())
+                .filter(|name| !name.is_empty())
+                .collect();
+
+        // Append parent names in reverse order (root to leaf)
+        names.extend(parent_names.into_iter().rev());
+        names
+    }
+}
+
 #[cfg(feature = "integration")]
 #[cfg(test)]
 mod tests {
@@ -89,8 +99,8 @@ mod tests {
     async fn test_publish() {
         let rt = Runtime::from_current().unwrap();
         let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-        let ns = dtr.namespace("test".to_string()).unwrap();
-        ns.publish("test", &"test".to_string()).await.unwrap();
+        let ns = dtr.namespace("test_namespace_publish".to_string()).unwrap();
+        ns.publish("test_event", &"test".to_string()).await.unwrap();
         rt.shutdown();
     }
 
@@ -98,13 +108,15 @@ mod tests {
     async fn test_subscribe() {
         let rt = Runtime::from_current().unwrap();
         let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-        let ns = dtr.namespace("test".to_string()).unwrap();
+        let ns = dtr
+            .namespace("test_namespace_subscribe".to_string())
+            .unwrap();
 
         // Create a subscriber
-        let mut subscriber = ns.subscribe("test").await.unwrap();
+        let mut subscriber = ns.subscribe("test_event").await.unwrap();
 
         // Publish a message
-        ns.publish("test", &"test_message".to_string())
+        ns.publish("test_event", &"test_message".to_string())
             .await
             .unwrap();
 

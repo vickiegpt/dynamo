@@ -1,17 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use dynamo_runtime::protocols::annotated::AnnotationsProvider;
 use serde::{Deserialize, Serialize};
@@ -26,7 +14,7 @@ pub use nvext::{NvExt, NvExtProvider};
 #[derive(Serialize, Deserialize, Validate, Debug, Clone)]
 pub struct NvCreateEmbeddingRequest {
     #[serde(flatten)]
-    pub inner: async_openai::types::CreateEmbeddingRequest,
+    pub inner: dynamo_async_openai::types::CreateEmbeddingRequest,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nvext: Option<NvExt>,
@@ -41,17 +29,17 @@ pub struct NvCreateEmbeddingRequest {
 #[derive(Serialize, Deserialize, Validate, Debug, Clone)]
 pub struct NvCreateEmbeddingResponse {
     #[serde(flatten)]
-    pub inner: async_openai::types::CreateEmbeddingResponse,
+    pub inner: dynamo_async_openai::types::CreateEmbeddingResponse,
 }
 
 impl NvCreateEmbeddingResponse {
     pub fn empty() -> Self {
         Self {
-            inner: async_openai::types::CreateEmbeddingResponse {
+            inner: dynamo_async_openai::types::CreateEmbeddingResponse {
                 object: "list".to_string(),
                 model: "embedding".to_string(),
                 data: vec![],
-                usage: async_openai::types::EmbeddingUsage {
+                usage: dynamo_async_openai::types::EmbeddingUsage {
                     prompt_tokens: 0,
                     total_tokens: 0,
                 },

@@ -79,24 +79,27 @@ __pycache__/
 *.so
 *.egg-info
 
+# Hatch build artifact
+components/**/_version.py
+
 ### Helm ###
 *.tgz
 Chart.lock
 generated-values.yaml
 
+# Local build artifacts for devcontainer
 .build/
 **/.devcontainer/.env
 TensorRT-LLM
 
-# Local build artifacts for devcontainer
-.build/
 # Copied binaries to ignore
 deploy/sdk/src/dynamo/sdk/cli/bin
 
-
-# START Ruler Generated Files
+# Ruler Generated Files
 /.cursor/instructions.md
 /.cursor/instructions.md.bak
 /CLAUDE.md
 /CLAUDE.md.bak
-# END Ruler Generated Files
+
+# Benchmarks
+benchmarks/results

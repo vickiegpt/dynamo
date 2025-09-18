@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 //! Library functions for the metrics application.
 //!
@@ -76,19 +64,19 @@
 //!     Ok(())
 //! }
 
-use axum::{routing::get, Router};
-use prometheus::{register_counter_vec, register_gauge_vec, Encoder, TextEncoder};
+use axum::{Router, routing::get};
+use prometheus::{Encoder, TextEncoder, register_counter_vec, register_gauge_vec};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::time::Duration as StdDuration;
 
 use dynamo_llm::kv_router::protocols::{ForwardPassMetrics, LoadMetrics};
-use dynamo_llm::kv_router::scheduler::Endpoint;
+use dynamo_llm::kv_router::scoring::Endpoint;
 use dynamo_llm::kv_router::scoring::ProcessedEndpoints;
 
 use dynamo_runtime::{
-    distributed::Component, error, service::EndpointInfo, utils::Duration, Result,
+    Result, distributed::Component, error, service::EndpointInfo, utils::Duration,
 };
 
 /// Configuration for metrics collection mode
@@ -145,6 +133,7 @@ impl MetricsMode {
 pub struct LLMWorkerLoadCapacityConfig {
     pub component_name: String,
     pub endpoint_name: String,
+    pub model_name: Option<String>,
 }
 
 /// Metrics collector for exposing metrics to prometheus/grafana
@@ -210,20 +199,12 @@ impl PrometheusMetricsCollector {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.shutdown_tx = Some(tx);
 
-        // Try to bind to the address first to fail early if it's not available
-        let server = match axum::Server::try_bind(&addr) {
-            Ok(server) => server,
-            Err(e) => {
-                return Err(error!(
-                    "Failed to bind to address {}: {}. The port may be in use.",
-                    addr, e
-                ));
-            }
-        };
-
         // Spawn the server in a background task
         tokio::spawn(async move {
-            let server = server.serve(app.into_make_service());
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .unwrap_or_else(|_| panic!("could not bind to address: {addr}"));
+            let server = axum::serve(listener, app);
 
             // Create a future that completes when shutdown signal is received
             let shutdown_future = async {

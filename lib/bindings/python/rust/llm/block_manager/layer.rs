@@ -1,22 +1,11 @@
-// SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 #![cfg(feature = "block-manager")]
 
 use super::*;
 use dynamo_llm::block_manager::block::BlockDataExt;
+use dynamo_llm::block_manager::block::BlockDataProviderMut;
 use pyo3::{types::PyTuple, PyObject, PyResult, Python};
 use std::sync::{Arc, Mutex};
 
@@ -87,13 +76,17 @@ impl Layer {
             let mut mutable_block = self.inner.lock().unwrap();
             ptr = match &mut *mutable_block {
                 block::BlockType::Pinned(block) => {
+                    use dynamo_llm::block_manager::block::private::PrivateToken;
+                    let block_data = block.block_data_mut(PrivateToken);
                     let mut layer_view_mut =
-                        block.layer_view_mut(self.layer_idx, 0).map_err(to_pyerr)?;
+                        block_data.layer_view_mut(self.layer_idx, 0).map_err(to_pyerr)?;
                     (unsafe { layer_view_mut.as_mut_ptr() }) as *mut std::ffi::c_void
                 }
                 block::BlockType::Device(block) => {
+                    use dynamo_llm::block_manager::block::private::PrivateToken;
+                    let block_data = block.block_data_mut(PrivateToken);
                     let mut layer_view_mut =
-                        block.layer_view_mut(self.layer_idx, 0).map_err(to_pyerr)?;
+                        block_data.layer_view_mut(self.layer_idx, 0).map_err(to_pyerr)?;
                     (unsafe { layer_view_mut.as_mut_ptr() }) as *mut std::ffi::c_void
                 }
             };
@@ -117,7 +110,7 @@ impl Layer {
             self.inner.clone(),
             ptr,
             vec![1, 1, num_outer_dims, page_size, inner_dim],
-            self.dtype.clone(),
+            self.dtype,
             self.device_id,
         )
     }

@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 //! TODO - we need to reconcile what is in this crate with distributed::transports
 
@@ -20,6 +8,7 @@ pub mod egress;
 pub mod ingress;
 pub mod tcp;
 
+use crate::SystemHealth;
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
@@ -33,9 +22,14 @@ use super::{AsyncEngine, AsyncEngineContext, AsyncEngineContextProvider, Respons
 use serde::{Deserialize, Serialize};
 
 use super::{
-    context, AsyncTransportEngine, Context, Data, Error, ManyOut, PipelineError, PipelineIO,
-    SegmentSource, ServiceBackend, ServiceEngine, SingleIn, Source,
+    AsyncTransportEngine, Context, Data, Error, ManyOut, PipelineError, PipelineIO, SegmentSource,
+    ServiceBackend, ServiceEngine, SingleIn, Source, context,
 };
+use ingress::push_handler::WorkHandlerMetrics;
+
+// Add Prometheus metrics types
+use crate::metrics::MetricsRegistry;
+use prometheus::{CounterVec, Histogram, IntCounter, IntCounterVec, IntGauge};
 
 pub trait Codable: PipelineIO + Serialize + for<'de> Deserialize<'de> {}
 impl<T: PipelineIO + Serialize + for<'de> Deserialize<'de>> Codable for T {}
@@ -278,12 +272,17 @@ struct RequestControlMessage {
 
 pub struct Ingress<Req: PipelineIO, Resp: PipelineIO> {
     segment: OnceLock<Arc<SegmentSource<Req, Resp>>>,
+    metrics: OnceLock<Arc<WorkHandlerMetrics>>,
+    /// Endpoint-specific notifier for health check timer resets
+    endpoint_health_check_notifier: OnceLock<Arc<tokio::sync::Notify>>,
 }
 
 impl<Req: PipelineIO + Sync, Resp: PipelineIO> Ingress<Req, Resp> {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             segment: OnceLock::new(),
+            metrics: OnceLock::new(),
+            endpoint_health_check_notifier: OnceLock::new(),
         })
     }
 
@@ -291,6 +290,19 @@ impl<Req: PipelineIO + Sync, Resp: PipelineIO> Ingress<Req, Resp> {
         self.segment
             .set(segment)
             .map_err(|_| anyhow::anyhow!("Segment already set"))
+    }
+
+    pub fn add_metrics(
+        &self,
+        endpoint: &crate::component::Endpoint,
+        metrics_labels: Option<&[(&str, &str)]>,
+    ) -> Result<()> {
+        let metrics = WorkHandlerMetrics::from_endpoint(endpoint, metrics_labels)
+            .map_err(|e| anyhow::anyhow!("Failed to create work handler metrics: {}", e))?;
+
+        self.metrics
+            .set(Arc::new(metrics))
+            .map_err(|_| anyhow::anyhow!("Metrics already set"))
     }
 
     pub fn link(segment: Arc<SegmentSource<Req, Resp>>) -> Result<Arc<Self>> {
@@ -317,11 +329,32 @@ impl<Req: PipelineIO + Sync, Resp: PipelineIO> Ingress<Req, Resp> {
 
         Ok(ingress)
     }
+
+    /// Helper method to access metrics if available
+    fn metrics(&self) -> Option<&Arc<WorkHandlerMetrics>> {
+        self.metrics.get()
+    }
 }
 
 #[async_trait]
 pub trait PushWorkHandler: Send + Sync {
     async fn handle_payload(&self, payload: Bytes) -> Result<(), PipelineError>;
+
+    /// Add metrics to the handler
+    fn add_metrics(
+        &self,
+        endpoint: &crate::component::Endpoint,
+        metrics_labels: Option<&[(&str, &str)]>,
+    ) -> Result<()>;
+
+    /// Set the endpoint-specific notifier for health check timer resets
+    fn set_endpoint_health_check_notifier(
+        &self,
+        _notifier: Arc<tokio::sync::Notify>,
+    ) -> Result<()> {
+        // Default implementation for backwards compatibility
+        Ok(())
+    }
 }
 
 /*

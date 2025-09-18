@@ -1,17 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::protocols::openai::nvext::NvExt;
 use crate::request_template::RequestTemplate;
 use crate::types::openai::chat_completions::{
     NvCreateChatCompletionRequest, OpenAIChatCompletionsStreamingEngine,
 };
-use dynamo_runtime::{pipeline::Context, runtime::CancellationToken, Runtime};
+use dynamo_runtime::{Runtime, pipeline::Context, runtime::CancellationToken};
 use futures::StreamExt;
 use std::io::{ErrorKind, Write};
 
-use crate::entrypoint::input::common;
 use crate::entrypoint::EngineConfig;
+use crate::entrypoint::input::common;
 
 /// Max response tokens for each single query. Must be less than model context size.
 /// TODO: Cmd line flag to overwrite this
@@ -81,15 +80,17 @@ async fn main_loop(
         };
 
         // Construct messages
-        let user_message = async_openai::types::ChatCompletionRequestMessage::User(
-            async_openai::types::ChatCompletionRequestUserMessage {
-                content: async_openai::types::ChatCompletionRequestUserMessageContent::Text(prompt),
+        let user_message = dynamo_async_openai::types::ChatCompletionRequestMessage::User(
+            dynamo_async_openai::types::ChatCompletionRequestUserMessage {
+                content: dynamo_async_openai::types::ChatCompletionRequestUserMessageContent::Text(
+                    prompt,
+                ),
                 name: None,
             },
         );
         messages.push(user_message);
         // Request
-        let inner = async_openai::types::CreateChatCompletionRequestArgs::default()
+        let inner = dynamo_async_openai::types::CreateChatCompletionRequestArgs::default()
             .messages(messages.clone())
             .model(
                 template
@@ -105,20 +106,12 @@ async fn main_loop(
             .temperature(template.as_ref().map_or(0.7, |t| t.temperature))
             .n(1) // only generate one response
             .build()?;
-        let nvext = NvExt {
-            ignore_eos: Some(true),
-            ..Default::default()
-        };
-
-        // TODO We cannot set min_tokens with async-openai
-        // if inspect_template {
-        //     // This makes the pre-processor ignore stop tokens
-        //     req_builder.min_tokens(8192);
-        // }
 
         let req = NvCreateChatCompletionRequest {
             inner,
-            nvext: Some(nvext),
+            common: Default::default(),
+            nvext: None,
+            chat_template_args: None,
         };
 
         // Call the model
@@ -140,15 +133,15 @@ async fn main_loop(
             match (item.data.as_ref(), item.event.as_deref()) {
                 (Some(data), _) => {
                     // Normal case
-                    let entry = data.inner.choices.first();
+                    let entry = data.choices.first();
                     let chat_comp = entry.as_ref().unwrap();
                     if let Some(c) = &chat_comp.delta.content {
                         let _ = stdout.write(c.as_bytes());
                         let _ = stdout.flush();
                         assistant_message += c;
                     }
-                    if chat_comp.finish_reason.is_some() {
-                        tracing::trace!("finish reason: {:?}", chat_comp.finish_reason.unwrap());
+                    if let Some(reason) = chat_comp.finish_reason {
+                        tracing::trace!("finish reason: {reason:?}");
                         break;
                     }
                 }
@@ -169,12 +162,12 @@ async fn main_loop(
         println!();
 
         let assistant_content =
-            async_openai::types::ChatCompletionRequestAssistantMessageContent::Text(
+            dynamo_async_openai::types::ChatCompletionRequestAssistantMessageContent::Text(
                 assistant_message,
             );
 
-        let assistant_message = async_openai::types::ChatCompletionRequestMessage::Assistant(
-            async_openai::types::ChatCompletionRequestAssistantMessage {
+        let assistant_message = dynamo_async_openai::types::ChatCompletionRequestMessage::Assistant(
+            dynamo_async_openai::types::ChatCompletionRequestAssistantMessage {
                 content: Some(assistant_content),
                 ..Default::default()
             },

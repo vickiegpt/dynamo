@@ -1,17 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use std::error::Error;
 
@@ -20,7 +8,7 @@ pub trait MaybeError {
     fn from_err(err: Box<dyn Error + Send + Sync>) -> Self;
 
     /// Construct into an error instance.
-    fn err(&self) -> Option<Box<dyn Error + Send + Sync>>;
+    fn err(&self) -> Option<anyhow::Error>;
 
     /// Check if the current instance represents a success.
     fn is_ok(&self) -> bool {
@@ -46,8 +34,8 @@ mod tests {
                 message: err.to_string(),
             }
         }
-        fn err(&self) -> Option<Box<dyn Error + Send + Sync>> {
-            Some(anyhow::Error::msg(self.message.clone()).into())
+        fn err(&self) -> Option<anyhow::Error> {
+            Some(anyhow::Error::msg(self.message.clone()))
         }
     }
 

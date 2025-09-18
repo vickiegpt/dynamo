@@ -20,19 +20,108 @@ package controller_common
 import (
 	"context"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/client-go/discovery"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
+type GroveConfig struct {
+	// Enabled is automatically determined by checking if Grove CRDs are installed in the cluster
+	Enabled bool
+	// TerminationDelay configures the termination delay for Grove PodCliqueSets
+	TerminationDelay time.Duration
+}
+
+type LWSConfig struct {
+	// Enabled is automatically determined by checking if LWS CRDs are installed in the cluster
+	Enabled bool
+}
+
+type KaiSchedulerConfig struct {
+	// Enabled is automatically determined by checking if Kai-scheduler CRDs are installed in the cluster
+	Enabled bool
+}
+
 type Config struct {
 	// Enable resources filtering, only the resources belonging to the given namespace will be handled.
 	RestrictedNamespace string
-	// If true, assume VirtualService endpoints are HTTPS
-	VirtualServiceSupportsHTTPS bool
-	EnableLWS                   bool
+	Grove               GroveConfig
+	LWS                 LWSConfig
+	KaiScheduler        KaiSchedulerConfig
+	EtcdAddress         string
+	NatsAddress         string
+	IngressConfig       IngressConfig
+	// ModelExpressURL is the URL of the Model Express server to inject into all pods
+	ModelExpressURL string
+	// PrometheusEndpoint is the URL of the Prometheus endpoint to use for metrics
+	PrometheusEndpoint string
+}
+
+type IngressConfig struct {
+	VirtualServiceGateway      string
+	IngressControllerClassName string
+	IngressControllerTLSSecret string
+	IngressHostSuffix          string
+}
+
+func (i *IngressConfig) UseVirtualService() bool {
+	return i.VirtualServiceGateway != ""
+}
+
+// DetectGroveAvailability checks if Grove is available by checking if the Grove API group is registered
+// This approach uses the discovery client which is simpler and more reliable
+func DetectGroveAvailability(ctx context.Context, mgr ctrl.Manager) bool {
+	return detectAPIGroupAvailability(ctx, mgr, "grove.io")
+}
+
+// DetectLWSAvailability checks if LWS is available by checking if the LWS API group is registered
+// This approach uses the discovery client which is simpler and more reliable
+func DetectLWSAvailability(ctx context.Context, mgr ctrl.Manager) bool {
+	return detectAPIGroupAvailability(ctx, mgr, "leaderworkerset.x-k8s.io")
+}
+
+// DetectKaiSchedulerAvailability checks if Kai-scheduler is available by checking if the scheduling.run.ai API group is registered
+// This approach uses the discovery client which is simpler and more reliable
+func DetectKaiSchedulerAvailability(ctx context.Context, mgr ctrl.Manager) bool {
+	return detectAPIGroupAvailability(ctx, mgr, "scheduling.run.ai")
+}
+
+// detectAPIGroupAvailability checks if a specific API group is registered in the cluster
+func detectAPIGroupAvailability(ctx context.Context, mgr ctrl.Manager, groupName string) bool {
+	logger := log.FromContext(ctx)
+
+	cfg := mgr.GetConfig()
+	if cfg == nil {
+		logger.Info("detection failed, no discovery client available", "group", groupName)
+		return false
+	}
+
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		logger.Error(err, "detection failed, could not create discovery client", "group", groupName)
+		return false
+	}
+
+	apiGroups, err := discoveryClient.ServerGroups()
+	if err != nil {
+		logger.Error(err, "detection failed, could not list server groups", "group", groupName)
+		return false
+	}
+
+	for _, group := range apiGroups.Groups {
+		if group.Name == groupName {
+			logger.Info("API group is available", "group", groupName)
+			return true
+		}
+	}
+
+	logger.Info("API group not available", "group", groupName)
+	return false
 }
 
 func EphemeralDeploymentEventFilter(config Config) predicate.Predicate {

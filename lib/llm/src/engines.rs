@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use std::env;
 use std::sync::Arc;
@@ -25,12 +13,9 @@ use dynamo_runtime::engine::{AsyncEngine, AsyncEngineContextProvider, ResponseSt
 use dynamo_runtime::pipeline::{Error, ManyOut, SingleIn};
 use dynamo_runtime::protocols::annotated::Annotated;
 
-use crate::backend::ExecutionContext;
-use crate::preprocessor::PreprocessedRequest;
-use crate::protocols::common::llm_backend::LLMEngineOutput;
 use crate::protocols::openai::{
     chat_completions::{NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse},
-    completions::{prompt_to_string, NvCreateCompletionRequest, NvCreateCompletionResponse},
+    completions::{NvCreateCompletionRequest, NvCreateCompletionResponse, prompt_to_string},
 };
 use crate::types::openai::embeddings::NvCreateEmbeddingRequest;
 use crate::types::openai::embeddings::NvCreateEmbeddingResponse;
@@ -77,52 +62,9 @@ pub static TOKEN_ECHO_DELAY: LazyLock<Duration> = LazyLock::new(|| {
     Duration::from_millis(delay_ms)
 });
 
-/// Engine that accepts pre-processed requests and echos the tokens back as the response
-/// The response will include the full prompt template.
-/// Useful for testing pre-processing.
-struct EchoEngineCore {}
-pub fn make_engine_core() -> ExecutionContext {
-    Arc::new(EchoEngineCore {})
-}
-
-#[async_trait]
-impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutput>>, Error>
-    for EchoEngineCore
-{
-    async fn generate(
-        &self,
-        incoming_request: SingleIn<PreprocessedRequest>,
-    ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
-        let (request, context) = incoming_request.into_parts();
-        let ctx = context.context();
-
-        let output = stream! {
-            for tok in request.token_ids {
-                tokio::time::sleep(*TOKEN_ECHO_DELAY).await;
-                yield delta_core(tok);
-            }
-            yield Annotated::from_data(LLMEngineOutput::stop());
-        };
-        Ok(ResponseStream::new(Box::pin(output), ctx))
-    }
-}
-
-fn delta_core(tok: u32) -> Annotated<LLMEngineOutput> {
-    let delta = LLMEngineOutput {
-        token_ids: vec![tok],
-        tokens: None,
-        text: None,
-        cum_log_probs: None,
-        log_probs: None,
-        finish_reason: None,
-        index: None,
-    };
-    Annotated::from_data(delta)
-}
-
 /// Engine that accepts un-preprocessed requests and echos the prompt back as the response
 /// Useful for testing ingress such as service-http.
-struct EchoEngineFull {}
+struct EchoEngine {}
 
 /// Validate Engine that verifies request data
 pub struct ValidateEngine<E> {
@@ -175,8 +117,8 @@ pub trait EmbeddingEngine: Send + Sync {
     ) -> Result<ManyOut<Annotated<NvCreateEmbeddingResponse>>, Error>;
 }
 
-pub fn make_engine_full() -> Arc<dyn StreamingEngine> {
-    let engine = EchoEngineFull {};
+pub fn make_echo_engine() -> Arc<dyn StreamingEngine> {
+    let engine = EchoEngine {};
     let data = EngineDispatcher::new(engine);
     Arc::new(data)
 }
@@ -187,23 +129,25 @@ impl
         SingleIn<NvCreateChatCompletionRequest>,
         ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>,
         Error,
-    > for EchoEngineFull
+    > for EchoEngine
 {
     async fn generate(
         &self,
         incoming_request: SingleIn<NvCreateChatCompletionRequest>,
     ) -> Result<ManyOut<Annotated<NvCreateChatCompletionStreamResponse>>, Error> {
         let (request, context) = incoming_request.transfer(());
-        let deltas = request.response_generator();
         let ctx = context.context();
-        let req = request.inner.messages.into_iter().next_back().unwrap();
+        let mut deltas = request.response_generator(ctx.id().to_string());
+        let Some(req) = request.inner.messages.into_iter().next_back() else {
+            anyhow::bail!("Empty chat messages in request");
+        };
 
         let prompt = match req {
-            async_openai::types::ChatCompletionRequestMessage::User(user_msg) => {
+            dynamo_async_openai::types::ChatCompletionRequestMessage::User(user_msg) => {
                 match user_msg.content {
-                    async_openai::types::ChatCompletionRequestUserMessageContent::Text(prompt) => {
-                        prompt
-                    }
+                    dynamo_async_openai::types::ChatCompletionRequestUserMessageContent::Text(
+                        prompt,
+                    ) => prompt,
                     _ => anyhow::bail!("Invalid request content field, expected Content::Text"),
                 }
             }
@@ -215,18 +159,12 @@ impl
             for c in prompt.chars() {
                 // we are returning characters not tokens, so there will be some postprocessing overhead
                 tokio::time::sleep(*TOKEN_ECHO_DELAY).await;
-                let inner = deltas.create_choice(0, Some(c.to_string()), None, None);
-                let response = NvCreateChatCompletionStreamResponse {
-                    inner,
-                };
+                let response = deltas.create_choice(0, Some(c.to_string()), None, None, None);
                 yield Annotated{ id: Some(id.to_string()), data: Some(response), event: None, comment: None };
                 id += 1;
             }
 
-            let inner = deltas.create_choice(0, None, Some(async_openai::types::FinishReason::Stop), None);
-            let response = NvCreateChatCompletionStreamResponse {
-                inner,
-            };
+            let response = deltas.create_choice(0, None, None, Some(dynamo_async_openai::types::FinishReason::Stop), None);
             yield Annotated { id: Some(id.to_string()), data: Some(response), event: None, comment: None };
         };
 
@@ -240,25 +178,25 @@ impl
         SingleIn<NvCreateCompletionRequest>,
         ManyOut<Annotated<NvCreateCompletionResponse>>,
         Error,
-    > for EchoEngineFull
+    > for EchoEngine
 {
     async fn generate(
         &self,
         incoming_request: SingleIn<NvCreateCompletionRequest>,
     ) -> Result<ManyOut<Annotated<NvCreateCompletionResponse>>, Error> {
         let (request, context) = incoming_request.transfer(());
-        let deltas = request.response_generator();
         let ctx = context.context();
+        let deltas = request.response_generator(ctx.id().to_string());
         let chars_string = prompt_to_string(&request.inner.prompt);
         let output = stream! {
             let mut id = 1;
             for c in chars_string.chars() {
                 tokio::time::sleep(*TOKEN_ECHO_DELAY).await;
-                let response = deltas.create_choice(0, Some(c.to_string()), None);
+                let response = deltas.create_choice(0, Some(c.to_string()), None, None);
                 yield Annotated{ id: Some(id.to_string()), data: Some(response), event: None, comment: None };
                 id += 1;
             }
-            let response = deltas.create_choice(0, None, Some(async_openai::types::CompletionFinishReason::Stop));
+            let response = deltas.create_choice(0, None, Some(dynamo_async_openai::types::CompletionFinishReason::Stop), None);
             yield Annotated { id: Some(id.to_string()), data: Some(response), event: None, comment: None };
 
         };
@@ -273,7 +211,7 @@ impl
         SingleIn<NvCreateEmbeddingRequest>,
         ManyOut<Annotated<NvCreateEmbeddingResponse>>,
         Error,
-    > for EchoEngineFull
+    > for EchoEngine
 {
     async fn generate(
         &self,

@@ -26,6 +26,7 @@ namespaceRestriction:
   # The target namespace to restrict to. If empty, defaults to the release namespace
   targetNamespace: ""
 controllerManager:
+  tolerations: []
   kubeRbacProxy:
     args:
     - --secure-listen-address=0.0.0.0:8443
@@ -74,14 +75,11 @@ controllerManager:
     annotations: {}
 
 dynamo:
-  imageBuilder:
-    serviceAccount:
-      annotations: {}
   components:
     serviceAccount:
       annotations: {}
 
-  enableLWS: false
+  groveTerminationDelay: 15m
 
   internalImages:
     debugger: python:3.12-slim
@@ -98,6 +96,9 @@ dynamo:
     existingSecretName: ''
     secure: true
 
+  metrics:
+    prometheusEndpoint: ""
+
 
 #imagePullSecrets: []
 kubernetesClusterDomain: cluster.local
@@ -111,3 +112,5 @@ metricsService:
 
 natsAddr: ""
 etcdAddr: ""
+modelExpressURL: ""
+

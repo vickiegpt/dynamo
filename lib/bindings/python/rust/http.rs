@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use std::sync::Arc;
 
@@ -19,8 +7,8 @@ use pyo3::{exceptions::PyException, prelude::*};
 
 use crate::{engine::*, to_pyerr, CancellationToken};
 
+pub use dynamo_llm::endpoint_type::EndpointType;
 pub use dynamo_llm::http::service::{error as http_error, service_v2};
-
 pub use dynamo_runtime::{
     error,
     pipeline::{async_trait, AsyncEngine, Data, ManyOut, SingleIn},
@@ -91,6 +79,27 @@ impl HttpService {
             service.run(token.inner).await.map_err(to_pyerr)?;
             Ok(())
         })
+    }
+
+    fn enable_endpoint(&self, endpoint_type: String, enabled: bool) -> PyResult<()> {
+        let endpoint_type = EndpointType::all()
+            .iter()
+            .find(|&&ep_type| ep_type.as_str().to_lowercase() == endpoint_type.to_lowercase())
+            .copied()
+            .ok_or_else(|| {
+                let valid_types = EndpointType::all()
+                    .iter()
+                    .map(|&ep_type| ep_type.as_str().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                to_pyerr(format!(
+                    "Invalid endpoint type: '{}'. Valid types are: {}",
+                    endpoint_type, valid_types
+                ))
+            })?;
+
+        self.inner.enable_model_endpoint(endpoint_type, enabled);
+        Ok(())
     }
 }
 

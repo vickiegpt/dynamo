@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -86,27 +74,17 @@ mod tests {
     // todo - make a distributed runtime fixture
     // todo - two options - fully mocked or integration test
     #[tokio::test]
-    async fn test_publish() {
+    async fn test_publish_and_subscribe() {
         let rt = Runtime::from_current().unwrap();
         let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-        let ns = dtr.namespace("test".to_string()).unwrap();
-        let cp = ns.component("component".to_string()).unwrap();
-        cp.publish("test", &"test".to_string()).await.unwrap();
-        rt.shutdown();
-    }
+        let ns = dtr.namespace("test_component".to_string()).unwrap();
+        let cp = ns.component("test_component".to_string()).unwrap();
 
-    #[tokio::test]
-    async fn test_subscribe() {
-        let rt = Runtime::from_current().unwrap();
-        let dtr = DistributedRuntime::from_settings(rt.clone()).await.unwrap();
-        let ns = dtr.namespace("test".to_string()).unwrap();
-        let cp = ns.component("component".to_string()).unwrap();
+        // Create a subscriber on the component
+        let mut subscriber = cp.subscribe("test_event").await.unwrap();
 
-        // Create a subscriber
-        let mut subscriber = ns.subscribe("test").await.unwrap();
-
-        // Publish a message
-        cp.publish("test", &"test_message".to_string())
+        // Publish a message from the component
+        cp.publish("test_event", &"test_message".to_string())
             .await
             .unwrap();
 

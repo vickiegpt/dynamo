@@ -3,173 +3,94 @@
 
 import logging
 import os
-from dataclasses import dataclass
-from typing import Any, List
+from dataclasses import dataclass, field
 
 import pytest
-import requests
 
-from tests.utils.managed_process import ManagedProcess
+from tests.serve.common import (
+    SERVE_TEST_DIR,
+    params_with_model_mark,
+    run_serve_deployment,
+)
+from tests.utils.engine_process import EngineConfig
+from tests.utils.payload_builder import chat_payload_default, completion_payload_default
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class SGLangConfig:
+class SGLangConfig(EngineConfig):
     """Configuration for SGLang test scenarios"""
 
-    script_name: str
-    marks: List[Any]
-    name: str
+    stragglers: list[str] = field(default_factory=lambda: ["SGLANG:EngineCore"])
 
 
-class SGLangProcess(ManagedProcess):
-    """Simple process manager for sglang shell scripts"""
+sglang_dir = os.environ.get("SGLANG_DIR", "/workspace/components/backends/sglang")
 
-    def __init__(self, script_name, request):
-        self.port = 8000
-        sglang_dir = "/workspace/examples/sglang"
-        script_path = os.path.join(sglang_dir, "launch", script_name)
-
-        # Verify script exists
-        if not os.path.exists(script_path):
-            raise FileNotFoundError(f"SGLang script not found: {script_path}")
-
-        # Make script executable and run it
-        command = ["bash", script_path]
-
-        super().__init__(
-            command=command,
-            timeout=900,
-            display_output=True,
-            working_dir=sglang_dir,
-            health_check_ports=[],  # Disable port health check
-            health_check_urls=[
-                (f"http://localhost:{self.port}/v1/models", self._check_models_api)
-            ],
-            delayed_start=60,  # Give SGLang more time to fully start
-            terminate_existing=False,
-            stragglers=[],  # Don't kill any stragglers automatically
-            log_dir=request.node.name,
-        )
-
-    def _check_models_api(self, response):
-        """Check if models API is working and returns models"""
-        try:
-            if response.status_code != 200:
-                return False
-            data = response.json()
-            return data.get("data") and len(data["data"]) > 0
-        except Exception:
-            return False
-
-
-# SGLang test configurations
 sglang_configs = {
     "aggregated": SGLangConfig(
-        script_name="agg.sh", marks=[pytest.mark.gpu_1], name="aggregated"
+        name="aggregated",
+        directory=SERVE_TEST_DIR,
+        script_name="sglang_agg.sh",
+        marks=[pytest.mark.gpu_1],
+        model="deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+        env={},
+        models_port=8000,
+        request_payloads=[chat_payload_default(), completion_payload_default()],
     ),
     "disaggregated": SGLangConfig(
-        script_name="disagg.sh", marks=[pytest.mark.gpu_2], name="disaggregated"
+        name="disaggregated",
+        directory=sglang_dir,
+        script_name="disagg.sh",
+        marks=[pytest.mark.gpu_2],
+        model="Qwen/Qwen3-0.6B",
+        env={},
+        models_port=8000,
+        request_payloads=[chat_payload_default(), completion_payload_default()],
+    ),
+    "kv_events": SGLangConfig(
+        name="kv_events",
+        directory=sglang_dir,
+        script_name="agg_router.sh",
+        marks=[pytest.mark.gpu_2],
+        model="Qwen/Qwen3-0.6B",
+        env={
+            "DYN_LOG": "dynamo_llm::kv_router::publisher=trace,dynamo_llm::kv_router::scheduler=info",
+        },
+        models_port=8000,
+        request_payloads=[
+            chat_payload_default(
+                expected_log=[
+                    r"ZMQ listener .* received batch with \d+ events \(seq=\d+\)",
+                    r"Event processor for worker_id \d+ processing event: Stored\(",
+                    r"Selected worker: \d+, logit: ",
+                ]
+            )
+        ],
     ),
 }
 
 
-@pytest.fixture(
-    params=[
-        pytest.param("aggregated", marks=[pytest.mark.gpu_1]),
-        pytest.param("disaggregated", marks=[pytest.mark.gpu_2]),
-    ]
-)
+@pytest.fixture(params=params_with_model_mark(sglang_configs))
 def sglang_config_test(request):
     """Fixture that provides different SGLang test configurations"""
     return sglang_configs[request.param]
 
 
 @pytest.mark.e2e
-@pytest.mark.slow
 @pytest.mark.sglang
-def test_sglang_deployment(request, runtime_services, sglang_config_test):
-    """Test SGLang deployment scenarios"""
-
-    # First check if sglang is available
-    try:
-        import sglang
-
-        logger.info(f"SGLang version: {sglang.__version__}")
-    except ImportError:
-        pytest.skip("SGLang not available")
-
+def test_sglang_deployment(
+    sglang_config_test, request, runtime_services, predownload_models
+):
+    """Test SGLang deployment scenarios using common helpers"""
     config = sglang_config_test
-
-    with SGLangProcess(config.script_name, request) as server:
-        # Test chat completions
-        response = requests.post(
-            f"http://localhost:{server.port}/v1/chat/completions",
-            json={
-                "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "Why is Roger Federer the best tennis player of all time?",
-                    }
-                ],
-                "max_tokens": 50,
-            },
-            timeout=120,
-        )
-
-        assert response.status_code == 200
-        result = response.json()
-        assert "choices" in result
-        assert len(result["choices"]) > 0
-        content = result["choices"][0]["message"]["content"]
-        assert len(content) > 0
-        logger.info(f"SGLang {config.name} response: {content}")
-
-        # Test completions endpoint for disaggregated only
-        if config.name == "disaggregated":
-            response = requests.post(
-                f"http://localhost:{server.port}/v1/completions",
-                json={
-                    "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-                    "prompt": "Roger Federer is the greatest tennis player of all time",
-                    "max_tokens": 30,
-                },
-                timeout=120,
-            )
-
-            assert response.status_code == 200
-            result = response.json()
-            assert "choices" in result
-            assert len(result["choices"]) > 0
-            text = result["choices"][0]["text"]
-            assert len(text) > 0
-            logger.info(f"SGLang completions response: {text}")
+    run_serve_deployment(config, request)
 
 
 @pytest.mark.skip(
     reason="Requires 4 GPUs - enable when hardware is consistently available"
 )
-def test_sglang_disagg_dp_attention(request, runtime_services):
+def test_sglang_disagg_dp_attention(request, runtime_services, predownload_models):
     """Test sglang disaggregated with DP attention (requires 4 GPUs)"""
 
-    with SGLangProcess("disagg_dp_attn.sh", request) as server:
-        # Test chat completions with the DP attention model
-        response = requests.post(
-            f"http://localhost:{server.port}/v1/chat/completions",
-            json={
-                "model": "silence09/DeepSeek-R1-Small-2layers",  # DP attention model
-                "messages": [{"role": "user", "content": "Tell me about MoE models"}],
-                "max_tokens": 50,
-            },
-            timeout=120,
-        )
-
-        assert response.status_code == 200
-        result = response.json()
-        assert "choices" in result
-        assert len(result["choices"]) > 0
-        content = result["choices"][0]["message"]["content"]
-        assert len(content) > 0
-        logger.info(f"SGLang DP attention response: {content}")
+    # Kept for reference; this test uses a different launch path and is skipped

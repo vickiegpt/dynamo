@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 //! Block Manager Dynamo Integration Tests
 //!
@@ -46,10 +34,10 @@ pub mod llm_kvbm {
         },
     };
     use dynamo_llm::tokens::{BlockHash, SequenceHash};
+    use dynamo_runtime::DistributedRuntime;
     use dynamo_runtime::component::Namespace;
     use dynamo_runtime::prelude::DistributedRuntimeProvider;
     use dynamo_runtime::traits::events::EventPublisher;
-    use dynamo_runtime::DistributedRuntime;
     use kvbm::events::EventManager;
     use tokio::sync::mpsc;
     pub use tokio_util::sync::CancellationToken;
@@ -383,18 +371,18 @@ mod tests {
 
     use dynamo_llm::tokens::{TokenBlockSequence, Tokens};
     use dynamo_runtime::{
-        traits::events::{EventPublisher, EventSubscriber},
         DistributedRuntime, Runtime,
+        traits::events::{EventPublisher, EventSubscriber},
     };
     use kvbm::{
-        block::registry::BlockRegistry,
-        block::state::CompleteState,
-        block::BlockState,
-        block::GlobalRegistry,
-        events::EventManager,
-        storage::{DeviceAllocator, DiskAllocator, PinnedAllocator},
         KvBlockManagerConfig, KvManagerLayoutConfig, KvManagerModelConfig, NixlOptions,
         ReferenceBlockManager,
+        block::BlockState,
+        block::GlobalRegistry,
+        block::registry::BlockRegistry,
+        block::state::CompleteState,
+        events::EventManager,
+        storage::{DeviceAllocator, DiskAllocator, PinnedAllocator},
     };
 
     use dynamo_llm::kv_router::{
@@ -481,7 +469,7 @@ mod tests {
             .build()
             .unwrap();
 
-        ReferenceBlockManager::new(config).unwrap()
+        ReferenceBlockManager::new(config).await.unwrap()
     }
 
     async fn setup_kvbm_component(

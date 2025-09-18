@@ -1,19 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
-use crate::{error, CancellationToken, ErrorContext, Result, Runtime};
+use crate::{CancellationToken, ErrorContext, Result, Runtime, error};
 
 use async_nats::jetstream::kv;
 use derive_builder::Builder;
@@ -21,21 +9,24 @@ use derive_getters::Dissolve;
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use validator::Validate;
 
 use etcd_client::{
-    Certificate, Compare, CompareOp, DeleteOptions, GetOptions, Identity, PutOptions, PutResponse,
-    TlsOptions, Txn, TxnOp, TxnOpResponse, WatchOptions, Watcher,
+    Certificate, Compare, CompareOp, DeleteOptions, GetOptions, Identity, LockClient, LockOptions,
+    LockResponse, PutOptions, PutResponse, TlsOptions, Txn, TxnOp, TxnOpResponse, WatchOptions,
+    Watcher,
 };
 pub use etcd_client::{ConnectOptions, KeyValue, LeaseClient};
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 
 mod lease;
 mod path;
 
 use lease::*;
 pub use path::*;
+
+use super::utils::build_in_runtime;
 
 //pub use etcd::ConnectOptions as EtcdConnectOptions;
 
@@ -45,6 +36,7 @@ pub struct Client {
     client: etcd_client::Client,
     primary_lease: i64,
     runtime: Runtime,
+    rt: Arc<tokio::runtime::Runtime>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,33 +93,36 @@ impl Client {
     /// If the lease expires, the [`Runtime`] will be shutdown.
     /// If the [`Runtime`] is shutdown, the lease will be revoked.
     pub async fn new(config: ClientOptions, runtime: Runtime) -> Result<Self> {
-        runtime
-            .secondary()
-            .spawn(Self::create(config, runtime.clone()))
-            .await?
-    }
-
-    /// Create a new etcd client and tie the primary [`CancellationToken`] to the primary etcd lease.
-    async fn create(config: ClientOptions, runtime: Runtime) -> Result<Self> {
         let token = runtime.primary_token();
-        let client =
-            etcd_client::Client::connect(config.etcd_url, config.etcd_connect_options).await?;
 
-        let lease_id = if config.attach_lease {
-            let lease_client = client.lease_client();
+        let ((client, lease_id), rt) = build_in_runtime(
+            async move {
+                let client =
+                    etcd_client::Client::connect(config.etcd_url, config.etcd_connect_options)
+                        .await?;
 
-            let lease = create_lease(lease_client, 10, token)
-                .await
-                .context("creating primary lease")?;
+                let lease_id = if config.attach_lease {
+                    let lease_client = client.lease_client();
 
-            lease.id
-        } else {
-            0
-        };
+                    let lease = create_lease(lease_client, 10, token)
+                        .await
+                        .context("creating primary lease")?;
+
+                    lease.id
+                } else {
+                    0
+                };
+
+                Ok((client, lease_id))
+            },
+            1,
+        )
+        .await?;
 
         Ok(Client {
             client,
             primary_lease: lease_id,
+            rt,
             runtime,
         })
     }
@@ -155,8 +150,7 @@ impl Client {
     pub async fn create_lease(&self, ttl: i64) -> Result<Lease> {
         let token = self.runtime.child_token();
         let lease_client = self.client.lease_client();
-        self.runtime
-            .secondary()
+        self.rt
             .spawn(create_lease(lease_client, ttl, token))
             .await?
     }
@@ -164,26 +158,18 @@ impl Client {
     // Revoke an etcd lease given its lease id. A wrapper over etcd_client::LeaseClient::revoke
     pub async fn revoke_lease(&self, lease_id: i64) -> Result<()> {
         let lease_client = self.client.lease_client();
-        self.runtime
-            .secondary()
-            .spawn(revoke_lease(lease_client, lease_id))
-            .await?
+        self.rt.spawn(revoke_lease(lease_client, lease_id)).await?
     }
 
-    pub async fn kv_create(
-        &self,
-        key: String,
-        value: Vec<u8>,
-        lease_id: Option<i64>,
-    ) -> Result<()> {
+    pub async fn kv_create(&self, key: &str, value: Vec<u8>, lease_id: Option<i64>) -> Result<()> {
         let id = lease_id.unwrap_or(self.lease_id());
         let put_options = PutOptions::new().with_lease(id);
 
         // Build the transaction
         let txn = Txn::new()
-            .when(vec![Compare::version(key.as_str(), CompareOp::Equal, 0)]) // Ensure the lock does not exist
+            .when(vec![Compare::version(key, CompareOp::Equal, 0)]) // Ensure the lock does not exist
             .and_then(vec![
-                TxnOp::put(key.as_str(), value, Some(put_options)), // Create the object
+                TxnOp::put(key, value, Some(put_options)), // Create the object
             ]);
 
         // Execute the transaction
@@ -309,6 +295,32 @@ impl Client {
         Ok(get_response.take_kvs())
     }
 
+    /// Acquire a distributed lock using etcd's native lock mechanism
+    /// Returns a LockResponse that can be used to unlock later
+    pub async fn lock(
+        &self,
+        key: impl Into<Vec<u8>>,
+        lease_id: Option<i64>,
+    ) -> Result<LockResponse> {
+        let mut lock_client = self.client.lock_client();
+        let id = lease_id.unwrap_or(self.lease_id());
+        let options = LockOptions::new().with_lease(id);
+        lock_client
+            .lock(key, Some(options))
+            .await
+            .map_err(|err| err.into())
+    }
+
+    /// Release a distributed lock using the key from the LockResponse
+    pub async fn unlock(&self, lock_key: impl Into<Vec<u8>>) -> Result<()> {
+        let mut lock_client = self.client.lock_client();
+        lock_client
+            .unlock(lock_key)
+            .await
+            .map_err(|err: etcd_client::Error| anyhow::anyhow!(err))?;
+        Ok(())
+    }
+
     pub async fn kv_get_and_watch_prefix(
         &self,
         prefix: impl AsRef<str> + std::fmt::Display,
@@ -345,7 +357,7 @@ impl Client {
 
         let (tx, rx) = mpsc::channel(32);
 
-        self.runtime.secondary().spawn(async move {
+        self.rt.spawn(async move {
             for kv in kvs {
                 if tx.send(WatchEvent::Put(kv)).await.is_err() {
                     // receiver is already closed
@@ -608,7 +620,7 @@ impl KvCache {
 #[cfg(feature = "integration")]
 #[cfg(test)]
 mod tests {
-    use crate::{distributed::DistributedConfig, DistributedRuntime};
+    use crate::{DistributedRuntime, distributed::DistributedConfig};
 
     use super::*;
 
@@ -616,7 +628,7 @@ mod tests {
     fn test_ectd_client() {
         let rt = Runtime::from_settings().unwrap();
         let rt_clone = rt.clone();
-        let config = DistributedConfig::from_settings();
+        let config = DistributedConfig::from_settings(false);
 
         rt_clone.primary().block_on(async move {
             let drt = DistributedRuntime::new(rt, config).await.unwrap();
@@ -628,19 +640,18 @@ mod tests {
         let key = "__integration_test_key";
         let value = b"test_value";
 
-        let client = drt.etcd_client();
-        let lease_id = drt.primary_lease().id();
+        let client = drt.etcd_client().expect("etcd client should be available");
+        let lease_id = drt
+            .primary_lease()
+            .expect("primary lease should be available")
+            .id();
 
         // Create the key
-        let result = client
-            .kv_create(key.to_string(), value.to_vec(), Some(lease_id))
-            .await;
+        let result = client.kv_create(key, value.to_vec(), Some(lease_id)).await;
         assert!(result.is_ok(), "");
 
         // Try to create the key again - this should fail
-        let result = client
-            .kv_create(key.to_string(), value.to_vec(), Some(lease_id))
-            .await;
+        let result = client.kv_create(key, value.to_vec(), Some(lease_id)).await;
         assert!(result.is_err());
 
         // Create or validate should succeed as the values match

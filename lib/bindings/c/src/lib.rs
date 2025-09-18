@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use async_once_cell::OnceCell as AsyncOnceCell;
 use libc::c_char;
@@ -48,7 +36,7 @@ pub enum DynamoLlmResult {
 
 /// # Safety
 /// the namespace_c_str and component_c_str are passed as pointers to C strings
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dynamo_llm_init(
     namespace_c_str: *const c_char,
     component_c_str: *const c_char,
@@ -108,7 +96,7 @@ pub unsafe extern "C" fn dynamo_llm_init(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn dynamo_llm_shutdown() -> DynamoLlmResult {
     let wk = match WK.get() {
         Some(wk) => wk,
@@ -123,7 +111,7 @@ pub extern "C" fn dynamo_llm_shutdown() -> DynamoLlmResult {
     DynamoLlmResult::OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn dynamo_llm_load_publisher_create() -> DynamoLlmResult {
     DynamoLlmResult::OK
 }
@@ -191,11 +179,7 @@ fn kv_event_create_stored_from_parts(
         if num_toks != (kv_block_size as usize) {
             if WARN_COUNT
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| {
-                    if c < 3 {
-                        Some(c + 1)
-                    } else {
-                        None
-                    }
+                    if c < 3 { Some(c + 1) } else { None }
                 })
                 .is_ok()
             {
@@ -256,7 +240,7 @@ pub struct DynamoKvStoredEventParams {
 /// # Safety
 /// parent_hash is passed as pointer to indicate whether the blocks
 /// has a parent hash or not. nullptr is used to represent no parent hash
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dynamo_kv_event_publish_stored(
     event_id: u64,
     token_ids: *const u32,
@@ -293,7 +277,7 @@ pub unsafe extern "C" fn dynamo_kv_event_publish_stored(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn dynamo_kv_event_publish_removed(
     event_id: u64,
     block_ids: *const u64,

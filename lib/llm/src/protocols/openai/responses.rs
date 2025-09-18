@@ -1,23 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
-use async_openai::types::responses::{
+use dynamo_async_openai::types::responses::{
     Content, Input, OutputContent, OutputMessage, OutputStatus, OutputText, Response,
     Role as ResponseRole, Status,
 };
-use async_openai::types::{
+use dynamo_async_openai::types::{
     ChatCompletionRequestMessage, ChatCompletionRequestUserMessage,
     ChatCompletionRequestUserMessageContent, CreateChatCompletionRequest,
 };
@@ -33,7 +21,7 @@ use super::{OpenAISamplingOptionsProvider, OpenAIStopConditionsProvider};
 #[derive(Serialize, Deserialize, Validate, Debug, Clone)]
 pub struct NvCreateResponse {
     #[serde(flatten)]
-    pub inner: async_openai::types::responses::CreateResponse,
+    pub inner: dynamo_async_openai::types::responses::CreateResponse,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nvext: Option<NvExt>,
@@ -42,7 +30,7 @@ pub struct NvCreateResponse {
 #[derive(Serialize, Deserialize, Validate, Debug, Clone)]
 pub struct NvResponse {
     #[serde(flatten)]
-    pub inner: async_openai::types::responses::Response,
+    pub inner: dynamo_async_openai::types::responses::Response,
 }
 
 /// Implements `NvExtProvider` for `NvCreateResponse`,
@@ -111,6 +99,18 @@ impl OpenAISamplingOptionsProvider for NvCreateResponse {
     /// Returns a reference to the optional `NvExt` extension, if available.
     fn nvext(&self) -> Option<&NvExt> {
         self.nvext.as_ref()
+    }
+
+    fn get_seed(&self) -> Option<i64> {
+        None // TODO setting as None for now
+    }
+
+    fn get_n(&self) -> Option<u8> {
+        None // TODO setting as None for now
+    }
+
+    fn get_best_of(&self) -> Option<u8> {
+        None // TODO setting as None for now
     }
 }
 
@@ -185,7 +185,9 @@ impl TryFrom<NvCreateResponse> for NvCreateChatCompletionRequest {
                 stream: Some(true), // Set this to Some(True) by default to aggregate stream
                 ..Default::default()
             },
+            common: Default::default(),
             nvext: resp.nvext,
+            chat_template_args: None,
         })
     }
 }
@@ -198,7 +200,7 @@ impl TryFrom<NvCreateChatCompletionResponse> for NvResponse {
     type Error = anyhow::Error;
 
     fn try_from(nv_resp: NvCreateChatCompletionResponse) -> Result<Self, Self::Error> {
-        let chat_resp = nv_resp.inner;
+        let chat_resp = nv_resp;
         let content_text = chat_resp
             .choices
             .into_iter()
@@ -255,8 +257,8 @@ impl TryFrom<NvCreateChatCompletionResponse> for NvResponse {
 
 #[cfg(test)]
 mod tests {
-    use async_openai::types::responses::{CreateResponse, Input};
-    use async_openai::types::{
+    use dynamo_async_openai::types::responses::{CreateResponse, Input};
+    use dynamo_async_openai::types::{
         ChatCompletionRequestMessage, ChatCompletionRequestUserMessageContent,
     };
 
@@ -340,28 +342,27 @@ mod tests {
     fn test_into_nvresponse_from_chat_response() {
         let now = 1_726_000_000;
         let chat_resp = NvCreateChatCompletionResponse {
-            inner: async_openai::types::CreateChatCompletionResponse {
-                id: "chatcmpl-xyz".into(),
-                choices: vec![async_openai::types::ChatChoice {
-                    index: 0,
-                    message: async_openai::types::ChatCompletionResponseMessage {
-                        content: Some("This is a reply".into()),
-                        refusal: None,
-                        tool_calls: None,
-                        role: async_openai::types::Role::Assistant,
-                        function_call: None,
-                        audio: None,
-                    },
-                    finish_reason: None,
-                    logprobs: None,
-                }],
-                created: now,
-                model: "llama-3.1-8b-instruct".into(),
-                service_tier: None,
-                system_fingerprint: None,
-                object: "chat.completion".to_string(),
-                usage: None,
-            },
+            id: "chatcmpl-xyz".into(),
+            choices: vec![dynamo_async_openai::types::ChatChoice {
+                index: 0,
+                message: dynamo_async_openai::types::ChatCompletionResponseMessage {
+                    content: Some("This is a reply".into()),
+                    refusal: None,
+                    tool_calls: None,
+                    role: dynamo_async_openai::types::Role::Assistant,
+                    function_call: None,
+                    audio: None,
+                    reasoning_content: None,
+                },
+                finish_reason: None,
+                logprobs: None,
+            }],
+            created: now,
+            model: "llama-3.1-8b-instruct".into(),
+            service_tier: None,
+            system_fingerprint: None,
+            object: "chat.completion".to_string(),
+            usage: None,
         };
 
         let wrapped: NvResponse = chat_resp.try_into().unwrap();

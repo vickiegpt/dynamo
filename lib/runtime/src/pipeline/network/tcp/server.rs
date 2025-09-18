@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use core::panic;
 use socket2::{Domain, SockAddr, Socket, Type};
@@ -26,7 +14,7 @@ use tokio::sync::Mutex;
 use bytes::Bytes;
 use derive_builder::Builder;
 use futures::{SinkExt, StreamExt};
-use local_ip_address::{list_afinet_netifas, local_ip, local_ipv6, Error};
+use local_ip_address::{Error, list_afinet_netifas, local_ip, local_ipv6};
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::AsyncWriteExt,
@@ -41,14 +29,14 @@ use super::{
 };
 use crate::engine::AsyncEngineContext;
 use crate::pipeline::{
+    PipelineError,
     network::{
+        ResponseService, ResponseStreamPrologue,
         codec::{TwoPartMessage, TwoPartMessageType},
         tcp::StreamType,
-        ResponseService, ResponseStreamPrologue,
     },
-    PipelineError,
 };
-use crate::{error, ErrorContext, Result};
+use crate::{ErrorContext, Result, error};
 
 #[allow(dead_code)]
 type ResponseType = TwoPartMessage;
@@ -461,7 +449,9 @@ async fn tcp_listener(
             }))
             .is_err()
         {
-            return Err(error!("The requester of the stream has been dropped before the connection was established"));
+            return Err(error!(
+                "The requester of the stream has been dropped before the connection was established"
+            ));
         }
 
         let (control_tx, control_rx) = mpsc::channel::<ControlMessage>(1);
@@ -539,13 +529,12 @@ async fn tcp_listener(
                                 }
                             }
 
-                            if !data.is_empty() {
-                                if let Err(err) = response_tx.send(data).await {
+                            if !data.is_empty()
+                                && let Err(err) = response_tx.send(data).await {
                                     tracing::debug!("forwarding body/data message to response channel failed: {}", err);
                                     control_tx.send(ControlMessage::Kill).await.expect("the control channel should not be closed");
                                     break;
                                 };
-                            }
                         }
                         Some(Err(_)) => {
                             // TODO(#171) - address fatal errors

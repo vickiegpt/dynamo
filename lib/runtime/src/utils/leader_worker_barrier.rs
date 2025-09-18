@@ -1,23 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use crate::{
-    transports::etcd::{Client, WatchEvent},
     DistributedRuntime,
+    transports::etcd::{Client, WatchEvent},
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
@@ -95,7 +83,7 @@ fn handle_watch_event<T: DeserializeOwned>(
 /// Creates a key-value pair in etcd, returning a specific error if the key already exists
 async fn create_barrier_key<T: Serialize>(
     client: &Client,
-    key: String,
+    key: &str,
     data: T,
     lease_id: Option<i64>,
 ) -> Result<(), LeaderWorkerBarrierError> {
@@ -193,7 +181,7 @@ impl<LeaderData: Serialize + DeserializeOwned, WorkerData: Serialize + Deseriali
         lease_id: i64,
     ) -> Result<(), LeaderWorkerBarrierError> {
         let key = barrier_key(&self.barrier_id, BARRIER_DATA);
-        create_barrier_key(client, key, data, Some(lease_id)).await
+        create_barrier_key(client, &key, data, Some(lease_id)).await
     }
 
     async fn wait_for_workers(
@@ -216,10 +204,10 @@ impl<LeaderData: Serialize + DeserializeOwned, WorkerData: Serialize + Deseriali
 
             let workers = worker_result.keys().collect::<HashSet<_>>();
 
-            create_barrier_key(client, key, workers, Some(lease_id)).await?;
+            create_barrier_key(client, &key, workers, Some(lease_id)).await?;
         } else {
             let key = barrier_key(&self.barrier_id, BARRIER_ABORT);
-            create_barrier_key(client, key, (), Some(lease_id)).await?;
+            create_barrier_key(client, &key, (), Some(lease_id)).await?;
         }
 
         Ok(())
@@ -302,7 +290,7 @@ impl<LeaderData: Serialize + DeserializeOwned, WorkerData: Serialize + Deseriali
             &self.barrier_id,
             &format!("{}/{}", BARRIER_WORKER, self.worker_id),
         );
-        create_barrier_key(client, key.clone(), data, Some(lease_id)).await?;
+        create_barrier_key(client, &key, data, Some(lease_id)).await?;
         Ok(key)
     }
 

@@ -1,36 +1,27 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use crate::kv_router::{
-    indexer::{compute_block_hash_for_seq, RouterEvent},
+    KV_EVENT_SUBJECT, KV_METRICS_ENDPOINT, KV_METRICS_SUBJECT,
+    indexer::{RouterEvent, compute_block_hash_for_seq},
     protocols::*,
-    KV_EVENT_SUBJECT, KV_METRICS_ENDPOINT,
+    scoring::LoadEvent,
 };
 use async_trait::async_trait;
-use dynamo_runtime::traits::{events::EventPublisher, DistributedRuntimeProvider};
+use dynamo_runtime::metrics::{MetricsRegistry, prometheus_names::kvstats};
+use dynamo_runtime::traits::{DistributedRuntimeProvider, events::EventPublisher};
 use dynamo_runtime::{
-    component::Component,
+    Error, Result,
+    component::{Component, Namespace},
     pipeline::{
-        network::Ingress, AsyncEngine, AsyncEngineContextProvider, ManyOut, ResponseStream,
-        SingleIn,
+        AsyncEngine, AsyncEngineContextProvider, ManyOut, ResponseStream, SingleIn,
+        network::Ingress,
     },
     protocols::annotated::Annotated,
-    Error, Result,
+    transports::nats::{NatsQueue, QUEUE_NAME, Slug},
 };
 use futures::stream;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -131,16 +122,27 @@ impl KvEventPublisher {
             )?);
         }
 
-        component
-            .drt()
-            .runtime()
-            .secondary()
-            .spawn(start_event_processor(
-                component,
-                worker_id,
-                cancellation_token.clone(),
-                rx,
-            ));
+        let stream_name = Slug::slugify(&format!("{}.{}", component.subject(), KV_EVENT_SUBJECT))
+            .to_string()
+            .replace("_", "-");
+        let nats_server =
+            std::env::var("NATS_SERVER").unwrap_or_else(|_| "nats://localhost:4222".to_string());
+        // Create NatsQueue without consumer since we're only publishing
+        let mut nats_queue = NatsQueue::new_without_consumer(
+            stream_name,
+            nats_server,
+            std::time::Duration::from_secs(60), // 1 minute timeout
+        );
+
+        // Connect the NatsQueue before passing it to the event processor
+        let cancellation_token_clone = cancellation_token.clone();
+        component.drt().runtime().secondary().spawn(async move {
+            if let Err(e) = nats_queue.connect().await {
+                tracing::error!("Failed to connect NatsQueue: {}", e);
+                return;
+            }
+            start_event_processor(nats_queue, worker_id, cancellation_token_clone, rx).await
+        });
 
         Ok(Self {
             kv_block_size,
@@ -196,7 +198,7 @@ async fn start_event_processor<P: EventPublisher + Send + Sync + 'static>(
                 // Encapsulate in a router event and publish.
                 tracing::trace!("Event processor for worker_id {} processing event: {:?}", worker_id, event.data);
                 let router_event = RouterEvent::new(worker_id, event);
-                if let Err(e) = publisher.publish(KV_EVENT_SUBJECT, &router_event).await {
+                if let Err(e) = publisher.publish(QUEUE_NAME, &router_event).await {
                     tracing::error!("Failed to publish event: {}", e);
                 }
             }
@@ -481,12 +483,77 @@ enum RawKvEvent {
 pub struct WorkerMetricsPublisher {
     tx: tokio::sync::watch::Sender<Arc<ForwardPassMetrics>>,
     rx: tokio::sync::watch::Receiver<Arc<ForwardPassMetrics>>,
+    /// Prometheus gauges for KvStats metrics
+    /// We use OnceLock for efficient one-time initialization and lock-free reads
+    /// The gauges are set once during register_prometheus_metrics and then only read
+    prometheus_gauges: OnceLock<KvStatsPrometheusGauges>,
+}
+
+struct KvStatsPrometheusGauges {
+    kv_active_blocks_gauge: prometheus::Gauge,
+    kv_total_blocks_gauge: prometheus::Gauge,
+    gpu_cache_usage_gauge: prometheus::Gauge,
+    gpu_prefix_cache_hit_rate_gauge: prometheus::Gauge,
+}
+
+impl KvStatsPrometheusGauges {
+    /// Create a new KvStatsPrometheusGauges instance with all metrics registered
+    fn new(component: &Component) -> Result<Self> {
+        let kv_active_blocks_gauge = component.create_gauge(
+            kvstats::ACTIVE_BLOCKS,
+            "Number of active KV cache blocks currently in use",
+            &[],
+        )?;
+
+        let kv_total_blocks_gauge = component.create_gauge(
+            kvstats::TOTAL_BLOCKS,
+            "Total number of KV cache blocks available",
+            &[],
+        )?;
+
+        let gpu_cache_usage_gauge = component.create_gauge(
+            kvstats::GPU_CACHE_USAGE_PERCENT,
+            "GPU cache usage as a percentage (0.0-1.0)",
+            &[],
+        )?;
+
+        let gpu_prefix_cache_hit_rate_gauge = component.create_gauge(
+            kvstats::GPU_PREFIX_CACHE_HIT_RATE,
+            "GPU prefix cache hit rate as a percentage (0.0-1.0)",
+            &[],
+        )?;
+
+        tracing::info!("Registered KvStats Prometheus metrics");
+
+        Ok(KvStatsPrometheusGauges {
+            kv_active_blocks_gauge,
+            kv_total_blocks_gauge,
+            gpu_cache_usage_gauge,
+            gpu_prefix_cache_hit_rate_gauge,
+        })
+    }
+
+    /// Update all gauges with values from KvStats
+    fn update_from_kvstats(&self, kv_stats: &KvStats) {
+        self.kv_active_blocks_gauge
+            .set(kv_stats.kv_active_blocks as f64);
+        self.kv_total_blocks_gauge
+            .set(kv_stats.kv_total_blocks as f64);
+        self.gpu_cache_usage_gauge
+            .set(kv_stats.gpu_cache_usage_perc as f64);
+        self.gpu_prefix_cache_hit_rate_gauge
+            .set(kv_stats.gpu_prefix_cache_hit_rate as f64);
+    }
 }
 
 impl WorkerMetricsPublisher {
     pub fn new() -> Result<Self> {
         let (tx, rx) = tokio::sync::watch::channel(Arc::new(ForwardPassMetrics::default()));
-        Ok(WorkerMetricsPublisher { tx, rx })
+        Ok(WorkerMetricsPublisher {
+            tx,
+            rx,
+            prometheus_gauges: OnceLock::new(),
+        })
     }
 
     pub fn publish(
@@ -494,13 +561,52 @@ impl WorkerMetricsPublisher {
         metrics: Arc<ForwardPassMetrics>,
     ) -> Result<(), tokio::sync::watch::error::SendError<Arc<ForwardPassMetrics>>> {
         tracing::trace!("Publish metrics: {metrics:?}");
+
+        // Update Prometheus gauges - OnceLock provides lock-free reads after initialization
+        // This is the hot path - we only read the Arc, no locking overhead
+        if let Some(gauges) = self.prometheus_gauges.get() {
+            gauges.update_from_kvstats(&metrics.kv_stats);
+        }
+
         self.tx.send(metrics)
     }
 
-    pub async fn create_endpoint(&self, component: Component) -> Result<()> {
+    /// Register KvStats Prometheus metrics with the component's registry
+    pub fn register_prometheus_metrics(&self, component: &Component) -> Result<()> {
+        // Use get_or_init for thread-safe one-time initialization
+        // This will only initialize once, subsequent calls will return immediately
+        self.prometheus_gauges.get_or_init(|| {
+            KvStatsPrometheusGauges::new(component).expect("Failed to create Prometheus gauges")
+        });
+
+        Ok(())
+    }
+
+    pub async fn create_endpoint(
+        &self,
+        component: Component,
+        metrics_labels: Option<&[(&str, &str)]>,
+    ) -> Result<()> {
         let mut metrics_rx = self.rx.clone();
-        let handler = Arc::new(KvLoadEndpoingHander::new(metrics_rx.clone()));
+        let handler = Arc::new(KvLoadEndpointHandler::new(metrics_rx.clone()));
         let handler = Ingress::for_engine(handler)?;
+
+        let worker_id = component
+            .drt()
+            .primary_lease()
+            .map(|lease| lease.id())
+            .unwrap_or_else(|| {
+                tracing::warn!("Component is static, assuming worker_id of 0");
+                0
+            });
+
+        self.start_nats_metrics_publishing(component.namespace().clone(), worker_id);
+
+        let metrics_labels = metrics_labels.map(|v| {
+            v.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<Vec<_>>()
+        });
 
         component
             .endpoint(KV_METRICS_ENDPOINT)
@@ -509,17 +615,95 @@ impl WorkerMetricsPublisher {
                 let metrics = metrics_rx.borrow_and_update().clone();
                 serde_json::to_value(&*metrics).unwrap()
             })
+            .metrics_labels(metrics_labels)
             .handler(handler)
             .start()
             .await
     }
+
+    /// Starts a background task to publish metrics over NATS
+    ///
+    /// This task monitors metric changes (specifically kv_active_blocks and num_requests_waiting)
+    /// and publishes stable metrics to NATS after they've been unchanged for 1ms.
+    #[allow(dead_code)]
+    fn start_nats_metrics_publishing(&self, namespace: Namespace, worker_id: i64) {
+        let nats_rx = self.rx.clone();
+
+        tokio::spawn(async move {
+            let mut rx = nats_rx;
+            let mut last_kv_active_blocks: Option<u64> = None;
+            let mut last_num_requests_waiting: Option<u64> = None;
+            let mut pending_publish: Option<Arc<ForwardPassMetrics>> = None;
+            let mut publish_timer =
+                Box::pin(tokio::time::sleep(tokio::time::Duration::from_secs(0)));
+            publish_timer.as_mut().reset(tokio::time::Instant::now()); // Complete immediately
+
+            loop {
+                tokio::select! {
+                    // Handle metrics changes
+                    result = rx.changed() => {
+                        if result.is_err() {
+                            tracing::debug!(
+                                "Metrics publisher sender dropped, stopping NATS background task"
+                            );
+                            break;
+                        }
+
+                        let metrics = rx.borrow_and_update().clone();
+
+                        // Extract the values we care about
+                        let current_kv_active_blocks = metrics.kv_stats.kv_active_blocks;
+                        let current_num_requests_waiting =
+                            metrics.worker_stats.num_requests_waiting;
+
+                        // Check if these specific metrics have changed
+                        let has_changed = match (last_kv_active_blocks, last_num_requests_waiting) {
+                            (Some(last_kv), Some(last_requests)) => {
+                                last_kv != current_kv_active_blocks
+                                    || last_requests != current_num_requests_waiting
+                            }
+                            _ => true, // First time, consider it changed
+                        };
+
+                        // If load metrics changed, schedule a publish
+                        if has_changed {
+                            pending_publish = Some(metrics.clone());
+                            last_kv_active_blocks = Some(current_kv_active_blocks);
+                            last_num_requests_waiting = Some(current_num_requests_waiting);
+
+                            // Start the 1ms timer
+                            publish_timer.as_mut().reset(
+                                tokio::time::Instant::now() + tokio::time::Duration::from_millis(1)
+                            );
+                        }
+                    }
+                    // Timer expired - publish if we have pending metrics
+                    _ = &mut publish_timer => {
+                        if let Some(metrics) = pending_publish.take() {
+                            // Create LoadEvent wrapping the metrics
+                            let load_event = LoadEvent {
+                                worker_id,
+                                data: (*metrics).clone(),
+                            };
+
+                            if let Err(e) =
+                                namespace.publish(KV_METRICS_SUBJECT, &load_event).await
+                            {
+                                tracing::warn!("Failed to publish metrics over NATS: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
 }
 
-struct KvLoadEndpoingHander {
+struct KvLoadEndpointHandler {
     metrics_rx: tokio::sync::watch::Receiver<Arc<ForwardPassMetrics>>,
 }
 
-impl KvLoadEndpoingHander {
+impl KvLoadEndpointHandler {
     pub fn new(metrics_rx: tokio::sync::watch::Receiver<Arc<ForwardPassMetrics>>) -> Self {
         Self { metrics_rx }
     }
@@ -527,7 +711,7 @@ impl KvLoadEndpoingHander {
 
 #[async_trait]
 impl AsyncEngine<SingleIn<()>, ManyOut<Annotated<ForwardPassMetrics>>, Error>
-    for KvLoadEndpoingHander
+    for KvLoadEndpointHandler
 {
     async fn generate(
         &self,
@@ -745,7 +929,7 @@ mod tests_startup_helpers {
         let published = published.lock().unwrap();
         assert_eq!(published.len(), 1);
         let (subject, _) = &published[0];
-        assert_eq!(subject, &KV_EVENT_SUBJECT.to_string());
+        assert_eq!(subject, QUEUE_NAME);
     }
 
     //--------------------------------------------------------------------
@@ -878,5 +1062,201 @@ mod test_exponential_backoff {
         // Max calculated value should be less than MAX_BACKOFF_MS
         let max_calculated = INITIAL_BACKOFF_MS * 2_u64.pow(MAX_BACKOFF_EXPONENT);
         assert!(max_calculated <= MAX_BACKOFF_MS);
+    }
+}
+
+#[cfg(all(test, feature = "integration"))]
+mod test_integration_publisher {
+    use super::*;
+    use crate::kv_router::protocols::{ForwardPassMetrics, KvStats, WorkerStats};
+    use dynamo_runtime::distributed_test_utils::create_test_drt_async;
+    use dynamo_runtime::traits::events::EventSubscriber;
+    use futures::StreamExt;
+
+    #[tokio::test]
+    #[ignore] // Mark as ignored as requested, because CI's integrations still don't have NATS
+    async fn test_metrics_publishing_behavior() -> Result<()> {
+        // Set up runtime and namespace
+        let drt = create_test_drt_async().await;
+        let namespace = drt.namespace("ns2001".to_string())?;
+
+        // Create a subscriber for the metrics events using subscribe_with_type
+        let mut subscriber = namespace
+            .subscribe_with_type::<LoadEvent>(KV_METRICS_SUBJECT)
+            .await
+            .unwrap();
+
+        // Create WorkerMetricsPublisher
+        let publisher = WorkerMetricsPublisher::new().unwrap();
+        let worker_id = 1234;
+
+        // Start NATS metrics publishing
+        publisher.start_nats_metrics_publishing(namespace.clone(), worker_id);
+
+        // Allow some time for the background task to start
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Test 1: Publish 10 different metrics with 0.5ms intervals
+        // Only the last one should be published after 1ms of stability
+        for i in 0..10 {
+            let metrics = Arc::new(ForwardPassMetrics {
+                kv_stats: KvStats {
+                    kv_active_blocks: (i * 100) as u64, // Changing load metric
+                    kv_total_blocks: 1000,
+                    gpu_cache_usage_perc: 0.5,
+                    gpu_prefix_cache_hit_rate: 0.8,
+                },
+                worker_stats: WorkerStats {
+                    num_requests_waiting: (i * 10) as u64, // Changing load metric
+                    data_parallel_rank: None,
+                    request_active_slots: 50,
+                    request_total_slots: 100,
+                },
+                spec_decode_stats: None,
+            });
+
+            publisher.publish(metrics).unwrap();
+            tokio::time::sleep(tokio::time::Duration::from_micros(100)).await;
+        }
+
+        // Wait a bit more than 1ms to ensure the last metric is published
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Verify we receive exactly one event with the last metric values
+        let result =
+            tokio::time::timeout(tokio::time::Duration::from_millis(500), subscriber.next())
+                .await
+                .unwrap();
+
+        let event = result.unwrap().unwrap(); // Unwrap the Option and the Result
+        assert_eq!(event.worker_id, worker_id);
+        assert_eq!(event.data.kv_stats.kv_active_blocks, 900); // Last value: 9 * 100
+        assert_eq!(event.data.worker_stats.num_requests_waiting, 90); // Last value: 9 * 10
+
+        // Ensure no more events are waiting
+        let no_msg =
+            tokio::time::timeout(tokio::time::Duration::from_millis(50), subscriber.next()).await;
+        assert!(no_msg.is_err(), "Expected no more messages, but found one");
+
+        // Test 2: Publish 10 more metrics where everything changes EXCEPT the load metrics
+        for i in 0..10 {
+            let metrics = Arc::new(ForwardPassMetrics {
+                kv_stats: KvStats {
+                    kv_active_blocks: 900,                         // Keep same as last published
+                    kv_total_blocks: 1000 + (i * 100) as u64,      // Change other metrics
+                    gpu_cache_usage_perc: 0.3 + (i as f32 * 0.05), // Change other metrics
+                    gpu_prefix_cache_hit_rate: 0.7 + (i as f32 * 0.01), // Change other metrics
+                },
+                worker_stats: WorkerStats {
+                    num_requests_waiting: 90, // Keep same as last published
+                    data_parallel_rank: None,
+                    request_active_slots: 40 + (i * 5) as u64, // Change other metrics
+                    request_total_slots: 100 + (i * 10) as u64, // Change other metrics
+                },
+                spec_decode_stats: None,
+            });
+
+            publisher.publish(metrics).unwrap();
+            tokio::time::sleep(tokio::time::Duration::from_micros(100)).await;
+        }
+
+        // Wait to ensure no events are published
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Verify no events are received
+        let no_msg =
+            tokio::time::timeout(tokio::time::Duration::from_millis(50), subscriber.next()).await;
+        assert!(
+            no_msg.is_err(),
+            "Expected no messages when load metrics don't change"
+        );
+
+        drt.shutdown();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore] // Mark as ignored as requested, because CI's integrations still don't have NATS
+    async fn test_kvstats_prometheus_gauge_updates() {
+        use crate::kv_router::publisher::kvstats;
+        use dynamo_runtime::metrics::MetricsRegistry;
+
+        // Test that publish() updates Prometheus gauges correctly using real Component
+        let publisher = WorkerMetricsPublisher::new().unwrap();
+
+        // Create a real DRT and component for integration testing
+        let drt = create_test_drt_async().await;
+        let namespace = drt.namespace("ns2002".to_string()).unwrap();
+        let component = namespace.component("comp2002".to_string()).unwrap();
+
+        // Register Prometheus metrics using the real constructor
+        publisher.register_prometheus_metrics(&component).unwrap();
+
+        // Get references to the gauges for testing
+        let gauges = publisher.prometheus_gauges.get().unwrap();
+        let active_blocks_gauge = gauges.kv_active_blocks_gauge.clone();
+        let total_blocks_gauge = gauges.kv_total_blocks_gauge.clone();
+        let cache_usage_gauge = gauges.gpu_cache_usage_gauge.clone();
+        let hit_rate_gauge = gauges.gpu_prefix_cache_hit_rate_gauge.clone();
+
+        // Create test metrics with specific values
+        let test_metrics = Arc::new(ForwardPassMetrics {
+            worker_stats: WorkerStats {
+                data_parallel_rank: None,
+                request_active_slots: 5,
+                request_total_slots: 100,
+                num_requests_waiting: 2,
+            },
+            kv_stats: KvStats {
+                kv_active_blocks: 42,
+                kv_total_blocks: 12894,
+                gpu_cache_usage_perc: 0.5,
+                gpu_prefix_cache_hit_rate: 0.75,
+            },
+            spec_decode_stats: None,
+        });
+
+        // Test 1: Initial gauge values should be 0
+        assert_eq!(active_blocks_gauge.get(), 0.0);
+        assert_eq!(total_blocks_gauge.get(), 0.0);
+        assert_eq!(cache_usage_gauge.get(), 0.0);
+        assert_eq!(hit_rate_gauge.get(), 0.0);
+
+        // Test 2: publish() should update all gauges with correct values
+        let result = publisher.publish(test_metrics);
+        assert!(result.is_ok());
+
+        // Test 3: Verify gauges were updated correctly
+        assert_eq!(active_blocks_gauge.get(), 42.0);
+        assert_eq!(total_blocks_gauge.get(), 12894.0);
+        assert_eq!(cache_usage_gauge.get(), 0.5);
+        assert_eq!(hit_rate_gauge.get(), 0.75);
+
+        // Test 4: Verify metrics are properly registered in the component's registry
+        // Component implements MetricsRegistry trait which provides prometheus_metrics_fmt()
+        let prometheus_output = component.prometheus_metrics_fmt().unwrap();
+
+        // Verify metric names are present
+        assert!(prometheus_output.contains(kvstats::ACTIVE_BLOCKS));
+        assert!(prometheus_output.contains(kvstats::TOTAL_BLOCKS));
+        assert!(prometheus_output.contains(kvstats::GPU_CACHE_USAGE_PERCENT));
+        assert!(prometheus_output.contains(kvstats::GPU_PREFIX_CACHE_HIT_RATE));
+
+        // Test 5: Verify the prometheus output contains the actual values
+        // Print the output to debug format issues
+        println!("Prometheus output:\n{}", prometheus_output);
+
+        // Check for metric values - the format includes labels so we need to be more flexible
+        assert!(prometheus_output.contains("kvstats_active_blocks"));
+        assert!(prometheus_output.contains("42")); // The value should be there
+        assert!(prometheus_output.contains("kvstats_total_blocks"));
+        assert!(prometheus_output.contains("12894")); // The value should be there
+        assert!(prometheus_output.contains("kvstats_gpu_cache_usage_percent"));
+        assert!(prometheus_output.contains("kvstats_gpu_prefix_cache_hit_rate"));
+
+        println!(
+            "✅ KvStatsPrometheusGauges constructor and publish() work correctly with real Component"
+        );
     }
 }

@@ -8,7 +8,7 @@ The SLA (Service Level Agreement)-based planner is an intelligent autoscaling sy
 > Currently, SLA-based planner only supports disaggregated setup.
 
 > [!WARNING]
-> Bare metal deployment with local connector is deprecated. The only option to deploy SLA-based planner is via k8s. We will update the examples in this document soon.
+> Bare metal deployment with local connector is deprecated. Please deploy the SLA planner in k8s.
 
 ## Features
 
@@ -17,7 +17,7 @@ The SLA (Service Level Agreement)-based planner is an intelligent autoscaling sy
 * **Performance interpolation**: Leverages profiling results data from pre-deployment profiling for accurate scaling decisions
 * **Correction factors**: Adapts to real-world performance deviations from profiled data
 
-## Architecture
+## Design
 
 The SLA planner consists of several key components:
 
@@ -28,52 +28,9 @@ The SLA planner consists of several key components:
 
 ## Pre-Deployment Profiling
 
-Before using the SLA planner, you must profile the performance of the selected model and GPU to generate interpolation data:
+**Prerequisite**: SLA-based planner requires pre-deployment profiling to be completed before deployment. The profiling process analyzes your model's performance characteristics to determine optimal tensor parallelism configurations and scaling parameters that the planner will use during operation.
 
-```bash
-cd $DYNAMO_HOME/benchmarks/profiler/
-python -m profile_sla \
-  --backend <vllm_v0/vllm_v1> \
-  --config <path-to-dynamo-config-file> \
-  --output-dir <path-to-profile-results-dir> \
-  --isl <target-input-sequence-length> \
-  --osl <target-output-sequence-length> \
-  --ttft <target-ttft-ms> \
-  --itl <target-itl-ms>
-```
-
-This script will:
-- Profile prefill performance across different tensor parallelism (TP) sizes
-- Profile decode performance under various concurrency levels
-- Recommend optimal TP configurations and scaling thresholds
-- Generate interpolation data for the recommended TP configuration
-
-### Prefill Interpolation Data
-
-In prefill engine, prefills are usually done with batch size=1 and only the ISL (excluding prefix cache hit) affects the iteration time. The script profiles the selected prefill TP configuration across different ISLs and record the TTFT and prefill throughput per GPU under those ISLs.
-
-### Decode Interpolation Data
-In decode engine, decode requests are added inflight and iteration time (or ITL) depends on both the context length and the real-time load of the engine. We capture the real-time load of the engine with active kv usage and average context length. The active kv usage determines the complexity of the memory-bounded attention kernel while the active kv usage divided the average context length determines the complexity of the computation bound MLP kernel. For example, the below figure shows the ITL of DS-Distilled Llama 8b model on H100 TP4. The ITL grows near-linearly with active kv usage under a fixed context length. And the slope increases as the context length decreases.
-
-![images](../images/itl_interpolation.png)
-
-The script profiles the selected decode TP configuration across different active kv blocks and average context length.
-
-### Output Format of Interpolation Data
-
-After suggesting the optimal TP configuration, two `.npz` files that describe the performance characteristics of the prefill and decode engines in their suggested parallel configurations will be generated. The two `.npz` files are:
-* `${benchmark_result_dir}/selected_prefill_interpolation/raw_data.npz}`
-  * `prefill_isl`: a 1D Numpy array to store the ISLs used to profile the prefill engine.
-  * `prefill_ttft`: a 1D Numpy array to store the TTFTs under the corresponding ISLs when the prefill engine is exclusively running each prefill request (i.e., with batch size of 1). The unit is in milliseconds.
-  * `prefill_thpt_per_gpu`: a 1D Numpy array to store the prefill throughput per GPU under the corresponding ISLs. The unit is in tokens per second per GPU.
-* `${benchmark_result_dir}/selected_decode_interpolation/raw_data.npz`
-  * `max_kv_tokens`: a 1D Numpy array with only one element to store the total number of KV tokens in the decode engine.
-  * `x_kv_usage`: a 1D Numpy array to store the percentage of the active KV blocks (in the range of [0, 1]) used to profile the decode engine. The active KV blocks can be controlled by varying `(ISL + OSL / 2) * concurrency`.
-  * `y_context_length`: a 1D Numpy array to store the average context length (ISL + OSL / 2) used to profile the decode engine.
-  * `z_itl`: a 1D Numpy array to store the ITLs under the corresponding active KV usage and context length. To skip the prefill stage while maintaining the context length, benchmark can be done by turn on kv reuse and warmup the engine with the prompts first before running the actual profiling. The unit is in milliseconds.
-  * `z_thpt_per_gpu`: a 1D Numpy array to store the decode throughput per GPU under the corresponding active KV usage and context length. The unit is in tokens per second per GPU.
-
-SLA planner can work with any interpolation data that follows the above format. For best results, use fine-grained and high coverage interpolation data for the prefill and decode engines.
+See [Pre-Deployment Profiling](../benchmarks/pre_deployment_profiling.md) for detailed instructions on running the profiling process.
 
 ## Load Prediction
 
@@ -151,20 +108,81 @@ Finally, SLA planner applies the change by scaling up/down the number of prefill
 
 ## Deploying
 
-To deploy SLA-planner, use the rust frontend (`dynamo-run`) that reports metrics at `/metrics` HTTP endpoint. You can also use your own frontend, but it must report number of requests, ISL, OSL, TTFT, ITL in the same format.
+### K8s Deployment
 
-SLA-planner and prometheus server are provided as common components that can be directly imported from `dynamo` package. The following changes are needed:
-- Add `Planner` and `Prometheus` components' dependency in `Frontend`.
-- Link `Planner` and `Prometheus` in the graph.
-- Add `Planner` and `Prometheus` configurations in the config file.
+For detailed deployment instructions including setup, configuration, troubleshooting, and architecture overview, see the [SLA Planner Deployment Guide](../guides/dynamo_deploy/sla_planner_deployment.md).
 
-We provide examples for `vllm_v0` and `vllm_v1`:
+**To deploy SLA Planner:**
 ```bash
-# vllm_v0
-cd $DYNAMO_HOME/examples/vllm_v0
-dynamo serve graphs.disagg_planner:Frontend -f ./configs/disagg_planner.yaml
-
-# vllm_v1
-cd $DYNAMO_HOME/examples/vllm_v1
-dynamo serve graphs.disagg_planner:Frontend -f ./configs/disagg_planner.yaml
+cd components/backends/vllm/deploy
+kubectl apply -f disagg_planner.yaml -n {$NAMESPACE}
 ```
+
+> [!NOTE]
+> The SLA planner requires a frontend that reports metrics at the `/metrics` HTTP endpoint with the number of requests, ISL, OSL, TTFT, and ITL in the correct format. The dynamo frontend provides these metrics automatically.
+
+### Virtual Deployment
+
+The SLA planner supports virtual deployment mode for customized environments (e.g., customized cluster) through the `VirtualConnector`. This connector enables the planner to communicate scaling decisions via ETCD without directly managing the deployment infrastructure.
+
+The `VirtualConnector` acts as a bridge between the SLA planner and external deployment environments. Instead of directly scaling Kubernetes resources, it writes scaling decisions to ETCD and waits for the deployment environment to acknowledge completion.
+
+#### ETCD Communication Protocol
+
+The VirtualConnector uses the following ETCD key structure under `/{dynamo_namespace}/planner/`:
+
+**Planner Output Keys** (written by the planner):
+- `num_prefill_workers`: Integer (stored as string) specifying the target number of prefill workers
+- `num_decode_workers`: Integer (stored as string) specifying the target number of decode workers
+- `decision_id`: Integer (stored as string) with incremental ID for each scaling decision (-1 if no decisions made)
+
+**Deployment Environment Input Key** (written by the deployment environment):
+- `scaled_decision_id`: Integer (stored as string) specifying the newest decision_id that has been successfully scaled
+
+#### Scaling Decision Flow
+
+1. **Decision Generation**: The planner calculates optimal worker counts and writes them to ETCD with an incremented `decision_id`
+2. **Change Detection**: The planner skips scaling if the target counts match current counts, logging: `"No scaling needed (prefill=X, decode=Y), skipping ETCD update"`
+3. **Readiness Check**: Before making new decisions, the planner verifies that previous scaling operations have completed by checking if `scaled_decision_id >= decision_id`
+4. **Timeout Handling**: If a scaling decision isn't acknowledged within 30 minutes (1800 seconds), the planner proceeds with new decisions anyway
+5. **Completion Tracking**: The planner can optionally wait for scaling completion confirmation (blocking mode)
+
+#### Configuration
+
+To use virtual deployment mode:
+
+```yaml
+environment: "virtual"
+backend: "vllm"  # or "sglang"
+```
+
+#### Deployment Environment Requirements
+
+The external deployment environment must:
+
+1. **Monitor ETCD**: Continuously watch the `/{dynamo_namespace}/planner/` prefix for scaling decisions
+2. **Parse Decisions**: Read `num_prefill_workers`, `num_decode_workers`, and `decision_id` values
+3. **Execute Scaling**: Apply the scaling decisions to the actual deployment infrastructure
+4. **Acknowledge Completion**: Write the completed `decision_id` to `scaled_decision_id` when scaling is finished
+
+#### Example Integration
+
+```python
+# Deployment environment pseudo-code
+async def monitor_scaling_decisions():
+    while True:
+        # Watch for changes in planner decisions
+        decision_id = await etcd.get("/my-namespace/planner/decision_id")
+        num_prefill = await etcd.get("/my-namespace/planner/num_prefill_workers")
+        num_decode = await etcd.get("/my-namespace/planner/num_decode_workers")
+
+        # Apply scaling to your infrastructure
+        await scale_prefill_workers(int(num_prefill))
+        await scale_decode_workers(int(num_decode))
+
+        # Acknowledge completion
+        await etcd.put("/my-namespace/planner/scaled_decision_id", decision_id)
+
+        await asyncio.sleep(10)
+```
+

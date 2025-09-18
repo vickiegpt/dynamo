@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
@@ -65,15 +53,15 @@ impl Decoder for TwoPartCodec {
 
         let header_len = cursor.get_u64() as usize;
         let body_len = cursor.get_u64() as usize;
-        let checksum = cursor.get_u64();
+        let _checksum = cursor.get_u64();
 
         let total_len = 24 + header_len + body_len;
 
         // Check if total_len exceeds max_message_size
-        if let Some(max_size) = self.max_message_size {
-            if total_len > max_size {
-                return Err(TwoPartCodecError::MessageTooLarge(total_len, max_size));
-            }
+        if let Some(max_size) = self.max_message_size
+            && total_len > max_size
+        {
+            return Err(TwoPartCodecError::MessageTooLarge(total_len, max_size));
         }
 
         // Check if enough data is available
@@ -84,13 +72,26 @@ impl Decoder for TwoPartCodec {
         // Advance the buffer past the lengths and checksum
         src.advance(24);
 
-        let bytes_to_hash = header_len + body_len;
-        let data_to_hash = &src[..bytes_to_hash];
-        let computed_checksum = xxh3_64(data_to_hash);
+        #[cfg(debug_assertions)]
+        {
+            // If the server sent a dummy checksum, skip it.
+            if _checksum != 0 {
+                let bytes_to_hash =
+                    header_len
+                        .checked_add(body_len)
+                        .ok_or(TwoPartCodecError::InvalidMessage(
+                            "Message exceeds max allowed length.".to_string(),
+                        ))?;
 
-        // Compare checksums
-        if checksum != computed_checksum {
-            return Err(TwoPartCodecError::ChecksumMismatch);
+                let data_to_hash = &src[..bytes_to_hash];
+
+                let computed_checksum = xxh3_64(data_to_hash);
+
+                // Compare checksums
+                if _checksum != computed_checksum {
+                    return Err(TwoPartCodecError::ChecksumMismatch);
+                }
+            }
         }
 
         // Read header and body data
@@ -111,22 +112,31 @@ impl Encoder<TwoPartMessage> for TwoPartCodec {
         let total_len = 24 + header_len + body_len; // 24 bytes for lengths and checksum
 
         // Check if total_len exceeds max_message_size
-        if let Some(max_size) = self.max_message_size {
-            if total_len > max_size {
-                return Err(TwoPartCodecError::MessageTooLarge(total_len, max_size));
-            }
+        if let Some(max_size) = self.max_message_size
+            && total_len > max_size
+        {
+            return Err(TwoPartCodecError::MessageTooLarge(total_len, max_size));
         }
 
-        // Compute checksum of the data
-        let mut data_to_hash = BytesMut::with_capacity(header_len + body_len);
-        data_to_hash.extend_from_slice(&item.header);
-        data_to_hash.extend_from_slice(&item.data);
-        let checksum = xxh3_64(&data_to_hash);
-
-        // Write header and body sizes and checksum
         dst.put_u64(header_len as u64);
         dst.put_u64(body_len as u64);
-        dst.put_u64(checksum);
+
+        // Only compute the checksum in debug mode.
+        // If we're in release mode, put a dummy value.
+        #[cfg(debug_assertions)]
+        {
+            // Compute checksum of the data
+            let mut data_to_hash = BytesMut::with_capacity(header_len + body_len);
+            data_to_hash.extend_from_slice(&item.header);
+            data_to_hash.extend_from_slice(&item.data);
+            let checksum = xxh3_64(&data_to_hash);
+
+            dst.put_u64(checksum);
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            dst.put_u64(0);
+        }
 
         // Write header and body
         dst.put_slice(&item.header);
@@ -433,6 +443,8 @@ mod tests {
 
     /// Test decoding of a message with checksum mismatch.
     #[test]
+    // Checksum only computed in debug mode, so only test in debug mode.
+    #[cfg(debug_assertions)]
     fn test_checksum_mismatch() {
         // Create a message
         let header_data = Bytes::from("header data");
@@ -624,6 +636,8 @@ mod tests {
 
     /// Test handling of corrupted data in a stream
     #[tokio::test]
+    // Checksum only computed in debug mode, so only test in debug mode.
+    #[cfg(debug_assertions)]
     async fn test_streaming_corrupted_data() {
         // Create messages
         let header_data = Bytes::from("header data");

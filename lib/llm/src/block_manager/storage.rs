@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 // TODO: Add docs.
 #![allow(missing_docs)]
@@ -77,17 +65,18 @@
 //! - [`StorageMemset`] - Memory initialization operations
 //! - [`StorageAllocator`] - Factory for creating storage instances
 
+pub mod arena;
 pub mod cuda;
 pub mod disk;
 pub mod nixl;
-
-pub mod arena;
+pub mod torch;
 
 pub use cuda::*;
 pub use disk::*;
+use torch::*;
 
 use std::{
-    alloc::{alloc_zeroed, dealloc, Layout},
+    alloc::{Layout, alloc_zeroed, dealloc},
     collections::HashMap,
     fmt::Debug,
     ptr::NonNull,
@@ -100,7 +89,7 @@ use thiserror::Error;
 pub type StorageResult<T> = std::result::Result<T, StorageError>;
 
 /// Represents the type of storage used for a block
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum StorageType {
     /// System memory
     System,
@@ -112,7 +101,7 @@ pub enum StorageType {
     Pinned,
 
     /// Disk memory
-    Disk,
+    Disk(u64),
 
     /// Remote memory accessible through NIXL
     Nixl,
@@ -191,6 +180,14 @@ pub trait Storage: Debug + Send + Sync + 'static {
     /// - No other references exist while the pointer is in use
     /// - Access patterns respect the storage's thread safety model
     unsafe fn as_mut_ptr(&mut self) -> *mut u8;
+}
+
+pub trait StorageTypeProvider {
+    type StorageType: Storage;
+
+    fn storage_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<Self::StorageType>()
+    }
 }
 
 /// Extension trait for storage types that support memory setting operations
@@ -313,7 +310,10 @@ impl std::fmt::Debug for RegistrationHandles {
 impl Drop for RegistrationHandles {
     fn drop(&mut self) {
         if !self.handles.is_empty() {
-            panic!("RegistrationHandles dropped with {} handles remaining; RegistrationHandles::release() needs to be explicitly called", self.handles.len());
+            panic!(
+                "RegistrationHandles dropped with {} handles remaining; RegistrationHandles::release() needs to be explicitly called",
+                self.handles.len()
+            );
         }
     }
 }
@@ -524,3 +524,41 @@ pub mod tests {
         }
     }
 }
+
+// Comment out Nixl-related code for now
+/*
+pub trait NixlDescriptor: Storage {
+    fn as_nixl_descriptor(&self) -> NixlMemoryDescriptor<'_, BlockKind, IsImmutable>;
+    fn as_nixl_descriptor_mut(&mut self) -> NixlMemoryDescriptor<'_, BlockKind, IsMutable>;
+}
+
+impl NixlDescriptor for SystemStorage {
+    fn as_nixl_descriptor(&self) -> NixlMemoryDescriptor<'_, BlockKind, IsImmutable> {
+        NixlMemoryDescriptor::new(self.as_ptr() as *const u8, self.size())
+    }
+
+    fn as_nixl_descriptor_mut(&mut self) -> NixlMemoryDescriptor<'_, BlockKind, IsMutable> {
+        NixlMemoryDescriptor::new_mut(self.as_mut_ptr() as *mut u8, self.size())
+    }
+}
+
+impl NixlDescriptor for PinnedStorage {
+    fn as_nixl_descriptor(&self) -> NixlMemoryDescriptor<'_, BlockKind, IsImmutable> {
+        NixlMemoryDescriptor::new(self.as_ptr() as *const u8, self.size())
+    }
+
+    fn as_nixl_descriptor_mut(&mut self) -> NixlMemoryDescriptor<'_, BlockKind, IsMutable> {
+        NixlMemoryDescriptor::new_mut(self.as_mut_ptr() as *mut u8, self.size())
+    }
+}
+
+impl NixlDescriptor for DeviceStorage {
+    fn as_nixl_descriptor(&self) -> NixlMemoryDescriptor<'_, BlockKind, IsImmutable> {
+        NixlMemoryDescriptor::new(self.as_ptr() as *const u8, self.size())
+    }
+
+    fn as_nixl_descriptor_mut(&mut self) -> NixlMemoryDescriptor<'_, BlockKind, IsMutable> {
+        NixlMemoryDescriptor::new_mut(self.as_mut_ptr() as *mut u8, self.size())
+    }
+}
+*/

@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use serde::de::{self, Deserializer, Visitor};
 use serde::{Deserialize, Serialize};
@@ -21,7 +9,7 @@ const REPLACEMENT_CHAR: char = '_';
 
 /// URL and NATS friendly string.
 /// Only a-z, 0-9, - and _.
-#[derive(Serialize, Clone, Debug, Eq, PartialEq)]
+#[derive(Serialize, Clone, Debug, Eq, PartialEq, Default)]
 pub struct Slug(String);
 
 impl Slug {
@@ -43,11 +31,7 @@ impl Slug {
             .chars()
             .map(|c| {
                 let is_valid = c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_';
-                if is_valid {
-                    c
-                } else {
-                    REPLACEMENT_CHAR
-                }
+                if is_valid { c } else { REPLACEMENT_CHAR }
             })
             .collect::<String>();
         Slug::new(out)
@@ -61,11 +45,7 @@ impl Slug {
             .chars()
             .map(|c| {
                 let is_valid = c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_';
-                if is_valid {
-                    c
-                } else {
-                    REPLACEMENT_CHAR
-                }
+                if is_valid { c } else { REPLACEMENT_CHAR }
             })
             .collect::<String>();
         let hash = blake3::hash(s.as_bytes()).to_string();

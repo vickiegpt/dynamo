@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 //! Dynamo
 
@@ -20,12 +8,11 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Weak},
+    sync::{Arc, OnceLock, Weak},
 };
-use tokio::sync::Mutex;
 
 pub use anyhow::{
-    anyhow as error, bail as raise, Context as ErrorContext, Error, Ok as OK, Result,
+    Context as ErrorContext, Error, Ok as OK, Result, anyhow as error, bail as raise,
 };
 
 use async_once_cell::OnceCell;
@@ -36,8 +23,12 @@ pub use config::RuntimeConfig;
 pub mod component;
 pub mod discovery;
 pub mod engine;
-pub mod http_server;
+pub mod health_check;
+pub mod system_status_server;
+pub use system_status_server::SystemStatusServerInfo;
+pub mod instances;
 pub mod logging;
+pub mod metrics;
 pub mod pipeline;
 pub mod prelude;
 pub mod protocols;
@@ -46,17 +37,25 @@ pub mod runtime;
 pub mod service;
 pub mod slug;
 pub mod storage;
+pub mod system_health;
 pub mod traits;
 pub mod transports;
 pub mod utils;
 pub mod worker;
 
 pub mod distributed;
+pub use distributed::distributed_test_utils;
 pub use futures::stream;
+pub use system_health::{HealthCheckTarget, SystemHealth};
 pub use tokio_util::sync::CancellationToken;
 pub use worker::Worker;
 
+use crate::metrics::prometheus_names::distributed_runtime;
+
 use component::{Endpoint, InstanceSource};
+use utils::GracefulShutdownTracker;
+
+use config::HealthStatus;
 
 /// Types of Tokio runtimes that can be used to construct a Dynamo [Runtime].
 #[derive(Clone)]
@@ -72,6 +71,72 @@ pub struct Runtime {
     primary: RuntimeType,
     secondary: RuntimeType,
     cancellation_token: CancellationToken,
+    endpoint_shutdown_token: CancellationToken,
+    graceful_shutdown_tracker: Arc<GracefulShutdownTracker>,
+}
+
+/// Type alias for runtime callback functions to reduce complexity
+///
+/// This type represents an Arc-wrapped callback function that can be:
+/// - Shared efficiently across multiple threads and contexts
+/// - Cloned without duplicating the underlying closure
+/// - Used in generic contexts requiring 'static lifetime
+///
+/// The Arc wrapper is included in the type to make sharing explicit.
+type RuntimeCallback = Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync + 'static>;
+
+/// Structure to hold Prometheus registries and associated callbacks for a given hierarchy
+pub struct MetricsRegistryEntry {
+    /// The Prometheus registry for this prefix
+    pub prometheus_registry: prometheus::Registry,
+    /// List of function callbacks that receive a reference to any MetricsRegistry
+    pub runtime_callbacks: Vec<RuntimeCallback>,
+}
+
+impl MetricsRegistryEntry {
+    /// Create a new metrics registry entry with an empty registry and no callbacks
+    pub fn new() -> Self {
+        Self {
+            prometheus_registry: prometheus::Registry::new(),
+            runtime_callbacks: Vec::new(),
+        }
+    }
+
+    /// Add a callback function that receives a reference to any MetricsRegistry
+    pub fn add_callback(&mut self, callback: RuntimeCallback) {
+        self.runtime_callbacks.push(callback);
+    }
+
+    /// Execute all runtime callbacks and return their results
+    pub fn execute_callbacks(&self) -> Vec<anyhow::Result<()>> {
+        self.runtime_callbacks
+            .iter()
+            .map(|callback| callback())
+            .collect()
+    }
+
+    /// Returns true if a metric with the given name already exists in the Prometheus registry
+    pub fn has_metric_named(&self, metric_name: &str) -> bool {
+        self.prometheus_registry
+            .gather()
+            .iter()
+            .any(|mf| mf.name() == metric_name)
+    }
+}
+
+impl Default for MetricsRegistryEntry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for MetricsRegistryEntry {
+    fn clone(&self) -> Self {
+        Self {
+            prometheus_registry: self.prometheus_registry.clone(),
+            runtime_callbacks: Vec::new(), // Callbacks cannot be cloned, so we start with an empty list
+        }
+    }
 }
 
 /// Distributed [Runtime] which provides access to shared resources across the cluster, this includes
@@ -85,6 +150,7 @@ pub struct DistributedRuntime {
     etcd_client: Option<transports::etcd::Client>,
     nats_client: transports::nats::Client,
     tcp_server: Arc<OnceCell<Arc<transports::tcp::server::TcpStreamServer>>>,
+    system_status_server: Arc<OnceLock<Arc<system_status_server::SystemStatusServerInfo>>>,
 
     // local registry for components
     // the registry allows us to use share runtime resources across instances of the same component object.
@@ -97,8 +163,12 @@ pub struct DistributedRuntime {
     // startup. Will not start etcd.
     is_static: bool,
 
-    instance_sources: Arc<Mutex<HashMap<Endpoint, Weak<InstanceSource>>>>,
+    instance_sources: Arc<tokio::sync::Mutex<HashMap<Endpoint, Weak<InstanceSource>>>>,
 
-    // Start time for tracking uptime
-    start_time: std::time::Instant,
+    // Health Status
+    system_health: Arc<std::sync::Mutex<SystemHealth>>,
+
+    // This map associates metric prefixes with their corresponding Prometheus registries and callbacks.
+    // Uses RwLock for better concurrency - multiple threads can read (execute callbacks) simultaneously.
+    hierarchy_to_metricsregistry: Arc<std::sync::RwLock<HashMap<String, MetricsRegistryEntry>>>,
 }

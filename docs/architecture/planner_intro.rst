@@ -25,7 +25,6 @@ Key features include:
 
 * **Load-based scaling** that monitors KV cache utilization and prefill queue size to make scaling decisions
 * **SLA-based scaling** that uses predictive modeling and performance interpolation to proactively meet TTFT and ITL targets
-* **Multi-backend support** for both local (Circus) and Kubernetes environments
 * **Graceful scaling** that ensures no requests are dropped during scale-down operations
 
 .. list-table::
@@ -45,14 +44,11 @@ Key features include:
      - ✅
      - vLLM
    * -
-     - ❌
+     - ✅
      - TensorRT-LLM
    * -
      - ❌
      - SGLang
-   * -
-     - ❌
-     - llama.cpp
    * - **Serving Type**
      - ✅
      - Aggregated
@@ -74,5 +70,7 @@ Key features include:
 .. toctree::
    :hidden:
 
+   Overview <self>
+   Pre-Deployment Profiling <../benchmarks/pre_deployment_profiling.md>
    Load-based Planner <load_planner.md>
    SLA-based Planner <sla_planner.md>

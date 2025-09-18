@@ -1,23 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 //! Pipeline Error
 //
 use async_nats::error::Error as NatsError;
 
-pub use anyhow::{anyhow, anyhow as error, bail, ensure, Context, Error, Result};
+pub use anyhow::{Context, Error, Result, anyhow, anyhow as error, bail, ensure};
 
 pub trait PipelineErrorExt {
     /// Downcast the [`Error`] to a [`PipelineError`]
@@ -64,13 +52,13 @@ pub enum PipelineError {
     /// terminating sink either cannot find the `oneshot` channel sender or the corresponding
     /// receiver was dropped
     #[error("Unlinked request; initiating request task was dropped or cancelled")]
-    DetatchedStreamReceiver,
+    DetachedStreamReceiver,
 
     // In the interim between when a response was made and when the stream was received, the
     // Sender for the stream was dropped. This maybe a logic error in the pipeline; and become a
     // panic/fatal error in the future.
     #[error("Unlinked response; response task was dropped or cancelled")]
-    DetatchedStreamSender,
+    DetachedStreamSender,
 
     #[error("Serialzation Error: {0}")]
     SerializationError(String),
@@ -131,6 +119,10 @@ pub enum PipelineError {
 
     #[error("NATS KV Err: {0} for bucket '{1}")]
     KeyValueError(String, String),
+
+    /// All instances are busy and cannot handle new requests
+    #[error("Service temporarily unavailable: {0}")]
+    ServiceOverloaded(String),
 }
 
 #[derive(Debug, thiserror::Error)]

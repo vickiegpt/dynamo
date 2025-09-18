@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 //! Engine Protocols
 //! ================
@@ -43,6 +31,10 @@ pub trait SamplingOptionsProvider {
 
 pub trait StopConditionsProvider {
     fn extract_stop_conditions(&self) -> Result<StopConditions>;
+}
+
+pub trait OutputOptionsProvider {
+    fn extract_output_options(&self) -> Result<OutputOptions>;
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -94,27 +86,27 @@ impl std::str::FromStr for FinishReason {
     }
 }
 
-impl From<FinishReason> for async_openai::types::CompletionFinishReason {
+impl From<FinishReason> for dynamo_async_openai::types::CompletionFinishReason {
     fn from(reason: FinishReason) -> Self {
         match reason {
             FinishReason::EoS | FinishReason::Stop | FinishReason::Cancelled => {
-                async_openai::types::CompletionFinishReason::Stop
+                dynamo_async_openai::types::CompletionFinishReason::Stop
             }
             FinishReason::ContentFilter => {
-                async_openai::types::CompletionFinishReason::ContentFilter
+                dynamo_async_openai::types::CompletionFinishReason::ContentFilter
             }
-            FinishReason::Length => async_openai::types::CompletionFinishReason::Length,
-            FinishReason::Error(_) => async_openai::types::CompletionFinishReason::Stop,
+            FinishReason::Length => dynamo_async_openai::types::CompletionFinishReason::Length,
+            FinishReason::Error(_) => dynamo_async_openai::types::CompletionFinishReason::Stop,
         }
     }
 }
 
-impl From<async_openai::types::CompletionFinishReason> for FinishReason {
-    fn from(reason: async_openai::types::CompletionFinishReason) -> Self {
+impl From<dynamo_async_openai::types::CompletionFinishReason> for FinishReason {
+    fn from(reason: dynamo_async_openai::types::CompletionFinishReason) -> Self {
         match reason {
-            async_openai::types::CompletionFinishReason::Stop => FinishReason::Stop,
-            async_openai::types::CompletionFinishReason::Length => FinishReason::Length,
-            async_openai::types::CompletionFinishReason::ContentFilter => {
+            dynamo_async_openai::types::CompletionFinishReason::Stop => FinishReason::Stop,
+            dynamo_async_openai::types::CompletionFinishReason::Length => FinishReason::Length,
+            dynamo_async_openai::types::CompletionFinishReason::ContentFilter => {
                 FinishReason::ContentFilter
             }
         }
@@ -178,6 +170,9 @@ pub struct CompletionRequest {
     /// More documentation on how and on the order in which sampling options are applied
     /// are needed.
     pub sampling_options: SamplingOptions,
+
+    #[builder(default)]
+    pub output_options: OutputOptions,
 
     /// The computed checksum of the Model Deployment Card (MDC).
     #[builder(default)]
@@ -250,6 +245,10 @@ pub struct StopConditions {
     /// tokens after the EOS token is generated.
     // TODO(ignore_eos) - improve this my masking the EOS token with logit bias
     pub ignore_eos: Option<bool>,
+
+    /// Maximum number of thinking tokens allowed
+    /// NOTE: Currently a passthrough - no enforcement logic implemented
+    pub max_thinking_tokens: Option<u32>,
 }
 
 impl StopConditions {
@@ -275,14 +274,14 @@ pub const FREQUENCY_PENALTY_RANGE: (f32, f32) = (-1.0, 1.0);
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SamplingOptions {
     /// Number of output sequences to return for the given prompt
-    pub n: Option<i32>,
+    pub n: Option<u8>,
 
     /// Number of output sequences that are generated from the prompt.
     /// From these `best_of` sequences, the top `n` sequences are returned.
     /// `best_of` must be greater than or equal to `n`. This is treated as
     /// the beam width when `use_beam_search` is True. By default, `best_of`
     /// is set to `n`.
-    pub best_of: Option<i32>,
+    pub best_of: Option<u8>,
 
     /// Float that penalizes new tokens based on whether they
     /// appear in the generated text so far. Values > 0 encourage the model
@@ -329,6 +328,108 @@ pub struct SamplingOptions {
 
     /// The seed to use when sampling
     pub seed: Option<i64>,
+
+    /// Whether to include the stop string in the output.
+    pub include_stop_str_in_output: Option<bool>,
+
+    /// Guided Decoding Options
+    pub guided_decoding: Option<GuidedDecodingOptions>,
+}
+
+/// Guided Decoding Options
+///
+/// Only one of `json`, `regex`, `choice`, or `grammar` should be set.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct GuidedDecodingOptions {
+    /// If specified, the output will follow the JSON schema. Can be a string, an object, or null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json: Option<serde_json::Value>,
+
+    /// If specified, the output will follow the regex pattern. Can be a string or null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regex: Option<String>,
+
+    /// If specified, the output will be exactly one of the choices.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub choice: Option<Vec<String>>,
+
+    /// If specified, the output will follow the context-free grammar. Can be a string or null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grammar: Option<String>,
+
+    /// If specified, the backend to use for guided decoding, can be backends like xgrammar or custom guided decoding backend
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+}
+
+impl GuidedDecodingOptions {
+    /// Construct without validation
+    pub fn new(
+        json: Option<serde_json::Value>,
+        regex: Option<String>,
+        choice: Option<Vec<String>>,
+        grammar: Option<String>,
+        backend: Option<String>,
+    ) -> Self {
+        Self {
+            json,
+            regex,
+            choice,
+            grammar,
+            backend,
+        }
+    }
+
+    /// Construct and validate (fallible)
+    pub fn validated(
+        json: Option<serde_json::Value>,
+        regex: Option<String>,
+        choice: Option<Vec<String>>,
+        grammar: Option<String>,
+        backend: Option<String>,
+    ) -> Result<Self> {
+        let instance = Self::new(json, regex, choice, grammar, backend);
+        instance.validate()?;
+        Ok(instance)
+    }
+
+    /// Construct only if one field is Some (fallible)
+    pub fn from_optional(
+        json: Option<serde_json::Value>,
+        regex: Option<String>,
+        choice: Option<Vec<String>>,
+        grammar: Option<String>,
+        backend: Option<String>,
+    ) -> Result<Option<Self>> {
+        let is_empty_choice = choice.as_ref().is_none_or(|v| v.is_empty());
+        if json.is_none() && regex.is_none() && is_empty_choice && grammar.is_none() {
+            return Ok(None);
+        }
+        let instance = Self::validated(json, regex, choice, grammar, backend)?;
+        Ok(Some(instance))
+    }
+
+    /// Validate that only one guided decoding option is set
+    pub fn validate(&self) -> Result<()> {
+        let count = [
+            self.json.is_some(),
+            self.regex.is_some(),
+            self.choice.as_ref().is_some_and(|v| !v.is_empty()),
+            self.grammar.is_some(),
+        ]
+        .iter()
+        .filter(|&&v| v)
+        .count();
+
+        if count > 1 {
+            Err(anyhow::anyhow!(
+                "Only one of json, regex, choice, or grammar can be set, but multiple are specified: {:?}",
+                self
+            ))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl SamplingOptions {
@@ -570,5 +671,136 @@ mod tests {
         } else {
             panic!("Expected a Completion variant");
         }
+    }
+
+    #[test]
+
+    fn test_guided_decoding_options_new_and_exclusive() {
+        // Only JSON set
+        let json_val = serde_json::json!({"type": "object"});
+        let backend = Some("xgrammar".to_string());
+        let opts = GuidedDecodingOptions::validated(
+            Some(json_val.clone()),
+            None,
+            None,
+            None,
+            backend.clone(),
+        );
+        assert!(opts.is_ok());
+        let opts = opts.unwrap();
+        assert_eq!(opts.json, Some(json_val));
+        assert!(opts.regex.is_none());
+        assert!(opts.choice.is_none());
+        assert!(opts.grammar.is_none());
+        assert_eq!(opts.backend, backend);
+
+        // Only regex set
+        let regex = Some(r"\d+".to_string());
+        let opts = GuidedDecodingOptions::validated(None, regex.clone(), None, None, None);
+        assert!(opts.is_ok());
+        let opts = opts.unwrap();
+        assert_eq!(opts.regex, regex);
+        assert!(opts.json.is_none());
+        assert!(opts.choice.is_none());
+        assert!(opts.grammar.is_none());
+
+        // Only choice set
+        let choice = Some(vec!["A".to_string(), "B".to_string()]);
+        let opts = GuidedDecodingOptions::validated(None, None, choice.clone(), None, None);
+        assert!(opts.is_ok());
+        let opts = opts.unwrap();
+        assert_eq!(opts.choice, choice);
+        assert!(opts.json.is_none());
+        assert!(opts.regex.is_none());
+        assert!(opts.grammar.is_none());
+
+        // Only grammar set
+        let grammar = Some("root ::= 'yes' | 'no'".to_string());
+        let opts = GuidedDecodingOptions::validated(None, None, None, grammar.clone(), None);
+        assert!(opts.is_ok());
+        let opts = opts.unwrap();
+        assert_eq!(opts.grammar, grammar);
+        assert!(opts.json.is_none());
+        assert!(opts.regex.is_none());
+        assert!(opts.choice.is_none());
+
+        // Multiple fields set (should error)
+        let opts = GuidedDecodingOptions::validated(
+            Some(serde_json::json!({})),
+            Some(r"\d+".to_string()),
+            None,
+            None,
+            None,
+        );
+        assert!(opts.is_err());
+
+        let opts = GuidedDecodingOptions::validated(
+            None,
+            Some(r"\d+".to_string()),
+            Some(vec!["A".to_string()]),
+            None,
+            None,
+        );
+        assert!(opts.is_err());
+
+        let opts = GuidedDecodingOptions::validated(
+            Some(serde_json::json!({})),
+            None,
+            Some(vec!["A".to_string()]),
+            Some("root ::= 'yes'".to_string()),
+            None,
+        );
+        assert!(opts.is_err());
+
+        // All fields None (should be ok, but not useful)
+        let opts = GuidedDecodingOptions::validated(None, None, None, None, None);
+        assert!(opts.is_ok());
+    }
+
+    #[test]
+    fn test_guided_decoding_options_from_optional() {
+        // All None returns Ok(None)
+        let opts = GuidedDecodingOptions::from_optional(None, None, None, None, None);
+        assert!(opts.is_ok());
+        assert!(opts.unwrap().is_none());
+
+        // Only one set returns Ok(Some)
+        let regex = Some(r"\w+".to_string());
+        let opts = GuidedDecodingOptions::from_optional(None, regex.clone(), None, None, None);
+        assert!(opts.is_ok());
+        let val = opts.unwrap();
+        assert!(val.is_some());
+        let val = val.unwrap();
+        assert_eq!(val.regex, regex);
+
+        // Multiple set returns Err
+        let opts = GuidedDecodingOptions::from_optional(
+            Some(serde_json::json!({})),
+            Some(r"\d+".to_string()),
+            None,
+            None,
+            None,
+        );
+        assert!(opts.is_err());
+
+        // Choice set but empty vector should not count as set
+        let opts = GuidedDecodingOptions::from_optional(None, None, Some(vec![]), None, None);
+        assert!(opts.is_ok());
+        let val = opts.unwrap();
+        assert!(val.is_none());
+
+        // Choice set with non-empty vector
+        let opts = GuidedDecodingOptions::from_optional(
+            None,
+            None,
+            Some(vec!["A".to_string()]),
+            None,
+            None,
+        );
+        assert!(opts.is_ok());
+        let val = opts.unwrap();
+        assert!(val.is_some());
+        let val = val.unwrap();
+        assert_eq!(val.choice, Some(vec!["A".to_string()]));
     }
 }

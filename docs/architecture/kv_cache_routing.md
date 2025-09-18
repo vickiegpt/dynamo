@@ -1,36 +1,38 @@
 <!--
 SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
 -->
 
->[!NOTE]
->This information is temporary and will change soon.
-
 # KV Cache Routing
-This documentation explains how Key-Value (KV) cache routing works in Dynamo, providing optimized inference for large language models by intelligently directing requests to workers with the most relevant cached data while simultaneously load balancing based on utilization metrics sent by the workers.
+This document explains how Dynamo's Key-Value (KV) cache routing optimizes large language model inference by intelligently directing requests to workers with the most relevant cached data, while maintaining load balance through worker utilization metrics.
+
+To enable KV cache aware routing start the frontend node like this:
+```
+python -m dynamo.frontend --router-mode kv
+```
+
+When KV blocks are created or removed, the engine notifies the Dynamo router, which then identifies the worker with the best matching blocks and routes traffic accordingly.
+
+To evaluate the benefits of KV-aware routing, compare your workload's performance using `--router-mode random|round-robin` against KV-aware routing.
+
+The main KV-aware routing arguments:
+
+- `--kv-overlap-score-weight`: Controls the importance of prefix cache overlaps in prefill cost calculations. Higher values improve Time To First Token (TTFT) at the cost of Inter-Token Latency (ITL). When set to 0, the router ignores prefix caches and uses pure load balancing. Defaults to 1.
+
+- `--router-temperature`: Controls worker selection randomness through softmax sampling of router cost logits. A value of 0 (default) ensures deterministic selection of the lowest-cost worker, while higher values introduce more randomness.
+
+- `--no-kv-events`: Disables KV event tracking. By default (when this flag is not provided), the router uses `KvIndexer` to monitor block creation and deletion events. When disabled with this flag, uses `ApproxKvIndexer`, which estimates cache hits based on a fixed time window (120s). Use this flag if your backend doesn't support KV events (or you are not confident in the accuracy or responsiveness of the events).
+
+- `--router-replica-sync`:  Disabled by default. Enables NATS-based synchronization of local routing decisions between router replicas. When enabled, routers share their active sequence information and local predictions of block usage, improving routing consistency across instances. Note that this does not sync the radix tree or cached KV block states themselves - those are synchronized through JetStream events
+
+- `--router-reset-states`: When specified, resets the router state on startup by clearing both the JetStream event stream and NATS object store, starting with a fresh state. By default (when this flag is not provided), the router persists state across restarts, downloading any available snapshot from NATS object store and continuing to consume events from where it left off. This enables routers to maintain KV cache awareness across restarts. **Warning**: Using `--router-reset-states` can bring existing router replicas into an inconsistent state. Only use this flag when launching the first router replica in a component, or consider using a different namespace/component for a clean slate.
+
+- `--router-snapshot-threshold`: Sets the number of messages in the JetStream before triggering a snapshot. When the message count exceeds this threshold, a router will attempt to purge acknowledged messages from the stream and create a snapshot of the current radix tree state in NATs object store. Defaults to 10000. This helps manage stream size and provides faster initialization for routers that restart.
+
+>[!Note]
+> State persistence is only available when KV events are enabled (default). When using `--no-kv-events` with `ApproxKvIndexer`, state persistence is not currently supported.
 
 ## Architecture
-Dynamo's architecture consists of three key concepts:
-
-- **Namespace**: Groups related components (similar to directories in a file system). In our examples, we use the label `dynamo`. This avoids collisions between two different dynamo graphs.
-- **Component**: The deployable unit in Dynamo. Components are self-contained and typically map to separate Docker containers. In our examples, we use labels like `VllmWorker `, `Router`, `Processor` for the components. Components can be created in Python or Rust.
-- **Endpoint**: Functions attached to components that transform inputs into outputs. Endpoints are discoverable and callable by other components. In our examples we use the label `generate` for most of the endpoints.
-
-A Dynamo graph is a collection of components that are linked together to form a graph. There are two paths through the graphs. The request path and the response path. For LLMs the request path is single-in (a single message) and the response path is many-out (streamed output).
-
-A common pattern is to spin up multiple of the same components that serve the same endpoints, for example, when you want to duplicate models to serve more requests. Each endpoint will get a unique identifier and you will have to tell Dynamo how to route requests between these endpoints.
 
 Colloquially, we refer to a Dynamo component that serves an endpoint for LLM inference as a **worker**.
 
@@ -50,6 +52,53 @@ We can then use the default routing methods exposed by the client class to send 
 - **Direct routing**: Explicitly targets a specific worker via `client.direct(input, component_id)`
 
 KV Cache routing uses direct routing with a special worker selection algorithm.
+
+## Serving Multiple Router Replicas
+
+For improved fault tolerance, you can launch multiple frontend + router replicas. Since the frontend and router are currently tied together, you'll need to use different HTTP ports for each instance. (The separation of the frontend and Router is WIP.)
+
+### Router State Management
+
+The KV Router tracks two types of state (see [KV Router Architecture](../components/router/README.md) for details):
+
+1. **Prefix blocks (cached KV blocks)**: Maintained in a radix tree, tracking which blocks are cached on each worker. This state is **persistent** - backed by NATS JetStream events and object store snapshots. New router replicas automatically sync this state on startup, ensuring consistent cache awareness across restarts.
+
+2. **Active blocks (decoding blocks)**: Tracks blocks currently being used for active generation requests. This state is **ephemeral** - when a new router replica starts, it begins with zero active block knowledge but becomes eventually consistent as it handles requests.
+
+### Enabling Router Replica Synchronization
+
+```bash
+# Router replica 1
+python -m dynamo.frontend --router-mode kv --port 8000 --router-replica-sync
+
+# Router replica 2 (can be started later)
+python -m dynamo.frontend --router-mode kv --port 8001 --router-replica-sync
+```
+
+The `--router-replica-sync` flag enables active block synchronization between replicas:
+- Active blocks are shared via NATS core messaging (fire-and-forget)
+- Replicas exchange routing decisions to maintain consistent load estimates
+- A new replica start with zero active blocks but quickly converge through request handling, by itself and active syncing with other replicas
+
+Without this flag, each replica maintains its own isolated view of active blocks, potentially leading to suboptimal routing.
+
+### Persistence and Recovery
+
+**Prefix blocks persist by default:**
+- Stored in NATS JetStream with 1-hour retention
+- Snapshots saved to NATS object store at configurable thresholds
+- New replicas automatically restore this state on startup
+
+You can a launch a third Router replica even if the first two Router replicas are down, and it will recover the full prefix state. (As mentioned above, the tracking of active blocks will not persist, but will become eventually consistent through request handling.)
+
+```bash
+python -m dynamo.frontend --router-mode kv --port 8002 --router-replica-sync
+```
+
+>[!Note]
+> If you need to start with a fresh state, you have two options:
+> 1. **Recommended**: Use a different namespace/component (see [Distributed Runtime](distributed_runtime.md)) which will start a new stream and NATS object store path
+> 2. **Use with caution**: Launch a router with the `--router-reset-states` flag, which will purge the entire stream and radix snapshot. This should only be done when launching the first router replica in a component, as it can bring existing router replicas into an inconsistent state.
 
 ## Understanding KV Cache
 The leading Large Language Models (LLMs) today are auto-regressive and based off of the [transformer architecture](https://proceedings.neurips.cc/paper_files/paper/2017/file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf). One key inference optimization technique is to cache the already computed keys and values and to reuse them for the future tokens. This is called the [KV Cache](https://developer.nvidia.com/blog/mastering-llm-techniques-inference-optimization/#key-value_caching).
@@ -94,30 +143,44 @@ Further details can be found for: [TRT-LLM](https://developer.nvidia.com/blog/in
                              |
           +------------------+------------------+
           |                  |                  |
-          | KV match: 15%    | KV match: 50%    | KV match: 75%
+          | Cached: 2 blocks | Cached: 5 blocks | Cached: 8 blocks
+          | Prefill: 8 blks  | Prefill: 5 blks  | Prefill: 2 blks
+          | Decode: 10 blks  | Decode: 5 blks   | Decode: 9 blks
           v                  v                  v
    +----------------+  +----------------+  +----------------+
    |   Worker 1     |  |   Worker 2     |  |   Worker 3     |
-   |  (Load: 30%)   |  |  (Load: 50%)   |  |  (Load: 80%)   |
    +----------------+  +----------------+  +----------------+
 ```
 
-Load balancing in LLM serving becomes complex when enabling KV Cache reuse. While KV Cache reuse can save significant computation, if the routing strategy is not aware of the unique KV states of each worker we can:
-- miss opportunities for KV Cache reuse if routing to the “wrong” node
-- get into an imbalanced state where a few workers are processing many requests, lowering throughput of entire system
+KV Cache reuse introduces complexity to LLM serving load balancing. While it can significantly reduce computation costs, routing strategies that ignore worker-specific KV states can lead to:
+- Missed cache reuse opportunities due to suboptimal worker selection
+- System throughput degradation from uneven request distribution across workers
 
-The best way to solve these issues is for the router to have a global view of KV Cache and load. With this view, the router can use a cost function to score the workers and make decisions to maximize cache hits while keeping the system balanced and throughput high.
+The router uses a cost function that considers both the prefill cost (influenced by cached blocks) and the decode load to make optimal routing decisions:
 
-In the above image, our cost function is (KV match - Load) so we select Worker 2 even though Worker 3 would offer the best KV match.
-- Worker 1 = (0.15 - 0.30) = -0.15
-- **Worker 2 = (0.50 - 0.50) = 0**
-- Worker 3 = (0.75 - 0.80) = -0.05
+### Cost Calculation
+
+1. **Prefill blocks**: Calculated by dividing the number of tokens requiring prefill processing by the block size. The system predicts this based on input tokens and available cached blocks per worker, updating the count when the first output token signals prefill completion.
+
+2. **Decode blocks**: Estimated from the request's input tokens and each worker's active sequences. The count updates when requests complete and their blocks are freed.
+
+3. **Cost formula**: `cost = overlap_score_weight * prefill_blocks + decode_blocks`
+   - Lower costs indicate better routing choices
+   - `overlap_score_weight` balances cache hit optimization against load distribution
+   - Higher weights favor cache reuse (improving TTFT), while lower weights prioritize even load distribution (improving ITL)
+
+### Worker Selection
+
+The router selects the worker with the lowest cost. When `router_temperature` is set to a non-zero value, the router uses softmax sampling on the normalized cost logits to introduce randomness in the selection, which can help with load distribution.
+
+Example calculation with `overlap_score_weight = 1.0`:
+- Worker 1: cost = 1.0 * 8 + 10 = 18
+- **Worker 2: cost = 1.0 * 5 + 5 = 10** (selected - lowest cost)
+- Worker 3: cost = 1.0 * 2 + 9 = 11
 
 ## Events
 
-In Dynamo, we want to support KV Cache Routing and load balancing for many backends that have different implementations of KV Cache and record different metrics. To that end, we built a KVPublisher that can be plugged into any framework to publish KV Events and a WorkerMetricsPublisher that can publish Metric Events.
-
-On the receiving side we have a KVIndexer which accepts events from the KVPublisher and puts them into a global prefix tree and a KvMetricsAggregator which aggregates metric events by worker.
+Dynamo supports KV Cache Routing across multiple backend implementations through a flexible event system. The KVPublisher component integrates with any framework to emit KV events, while the KVIndexer component maintains a global prefix tree of cached blocks by processing these events from all workers.
 
 ```text
 +----------------+                         +-----------------+
@@ -127,13 +190,8 @@ On the receiving side we have a KVIndexer which accepts events from the KVPublis
 | +------------+ | remove_kv_block()       | |  KVIndexer  | |
 | |KVPublisher | |------------------------>| +-------------+ |
 | +------------+ |                         |                 |
-|                | num_request_waiting     | +--------------+|
-| +------------+ | gpu_cache_usage_perc    | |KvMetricsAggre||
-| |KvMetrics   | |------------------------>| |    gator     ||
-| |Publisher   | |        ...              | +--------------+|
-| +------------+ |                         +-----------------+
-+----------------+
-
+|                |                         |                 |
++----------------+                         +-----------------+
 ```
 
 ### KVPublisher
@@ -150,89 +208,154 @@ The KVIndexer builds and maintains a global view of cached blocks in a prefix tr
 
 The KVIndexer has a method `find_matches_for_request`, which takes in tokens and returns a dictionary with keys of worker id and values of the number of matched KV Blocks.
 
-Example:
+### Inter-Router Communication
+
+In distributed deployments with multiple routers, each router maintains visibility over only a portion of the total requests. To ensure consistent routing decisions, routers synchronize their states through three event types:
+
+1. **AddRequest**: Notifies other routers when a request is assigned to a worker. Includes request ID, worker ID, token sequence blocks, and overlap score to track block usage across the system.
+
+2. **MarkPrefillCompleted**: Signals when a request moves from prefill to decode phase, allowing routers to update their worker load calculations by excluding completed prefill tokens.
+
+3. **Free**: Indicates request completion and resource release, enabling accurate block reference counting across all routers.
+
+Each event carries a unique router ID to prevent self-event processing. This asynchronous communication system ensures optimal routing decisions by maintaining consistent KV cache state across all routers, even as they handle different request streams.
+
+### Event Persistence and Recovery
+
+KV cache events are persisted in NATS JetStream, allowing router replicas to maintain their global view of KV blocks across restarts. By default, routers persist their state - they download any available snapshot from NATS object store and continue consuming events from their last acknowledged position in the stream. This default behavior ensures KV cache awareness is maintained across router restarts without any additional configuration.
+
+To manage stream growth, when the message count exceeds `--router-snapshot-threshold`, a router acquires an etcd-based distributed lock, purges acknowledged messages from the stream, and uploads the current radix tree state to NATS object store. This snapshot serves as a checkpoint for faster initialization of future router instances.
+
+
+## Using KvPushRouter Python API
+
+Instead of launching the KV Router via command line, you can create a `KvPushRouter` object directly in Python. This allows per-request routing configuration overrides.
+
+### Setup
+
+First, launch your backend engines:
+```bash
+python -m dynamo.vllm --model meta-llama/Llama-2-7b-hf --endpoint dyn://inference.vllm.generate
+```
+
+### Example Script
+
 ```python
-from dynamo.llm import KvIndexer
-from dynamo.sdk import dynamo_context
+import asyncio
+from dynamo._core import DistributedRuntime, KvPushRouter, KvRouterConfig
 
-runtime = dynamo_context["runtime"]
-kv_listener = runtime.namespace("dynamo").component("VllmWorker")
-await kv_listener.create_service()
+async def main():
+    # Get runtime and create endpoint
+    runtime = DistributedRuntime.detached()
+    namespace = runtime.namespace("inference")
+    component = namespace.component("vllm")
+    endpoint = component.endpoint("generate")
 
-indexer = KvIndexer(kv_listener, block_size=16)
-indexer.find_matches_for_request([INPUT SEQUENCE OF TOKEN IDs])
+    # Create KV router
+    kv_router_config = KvRouterConfig()
+    router = KvPushRouter(
+        endpoint=endpoint,
+        block_size=16,
+        kv_router_config=kv_router_config
+    )
+
+    # Your input tokens
+    token_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+    # Generate with per-request routing override
+    stream = await router.generate(
+        token_ids=token_ids,
+        model="meta-llama/Llama-2-7b-hf",
+        stop_conditions={
+            "max_tokens": 20,        # Generate exactly 20 tokens
+            "ignore_eos": True,      # Don't stop at EOS token
+        },
+        sampling_options={
+            "temperature": 0.7,
+            "top_p": 0.9,
+        },
+        router_config_override={
+            "overlap_score_weight": 2.0,    # Prioritize cache hits for this request
+            "router_temperature": 0.5,       # Add routing randomness
+        }
+    )
+
+    # Collect generated tokens
+    generated_tokens = []
+    async for response in stream:
+        if isinstance(response, dict) and "token_ids" in response:
+            generated_tokens.extend(response["token_ids"])
+
+    print(f"Generated {len(generated_tokens)} tokens: {generated_tokens}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
-Sample Output:
-```
-{
-	123456789: 10,
-	987654321: 3,
-	543219876: 7,
-}
-```
+### Additional Routing Features
 
-```{note}
-This example is designed to help you understand KV cache routing; it won't run outside of the context of dynamo serve. See the examples/ directory for runnable examples.
-```
+The `KvPushRouter` provides additional methods for fine-grained control:
 
-### WorkerMetricsPublisher
-We added a KvMetrics Publisher which sends the following metrics to the KvMetricsAggregator:
-- num_requests_waiting
-- gpu_cache_usage_perc
-- gpu_prefix_cache_hit_rate
-- request_active_slots
-- request_total_slots
-- kv_active_blocks
-- kv_total_blocks
+- **`best_worker_id()`**: Query which worker would be selected for given tokens without actually routing the request. Returns `(worker_id, overlap_blocks)`.
+- **`get_potential_loads()`**: Get detailed load information for all workers including potential prefill tokens and active decode blocks.
+- **`worker_id` parameter in `generate()`**: Force routing to a specific worker by passing `worker_id=<id>` to bypass the automatic KV-aware selection.
 
-Currently, the WorkerMetricsPublisher exists as a Python binding.
+The `router_config_override` parameter allows you to adjust routing behavior per request without recreating the router. This is useful for implementing different routing strategies based on request characteristics.
 
-### KvMetricsAggregator
-The KvMetricsAggregator receives these metrics and aggregates them. It has a method `get_metrics` which returns an object of `AggregatedMetrics`.
+### Custom Routing Example: Minimizing TTFT
 
-Example:
+Here's an example of using `get_potential_loads()` to implement custom routing that minimizes Time To First Token (TTFT) by selecting the worker with the least prefill work:
+
 ```python
-from dynamo.llm import KvMetricsAggregator
-from dynamo.sdk import dynamo_context
+import asyncio
+from dynamo._core import DistributedRuntime, KvPushRouter, KvRouterConfig
 
-runtime = dynamo_context["runtime"]
-kv_listener = runtime.namespace("dynamo").component("VllmWorker")
-await kv_listener.create_service()
-metrics_aggregator = KvMetricsAggregator(kv_listener)
+async def minimize_ttft_routing():
+    # Setup router
+    runtime = DistributedRuntime.detached()
+    namespace = runtime.namespace("inference")
+    component = namespace.component("vllm")
+    endpoint = component.endpoint("generate")
 
-for endpoint in metrics_aggregator.get_metrics().endpoints:
-    print("Worker ID: ", endpoint.worker_id)
-    print("GPU Cache Usage: ", endpoint.gpu_cache_usage_perc)
-    print("Number of Requests Waiting: ", endpoint.num_requests_waiting)
-    print("GPU Prefix Cache Hit Rate: ", endpoint.gpu_prefix_cache_hit_rate)
-    print("***")
+    router = KvPushRouter(
+        endpoint=endpoint,
+        block_size=16,
+        kv_router_config=KvRouterConfig()
+    )
+
+    # Your input tokens
+    token_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+    # Get potential loads for all workers
+    potential_loads = await router.get_potential_loads(token_ids)
+
+    # Find worker with minimum prefill tokens (best for TTFT)
+    best_worker = min(potential_loads, key=lambda x: x['potential_prefill_tokens'])
+
+    print(f"Worker loads: {potential_loads}")
+    print(f"Selected worker {best_worker['worker_id']} with {best_worker['potential_prefill_tokens']} prefill tokens")
+
+    # Route directly to the selected worker
+    stream = await router.generate(
+        token_ids=token_ids,
+        model="meta-llama/Llama-2-7b-hf",
+        worker_id=best_worker['worker_id'],  # Force routing to optimal worker
+        stop_conditions={"max_tokens": 20}
+    )
+
+    # Process response
+    async for response in stream:
+        if isinstance(response, dict) and "token_ids" in response:
+            print(f"Generated tokens: {response['token_ids']}")
+
+if __name__ == "__main__":
+    asyncio.run(minimize_ttft_routing())
 ```
 
-Sample Output:
-```
-Worker ID: 123456789
-GPU Cache Usage: 0.5
-Number of Requests Waiting: 2
-GPU Prefix Cache Hit Rate: 0.1
-***
-Worker ID: 987654321
-GPU Cache Usage: 0.5
-Number of Requests Waiting: 1
-GPU Prefix Cache Hit Rate: 0.1
-***
-```
+This approach gives you complete control over routing decisions, allowing you to optimize for different metrics based on your specific requirements. As some examples:
 
-```{note}
-This example is for building understanding, it will not run outside of the context of dynamo serve. See the examples/ folder for runnable examples.
-```
+- **Minimize TTFT**: Select worker with lowest `potential_prefill_tokens`
+- **Maximize cache reuse**: Use `best_worker_id()` which considers both prefill and decode loads
+- **Balance load**: Consider both `potential_prefill_tokens` and `potential_decode_blocks` together
 
-### [KV Router](https://github.com/ai-dynamo/dynamo/blob/main/examples/llm/components/kv_router.py)
-The Router component makes intelligent worker selection decisions
-1. Receives incoming requests as tokens
-2. Queries the KVIndexer to find potential cache hits across workers
-3. Collects performance metrics from workers (via KvMetricsAggregator)
-4. Uses a cost function to determine the optimal worker for each request
-5. Returns chosen worker
-
-The processor manages tokenizing the request, sending it to the KV Router and then once it receives a response, directs the request to the selected worker using direct() routing.
+See [KV Router Architecture](../components/router/README.md) for performance tuning details.

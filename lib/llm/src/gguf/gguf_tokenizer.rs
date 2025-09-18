@@ -27,19 +27,21 @@
 
 // https://github.com/huggingface/transformers/blob/8685b3c5d2dd2550527773d2a02499495a759e31/src/transformers/convert_slow_tokenizer.py
 
-use std::collections::HashMap;
-
+use ahash::AHashMap;
 use anyhow::Result;
 use itertools::Itertools;
 use tokenizers::{
+    AddedToken, DecoderWrapper, ModelWrapper, NormalizerWrapper, Tokenizer,
     decoders::{
         self, byte_fallback::ByteFallback, byte_level::ByteLevel, fuse::Fuse, strip::Strip,
     },
     models::{bpe::BpeBuilder, unigram::Unigram},
     normalizers::{self, Prepend, Replace},
     pre_tokenizers,
-    processors::{self, template::TemplateProcessing},
-    AddedToken, DecoderWrapper, ModelWrapper, NormalizerWrapper, Tokenizer,
+    processors::{
+        self,
+        template::{self, TemplateProcessing},
+    },
 };
 use tracing::info;
 
@@ -233,7 +235,8 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
         })
         .collect::<Vec<_>>();
 
-    let mut vocab = HashMap::new();
+    // Use ahash::AHashMap so that we satisfy Into<AHashMap<_>> bounds
+    let mut vocab: AHashMap<String, u32> = AHashMap::new();
     for (i, token) in p.tokens.iter().enumerate() {
         #[allow(clippy::cast_possible_truncation)]
         vocab.insert(token.clone(), i as u32);
@@ -247,14 +250,10 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
         ..
     } = *p;
 
-    let mut bpe = BpeBuilder::new().vocab_and_merges(
-        // Convert HashMap<String, u32> to AHashMap<String, u32> using .into_iter().collect()
-        vocab.into_iter().collect::<ahash::AHashMap<_, _>>(),
-        merges,
-    );
+    let mut bpe = BpeBuilder::new().vocab_and_merges(vocab, merges);
     if let Some(unk) = unk {
         bpe = bpe.unk_token(p.tokens[unk as usize].to_string());
-    }
+    };
 
     let bpe = bpe.build().map_err(anyhow::Error::msg)?;
 
@@ -267,13 +266,26 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
         false, true, true,
     )));
     if add_bos_token.is_some_and(|x| x) {
+        // Use ahash::AHashMap so that we satisfy Into<AHashMap<_>> bounds
+        let mut special_toks: AHashMap<String, processors::template::SpecialToken> =
+            AHashMap::new();
+
+        special_toks.insert(
+            p.tokens[bos as usize].clone(),
+            template::SpecialToken::new(
+                p.tokens[bos as usize].clone(),
+                vec![bos],
+                vec![p.tokens[bos as usize].clone()],
+            )
+            .unwrap(),
+        );
         tokenizer.with_post_processor(Some(
             TemplateProcessing::builder()
                 .try_single(format!("{}:0 $A:0", p.tokens[bos as usize]))
                 .unwrap()
                 .try_pair(format!("{}:0 $A:0 $B:1", p.tokens[bos as usize]))
                 .unwrap()
-                .special_tokens(vec![(p.tokens[bos as usize].clone(), bos)])
+                .special_tokens(special_toks)
                 .build()
                 .unwrap(),
         ));
@@ -390,7 +402,7 @@ impl TryFrom<Normalizer<'_>> for NormalizerWrapper {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+    use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
     use tokenizers::Tokenizer;
 
     #[allow(dead_code)]

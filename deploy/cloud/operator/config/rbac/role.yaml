@@ -99,6 +99,27 @@ rules:
   - update
   - watch
 - apiGroups:
+  - grove.io
+  resources:
+  - podcliques/scale
+  - podcliquescalinggroups/scale
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - grove.io
+  resources:
+  - podcliquesets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - leaderworkerset.x-k8s.io
   resources:
   - leaderworkersets
@@ -164,6 +185,13 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - scheduling.run.ai
+  resources:
+  - queues
+  verbs:
+  - get
+  - list
 - apiGroups:
   - scheduling.volcano.sh
   resources:

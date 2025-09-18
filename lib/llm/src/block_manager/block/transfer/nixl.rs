@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use super::*;
 
@@ -20,17 +8,19 @@ use nixl_sys::{MemoryRegion, NixlDescriptor, XferDescList};
 use std::future::Future;
 
 fn append_xfer_request<Source, Destination>(
-    src: &Arc<Source>,
+    src: &Source,
     dst: &mut Destination,
     src_dl: &mut XferDescList,
     dst_dl: &mut XferDescList,
 ) -> Result<()>
 where
     Source: BlockDataProvider,
+    Source::StorageType: NixlDescriptor,
     Destination: BlockDataProviderMut,
+    Destination::StorageType: NixlDescriptor,
 {
-    let src_data = src.block_data(private::PrivateToken);
-    let dst_data = dst.block_data_mut(private::PrivateToken);
+    let src_data = src.block_data();
+    let dst_data = dst.block_data_mut();
 
     if src_data.is_fully_contiguous() && dst_data.is_fully_contiguous() {
         let src_desc = src_data.block_view()?.as_nixl_descriptor();
@@ -84,14 +74,16 @@ where
 
 /// Copy a block from a source to a destination using CUDA memcpy
 pub fn write_blocks_to<Source, Destination>(
-    src: &[Arc<Source>],
+    src: &[Source],
     dst: &mut [Destination],
     ctx: &Arc<TransferContext>,
     transfer_type: NixlTransfer,
 ) -> Result<Box<dyn Future<Output = ()> + Send + Sync + Unpin>>
 where
     Source: BlockDataProvider,
+    Source::StorageType: NixlDescriptor,
     Destination: BlockDataProviderMut,
+    Destination::StorageType: NixlDescriptor,
 {
     if src.is_empty() || dst.is_empty() {
         return Ok(Box::new(std::future::ready(())));
@@ -107,18 +99,18 @@ where
     let src_mem_type = src
         .first()
         .unwrap()
-        .block_data(private::PrivateToken)
+        .block_data()
         .storage_type()
         .nixl_mem_type();
     let dst_mem_type = dst
         .first()
         .unwrap()
-        .block_data(private::PrivateToken)
+        .block_data()
         .storage_type()
         .nixl_mem_type();
 
-    let mut src_dl = XferDescList::new(src_mem_type, true)?;
-    let mut dst_dl = XferDescList::new(dst_mem_type, true)?;
+    let mut src_dl = XferDescList::new(src_mem_type, false)?;
+    let mut dst_dl = XferDescList::new(dst_mem_type, false)?;
 
     for (src, dst) in src.iter().zip(dst.iter_mut()) {
         append_xfer_request(src, dst, &mut src_dl, &mut dst_dl)?;

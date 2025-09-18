@@ -1,31 +1,19 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 #![allow(dead_code)]
 
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 
 use dynamo_runtime::engine::ResponseStream;
 use dynamo_runtime::{
-    pipeline::{
-        async_trait, AsyncEngine, Data, Event, ManyOut, Operator, ServiceBackend, ServiceEngine,
-        ServiceFrontend, SingleIn, *,
-    },
     Error,
+    pipeline::{
+        AsyncEngine, Data, Event, ManyOut, Operator, ServiceBackend, ServiceEngine,
+        ServiceFrontend, SingleIn, async_trait, *,
+    },
 };
 
 mod common;
@@ -153,8 +141,8 @@ fn make_postprocessor() -> Arc<PipelineNode<ManyOut<Annotated<String>>, ManyOut<
 // Node 0:
 // [frontend] -------[pre processor]-----> [backend]
 // [frontend] <----- [post processor] ---- [backend]
-fn make_service(
-) -> Result<ServiceEngine<SingleIn<String>, ManyOut<Annotated<String>>>, PipelineError> {
+fn make_service()
+-> Result<ServiceEngine<SingleIn<String>, ManyOut<Annotated<String>>>, PipelineError> {
     // Frontend - Callable interface
     let frontend = ServiceFrontend::<SingleIn<String>, ManyOut<Annotated<String>>>::new();
 
@@ -253,14 +241,16 @@ async fn test_disaggregated_service() {
     // }
     // assert_eq!(counter, 20);
 
-    println!("Test blocked: SegmentSink::attach requires Arc<dyn AsyncEngine> but AsyncEngineStream cannot be Sync");
+    println!(
+        "Test blocked: SegmentSink::attach requires Arc<dyn AsyncEngine> but AsyncEngineStream cannot be Sync"
+    );
 }
 
 // Node 0:
 // [frontend] --> [pre processor] --> [operator] ----------------------> [backend]
 // [frontend] <---------------------- [operator] <--[post processor] <-- [backend]
-fn make_service_with_operator(
-) -> Result<ServiceEngine<SingleIn<String>, ManyOut<Annotated<String>>>, PipelineError> {
+fn make_service_with_operator()
+-> Result<ServiceEngine<SingleIn<String>, ManyOut<Annotated<String>>>, PipelineError> {
     // Frontend - Callable interface
     let frontend = ServiceFrontend::<SingleIn<String>, ManyOut<Annotated<String>>>::new();
 

@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use crate::engine::AsyncEngineContextProvider;
 
@@ -52,7 +40,7 @@ impl<In: PipelineIO, Out: PipelineIO + AsyncEngineContextProvider> Sink<Out> for
         let mut sinks = self.sinks.lock().unwrap();
         let tx = sinks
             .remove(ctx.id())
-            .ok_or(PipelineError::DetatchedStreamReceiver)
+            .ok_or(PipelineError::DetachedStreamReceiver)
             .inspect_err(|_| {
                 ctx.stop_generating();
             })?;
@@ -60,7 +48,7 @@ impl<In: PipelineIO, Out: PipelineIO + AsyncEngineContextProvider> Sink<Out> for
 
         Ok(tx
             .send(data)
-            .map_err(|_| PipelineError::DetatchedStreamReceiver)
+            .map_err(|_| PipelineError::DetachedStreamReceiver)
             .inspect_err(|_| {
                 ctx.stop_generating();
             })?)
@@ -76,14 +64,14 @@ impl<In: PipelineIO + Sync, Out: PipelineIO> AsyncEngine<In, Out, Error> for Fro
             sinks.insert(request.id().to_string(), tx);
         }
         self.on_next(request, private::Token {}).await?;
-        Ok(rx.await.map_err(|_| PipelineError::DetatchedStreamSender)?)
+        Ok(rx.await.map_err(|_| PipelineError::DetachedStreamSender)?)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::{error::PipelineErrorExt, ManyOut, SingleIn};
+    use crate::pipeline::{ManyOut, SingleIn, error::PipelineErrorExt};
 
     #[tokio::test]
     async fn test_frontend_no_edge() {

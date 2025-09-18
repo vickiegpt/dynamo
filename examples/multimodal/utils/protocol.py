@@ -15,17 +15,18 @@
 
 
 import json
-from typing import Any, List, Literal, Optional, Union
+from typing import Any, List, Literal, Optional, Tuple, Union
 
-import connect
 import msgspec
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_core import core_schema
 from typing_extensions import NotRequired
 from vllm.inputs.data import TokensPrompt
 from vllm.outputs import CompletionOutput
 from vllm.sampling_params import SamplingParams
 from vllm.sequence import PromptLogprobs, RequestMetrics
+
+import dynamo.nixl_connect as connect
 
 
 class Request(BaseModel):
@@ -72,7 +73,6 @@ class vLLMGenerateRequest(BaseModel):
     Serializable class of all the fields vLLM engine requires for inference
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
     engine_prompt: PatchedTokensPrompt
     sampling_params: SamplingParams
     request_id: str
@@ -88,7 +88,8 @@ class vLLMGenerateRequest(BaseModel):
         return v
 
     model_config = ConfigDict(
-        json_encoders={SamplingParams: lambda v: msgspec.json.encode(v)}
+        arbitrary_types_allowed=True,
+        json_encoders={SamplingParams: lambda v: msgspec.json.encode(v)},
     )
 
 
@@ -132,31 +133,19 @@ class MultiModalRequest(BaseModel):
     stream: Optional[bool] = True
 
 
+class MultiModalInput(BaseModel):
+    image_url: Optional[str] = None
+    video_url: Optional[str] = None
+
+
 class vLLMMultimodalRequest(vLLMGenerateRequest):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    image_url: Optional[str] = None
-    video_url: Optional[str] = None
-
-
-class EncodeRequest(BaseModel):
-    """
-    Serializable class for encoding requests for both images and videos
-    """
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    image_url: Optional[str] = None
-    video_url: Optional[str] = None
-    num_frames: Optional[int] = None
-    request_id: str
-    serialized_request: Optional[connect.SerializedRequest] = None
-
-
-class EncodeResponse(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    request_id: str
+    multimodal_input: Optional[MultiModalInput] = Field(default_factory=MultiModalInput)
     image_grid_thw: Optional[List[Any]] = None
-    image_sizes: Optional[List[Any]] = None
-    raw_frames: Optional[List[List[List[List[int]]]]] = None
+    embeddings_shape: Optional[
+        Union[Tuple[int, int, int], Tuple[int, int, int, int]]
+    ] = None
+    serialized_request: Optional[connect.RdmaMetadata] = None
 
 
 class MyRequestOutput(BaseModel):
@@ -169,6 +158,7 @@ class MyRequestOutput(BaseModel):
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
     request_id: str
     prompt: Optional[str] = None
     prompt_token_ids: Optional[List[int]] = None
@@ -176,6 +166,7 @@ class MyRequestOutput(BaseModel):
     outputs: List[CompletionOutput]
     finished: bool
     metrics: Optional[RequestMetrics] = None
+    kv_transfer_params: Optional[dict[str, Any]] = None
     # lora_request: Optional[LoRARequest] = None
     # encoder_prompt: Optional[str] = None
     # encoder_prompt_token_ids: Optional[List[int]] = None

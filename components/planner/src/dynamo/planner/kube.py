@@ -14,104 +14,76 @@
 # limitations under the License.
 
 import asyncio
+import os
 from typing import Optional
 
 from kubernetes import client, config
+from kubernetes.config.config_exception import ConfigException
+
+
+def get_current_k8s_namespace() -> str:
+    """Get the current namespace if running inside a k8s cluster"""
+    try:
+        with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace", "r") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        # Fallback to 'default' if not running in k8s
+        return "default"
 
 
 class KubernetesAPI:
-    def __init__(self):
+    def __init__(self, k8s_namespace: Optional[str] = None):
         # Load kubernetes configuration
-        config.load_incluster_config()  # for in-cluster deployment
+        try:
+            config.load_incluster_config()  # for in-cluster deployment
+        except ConfigException:
+            config.load_kube_config()  # for out-of-cluster deployment
 
         self.custom_api = client.CustomObjectsApi()
-        self.current_namespace = self._get_current_namespace()
+        self.current_namespace = k8s_namespace or get_current_k8s_namespace()
 
-    def _get_current_namespace(self) -> str:
-        """Get the current namespace if running inside a k8s cluster"""
-        try:
-            with open(
-                "/var/run/secrets/kubernetes.io/serviceaccount/namespace", "r"
-            ) as f:
-                return f.read().strip()
-        except FileNotFoundError:
-            # Fallback to 'default' if not running in k8s
-            return "default"
-
-    async def get_graph_deployment(
-        self, component_name: str, dynamo_namespace: str
+    def _get_graph_deployment_from_name(
+        self, graph_deployment_name: str
     ) -> Optional[dict]:
-        """
-        Get DynamoGraphDeployment by first finding the associated DynamoComponentDeployment
-        and then retrieving its owner reference.
+        """Get the graph deployment from the dynamo graph deployment name"""
+        return self.custom_api.get_namespaced_custom_object(
+            group="nvidia.com",
+            version="v1alpha1",
+            namespace=self.current_namespace,
+            plural="dynamographdeployments",
+            name=graph_deployment_name,
+        )
 
-        Args:
-            component_name: The name of the component
-            dynamo_namespace: The dynamo namespace
+    async def get_parent_graph_deployment(self) -> Optional[dict]:
+        """
+        Get the parent DynamoGraphDeployment using environment variable.
+
+        Uses DYN_PARENT_DGD_K8S_NAME environment variable and assumes the DGD
+        is in the same namespace as this component (self.current_namespace).
 
         Returns:
-            The DynamoGraphDeployment object or None if not found
+            The DynamoGraphDeployment object or None if env var is not set
         """
+        dgd_name = os.getenv("DYN_PARENT_DGD_K8S_NAME")
+
+        if not dgd_name:
+            return None
+
         try:
-            # First, find the DynamoComponentDeployment using the component name and namespace labels
-            label_selector = f"nvidia.com/dynamo-component={component_name},nvidia.com/dynamo-namespace={dynamo_namespace}"
-
-            component_deployments = self.custom_api.list_namespaced_custom_object(
-                group="nvidia.com",
-                version="v1alpha1",
-                namespace=self.current_namespace,
-                plural="dynamocomponentdeployments",
-                label_selector=label_selector,
-            )
-
-            items = component_deployments.get("items", [])
-            if not items:
-                return None
-
-            if len(items) > 1:
-                raise ValueError(
-                    f"Multiple component deployments found for component {component_name} in dynamo namespace {dynamo_namespace}. "
-                    "Expected exactly one deployment."
-                )
-
-            # Get the component deployment and extract the owner reference
-            component_deployment = items[0]
-            owner_refs = component_deployment.get("metadata", {}).get(
-                "ownerReferences", []
-            )
-
-            # Find the DynamoGraphDeployment in the owner references
-            graph_deployment_ref = None
-            for ref in owner_refs:
-                if (
-                    ref.get("apiVersion") == "nvidia.com/v1alpha1"
-                    and ref.get("kind") == "DynamoGraphDeployment"
-                ):
-                    graph_deployment_ref = ref
-                    break
-
-            if not graph_deployment_ref:
-                return None
-
-            # Get the actual DynamoGraphDeployment using the name from the owner reference
-            graph_deployment_name = graph_deployment_ref.get("name")
-            if not graph_deployment_name:
-                return None
-
-            graph_deployment = self.custom_api.get_namespaced_custom_object(
-                group="nvidia.com",
-                version="v1alpha1",
-                namespace=self.current_namespace,
-                plural="dynamographdeployments",
-                name=graph_deployment_name,
-            )
-
-            return graph_deployment
-
+            return self._get_graph_deployment_from_name(dgd_name)
         except client.ApiException as e:
             if e.status == 404:
                 return None
             raise
+
+    async def get_graph_deployment(self) -> Optional[dict]:
+        """
+        Get the parent DynamoGraphDeployment using environment variable.
+
+        Returns:
+            The DynamoGraphDeployment object or None if env var is not set
+        """
+        return await self.get_parent_graph_deployment()
 
     async def update_graph_replicas(
         self, graph_deployment_name: str, component_name: str, replicas: int
@@ -127,19 +99,36 @@ class KubernetesAPI:
             body=patch,
         )
 
+    async def is_deployment_ready(self, graph_deployment_name: str) -> bool:
+        """Check if a graph deployment is ready"""
+
+        graph_deployment = self._get_graph_deployment_from_name(graph_deployment_name)
+
+        if not graph_deployment:
+            raise ValueError(f"Graph deployment {graph_deployment_name} not found")
+
+        conditions = graph_deployment.get("status", {}).get("conditions", [])
+        ready_condition = next(
+            (c for c in conditions if c.get("type") == "Ready"), None
+        )
+
+        return ready_condition is not None and ready_condition.get("status") == "True"
+
     async def wait_for_graph_deployment_ready(
         self,
         graph_deployment_name: str,
-        max_attempts: int = 60,  # default: 10 minutes total
+        max_attempts: int = 180,  # default: 30 minutes total
         delay_seconds: int = 10,  # default: check every 10 seconds
     ) -> None:
         """Wait for a graph deployment to be ready"""
 
         for attempt in range(max_attempts):
             await asyncio.sleep(delay_seconds)
-            graph_deployment = await self.get_graph_deployment(
-                graph_deployment_name, self.current_namespace
+
+            graph_deployment = self._get_graph_deployment_from_name(
+                graph_deployment_name
             )
+
             if not graph_deployment:
                 raise ValueError(f"Graph deployment {graph_deployment_name} not found")
 
