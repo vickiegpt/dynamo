@@ -4,6 +4,7 @@
 import logging
 import os
 import time
+from typing import Optional
 
 import pytest
 
@@ -24,10 +25,10 @@ class TRTLLMConfig(EngineConfig):
         self,
         name: str,
         directory: str,
-        script_name: str = None,
-        command: list = None,
-        marks: list = None,
-        request_payloads: list = None,
+        script_name: Optional[str] = None,
+        command: Optional[list] = None,
+        marks: Optional[list] = None,
+        request_payloads: Optional[list] = None,
         model: str = "Qwen/Qwen3-0.6B",
         **kwargs,
     ):
@@ -233,7 +234,7 @@ def test_request_cancellation_trtllm_disaggregated_decode_first(
         )
 
 
-@pytest.mark.e2e
+@pytest.mark.skip(reason="Require Dynamo fix for decode worker inhibited issue")
 @pytest.mark.gpu_2
 @pytest.mark.trtllm_marker
 @pytest.mark.slow

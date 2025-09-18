@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import time
+from typing import Optional
 
 import pytest
 import requests
@@ -22,7 +23,7 @@ class DynamoFrontendProcess(ManagedProcess):
     """Process manager for Dynamo frontend"""
 
     def __init__(self, request):
-        command = ["python", "-m", "dynamo.frontend", f"--http-port={FRONTEND_PORT}"]
+        command = ["python", "-m", "dynamo.frontend"]
 
         # Set debug logging environment
         env = os.environ.copy()
@@ -138,7 +139,7 @@ class DynamoWorkerProcess(ManagedProcess):
 
 
 def send_completion_request(
-    prompt: str, max_tokens: int, timeout: int = 120, model: str = None
+    prompt: str, max_tokens: int, timeout: int = 120, model: Optional[str] = None
 ) -> requests.Response:
     """Send a completion request to the frontend"""
     payload = {
@@ -176,7 +177,7 @@ def send_chat_completion_request(
     max_tokens: int,
     timeout: int = 120,
     stream: bool = False,
-    model: str = None,
+    model: Optional[str] = None,
 ) -> requests.Response:
     """Send a chat completion request to the frontend"""
     payload = {
@@ -212,7 +213,7 @@ def send_chat_completion_request(
 
 
 def send_request_and_cancel(
-    request_type: str = "completion", timeout: int = 1, model: str = None
+    request_type: str = "completion", timeout: int = 1, model: Optional[str] = None
 ):
     """Send a request with short timeout to trigger cancellation"""
     logger.info(f"Sending {request_type} request to be cancelled...")
