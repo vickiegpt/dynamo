@@ -1979,6 +1979,7 @@ name = "dynamo-llm"
 version = "0.5.0"
 dependencies = [
  "ahash",
+ "aho-corasick",
  "akin",
  "aligned-vec",
  "anyhow",

@@ -79,6 +79,24 @@ impl MarkerMatcher {
         self.max_pattern_len
     }
 
+    /// Safe UTF-8 slicing that ensures we only slice at character boundaries
+    fn safe_slice(text: &str, start_byte: usize, end_byte: usize) -> String {
+        // Clamp indices to valid boundaries
+        let start = text
+            .char_indices()
+            .find(|(i, _)| *i >= start_byte)
+            .map(|(i, _)| i)
+            .unwrap_or(text.len());
+
+        let end = text
+            .char_indices()
+            .find(|(i, _)| *i >= end_byte)
+            .map(|(i, _)| i)
+            .unwrap_or(text.len());
+
+        text[start..end].to_string()
+    }
+
     /// Process a chunk with an optional partial buffer from previous chunk
     pub fn process_chunk(&self, chunk: &str, partial_buffer: &str) -> MatchResult {
         // Combine buffer with new chunk
@@ -92,10 +110,10 @@ impl MarkerMatcher {
         if let Some(mat) = self.complete_matcher.find(&combined) {
             let marker = &self.patterns[mat.pattern().as_usize()];
             return MatchResult::Complete {
-                prefix: combined[..mat.start()].to_string(),
+                prefix: Self::safe_slice(&combined, 0, mat.start()),
                 marker: marker.clone(),
                 marker_start: mat.start(),
-                suffix: combined[mat.end()..].to_string(),
+                suffix: Self::safe_slice(&combined, mat.end(), combined.len()),
             };
         }
 
@@ -103,7 +121,7 @@ impl MarkerMatcher {
         // This is the key: check "n<T" → finds "<T" as partial
         if let Some((partial_start, partial, patterns)) = self.find_partial_suffix(&combined) {
             return MatchResult::Partial {
-                prefix: combined[..partial_start].to_string(),
+                prefix: Self::safe_slice(&combined, 0, partial_start),
                 partial: partial.to_string(),
                 possible_patterns: patterns,
             };
@@ -120,7 +138,8 @@ impl MarkerMatcher {
     fn find_partial_suffix<'a>(&self, text: &'a str) -> Option<(usize, &'a str, Vec<String>)> {
         // Start from the beginning to find the EARLIEST partial match
         // This ensures we emit as much as possible
-        for i in 0..text.len() {
+        // Use char_indices to get valid UTF-8 boundaries
+        for (i, _) in text.char_indices() {
             let suffix = &text[i..];
             if let Some(patterns) = self.prefix_trie.find_prefix_match(suffix) {
                 // This suffix is a prefix of one or more patterns
@@ -427,6 +446,117 @@ mod tests {
             assert!(possible_patterns.contains(&"FooBar".to_string()));
         } else {
             panic!("Expected partial match for 'FooBa', got: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_unicode_complete_match() {
+        // Test complete pattern matching with unicode content
+        // Use patterns with ASCII markers but unicode content
+        let patterns = vec!["<TOOLCALL>".to_string()];
+        let matcher = MarkerMatcher::new(patterns).unwrap();
+
+        // Test with emoji and multi-byte characters
+        let result = matcher.process_chunk("Hello 👋 world <TOOLCALL>data 🚀", "");
+
+        if let MatchResult::Complete {
+            prefix,
+            marker,
+            suffix,
+            ..
+        } = result
+        {
+            assert_eq!(prefix, "Hello 👋 world ");
+            assert_eq!(marker, "<TOOLCALL>");
+            assert_eq!(suffix, "data 🚀");
+        } else {
+            panic!("Expected complete match, got: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_unicode_partial_match() {
+        // Test partial matching where the partial might occur after unicode content
+        let patterns = vec!["<TOOLCALL>".to_string()];
+        let matcher = MarkerMatcher::new(patterns).unwrap();
+
+        // Test partial after multi-byte characters
+        let result = matcher.process_chunk("Text with 中文字符 and <TO", "");
+
+        if let MatchResult::Partial {
+            prefix,
+            partial,
+            possible_patterns,
+        } = result
+        {
+            assert_eq!(prefix, "Text with 中文字符 and ");
+            assert_eq!(partial, "<TO");
+            assert!(possible_patterns.contains(&"<TOOLCALL>".to_string()));
+        } else {
+            panic!("Expected partial match, got: {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_unicode_no_false_positive() {
+        // Test that unicode content doesn't create false positives
+        let patterns = vec!["<TOOLCALL>".to_string()];
+        let matcher = MarkerMatcher::new(patterns).unwrap();
+
+        // Test with unicode that might look similar to ASCII patterns
+        let result = matcher.process_chunk("Unicode test ＜ＴＯＯＬＣＡＬＬ＞ full-width", "");
+
+        if let MatchResult::None { content } = result {
+            assert_eq!(content, "Unicode test ＜ＴＯＯＬＣＡＬＬ＞ full-width");
+        } else {
+            panic!(
+                "Expected no match for full-width characters, got: {:?}",
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn test_unicode_pattern_itself() {
+        // Test patterns that contain unicode characters
+        let patterns = vec!["🔧工具".to_string(), "📞call".to_string()];
+        let matcher = MarkerMatcher::new(patterns).unwrap();
+
+        // Test complete match with unicode pattern
+        let result1 = matcher.process_chunk("Start 🔧工具 end", "");
+        if let MatchResult::Complete {
+            prefix,
+            marker,
+            suffix,
+            ..
+        } = result1
+        {
+            assert_eq!(prefix, "Start ");
+            assert_eq!(marker, "🔧工具");
+            assert_eq!(suffix, " end");
+        } else {
+            panic!(
+                "Expected complete match for unicode pattern, got: {:?}",
+                result1
+            );
+        }
+
+        // Test partial match with unicode pattern
+        let result2 = matcher.process_chunk("Text 🔧工", "");
+        if let MatchResult::Partial {
+            prefix,
+            partial,
+            possible_patterns,
+        } = result2
+        {
+            assert_eq!(prefix, "Text ");
+            assert_eq!(partial, "🔧工");
+            assert!(possible_patterns.contains(&"🔧工具".to_string()));
+        } else {
+            panic!(
+                "Expected partial match for unicode pattern, got: {:?}",
+                result2
+            );
         }
     }
 }

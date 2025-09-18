@@ -615,7 +615,7 @@ impl OpenAIPreprocessor {
         tool_call_parser: Option<&String>,
         tool_choice: Option<&ChatCompletionToolChoiceOption>,
         has_tools: bool,
-    ) -> Result<bool, Error> {
+    ) -> std::result::Result<bool, Error> {
         match (tool_call_parser, tool_choice, has_tools) {
             // No parser but tools requested - error cases
             (None, Some(ChatCompletionToolChoiceOption::Required), true) => Err(anyhow::anyhow!(
