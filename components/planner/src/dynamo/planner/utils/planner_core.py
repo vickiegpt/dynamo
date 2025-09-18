@@ -129,12 +129,18 @@ class Planner:
             self.no_correction = True
         else:
             self.no_correction = args.no_correction
-        
+
         # Cache initialization mode settings
         # This is only for vLLM backend
-        self.vllm_cache_initialization_mode = getattr(args, 'vllm_cache_initialization_mode', False)
-        self.post_vllm_cache_prefill_replicas = getattr(args, 'post_vllm_cache_prefill_replicas', 1)
-        self.post_vllm_cache_decode_replicas = getattr(args, 'post_vllm_cache_decode_replicas', 1)
+        self.vllm_cache_initialization_mode = getattr(
+            args, "vllm_cache_initialization_mode", False
+        )
+        self.post_vllm_cache_prefill_replicas = getattr(
+            args, "post_vllm_cache_prefill_replicas", 1
+        )
+        self.post_vllm_cache_decode_replicas = getattr(
+            args, "post_vllm_cache_decode_replicas", 1
+        )
         self.vllm_cache_initialized = False
         if self.vllm_cache_initialization_mode:
             logger.info(
@@ -370,9 +376,13 @@ class Planner:
         try:
             # Assume if a decode worker is ready, the cache has been initialized
             if self.connector:
-                is_initial_deployment_ready = await self.connector.kube_api.is_deployment_ready(self.namespace)
+                is_initial_deployment_ready = (
+                    await self.connector.kube_api.is_deployment_ready(self.namespace)
+                )
                 if is_initial_deployment_ready:
-                    logger.info("Initial deployment is ready, vLLM cache initialization complete")
+                    logger.info(
+                        "Initial deployment is ready, vLLM cache initialization complete"
+                    )
                     return True
         except Exception as e:
             logger.warning(f"Failed to check vLLM cache initialization status: {e}")
@@ -381,43 +391,59 @@ class Planner:
     async def handle_vllm_cache_initialization(self):
         if not self.vllm_cache_initialization_mode or self.vllm_cache_initialized:
             return
-        
+
         # Add a flag to track if initial replicas have been set to ensure they're only set once
-        if not hasattr(self, '_initial_replicas_set'):
+        if not hasattr(self, "_initial_replicas_set"):
             self._initial_replicas_set = False
-        
+
         # Set initial replicas only once
         if not self._initial_replicas_set:
-            logger.info("vLLM cache initialization mode enabled, ensuring minimal initial replicas")
-            
+            logger.info(
+                "vLLM cache initialization mode enabled, ensuring minimal initial replicas"
+            )
+
             # Force initial replicas to support vllm cache initialization
             initial_replicas = {
                 WORKER_COMPONENT_NAMES[self.args.backend].prefill_worker_k8s_name: 0,
                 WORKER_COMPONENT_NAMES[self.args.backend].decode_worker_k8s_name: 1,
             }
-                            
+
             if not self.args.no_operation:
-                await self.connector.set_component_replicas(initial_replicas, blocking=False)
-            logger.info(f"Set initial replicas for vLLM cache initialization: {initial_replicas}")
+                await self.connector.set_component_replicas(
+                    initial_replicas, blocking=False
+                )
+            logger.info(
+                f"Set initial replicas for vLLM cache initialization: {initial_replicas}"
+            )
             self._initial_replicas_set = True
             return
-            
+
         # Check if vllm cache initialization is complete
         if await self.check_vllm_cache_initialization_complete():
-            logger.info("vLLM cache initialization complete, scaling to target replicas")
+            logger.info(
+                "vLLM cache initialization complete, scaling to target replicas"
+            )
             self.vllm_cache_initialized = True
-            
+
             # Scale to target replicas
             target_replicas = {
-                WORKER_COMPONENT_NAMES[self.args.backend].prefill_worker_k8s_name: self.post_vllm_cache_prefill_replicas,
-                WORKER_COMPONENT_NAMES[self.args.backend].decode_worker_k8s_name: self.post_vllm_cache_decode_replicas,
+                WORKER_COMPONENT_NAMES[
+                    self.args.backend
+                ].prefill_worker_k8s_name: self.post_vllm_cache_prefill_replicas,
+                WORKER_COMPONENT_NAMES[
+                    self.args.backend
+                ].decode_worker_k8s_name: self.post_vllm_cache_decode_replicas,
             }
-            
+
             if not self.args.no_operation:
-                await self.connector.set_component_replicas(target_replicas, blocking=False)
-                
-            logger.info(f"Scaled to target replicas: prefill={self.post_vllm_cache_prefill_replicas}, decode={self.post_vllm_cache_decode_replicas}")
-            
+                await self.connector.set_component_replicas(
+                    target_replicas, blocking=False
+                )
+
+            logger.info(
+                f"Scaled to target replicas: prefill={self.post_vllm_cache_prefill_replicas}, decode={self.post_vllm_cache_decode_replicas}"
+            )
+
             # Update Prometheus metrics
             if not self.dryrun:
                 self.num_p_workers_gauge.set(self.post_vllm_cache_prefill_replicas)
@@ -493,9 +519,12 @@ class Planner:
             # Handle vLLM cache initialization completely separately from scaling adjustments
             if self.args.backend == "vllm":
                 await self.handle_vllm_cache_initialization()
-                
+
                 # If cache initialization is in progress, skip all other operations
-                if self.vllm_cache_initialization_mode and not self.vllm_cache_initialized:
+                if (
+                    self.vllm_cache_initialization_mode
+                    and not self.vllm_cache_initialized
+                ):
                     continue
 
             if (
