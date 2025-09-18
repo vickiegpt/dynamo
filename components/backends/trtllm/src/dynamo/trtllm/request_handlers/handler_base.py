@@ -100,8 +100,14 @@ class HandlerBase:
                 result["finish_reason"] == "stop" or result["finish_reason"] == "error"
             )
 
-    def calculate_bytes_per_second(self, bytes, start, end):
-        pass
+    # Returns a tuple of (latency, bytes_per_second)
+    def calculate_kv_perf_metrics(self, bytes, start, end):
+        if bytes == 0:
+            return (-1, -1)
+        assert start < end, "kv cache performance start time is greater than the end time!"
+        total_time = end - start
+        return (total_time, bytes / total_time)
+    
     def request_perf_metrics_to_json(self, perf_metrics):
         timing_metrics = perf_metrics.timing_metrics
         kv_cache_metrics = perf_metrics.kv_cache_metrics
@@ -128,7 +134,9 @@ class HandlerBase:
                 # TODO: move to kv_cache_metrics
                 "kv_cache_size": timing_metrics.kv_cache_size,
                 "kv_cache_transfer_start": timing_metrics.kv_cache_transfer_start.total_seconds(),
+                "kv_cache_transfer_start_raw": timing_metrics.kv_cache_transfer_start,
                 "kv_cache_transfer_end": timing_metrics.kv_cache_transfer_end.total_seconds(),
+                "kv_cache_transfer_end_raw": timing_metrics.kv_cache_transfer_end,
             })
         if speculative_decoding.total_draft_tokens > 0:
             metrics_json["speculative_decoding"] = {
@@ -250,10 +258,10 @@ class HandlerBase:
                 if output.request_perf_metrics:
                     request_perf_metrics = output.request_perf_metrics
                     json_perf_metrics = self.request_perf_metrics_to_json(request_perf_metrics)
-                    bytes_per_second = self.calculate_bytes_per_second(request_perf_metrics.timing_metrics.kv_cache_size,
+                    latency, bytes_per_second = self.calculate_kv_perf_metrics(request_perf_metrics.timing_metrics.kv_cache_size,
                                                                        request_perf_metrics.timing_metrics.kv_cache_transfer_start.total_seconds(),
                                                                        request_perf_metrics.timing_metrics.kv_cache_transfer_end.total_seconds())
-                    logging.info(f"bytes_per_second_for_request={bytes_per_second}")
+                    logging.info(f"latency={latency},bytes_per_second_for_request={bytes_per_second}")
                     final_out["request_perf_metrics"] = json_perf_metrics
                     logging.debug(f"Request perf metrics: {json_perf_metrics}")
                 if output.disaggregated_params:

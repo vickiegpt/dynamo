@@ -239,7 +239,6 @@ class Publisher:
 
         stats = self.engine.llm.get_stats_async(timeout=5)
         async for stat in stats:
-            logging.debug(f"Full Stat obj: {stat}")
             request_active_slots = stat["numActiveRequests"]
             request_total_slots = stat["maxNumActiveRequests"]
             kv_active_block = stat["kvCacheStats"]["usedNumBlocks"]
