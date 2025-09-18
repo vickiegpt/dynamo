@@ -66,7 +66,7 @@ class AggregatedHandler(HandlerBase):
     def __init__(self, config: RequestHandlerConfig):
         super().__init__(config)
 
-    async def generate(self, request: dict, context):
+    async def generate(self, request: dict, context=None):
         # Implement all steps locally.
         async for res in self.generate_locally(request, context=context):
             yield res

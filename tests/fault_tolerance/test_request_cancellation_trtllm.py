@@ -13,51 +13,13 @@ from tests.fault_tolerance.test_request_cancellation import (
     send_request_and_cancel,
     strip_ansi_codes,
 )
-from tests.utils.engine_process import FRONTEND_PORT, EngineConfig, EngineProcess
+from tests.serve.test_trtllm import TRTLLMConfig
+from tests.utils.engine_process import FRONTEND_PORT, EngineProcess
 
 logger = logging.getLogger(__name__)
 
 
-class TRTLLMConfig(EngineConfig):
-    """Configuration for TRTLLM cancellation test scenarios"""
-
-    def __init__(
-        self,
-        name: str,
-        directory: str,
-        script_name: Optional[str] = None,
-        command: Optional[list] = None,
-        marks: Optional[list] = None,
-        request_payloads: Optional[list] = None,
-        model: str = "Qwen/Qwen3-0.6B",
-        **kwargs,
-    ):
-        # Set TRTLLM-specific defaults
-        if marks is None:
-            marks = []
-        if request_payloads is None:
-            request_payloads = []
-
-        # Initialize the parent EngineConfig with all required fields
-        super().__init__(
-            name=name,
-            directory=directory,
-            marks=marks,
-            request_payloads=request_payloads,
-            model=model,
-            script_name=script_name,
-            command=command,
-            models_port=kwargs.get("models_port", FRONTEND_PORT),
-            stragglers=kwargs.get("stragglers", ["TRTLLM:EngineCore"]),
-            **{
-                k: v
-                for k, v in kwargs.items()
-                if k not in ["models_port", "stragglers"]
-            },
-        )
-
-
-def verify_request_cancelled_trtllm_simple(
+def verify_request_cancelled_trtllm(
     trtllm_process: EngineProcess,
     trtllm_log_offset: int = 0,
 ) -> int:
@@ -146,7 +108,7 @@ def test_request_cancellation_trtllm_aggregated(request, runtime_services):
 
             logger.info("Checking for cancellation messages in TRTLLM logs...")
             time.sleep(1)  # Give more time for TRTLLM logs to be written
-            trtllm_log_offset = verify_request_cancelled_trtllm_simple(
+            trtllm_log_offset = verify_request_cancelled_trtllm(
                 trtllm_process,
                 trtllm_log_offset=trtllm_log_offset,
             )
@@ -220,7 +182,7 @@ def test_request_cancellation_trtllm_disaggregated_decode_first(
 
             logger.info("Checking for cancellation messages in TRTLLM logs...")
             time.sleep(1)  # Give more time for TRTLLM logs to be written
-            trtllm_log_offset = verify_request_cancelled_trtllm_simple(
+            trtllm_log_offset = verify_request_cancelled_trtllm(
                 trtllm_process,
                 trtllm_log_offset=trtllm_log_offset,
             )
@@ -298,7 +260,7 @@ def test_request_cancellation_trtllm_disaggregated_prefill_first(
 
             logger.info("Checking for cancellation messages in TRTLLM logs...")
             time.sleep(1)  # Give more time for TRTLLM logs to be written
-            trtllm_log_offset = verify_request_cancelled_trtllm_simple(
+            trtllm_log_offset = verify_request_cancelled_trtllm(
                 trtllm_process,
                 trtllm_log_offset=trtllm_log_offset,
             )
