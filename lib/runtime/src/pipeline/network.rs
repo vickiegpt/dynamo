@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 //! TODO - we need to reconcile what is in this crate with distributed::transports
 
@@ -20,6 +8,7 @@ pub mod egress;
 pub mod ingress;
 pub mod tcp;
 
+use crate::SystemHealth;
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
@@ -288,6 +277,8 @@ pub struct Ingress<Req: PipelineIO, Resp: PipelineIO> {
     engine: OnceLock<ServiceEngine<Req, Resp>>,
     // Store type-erased engine for local registry
     any_engine: OnceLock<Arc<dyn crate::engine::AnyAsyncEngine>>,
+    /// Endpoint-specific notifier for health check timer resets
+    endpoint_health_check_notifier: OnceLock<Arc<tokio::sync::Notify>>,
 }
 
 impl<Req: PipelineIO + Sync, Resp: PipelineIO> Ingress<Req, Resp> {
@@ -297,6 +288,7 @@ impl<Req: PipelineIO + Sync, Resp: PipelineIO> Ingress<Req, Resp> {
             metrics: OnceLock::new(),
             engine: OnceLock::new(),
             any_engine: OnceLock::new(),
+            endpoint_health_check_notifier: OnceLock::new(),
         })
     }
 
@@ -381,6 +373,15 @@ pub trait PushWorkHandler: Send + Sync {
     /// Get the underlying engine as AnyAsyncEngine for local registry (optional)
     fn as_any_engine(&self) -> Option<Arc<dyn crate::engine::AnyAsyncEngine>> {
         None
+    }
+
+    /// Set the endpoint-specific notifier for health check timer resets
+    fn set_endpoint_health_check_notifier(
+        &self,
+        _notifier: Arc<tokio::sync::Notify>,
+    ) -> Result<()> {
+        // Default implementation for backwards compatibility
+        Ok(())
     }
 }
 
