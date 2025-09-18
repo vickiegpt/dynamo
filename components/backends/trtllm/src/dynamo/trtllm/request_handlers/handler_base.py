@@ -108,43 +108,43 @@ class HandlerBase:
         total_time = end - start
         return (total_time, bytes / total_time)
     
-    def request_perf_metrics_to_json(self, perf_metrics):
-        timing_metrics = perf_metrics.timing_metrics
-        kv_cache_metrics = perf_metrics.kv_cache_metrics
-        speculative_decoding = perf_metrics.speculative_decoding
-        metrics_json = {
-            "first_iter": perf_metrics.first_iter,
-            "last_iter": perf_metrics.last_iter,
-            # exclude perf_metrics.iter since it is only meaningful when the request is not finished
-        }
-        metrics_json["timing_metrics"] = {
-            "arrival_time": timing_metrics.arrival_time.total_seconds(),
-            "first_scheduled_time": timing_metrics.first_scheduled_time.total_seconds(),
-            "first_token_time": timing_metrics.first_token_time.total_seconds(),
-            "last_token_time": timing_metrics.last_token_time.total_seconds(),
-        }
-        metrics_json["kv_cache_metrics"] = {
-            "num_total_allocated_blocks": kv_cache_metrics.num_total_allocated_blocks,
-            "num_new_allocated_blocks": kv_cache_metrics.num_new_allocated_blocks,
-            "num_reused_blocks": kv_cache_metrics.num_reused_blocks,
-            "num_missed_blocks": kv_cache_metrics.num_missed_blocks,
-        }
-        if timing_metrics.kv_cache_size > 0:
-            metrics_json["timing_metrics"].update({
-                # TODO: move to kv_cache_metrics
-                "kv_cache_size": timing_metrics.kv_cache_size,
-                "kv_cache_transfer_start": timing_metrics.kv_cache_transfer_start.total_seconds(),
-                "kv_cache_transfer_start_raw": timing_metrics.kv_cache_transfer_start,
-                "kv_cache_transfer_end": timing_metrics.kv_cache_transfer_end.total_seconds(),
-                "kv_cache_transfer_end_raw": timing_metrics.kv_cache_transfer_end,
-            })
-        if speculative_decoding.total_draft_tokens > 0:
-            metrics_json["speculative_decoding"] = {
-                "acceptance_rate": speculative_decoding.acceptance_rate,
-                "total_accepted_draft_tokens": speculative_decoding.total_accepted_draft_tokens,
-                "total_draft_tokens": speculative_decoding.total_draft_tokens,
-            }
-        return metrics_json
+    # def request_perf_metrics_to_json(self, perf_metrics):
+    #     timing_metrics = perf_metrics.timing_metrics
+    #     kv_cache_metrics = perf_metrics.kv_cache_metrics
+    #     speculative_decoding = perf_metrics.speculative_decoding
+    #     metrics_json = {
+    #         "first_iter": perf_metrics.first_iter,
+    #         "last_iter": perf_metrics.last_iter,
+    #         # exclude perf_metrics.iter since it is only meaningful when the request is not finished
+    #     }
+    #     metrics_json["timing_metrics"] = {
+    #         "arrival_time": timing_metrics.arrival_time.total_seconds(),
+    #         "first_scheduled_time": timing_metrics.first_scheduled_time.total_seconds(),
+    #         "first_token_time": timing_metrics.first_token_time.total_seconds(),
+    #         "last_token_time": timing_metrics.last_token_time.total_seconds(),
+    #     }
+    #     metrics_json["kv_cache_metrics"] = {
+    #         "num_total_allocated_blocks": kv_cache_metrics.num_total_allocated_blocks,
+    #         "num_new_allocated_blocks": kv_cache_metrics.num_new_allocated_blocks,
+    #         "num_reused_blocks": kv_cache_metrics.num_reused_blocks,
+    #         "num_missed_blocks": kv_cache_metrics.num_missed_blocks,
+    #     }
+    #     if timing_metrics.kv_cache_size > 0:
+    #         metrics_json["timing_metrics"].update({
+    #             # TODO: move to kv_cache_metrics
+    #             "kv_cache_size": timing_metrics.kv_cache_size,
+    #             "kv_cache_transfer_start": timing_metrics.kv_cache_transfer_start.total_seconds(),
+    #             "kv_cache_transfer_start_raw": timing_metrics.kv_cache_transfer_start,
+    #             "kv_cache_transfer_end": timing_metrics.kv_cache_transfer_end.total_seconds(),
+    #             "kv_cache_transfer_end_raw": timing_metrics.kv_cache_transfer_end,
+    #         })
+    #     if speculative_decoding.total_draft_tokens > 0:
+    #         metrics_json["speculative_decoding"] = {
+    #             "acceptance_rate": speculative_decoding.acceptance_rate,
+    #             "total_accepted_draft_tokens": speculative_decoding.total_accepted_draft_tokens,
+    #             "total_draft_tokens": speculative_decoding.total_draft_tokens,
+    #         }
+    #     return metrics_json
 
     async def generate_locally(
         self, request: dict, embeddings: Optional[Union[torch.Tensor, dict]] = None
@@ -255,15 +255,12 @@ class HandlerBase:
             if res.finished and self.disaggregation_mode != DisaggregationMode.PREFILL:
                 final_out = {}
                 output = res.outputs[0]
-                if output.request_perf_metrics:
-                    request_perf_metrics = output.request_perf_metrics
-                    json_perf_metrics = self.request_perf_metrics_to_json(request_perf_metrics)
-                    latency, bytes_per_second = self.calculate_kv_perf_metrics(request_perf_metrics.timing_metrics.kv_cache_size,
-                                                                       request_perf_metrics.timing_metrics.kv_cache_transfer_start.total_seconds(),
-                                                                       request_perf_metrics.timing_metrics.kv_cache_transfer_end.total_seconds())
+                if output.request_perf_metrics and output.request_perf_metrics.timing_metrics:
+                    timing_metrics = output.request_perf_metrics.timing_metrics
+                    latency, bytes_per_second = self.calculate_kv_perf_metrics(timing_metrics.kv_cache_size,
+                                                                       timing_metrics.kv_cache_transfer_start.total_seconds(),
+                                                                       timing_metrics.kv_cache_transfer_end.total_seconds())
                     logging.info(f"latency={latency},bytes_per_second_for_request={bytes_per_second}")
-                    final_out["request_perf_metrics"] = json_perf_metrics
-                    logging.debug(f"Request perf metrics: {json_perf_metrics}")
                 if output.disaggregated_params:
                     final_out["ctx_request_id"] = output.disaggregated_params.ctx_request_id
 
