@@ -65,20 +65,6 @@ pub struct LLMMetricAnnotation {
     pub chunk_tokens: usize,
 }
 
-pub fn maybe_enable_tool_call(
-    parser_str: Option<&str>,
-    request: &NvCreateChatCompletionRequest,
-) -> bool {
-    // Enable tool call if the below two conditions are satisfied
-    // 1. parser_str is not None
-    // 2. tool_choice is not None
-    parser_str.is_some()
-        && !matches!(
-            request.inner.tool_choice,
-            Some(ChatCompletionToolChoiceOption::None)
-        )
-}
-
 impl LLMMetricAnnotation {
     /// Convert this metrics struct to an Annotated event
     pub fn to_annotation<T>(&self) -> Result<Annotated<T>, serde_json::Error> {
@@ -696,8 +682,6 @@ impl
         // create a response generator
         let response_generator = request.response_generator(context.id().to_string());
 
-        let _enable_tool_calling =
-            maybe_enable_tool_call(self.tool_call_parser.as_deref(), &request);
         // preprocess the request into a common request
         let (common_request, annotations) = self.preprocess_request(&request)?;
         let mut response_generator = Box::new(response_generator);

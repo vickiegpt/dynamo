@@ -152,7 +152,6 @@ mod tests {
     async fn parses_single_parameters_object() {
         let input = r#"{ "name": "hello", "parameters": { "x": 1, "y": 2 } }"#;
         let (result, content) = try_tool_call_parse(input, &ToolCallConfig::default())
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
@@ -167,7 +166,6 @@ mod tests {
     async fn parses_single_arguments_object() {
         let input = r#"{ "name": "world", "arguments": { "a": "abc", "b": 42 } }"#;
         let (result, content) = try_tool_call_parse(input, &ToolCallConfig::default())
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
@@ -182,7 +180,6 @@ mod tests {
     async fn parses_vec_of_parameters() {
         let input = r#"[{ "name": "first", "parameters": { "a": 1 } }, { "name": "second", "parameters": { "b": 2 } }]"#;
         let (result, content) = try_tool_call_parse(input, &ToolCallConfig::default())
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
@@ -199,7 +196,6 @@ mod tests {
     async fn parses_vec_of_arguments() {
         let input = r#"[{ "name": "alpha", "arguments": { "a": "x" } }, { "name": "omega", "arguments": { "z": "y" } }]"#;
         let (result, content) = try_tool_call_parse(input, &ToolCallConfig::default())
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
@@ -217,7 +213,6 @@ mod tests {
         let input =
             r#"<TOOLCALL>[{ "name": "wrapped", "parameters": { "foo": "bar" } }]</TOOLCALL>"#;
         let (result, content) = try_tool_call_parse(input, &ToolCallConfig::default())
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
@@ -241,7 +236,6 @@ mod tests {
                 },
             },
         )
-        .await
         .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
@@ -255,7 +249,6 @@ mod tests {
     async fn returns_none_on_invalid_input() {
         let input = r#"not even json"#;
         let (result, content) = try_tool_call_parse(input, &ToolCallConfig::default())
-            .await
             .unwrap();
         assert_eq!(content, Some("not even json".to_string()));
         assert!(result.is_empty());
@@ -265,7 +258,6 @@ mod tests {
     async fn returns_none_on_valid_json_wrong_shape() {
         let input = r#"{ "foo": "bar" }"#;
         let (result, content) = try_tool_call_parse(input, &ToolCallConfig::default())
-            .await
             .unwrap();
         assert_eq!(content, Some("{ \"foo\": \"bar\" }".to_string()));
         assert!(result.is_empty());
@@ -280,7 +272,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
 
 <TOOLCALL>[{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}]</TOOLCALL>"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("nemotron_deci"))
-            .await
             .unwrap();
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -295,7 +286,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
     async fn test_nvidia_llama3_nemotron_super_49b_simple_with_no_think() {
         let input = r#"<TOOLCALL>[{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}]</TOOLCALL>"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("nemotron_deci"))
-            .await
             .unwrap();
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -314,7 +304,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
 
 <TOOLCALL>[{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}, {"name": "get_weather", "arguments": {"location": "New York, NY", "unit": "fahrenheit"}}]</TOOLCALL>"#;
         let config = ToolCallConfig::nemotron_deci();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("<think>\nOkay, the user is asking for the weather in San Francisco in Fahrenheit. Let me check the tools available.\n</think>".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
@@ -345,7 +335,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
   </TOOLCALL>
   "#;
         let config = ToolCallConfig::nemotron_deci();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("<think>\nOkay, the user is asking for the weather in San Francisco in Fahrenheit. Let me check the tools available.\n</think>".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
@@ -365,7 +355,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
 {"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}
 </tool_call>"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("hermes"))
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
@@ -382,7 +371,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
 {"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}
 </tool_call>"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("hermes"))
-            .await
             .unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert!(!result.is_empty());
@@ -395,7 +383,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
 {"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}
 </tool_call>"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("hermes"))
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
@@ -416,7 +403,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
 </tool_call>
 "#;
         let config = ToolCallConfig::hermes();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
@@ -440,7 +427,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
 </tool_call>
 "#;
         let config = ToolCallConfig::hermes();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
@@ -468,7 +455,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
 </tool_call>
 "#;
         let config = ToolCallConfig::hermes();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
@@ -495,7 +482,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
                 ..Default::default()
             },
         };
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -509,7 +496,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
     async fn test_mistralai_mistral_7b_instruct_v03_simple() {
         let input = r#" [{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}]"#;
         let config = ToolCallConfig::mistral();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -523,7 +510,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
     async fn test_mistralai_mistral_7b_instruct_v03_simple_with_normal_text() {
         let input = r#"Hey How are you? [{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}]"#;
         let config = ToolCallConfig::mistral();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -542,7 +529,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
         "unit": "fahrenheit"}}]
         "#;
         let config = ToolCallConfig::mistral();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -556,7 +543,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
     async fn test_mistralai_mistral_7b_instruct_v03_multiple() {
         let input = r#" [{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}, {"name": "get_weather", "arguments": {"location": "New York, NY", "unit": "fahrenheit"}}]"#;
         let config = ToolCallConfig::mistral();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
@@ -574,7 +561,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
     async fn test_mistralai_mistral_7b_instruct_v03_multiple_with_normal_text() {
         let input = r#"Hey How are you? [{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}, {"name": "get_weather", "arguments": {"location": "New York, NY", "unit": "fahrenheit"}}]"#;
         let config = ToolCallConfig::mistral();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
@@ -600,7 +587,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
         "fahrenheit"}}]
         "#;
         let config = ToolCallConfig::mistral();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
@@ -618,7 +605,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
     async fn test_mistralai_mistral_7b_instruct_v03_single_with_start_token() {
         let input = r#"[TOOL_CALLS] [{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}]"#;
         let config = ToolCallConfig::mistral();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -632,7 +619,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
     async fn test_mistralai_mistral_7b_instruct_v03_single_with_start_token_with_normal_text() {
         let input = r#"Hey How are you? [TOOL_CALLS] [{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}]"#;
         let config = ToolCallConfig::mistral();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -652,7 +639,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
         "unit": "fahrenheit"}}]
         "#;
         let config = ToolCallConfig::mistral();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -666,7 +653,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
     async fn test_mistralai_mistral_7b_instruct_v03_single_with_start_token_multiple() {
         let input = r#"[TOOL_CALLS] [{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}, {"name": "get_weather", "arguments": {"location": "New York, NY", "unit": "fahrenheit"}}]"#;
         let config = ToolCallConfig::mistral();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
@@ -685,7 +672,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
      {
         let input = r#"Hey How are you? [TOOL_CALLS] [{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}, {"name": "get_weather", "arguments": {"location": "New York, NY", "unit": "fahrenheit"}}]"#;
         let config = ToolCallConfig::mistral();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
@@ -713,7 +700,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
         "fahrenheit"}}]
         "#;
         let config = ToolCallConfig::mistral();
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
@@ -731,7 +718,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
     async fn test_meta_llama_llama31_8b_instruct_simple() {
         let input = r#"{"name": "get_weather", "parameters": {"location": "San Francisco, CA", "unit": "fahrenheit"}}"#;
         let (result, content) = try_tool_call_parse(input, &ToolCallConfig::mistral())
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
@@ -746,7 +732,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
     async fn test_meta_llama_llama31_8b_instruct_simple_with_normal_text() {
         let input = r#"Hey How are you? {"name": "get_weather", "parameters": {"location": "San Francisco, CA", "unit": "fahrenheit"}}"#;
         let (result, content) = try_tool_call_parse(input, &ToolCallConfig::mistral())
-            .await
             .unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert!(!result.is_empty());
@@ -764,7 +749,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
         "parameters": {"location": "San Francisco, CA", "unit": "fahrenheit"}}
         "#;
         let (result, content) = detect_and_parse_tool_call(input, Some("llama3_json"))
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
@@ -779,7 +763,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
     async fn test_meta_llama_llama31_8b_instruct_with_python_tag() {
         let input = r#"<|python_tag|>{ "name": "get_weather", "parameters": {"location": "San Francisco, CA", "unit": "fahrenheit" } }"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("llama3_json"))
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
@@ -794,7 +777,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
     async fn test_meta_llama_llama31_8b_instruct_with_python_tag_with_normal_text() {
         let input = r#"Hey How are you? <|python_tag|>{ "name": "get_weather", "parameters": {"location": "San Francisco, CA", "unit": "fahrenheit" } }"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("llama3_json"))
-            .await
             .unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert!(!result.is_empty());
@@ -812,7 +794,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
         {"name": "get_weather", "parameters": {"location": "San Francisco, CA", "unit": "fahrenheit"}}
         "#;
         let (result, content) = detect_and_parse_tool_call(input, Some("llama3_json"))
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
@@ -832,7 +813,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
         {"name": "get_weather", "parameters": {"location": "New York, NY", "unit": "fahrenheit" }}
         "#;
         let (result, content) = detect_and_parse_tool_call(input, Some("llama3_json"))
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
@@ -851,7 +831,7 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
     async fn test_detect_and_parse_tool_call_error_handling() {
         // Unknown parser string should return an error
         let input = r#"{"name": "get_weather", "arguments": {"location": "San Francisco, CA"}}"#;
-        let result = detect_and_parse_tool_call(input, Some("unknown_parser")).await;
+        let result = detect_and_parse_tool_call(input, Some("unknown_parser"));
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -863,7 +843,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
         // Known parser, but invalid input (not JSON) should return Ok(None)
         let input = "not a json";
         let (result, content) = detect_and_parse_tool_call(input, Some("hermes"))
-            .await
             .unwrap();
         assert_eq!(content, Some("not a json".to_string()));
         assert!(result.is_empty());
@@ -871,7 +850,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
         // Known parser, but valid JSON with wrong shape should return Ok(None)
         let input = r#"{"foo": "bar"}"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("hermes"))
-            .await
             .unwrap();
         assert_eq!(content, Some(r#"{"foo": "bar"}"#.to_string()));
         assert!(result.is_empty());
@@ -886,7 +864,6 @@ Okay, the user is asking for the weather in San Francisco in Fahrenheit. Let me 
 
 Remember, San Francisco weather can be quite unpredictable, particularly with its famous fog, which can significantly lower temperatures. Always check a local weather forecast for the most accurate and up-to-date information."#;
         let (result, content) = try_tool_call_parse(input, &ToolCallConfig::default())
-            .await
             .unwrap();
         assert_eq!(content, Some(input.to_string()));
         assert!(result.is_empty()); // This model doesn't produce tool calls
@@ -907,7 +884,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
                 ..Default::default()
             },
         };
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -930,7 +907,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
                 ..Default::default()
             },
         };
-        let (result, content) = try_tool_call_parse(input, &config).await.unwrap();
+        let (result, content) = try_tool_call_parse(input, &config).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -943,7 +920,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
     #[tokio::test]
     async fn test_detect_and_parse_tool_call_default_parser_nemotron_deci() {
         let input = r#"<TOOLCALL>[{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}]</TOOLCALL>"#;
-        let (result, content) = detect_and_parse_tool_call(input, None).await.unwrap();
+        let (result, content) = detect_and_parse_tool_call(input, None).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -956,7 +933,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
     #[tokio::test]
     async fn test_detect_and_parse_tool_call_default_parser_nemotron_deci_multiple() {
         let input = r#"<TOOLCALL>[{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}, {"name": "get_weather", "arguments": {"location": "New York, NY", "unit": "fahrenheit"}}]</TOOLCALL>"#;
-        let (result, content) = detect_and_parse_tool_call(input, None).await.unwrap();
+        let (result, content) = detect_and_parse_tool_call(input, None).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
@@ -974,7 +951,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
     async fn test_detect_and_parse_tool_call_default_parser_nemotron_deci_multiple_with_normal_text()
      {
         let input = r#"Hey How are you? <TOOLCALL>[{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}}, {"name": "get_weather", "arguments": {"location": "New York, NY", "unit": "fahrenheit"}}]</TOOLCALL>"#;
-        let (result, content) = detect_and_parse_tool_call(input, None).await.unwrap();
+        let (result, content) = detect_and_parse_tool_call(input, None).unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 2);
@@ -991,7 +968,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
     #[tokio::test]
     async fn test_detect_and_parse_tool_call_default_parser_llama3_json_with_python_tag() {
         let input = r#"<|python_tag|>{ "name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit" } }"#;
-        let (result, content) = detect_and_parse_tool_call(input, None).await.unwrap();
+        let (result, content) = detect_and_parse_tool_call(input, None).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -1005,7 +982,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
     async fn test_detect_and_parse_tool_call_default_parser_llama3_json_with_python_tag_with_normal_text()
      {
         let input = r#"Hey How are you? <|python_tag|>{ "name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit" } }"#;
-        let (result, content) = detect_and_parse_tool_call(input, None).await.unwrap();
+        let (result, content) = detect_and_parse_tool_call(input, None).unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -1026,7 +1003,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
           {"location": "San Francisco, CA",
           "unit": "fahrenheit" }}
         "#;
-        let (result, content) = detect_and_parse_tool_call(input, None).await.unwrap();
+        let (result, content) = detect_and_parse_tool_call(input, None).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -1044,7 +1021,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
          {"location": "San Francisco, CA",
           "unit": "fahrenheit" }}
         "#;
-        let (result, content) = detect_and_parse_tool_call(input, None).await.unwrap();
+        let (result, content) = detect_and_parse_tool_call(input, None).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
         assert_eq!(result.len(), 1);
@@ -1058,7 +1035,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
     async fn test_detect_and_parse_tool_call_default_parser_llama3_json_without_python_tag() {
         let input = r#"{ "name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit" } }"#;
         let (result, content) = try_tool_call_parse(input, &ToolCallConfig::mistral())
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert!(!result.is_empty());
@@ -1074,7 +1050,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
      {
         let input = r#"Hey How are you? { "name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit" } }"#;
         let (result, content) = try_tool_call_parse(input, &ToolCallConfig::mistral())
-            .await
             .unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert!(!result.is_empty());
@@ -1090,7 +1065,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         let input =
             r#"functools[{"name": "get_country_capital", "arguments": {"country": "Poland"}}]"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("phi4"))
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert_eq!(result.len(), 1);
@@ -1103,7 +1077,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
     async fn test_phi4_single_function_call_with_normal_text() {
         let input = r#"Hey How are you? functools[{"name": "get_country_capital", "arguments": {"country": "Poland"}}]"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("phi4"))
-            .await
             .unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert_eq!(result.len(), 1);
@@ -1119,7 +1092,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
   {"name": "get_population", "arguments": {"city": "Warsaw"}}
 ]"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("phi4"))
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert_eq!(result.len(), 2);
@@ -1140,7 +1112,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
   {"name": "get_population", "arguments": {"city": "Warsaw"}}
 ]"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("phi4"))
-            .await
             .unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert_eq!(result.len(), 2);
@@ -1160,7 +1131,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         {"location": {"city": "San Francisco",
         "state": "CA"}, "date": "2023-10-05"}}]"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("phi4"))
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert_eq!(result.len(), 1);
@@ -1177,7 +1147,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         {"location": {"city": "San Francisco",
         "state": "CA"}, "date": "2023-10-05"}}]"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("phi4"))
-            .await
             .unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert_eq!(result.len(), 1);
@@ -1193,7 +1162,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         let input = r#"functools[{"name": "calculate_distance",
          "parameters": {"from": "New York", "to": "Los Angeles"}}]"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("phi4"))
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert_eq!(result.len(), 1);
@@ -1208,7 +1176,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         let input = r#"Hey How are you? functools[{"name": "calculate_distance",
          "parameters": {"from": "New York", "to": "Los Angeles"}}]"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("phi4"))
-            .await
             .unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert_eq!(result.len(), 1);
@@ -1222,7 +1189,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
     async fn test_pythonic_parser_basic_with_constants() {
         let input = r#"[get_weather(location="San Francisco", unit="fahrenheit"), get_weather(location="New York", unit="fahrenheit")]"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("pythonic"))
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert_eq!(result.len(), 2);
@@ -1241,7 +1207,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
     async fn test_pythonic_parser_with_constants_and_normal_text() {
         let input = r#"Hey How are you? [get_weather(location="San Francisco", unit="fahrenheit"), get_weather(location="New York", unit="fahrenheit")]"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("pythonic"))
-            .await
             .unwrap();
         assert_eq!(content, Some("Hey How are you?".to_string()));
         assert_eq!(result.len(), 2);
@@ -1264,7 +1229,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         <|message|>{"location":"San Francisco", "unit":"fahrenheit"}<|call|>
         "#;
         let (result, content) = detect_and_parse_tool_call(input, Some("harmony"))
-            .await
             .unwrap();
         assert_eq!(
             content,
@@ -1281,7 +1245,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
     async fn test_deepseek_v3_1_parser_basic() {
         let input = r#"<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_current_weather<｜tool▁sep｜>{"location": "Tokyo"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>get_current_weather<｜tool▁sep｜>{"location": "Paris"}<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>"#;
         let (result, content) = detect_and_parse_tool_call(input, Some("deepseek_v3_1"))
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert_eq!(result.len(), 2);
@@ -1298,7 +1261,6 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         let input = r#"<tool_call>{"name": "get_weather", "arguments": {"location": "San Francisco, CA", "unit": "celsius"}}</tool_call>"
         "#;
         let (result, content) = detect_and_parse_tool_call(input, Some("hermes"))
-            .await
             .unwrap();
         assert_eq!(content, Some("".to_string()));
         assert_eq!(result.len(), 1);

@@ -862,14 +862,30 @@ impl JailedStreamBuilder {
     }
 
     /// Build the configured JailedStream
-    pub fn build(self) -> JailedStream {
+    pub fn build(mut self) -> JailedStream {
+        // Auto-populate jail sequences from parser config if not manually configured
+        if let Some(ref parser_name) = self.tool_call_parser {
+            let parser_map = get_tool_parser_map();
+            if let Some(config) = parser_map.get(parser_name.as_str()) {
+                // Auto-populate start sequences if none configured
+                if self.jail_start_sequences.is_empty() {
+                    self.jail_start_sequences = config.json.tool_call_start_tokens.clone();
+                }
+
+                // Auto-populate end sequences if none configured
+                if self.jail_end_sequences.is_empty() {
+                    self.jail_end_sequences = config.json.tool_call_end_tokens.clone();
+                }
+            }
+        }
+
         // Collect all possible marker patterns for the MarkerMatcher
         let mut all_patterns = Vec::new();
 
-        // Add configured start sequences
+        // Add configured start sequences (now auto-populated if needed)
         all_patterns.extend(self.jail_start_sequences.clone());
 
-        // Add patterns from tool call parser if configured
+        // Add patterns from tool call parser if configured (for redundancy)
         if let Some(ref parser_name) = self.tool_call_parser {
             let parser_map = get_tool_parser_map();
             if let Some(config) = parser_map.get(parser_name.as_str()) {
@@ -879,15 +895,18 @@ impl JailedStreamBuilder {
         }
 
         // Add common tool call markers to ensure we detect all formats
+        // These are always included even when a specific parser is configured
+        // to provide broad compatibility and prevent missed tool calls
         let common_markers = vec![
-            "<TOOLCALL>".to_string(),
-            "<tool_call>".to_string(),
-            "[TOOL_CALLS]".to_string(),
-            "<|python_tag|>".to_string(),
-            "functools[".to_string(),
+            "<TOOLCALL>".to_string(),     // nemotron_deci format
+            "<tool_call>".to_string(),    // hermes format
+            "[TOOL_CALLS]".to_string(),   // mistral format
+            "<|python_tag|>".to_string(), // llama3_json format
+            "functools[".to_string(),     // phi4 format
             // Add JSON start patterns for Mistral-style tool calls
             "[{".to_string(),
             "{".to_string(),
+            // Note: Harmony parser uses JSON patterns, covered by "{" above
         ];
         for marker in common_markers {
             if !all_patterns.contains(&marker) {
@@ -1155,22 +1174,22 @@ mod tests {
         }
 
         /// Helper to assert no content or tool calls (for accumulated chunks)
+        #[allow(dead_code)]
         pub fn assert_empty_emission(result: &Annotated<NvCreateChatCompletionStreamResponse>) {
-            if let Some(data) = &result.data {
-                if let Some(choice) = data.choices.first() {
-                    assert!(
-                        choice.delta.content.is_none()
-                            || choice.delta.content.as_ref().unwrap().is_empty(),
-                        "Expected no content but got: {:?}",
-                        choice.delta.content
-                    );
-                    assert!(
-                        choice.delta.tool_calls.is_none()
-                            || choice.delta.tool_calls.as_ref().unwrap().is_empty(),
-                        "Expected no tool calls but got: {:?}",
-                        choice.delta.tool_calls
-                    );
-                }
+            if let Some(data) = &result.data
+                && let Some(choice) = data.choices.first() {
+                assert!(
+                    choice.delta.content.is_none()
+                        || choice.delta.content.as_ref().unwrap().is_empty(),
+                    "Expected no content but got: {:?}",
+                    choice.delta.content
+                );
+                assert!(
+                    choice.delta.tool_calls.is_none()
+                        || choice.delta.tool_calls.as_ref().unwrap().is_empty(),
+                    "Expected no tool calls but got: {:?}",
+                    choice.delta.tool_calls
+                );
             }
         }
 
@@ -1214,6 +1233,7 @@ mod tests {
         }
 
         /// Helper to check if result contains content
+        #[allow(dead_code)]
         pub fn has_content(result: &Annotated<NvCreateChatCompletionStreamResponse>) -> bool {
             result
                 .data
