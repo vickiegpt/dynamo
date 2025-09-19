@@ -71,6 +71,9 @@ pub struct DeltaGenerator {
     /// This is used to parse reasoning content in the response.
     /// None means no reasoning parsing will be performed.
     reasoning_parser: Option<ReasoningParserWrapper>,
+    
+    /// Counter for reasoning tokens separate from completion tokens
+    reasoning_tokens: u32,
 }
 
 impl DeltaGenerator {
@@ -122,6 +125,7 @@ impl DeltaGenerator {
             msg_counter: 0,
             options,
             reasoning_parser,
+            reasoning_tokens: 0,
         }
     }
 
@@ -294,6 +298,20 @@ impl DeltaGenerator {
     pub fn create_usage_chunk(&self) -> NvCreateChatCompletionStreamResponse {
         let mut usage = self.usage.clone();
         usage.total_tokens = usage.prompt_tokens.saturating_add(usage.completion_tokens);
+        
+        // Add reasoning tokens to total_tokens and populate completion_tokens_details
+        usage.total_tokens = usage.total_tokens.saturating_add(self.reasoning_tokens);
+        
+        // Only set completion_tokens_details if we have reasoning tokens or if reasoning parser is enabled
+        if self.reasoning_tokens > 0 || self.reasoning_parser.is_some() {
+            use dynamo_async_openai::types::CompletionTokensDetails;
+            usage.completion_tokens_details = Some(CompletionTokensDetails {
+                accepted_prediction_tokens: None,
+                audio_tokens: None,
+                reasoning_tokens: Some(self.reasoning_tokens),
+                rejected_prediction_tokens: None,
+            });
+        }
 
         dynamo_async_openai::types::CreateChatCompletionStreamResponse {
             id: self.id.clone(),
@@ -330,18 +348,18 @@ impl crate::protocols::openai::DeltaGeneratorExt<NvCreateChatCompletionStreamRes
         &mut self,
         delta: crate::protocols::common::llm_backend::BackendOutput,
     ) -> anyhow::Result<NvCreateChatCompletionStreamResponse> {
-        // Aggregate token usage if enabled.
-        if self.options.enable_usage {
+        // Calculate token length once for reuse
+        let token_length: u32 = if self.options.enable_usage {
             // SAFETY: Casting from `usize` to `u32` could lead to precision loss after `u32::MAX`,
             // but this will not be an issue until context lengths exceed 4_294_967_295.
-            let token_length: u32 = delta
+            delta
                 .token_ids
                 .len()
                 .try_into()
-                .expect("token_ids length exceeds u32::MAX");
-
-            self.usage.completion_tokens += token_length;
-        }
+                .expect("token_ids length exceeds u32::MAX")
+        } else {
+            0
+        };
 
         let logprobs = self.create_logprobs(
             delta.tokens,
@@ -374,11 +392,41 @@ impl crate::protocols::openai::DeltaGeneratorExt<NvCreateChatCompletionStreamRes
         // Handle reasoning parsing if enabled, otherwise treat all text as normal
         let (normal_text, reasoning_content) =
             match self.create_reasoning_content(&delta.text, &delta.token_ids) {
-                Some(reasoning_parser_result) => (
-                    reasoning_parser_result.get_some_normal_text(),
-                    reasoning_parser_result.get_some_reasoning(),
-                ),
-                None => (delta.text, None),
+                Some(reasoning_parser_result) => {
+                    // If we have reasoning parsing results, estimate token distribution
+                    if self.options.enable_usage {
+                        let reasoning_text = &reasoning_parser_result.reasoning_text;
+                        let normal_text = &reasoning_parser_result.normal_text;
+                        
+                        // Use character-based proportion to estimate reasoning tokens
+                        let total_chars = reasoning_text.chars().count() + normal_text.chars().count();
+                        if total_chars > 0 {
+                            let reasoning_chars = reasoning_text.chars().count();
+                            let reasoning_token_ratio = reasoning_chars as f64 / total_chars as f64;
+                            let estimated_reasoning_tokens = (token_length as f64 * reasoning_token_ratio).round() as u32;
+                            
+                            self.reasoning_tokens += estimated_reasoning_tokens;
+                            // Subtract reasoning tokens from completion tokens
+                            // Only count non-reasoning tokens in completion_tokens
+                            self.usage.completion_tokens += token_length.saturating_sub(estimated_reasoning_tokens);
+                        } else {
+                            // If no text content, count all tokens as completion tokens
+                            self.usage.completion_tokens += token_length;
+                        }
+                    }
+                    
+                    (
+                        reasoning_parser_result.get_some_normal_text(),
+                        reasoning_parser_result.get_some_reasoning(),
+                    )
+                },
+                None => {
+                    // No reasoning parsing, all tokens are completion tokens
+                    if self.options.enable_usage {
+                        self.usage.completion_tokens += token_length;
+                    }
+                    (delta.text, None)
+                },
             };
 
         // Create the streaming response.
@@ -405,4 +453,123 @@ impl crate::protocols::openai::DeltaGeneratorExt<NvCreateChatCompletionStreamRes
     fn is_usage_enabled(&self) -> bool {
         DeltaGenerator::is_usage_enabled(self)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dynamo_parsers::{ReasoningParserType, ParserResult};
+    use crate::local_model::runtime_config::ModelRuntimeConfig;
+    use crate::protocols::common::llm_backend::BackendOutput;
+
+    fn create_test_delta_generator() -> DeltaGenerator {
+        let options = DeltaGeneratorOptions {
+            enable_usage: true,
+            enable_logprobs: false,
+            runtime_config: ModelRuntimeConfig::default(),
+        };
+        
+        DeltaGenerator::new(
+            "test-model".to_string(),
+            options,
+            "test-request-id".to_string(),
+        )
+    }
+
+    fn create_test_delta_generator_with_reasoning(parser_name: &str) -> DeltaGenerator {
+        let mut runtime_config = ModelRuntimeConfig::default();
+        runtime_config.reasoning_parser = Some(parser_name.to_string());
+        
+        let options = DeltaGeneratorOptions {
+            enable_usage: true,
+            enable_logprobs: false,
+            runtime_config,
+        };
+        
+        DeltaGenerator::new(
+            "test-model".to_string(),
+            options,
+            "test-request-id".to_string(),
+        )
+    }
+
+    #[test]
+    fn test_reasoning_tokens_initialization() {
+        let generator = create_test_delta_generator();
+        assert_eq!(generator.reasoning_tokens, 0);
+        assert!(generator.reasoning_parser.is_none());
+    }
+
+    #[test]
+    fn test_reasoning_tokens_with_parser() {
+        let generator = create_test_delta_generator_with_reasoning("basic");
+        assert_eq!(generator.reasoning_tokens, 0);
+        assert!(generator.reasoning_parser.is_some());
+    }
+
+    #[test]
+    fn test_create_usage_chunk_with_reasoning_tokens() {
+        let mut generator = create_test_delta_generator_with_reasoning("basic");
+        
+        // Simulate some reasoning tokens
+        generator.reasoning_tokens = 10;
+        generator.usage.completion_tokens = 5;
+        generator.usage.prompt_tokens = 3;
+        
+        let usage_chunk = generator.create_usage_chunk();
+        
+        // Check that usage is populated
+        assert!(usage_chunk.usage.is_some());
+        let usage = usage_chunk.usage.unwrap();
+        
+        // Total tokens should include reasoning tokens
+        assert_eq!(usage.total_tokens, 3 + 5 + 10); // prompt + completion + reasoning
+        assert_eq!(usage.prompt_tokens, 3);
+        assert_eq!(usage.completion_tokens, 5);
+        
+        // Check completion_tokens_details
+        assert!(usage.completion_tokens_details.is_some());
+        let details = usage.completion_tokens_details.unwrap();
+        assert_eq!(details.reasoning_tokens, Some(10));
+        assert_eq!(details.accepted_prediction_tokens, None);
+        assert_eq!(details.audio_tokens, None);
+        assert_eq!(details.rejected_prediction_tokens, None);
+    }
+
+    #[test]
+    fn test_create_usage_chunk_no_reasoning_tokens() {
+        let generator = create_test_delta_generator();
+        
+        let usage_chunk = generator.create_usage_chunk();
+        
+        assert!(usage_chunk.usage.is_some());
+        let usage = usage_chunk.usage.unwrap();
+        
+        // Without reasoning parser, completion_tokens_details should be None
+        assert!(usage.completion_tokens_details.is_none());
+    }
+
+    #[test]
+    fn test_choice_from_postprocessor_without_reasoning() {
+        let mut generator = create_test_delta_generator();
+        
+        let backend_output = BackendOutput {
+            text: Some("Hello world".to_string()),
+            tokens: vec![], 
+            token_ids: vec![1, 2, 3, 4], // 4 tokens
+            finish_reason: None,
+            log_probs: None,
+            top_logprobs: None,
+        };
+        
+        let result = generator.choice_from_postprocessor(backend_output);
+        assert!(result.is_ok());
+        
+        // All tokens should be counted as completion tokens
+        assert_eq!(generator.usage.completion_tokens, 4);
+        assert_eq!(generator.reasoning_tokens, 0);
+    }
+
+    // Note: More comprehensive tests would require mocking the reasoning parser
+    // but for now this validates the basic structure and initialization
 }
