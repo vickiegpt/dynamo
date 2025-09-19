@@ -393,26 +393,13 @@ impl crate::protocols::openai::DeltaGeneratorExt<NvCreateChatCompletionStreamRes
         let (normal_text, reasoning_content) =
             match self.create_reasoning_content(&delta.text, &delta.token_ids) {
                 Some(reasoning_parser_result) => {
-                    // If we have reasoning parsing results, estimate token distribution
+                    // If we have reasoning parsing results, use actual token counts when available
                     if self.options.enable_usage {
-                        let reasoning_text = &reasoning_parser_result.reasoning_text;
-                        let normal_text = &reasoning_parser_result.normal_text;
+                        let reasoning_tokens = reasoning_parser_result.get_reasoning_token_count(token_length);
+                        let completion_tokens = reasoning_parser_result.get_normal_token_count(token_length);
                         
-                        // Use character-based proportion to estimate reasoning tokens
-                        let total_chars = reasoning_text.chars().count() + normal_text.chars().count();
-                        if total_chars > 0 {
-                            let reasoning_chars = reasoning_text.chars().count();
-                            let reasoning_token_ratio = reasoning_chars as f64 / total_chars as f64;
-                            let estimated_reasoning_tokens = (token_length as f64 * reasoning_token_ratio).round() as u32;
-                            
-                            self.reasoning_tokens += estimated_reasoning_tokens;
-                            // Subtract reasoning tokens from completion tokens
-                            // Only count non-reasoning tokens in completion_tokens
-                            self.usage.completion_tokens += token_length.saturating_sub(estimated_reasoning_tokens);
-                        } else {
-                            // If no text content, count all tokens as completion tokens
-                            self.usage.completion_tokens += token_length;
-                        }
+                        self.reasoning_tokens += reasoning_tokens;
+                        self.usage.completion_tokens += completion_tokens;
                     }
                     
                     (

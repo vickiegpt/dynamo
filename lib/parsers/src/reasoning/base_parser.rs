@@ -11,6 +11,8 @@ pub struct BasicReasoningParser {
     stream_reasoning: bool,
     _buffer: String,
     stripped_think_start: bool,
+    /// Track tokens processed so far in streaming mode
+    tokens_processed: Vec<u32>,
 }
 
 impl BasicReasoningParser {
@@ -27,17 +29,21 @@ impl BasicReasoningParser {
             stream_reasoning,
             _buffer: String::new(),
             stripped_think_start: false,
+            tokens_processed: Vec::new(),
         }
     }
 }
 
 impl ReasoningParser for BasicReasoningParser {
-    fn detect_and_parse_reasoning(&mut self, text: &str, _token_ids: &[u32]) -> ParserResult {
+    fn detect_and_parse_reasoning(&mut self, text: &str, token_ids: &[u32]) -> ParserResult {
+        let token_count = token_ids.len() as u32;
         let in_reasoning = self._in_reasoning || text.contains(&self.think_start_token);
         if !in_reasoning {
             return ParserResult {
                 normal_text: text.to_string(),
                 reasoning_text: String::new(),
+                normal_token_count: Some(token_count),
+                reasoning_token_count: Some(0),
             };
         }
 
@@ -49,6 +55,8 @@ impl ReasoningParser for BasicReasoningParser {
             return ParserResult {
                 normal_text: String::new(),
                 reasoning_text: processed_text,
+                normal_token_count: Some(0),
+                reasoning_token_count: Some(token_count),
             };
         }
 
@@ -60,17 +68,34 @@ impl ReasoningParser for BasicReasoningParser {
             .map(|s| s.trim().to_string())
             .unwrap_or_default();
 
+        // Estimate token distribution based on character proportion
+        let total_chars = reasoning_text.chars().count() + normal_text.chars().count();
+        let (reasoning_tokens, normal_tokens) = if total_chars > 0 {
+            let reasoning_chars = reasoning_text.chars().count();
+            let reasoning_ratio = reasoning_chars as f64 / total_chars as f64;
+            let reasoning_tokens = (token_count as f64 * reasoning_ratio).round() as u32;
+            (reasoning_tokens, token_count.saturating_sub(reasoning_tokens))
+        } else {
+            (0, token_count)
+        };
+
         ParserResult {
             normal_text,
             reasoning_text,
+            normal_token_count: Some(normal_tokens),
+            reasoning_token_count: Some(reasoning_tokens),
         }
     }
 
     fn parse_reasoning_streaming_incremental(
         &mut self,
         text: &str,
-        _token_ids: &[u32],
+        token_ids: &[u32],
     ) -> ParserResult {
+        // Track tokens for this chunk
+        self.tokens_processed.extend_from_slice(token_ids);
+        let current_token_count = token_ids.len() as u32;
+        
         // Incrementally parse the streaming text
         self._buffer.push_str(text);
         let mut current_text = self._buffer.to_string();
@@ -82,6 +107,8 @@ impl ReasoningParser for BasicReasoningParser {
             return ParserResult {
                 normal_text: String::new(),
                 reasoning_text: String::new(),
+                normal_token_count: Some(0),
+                reasoning_token_count: Some(0),
             };
         }
         if self.think_end_token.starts_with(&current_text)
@@ -90,6 +117,8 @@ impl ReasoningParser for BasicReasoningParser {
             return ParserResult {
                 normal_text: String::new(),
                 reasoning_text: String::new(),
+                normal_token_count: Some(0),
+                reasoning_token_count: Some(0),
             };
         }
 
@@ -117,19 +146,35 @@ impl ReasoningParser for BasicReasoningParser {
             } else {
                 ""
             };
+            
+            // Estimate token distribution based on character proportion as fallback
+            let total_chars = reasoning_text.chars().count() + normal_text.chars().count();
+            let (reasoning_tokens, normal_tokens) = if total_chars > 0 {
+                let reasoning_chars = reasoning_text.chars().count();
+                let reasoning_ratio = reasoning_chars as f64 / total_chars as f64;
+                let reasoning_tokens = (current_token_count as f64 * reasoning_ratio).round() as u32;
+                (reasoning_tokens, current_token_count.saturating_sub(reasoning_tokens))
+            } else {
+                (0, current_token_count)
+            };
+            
             return ParserResult {
                 normal_text: normal_text.to_string(),
                 reasoning_text: reasoning_text.trim().to_string(),
+                normal_token_count: Some(normal_tokens),
+                reasoning_token_count: Some(reasoning_tokens),
             };
         }
         // Continue with reasoning content
         if self._in_reasoning && self.stream_reasoning {
-            // Stream the content immediately
+            // Stream the content immediately - all tokens are reasoning tokens
             let reasoning_text = current_text;
             self._buffer.clear();
             ParserResult {
                 normal_text: String::new(),
                 reasoning_text,
+                normal_token_count: Some(0),
+                reasoning_token_count: Some(current_token_count),
             }
         } else if !self._in_reasoning {
             // If we're not in a reasoning block return as normal text
@@ -138,12 +183,16 @@ impl ReasoningParser for BasicReasoningParser {
             ParserResult {
                 normal_text,
                 reasoning_text: String::new(),
+                normal_token_count: Some(current_token_count),
+                reasoning_token_count: Some(0),
             }
         } else {
             // If we are in a reasoning block but no end token is found, return the current buffer
             ParserResult {
                 normal_text: String::new(),
                 reasoning_text: String::new(),
+                normal_token_count: Some(0),
+                reasoning_token_count: Some(0),
             }
         }
     }

@@ -58,6 +58,8 @@ impl GptOssReasoningParser {
 
 impl ReasoningParser for GptOssReasoningParser {
     fn detect_and_parse_reasoning(&mut self, _text: &str, token_ids: &[u32]) -> ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
         tracing::debug!(
             "detect_and_parse_reasoning called with {} token_ids",
             token_ids.len()
@@ -87,6 +89,8 @@ impl ReasoningParser for GptOssReasoningParser {
                 let current = parser.current_content().unwrap_or_default();
                 tracing::debug!("Current content length: {}", current.len());
                 ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
                     normal_text: String::new(),
                     reasoning_text: current,
                 }
@@ -103,6 +107,8 @@ impl ReasoningParser for GptOssReasoningParser {
                 let current = parser.current_content().unwrap_or_default();
                 tracing::debug!("Current content length: {}", current.len());
                 ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
                     normal_text: current,
                     reasoning_text,
                 }
@@ -141,6 +147,8 @@ impl ReasoningParser for GptOssReasoningParser {
                 );
 
                 ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
                     normal_text,
                     reasoning_text,
                 }
@@ -153,6 +161,8 @@ impl ReasoningParser for GptOssReasoningParser {
         text: &str,
         token_ids: &[u32],
     ) -> ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
         tracing::debug!(
             "parse_reasoning_streaming_incremental called with {} token_ids",
             token_ids.len()
@@ -179,6 +189,8 @@ impl ReasoningParser for GptOssReasoningParser {
                 if let Some(current) = self.parser.last_content_delta().unwrap_or_default() {
                     tracing::debug!("Got normal text delta of {} chars", current.len());
                     return ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
                         normal_text: current,
                         reasoning_text: String::new(),
                     };
@@ -236,6 +248,8 @@ impl ReasoningParser for GptOssReasoningParser {
                     }
 
                     ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
                         normal_text: final_text,
                         reasoning_text: String::new(),
                     }
@@ -248,6 +262,8 @@ impl ReasoningParser for GptOssReasoningParser {
                 if let Some(current) = self.parser.last_content_delta().unwrap_or_default() {
                     tracing::debug!("Got reasoning text delta of {} chars", current.len());
                     return ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
                         normal_text: String::new(),
                         reasoning_text: current,
                     };

@@ -39,6 +39,8 @@ impl Default for GraniteReasoningParser {
 
 impl ReasoningParser for GraniteReasoningParser {
     fn detect_and_parse_reasoning(&mut self, text: &str, _: &[u32]) -> ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
         let think_start_token = self
             .think_start_tokens
             .iter()
@@ -58,6 +60,8 @@ impl ReasoningParser for GraniteReasoningParser {
                 .any(|token| text.contains(token));
         if !in_reasoning {
             return ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
                 normal_text: text.to_string(),
                 reasoning_text: String::new(),
             };
@@ -69,6 +73,8 @@ impl ReasoningParser for GraniteReasoningParser {
         if !processed_text.contains(think_end_token) {
             // Assume reasoning was truncated before `think_end_token`
             return ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
                 normal_text: String::new(),
                 reasoning_text: processed_text,
             };
@@ -83,12 +89,16 @@ impl ReasoningParser for GraniteReasoningParser {
             .unwrap_or_default();
 
         ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
             normal_text,
             reasoning_text,
         }
     }
 
     fn parse_reasoning_streaming_incremental(&mut self, text: &str, _: &[u32]) -> ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
         // Implement streaming parsing logic specific to Granite format
 
         // Incrementally parse the streaming text
@@ -101,6 +111,8 @@ impl ReasoningParser for GraniteReasoningParser {
                 && think_start_token.as_str() != current_text.as_str()
             {
                 return ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
                     normal_text: String::new(),
                     reasoning_text: String::new(),
                 };
@@ -111,6 +123,8 @@ impl ReasoningParser for GraniteReasoningParser {
                 && think_end_token.as_str() != current_text.as_str()
             {
                 return ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
                     normal_text: String::new(),
                     reasoning_text: String::new(),
                 };
@@ -153,6 +167,8 @@ impl ReasoningParser for GraniteReasoningParser {
                 ""
             };
             return ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
                 normal_text: normal_text.to_string(),
                 reasoning_text: reasoning_text.to_string(),
             };
@@ -163,6 +179,8 @@ impl ReasoningParser for GraniteReasoningParser {
             let reasoning_text = current_text;
             self.buffer.clear();
             ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
                 normal_text: String::new(),
                 reasoning_text,
             }
@@ -171,6 +189,8 @@ impl ReasoningParser for GraniteReasoningParser {
             let normal_text = current_text;
             self.buffer.clear();
             ParserResult {
+                normal_token_count: None,
+                reasoning_token_count: None,
                 normal_text,
                 reasoning_text: String::new(),
             }

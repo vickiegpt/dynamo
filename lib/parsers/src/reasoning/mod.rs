@@ -43,6 +43,14 @@ pub struct ParserResult {
 
     /// The extracted reasoning text from within reasoning blocks.
     pub reasoning_text: String,
+
+    /// Number of tokens in the normal text (if available).
+    /// This should be used instead of text-based estimation when available.
+    pub normal_token_count: Option<u32>,
+
+    /// Number of tokens in the reasoning text (if available).  
+    /// This should be used instead of text-based estimation when available.
+    pub reasoning_token_count: Option<u32>,
 }
 
 impl ParserResult {
@@ -59,6 +67,34 @@ impl ParserResult {
             None
         } else {
             Some(self.normal_text.clone())
+        }
+    }
+
+    /// Get the reasoning token count if available, otherwise estimate from character count
+    pub fn get_reasoning_token_count(&self, total_tokens: u32) -> u32 {
+        if let Some(count) = self.reasoning_token_count {
+            count
+        } else {
+            // Fallback to character-based estimation
+            let total_chars = self.reasoning_text.chars().count() + self.normal_text.chars().count();
+            if total_chars > 0 {
+                let reasoning_chars = self.reasoning_text.chars().count();
+                let reasoning_token_ratio = reasoning_chars as f64 / total_chars as f64;
+                (total_tokens as f64 * reasoning_token_ratio).round() as u32
+            } else {
+                0
+            }
+        }
+    }
+
+    /// Get the normal (non-reasoning) token count if available, otherwise estimate from character count
+    pub fn get_normal_token_count(&self, total_tokens: u32) -> u32 {
+        if let Some(count) = self.normal_token_count {
+            count
+        } else {
+            // Fallback to character-based estimation
+            let reasoning_tokens = self.get_reasoning_token_count(total_tokens);
+            total_tokens.saturating_sub(reasoning_tokens)
         }
     }
 }
