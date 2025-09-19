@@ -260,7 +260,7 @@ class HandlerBase:
                     latency, bytes_per_second = self.calculate_kv_perf_metrics(timing_metrics.kv_cache_size,
                                                                        timing_metrics.kv_cache_transfer_start.total_seconds(),
                                                                        timing_metrics.kv_cache_transfer_end.total_seconds())
-                    logging.info(f"latency={latency},bytes_per_second_for_request={bytes_per_second}")
+                    logging.info(f"latency={latency},bytes_per_second_for_request={bytes_per_second},trtllm_first_token_time={timing_metrics.first_token_time.total_seconds()}")
                 if output.disaggregated_params:
                     final_out["ctx_request_id"] = output.disaggregated_params.ctx_request_id
 
