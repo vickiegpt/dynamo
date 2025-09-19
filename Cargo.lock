@@ -1979,6 +1979,16 @@ dependencies = [
 [[package]]
 name = "dynamo-kv-core"
 version = "0.5.0"
+dependencies = [
+ "dynamo-runtime-core",
+]
+
+[[package]]
+name = "dynamo-kvbm"
+version = "0.5.0"
+dependencies = [
+ "dynamo-kv-core",
+]
 
 [[package]]
 name = "dynamo-llm"
@@ -2075,6 +2085,9 @@ dependencies = [
 [[package]]
 name = "dynamo-llm-core"
 version = "0.5.0"
+dependencies = [
+ "dynamo-kv-core",
+]
 
 [[package]]
 name = "dynamo-parsers"
@@ -4009,14 +4022,6 @@ checksum = "7507624b29483431c0ba2d82aece8ca6cdba9382bff4ddd0f7490560c056098d"
 dependencies = [
  "winapi 0.2.8",
  "winapi-build",
-]
-
-[[package]]
-name = "kvbm"
-version = "0.5.0"
-dependencies = [
- "dynamo-kv-core",
- "dynamo-runtime",
 ]
 
 [[package]]

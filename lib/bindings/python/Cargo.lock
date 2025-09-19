@@ -1378,6 +1378,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-kv-core"
+version = "0.5.0"
+dependencies = [
+ "dynamo-runtime-core",
+]
+
+[[package]]
 name = "dynamo-llm"
 version = "0.5.0"
 dependencies = [
@@ -1460,6 +1467,9 @@ dependencies = [
 [[package]]
 name = "dynamo-llm-core"
 version = "0.5.0"
+dependencies = [
+ "dynamo-kv-core",
+]
 
 [[package]]
 name = "dynamo-parsers"

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 [package]
-name = "kvbm"
+name = "dynamo-kvbm"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -27,4 +27,3 @@ description = "Dynamo KV Block Manager (KVBM)"
 [dependencies]
 # local
 dynamo-kv-core = { workspace = true }
-dynamo-runtime = { workspace = true }

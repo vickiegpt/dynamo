@@ -26,3 +26,4 @@ keywords.workspace = true
 description = "Dynamo LLM Core Library"
 
 [dependencies]
+dynamo-kv-core = { workspace = true }
