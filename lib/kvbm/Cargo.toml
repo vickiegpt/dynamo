@@ -27,3 +27,4 @@ description = "Dynamo KV Block Manager (KVBM)"
 [dependencies]
 # local
 dynamo-kv-core = { workspace = true }
+dynamo-runtime-core = { workspace = true }
