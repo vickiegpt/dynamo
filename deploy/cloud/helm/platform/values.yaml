@@ -38,6 +38,13 @@ dynamo-operator:
 
   # Controller manager configuration
   controllerManager:
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: nvidia.com/gpu
+                  operator: DoesNotExist
     tolerations:
       - key: "dedicated"
         operator: "Equal"
@@ -126,12 +133,31 @@ dynamo-operator:
 # Grove component - distributed inference orchestration
 grove:
   # -- Whether to enable Grove for multi-node inference coordination, if enabled, the Grove operator will be deployed cluster-wide
-  enabled: false
+  enabled: true
+  tolerations:
+    - key: "dedicated"
+      operator: "Equal"
+      value: "user-workload"
+      effect: "NoSchedule"
+    - key: "dedicated"
+      operator: "Equal"
+      value: "user-workload"
+      effect: "NoExecute"
 
 # Kai Scheduler component - advanced workload scheduling
 kai-scheduler:
   # -- Whether to enable Kai Scheduler for intelligent resource allocation, if enabled, the Kai Scheduler operator will be deployed cluster-wide
-  enabled: false
+  enabled: true
+  global:
+    tolerations:
+      - key: "dedicated"
+        operator: "Equal"
+        value: "user-workload"
+        effect: "NoSchedule"
+      - key: "dedicated"
+        operator: "Equal"
+        value: "user-workload"
+        effect: "NoExecute"
 
 # etcd configuration - distributed key-value store for operator state
 # For complete configuration options, see: https://github.com/bitnami/charts/tree/main/bitnami/etcd
