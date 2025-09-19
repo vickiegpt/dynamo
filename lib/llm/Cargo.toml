@@ -48,8 +48,9 @@ name = "transfer_context_v2"
 harness = false
 required-features = ["block-manager", "testing-cuda"]
 [dependencies]
-# repo
+# local
 dynamo-runtime = { workspace = true }
+dynamo-llm-core = { workspace = true }
 
 # workspace
 anyhow = { workspace = true }

@@ -1403,6 +1403,7 @@ dependencies = [
  "derive_builder",
  "dialoguer",
  "dynamo-async-openai",
+ "dynamo-llm-core",
  "dynamo-parsers",
  "dynamo-runtime",
  "either",
@@ -1455,6 +1456,10 @@ dependencies = [
  "xxhash-rust",
  "zeromq",
 ]
+
+[[package]]
+name = "dynamo-llm-core"
+version = "0.5.0"
 
 [[package]]
 name = "dynamo-parsers"
@@ -1525,6 +1530,7 @@ dependencies = [
  "chrono",
  "derive-getters",
  "derive_builder",
+ "dynamo-runtime-core",
  "educe",
  "either",
  "etcd-client",
@@ -1555,6 +1561,10 @@ dependencies = [
  "validator",
  "xxhash-rust",
 ]
+
+[[package]]
+name = "dynamo-runtime-core"
+version = "0.5.0"
 
 [[package]]
 name = "ed25519"

@@ -1977,6 +1977,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-kv-core"
+version = "0.5.0"
+
+[[package]]
 name = "dynamo-llm"
 version = "0.5.0"
 dependencies = [
@@ -2006,6 +2010,7 @@ dependencies = [
  "derive_builder",
  "dialoguer",
  "dynamo-async-openai",
+ "dynamo-llm-core",
  "dynamo-parsers",
  "dynamo-runtime",
  "either",
@@ -2066,6 +2071,10 @@ dependencies = [
  "xxhash-rust",
  "zeromq",
 ]
+
+[[package]]
+name = "dynamo-llm-core"
+version = "0.5.0"
 
 [[package]]
 name = "dynamo-parsers"
@@ -2134,6 +2143,7 @@ dependencies = [
  "console-subscriber",
  "derive-getters",
  "derive_builder",
+ "dynamo-runtime-core",
  "educe",
  "either",
  "env_logger",
@@ -2171,6 +2181,10 @@ dependencies = [
  "validator",
  "xxhash-rust",
 ]
+
+[[package]]
+name = "dynamo-runtime-core"
+version = "0.5.0"
 
 [[package]]
 name = "dynamo-tokens"
@@ -3995,6 +4009,14 @@ checksum = "7507624b29483431c0ba2d82aece8ca6cdba9382bff4ddd0f7490560c056098d"
 dependencies = [
  "winapi 0.2.8",
  "winapi-build",
+]
+
+[[package]]
+name = "kvbm"
+version = "0.5.0"
+dependencies = [
+ "dynamo-kv-core",
+ "dynamo-runtime",
 ]
 
 [[package]]
