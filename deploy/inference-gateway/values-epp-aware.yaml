@@ -25,7 +25,7 @@ epp:
     - name: USE_STREAMING
       value: "true"
     - name: DYNAMO_COMPONENT
-      value: "backend"
+      value: "Frontend"
     - name: DYNAMO_KV_BLOCK_SIZE
       value: 512
     - name: RUST_BACKTRACE
