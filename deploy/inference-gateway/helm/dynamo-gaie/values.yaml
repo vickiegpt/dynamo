@@ -72,5 +72,5 @@ epp:
 eppAware:
   enabled: false
   # Optional: override EPP image when epp-aware=true
-  eppImage:  gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/epp-lib-7
+  eppImage:  gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/epp-lib-rust-5
 
