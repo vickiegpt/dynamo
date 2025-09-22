@@ -77,7 +77,8 @@ async fn mx_download_direct(model_name: &str, ignore_weights: bool) -> anyhow::R
     .await
 }
 
-// TODO: remove
+// TODO: remove in the future. This is a temporary workaround to find common
+// cache directory between client and server.
 fn get_model_express_cache_dir() -> PathBuf {
     if let Ok(cache_path) = env::var("HF_HUB_CACHE") {
         return PathBuf::from(cache_path);
