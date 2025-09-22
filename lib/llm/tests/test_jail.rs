@@ -449,11 +449,7 @@ mod tests {
         );
 
         // Second chunk should contain the accumulated jailed content
-        let jailed = results[1]
-            .data
-            .as_ref()
-            .unwrap()
-            .choices[0]
+        let jailed = results[1].data.as_ref().unwrap().choices[0]
             .delta
             .content
             .as_ref()
