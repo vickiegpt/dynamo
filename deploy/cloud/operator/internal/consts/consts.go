@@ -16,6 +16,9 @@ const (
 	DynamoServicePortName   = "http"
 	DynamoContainerPortName = "http"
 
+	DynamoPlannerMetricsPort = 9085
+	DynamoMetricsPortName    = "metrics"
+
 	DynamoSystemPort     = 9090
 	DynamoSystemPortName = "system"
 
@@ -26,6 +29,8 @@ const (
 	KubeLabelDynamoSelector = "nvidia.com/selector"
 
 	KubeAnnotationEnableGrove = "nvidia.com/enable-grove"
+
+	KubeAnnotationDisableImagePullSecretDiscovery = "nvidia.com/disable-image-pull-secret-discovery"
 
 	KubeLabelDynamoGraphDeploymentName  = "nvidia.com/dynamo-graph-deployment-name"
 	KubeLabelDynamoComponent            = "nvidia.com/dynamo-component"
