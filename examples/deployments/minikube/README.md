@@ -135,7 +135,7 @@ To simplify this tutorial, we'll leverage prebuilt Dynamo containers targeting a
 
 ```bash
 # set release version
-export RELEASE_VERSION=0.4.1
+export RELEASE_VERSION=0.5.0
 
 # configure dynamo image and corresponding tag
 export DYNAMO_IMAGE=nvcr.io/nvidia/ai-dynamo/vllm-runtime:${RELEASE_VERSION}
@@ -199,7 +199,7 @@ Now that we're aware of the corresponding helm charts we'll need to deploy to se
 
 ```bash
 # Fetch the CRDs helm chart
-helm fetch https://helm.ngc.nvidia.com/nvidia/ai-dynamo/charts/dynamo-crds-0.4.0.tgz
+helm fetch https://helm.ngc.nvidia.com/nvidia/ai-dynamo/charts/dynamo-crds-${RELEASE_VERSION}.tgz
 
 # Fetch the platform helm chart
 helm fetch https://helm.ngc.nvidia.com/nvidia/ai-dynamo/charts/dynamo-platform-${RELEASE_VERSION}.tgz
@@ -208,8 +208,8 @@ helm fetch https://helm.ngc.nvidia.com/nvidia/ai-dynamo/charts/dynamo-platform-$
 ls -l *.tgz
 
 # output should be similar
--rw-r--r-- 1 ubuntu ubuntu 13342 Jul 31 20:13 dynamo-crds-0.4.0.tgz
--rw-r--r-- 1 ubuntu ubuntu 89682 Jul 31 20:13 dynamo-platform-0.4.1.tgz
+-rw-r--r-- 1 ubuntu ubuntu 13342 Jul 31 20:13 dynamo-crds-0.5.0.tgz
+-rw-r--r-- 1 ubuntu ubuntu 89682 Jul 31 20:13 dynamo-platform-0.5.0.tgz
 ```
 
 ---
@@ -220,7 +220,7 @@ Once we've verified the charts have been pulled successfully, we'll install the 
 
 ```bash
 # install dynamo crd's chart in default namespace (CRD's exposed from this chart aren't namespace scoped)
-helm install dynamo-crds dynamo-crds-0.4.0.tgz \
+helm install dynamo-crds dynamo-crds-${RELEASE_VERSION}.tgz \
   --namespace default \
   --wait \
   --atomic
@@ -234,7 +234,7 @@ helm list --filter dynamo-crds -n default
 
 # output should be similar
 NAME            NAMESPACE       REVISION        UPDATED                                 STATUS          CHART
-dynamo-crds     default         1               2025-07-31 20:29:17.598324415 +0000 UTC deployed        dynamo-crds-0.4.0
+dynamo-crds     default         1               2025-07-31 20:29:17.598324415 +0000 UTC deployed        dynamo-crds-0.5.0
 
 # verify creation of CRD's
 kubectl get crd | grep "dynamo"
@@ -261,7 +261,7 @@ helm list --filter dynamo-platform -n ${NAMESPACE}
 
 # output should be similar
 NAME            NAMESPACE       REVISION        UPDATED                                 STATUS          CHART
-dynamo-platform dynamo-cloud    1               2025-07-31 20:28:48.31568394 +0000 UTC  deployed        dynamo-platform-0.4.1
+dynamo-platform dynamo-cloud    1               2025-07-31 20:28:48.31568394 +0000 UTC  deployed        dynamo-platform-0.5.0
 
 # verify dynamo platform pods are running
 kubectl get pods -n ${NAMESPACE}
@@ -316,7 +316,7 @@ Once all the pods are in a running state, verify the details regarding the Dynam
 
 ```bash
 # get services running in dynamo-cloud namespace
-kubectl get svc -n ${NAMESPACE}
+kubectl get svc -n ${NAMESPACE} | grep "vllm"
 
 # output should be similar
 NAME                            TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)     AGE
