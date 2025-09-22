@@ -98,6 +98,8 @@ pub struct OpenAIPreprocessor {
     formatter: Arc<dyn OAIPromptFormatter>,
     tokenizer: Arc<dyn Tokenizer>,
     model_info: Arc<dyn ModelInfo>,
+    /// Per-model runtime configuration propagated to response generator (e.g., reasoning/tool parser)
+    runtime_config: crate::local_model::runtime_config::ModelRuntimeConfig,
     tool_call_parser: Option<String>,
 }
 
@@ -125,11 +127,15 @@ impl OpenAIPreprocessor {
         let model_info = model_info.get_model_info()?;
         let tool_call_parser = mdc.runtime_config.tool_call_parser.clone();
 
+        // // Initialize runtime config from the ModelDeploymentCard
+        let runtime_config = mdc.runtime_config.clone();
+
         Ok(Arc::new(Self {
             formatter,
             tokenizer,
             model_info,
             mdcsum,
+            runtime_config,
             tool_call_parser,
         }))
     }
@@ -682,7 +688,11 @@ impl
         // create a response generator
         let response_generator = request.response_generator(context.id().to_string());
 
-        // preprocess the request into a common request
+        // set the runtime configuration
+        response_generator.set_reasoning_parser(self.runtime_config.clone());
+        let enable_tool_calling =
+            maybe_enable_tool_call(self.tool_call_parser.as_deref(), &request);
+        // convert the chat completion request to a common completion request
         let (common_request, annotations) = self.preprocess_request(&request)?;
         let mut response_generator = Box::new(response_generator);
 
