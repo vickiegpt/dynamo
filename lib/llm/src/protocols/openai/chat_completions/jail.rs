@@ -874,7 +874,13 @@ impl JailedStreamBuilder {
 
                 // Auto-populate end sequences if none configured
                 if self.jail_end_sequences.is_empty() {
-                    self.jail_end_sequences = config.json.tool_call_end_tokens.clone();
+                    self.jail_end_sequences = config
+                        .json
+                        .tool_call_end_tokens
+                        .iter()
+                        .cloned()
+                        .filter(|s| !s.is_empty())
+                        .collect();
                 }
             }
         }

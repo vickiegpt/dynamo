@@ -1733,4 +1733,129 @@ mod tests {
             "Content reconstruction should only include 'text' (tool call parsed separately)"
         );
     }
+
+    #[tokio::test]
+    async fn test_jailed_stream_harmony_parser() {
+        // Harmony format with analysis text and a tool call encoded in special tags
+        let chunks = vec![
+            create_mock_response_chunk(
+                "<|channel|>analysis<|message|>Need to use function get_current_weather.<|end|>"
+                    .to_string(),
+                0,
+            ),
+            create_mock_response_chunk("<|start|>".to_string(), 0),
+            create_mock_response_chunk("assistant".to_string(), 0),
+            create_mock_response_chunk("<|channel|>".to_string(), 0),
+            create_mock_response_chunk(
+                "commentary to=functions.get_current_weather <|constrain|>json".to_string(),
+                0,
+            ),
+            create_mock_response_chunk(
+                "<|message|>{\"location\":\"San Francisco\"}<|call|>".to_string(),
+                0,
+            ),
+        ];
+
+        let input_stream = stream::iter(chunks);
+
+        let jail = JailedStream::builder().tool_call_parser("harmony").build();
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should have at least two outputs: the analysis text and the parsed tool call
+        assert!(results.len() >= 2);
+
+        // Verify the analysis text appears as content in one of the outputs
+        let has_analysis_text = results.iter().any(|r| {
+            r.data
+                .as_ref()
+                .and_then(|d| d.choices.first())
+                .and_then(|c| c.delta.content.as_ref())
+                .map(|content| content.contains("Need to use function get_current_weather."))
+                .unwrap_or(false)
+        });
+        assert!(has_analysis_text, "Should contain extracted analysis text");
+
+        // Verify a tool call was parsed with expected name and args
+        let tool_call_idx = results
+            .iter()
+            .position(|r| test_utils::has_tool_call(r))
+            .expect("Should have a tool call result");
+        test_utils::assert_tool_call(
+            &results[tool_call_idx],
+            "get_current_weather",
+            json!({"location": "San Francisco"}),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_mistral_false_positive_curly() {
+        // Curly brace in normal text should not trigger tool call detection for mistral
+        let chunks = vec![
+            create_mock_response_chunk("Hey How".to_string(), 0),
+            create_mock_response_chunk("are { you? ".to_string(), 0),
+            create_final_response_chunk(0),
+        ];
+
+        let input_stream = stream::iter(chunks);
+        let jail = JailedStream::builder().tool_call_parser("mistral").build();
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        assert!(results.len() >= 2);
+        assert_content(&results[0], "Hey How");
+        assert!(
+            results.iter().any(|r| extract_content(r) == "are { you? "),
+            "Should preserve the literal text with curly brace"
+        );
+        for (i, r) in results.iter().enumerate() {
+            assert!(
+                !has_tool_call(r),
+                "Result {} should not contain tool calls for false-positive text",
+                i
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_jailed_stream_mistral_false_positive_then_tool_calls_marker() {
+        // Normal text with curly brace followed by explicit [TOOL_CALLS] marker should parse tool call
+        let chunks = vec![
+            create_mock_response_chunk("Hey How".to_string(), 0),
+            create_mock_response_chunk("are { you? ".to_string(), 0),
+            create_mock_response_chunk("[TOOL_CALLS]".to_string(), 0),
+            create_mock_response_chunk(
+                "[{\"name\": \"get_weather\", \"arguments\": {\"location\": \"San Francisco\", \"unit\": \"fahrenheit\"}}]"
+                    .to_string(),
+                0,
+            ),
+        ];
+
+        let input_stream = stream::iter(chunks);
+        let jail = JailedStream::builder().tool_call_parser("mistral").build();
+        let jailed_stream = jail.apply(input_stream);
+        let results: Vec<_> = jailed_stream.collect().await;
+
+        // Should preserve earlier content and also produce a tool call
+        assert!(results.len() >= 2);
+
+        assert!(
+            results.iter().any(|r| extract_content(r) == "Hey How"),
+            "Should include initial content"
+        );
+        assert!(
+            results.iter().any(|r| extract_content(r) == "are { you? "),
+            "Should include content preceding the marker"
+        );
+
+        let tool_call_idx = results
+            .iter()
+            .position(|r| test_utils::has_tool_call(r))
+            .expect("Should have a tool call result");
+        test_utils::assert_tool_call(
+            &results[tool_call_idx],
+            "get_weather",
+            json!({"location": "San Francisco", "unit": "fahrenheit"}),
+        );
+    }
 }
