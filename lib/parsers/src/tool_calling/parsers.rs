@@ -1159,8 +1159,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         // Reproduce the issue where "functools" appears in content field
         // This might happen when there's malformed JSON or parsing issues
         let input = r#"functools{"name": "get_weather","arguments":{"location":"San Francisco"}}"#;
-        let (result, content) =
-            detect_and_parse_tool_call(input, Some("phi4")).unwrap();
+        let (result, content) = detect_and_parse_tool_call(input, Some("phi4")).unwrap();
         // Content should be empty, not contain "functools"
         assert_eq!(content, Some("".to_string()));
         assert_eq!(result.len(), 1);
@@ -1174,8 +1173,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         // Test the case where only the token appears without JSON
         // This case is less critical but shouldn't leak the full token
         let input = r#"functools"#;
-        let (result, _content) =
-            detect_and_parse_tool_call(input, Some("phi4")).unwrap();
+        let (result, _content) = detect_and_parse_tool_call(input, Some("phi4")).unwrap();
         // Content may contain the token if no valid JSON follows, but shouldn't crash
         // The important thing is that no tool calls are returned
         assert_eq!(result.len(), 0); // No tool calls found
@@ -1186,8 +1184,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
     async fn test_phi4_token_with_invalid_json() {
         // Test the case where token is followed by invalid JSON
         let input = r#"functools{invalid json}"#;
-        let (result, content) =
-            detect_and_parse_tool_call(input, Some("phi4")).unwrap();
+        let (result, content) = detect_and_parse_tool_call(input, Some("phi4")).unwrap();
         // Content should be empty, not contain "functools" or leak the token
         assert_eq!(content, Some("".to_string()));
         assert_eq!(result.len(), 0); // No tool calls found due to invalid JSON
@@ -1237,8 +1234,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         // are correctly treated as normal content, not tool calls
 
         let input = r#"funk music is great"#;
-        let (result, content) =
-            detect_and_parse_tool_call(input, Some("phi4")).unwrap();
+        let (result, content) = detect_and_parse_tool_call(input, Some("phi4")).unwrap();
         // Should be treated as normal content, not tool call
         assert_eq!(
             result.len(),
@@ -1257,8 +1253,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         // Test words that start with "func" but are not "functools"
 
         let input = r#"The function works well"#;
-        let (result, content) =
-            detect_and_parse_tool_call(input, Some("phi4")).unwrap();
+        let (result, content) = detect_and_parse_tool_call(input, Some("phi4")).unwrap();
         assert_eq!(
             result.len(),
             0,
@@ -1267,8 +1262,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         assert_eq!(content, Some("The function works well".to_string()));
 
         let input = r#"functional programming"#;
-        let (result, content) =
-            detect_and_parse_tool_call(input, Some("phi4")).unwrap();
+        let (result, content) = detect_and_parse_tool_call(input, Some("phi4")).unwrap();
         assert_eq!(
             result.len(),
             0,
@@ -1291,8 +1285,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         ];
 
         for test_input in test_cases {
-            let (result, content) =
-                detect_and_parse_tool_call(test_input, Some("phi4")).unwrap();
+            let (result, content) = detect_and_parse_tool_call(test_input, Some("phi4")).unwrap();
             assert_eq!(
                 result.len(),
                 0,
@@ -1320,8 +1313,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
         ];
 
         for test_input in test_cases {
-            let (result, content) =
-                detect_and_parse_tool_call(test_input, Some("phi4")).unwrap();
+            let (result, content) = detect_and_parse_tool_call(test_input, Some("phi4")).unwrap();
             assert_eq!(
                 result.len(),
                 0,
@@ -1340,8 +1332,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
     #[tokio::test]
     async fn test_pythonic_parser_basic_with_constants() {
         let input = r#"[get_weather(location="San Francisco", unit="fahrenheit"), get_weather(location="New York", unit="fahrenheit")]"#;
-        let (result, content) =
-            detect_and_parse_tool_call(input, Some("pythonic")).unwrap();
+        let (result, content) = detect_and_parse_tool_call(input, Some("pythonic")).unwrap();
         assert_eq!(content, Some("".to_string()));
         assert_eq!(result.len(), 2);
         let (name, args) = extract_name_and_args(result[0].clone());
@@ -1376,8 +1367,7 @@ Remember, San Francisco weather can be quite unpredictable, particularly with it
     async fn test_harmony_parser_basic() {
         let input = r#"
         <|channel|>analysis<|message|>Need to use function get_current_weather.<|end|><|start|>assistant<|channel|>commentary to=functions.get_current_weather <|constrain|>json<|message|>{"location":"San Francisco", "unit":"fahrenheit"}"#;
-        let (result, content) =
-            detect_and_parse_tool_call(input, Some("harmony")).unwrap();
+        let (result, content) = detect_and_parse_tool_call(input, Some("harmony")).unwrap();
         assert_eq!(
             content,
             Some("Need to use function get_current_weather.".to_string())
