@@ -1762,8 +1762,9 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
-        // Should have at least two outputs: the analysis text and the parsed tool call
-        assert!(results.len() >= 2);
+        // Should have at least one output containing both analysis text and parsed tool call
+        assert!(!results.is_empty());
+        println!("results: {:?}", results);
 
         // Verify the analysis text appears as content in one of the outputs
         let has_analysis_text = results.iter().any(|r| {

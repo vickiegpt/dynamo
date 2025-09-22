@@ -229,25 +229,43 @@ impl ChoiceJailState {
                 }
 
                 MatchResult::None { content } => {
-                    // No markers - emit everything
-                    if !content.is_empty() {
-                        #[allow(deprecated)]
-                        let pass_through_choice = ChatChoiceStream {
-                            index: choice.index,
-                            delta: ChatCompletionStreamResponseDelta {
-                                role: choice.delta.role,
-                                content: Some(content),
-                                tool_calls: None,
-                                function_call: None,
-                                refusal: None,
-                                reasoning_content: None,
-                            },
-                            finish_reason: None,
-                            logprobs: choice.logprobs.clone(),
-                        };
-                        emissions.push(ChoiceEmission::PassThrough(pass_through_choice));
+                    // Check if this content (combined with partial buffer) should start jailing
+                    let combined_content = if self.partial_match_buffer.is_empty() {
+                        content.clone()
+                    } else {
+                        format!("{}{}", self.partial_match_buffer, content)
+                    };
+
+                    if jail_stream.should_start_jail(&combined_content) {
+                        // Start jailing with the combined content
+                        tracing::debug!(
+                            "Choice {} tool call start detected via parser, starting jail",
+                            choice.index
+                        );
+                        self.is_jailed = true;
+                        self.accumulated_content = combined_content;
+                        self.partial_match_buffer.clear();
+                    } else {
+                        // No markers - emit everything
+                        if !content.is_empty() {
+                            #[allow(deprecated)]
+                            let pass_through_choice = ChatChoiceStream {
+                                index: choice.index,
+                                delta: ChatCompletionStreamResponseDelta {
+                                    role: choice.delta.role,
+                                    content: Some(content),
+                                    tool_calls: None,
+                                    function_call: None,
+                                    refusal: None,
+                                    reasoning_content: None,
+                                },
+                                finish_reason: None,
+                                logprobs: choice.logprobs.clone(),
+                            };
+                            emissions.push(ChoiceEmission::PassThrough(pass_through_choice));
+                        }
+                        self.partial_match_buffer.clear();
                     }
-                    self.partial_match_buffer.clear();
                 }
             }
         } else {
