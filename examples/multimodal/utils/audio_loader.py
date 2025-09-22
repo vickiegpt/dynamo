@@ -36,7 +36,7 @@ class AudioLoader:
         self._cache_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=cache_size)
 
     async def load_audio(
-        self, audio_url: str, sampling_rate: int = None
+        self, audio_url: str, sampling_rate: int = 16000
     ) -> Tuple[np.ndarray, float]:
         parsed_url = urlparse(audio_url)
 
