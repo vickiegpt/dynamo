@@ -499,6 +499,7 @@ pub struct WorkerMetricsPublisher {
     /// We use OnceLock for efficient one-time initialization and lock-free reads
     /// The gauges are set once during register_prometheus_metrics and then only read
     prometheus_gauges: OnceLock<KvStatsPrometheusGauges>,
+    prometheus_histograms: OnceLock<KvStatsPrometheusHistograms>,
 }
 
 struct KvStatsPrometheusGauges {
@@ -558,6 +559,30 @@ impl KvStatsPrometheusGauges {
     }
 }
 
+struct KvStatsPrometheusHistograms {
+    kv_cache_latency_histogram: prometheus::Histogram,
+}
+
+impl KvStatsPrometheusHistograms {
+    /// Create a new KvStatsPrometheusGauges instance with all metrics registered
+    fn new(component: &Component) -> Result<Self> {
+        let kv_cache_latency_histogram = component.create_histogram(
+            "kv_cache_latency",
+            "Latency of the kv cache transfer in disaggregated mode.",
+            &[],
+            vec![0.0, 0.001, 0.005, 0.01, 0.015, 0.02, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0,].into(),
+        )?;
+
+        Ok(KvStatsPrometheusHistograms { 
+            kv_cache_latency_histogram,
+        })
+    }
+
+    pub fn update(&self, kv_perf_metrics: &KvPerfStats) {
+        self.kv_cache_latency_histogram.observe(kv_perf_metrics.transfer_latency.into());
+    }
+}
+
 impl WorkerMetricsPublisher {
     pub fn new() -> Result<Self> {
         let (tx, rx) = tokio::sync::watch::channel(Arc::new(ForwardPassMetrics::default()));
@@ -565,6 +590,7 @@ impl WorkerMetricsPublisher {
             tx,
             rx,
             prometheus_gauges: OnceLock::new(),
+            prometheus_histograms: OnceLock::new(),
         })
     }
 
@@ -583,12 +609,24 @@ impl WorkerMetricsPublisher {
         self.tx.send(metrics)
     }
 
+    pub fn publish_kv_perf(&self, metrics: Arc<KvPerfStats>) {
+        tracing::trace!("Publish kv perf metrics: {metrics:?}");
+
+        if let Some(histograms) = self.prometheus_histograms.get() {
+            histograms.update(&metrics);
+        }
+    }
+
     /// Register KvStats Prometheus metrics with the component's registry
     pub fn register_prometheus_metrics(&self, component: &Component) -> Result<()> {
         // Use get_or_init for thread-safe one-time initialization
         // This will only initialize once, subsequent calls will return immediately
         self.prometheus_gauges.get_or_init(|| {
             KvStatsPrometheusGauges::new(component).expect("Failed to create Prometheus gauges")
+        });
+
+        self.prometheus_histograms.get_or_init(|| {
+            KvStatsPrometheusHistograms::new(component).expect("Failed to create Prometheus histograms")
         });
 
         Ok(())

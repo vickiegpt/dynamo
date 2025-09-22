@@ -24,6 +24,7 @@ use llm_rs::kv_router::indexer::compute_block_hash_for_seq;
 use llm_rs::kv_router::indexer::KvIndexerInterface;
 use llm_rs::kv_router::protocols::ForwardPassMetrics as RsForwardPassMetrics;
 use llm_rs::kv_router::protocols::KvStats as RsKvStats;
+use llm_rs::kv_router::protocols::KvPerfStats as RsKvPerfStats;
 use llm_rs::kv_router::protocols::SpecDecodeStats as RsSpecDecodeStats;
 use llm_rs::kv_router::protocols::WorkerStats as RsWorkerStats;
 use rs::traits::events::EventSubscriber;
@@ -759,6 +760,10 @@ pub struct WorkerStats(pub RsWorkerStats);
 #[pyclass]
 #[repr(transparent)]
 pub struct KvStats(pub RsKvStats);
+
+#[pyclass]
+#[repr(transparent)]
+pub struct KvPerfStats(pub RsKvPerfStats);
 
 #[pyclass]
 #[repr(transparent)]

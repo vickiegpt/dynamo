@@ -55,6 +55,12 @@ pub struct KvStats {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct KvPerfStats {
+    // transfer latency from prefill to decode worker
+    pub transfer_latency: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct PredictiveLoadMetrics {
     pub kv_active_blocks: u64,
 }
