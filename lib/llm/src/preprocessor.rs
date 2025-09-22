@@ -624,15 +624,24 @@ impl OpenAIPreprocessor {
     ) -> std::result::Result<bool, Error> {
         match (tool_call_parser, tool_choice, has_tools) {
             // No parser but tools requested - error cases
-            (None, Some(ChatCompletionToolChoiceOption::Required), true) => Err(anyhow::anyhow!(
-                "Tool choice 'required' specified but no tool parser configured"
-            )),
-            (None, Some(ChatCompletionToolChoiceOption::Auto), true) => Err(anyhow::anyhow!(
-                "Tool choice 'auto' specified but no tool parser configured"
-            )),
-            (None, Some(ChatCompletionToolChoiceOption::Named(_)), _) => Err(anyhow::anyhow!(
-                "Named tool choice specified but no tool parser configured"
-            )),
+            (None, Some(ChatCompletionToolChoiceOption::Required), true) => {
+                tracing::warn!(
+                    "Tool choice 'required' specified but no tool parser configured; proceeding without jailing"
+                );
+                Ok(false)
+            }
+            (None, Some(ChatCompletionToolChoiceOption::Auto), true) => {
+                tracing::warn!(
+                    "Tool choice 'auto' specified but no tool parser configured; proceeding without jailing"
+                );
+                Ok(false)
+            }
+            (None, Some(ChatCompletionToolChoiceOption::Named(_)), _) => {
+                tracing::warn!(
+                    "Named tool choice specified but no tool parser configured; proceeding without jailing"
+                );
+                Ok(false)
+            }
 
             // Parser exists and tools might be called
             (Some(_), Some(ChatCompletionToolChoiceOption::None), _) => {
@@ -864,182 +873,4 @@ impl
     }
 }
 
-#[allow(deprecated, dead_code)]
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use dynamo_async_openai::types::{
-        ChatChoiceStream, ChatCompletionStreamResponseDelta, FinishReason as OAIFinishReason, Role,
-    };
-
-    use dynamo_runtime::protocols::annotated::Annotated;
-
-    use std::sync::Arc;
-
-    // Helper function to create a mock chat response chunk
-    fn create_mock_response_chunk(
-        content: String,
-        index: u32,
-    ) -> Annotated<NvCreateChatCompletionStreamResponse> {
-        let choice = ChatChoiceStream {
-            index,
-            delta: ChatCompletionStreamResponseDelta {
-                role: Some(Role::Assistant),
-                content: Some(content),
-                tool_calls: None,
-                function_call: None,
-                refusal: None,
-                reasoning_content: None,
-            },
-            finish_reason: None,
-            logprobs: None,
-        };
-
-        let response = NvCreateChatCompletionStreamResponse {
-            id: "test-id".to_string(),
-            choices: vec![choice],
-            created: 1234567890,
-            model: "test-model".to_string(),
-            system_fingerprint: Some("test-fingerprint".to_string()),
-            object: "chat.completion.chunk".to_string(),
-            usage: None,
-            service_tier: None,
-        };
-
-        Annotated {
-            data: Some(response),
-            id: None,
-            event: None,
-            comment: None,
-        }
-    }
-
-    // Helper function to create a final response chunk with finish reason
-    fn create_final_response_chunk(index: u32) -> Annotated<NvCreateChatCompletionStreamResponse> {
-        let choice = ChatChoiceStream {
-            index,
-            delta: ChatCompletionStreamResponseDelta {
-                role: None,
-                content: None,
-                tool_calls: None,
-                function_call: None,
-                refusal: None,
-                reasoning_content: None,
-            },
-            finish_reason: Some(OAIFinishReason::Stop),
-            logprobs: None,
-        };
-
-        let response = NvCreateChatCompletionStreamResponse {
-            id: "test-id".to_string(),
-            choices: vec![choice],
-            created: 1234567890,
-            model: "test-model".to_string(),
-            system_fingerprint: Some("test-fingerprint".to_string()),
-            object: "chat.completion.chunk".to_string(),
-            usage: None,
-            service_tier: None,
-        };
-
-        Annotated {
-            data: Some(response),
-            id: None,
-            event: None,
-            comment: None,
-        }
-    }
-
-    // Mock async engine context for testing
-    #[derive(Debug)]
-    struct MockAsyncEngineContext {
-        id: String,
-        stopped: std::sync::atomic::AtomicBool,
-    }
-
-    impl MockAsyncEngineContext {
-        fn new(id: String) -> Self {
-            Self {
-                id,
-                stopped: std::sync::atomic::AtomicBool::new(false),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl dynamo_runtime::pipeline::AsyncEngineContext for MockAsyncEngineContext {
-        fn id(&self) -> &str {
-            &self.id
-        }
-
-        fn stop(&self) {
-            self.stopped
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-
-        fn stop_generating(&self) {
-            self.stopped
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-
-        fn kill(&self) {
-            self.stopped
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-
-        fn is_stopped(&self) -> bool {
-            self.stopped.load(std::sync::atomic::Ordering::Relaxed)
-        }
-
-        fn is_killed(&self) -> bool {
-            self.stopped.load(std::sync::atomic::Ordering::Relaxed)
-        }
-
-        async fn stopped(&self) {
-            // No-op for testing
-        }
-
-        async fn killed(&self) {
-            // No-op for testing
-        }
-
-        fn link_child(&self, _: Arc<dyn dynamo_runtime::pipeline::AsyncEngineContext>) {
-            // No-op for testing
-        }
-    }
-
-    // Test for tool call detection with different parsers - still valuable to keep
-    #[tokio::test]
-    async fn test_detect_tool_call_start_different_parsers() {
-        use dynamo_parsers::tool_calling::detect_tool_call_start;
-
-        // Test nemotron_deci parser
-        assert!(detect_tool_call_start("<TOOLCALL>", Some("nemotron_deci")).unwrap());
-        assert!(!detect_tool_call_start("Hello world", Some("nemotron_deci")).unwrap());
-        assert!(!detect_tool_call_start("<tool_call>", Some("nemotron_deci")).unwrap()); // Wrong format
-
-        // Test hermes parser - now also detects JSON patterns
-        assert!(detect_tool_call_start("<tool_call>", Some("hermes")).unwrap());
-        assert!(detect_tool_call_start("{\"name\": \"test\"}", Some("hermes")).unwrap()); // JSON detection
-        assert!(!detect_tool_call_start("Hello world", Some("hermes")).unwrap());
-        assert!(!detect_tool_call_start("<TOOLCALL>", Some("hermes")).unwrap()); // Wrong format
-
-        // Test phi4 parser
-        assert!(detect_tool_call_start("functools[", Some("phi4")).unwrap());
-        assert!(detect_tool_call_start("{\"name\": \"test\"}", Some("phi4")).unwrap()); // JSON detection
-        assert!(!detect_tool_call_start("Hello world", Some("phi4")).unwrap());
-
-        // Test mistral parser
-        assert!(detect_tool_call_start("[{", Some("mistral")).unwrap());
-        assert!(detect_tool_call_start("[TOOL_CALLS]", Some("mistral")).unwrap());
-        assert!(!detect_tool_call_start("Hello world", Some("mistral")).unwrap());
-
-        // Test llama3_json parser
-        assert!(detect_tool_call_start("<|python_tag|>", Some("llama3_json")).unwrap());
-        assert!(detect_tool_call_start("{\"name\": \"test\"}", Some("llama3_json")).unwrap()); // JSON detection
-
-        // Test default parser (should behave like nemotron_deci)
-        assert!(detect_tool_call_start("<TOOLCALL>", None).unwrap());
-        assert!(detect_tool_call_start("{\"name\": \"test\"}", None).unwrap()); // JSON detection
-        assert!(!detect_tool_call_start("Hello world", None).unwrap());
-    }
-}
+// Note: tests for jailing and parser detection live in `lib/llm/tests/test_jail.rs`

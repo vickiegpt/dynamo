@@ -434,6 +434,11 @@ mod tests {
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
 
+        // We should get 2 chunks:
+        // 1. "Normal text " (before jail)
+        // 2. Accumulated jailed content when jail ends via </jail>
+        assert_eq!(results.len(), 2);
+
         // First chunk should pass through
         assert_eq!(
             results[0].data.as_ref().unwrap().choices[0]
@@ -443,8 +448,17 @@ mod tests {
             Some("Normal text ")
         );
 
-        // Jail should trigger and accumulate
-        assert!(results.len() >= 2);
+        // Second chunk should contain the accumulated jailed content
+        let jailed = results[1]
+            .data
+            .as_ref()
+            .unwrap()
+            .choices[0]
+            .delta
+            .content
+            .as_ref()
+            .expect("Expected accumulated jailed content");
+        assert!(jailed.contains("<jail><TOOLCALL>Jailed content</jail>"));
     }
 
     #[tokio::test]

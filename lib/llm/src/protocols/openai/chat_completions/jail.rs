@@ -140,9 +140,9 @@ impl ChoiceJailState {
                     let full_content = format!("{}{}", marker, suffix);
 
                     // Check if this already contains the end marker
-                    let (should_unjail, split_pos) = jail_stream.should_end_jail(&full_content);
+                    let (should_end, split_pos) = jail_stream.should_end_jail(&full_content);
 
-                    if should_unjail {
+                    if should_end {
                         // Complete tool call found in this chunk
                         tracing::debug!(
                             "Choice {} complete tool call detected in single chunk",
@@ -272,9 +272,9 @@ impl ChoiceJailState {
             // Already jailed - accumulate and check for unjail
             self.accumulate(content);
 
-            let (should_unjail, split_pos) = jail_stream.should_end_jail(&self.accumulated_content);
+            let (should_end, split_pos) = jail_stream.should_end_jail(&self.accumulated_content);
 
-            if should_unjail {
+            if should_end {
                 tracing::debug!(
                     "Choice {} jail exit detected, releasing accumulated content",
                     choice.index
@@ -919,22 +919,24 @@ impl JailedStreamBuilder {
         }
 
         // Add common tool call markers to ensure we detect all formats
-        // These are always included even when a specific parser is configured
-        // to provide broad compatibility and prevent missed tool calls
-        let common_markers = vec![
-            "<TOOLCALL>".to_string(),     // nemotron_deci format
-            "<tool_call>".to_string(),    // hermes format
-            "[TOOL_CALLS]".to_string(),   // mistral format
-            "<|python_tag|>".to_string(), // llama3_json format
-            "functools[".to_string(),     // phi4 format
-            // Add JSON start patterns for Mistral-style tool calls
-            "[{".to_string(),
-            "{".to_string(),
-            // Note: Harmony parser uses JSON patterns, covered by "{" above
-        ];
-        for marker in common_markers {
-            if !all_patterns.contains(&marker) {
-                all_patterns.push(marker);
+        // Only include these when a specific parser is NOT configured,
+        // to avoid unexpected false positives for explicit formats
+        if self.tool_call_parser.is_none() {
+            let common_markers = vec![
+                "<TOOLCALL>".to_string(),     // nemotron_deci format
+                "<tool_call>".to_string(),    // hermes format
+                "[TOOL_CALLS]".to_string(),   // mistral format
+                "<|python_tag|>".to_string(), // llama3_json format
+                "functools[".to_string(),     // phi4 format
+                // Add JSON start patterns for Mistral-style tool calls
+                "[{".to_string(),
+                "{".to_string(),
+                // Note: Harmony parser uses JSON patterns, covered by "{" above
+            ];
+            for marker in common_markers {
+                if !all_patterns.contains(&marker) {
+                    all_patterns.push(marker);
+                }
             }
         }
 
