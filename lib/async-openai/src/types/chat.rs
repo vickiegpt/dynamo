@@ -235,17 +235,6 @@ pub struct VideoUrl {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Builder, PartialEq)]
-#[builder(name = "AudioUrlArgs")]
-#[builder(pattern = "mutable")]
-#[builder(setter(into, strip_option), default)]
-#[builder(derive(Debug))]
-#[builder(build_fn(error = "OpenAIError"))]
-pub struct AudioUrl {
-    /// Either a URL of the audio or the base64 encoded audio data.
-    pub url: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Builder, PartialEq)]
 #[builder(name = "ChatCompletionRequestMessageContentPartImageArgs")]
 #[builder(pattern = "mutable")]
 #[builder(setter(into, strip_option))]
@@ -314,16 +303,6 @@ pub struct InputAudio {
 #[builder(build_fn(error = "OpenAIError"))]
 pub struct ChatCompletionRequestMessageContentPartAudioUrl {
     pub audio_url: AudioUrl,
-}
-
-#[derive(Debug, Serialize, Deserialize, Default, Clone, Builder, PartialEq)]
-#[builder(name = "ChatCompletionRequestMessageContentPartAudioArgs")]
-#[builder(pattern = "mutable")]
-#[builder(setter(into, strip_option), default)]
-#[builder(derive(Debug))]
-#[builder(build_fn(error = "OpenAIError"))]
-pub struct ChatCompletionRequestMessageContentPartAudio {
-    pub input_audio: InputAudio,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
