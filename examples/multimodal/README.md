@@ -532,7 +532,7 @@ flowchart LR
 ```
 
 ```bash
-pip install vllm["audio"] # multimodal audio models need vllm[audio] dependency
+pip install vllm["audio"] accelerate # multimodal audio models dependency
 cd $DYNAMO_HOME/examples/multimodal
 bash launch/audio_agg.sh
 ```
@@ -629,7 +629,7 @@ flowchart LR
 ```
 
 ```bash
-pip install vllm["audio"] # multimodal audio models need vllm[audio] dependency
+pip install vllm["audio"] accelerate # multimodal audio models dependency
 cd $DYNAMO_HOME/examples/multimodal
 bash launch/audio_disagg.sh
 ```

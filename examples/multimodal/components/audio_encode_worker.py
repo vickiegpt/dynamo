@@ -71,7 +71,7 @@ class VllmEncodeWorker:
             self.model, trust_remote_code=True
         )
         self.audio_model = Qwen2AudioForConditionalGeneration.from_pretrained(
-            self.model, device_map="auto", torch_dtype=torch.float16
+            self.model, device_map="auto", dtype=torch.float16
         ).eval()
 
     def get_audio_embeddings(self, audio_features):
