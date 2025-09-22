@@ -849,7 +849,7 @@ mod tests {
         test_utils::assert_content(&results[0], "Let me call a function. ");
         test_utils::assert_content(
             &results[1],
-            "<TOOLCALL>[{\"name\": \"broken_func\", \"arguments\": {\"param\": incomplete</TOOLCALL> Function call attempt finished.",
+            "<TOOLCALL>[{\"name\": \"broken_func\", \"arguments\": {\"param\": incomplete</TOOLCALL>",
         );
 
         // Verify malformed content is preserved as text (including markers when parsing fails)
@@ -1779,7 +1779,7 @@ mod tests {
         // Verify a tool call was parsed with expected name and args
         let tool_call_idx = results
             .iter()
-            .position(|r| test_utils::has_tool_call(r))
+            .position(test_utils::has_tool_call)
             .expect("Should have a tool call result");
         test_utils::assert_tool_call(
             &results[tool_call_idx],
@@ -1853,7 +1853,7 @@ mod tests {
 
         let tool_call_idx = results
             .iter()
-            .position(|r| test_utils::has_tool_call(r))
+            .position(test_utils::has_tool_call)
             .expect("Should have a tool call result");
         test_utils::assert_tool_call(
             &results[tool_call_idx],

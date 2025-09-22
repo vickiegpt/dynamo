@@ -878,8 +878,8 @@ impl JailedStreamBuilder {
                         .json
                         .tool_call_end_tokens
                         .iter()
+                        .filter(|&s| !s.is_empty())
                         .cloned()
-                        .filter(|s| !s.is_empty())
                         .collect();
                 }
             }
