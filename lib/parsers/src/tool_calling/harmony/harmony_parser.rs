@@ -174,11 +174,11 @@ pub fn parse_tool_calls_harmony(
 /// # Returns
 /// * `Ok((tool_calls, normal_text))` - Tuple containing extracted tool calls and any normal text
 /// * `Err(e)` - If parsing fails due to encoding or tokenization errors
-pub async fn parse_tool_calls_harmony_complete(
+pub fn parse_tool_calls_harmony_complete(
     text: &str,
     _config: &JsonParserConfig,
 ) -> anyhow::Result<(Vec<ToolCallResponse>, Option<String>)> {
-    let enc = match get_harmony_encoding().await.as_ref() {
+    let enc = match get_harmony_encoding().as_ref() {
         Ok(e) => e,
         Err(e) => {
             tracing::debug!("Failed to load harmony encoding: {e}. Tool calls will not be parsed.");

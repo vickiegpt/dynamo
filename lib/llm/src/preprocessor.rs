@@ -688,13 +688,13 @@ impl
         // create a response generator
         let response_generator = request.response_generator(context.id().to_string());
 
-        // set the runtime configuration
-        response_generator.set_reasoning_parser(self.runtime_config.clone());
-        let enable_tool_calling =
-            maybe_enable_tool_call(self.tool_call_parser.as_deref(), &request);
         // convert the chat completion request to a common completion request
         let (common_request, annotations) = self.preprocess_request(&request)?;
+
         let mut response_generator = Box::new(response_generator);
+
+        // set the runtime configuration
+        response_generator.set_reasoning_parser(self.runtime_config.clone());
 
         // update isl
         response_generator.update_isl(common_request.token_ids.len() as u32);

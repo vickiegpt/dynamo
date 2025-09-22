@@ -748,6 +748,7 @@ mod tests {
 
         let jailed_stream = jail.apply(input_stream);
         let results: Vec<_> = jailed_stream.collect().await;
+        println!("results: {:?}", results);
 
         // Should have exactly 3 chunks: content + tool call + content
         assert_eq!(
