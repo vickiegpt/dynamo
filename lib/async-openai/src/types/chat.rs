@@ -296,13 +296,13 @@ pub struct InputAudio {
 
 /// Learn about [audio inputs](https://platform.openai.com/docs/guides/audio).
 #[derive(Debug, Serialize, Deserialize, Default, Clone, Builder, PartialEq)]
-#[builder(name = "ChatCompletionRequestMessageContentPartAudioUrlArgs")]
+#[builder(name = "ChatCompletionRequestMessageContentPartAudioArgs")]
 #[builder(pattern = "mutable")]
 #[builder(setter(into, strip_option), default)]
 #[builder(derive(Debug))]
 #[builder(build_fn(error = "OpenAIError"))]
-pub struct ChatCompletionRequestMessageContentPartAudioUrl {
-    pub audio_url: AudioUrl,
+pub struct ChatCompletionRequestMessageContentPartAudio {
+    pub input_audio: InputAudio,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
