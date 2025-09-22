@@ -29,6 +29,6 @@ epp:
     - name: DYNAMO_KV_BLOCK_SIZE
       value: 512
     - name: RUST_BACKTRACE
-      value: 1
+      value: full
     - name: RUST_LOG
       value: tokio=trace
