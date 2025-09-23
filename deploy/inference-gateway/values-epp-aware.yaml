@@ -24,8 +24,10 @@ epp:
   extraEnv:
     - name: USE_STREAMING
       value: "true"
+    - name: DYNAMO_NAMESPACE
+      value: vllm-agg
     - name: DYNAMO_COMPONENT
-      value: "Frontend"
+      value: "backend"
     - name: DYNAMO_KV_BLOCK_SIZE
       value: 512
     - name: RUST_BACKTRACE
