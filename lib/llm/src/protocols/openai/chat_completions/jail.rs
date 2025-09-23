@@ -121,7 +121,65 @@ impl ChoiceJailState {
         std::mem::take(&mut self.accumulated_content)
     }
 
-    /// Process incoming content and return what should be emitted (if anything)
+    /// Helper to emit a pass-through chunk if not empty.
+    #[inline]
+    fn emit_pass_through(
+        emissions: &mut Vec<ChoiceEmission>,
+        content: &str,
+        choice: &ChatChoiceStream,
+    ) {
+        if !content.is_empty() {
+            #[allow(deprecated)]
+            let pass_through_choice = create_choice_stream(
+                content,
+                choice.delta.role,
+                choice.index,
+                choice.finish_reason,
+                choice.logprobs.clone(),
+            );
+            emissions.push(ChoiceEmission::PassThrough(pass_through_choice));
+        }
+    }
+
+    /// Helper to emit trailing content if not empty.
+    #[inline]
+    fn emit_trailing(
+        emissions: &mut Vec<ChoiceEmission>,
+        trailing: &str,
+        choice: &ChatChoiceStream,
+    ) {
+        if !trailing.is_empty() {
+            #[allow(deprecated)]
+            let trailing_choice = create_choice_stream(
+                trailing,
+                choice.delta.role,
+                choice.index,
+                choice.finish_reason,
+                choice.logprobs.clone(),
+            );
+            emissions.push(ChoiceEmission::Trailing(trailing_choice));
+        }
+    }
+
+    /// Helper to emit tool call or content emission based on tool_calls presence.
+    #[inline]
+    fn emit_tool_or_content(
+        emissions: &mut Vec<ChoiceEmission>,
+        tool_choice: ChatChoiceStream,
+    ) {
+        if tool_choice.delta.tool_calls.is_some() {
+            emissions.push(ChoiceEmission::ToolCall(tool_choice));
+        } else {
+            emissions.push(ChoiceEmission::Content(tool_choice));
+        }
+    }
+
+    /// Process incoming content and return what should be emitted (if anything).
+    ///
+    /// This function handles the logic for detecting tool call markers, managing
+    /// the "jailed" state (where content is being accumulated for a tool call),
+    /// and emitting the appropriate `ChoiceEmission` variants. It uses helper
+    /// functions to reduce code duplication and improve clarity.
     fn process_content(
         &mut self,
         choice: &ChatChoiceStream,
@@ -131,69 +189,38 @@ impl ChoiceJailState {
         let mut emissions = Vec::new();
 
         if !self.is_jailed {
-            // Use the marker matcher to detect complete/partial markers
+            // Not currently jailed: look for markers in the incoming chunk.
             match jail_stream
                 .marker_matcher
                 .process_chunk(content, &self.partial_match_buffer)
             {
-                MatchResult::Complete {
-                    prefix,
-                    marker,
-                    suffix,
-                    ..
-                } => {
-                    // Emit prefix if any
-                    if !prefix.is_empty() {
-                        #[allow(deprecated)]
-                        let prefix_choice = create_choice_stream(
-                            &prefix,
-                            choice.delta.role,
-                            choice.index,
-                            choice.finish_reason,
-                            choice.logprobs.clone(),
-                        );
-                        emissions.push(ChoiceEmission::PassThrough(prefix_choice));
-                    }
+                MatchResult::Complete { prefix, marker, suffix, .. } => {
+                    // Emit any prefix before the marker.
+                    Self::emit_pass_through(&mut emissions, &prefix, choice);
 
-                    // Build the potential full content
+                    // Build the content starting from the marker.
                     let full_content = format!("{}{}", marker, suffix);
 
-                    // Check if this already contains the end marker
+                    // Check if this chunk also contains the end marker.
                     let (should_end, split_pos) = jail_stream.should_end_jail(&full_content);
 
                     if should_end {
-                        // Complete tool call found in this chunk
+                        // Tool call is complete in this chunk.
                         tracing::debug!(
                             "Choice {} complete tool call detected in single chunk",
                             choice.index
                         );
-
                         let (jailed_part, trailing_part) = full_content.split_at(split_pos);
 
-                        // Create the tool call choice
+                        // Create the tool call choice and emit accordingly.
                         let tool_choice =
                             jail_stream.create_tool_call_choice(choice.index, jailed_part, choice);
+                        Self::emit_tool_or_content(&mut emissions, tool_choice);
 
-                        if tool_choice.delta.tool_calls.is_some() {
-                            emissions.push(ChoiceEmission::ToolCall(tool_choice));
-                        } else {
-                            emissions.push(ChoiceEmission::Content(tool_choice));
-                        }
-
-                        // Handle trailing content if any
-                        if !trailing_part.is_empty() {
-                            #[allow(deprecated)]
-                            let trailing_choice = create_choice_stream(
-                                trailing_part,
-                                choice.delta.role,
-                                choice.index,
-                                choice.finish_reason,
-                                choice.logprobs.clone(),
-                            );
-                            emissions.push(ChoiceEmission::Trailing(trailing_choice));
-                        }
+                        // Emit any trailing content after the tool call.
+                        Self::emit_trailing(&mut emissions, trailing_part, choice);
                     } else {
-                        // Start jailing with the marker and suffix
+                        // Start jailing: accumulate content from marker onwards.
                         tracing::debug!(
                             "Choice {} start marker '{}' detected, starting jail",
                             choice.index,
@@ -203,28 +230,15 @@ impl ChoiceJailState {
                         self.accumulated_content = full_content;
                     }
 
+                    // Clear the partial match buffer after processing a complete match.
                     self.partial_match_buffer.clear();
                 }
 
-                MatchResult::Partial {
-                    prefix,
-                    partial,
-                    possible_patterns,
-                } => {
-                    // Emit the safe prefix
-                    if !prefix.is_empty() {
-                        #[allow(deprecated)]
-                        let prefix_choice = create_choice_stream(
-                            &prefix,
-                            choice.delta.role,
-                            choice.index,
-                            choice.finish_reason,
-                            choice.logprobs.clone(),
-                        );
-                        emissions.push(ChoiceEmission::PassThrough(prefix_choice));
-                    }
+                MatchResult::Partial { prefix, partial, possible_patterns } => {
+                    // Emit any safe prefix before the partial marker.
+                    Self::emit_pass_through(&mut emissions, &prefix, choice);
 
-                    // Hold the partial for next chunk
+                    // Store the partial marker for the next chunk.
                     self.partial_match_buffer = partial;
 
                     tracing::trace!(
@@ -236,7 +250,7 @@ impl ChoiceJailState {
                 }
 
                 MatchResult::None { content } => {
-                    // Check if this content (combined with partial buffer) should start jailing
+                    // No marker found: check if the combined content should start jailing.
                     let combined_content = if self.partial_match_buffer.is_empty() {
                         content.clone()
                     } else {
@@ -244,7 +258,7 @@ impl ChoiceJailState {
                     };
 
                     if jail_stream.should_start_jail(&combined_content) {
-                        // Start jailing with the combined content
+                        // Start jailing with the combined content.
                         tracing::debug!(
                             "Choice {} tool call start detected via parser, starting jail",
                             choice.index
@@ -253,24 +267,14 @@ impl ChoiceJailState {
                         self.accumulated_content = combined_content;
                         self.partial_match_buffer.clear();
                     } else {
-                        // No markers - emit everything
-                        if !content.is_empty() {
-                            #[allow(deprecated)]
-                            let pass_through_choice = create_choice_stream(
-                                &content,
-                                choice.delta.role,
-                                choice.index,
-                                choice.finish_reason,
-                                choice.logprobs.clone(),
-                            );
-                            emissions.push(ChoiceEmission::PassThrough(pass_through_choice));
-                        }
+                        // No markers: emit all content as pass-through.
+                        Self::emit_pass_through(&mut emissions, &content, choice);
                         self.partial_match_buffer.clear();
                     }
                 }
             }
         } else {
-            // Already jailed - accumulate and check for unjail
+            // Already jailed: accumulate content and check for unjail.
             self.accumulate(content);
 
             let (should_end, split_pos) = jail_stream.should_end_jail(&self.accumulated_content);
@@ -281,37 +285,21 @@ impl ChoiceJailState {
                     choice.index
                 );
 
-                // Split the content
+                // Split the accumulated content at the end marker.
                 let (jailed_part, trailing_part) = self.accumulated_content.split_at(split_pos);
 
-                // Create the unjailed choice
+                // Create the unjailed choice and emit accordingly.
                 let unjailed_choice =
                     jail_stream.create_tool_call_choice(choice.index, jailed_part, choice);
+                Self::emit_tool_or_content(&mut emissions, unjailed_choice);
 
-                // Determine emission type based on whether tool calls were parsed
-                if unjailed_choice.delta.tool_calls.is_some() {
-                    emissions.push(ChoiceEmission::ToolCall(unjailed_choice));
-                } else {
-                    emissions.push(ChoiceEmission::Content(unjailed_choice));
-                }
+                // Emit any trailing content after the tool call.
+                Self::emit_trailing(&mut emissions, trailing_part, choice);
 
-                // Handle trailing content if any
-                if !trailing_part.is_empty() {
-                    #[allow(deprecated)]
-                    let trailing_choice = create_choice_stream(
-                        trailing_part,
-                        choice.delta.role,
-                        choice.index,
-                        choice.finish_reason,
-                        choice.logprobs.clone(),
-                    );
-                    emissions.push(ChoiceEmission::Trailing(trailing_choice));
-                }
-
-                // End jailing
+                // End jailing and clear the buffer.
                 self.end_jail();
             }
-            // If not unjailing, don't emit anything (still accumulating)
+            // If not unjailing, keep accumulating until the end marker is found.
         }
 
         emissions
