@@ -34,3 +34,5 @@ epp:
       value: full
     - name: RUST_LOG
       value: info,dynamo_runtime=trace,dynamo_llm=trace,tokio=trace
+    - name: DYNAMO_FORCE_RR
+      value: 1
