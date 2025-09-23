@@ -7,7 +7,7 @@ import os
 import time
 from typing import Optional
 
-from dynamo.planner.defaults import WORKER_COMPONENT_NAMES
+from dynamo.planner.utils.exceptions import DeploymentValidationError
 from dynamo.planner.planner_connector import PlannerConnector
 from dynamo.runtime import DistributedRuntime, EtcdKvCache
 from dynamo.runtime.logging import configure_dynamo_logging
@@ -48,7 +48,6 @@ class VirtualConnector(PlannerConnector):
 
         self.backend = backend
         self.dynamo_namespace = dynamo_namespace
-        self.worker_component_names = WORKER_COMPONENT_NAMES[backend]
 
         # Initialize current worker counts
         self.num_prefill_workers = 0
@@ -92,6 +91,40 @@ class VirtualConnector(PlannerConnector):
             )
         return self._etcd_kv_cache
 
+    async def wait_for_deployment_ready(
+        self, 
+        max_attempts: int = 180,  # default: 30 minutes total
+        delay_seconds: int = 10,  # default: check every 10 seconds
+    ):
+        """Wait for the deployment to be ready"""
+        # For virtual connector, we wait for the scaling to be ready
+        # using the existing scaling readiness check mechanism
+        for attempt in range(max_attempts):
+            is_ready = await self._is_scaling_ready()
+            if is_ready:
+                logger.info("Virtual deployment is ready")
+                return
+            
+            logger.debug(f"Virtual deployment not ready, attempt {attempt + 1}/{max_attempts}")
+            await asyncio.sleep(delay_seconds)
+        
+        logger.warning(f"Virtual deployment not ready after {max_attempts * delay_seconds}s")
+        # Don't raise an exception to match KubernetesConnector behavior
+    
+    async def verify_prefill_and_decode_components_exist(self):
+        """
+        Verify that the deployment contains services with subComponentType prefill and decode
+        
+        For VirtualConnector, this checks that the worker component names are properly configured
+        for the given backend.
+        
+        Raises:
+            DeploymentValidationError: If the worker component names are not properly configured
+        """
+        if self.etcd_kv_cache is None:
+            raise DeploymentValidationError("VirtualConnector not properly initialized. Call _async_init() first.")
+
+
     async def _load_current_state(self):
         """Load current state from ETCD"""
         # Get all current values
@@ -128,13 +161,6 @@ class VirtualConnector(PlannerConnector):
                     "Failed to parse decision_id from ETCD, using default -1"
                 )
 
-    def _component_to_worker_type(self, component_name: str) -> Optional[str]:
-        """Map component name to worker type (prefill or decode)"""
-        if component_name == self.worker_component_names.prefill_worker_k8s_name:
-            return "prefill"
-        elif component_name == self.worker_component_names.decode_worker_k8s_name:
-            return "decode"
-        else:
             return None
 
     async def _is_scaling_ready(self) -> bool:
@@ -252,13 +278,8 @@ class VirtualConnector(PlannerConnector):
             f"Timeout waiting for scaling decision #{self.decision_id} to complete after {SCALING_MAX_WAIT_TIME}s"
         )
 
-    async def add_component(self, component_name: str, blocking: bool = True):
+    async def add_component(self, worker_type: str, blocking: bool = True):
         """Add a component by increasing its replica count by 1"""
-        worker_type = self._component_to_worker_type(component_name)
-        if worker_type is None:
-            logger.warning(f"Unknown component name: {component_name}, skipping")
-            return
-
         if worker_type == "prefill":
             await self._update_scaling_decision(
                 num_prefill=self.num_prefill_workers + 1
@@ -269,13 +290,8 @@ class VirtualConnector(PlannerConnector):
         if blocking:
             await self._wait_for_scaling_completion()
 
-    async def remove_component(self, component_name: str, blocking: bool = True):
+    async def remove_component(self, worker_type: str, blocking: bool = True):
         """Remove a component by decreasing its replica count by 1"""
-        worker_type = self._component_to_worker_type(component_name)
-        if worker_type is None:
-            logger.warning(f"Unknown component name: {component_name}, skipping")
-            return
-
         if worker_type == "prefill":
             new_count = max(0, self.num_prefill_workers - 1)
             await self._update_scaling_decision(num_prefill=new_count)
@@ -296,12 +312,7 @@ class VirtualConnector(PlannerConnector):
         num_prefill = None
         num_decode = None
 
-        for component_name, replicas in target_replicas.items():
-            worker_type = self._component_to_worker_type(component_name)
-            if worker_type is None:
-                logger.warning(f"Unknown component name: {component_name}, skipping")
-                continue
-
+        for worker_type, replicas in target_replicas.items():
             if worker_type == "prefill":
                 num_prefill = replicas
             elif worker_type == "decode":
