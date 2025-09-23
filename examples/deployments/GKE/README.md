@@ -172,7 +172,7 @@ spec:
       extraPodSpec:
         mainContainer:
           startupProbe:
-			initialDelaySeconds: 180
+            initialDelaySeconds: 180
           image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:0.4.0
           command:
             - /bin/sh
