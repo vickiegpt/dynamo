@@ -94,6 +94,8 @@ class RequestHandler:
         self.reported_model_name = reported_model_name
 
     async def generate(self, request: dict, context=None):
+        print(request)
+        
         model_name = request.get("model", self.reported_model_name)
         stream = request.get("stream", True)
         request_id = f"mock-{uuid.uuid4().hex}"
