@@ -29,7 +29,7 @@ epp:
     - name: DYNAMO_COMPONENT
       value: "backend"
     - name: DYNAMO_KV_BLOCK_SIZE
-      value: 512
+      value: 16
     - name: RUST_BACKTRACE
       value: full
     - name: RUST_LOG
