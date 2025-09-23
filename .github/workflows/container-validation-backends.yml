@@ -70,12 +70,64 @@ jobs:
           BUILD_START_TIME=$(date +%s)
           echo "Build started at: $(date -u -d @$BUILD_START_TIME)"
           
-          # Reset sccache stats before build
-          sccache --stop-server || true
-          sccache --start-server || true
-          sccache --zero-stats || true
+          # === COMPREHENSIVE SCCACHE LOGGING (STATUS QUO) ===
+          echo "🔍 SCCACHE STATUS QUO ANALYSIS"
+          echo "=================================="
           
-          # Run the build
+          # 1. Check sccache availability
+          echo "📋 Step 1: Checking sccache availability..."
+          if command -v sccache >/dev/null 2>&1; then
+            echo "✅ sccache found at: $(which sccache)"
+            echo "   Version: $(sccache --version 2>/dev/null || echo 'version check failed')"
+          else
+            echo "❌ sccache NOT found in PATH"
+            echo "   PATH contents:"
+            echo "$PATH" | tr ':' '\n' | head -10 | sed 's/^/     /'
+          fi
+          
+          # 2. Check environment variables
+          echo ""
+          echo "📋 Step 2: Environment variables..."
+          echo "   SCCACHE_S3_BUCKET: '${SCCACHE_S3_BUCKET:-NOT SET}'"
+          echo "   AWS_DEFAULT_REGION: '${AWS_DEFAULT_REGION:-NOT SET}'"
+          echo "   USE_SCCACHE: '${USE_SCCACHE:-NOT SET}'"
+          echo "   HOME: '${HOME:-NOT SET}'"
+          echo "   USER: '${USER:-NOT SET}'"
+          
+          # 3. Reset sccache stats before build (with detailed logging)
+          echo ""
+          echo "📋 Step 3: Starting sccache server..."
+          
+          echo "   Stopping existing server..."
+          STOP_OUTPUT=$(sccache --stop-server 2>&1 || echo "stop failed")
+          echo "   Stop output: $STOP_OUTPUT"
+          
+          echo "   Starting new server..."
+          START_OUTPUT=$(sccache --start-server 2>&1 || echo "start failed")
+          echo "   Start output: $START_OUTPUT"
+          
+          echo "   Zeroing stats..."
+          ZERO_OUTPUT=$(sccache --zero-stats 2>&1 || echo "zero failed")
+          echo "   Zero output: $ZERO_OUTPUT"
+          
+          # 4. Check server status after start
+          echo ""
+          echo "📋 Step 4: Server status check..."
+          if command -v sccache >/dev/null 2>&1; then
+            echo "   Getting initial stats..."
+            INITIAL_STATS=$(sccache --show-stats 2>&1 || echo "stats failed")
+            echo "   Initial stats:"
+            echo "$INITIAL_STATS" | sed 's/^/     /'
+          else
+            echo "   ❌ Cannot check stats - sccache not available"
+          fi
+          
+          # 5. Run the build with timing
+          echo ""
+          echo "📋 Step 5: Running build..."
+          echo "   Build command: ./container/build.sh --tag ${{ matrix.framework }}:latest --target ${{ matrix.target }} --framework ${{ matrix.framework }} --use-sccache --sccache-bucket \"$SCCACHE_S3_BUCKET\" --sccache-region \"$AWS_DEFAULT_REGION\""
+          echo "   Build started at: $(date)"
+          
           ./container/build.sh --tag ${{ matrix.framework }}:latest \
             --target ${{ matrix.target }} \
             --framework ${{ matrix.framework }} \
@@ -83,31 +135,111 @@ jobs:
             --sccache-bucket "$SCCACHE_S3_BUCKET" \
             --sccache-region "$AWS_DEFAULT_REGION"
           
+          BUILD_RESULT=$?
+          echo "   Build completed at: $(date)"
+          echo "   Build exit code: $BUILD_RESULT"
+          
           # Capture build end time and calculate duration
           BUILD_END_TIME=$(date +%s)
           BUILD_DURATION=$((BUILD_END_TIME - BUILD_START_TIME))
           echo "Build completed at: $(date -u -d @$BUILD_END_TIME)"
           echo "Build duration: ${BUILD_DURATION} seconds"
           
-          # Get cache hit rate from sccache
+          # === COMPREHENSIVE CACHE ANALYSIS (STATUS QUO) ===
+          echo ""
+          echo "📋 Step 6: Post-build sccache analysis..."
+          
           CACHE_HIT_RATE=0
           if command -v sccache >/dev/null 2>&1; then
-            SCCACHE_STATS=$(sccache --show-stats 2>/dev/null || echo "")
-            if [ -n "$SCCACHE_STATS" ]; then
-              echo "📊 SCache Statistics:"
+            echo "✅ sccache command available for analysis"
+            
+            # Get raw stats
+            echo "   Getting raw sccache stats..."
+            SCCACHE_STATS=$(sccache --show-stats 2>&1)
+            STATS_EXIT_CODE=$?
+            echo "   Stats command exit code: $STATS_EXIT_CODE"
+            
+            if [ $STATS_EXIT_CODE -eq 0 ] && [ -n "$SCCACHE_STATS" ]; then
+              echo ""
+              echo "📊 FULL sccache Statistics:"
+              echo "----------------------------"
               echo "$SCCACHE_STATS"
+              echo "----------------------------"
+              echo ""
               
-              # Parse cache hit rate (this is a rough calculation)
-              CACHE_HITS=$(echo "$SCCACHE_STATS" | grep -E "Cache hits" | grep -oE '[0-9]+' | head -1 || echo "0")
-              CACHE_MISSES=$(echo "$SCCACHE_STATS" | grep -E "Cache misses" | grep -oE '[0-9]+' | head -1 || echo "0")
+              # Detailed parsing with debug info
+              echo "🔍 Parsing sccache statistics..."
+              
+              echo "   Looking for 'Cache hits' pattern..."
+              CACHE_HITS_LINE=$(echo "$SCCACHE_STATS" | grep -E "Cache hits" || echo "not found")
+              echo "   Cache hits line: '$CACHE_HITS_LINE'"
+              CACHE_HITS=$(echo "$CACHE_HITS_LINE" | grep -oE '[0-9]+' | head -1 || echo "0")
+              echo "   Extracted cache hits: '$CACHE_HITS'"
+              
+              echo "   Looking for 'Cache misses' pattern..."
+              CACHE_MISSES_LINE=$(echo "$SCCACHE_STATS" | grep -E "Cache misses" || echo "not found")
+              echo "   Cache misses line: '$CACHE_MISSES_LINE'"
+              CACHE_MISSES=$(echo "$CACHE_MISSES_LINE" | grep -oE '[0-9]+' | head -1 || echo "0")
+              echo "   Extracted cache misses: '$CACHE_MISSES'"
+              
+              echo "   Looking for 'Compile requests' pattern..."
+              COMPILE_REQUESTS_LINE=$(echo "$SCCACHE_STATS" | grep -E "Compile requests[^a-z]" || echo "not found")
+              echo "   Compile requests line: '$COMPILE_REQUESTS_LINE'"
+              COMPILE_REQUESTS=$(echo "$COMPILE_REQUESTS_LINE" | grep -oE '[0-9]+' | head -1 || echo "0")
+              echo "   Extracted compile requests: '$COMPILE_REQUESTS'"
+              
+              echo "   Looking for 'Non-cacheable' pattern..."
+              NON_CACHEABLE_LINE=$(echo "$SCCACHE_STATS" | grep -E "Non-cacheable" || echo "not found")
+              echo "   Non-cacheable line: '$NON_CACHEABLE_LINE'"
+              NON_CACHEABLE=$(echo "$NON_CACHEABLE_LINE" | grep -oE '[0-9]+' | head -1 || echo "0")
+              echo "   Extracted non-cacheable: '$NON_CACHEABLE'"
+              
+              echo "   Looking for 'Non-compilation calls' pattern..."
+              NON_COMPILATION_LINE=$(echo "$SCCACHE_STATS" | grep -E "Non-compilation calls" || echo "not found")
+              echo "   Non-compilation calls line: '$NON_COMPILATION_LINE'"
+              NON_COMPILATION=$(echo "$NON_COMPILATION_LINE" | grep -oE '[0-9]+' | head -1 || echo "0")
+              echo "   Extracted non-compilation calls: '$NON_COMPILATION'"
+              
+              # Calculate totals
               TOTAL_REQUESTS=$((CACHE_HITS + CACHE_MISSES))
+              echo ""
+              echo "📈 CALCULATION BREAKDOWN:"
+              echo "   Cache hits: $CACHE_HITS"
+              echo "   Cache misses: $CACHE_MISSES"
+              echo "   Total cacheable requests: $TOTAL_REQUESTS"
+              echo "   Compile requests: $COMPILE_REQUESTS"
+              echo "   Non-cacheable: $NON_CACHEABLE"
+              echo "   Non-compilation calls: $NON_COMPILATION"
               
               if [ "$TOTAL_REQUESTS" -gt 0 ]; then
                 CACHE_HIT_RATE=$((CACHE_HITS * 100 / TOTAL_REQUESTS))
+                echo "   ✅ Hit rate calculation: ($CACHE_HITS * 100) / $TOTAL_REQUESTS = ${CACHE_HIT_RATE}%"
+              else
+                echo "   ⚠️  No cacheable requests found - hit rate remains 0%"
+                
+                if [ "$COMPILE_REQUESTS" -gt 0 ]; then
+                  echo "   🔍 Analysis: $COMPILE_REQUESTS compile requests but no cache hits/misses"
+                  echo "      This suggests sccache received requests but they weren't cacheable"
+                elif [ "$NON_COMPILATION" -gt 0 ]; then
+                  echo "   🔍 Analysis: $NON_COMPILATION non-compilation calls"
+                  echo "      This suggests sccache was called but not for actual compilation"
+                else
+                  echo "   🔍 Analysis: No activity detected"
+                  echo "      This suggests sccache server is running but not being used"
+                fi
               fi
               
-              echo "Cache hits: $CACHE_HITS, misses: $CACHE_MISSES, hit rate: ${CACHE_HIT_RATE}%"
+              echo ""
+              echo "🎯 FINAL RESULT: Cache hit rate = ${CACHE_HIT_RATE}%"
+              
+            else
+              echo "❌ Failed to get sccache stats"
+              echo "   Stats output: '$SCCACHE_STATS'"
+              echo "   This indicates sccache server may not be running or accessible"
             fi
+          else
+            echo "❌ sccache command not available for analysis"
+            echo "   This means sccache is not installed or not in PATH"
           fi
           
           # Get Docker image size
@@ -138,12 +270,33 @@ jobs:
           }
           EOF
           
+          # === STATUS QUO SUMMARY ===
+          echo ""
+          echo "🏁 STATUS QUO ANALYSIS COMPLETE"
+          echo "==============================="
           echo "📊 Build Metrics Summary:"
           echo "  Framework: ${{ matrix.framework }}"
           echo "  Target: ${{ matrix.target }}"
           echo "  Duration: ${BUILD_DURATION}s"
           echo "  Image Size: ${IMAGE_SIZE_MB} MB"
           echo "  Cache Hit Rate: ${CACHE_HIT_RATE}%"
+          echo ""
+          echo "🔍 Key Findings:"
+          if [ "$CACHE_HIT_RATE" -eq 0 ]; then
+            echo "  ❌ ISSUE: 0% cache hit rate detected"
+            echo "     This confirms the problem we're trying to solve"
+          else
+            echo "  ✅ Cache hit rate: ${CACHE_HIT_RATE}%"
+          fi
+          echo ""
+          echo "📋 This detailed log will help us understand:"
+          echo "  1. Whether sccache is installed and accessible"
+          echo "  2. If sccache server starts successfully"
+          echo "  3. What type of requests sccache receives"
+          echo "  4. Why cache hit rate calculation results in 0%"
+          echo ""
+          echo "🎯 Next step: Apply enhanced sccache workflow to fix issues"
+          echo "==============================="
       - name: Run pytest
         run: |
           docker run --rm --gpus all -w /workspace \
