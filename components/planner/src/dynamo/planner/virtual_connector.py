@@ -7,6 +7,7 @@ import os
 import time
 from typing import Optional
 
+from dynamo.planner.kubernetes_connector import SubComponentType, TargetReplica
 from dynamo.planner.utils.exceptions import DeploymentValidationError
 from dynamo.planner.planner_connector import PlannerConnector
 from dynamo.runtime import DistributedRuntime, EtcdKvCache
@@ -111,7 +112,7 @@ class VirtualConnector(PlannerConnector):
         logger.warning(f"Virtual deployment not ready after {max_attempts * delay_seconds}s")
         # Don't raise an exception to match KubernetesConnector behavior
     
-    async def verify_prefill_and_decode_components_exist(self):
+    async def verify_prefill_and_decode_components_exist(self, prefill_component_name: str = None, decode_component_name: str = None):
         """
         Verify that the deployment contains services with subComponentType prefill and decode
         
@@ -303,7 +304,7 @@ class VirtualConnector(PlannerConnector):
             await self._wait_for_scaling_completion()
 
     async def set_component_replicas(
-        self, target_replicas: dict[str, int], blocking: bool = True
+        self, target_replicas: list[TargetReplica], blocking: bool = True
     ):
         """Set the replicas for multiple components at once"""
         if not target_replicas:
@@ -312,11 +313,11 @@ class VirtualConnector(PlannerConnector):
         num_prefill = None
         num_decode = None
 
-        for worker_type, replicas in target_replicas.items():
-            if worker_type == "prefill":
-                num_prefill = replicas
-            elif worker_type == "decode":
-                num_decode = replicas
+        for target_replica in target_replicas:
+            if target_replica.sub_component_type == SubComponentType.PREFILL:
+                num_prefill = target_replica.desired_replicas
+            elif target_replica.sub_component_type == SubComponentType.DECODE:
+                num_decode = target_replica.desired_replicas
 
         # Update scaling decision if there are any changes
         await self._update_scaling_decision(
