@@ -33,4 +33,4 @@ epp:
     - name: RUST_BACKTRACE
       value: full
     - name: RUST_LOG
-      value: tokio=trace
+      value: info,dynamo_runtime=trace,dynamo_llm=trace,tokio=trace
