@@ -131,6 +131,18 @@ curl http://localhost:8000/v1/models
 
 **For detailed Kubernetes deployment guide**: [Kubernetes Documentation](docs/kubernetes/README.md)
 
+## Next Steps
+
+- Check out [Backends](components/backends) to deploy various workflow configurations (e.g. SGLang with router, vLLM with disaggregated serving, etc.)
+- Run some [Examples](examples) to learn about building components in Dynamo and exploring various integrations.
+
+### Benchmarking Dynamo
+
+Dynamo provides comprehensive benchmarking tools to evaluate and optimize your deployments:
+
+* **[Benchmarking Guide](docs/benchmarks/benchmarking.md)** – Compare deployment topologies (aggregated vs. disaggregated vs. vanilla vLLM) using GenAI-Perf
+* **[Pre-Deployment Profiling](docs/benchmarks/pre_deployment_profiling.md)** – Optimize configurations before deployment to meet SLA requirements
+
 # Supported Engines
 
 Dynamo supports multiple inference engines. Choose your preferred backend:
@@ -146,6 +158,7 @@ Dynamo supports multiple inference engines. Choose your preferred backend:
 # Development
 
 <details>
+
 <summary><strong>Building from Source</strong> (Click to expand)</summary>
 
 **For contributors and advanced users**
