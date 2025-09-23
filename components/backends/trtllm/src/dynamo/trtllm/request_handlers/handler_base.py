@@ -36,9 +36,7 @@ from dynamo.trtllm.utils.disagg_utils import (
     DisaggregatedParamsCodec,
 )
 
-from dynamo.llm import (
-    KvPerfStats
-)
+from dynamo._core import KvPerfStats
 
 configure_dynamo_logging()
 
@@ -267,7 +265,7 @@ class HandlerBase:
                     kv_perf_stats = KvPerfStats(
                         transfer_latency=latency,
                     )
-                    self.publisher.publish_kv_perf(kv_perf_stats)
+                    self.publisher.metrics_publisher.publish_kv_perf(kv_perf_stats)
                     logging.info(f"latency={latency},bytes_per_second_for_request={bytes_per_second},trtllm_first_token_time={timing_metrics.first_token_time.total_seconds()}")
                 if output.disaggregated_params:
                     final_out["ctx_request_id"] = output.disaggregated_params.ctx_request_id

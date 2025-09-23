@@ -609,12 +609,14 @@ impl WorkerMetricsPublisher {
         self.tx.send(metrics)
     }
 
-    pub fn publish_kv_perf(&self, metrics: Arc<KvPerfStats>) {
+    pub fn publish_kv_perf(&self, metrics: Arc<KvPerfStats>) -> Result<()>{
         tracing::trace!("Publish kv perf metrics: {metrics:?}");
 
         if let Some(histograms) = self.prometheus_histograms.get() {
             histograms.update(&metrics);
         }
+
+        Ok(())
     }
 
     /// Register KvStats Prometheus metrics with the component's registry

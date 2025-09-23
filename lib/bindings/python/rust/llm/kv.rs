@@ -107,6 +107,14 @@ impl WorkerMetricsPublisher {
             .publish(metrics.0.clone().into())
             .map_err(to_pyerr)
     }
+
+    #[pyo3(signature = (metrics))]
+    fn publish_kv_perf(&self, _py: Python, metrics: &KvPerfStats) -> PyResult<()> {
+        // Create and publish the KV perf metrics
+        self.inner
+            .publish_kv_perf(metrics.0.clone().into())
+            .map_err(to_pyerr)
+    }
 }
 
 #[pyclass]
@@ -801,6 +809,19 @@ impl WorkerStats {
             request_active_slots,
             request_total_slots,
             num_requests_waiting,
+        })
+    }
+}
+
+#[pymethods]
+impl KvPerfStats {
+    #[new]
+    #[pyo3(signature = (transfer_latency))]
+    fn new(
+        transfer_latency: f32
+    ) -> Self {
+        Self(RsKvPerfStats {
+            transfer_latency,
         })
     }
 }

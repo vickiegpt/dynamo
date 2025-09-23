@@ -113,6 +113,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::kv::ForwardPassMetrics>()?;
     m.add_class::<llm::kv::WorkerStats>()?;
     m.add_class::<llm::kv::KvStats>()?;
+    m.add_class::<llm::kv::KvPerfStats>()?;
     m.add_class::<llm::kv::SpecDecodeStats>()?;
     m.add_class::<llm::kv::KvPushRouter>()?;
     m.add_class::<llm::kv::KvPushRouterStream>()?;

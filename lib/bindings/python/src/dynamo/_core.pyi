@@ -389,6 +389,21 @@ class KvStats:
         """
         ...
 
+class KvPerfStats:
+    """
+    KV Perf Stats
+    """
+    ...
+
+    def __init__(
+        self,
+        transfer_latency: float,
+    ) -> None:
+        """
+        Create a `KvPerfStats` object
+        """
+        ...
+
 class SpecDecodeStats:
     """
     Speculative decoding stats.
@@ -453,7 +468,16 @@ class WorkerMetricsPublisher:
         """
         Update the metrics being reported.
         """
+
+    def publish_kv_perf(
+        self,
+        metrics: KvPerfStats
+    ) -> None:
+        """
+        Update the metrics being reported.
+        """
         ...
+
 
 class ModelDeploymentCard:
     """
