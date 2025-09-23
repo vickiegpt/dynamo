@@ -122,7 +122,7 @@ class VirtualConnector(PlannerConnector):
             DeploymentValidationError: If the worker component names are not properly configured
         """
         if self.etcd_kv_cache is None:
-            raise DeploymentValidationError("VirtualConnector not properly initialized. Call _async_init() first.")
+            raise DeploymentValidationError(["VirtualConnector not properly initialized. Call _async_init() first."])
 
 
     async def _load_current_state(self):
