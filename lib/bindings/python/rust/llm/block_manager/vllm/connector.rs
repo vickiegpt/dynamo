@@ -50,11 +50,13 @@ impl SchedulerOutput {
         block_ids: Vec<BlockId>,
         num_computed_tokens: usize,
     ) {
+        tracing::info!("Adding new request: {:?} | {:?} | {:?} | {:?}", request_id, prompt_token_ids, block_ids, num_computed_tokens);
         self.new_requests.push(NewRequestData {
             request_id,
             prompt_token_ids,
             block_ids,
             num_computed_tokens,
+            block_priority: None,
         });
     }
 
@@ -67,12 +69,14 @@ impl SchedulerOutput {
         new_block_ids: Vec<BlockId>,
         num_computed_tokens: usize,
     ) {
+        tracing::info!("Adding cached request: {:?} | {:?} | {:?} | {:?} | {:?}", request_id, resumed_from_preemption, new_token_ids, new_block_ids, num_computed_tokens);
         self.cached_requests.push(CachedRequestData {
             request_id,
             resumed_from_preemption,
             new_token_ids,
             new_block_ids,
             num_computed_tokens,
+            block_priority: None,
         });
     }
 
@@ -83,7 +87,7 @@ impl SchedulerOutput {
     }
 
     /// Use this to assert that the total number of scheduled tokens is correct
-    /// Compare this to the value in in the vLLM SchedulerOutput
+    /// Compare this to the value in the vLLM SchedulerOutput
     pub fn get_num_scheduled_tokens(&self) -> usize {
         self.num_scheduled_tokens.values().sum()
     }
@@ -100,6 +104,7 @@ pub struct NewRequestData {
     pub prompt_token_ids: Vec<u32>,
     pub block_ids: Vec<BlockId>,
     pub num_computed_tokens: usize,
+    pub block_priority: Option<Vec<u32>>,
 }
 
 impl std::fmt::Debug for NewRequestData {
@@ -109,6 +114,7 @@ impl std::fmt::Debug for NewRequestData {
             .field("num_tokens", &self.prompt_token_ids.len())
             .field("num_blocks", &self.block_ids.len())
             .field("num_computed_tokens", &self.num_computed_tokens)
+            .field("num_block_priority", &self.block_priority.as_ref().map(|p| p.len()).unwrap_or(0))
             .finish()
     }
 }
@@ -120,6 +126,8 @@ pub struct CachedRequestData {
     pub new_token_ids: Vec<u32>,
     pub new_block_ids: Vec<BlockId>,
     pub num_computed_tokens: usize,
+    // TODO(ziqif): should this be a single u32 since all decode blocks have the same priority?
+    pub block_priority: Option<Vec<u32>>,
 }
 
 impl std::fmt::Debug for CachedRequestData {
@@ -130,6 +138,7 @@ impl std::fmt::Debug for CachedRequestData {
             .field("num_new_tokens", &self.new_token_ids.len())
             .field("num_new_blocks", &self.new_block_ids.len())
             .field("num_computed_tokens", &self.num_computed_tokens)
+            .field("num_block_priority", &self.block_priority.as_ref().map(|p| p.len()).unwrap_or(0))
             .finish()
     }
 }

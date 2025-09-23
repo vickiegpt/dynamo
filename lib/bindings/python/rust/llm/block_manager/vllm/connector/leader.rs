@@ -289,8 +289,9 @@ impl Leader for KvConnectorLeader {
 
         // the second call will show num_external_tokens == 0
         // this call is just letting us know the other blocks that are being used for the remainder of the prefill
+        let num_tokens = block_ids.len() * self.block_size;
         if num_external_tokens > 0 {
-            let num_computed_tokens = block_ids.len() * self.block_size - num_external_tokens;
+            let num_computed_tokens = num_tokens - num_external_tokens;
             slot.record_cached_device_tokens(num_computed_tokens);
             slot.advance_computed_position(num_computed_tokens)?;
 
@@ -301,6 +302,10 @@ impl Leader for KvConnectorLeader {
             );
             slot.trigger_onboarding(num_external_tokens)?;
             self.onboarding_slots.insert(request_id);
+        } else {
+            if num_tokens > 0 {
+                slot.record_cached_device_tokens(num_tokens);
+            }
         }
 
         Ok(())

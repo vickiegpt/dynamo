@@ -242,9 +242,11 @@ impl Leader for KvConnectorLeader {
             .inflight_request_to_num_external_tokens
             .get(&request_id)
         {
-            if num_external_tokens > 0 {
-                let num_computed_tokens = context_current_position - num_external_tokens;
+            let num_computed_tokens = context_current_position - num_external_tokens;
+            if num_computed_tokens > 0 {
                 slot.record_cached_device_tokens(num_computed_tokens);
+            }
+            if num_external_tokens > 0 {
                 slot.advance_computed_position(num_computed_tokens)?;
 
                 tracing::debug!(
@@ -258,6 +260,10 @@ impl Leader for KvConnectorLeader {
 
             self.inflight_request_to_num_external_tokens
                 .remove(&request_id);
+        } else {
+            if context_current_position > 0 {
+                slot.record_cached_device_tokens(context_current_position);
+            }
         }
 
         Ok(())
