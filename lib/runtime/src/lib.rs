@@ -23,7 +23,6 @@ use std::{
     sync::{Arc, OnceLock, Weak},
     time::Instant,
 };
-use tokio::sync::Mutex;
 
 pub use anyhow::{
     Context as ErrorContext, Error, Ok as OK, Result, anyhow as error, bail as raise,
@@ -56,11 +55,15 @@ pub mod utils;
 pub mod worker;
 
 pub mod distributed;
+pub use distributed::distributed_test_utils;
 pub use futures::stream;
 pub use tokio_util::sync::CancellationToken;
 pub use worker::Worker;
 
+use crate::metrics::prometheus_names::distributed_runtime;
+
 use component::{Endpoint, InstanceSource};
+use utils::GracefulShutdownTracker;
 
 use config::HealthStatus;
 
@@ -78,6 +81,8 @@ pub struct Runtime {
     primary: RuntimeType,
     secondary: RuntimeType,
     cancellation_token: CancellationToken,
+    endpoint_shutdown_token: CancellationToken,
+    graceful_shutdown_tracker: Arc<GracefulShutdownTracker>,
 }
 
 /// Current Health Status
@@ -157,7 +162,7 @@ impl SystemHealth {
         registry: &T,
     ) -> anyhow::Result<()> {
         let gauge = registry.create_gauge(
-            "uptime_seconds",
+            distributed_runtime::UPTIME_SECONDS,
             "Total uptime of the DistributedRuntime in seconds",
             &[],
         )?;
@@ -268,7 +273,7 @@ pub struct DistributedRuntime {
     // startup. Will not start etcd.
     is_static: bool,
 
-    instance_sources: Arc<Mutex<HashMap<Endpoint, Weak<InstanceSource>>>>,
+    instance_sources: Arc<tokio::sync::Mutex<HashMap<Endpoint, Weak<InstanceSource>>>>,
 
     // Health Status
     system_health: Arc<std::sync::Mutex<SystemHealth>>,

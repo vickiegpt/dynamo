@@ -40,6 +40,13 @@ fn main() {
     // Rerun build if environment variable changes
     println!("cargo:rerun-if-env-changed=DYNAMO_FATBIN_PATH");
 
+    println!("cargo:warning=Building with CUDA KV off");
+    build_protos()
+}
+
+fn build_protos() -> Result<(), Box<dyn std::error::Error>> {
+    tonic_build::compile_protos("src/grpc/protos/kserve.proto")?;
+    Ok(())
 }
 
 fn find_fatbin_file() -> Option<PathBuf> {

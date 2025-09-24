@@ -65,7 +65,7 @@ async def init(runtime: DistributedRuntime, config: Config):
             .client()
         )
 
-    publisher, metrics_task = await setup_sgl_metrics(engine, component)
+    publisher, metrics_task, metrics_labels = await setup_sgl_metrics(engine, component)
 
     kv_publisher = None
     if server_args.kv_events_config:
@@ -97,7 +97,10 @@ async def init(runtime: DistributedRuntime, config: Config):
     async def register_model():
         """Register the model and signal readiness"""
         registration_success = await register_llm_with_runtime_config(
-            engine, generate_endpoint, server_args, dynamo_args.migration_limit
+            engine,
+            generate_endpoint,
+            server_args,
+            dynamo_args,
         )
 
         if not registration_success:
@@ -113,7 +116,11 @@ async def init(runtime: DistributedRuntime, config: Config):
         # Start endpoint immediately and register model concurrently
         # Requests queue until ready_event is set
         await asyncio.gather(
-            generate_endpoint.serve_endpoint(gated_generate, graceful_shutdown=False),
+            generate_endpoint.serve_endpoint(
+                handler.generate,
+                graceful_shutdown=True,
+                metrics_labels=metrics_labels,
+            ),
             register_model(),
         )
     except Exception as e:
@@ -143,7 +150,13 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
 
     handler = PrefillWorkerHandler(component, engine, config)
 
-    tasks = [generate_endpoint.serve_endpoint(handler.generate, graceful_shutdown=True)]
+    tasks = [
+        generate_endpoint.serve_endpoint(
+            handler.generate,
+            graceful_shutdown=True,
+            metrics_labels=[("model", server_args.served_model_name)],
+        )
+    ]
 
     try:
         await asyncio.gather(*tasks)
