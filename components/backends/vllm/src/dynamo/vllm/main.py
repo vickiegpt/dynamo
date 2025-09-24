@@ -32,6 +32,7 @@ from .args import (
 from .handlers import DecodeWorkerHandler, PrefillWorkerHandler
 from .health_check import VllmHealthCheckPayload
 from .publisher import StatLoggerFactory
+from .ports import get_host_ip
 
 configure_dynamo_logging()
 logger = logging.getLogger(__name__)
@@ -116,6 +117,19 @@ def setup_vllm_engine(config, stat_logger=None):
     usage_context = UsageContext.OPENAI_API_SERVER
     vllm_config = engine_args.create_engine_config(usage_context=usage_context)
 
+    # Wire Dynamo-managed ports into vLLM to prevent conflicts across instances
+    if getattr(config, "dp_master_ports", None):
+        vllm_config.parallel_config.data_parallel_master_ip = (
+            engine_args.data_parallel_address or get_host_ip()
+        )
+        vllm_config.parallel_config.data_parallel_master_port = (
+            config.dp_master_ports[0]
+        )
+        vllm_config.parallel_config._data_parallel_master_port_list = []
+
+    if getattr(config, "dp_rpc_port", None):
+        vllm_config.parallel_config.data_parallel_rpc_port = config.dp_rpc_port
+
     factory = []
     if stat_logger:
         factory.append(stat_logger)
@@ -143,6 +157,9 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
 
     generate_endpoint = component.endpoint(config.endpoint)
     clear_endpoint = component.endpoint("clear_kv_blocks")
+    sleep_endpoint = component.endpoint("sleep")
+    wake_up_endpoint = component.endpoint("wake_up")
+    is_sleeping_endpoint = component.endpoint("is_sleeping")
 
     engine_client, _, default_sampling_params = setup_vllm_engine(config)
 
@@ -171,6 +188,15 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
             clear_endpoint.serve_endpoint(
                 handler.clear_kv_blocks, metrics_labels=[("model", config.model)]
             ),
+            sleep_endpoint.serve_endpoint(
+                handler.sleep, metrics_labels=[("model", config.model)]
+            ),
+            wake_up_endpoint.serve_endpoint(
+                handler.wake_up, metrics_labels=[("model", config.model)]
+            ),
+            is_sleeping_endpoint.serve_endpoint(
+                handler.is_sleeping, metrics_labels=[("model", config.model)]
+            ),
         )
         logger.debug("serve_endpoint completed for prefill worker")
     except Exception as e:
@@ -191,6 +217,9 @@ async def init(runtime: DistributedRuntime, config: Config):
 
     generate_endpoint = component.endpoint(config.endpoint)
     clear_endpoint = component.endpoint("clear_kv_blocks")
+    sleep_endpoint = component.endpoint("sleep")
+    wake_up_endpoint = component.endpoint("wake_up")
+    is_sleeping_endpoint = component.endpoint("is_sleeping")
 
     prefill_worker_client = (
         await runtime.namespace(config.namespace)
@@ -284,6 +313,15 @@ async def init(runtime: DistributedRuntime, config: Config):
             ),
             clear_endpoint.serve_endpoint(
                 handler.clear_kv_blocks, metrics_labels=[("model", config.model)]
+            ),
+            sleep_endpoint.serve_endpoint(
+                handler.sleep, metrics_labels=[("model", config.model)]
+            ),
+            wake_up_endpoint.serve_endpoint(
+                handler.wake_up, metrics_labels=[("model", config.model)]
+            ),
+            is_sleeping_endpoint.serve_endpoint(
+                handler.is_sleeping, metrics_labels=[("model", config.model)]
             ),
         )
         logger.debug("serve_endpoint completed for decode worker")

@@ -46,6 +46,45 @@ class BaseWorkerHandler(ABC):
             yield {"status": "success", "message": "KV cache cleared"}
         except Exception as e:
             yield {"status": "error", "message": str(e)}
+    
+    async def sleep(self, request=None):
+        """Put the engine to sleep at the specified level.
+        
+        Sleep levels:
+        - Level 1: Sleep model weights with offloading (if no companion process)
+        - Level 2: Sleep model weights without offloading (if no companion process)
+        - Level 3: Additionally sleep KV cache (requires sleep mode)
+        """
+        try:
+            level = request.get("level", 3) if request else 3
+            await self.engine_client.sleep(level)
+            yield {"status": "success", "message": f"Engine put to sleep (level {level})"}
+        except Exception as e:
+            yield {"status": "error", "message": str(e)}
+    
+    async def wake_up(self, request=None):
+        """Wake up the engine."""
+        try:
+            tags = request.get("tags") if request else None
+            await self.engine_client.wake_up(tags)
+            yield {"status": "success", "message": "Engine woken up"}
+        except Exception as e:
+            yield {"status": "error", "message": str(e)}
+
+    async def is_sleeping(self, request=None):
+        """Return whether the engine is currently sleeping.
+
+        Response schema:
+        {"status": "success", "sleeping": bool, "sleeping_tags": [str]}
+        or {"status": "error", "message": str}
+        """
+        try:
+            sleeping = await self.engine_client.is_sleeping()
+            yield {
+                "sleeping": bool(sleeping),
+            }
+        except Exception as e:
+            yield {"status": "error", "message": str(e)}
 
     def cleanup(self):
         """Override in subclasses if cleanup is needed."""

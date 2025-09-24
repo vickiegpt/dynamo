@@ -63,6 +63,11 @@ class Config:
     tool_call_parser: Optional[str] = None
     reasoning_parser: Optional[str] = None
 
+    # Dynamo-managed ports (populated in configure_ports_with_etcd)
+    dp_master_ports: Optional[list[int]] = None
+    dp_rpc_port: Optional[int] = None
+    dp_fake_master_port: Optional[int] = None
+
 
 def parse_args() -> Config:
     parser = FlexibleArgumentParser(
@@ -202,6 +207,37 @@ async def configure_ports_with_etcd(config: Config, etcd_client):
 
     dp_rank = config.engine_args.data_parallel_rank or 0
     worker_id = f"vllm-{config.component}-dp{dp_rank}"
+
+    # Reserve torch.distributed base ports (DP/world + retries) to avoid conflicts across instances
+    # Only needed when data parallel size > 1 or when hybrid/external DP is used
+    dp_size = config.engine_args.data_parallel_size or 1
+    if dp_size > 1:
+        DP_PORT_BLOCK_SIZE = 8  # Sparing in case we run DEP = 8 for 8 GPUs on DGX
+        dp_port_metadata = PortMetadata(worker_id=worker_id, reason="dp_master_ports")
+        dp_port_request = PortAllocationRequest(
+            etcd_context=etcd_context,
+            metadata=dp_port_metadata,
+            port_range=config.port_range,
+            block_size=DP_PORT_BLOCK_SIZE,
+        )
+        dp_ports = await allocate_and_reserve_port_block(dp_port_request)
+        config.dp_master_ports = dp_ports
+
+        # Also reserve a DP RPC port used by vLLM for inter-node messaging
+        dp_rpc_metadata = PortMetadata(worker_id=worker_id, reason="dp_rpc_port")
+        config.dp_rpc_port = await allocate_and_reserve_port(
+            etcd_context=etcd_context,
+            metadata=dp_rpc_metadata,
+            port_range=config.port_range,
+        )
+
+        # Reserve fake DP master base port to avoid conflicts during fake/discovery init
+        dp_fake_md = PortMetadata(worker_id=worker_id, reason="dp_fake_master_port")
+        config.dp_fake_master_port = await allocate_and_reserve_port(
+            etcd_context=etcd_context,
+            metadata=dp_fake_md,
+            port_range=config.port_range,
+        )
 
     # Allocate KV events port
     if config.engine_args.enable_prefix_caching:
@@ -353,6 +389,29 @@ def overwrite_args(config):
     kv_events_config = create_kv_events_config(config)
     if kv_events_config:
         defaults["kv_events_config"] = kv_events_config
+
+    # If Dynamo reserved DP ports, set env so vLLM avoids conflicts
+    if config.dp_master_ports:
+        # Use the first reserved port as base; vLLM will allocate more via get_open_ports_list()
+        os.environ["VLLM_DP_MASTER_PORT"] = str(config.dp_master_ports[0])
+        logger.info(
+            f"Using reserved DP master base port {config.dp_master_ports[0]} for torch.distributed"
+        )
+        # Set explicit base in engine_args so vLLM DP reconfigs keep using our base
+        config.engine_args.data_parallel_address = config.engine_args.data_parallel_address or get_host_ip()
+        # Note: ParallelConfig will derive more ports from this base
+
+    if config.dp_rpc_port:
+        # Override vLLM data_parallel_rpc_port to avoid conflicts across instances
+        config.engine_args.data_parallel_rpc_port = config.dp_rpc_port
+        logger.info(f"Using reserved DP RPC port {config.dp_rpc_port}")
+
+    # Configure fake DP master port so stateless fake groups do not collide
+    if config.dp_fake_master_port:
+        # ParallelConfig.get_next_fake_dp_init_port() pulls from
+        # data_parallel_fake_master_port and then increments. Seed it here.
+        config.engine_args.data_parallel_fake_master_port = config.dp_fake_master_port
+        logger.info(f"Using reserved DP fake master base port {config.dp_fake_master_port}")
 
     logger.debug("Setting Dynamo defaults for vLLM")
     for key, value in defaults.items():
