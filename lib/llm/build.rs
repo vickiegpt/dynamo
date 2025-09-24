@@ -16,7 +16,7 @@
 use std::path::PathBuf;
 use std::env;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get FATBIN path and copy it to OUT_DIR for embedding
     if let Some(fatbin_path) = find_fatbin_file() {
         // Copy FATBIN to OUT_DIR so we can include it with a predictable path
