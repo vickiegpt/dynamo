@@ -71,6 +71,11 @@ pub struct CommonExt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[builder(default, setter(strip_option))]
     pub guided_decoding_backend: Option<String>,
+
+    /// Arbitrary user_metadata object
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[builder(default, setter(strip_option))]
+    pub user_metadata: Option<serde_json::Value>,
 }
 
 impl CommonExt {
@@ -96,6 +101,9 @@ pub trait CommonExtProvider {
     fn get_min_p(&self) -> Option<f32>;
     fn get_repetition_penalty(&self) -> Option<f32>;
     fn get_include_stop_str_in_output(&self) -> Option<bool>;
+
+    /// user_metadata passthrough object
+    fn get_user_metadata(&self) -> Option<&serde_json::Value>;
 }
 
 /// Helper function to emit deprecation warnings for nvext parameters
@@ -146,6 +154,7 @@ mod tests {
         assert_eq!(common_ext.guided_choice, None);
         assert_eq!(common_ext.guided_decoding_backend, None);
         assert_eq!(common_ext.include_stop_str_in_output, None);
+        assert_eq!(common_ext.user_metadata, None);
     }
 
     #[test]
@@ -161,6 +170,7 @@ mod tests {
             .guided_grammar("grammar".to_string())
             .guided_choice(vec!["choice1".to_string(), "choice2".to_string()])
             .guided_decoding_backend("backend".to_string())
+            .user_metadata(serde_json::json!({"key1": "value1", "key2": "value2"}))
             .build()
             .unwrap();
 
@@ -182,6 +192,10 @@ mod tests {
         assert_eq!(
             common_ext.guided_decoding_backend,
             Some("backend".to_string())
+        );
+        assert_eq!(
+            common_ext.user_metadata.as_ref(),
+            Some(&serde_json::json!({"key1": "value1", "key2": "value2"}))
         );
     }
 
@@ -215,6 +229,7 @@ mod tests {
             guided_grammar: None,
             guided_choice: None,
             guided_decoding_backend: None,
+            user_metadata: None,
         };
         assert!(common_ext.validate().is_ok());
     }

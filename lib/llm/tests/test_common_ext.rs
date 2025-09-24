@@ -386,3 +386,42 @@ fn test_sampling_parameters_extraction() {
     assert_eq!(sampling_options.top_k, Some(42));
     assert_eq!(sampling_options.repetition_penalty, Some(1.3));
 }
+
+#[test]
+fn test_chat_completions_user_metadata_from_common() {
+    let json_str = r#"{
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "user_metadata": {"key1": "value1", "key2": "value2"}
+    }"#;
+
+    let request: NvCreateChatCompletionRequest = serde_json::from_str(json_str).unwrap();
+
+    assert_eq!(
+        request.common.user_metadata,
+        Some(serde_json::json!({"key1": "value1", "key2": "value2"}))
+    );
+    assert_eq!(
+        request.get_user_metadata(),
+        Some(&serde_json::json!({"key1": "value1", "key2": "value2"}))
+    );
+}
+
+#[test]
+fn test_completions_user_metadata_from_common() {
+    let json_str = r#"{
+        "model": "test-model",
+        "prompt": "Hello world",
+        "user_metadata": {"key1": "value1", "key2": "value2"}
+    }"#;
+
+    let request: NvCreateCompletionRequest = serde_json::from_str(json_str).unwrap();
+    assert_eq!(
+        request.common.user_metadata,
+        Some(serde_json::json!({"key1": "value1", "key2": "value2"}))
+    );
+    assert_eq!(
+        request.get_user_metadata(),
+        Some(&serde_json::json!({"key1": "value1", "key2": "value2"}))
+    );
+}

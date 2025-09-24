@@ -222,6 +222,10 @@ impl CommonExtProvider for NvCreateCompletionRequest {
     fn get_include_stop_str_in_output(&self) -> Option<bool> {
         self.common.include_stop_str_in_output
     }
+
+    fn get_user_metadata(&self) -> Option<&serde_json::Value> {
+        self.common.user_metadata.as_ref()
+    }
 }
 
 impl OpenAIStopConditionsProvider for NvCreateCompletionRequest {
