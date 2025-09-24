@@ -16,36 +16,40 @@ impl<S> Layer<S> for CustomLayer
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
+    fn on_enter(&self, id: &tracing::span::Id, ctx: tracing_subscriber::layer::Context<'_, S>) {
+        if let Some(span) = ctx.span(id) {
+            let span_name = span.name();
+            
+            // Get the OpenTelemetry context using the same technique as in the snippet
+            let current_span = Span::current();
+            let otel_context = current_span.context();
+            let span_ref = otel_context.span();
+            let span_context = span_ref.span_context();
+            
+            let trace_id = format!("{}", span_context.trace_id());
+            let span_id = format!("{}", span_context.span_id());
+            
+            println!("[ENTER] span_name={}, trace_id={}, span_id={}", span_name, trace_id, span_id);
+        }
+    }
+    
     fn on_event(&self, event: &Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
         // Get the message field from the event
         let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
         
-        // Get the span context if it exists
-        let span: Option<tracing_subscriber::registry::SpanRef<'_, S>> = event.parent().and_then(|id| ctx.span(id)).or_else(|| ctx.lookup_current());;
-        let (trace_id, span_id) = if let Some(span) = span {
-            // Get the OpenTelemetry context from the span
-            let extensions = span.extensions();
-            let span_ref = extensions.get::<tracing_opentelemetry::OtelData>();
-            
-            if let Some(otel_data) = span_ref {
-                let cx = otel_data.parent_cx.clone();
-                let span: opentelemetry::trace::SpanRef<'_> = cx.span();
-                let span_context = span.span_context();
-                (
-                    format!("{}", span_context.trace_id()),
-                    format!("{}", span_context.span_id())
-                )
-            } else {
-                ("no_trace".to_string(), "no_span".to_string())
-            }
-        } else {
-            ("root".to_string(), "root".to_string())
-        };
+        // Get the OpenTelemetry context using the same technique as in the snippet
+        let current_span = Span::current();
+        let otel_context = current_span.context();
+        let span_ref = otel_context.span();
+        let span_context = span_ref.span_context();
+        
+        let trace_id = format!("{}", span_context.trace_id());
+        let span_id = format!("{}", span_context.span_id());
 
-        // Print the message with trace context if we found one
+        // Print the message with trace context
         if let Some(message) = visitor.message {
-            println!("[trace_id={}, span_id={}] {}", trace_id, span_id, message);
+            println!("[EVENT] message={}, trace_id={}, span_id={}", message, trace_id, span_id);
         }
     }
 }
@@ -195,8 +199,8 @@ async fn process_request_from_service(request_id: u32, headers: HashMap<String, 
     
     // Continue with normal processing - these will be part of the same trace
     simulate_work("database_query", 200).await;
-    simulate_work("external_api_call", 300).await;
-    simulate_work("data_processing", 150).await;
+    // simulate_work("external_api_call", 300).await;
+    // simulate_work("data_processing", 150).await;
     
     info!(request_id = request_id, "Request from external service completed");
 }
@@ -257,12 +261,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wait between requests to clearly separate them
     tokio::time::sleep(Duration::from_secs(1)).await;
     
-    // {
-    //     let request_span = tracing::info_span!("request_2");
-    //     let _enter = request_span.enter();
-    //     info!("Processing second request");
-    //     process_request(2).await;
-    // }
+    {
+        let request_span = tracing::info_span!("request_2");
+        let _enter = request_span.enter();
+        info!("Processing second request");
+        process_request(2).await;
+    }
 
     // Wait a bit more
     tokio::time::sleep(Duration::from_secs(1)).await;
