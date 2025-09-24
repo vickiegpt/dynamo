@@ -125,37 +125,65 @@ echo "  DEEPGEMM_REF=$DEEPGEMM_REF | FLASHINF_REF=$FLASHINF_REF"
 echo "  INSTALLATION_DIR=$INSTALLATION_DIR | VLLM_GIT_URL=$VLLM_GIT_URL"
 
 echo "\n=== Cloning vLLM repository ==="
+# We need to clone to install dependencies
 cd $INSTALLATION_DIR
 git clone $VLLM_GIT_URL vllm
 cd vllm
 git checkout $VLLM_REF
 
-echo "\n=== Installing vLLM ==="
+# TODO remove in future vLLM release, re-instate ignore torch script
+# https://github.com/vllm-project/vllm/pull/24729
+GIT_COMMITTER_NAME="Container Build" GIT_COMMITTER_EMAIL="container@buildkitsandbox.local" git cherry-pick 740f064
 
-if [[ $VLLM_REF =~ ^v ]]; then
-    # VLLM_REF starts with 'v' - use pip install with version tag
+
+echo "\n=== Installing vLLM & FlashInfer ==="
+
+if [[ $VLLM_REF =~ ^v ]] && [ "$ARCH" = "amd64" ]; then
+    # VLLM_REF starts with 'v' and amd64 - use pip install with version tag
     echo "Installing vLLM $VLLM_REF from PyPI..."
+
     uv pip install vllm[flashinfer]==$VLLM_REF --torch-backend=$TORCH_BACKEND
+
 else
-    # VLLM_REF does not start with 'v' - use git checkout path
+    # VLLM_REF does not start with 'v' or amd64 - use git checkout path
     if [ "$ARCH" = "arm64" ]; then
+
+        # torch 2.8.0 doesn't have a aarch wheel for cu128, vLLM uses torch 2.8.0 nightly wheel builds to compile its aarch wheel against
+        # nightly can be unstable so we will not use it here
+        # for now we will use torch 2.7.1+cu128 but this requires a recompilation from source
+
         echo "Building vLLM from source for ARM64 architecture..."
 
-        # Try to install specific PyTorch version first, fallback to latest nightly
+        # Try to install specific PyTorch version first
         echo "Attempting to install pinned PyTorch nightly versions..."
-        if ! uv pip install torch==2.7.1+cu128 torchaudio==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl; then
+        if ! uv pip install torch==2.7.1+cu128 torchaudio==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128; then
             echo "Pinned versions failed"
             exit 1
-            # uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
         fi
 
+        # Create constraints file to pin all PyTorch-related versions
+        echo "Creating constraints file to preserve PyTorch ecosystem versions..."
+        TORCH_VERSION=$(python -c "import torch; print(torch.__version__)")
+        TORCHAUDIO_VERSION=$(python -c "import torchaudio; print(torchaudio.__version__)")
+        TORCHVISION_VERSION=$(python -c "import torchvision; print(torchvision.__version__)")
+
+        rm -rf /tmp/torch_constraints.txt
+        echo "torch==$TORCH_VERSION" > /tmp/torch_constraints.txt
+        echo "torchaudio==$TORCHAUDIO_VERSION" >> /tmp/torch_constraints.txt
+        echo "torchvision==$TORCHVISION_VERSION" >> /tmp/torch_constraints.txt
+
+        echo "Pinned versions:"
+        echo "  - torch==$TORCH_VERSION"
+        echo "  - torchaudio==$TORCHAUDIO_VERSION"
+        echo "  - torchvision==$TORCHVISION_VERSION"
+
         python use_existing_torch.py
-        uv pip install -r requirements/build.txt
+        uv pip install -c /tmp/torch_constraints.txt -r requirements/build.txt
 
         if [ "$EDITABLE" = "true" ]; then
-            MAX_JOBS=${MAX_JOBS} uv pip install --no-build-isolation -e . -v
+            MAX_JOBS=${MAX_JOBS} uv pip install --no-build-isolation -c /tmp/torch_constraints.txt -e . -v
         else
-            MAX_JOBS=${MAX_JOBS} uv pip install --no-build-isolation . -v
+            MAX_JOBS=${MAX_JOBS} uv pip install --no-build-isolation -c /tmp/torch_constraints.txt . -v
         fi
 
         echo "\n=== Installing FlashInfer from source ==="
@@ -163,7 +191,9 @@ else
         git clone https://github.com/flashinfer-ai/flashinfer.git --recursive
         cd flashinfer
         git checkout $FLASHINF_REF
-        uv pip install -v --no-build-isolation .
+
+        # Install with constraints to prevent PyTorch upgrade
+        uv pip install -v --no-build-isolation -c /tmp/torch_constraints.txt .
 
     else
         echo "Building vLLM from source for AMD64 architecture..."
@@ -191,6 +221,8 @@ if [ "$ARCH" = "amd64" ]; then
     # LMCache installation currently fails on arm64 due to CUDA dependency issues:
     # OSError: CUDA_HOME environment variable is not set. Please set it to your CUDA install root.
     # TODO: Re-enable for arm64 after verifying lmcache compatibility and resolving the build issue.
+
+    # Alec: Likely lmcache was compiled witha different version of torch and need to install it from source for arm64
     uv pip install lmcache==0.3.3
     echo "✓ LMCache installed"
 else
@@ -198,7 +230,8 @@ else
 fi
 
 echo "\n=== Installing DeepGEMM ==="
-cd tools/
+cd $INSTALLATION_DIR/vllm/tools
+
 if [ -n "$DEEPGEMM_REF" ]; then
     bash install_deepgemm.sh --cuda-version "${CUDA_VERSION}" --ref "$DEEPGEMM_REF"
 else
