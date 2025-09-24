@@ -18,18 +18,33 @@ where
 {
     fn on_enter(&self, id: &tracing::span::Id, ctx: tracing_subscriber::layer::Context<'_, S>) {
         if let Some(span) = ctx.span(id) {
-            let span_name = span.name();
-            
-            // Get the OpenTelemetry context using the same technique as in the snippet
+            // Method 2: Get from current span context (alternative approach)
             let current_span = Span::current();
             let otel_context = current_span.context();
             let span_ref = otel_context.span();
             let span_context = span_ref.span_context();
+            let current_trace_id = format!("{}", span_context.trace_id());
+            let current_span_id = format!("{}", span_context.span_id());
+
+
+            let span_name = span.name();
+            // Get the OpenTelemetry data from the span extensions
+            let extensions = span.extensions();
+            let (trace_id, span_id) = if let Some(otel_data) = extensions.get::<tracing_opentelemetry::OtelData>() {
+                let trace_id = otel_data.builder.trace_id
+                    .map(|id| format!("{:?}", id))
+                    .unwrap_or_else(|| "no_trace".to_string());
+                let span_id = otel_data.builder.span_id
+                    .map(|id| format!("{:?}", id))
+                    .unwrap_or_else(|| "no_span".to_string());
+                (trace_id, span_id)
+            } else {
+                ("no_otel_data".to_string(), "no_otel_data".to_string())
+            };
+            println!("[ENTER] span_name={}, builder_trace_id={}, builder_span_id={}, current_trace_id={}, current_span_id={}", 
+                span_name, trace_id, span_id, current_trace_id, current_span_id);
             
-            let trace_id = format!("{}", span_context.trace_id());
-            let span_id = format!("{}", span_context.span_id());
-            
-            println!("[ENTER] span_name={}, trace_id={}, span_id={}", span_name, trace_id, span_id);
+            // println!("ENTER [trace_id={}, span_id={}] span: {}", trace_id, span_id, span_name);
         }
     }
     
@@ -38,18 +53,27 @@ where
         let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
         
-        // Get the OpenTelemetry context using the same technique as in the snippet
-        let current_span = Span::current();
-        let otel_context = current_span.context();
-        let span_ref = otel_context.span();
-        let span_context = span_ref.span_context();
-        
-        let trace_id = format!("{}", span_context.trace_id());
-        let span_id = format!("{}", span_context.span_id());
+        // Get the span context if it exists
+        let (trace_id, span_id) = if let Some(span) = ctx.lookup_current() {
+            let extensions = span.extensions();
+            if let Some(otel_data) = extensions.get::<tracing_opentelemetry::OtelData>() {
+                let trace_id = otel_data.builder.trace_id
+                    .map(|id| format!("{:?}", id))
+                    .unwrap_or_else(|| "no_trace".to_string());
+                let span_id = otel_data.builder.span_id
+                    .map(|id| format!("{:?}", id))
+                    .unwrap_or_else(|| "no_span".to_string());
+                (trace_id, span_id)
+            } else {
+                ("no_otel_data".to_string(), "no_otel_data".to_string())
+            }
+        } else {
+            ("root".to_string(), "root".to_string())
+        };
 
-        // Print the message with trace context
+        // Print the message with trace context if we found one
         if let Some(message) = visitor.message {
-            println!("[EVENT] message={}, trace_id={}, span_id={}", message, trace_id, span_id);
+            println!("EVENT [trace_id={}, span_id={}] {}", trace_id, span_id, message);
         }
     }
 }
@@ -199,8 +223,8 @@ async fn process_request_from_service(request_id: u32, headers: HashMap<String, 
     
     // Continue with normal processing - these will be part of the same trace
     simulate_work("database_query", 200).await;
-    // simulate_work("external_api_call", 300).await;
-    // simulate_work("data_processing", 150).await;
+    simulate_work("external_api_call", 300).await;
+    simulate_work("data_processing", 150).await;
     
     info!(request_id = request_id, "Request from external service completed");
 }
@@ -261,12 +285,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wait between requests to clearly separate them
     tokio::time::sleep(Duration::from_secs(1)).await;
     
-    {
-        let request_span = tracing::info_span!("request_2");
-        let _enter = request_span.enter();
-        info!("Processing second request");
-        process_request(2).await;
-    }
+    // {
+    //     let request_span = tracing::info_span!("request_2");
+    //     let _enter = request_span.enter();
+    //     info!("Processing second request");
+    //     process_request(2).await;
+    // }
 
     // Wait a bit more
     tokio::time::sleep(Duration::from_secs(1)).await;
