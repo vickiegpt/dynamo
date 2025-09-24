@@ -280,20 +280,13 @@ impl OAIPromptFormatter for HfTokenizerConfigJsonFormatter {
             ..mixins
         };
 
-        eprint!("[+++++] IM HEEasdf282: {:?}", ctx);
-        eprintln!("[+++++] IM req.reasoning_effort 283: {:?}", req.reasoning_effort());
-
-
-
         // Merge any additional args into the context last so they take precedence
         let ctx = if let Some(args) = req.reasoning_effort() {
-            eprintln!("[+++++] IM HEEasdf: {:?}", args);
             let extra = Value::from_serialize(args);
             context! { ..ctx, ..extra }
         } else {
             ctx
         };
-        eprintln!("[+++++] IM HERE CTX: {:?}", ctx);
 
         let tmpl: minijinja::Template<'_, '_> = if has_tools {
             self.env.get_template("tool_use")?
