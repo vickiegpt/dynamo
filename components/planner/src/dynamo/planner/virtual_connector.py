@@ -9,7 +9,10 @@ from typing import Optional
 
 from dynamo.planner.kubernetes_connector import SubComponentType, TargetReplica
 from dynamo.planner.planner_connector import PlannerConnector
-from dynamo.planner.utils.exceptions import DeploymentValidationError
+from dynamo.planner.utils.exceptions import (
+    DeploymentValidationError,
+    EmptyTargetReplicasError,
+)
 from dynamo.runtime import DistributedRuntime, EtcdKvCache
 from dynamo.runtime.logging import configure_dynamo_logging
 
@@ -317,7 +320,7 @@ class VirtualConnector(PlannerConnector):
     ):
         """Set the replicas for multiple components at once"""
         if not target_replicas:
-            raise ValueError("target_replicas cannot be empty")
+            raise EmptyTargetReplicasError()
 
         num_prefill = None
         num_decode = None
