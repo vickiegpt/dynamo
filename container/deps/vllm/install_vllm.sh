@@ -9,7 +9,7 @@
 # 1. vLLM
 # 2. LMCache
 # 3. DeepGEMM
-# 5. EP kernels
+# 4. EP kernels
 
 set -euo pipefail
 
