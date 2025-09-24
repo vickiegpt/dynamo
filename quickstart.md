@@ -241,7 +241,6 @@ helm uninstall dynamo-crds --namespace default
 - **[Monitoring Setup](docs/kubernetes/metrics.md)** - Observability and metrics
 - **[Logging Configuration](docs/kubernetes/logging.md)** - Centralized logging setup
 - **[Multi-node Deployment](docs/kubernetes/multinode-deployment.md)** - Scale across K8s nodes
-- **[Security Guide](docs/kubernetes/security.md)** - Secure your production deployment
 - **[Performance Tuning](docs/benchmarks/)** - Optimize for your workload
 
 ---
