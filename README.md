@@ -96,7 +96,7 @@ docker compose -f deploy/docker-compose.yml up -d
 python -m dynamo.frontend --http-port 8000
 
 # Terminal 2: Start backend worker  
-python -m dynamo.sglang.worker --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B --skip-tokenizer-init
+python -m dynamo.sglang --model-path deepseek-ai/DeepSeek-R1-Distill-Llama-8B
 ```
 
 ### 4. Test It
@@ -150,7 +150,7 @@ Dynamo supports multiple inference engines. Choose your preferred backend:
 | Engine | Install | Run Command | Notes |
 |--------|---------|-------------|-------|
 | **vLLM** | `uv pip install ai-dynamo[vllm]` | `python -m dynamo.vllm --model Qwen/Qwen3-0.6B` | Use `--context-length <value>` if KV cache doesn't fit in memory. Set `CUDA_VISIBLE_DEVICES` to specify GPUs. |
-| **SGLang** | `uv pip install ai-dynamo[sglang]` | `python -m dynamo.sglang.worker --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B` | Requires `apt install -y libnuma-dev` dependency. |
+| **SGLang** | `uv pip install ai-dynamo[sglang]` | `python -m dynamo.sglang --model-path deepseek-ai/DeepSeek-R1-Distill-Llama-8B` | Requires `apt install -y libnuma-dev` dependency. |
 | **TensorRT-LLM** | `uv pip install ai-dynamo[trtllm]` | `python -m dynamo.trtllm --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B` | Requires NVIDIA PyTorch container. See [TensorRT-LLM Quickstart](quickstart.md#tensorrt-llm-backend) for setup. |
 
 **Detailed engine guides**: [vLLM](components/backends/vllm/README.md) | [SGLang](components/backends/sglang/README.md) | [TensorRT-LLM](components/backends/trtllm/README.md)

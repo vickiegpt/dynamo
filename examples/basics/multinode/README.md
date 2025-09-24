@@ -131,23 +131,21 @@ Open a terminal on Node 1 and launch both workers:
 
 ```bash
 # Launch prefill worker in background
-CUDA_VISIBLE_DEVICES=0 python3 -m dynamo.sglang.worker \
+CUDA_VISIBLE_DEVICES=0 python3 -m dynamo.sglang \
     --model-path Qwen/Qwen3-0.6B \
     --served-model-name Qwen/Qwen3-0.6B \
     --page-size 16 \
     --tp 1 \
     --trust-remote-code \
-    --skip-tokenizer-init \
     --disaggregation-mode prefill \
     --disaggregation-transfer-backend nixl &
 
-CUDA_VISIBLE_DEVICES=1 python3 -m dynamo.sglang.decode_worker \
+CUDA_VISIBLE_DEVICES=1 python3 -m dynamo.sglang \
     --model-path Qwen/Qwen3-0.6B \
     --served-model-name Qwen/Qwen3-0.6B \
     --page-size 16 \
     --tp 1 \
     --trust-remote-code \
-    --skip-tokenizer-init \
     --disaggregation-mode decode \
     --disaggregation-transfer-backend nixl
 ```
@@ -157,7 +155,7 @@ CUDA_VISIBLE_DEVICES=1 python3 -m dynamo.sglang.decode_worker \
 > - `--page-size 16`: Sets the KV cache block size - must be identical across all workers
 > - `--disaggregation-mode`: Separates prefill (prompt processing) from decode (token > generation)
 > - `--disaggregation-transfer-backend nixl`: Enables high-speed GPU-to-GPU transfers
-> - `--skip-tokenizer-init`: Avoids duplicate tokenizer loading since the frontend > handles tokenization
+> - `--skip-tokenizer-init`: Automatically set when using dynamo frontend to avoid duplicate tokenizer loading
 
 ### Step 3: Launch Replica 2 (Node 2)
 
@@ -165,24 +163,22 @@ Open a terminal on Node 2 and launch both workers:
 
 ```bash
 # Launch prefill worker in background
-CUDA_VISIBLE_DEVICES=0 python3 -m dynamo.sglang.worker \
+CUDA_VISIBLE_DEVICES=0 python3 -m dynamo.sglang \
     --model-path Qwen/Qwen3-0.6B \
     --served-model-name Qwen/Qwen3-0.6B \
     --page-size 16 \
     --tp 1 \
     --trust-remote-code \
-    --skip-tokenizer-init \
     --disaggregation-mode prefill \
     --disaggregation-transfer-backend nixl &
 
 # Launch decode worker in foreground
-CUDA_VISIBLE_DEVICES=1 python3 -m dynamo.sglang.decode_worker \
+CUDA_VISIBLE_DEVICES=1 python3 -m dynamo.sglang \
     --model-path Qwen/Qwen3-0.6B \
     --served-model-name Qwen/Qwen3-0.6B \
     --page-size 16 \
     --tp 1 \
     --trust-remote-code \
-    --skip-tokenizer-init \
     --disaggregation-mode decode \
     --disaggregation-transfer-backend nixl
 ```
@@ -473,7 +469,7 @@ Stop all components in reverse order:
      exit
 
      # Method 3: Kill by process name (from any terminal)
-     pkill -f "dynamo.sglang.worker.*prefill"
+     pkill -f "dynamo.sglang.*prefill"
      ```
 3. Stop infrastructure services:
    ```bash
