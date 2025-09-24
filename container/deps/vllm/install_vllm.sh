@@ -20,11 +20,11 @@ set -euo pipefail
 
 # Parse arguments
 EDITABLE=true
-VLLM_REF="1da94e673c257373280026f75ceb4effac80e892"  # from v0.10.1.1
+VLLM_REF="f9455fb4190645f99063a1b8a496a8c4e22be729"  # from v0.10.1.1
 # When updating above VLLM_REF make sure precompiled wheel file URL is correct. Run this command:
 # aws s3 ls s3://vllm-wheels/${VLLM_REF}/ --region us-west-2 --no-sign-request
-VLLM_PRECOMPILED_WHEEL_LOCATION="https://vllm-wheels.s3.us-west-2.amazonaws.com/${VLLM_REF}/vllm-0.10.1.1-cp38-abi3-manylinux1_x86_64.whl"
-VLLM_GIT_URL="https://github.com/vllm-project/vllm.git"
+# VLLM_PRECOMPILED_WHEEL_LOCATION="https://vllm-wheels.s3.us-west-2.amazonaws.com/${VLLM_REF}/vllm-0.10.1.1-cp38-abi3-manylinux1_x86_64.whl"
+VLLM_GIT_URL="https://github.com/galletas1712/vllm.git"
 MAX_JOBS=16
 INSTALLATION_DIR=/tmp
 ARCH=$(uname -m)
@@ -156,8 +156,6 @@ else
         echo "Pinned versions failed"
         exit 1
     fi
-
-    export VLLM_PRECOMPILED_WHEEL_LOCATION="${VLLM_PRECOMPILED_WHEEL_LOCATION}"
 
     if [ "$EDITABLE" = "true" ]; then
 	uv pip install -e . --torch-backend=$TORCH_BACKEND

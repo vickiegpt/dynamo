@@ -251,7 +251,7 @@ get_options() {
 
     if [ -n "$HF_CACHE" ]; then
         mkdir -p "$HF_CACHE"
-        VOLUME_MOUNTS+=" -v $HF_CACHE:/root/.cache/huggingface"
+        VOLUME_MOUNTS+=" -v $HF_CACHE:\$HOME/.cache/huggingface"
     fi
 
     if [ -z "${PRIVILEGED}" ]; then

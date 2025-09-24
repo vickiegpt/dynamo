@@ -14,7 +14,7 @@ ARG RUNTIME_IMAGE="nvcr.io/nvidia/cuda"
 ARG RUNTIME_IMAGE_TAG="12.8.1-runtime-ubuntu24.04"
 
 # Make sure to update the dependency version in pyproject.toml when updating this
-ARG VLLM_REF="1da94e673c257373280026f75ceb4effac80e892"  # from v0.10.1.1
+ARG VLLM_REF="f9455fb4190645f99063a1b8a496a8c4e22be729"  # from v0.10.1.1
 ARG TORCH_BACKEND="cu128"
 
 # sccache configuration - inherit from base build
