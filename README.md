@@ -64,7 +64,7 @@ To learn more about each framework and their capabilities, check out each framew
 
 # Quick Start
 
-**New to Dynamo?** **[Complete Quickstart Guide](quickstart.md)** (Recommended)
+**New to Dynamo?** **[Complete Quickstart Guide](docs/quickstart.md)** (Recommended)
 
 ## Local Development
 
@@ -108,7 +108,7 @@ curl localhost:8000/v1/chat/completions \
 
 ## Kubernetes Deployment
 
-**Production deployments** **[Kubernetes Quickstart](quickstart.md#kubernetes-quickstart)**
+**Production deployments** **[Kubernetes Quickstart](docs/quickstart.md#kubernetes-quickstart)**
 
 ```bash
 # Install platform
@@ -151,7 +151,7 @@ Dynamo supports multiple inference engines. Choose your preferred backend:
 |--------|---------|-------------|-------|
 | **vLLM** | `uv pip install ai-dynamo[vllm]` | `python -m dynamo.vllm --model Qwen/Qwen3-0.6B` | Use `--context-length <value>` if KV cache doesn't fit in memory. Set `CUDA_VISIBLE_DEVICES` to specify GPUs. |
 | **SGLang** | `uv pip install ai-dynamo[sglang]` | `python -m dynamo.sglang --model-path deepseek-ai/DeepSeek-R1-Distill-Llama-8B` | Requires `apt install -y libnuma-dev` dependency. |
-| **TensorRT-LLM** | `uv pip install ai-dynamo[trtllm]` | `python -m dynamo.trtllm --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B` | Requires NVIDIA PyTorch container. See [TensorRT-LLM Quickstart](quickstart.md#tensorrt-llm-backend) for setup. |
+| **TensorRT-LLM** | `uv pip install ai-dynamo[trtllm]` | `python -m dynamo.trtllm --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B` | Requires NVIDIA PyTorch container. See [TensorRT-LLM Quickstart](docs/quickstart.md#tensorrt-llm-backend) for setup. |
 
 **Detailed engine guides**: [vLLM](components/backends/vllm/README.md) | [SGLang](components/backends/sglang/README.md) | [TensorRT-LLM](components/backends/trtllm/README.md)
 
