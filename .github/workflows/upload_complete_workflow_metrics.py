@@ -195,7 +195,7 @@ def mask_sensitive_urls(error_msg: str, url: str) -> str:
     return error_msg
 
 class WorkflowMetricsUploader:
-    def __init__(self):
+    def __init__(self): 
         self.headers = {"Content-Type": "application/json", "Accept-Charset": "UTF-8"}
         self.workflow_index = os.getenv('WORKFLOW_INDEX', '')
         self.jobs_index = os.getenv('JOB_INDEX', '')
