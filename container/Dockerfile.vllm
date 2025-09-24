@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.10.0
 # SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -135,6 +136,8 @@ ENV SCCACHE_BUCKET=${USE_SCCACHE:+${SCCACHE_BUCKET}} \
 # Install VLLM and related dependencies
 RUN --mount=type=bind,source=./container/deps/,target=/tmp/deps \
     --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=secret,id=aws-key-id,env=AWS_ACCESS_KEY_ID \
+    --mount=type=secret,id=aws-secret-id,env=AWS_SECRET_ACCESS_KEY \
         # TODO - split vllm, DeepEP, DeepGeMM, PPLX installs
         # Should be able to select how you want your build to go
         cp /tmp/deps/vllm/install_vllm.sh /tmp/install_vllm.sh && \
@@ -195,7 +198,9 @@ RUN apt-get update && \
         ninja-build \
         g++ \
         # prometheus dependencies
-        ca-certificates && \
+        ca-certificates \
+        # DeepGemm uses 'cuobjdump' which does not come with CUDA image
+        cuda-command-line-tools-12-8 && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy CUDA development tools (nvcc, headers, dependencies, etc.) from base devel image
@@ -222,7 +227,7 @@ RUN ARCH=$(dpkg --print-architecture) && \
         arm64) PLATFORM=linux-arm64 ;; \
         *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
     esac && \
-    curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.${PLATFORM}.tar.gz" \
+    curl -fsSL --retry 5 --retry-delay 5 "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.${PLATFORM}.tar.gz" \
     | tar -xz -C /tmp && \
     mv "/tmp/prometheus-${PROM_VERSION}.${PLATFORM}/prometheus" /usr/local/bin/ && \
     chmod +x /usr/local/bin/prometheus && \
@@ -244,6 +249,10 @@ $NIXL_PLUGIN_DIR:\
 /usr/local/ucx/lib:\
 /usr/local/ucx/lib/ucx:\
 $LD_LIBRARY_PATH
+
+# DeepGemm runs nvcc for JIT kernel compilation, however the CUDA include path
+# is not properly set for complilation. Set CPATH to help nvcc find the headers.
+ENV CPATH=/usr/local/cuda/include:$CPATH
 
 ### VIRTUAL ENVIRONMENT SETUP ###
 
@@ -280,23 +289,25 @@ RUN --mount=type=bind,source=./container/launch_message.txt,target=/workspace/la
 ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
 CMD []
 
-#######################################
-########## Local Development #######
-#######################################
+###########################################################
+########## Development (run.sh, runs as root user) ########
+###########################################################
 #
-# PURPOSE: Local development
+# PURPOSE: Local development environment for use with run.sh (not Dev Container plug-in)
 #
-# This stage adds development tools, utilities, and dependencies specifically
-# needed for:
-# - Local development and debugging
-# - vscode/cursor development
+# This stage runs as root and provides:
+# - Development tools and utilities for local debugging
+# - Support for vscode/cursor development outside the Dev Container plug-in
 #
-# Use this stage when you need a full development environment with additional
-# tooling beyond the base runtime image.
+# Use this stage if you need a full-featured development environment with extra tools,
+# but do not use it with the Dev Container plug-in.
 
 FROM runtime AS dev
 
-# Install utilities
+# Don't want ubuntu to be editable, just change uid and gid.
+ARG WORKSPACE_DIR=/workspace
+
+# Install utilities as root
 RUN apt-get update -y && \
     apt-get install -y --no-install-recommends  \
     # Install utilities
@@ -325,54 +336,30 @@ RUN apt-get update -y && \
     protobuf-compiler && \
     rm -rf /var/lib/apt/lists/*
 
-# Rust environment setup
-ENV RUSTUP_HOME=/usr/local/rustup \
+COPY --from=runtime /usr/local/bin /usr/local/bin
+
+# Set workspace directory variable
+ENV WORKSPACE_DIR=${WORKSPACE_DIR} \
+    DYNAMO_HOME=${WORKSPACE_DIR} \
+    RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
-    CARGO_TARGET_DIR=/opt/dynamo/target \
+    CARGO_TARGET_DIR=/workspace/target \
+    VIRTUAL_ENV=/opt/dynamo/venv \
     PATH=/usr/local/cargo/bin:$PATH
 
-COPY --from=dynamo_base $RUSTUP_HOME $RUSTUP_HOME
-COPY --from=dynamo_base $CARGO_HOME $CARGO_HOME
-
-# https://code.visualstudio.com/remote/advancedcontainers/add-nonroot-user
-# Will use the default ubuntu user, but give sudo access
-# Needed so files permissions aren't set to root ownership when writing from inside container
-
-# Don't want ubuntu to be editable, just change uid and gid. User ubuntu is hardcoded in .devcontainer
-ENV USERNAME=ubuntu
-ARG USER_UID=1000
-ARG USER_GID=1000
-
-RUN apt-get update && apt-get install -y sudo gnupg2 gnupg1 \
-    && echo "$USERNAME ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME \
-    && chmod 0440 /etc/sudoers.d/$USERNAME \
-    && mkdir -p /home/$USERNAME \
-    && chown -R $USERNAME:$USERNAME /home/$USERNAME \
-    && rm -rf /var/lib/apt/lists/* \
-    && chsh -s /bin/bash $USERNAME
+COPY --from=dynamo_base /usr/local/rustup /usr/local/rustup
+COPY --from=dynamo_base /usr/local/cargo /usr/local/cargo
 
 # This is a slow operation (~40s on my cpu)
 # Much better than chown -R $USERNAME:$USERNAME /opt/dynamo/venv (~10min on my cpu)
-COPY --from=runtime --chown=$USER_UID:$USER_GID ${VIRTUAL_ENV} ${VIRTUAL_ENV}
-RUN chown $USERNAME:$USERNAME ${VIRTUAL_ENV}
-COPY --from=runtime --chown=$USERNAME:$USERNAME /usr/local/bin /usr/local/bin
+COPY --from=runtime ${VIRTUAL_ENV} ${VIRTUAL_ENV}
 
 # so we can use maturin develop
 RUN uv pip install maturin[patchelf]
 
-USER $USERNAME
-ENV HOME=/home/$USERNAME
-ENV PYTHONPATH=$PYTHONPATH:$HOME/dynamo/components/planner/src
-ENV CARGO_TARGET_DIR=$HOME/dynamo/.build/target
-WORKDIR $HOME
-
-# https://code.visualstudio.com/remote/advancedcontainers/persist-bash-history
-RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=$HOME/.commandhistory/.bash_history" \
-    && mkdir -p $HOME/.commandhistory \
-    && touch $HOME/.commandhistory/.bash_history \
-    && echo "$SNIPPET" >> "$HOME/.bashrc"
-
-RUN mkdir -p /home/$USERNAME/.cache/
+# Make sure to sync this with the one specified on README.md.
+# This is a generic PYTHONPATH which works for all the frameworks, so some paths may not be relevant for this particular framework.
+ENV PYTHONPATH=${WORKSPACE_DIR}/components/metrics/src:${WORKSPACE_DIR}/components/frontend/src:${WORKSPACE_DIR}/components/planner/src:${WORKSPACE_DIR}/components/backends/mocker/src:${WORKSPACE_DIR}/components/backends/trtllm/src:${WORKSPACE_DIR}/components/backends/vllm/src:${WORKSPACE_DIR}/components/backends/sglang/src:${WORKSPACE_DIR}/components/backends/llama_cpp/src
 
 ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
 CMD []

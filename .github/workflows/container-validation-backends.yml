@@ -11,7 +11,7 @@ on:
 
 jobs:
   build-test:
-    runs-on: gpu-l40-runners
+    runs-on: gpu-l40-amd64
     outputs:
       build-duration-sec: ${{ steps.build-image.outputs.build-duration-sec }}
       image-size-bytes: ${{ steps.build-image.outputs.image-size-bytes }}
@@ -22,12 +22,20 @@ jobs:
       framework: ${{ matrix.framework }}
       target: ${{ matrix.target }}
     strategy:
+      fail-fast: false
       matrix:
-        framework: [vllm]
+        framework: [vllm, sglang, trtllm]
         include:
           - framework: vllm
             target: runtime
             pytest_marks: "e2e and vllm and gpu_1 and not slow"
+          - framework: sglang
+            target: runtime
+            pytest_marks: "e2e and sglang and gpu_1 and not slow"
+          - framework: trtllm
+            target: runtime
+            pytest_marks: "e2e and trtllm_marker and gpu_1 and not slow"
+
     # Do not cancel main branch runs
     concurrency:
       group: ${{ github.workflow }}-${{ matrix.framework }}-build-test-${{ github.ref_name || github.run_id }}
@@ -54,17 +62,14 @@ jobs:
         if: always()
         run: |
           docker system prune -af
-      - name: Debug
-        run: |
-          lsmod | grep nvidia
-          sudo dmesg | grep -i nvrm || true
-          nvidia-smi
       - name: Build image
         id: build-image
         env:
           GITHUB_TOKEN: ${{ secrets.CI_TOKEN }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
           SCCACHE_S3_BUCKET:  ${{ secrets.SCCACHE_S3_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           # Capture build start time
           BUILD_START_TIME=$(date +%s)
@@ -298,8 +303,11 @@ jobs:
           echo "🎯 Next step: Apply enhanced sccache workflow to fix issues"
           echo "==============================="
       - name: Run pytest
+        env:
+          HF_HOME: /runner/_work/_temp
         run: |
-          docker run --rm --gpus all -w /workspace \
+          docker run --runtime=nvidia --rm --gpus all -w /workspace \
+            --network host \
             --name ${{ env.CONTAINER_ID }}_pytest \
             ${{ matrix.framework }}:latest \
             bash -c "pytest -xsv --basetemp=/tmp --junitxml=${{ env.PYTEST_XML_FILE }} -m \"${{ env.PYTEST_MARKS }}\""

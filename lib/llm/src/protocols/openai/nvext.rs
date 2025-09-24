@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
@@ -35,6 +23,12 @@ pub struct NvExt {
     #[validate(custom(function = "validate_top_k"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_k: Option<i32>,
+
+    /// Relative probability floor
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[builder(default, setter(strip_option))]
+    #[validate(range(min = 0.0, max = 1.0))]
+    pub min_p: Option<f32>,
 
     /// How much to penalize tokens based on how frequently they occur in the text.
     /// A value of 1 means no penalty, while values larger than 1 discourage and values smaller encourage.
@@ -100,6 +94,12 @@ pub struct NvExt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[builder(default, setter(strip_option))]
     pub guided_decoding_backend: Option<String>,
+
+    /// Maximum number of thinking tokens allowed
+    /// NOTE: Currently passed through to backends as a no-op for future implementation
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[builder(default, setter(strip_option))]
+    pub max_thinking_tokens: Option<u32>,
 }
 
 impl Default for NvExt {
@@ -157,6 +157,7 @@ mod tests {
         assert_eq!(nv_ext.guided_regex, None);
         assert_eq!(nv_ext.guided_grammar, None);
         assert_eq!(nv_ext.guided_choice, None);
+        assert_eq!(nv_ext.max_thinking_tokens, None);
     }
 
     // Test valid builder configurations
@@ -172,6 +173,7 @@ mod tests {
             .guided_grammar("S -> 'a' S 'b' | 'c'".to_string())
             .guided_choice(vec!["choice1".to_string(), "choice2".to_string()])
             .guided_decoding_backend("xgrammar".to_string())
+            .max_thinking_tokens(1024)
             .build()
             .unwrap();
 
@@ -193,6 +195,7 @@ mod tests {
             Some(vec!["choice1".to_string(), "choice2".to_string()])
         );
         assert_eq!(nv_ext.guided_decoding_backend, Some("xgrammar".to_string()));
+        assert_eq!(nv_ext.max_thinking_tokens, Some(1024));
         // Validate the built struct
         assert!(nv_ext.validate().is_ok());
     }

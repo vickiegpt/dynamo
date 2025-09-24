@@ -21,7 +21,7 @@ limitations under the License.
 [![Discord](https://dcbadge.limes.pink/api/server/D92uqZRjCZ?style=flat)](https://discord.gg/D92uqZRjCZ)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ai-dynamo/dynamo)
 
-| **[Roadmap](https://github.com/ai-dynamo/dynamo/issues/762)** | **[Documentation](https://docs.nvidia.com/dynamo/latest/index.html)** | **[Examples](https://github.com/ai-dynamo/dynamo/tree/main/examples)** | **[Design Proposals](https://github.com/ai-dynamo/enhancements)** |
+| **[Roadmap](https://github.com/ai-dynamo/dynamo/issues/762)** | **[Support matrix](https://github.com/ai-dynamo/dynamo/blob/main/docs/support_matrix.md)** | **[Documentation](https://docs.nvidia.com/dynamo/latest/index.html)** | **[Examples](https://github.com/ai-dynamo/dynamo/tree/main/examples)** | **[Prebuilt containers](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/ai-dynamo/collections/ai-dynamo)** | **[Design Proposals](https://github.com/ai-dynamo/enhancements)** | **[Blogs](https://developer.nvidia.com/blog/tag/nvidia-dynamo)**
 
 # NVIDIA Dynamo
 
@@ -59,8 +59,8 @@ Dynamo is designed to be inference engine agnostic (supports TRT-LLM, vLLM, SGLa
 | [**Conditional Disaggregation**](/docs/architecture/disagg_serving.md#conditional-disaggregation) | 🚧 | 🚧 | 🚧 |
 | [**KV-Aware Routing**](/docs/architecture/kv_cache_routing.md) | ✅ | ✅ | ✅ |
 | [**Load Based Planner**](/docs/architecture/load_planner.md) | 🚧 | 🚧 | 🚧 |
-| [**SLA-Based Planner**](/docs/architecture/sla_planner.md) | ✅ | ✅ | 🚧 |
-| [**KVBM**](/docs/architecture/kvbm_architecture.md) | 🚧 | 🚧 | 🚧 |
+| [**SLA-Based Planner**](/docs/architecture/sla_planner.md) | ✅ | ✅ | ✅ |
+| [**KVBM**](/docs/architecture/kvbm_architecture.md) | ✅ | 🚧 | ✅ |
 
 To learn more about each framework and their capabilities, check out each framework's README!
 - **[vLLM](components/backends/vllm/README.md)**
@@ -91,6 +91,7 @@ To coordinate across a data center, Dynamo relies on etcd and NATS. To run Dynam
 To quickly setup etcd & NATS, you can also run:
 ```
 # At the root of the repository:
+# Edit deploy/docker-compose.yml to comment out "runtime: nvidia" of the dcgm-exporter service if the nvidia container runtime isn't deployed or to be used.
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
@@ -120,7 +121,7 @@ Dynamo provides a simple way to spin up a local set of inference components incl
 ```
 # Start an OpenAI compatible HTTP server, a pre-processor (prompt templating and tokenization) and a router.
 # Pass the TLS certificate and key paths to use HTTPS instead of HTTP.
-python -m dynamo.frontend --http-port 8080 [--tls-cert-path cert.pem] [--tls-key-path key.pem]
+python -m dynamo.frontend --http-port 8000 [--tls-cert-path cert.pem] [--tls-key-path key.pem]
 
 # Start the SGLang engine, connecting to NATS and etcd to receive requests. You can run several of these,
 # both for the same model and for multiple models. The frontend node will discover them.
@@ -130,7 +131,7 @@ python -m dynamo.sglang.worker --model deepseek-ai/DeepSeek-R1-Distill-Llama-8B 
 #### Send a Request
 
 ```bash
-curl localhost:8080/v1/chat/completions   -H "Content-Type: application/json"   -d '{
+curl localhost:8000/v1/chat/completions   -H "Content-Type: application/json"   -d '{
     "model": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
     "messages": [
     {
@@ -147,7 +148,7 @@ Rerun with `curl -N` and change `stream` in the request to `true` to get the res
 
 ### Deploying Dynamo
 
-- Follow the [Quickstart Guide](docs/guides/dynamo_deploy/README.md) to deploy on Kubernetes.
+- Follow the [Quickstart Guide](docs/kubernetes/README.md) to deploy on Kubernetes.
 - Check out [Backends](components/backends) to deploy various workflow configurations (e.g. SGLang with router, vLLM with disaggregated serving, etc.)
 - Run some [Examples](examples) to learn about building components in Dynamo and exploring various integrations.
 
@@ -199,7 +200,7 @@ It is recommended to use [NGC PyTorch Container](https://catalog.ngc.nvidia.com/
 
 > [!Note]
 > Ensure that you select a PyTorch container image version that matches the version of TensorRT-LLM you are using.
-> For example, if you are using `tensorrt-llm==1.0.0rc6`, use the PyTorch container image version `25.06`.
+> For example, if you are using `tensorrt-llm==1.1.0rc5`, use the PyTorch container image version `25.06`.
 > To find the correct PyTorch container version for your desired `tensorrt-llm` release, visit the [TensorRT-LLM Dockerfile.multi](https://github.com/NVIDIA/TensorRT-LLM/blob/main/docker/Dockerfile.multi) on GitHub. Switch to the branch that matches your `tensorrt-llm` version, and look for the `BASE_TAG` line to identify the recommended PyTorch container tag.
 
 > [!Important]
