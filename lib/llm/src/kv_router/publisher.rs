@@ -365,15 +365,21 @@ fn convert_event(
             lora_id,
         } => {
             let num_block_tokens = vec![block_size as u64; block_hashes.len()];
+            let block_hashes_u64: Vec<u64> = block_hashes
+                .into_iter()
+                .map(BlockHashValue::into_u64)
+                .collect();
             KvCacheEvent {
                 event_id,
                 data: KvCacheEventData::Stored(KvCacheStoreData {
-                    parent_hash: parent_block_hash.map(ExternalSequenceBlockHash::from),
+                    parent_hash: parent_block_hash
+                        .map(BlockHashValue::into_u64)
+                        .map(ExternalSequenceBlockHash::from),
                     blocks: create_stored_blocks(
                         kv_block_size,
                         &token_ids,
                         &num_block_tokens,
-                        &block_hashes,
+                        &block_hashes_u64,
                         lora_id.unwrap_or(0),
                         warning_count,
                     ),
@@ -383,6 +389,7 @@ fn convert_event(
         RawKvEvent::BlockRemoved { block_hashes } => {
             let hashes = block_hashes
                 .into_iter()
+                .map(BlockHashValue::into_u64)
                 .map(ExternalSequenceBlockHash::from)
                 .collect();
             KvCacheEvent {
@@ -401,7 +408,7 @@ fn convert_event(
 
 pub fn create_stored_block_from_parts(
     kv_block_size: u32,
-    block_hash: i64,
+    block_hash: u64,
     token_ids: &[u32],
     _lora_id: u64,
 ) -> KvCacheStoredBlockData {
@@ -416,7 +423,7 @@ pub fn create_stored_blocks(
     kv_block_size: u32,
     token_ids: &[u32],
     num_block_tokens: &[u64],
-    block_hashes: &[i64],
+    block_hashes: &[u64],
     lora_id: u64,
     warning_count: &Arc<AtomicU32>,
 ) -> Vec<KvCacheStoredBlockData> {
@@ -460,18 +467,36 @@ struct KvEventBatch {
     data_parallel_rank: u32, // we are ignoring this for now
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[serde(untagged)]
+enum BlockHashValue {
+    Signed(i64),
+    Unsigned(u64),
+}
+
+impl BlockHashValue {
+    fn into_u64(self) -> u64 {
+        match self {
+            BlockHashValue::Signed(v) => v as u64,
+            BlockHashValue::Unsigned(v) => v,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type")] // msgspec encodes variant tag as a string when `tag=True`
 enum RawKvEvent {
     BlockStored {
-        block_hashes: Vec<i64>,
-        parent_block_hash: Option<i64>,
+        /// Block hashes may be emitted as either signed or unsigned 64-bit values.
+        /// We normalize them to `u64` while deserializing to support both producers.
+        block_hashes: Vec<BlockHashValue>,
+        parent_block_hash: Option<BlockHashValue>,
         token_ids: Vec<u32>,
         block_size: usize,
         lora_id: Option<u64>,
     },
     BlockRemoved {
-        block_hashes: Vec<i64>,
+        block_hashes: Vec<BlockHashValue>,
     },
     AllBlocksCleared,
 }
@@ -759,7 +784,7 @@ mod test_event_processing {
         // two blocks, each of size 4
         let token_ids = vec![1, 2, 3, 4, 5, 6, 7, 8];
         let num_block_tokens = vec![4_u64, 4_u64];
-        let block_hashes = vec![111_i64, 222_i64];
+        let block_hashes = vec![111_u64, 222_u64];
 
         let blocks = create_stored_blocks(
             kv_block_size,
@@ -781,7 +806,7 @@ mod test_event_processing {
         // second block is the wrong size
         let token_ids = vec![1, 2, 3, 4, 5, 6, 7];
         let num_block_tokens = vec![4_u64, 3_u64];
-        let block_hashes = vec![111_i64, 222_i64];
+        let block_hashes = vec![111_u64, 222_u64];
         let warning_count = Arc::new(AtomicU32::new(0));
 
         let blocks = create_stored_blocks(
