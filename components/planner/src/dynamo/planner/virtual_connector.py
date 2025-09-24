@@ -8,8 +8,8 @@ import time
 from typing import Optional
 
 from dynamo.planner.kubernetes_connector import SubComponentType, TargetReplica
-from dynamo.planner.utils.exceptions import DeploymentValidationError
 from dynamo.planner.planner_connector import PlannerConnector
+from dynamo.planner.utils.exceptions import DeploymentValidationError
 from dynamo.runtime import DistributedRuntime, EtcdKvCache
 from dynamo.runtime.logging import configure_dynamo_logging
 
@@ -93,7 +93,7 @@ class VirtualConnector(PlannerConnector):
         return self._etcd_kv_cache
 
     async def wait_for_deployment_ready(
-        self, 
+        self,
         max_attempts: int = 180,  # default: 30 minutes total
         delay_seconds: int = 10,  # default: check every 10 seconds
     ):
@@ -105,26 +105,35 @@ class VirtualConnector(PlannerConnector):
             if is_ready:
                 logger.info("Virtual deployment is ready")
                 return
-            
-            logger.debug(f"Virtual deployment not ready, attempt {attempt + 1}/{max_attempts}")
+
+            logger.debug(
+                f"Virtual deployment not ready, attempt {attempt + 1}/{max_attempts}"
+            )
             await asyncio.sleep(delay_seconds)
-        
-        logger.warning(f"Virtual deployment not ready after {max_attempts * delay_seconds}s")
+
+        logger.warning(
+            f"Virtual deployment not ready after {max_attempts * delay_seconds}s"
+        )
         # Don't raise an exception to match KubernetesConnector behavior
-    
-    async def verify_prefill_and_decode_components_exist(self, prefill_component_name: str = None, decode_component_name: str = None):
+
+    async def verify_prefill_and_decode_components_exist(
+        self,
+        prefill_component_name: Optional[str] = None,
+        decode_component_name: Optional[str] = None,
+    ):
         """
         Verify that the deployment contains services with subComponentType prefill and decode
-        
+
         For VirtualConnector, this checks that the worker component names are properly configured
         for the given backend.
-        
+
         Raises:
             DeploymentValidationError: If the worker component names are not properly configured
         """
         if self.etcd_kv_cache is None:
-            raise DeploymentValidationError(["VirtualConnector not properly initialized. Call _async_init() first."])
-
+            raise DeploymentValidationError(
+                ["VirtualConnector not properly initialized. Call _async_init() first."]
+            )
 
     async def _load_current_state(self):
         """Load current state from ETCD"""
