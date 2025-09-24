@@ -517,7 +517,7 @@ pub mod openai_preprocessor_tests {
         let mdc = make_mdc_from_repo(
             "tests/data/sample-models",
             "openai/gpt-oss-120b",
-            "main",
+            "b5c939de8f754692c1647ca79fbf85e8c1e70f8a",
             Some(vec![PromptContextMixin::OaiChat]),
         )
         .await;

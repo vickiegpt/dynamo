@@ -706,37 +706,43 @@ impl HFConfig {
         text_config.final_bos_token_id = final_bos_token_id;
 
         // TODO: refactor this when we switch to per-architecture tokenization
-        // eos_token_id can appear in multiple places, we take the union of them.
-        // i.e. for gpt-oss, eos_token_id in config.json only has 200002 while in its
-        // generation_config.json it has [200002, 199999, 200012]
-        let mut eos_token_id_set: HashSet<TokenIdType> = std::collections::HashSet::new();
-        if let Some(v) = config
-            .eos_token_id
-            .as_ref()
-            .or(text_config.eos_token_id.as_ref())
-        {
-            if v.is_number() {
-                if let Some(n) = v.as_number().and_then(|n| n.as_u64()) {
-                    eos_token_id_set.insert(n as TokenIdType);
-                }
-            } else if v.is_array() {
-                let arr = v.as_array().unwrap(); // Safety: We just checked
-                for inner_v in arr.iter() {
-                    if let Some(n) = inner_v
-                        .as_number()
-                        .and_then(|n| n.as_u64())
-                        .map(|n| n as TokenIdType)
-                    {
-                        eos_token_id_set.insert(n);
+        // eos_token_id can appear in multiple places; take the union from all sources.
+        // e.g., for gpt-oss, config.json only contains 200002, while generation_config.json
+        // has [200002, 199999, 200012]
+        let mut eos_token_id_set: HashSet<TokenIdType> = HashSet::new();
+
+        // Helper to merge either a single number or an array of numbers
+        let mut merge_eos = |v: &serde_json::Value| {
+            if let Some(n) = v.as_number().and_then(|n| n.as_u64()) {
+                eos_token_id_set.insert(n as TokenIdType);
+                return;
+            }
+            if let Some(arr) = v.as_array() {
+                for inner in arr {
+                    if let Some(n) = inner.as_number().and_then(|n| n.as_u64()) {
+                        eos_token_id_set.insert(n as TokenIdType);
+                    } else {
+                        tracing::error!(
+                            ?inner,
+                            path = %file_path.display(),
+                            "eos_token_id array contains non-numeric value; skipping"
+                        );
                     }
                 }
-            } else {
-                tracing::error!(
-                    ?v,
-                    path = %file_path.display(),
-                    "eos_token_id is not a number or an array, cannot use"
-                );
+                return;
             }
+            tracing::error!(
+                ?v,
+                path = %file_path.display(),
+                "eos_token_id is not a number or an array; skipping"
+            );
+        };
+
+        if let Some(v) = config.eos_token_id.as_ref() {
+            merge_eos(v);
+        }
+        if let Some(v) = text_config.eos_token_id.as_ref() {
+            merge_eos(v);
         }
         // Read from generation_config.json if present
         if let Ok(v) = crate::file_json_field::<serde_json::Value>(&gencfg_path, "eos_token_id")
@@ -744,28 +750,7 @@ impl HFConfig {
                 |err| tracing::warn!(%err, "Missing eos_token_id in generation_config.json"),
             )
         {
-            if v.is_number() {
-                if let Some(n) = v.as_number().and_then(|n| n.as_u64()) {
-                    eos_token_id_set.insert(n as TokenIdType);
-                }
-            } else if v.is_array() {
-                let arr = v.as_array().unwrap(); // Safety: We just checked
-                for inner_v in arr.iter() {
-                    if let Some(n) = inner_v
-                        .as_number()
-                        .and_then(|n| n.as_u64())
-                        .map(|n| n as TokenIdType)
-                    {
-                        eos_token_id_set.insert(n);
-                    }
-                }
-            } else {
-                tracing::error!(
-                    ?v,
-                    path = %file_path.display(),
-                    "eos_token_id is not a number or an array, cannot use"
-                );
-            }
+            merge_eos(&v);
         }
         if eos_token_id_set.is_empty() {
             anyhow::bail!(
