@@ -159,7 +159,6 @@ For complete Kubernetes deployment instructions, configurations, and troubleshoo
 
 vLLM workers are configured through command-line arguments. Key parameters include:
 
-- `--endpoint`: Dynamo endpoint in format `dyn://namespace.component.endpoint`
 - `--model`: Model to serve (e.g., `Qwen/Qwen3-0.6B`)
 - `--is-prefill-worker`: Enable prefill-only mode for disaggregated serving
 - `--metrics-endpoint-port`: Port for publishing KV metrics to Dynamo
@@ -168,6 +167,18 @@ vLLM workers are configured through command-line arguments. Key parameters inclu
 See `args.py` for the full list of configuration options and their defaults.
 
 The [documentation](https://docs.vllm.ai/en/v0.9.2/configuration/serve_args.html?h=serve+arg) for the vLLM CLI args points to running 'vllm serve --help' to see what CLI args can be added. We use the same argument parser as vLLM.
+
+### Hashing Consistency for KV Events
+
+When using KV-aware routing, ensure deterministic hashing across processes to avoid radix tree mismatches. Choose one of the following:
+
+- Set `PYTHONHASHSEED=0` for all vLLM processes when relying on Python's builtin hashing for prefix caching.
+- If your vLLM version supports it, configure a deterministic prefix caching algorithm, for example:
+
+```bash
+vllm serve ... --enable-prefix-caching --prefix-caching-algo sha256
+```
+See the high-level notes in [KV Cache Routing](../../../docs/architecture/kv_cache_routing.md) on deterministic event IDs.
 
 ## Request Migration
 

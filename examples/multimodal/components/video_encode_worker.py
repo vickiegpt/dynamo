@@ -217,8 +217,9 @@ class VllmEncodeWorker:
 
     @classmethod
     def parse_args(cls) -> Tuple[argparse.Namespace, Config]:
-        DEFAULT_ENDPOINT = "dyn://dynamo.encoder.generate"
-        DEFAULT_DOWNSTREAM_ENDPOINT = "dyn://dynamo.llm.generate"
+        DYN_NAMESPACE = os.environ.get("DYN_NAMESPACE", "dynamo")
+        DEFAULT_ENDPOINT = f"dyn://{DYN_NAMESPACE}.encoder.generate"
+        DEFAULT_DOWNSTREAM_ENDPOINT = f"dyn://{DYN_NAMESPACE}.llm.generate"
 
         parser = FlexibleArgumentParser(
             description="vLLM based encoder for Dynamo LLM."
@@ -308,7 +309,9 @@ async def init(runtime: DistributedRuntime, args: argparse.Namespace, config: Co
 
     try:
         await asyncio.gather(
-            generate_endpoint.serve_endpoint(handler.generate),
+            generate_endpoint.serve_endpoint(
+                handler.generate, metrics_labels=[("model", config.model)]
+            ),
         )
     except Exception as e:
         logger.error(f"Failed to serve endpoints: {e}")

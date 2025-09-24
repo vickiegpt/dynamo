@@ -2,20 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import os
 from typing import Optional
 
 from tensorrt_llm.llmapi import BuildConfig
 
+from dynamo._core import get_reasoning_parser_names, get_tool_parser_names
 from dynamo.trtllm import __version__
 from dynamo.trtllm.request_handlers.handler_base import (
     DisaggregationMode,
     DisaggregationStrategy,
 )
 
+DYN_NAMESPACE = os.environ.get("DYN_NAMESPACE", "dynamo")
+
 # Default endpoint for the next worker.
-DEFAULT_ENDPOINT = "dyn://dynamo.tensorrt_llm.generate"
+DEFAULT_ENDPOINT = f"dyn://{DYN_NAMESPACE}.tensorrt_llm.generate"
 DEFAULT_MODEL_PATH = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-DEFAULT_NEXT_ENDPOINT = "dyn://dynamo.tensorrt_llm_next.generate"
+DEFAULT_NEXT_ENDPOINT = f"dyn://{DYN_NAMESPACE}.tensorrt_llm_next.generate"
+DEFAULT_ENCODE_ENDPOINT = f"dyn://{DYN_NAMESPACE}.tensorrt_llm_encode.generate"
 DEFAULT_DISAGGREGATION_STRATEGY = DisaggregationStrategy.DECODE_FIRST
 DEFAULT_DISAGGREGATION_MODE = DisaggregationMode.AGGREGATED
 
@@ -41,14 +46,17 @@ class Config:
         self.max_beam_width: int = BuildConfig.max_beam_width
         self.free_gpu_memory_fraction: Optional[float] = None
         self.extra_engine_args: str = ""
+        self.override_engine_args: str = ""
         self.publish_events_and_metrics: bool = False
         self.disaggregation_mode: DisaggregationMode = DEFAULT_DISAGGREGATION_MODE
         self.disaggregation_strategy: DisaggregationStrategy = (
             DEFAULT_DISAGGREGATION_STRATEGY
         )
         self.next_endpoint: str = ""
+        self.encode_endpoint: str = ""
         self.modality: str = "text"
-
+        self.allowed_local_media_path: str = ""
+        self.max_file_size_mb: int = 50
         self.reasoning_parser: Optional[str] = None
         self.tool_call_parser: Optional[str] = None
 
@@ -70,14 +78,18 @@ class Config:
             f"max_beam_width={self.max_beam_width}, "
             f"free_gpu_memory_fraction={self.free_gpu_memory_fraction}, "
             f"extra_engine_args={self.extra_engine_args}, "
+            f"override_engine_args={self.override_engine_args}, "
             f"migration_limit={self.migration_limit}, "
             f"publish_events_and_metrics={self.publish_events_and_metrics}, "
             f"disaggregation_mode={self.disaggregation_mode}, "
             f"disaggregation_strategy={self.disaggregation_strategy}, "
             f"next_endpoint={self.next_endpoint}, "
-            f"modality={self.modality})"
-            f"reasoning_parser={self.reasoning_parser})"
-            f"tool_call_parser={self.tool_call_parser})"
+            f"encode_endpoint={self.encode_endpoint}, "
+            f"modality={self.modality}, "
+            f"allowed_local_media_path={self.allowed_local_media_path}, "
+            f"max_file_size_mb={self.max_file_size_mb}, "
+            f"reasoning_parser={self.reasoning_parser}, "
+            f"tool_call_parser={self.tool_call_parser}"
         )
 
 
@@ -208,6 +220,12 @@ def cmd_line_args():
         help="Path to a YAML file containing additional keyword arguments to pass to the TRTLLM engine.",
     )
     parser.add_argument(
+        "--override-engine-args",
+        type=str,
+        default="",
+        help='Python dictionary string to override specific engine arguments from the YAML file. Example: \'{"tensor_parallel_size": 2, "kv_cache_config": {"enable_block_reuse": false}}\'',
+    )
+    parser.add_argument(
         "--publish-events-and-metrics",
         action="store_true",
         help="If set, publish events and metrics to the dynamo components.",
@@ -218,6 +236,12 @@ def cmd_line_args():
         default=DEFAULT_DISAGGREGATION_MODE,
         choices=[mode.value for mode in DisaggregationMode],
         help=f"Mode to use for disaggregation. Default: {DEFAULT_DISAGGREGATION_MODE}",
+    )
+    parser.add_argument(
+        "--use-nixl-connect",
+        type=bool,
+        default=False,
+        help="Use NIXL Connect for communication between workers.",
     )
     parser.add_argument(
         "--disaggregation-strategy",
@@ -239,19 +263,38 @@ def cmd_line_args():
         default="",
         help=f"Endpoint(in 'dyn://namespace.component.endpoint' format) to send requests to when running in disaggregation mode. Default: {DEFAULT_NEXT_ENDPOINT} if first worker, empty if next worker",
     )
-
+    parser.add_argument(
+        "--encode-endpoint",
+        type=str,
+        default="",
+        help=f"Endpoint(in 'dyn://namespace.component.endpoint' format) for the encode worker. Default: {DEFAULT_ENCODE_ENDPOINT}",
+    )
+    parser.add_argument(
+        "--allowed-local-media-path",
+        type=str,
+        default="",
+        help="Path to a directory that is allowed to be accessed by the model. Default: empty",
+    )
+    parser.add_argument(
+        "--max-file-size-mb",
+        type=int,
+        default=50,
+        help="Maximum size of downloadable embedding files/Image URLs. Default: 50MB",
+    )
     # To avoid name conflicts with different backends, adoped prefix "dyn-" for dynamo specific args
     parser.add_argument(
         "--dyn-tool-call-parser",
         type=str,
         default=None,
-        help="Tool call parser name for the model. Available options: 'hermes', 'nemotron_deci', 'llama3_json', 'mistral', 'phi4'.",
+        choices=get_tool_parser_names(),
+        help="Tool call parser name for the model.",
     )
     parser.add_argument(
         "--dyn-reasoning-parser",
         type=str,
         default=None,
-        help="Reasoning parser name for the model. Available options: 'basic', 'deepseek_r1', 'gpt_oss'.",
+        choices=get_reasoning_parser_names(),
+        help="Reasoning parser name for the model. If not specified, no reasoning parsing is performed.",
     )
 
     args = parser.parse_args()
@@ -280,6 +323,9 @@ def cmd_line_args():
             and config.disaggregation_mode != DisaggregationMode.AGGREGATED
         ):
             args.next_endpoint = DEFAULT_NEXT_ENDPOINT
+    elif config.disaggregation_mode == DisaggregationMode.ENCODE:
+        if args.endpoint == "":
+            args.endpoint = DEFAULT_ENCODE_ENDPOINT
     else:
         if args.endpoint == "":
             args.endpoint = DEFAULT_NEXT_ENDPOINT
@@ -294,6 +340,9 @@ def cmd_line_args():
     config.component = parsed_component_name
     config.endpoint = parsed_endpoint_name
     config.next_endpoint = args.next_endpoint
+    config.encode_endpoint = args.encode_endpoint
+    config.allowed_local_media_path = args.allowed_local_media_path
+    config.max_file_size_mb = args.max_file_size_mb
 
     config.tensor_parallel_size = args.tensor_parallel_size
     if args.pipeline_parallel_size is not None:
@@ -311,6 +360,7 @@ def cmd_line_args():
     config.kv_block_size = args.kv_block_size
     config.migration_limit = args.migration_limit
     config.extra_engine_args = args.extra_engine_args
+    config.override_engine_args = args.override_engine_args
     config.publish_events_and_metrics = args.publish_events_and_metrics
     config.modality = args.modality
 
@@ -318,3 +368,18 @@ def cmd_line_args():
     config.tool_call_parser = args.dyn_tool_call_parser
 
     return config
+
+
+def deep_update(target: dict, source: dict) -> None:
+    """
+    Recursively update nested dictionaries.
+
+    Args:
+        target: Dictionary to update
+        source: Dictionary with new values
+    """
+    for key, value in source.items():
+        if isinstance(value, dict) and key in target and isinstance(target[key], dict):
+            deep_update(target[key], value)
+        else:
+            target[key] = value

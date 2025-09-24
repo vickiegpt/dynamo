@@ -1,127 +1,123 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
-use hf_hub::api::tokio::ApiBuilder;
 use std::env;
 use std::path::{Path, PathBuf};
 
-const IGNORED: [&str; 5] = [
-    ".gitattributes",
-    "LICENSE",
-    "LICENSE.txt",
-    "README.md",
-    "USE_POLICY.md",
-];
+use modelexpress_client::{
+    Client as MxClient, ClientConfig as MxClientConfig, ModelProvider as MxModelProvider,
+};
+use modelexpress_common::download as mx;
 
-const HF_TOKEN_ENV_VAR: &str = "HF_TOKEN";
+/// Example: export MODEL_EXPRESS_URL=http://localhost:8001
+const MODEL_EXPRESS_ENDPOINT_ENV_VAR: &str = "MODEL_EXPRESS_URL";
 
-/// Checks if a file is a model weight file
-fn is_weight_file(filename: &str) -> bool {
-    filename.ends_with(".bin")
-        || filename.ends_with(".safetensors")
-        || filename.ends_with(".h5")
-        || filename.ends_with(".msgpack")
-        || filename.ends_with(".ckpt.index")
-}
-
-/// Attempt to download a model from Hugging Face
-/// Returns the directory it is in
+/// Download a model using ModelExpress client. The client first requests for the model
+/// from the server and fallbacks to direct download in case of server failure.
 /// If ignore_weights is true, model weight files will be skipped
+/// Returns the path to the model files
 pub async fn from_hf(name: impl AsRef<Path>, ignore_weights: bool) -> anyhow::Result<PathBuf> {
     let name = name.as_ref();
-    let token = env::var(HF_TOKEN_ENV_VAR).ok();
-    let api = ApiBuilder::from_env()
-        .with_progress(true)
-        .with_token(token)
-        .high()
-        .build()?;
     let model_name = name.display().to_string();
 
-    let repo = api.model(model_name.clone());
+    let mut config: MxClientConfig = MxClientConfig::default();
+    if let Ok(endpoint) = env::var(MODEL_EXPRESS_ENDPOINT_ENV_VAR) {
+        config = config.with_endpoint(endpoint);
+    }
 
-    let info = match repo.info().await {
-        Ok(info) => info,
+    let result = match MxClient::new(config).await {
+        Ok(mut client) => {
+            tracing::info!("Successfully connected to ModelExpress server");
+            match client
+                .request_model_with_provider_and_fallback(
+                    &model_name,
+                    MxModelProvider::HuggingFace,
+                    ignore_weights,
+                )
+                .await
+            {
+                Ok(()) => {
+                    tracing::info!("Server download succeeded for model: {model_name}");
+                    match client.get_model_path(&model_name).await {
+                        Ok(path) => Ok(path),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to resolve local model path after server download for '{model_name}': {e}. \
+                                Falling back to direct download."
+                            );
+                            mx_download_direct(&model_name, ignore_weights).await
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Server download failed for model '{model_name}': {e}. Falling back to direct download."
+                    );
+                    mx_download_direct(&model_name, ignore_weights).await
+                }
+            }
+        }
         Err(e) => {
-            return Err(anyhow::anyhow!(
-                "Failed to fetch model '{}' from HuggingFace: {}. Is this a valid HuggingFace ID?",
-                model_name,
-                e
-            ));
+            tracing::warn!("Cannot connect to ModelExpress server: {e}. Using direct download.");
+            mx_download_direct(&model_name, ignore_weights).await
         }
     };
 
-    if info.siblings.is_empty() {
-        return Err(anyhow::anyhow!(
-            "Model '{}' exists but contains no downloadable files.",
-            model_name
-        ));
-    }
-
-    let mut p = PathBuf::new();
-    let mut files_downloaded = false;
-
-    for sib in info.siblings {
-        if IGNORED.contains(&sib.rfilename.as_str()) || is_image(&sib.rfilename) {
-            continue;
+    match result {
+        Ok(path) => {
+            tracing::info!("ModelExpress download completed successfully for model: {model_name}");
+            Ok(path)
         }
-
-        // If ignore_weights is true, skip weight files
-        if ignore_weights && is_weight_file(&sib.rfilename) {
-            continue;
+        Err(e) => {
+            tracing::warn!("ModelExpress download failed for model '{model_name}': {e}");
+            Err(e)
         }
-
-        match repo.get(&sib.rfilename).await {
-            Ok(path) => {
-                p = path;
-                files_downloaded = true;
-            }
-            Err(e) => {
-                return Err(anyhow::anyhow!(
-                    "Failed to download file '{}' from model '{}': {}",
-                    sib.rfilename,
-                    model_name,
-                    e
-                ));
-            }
-        }
-    }
-
-    if !files_downloaded {
-        let file_type = if ignore_weights {
-            "non-weight"
-        } else {
-            "valid"
-        };
-        return Err(anyhow::anyhow!(
-            "No {} files found for model '{}'.",
-            file_type,
-            model_name
-        ));
-    }
-
-    match p.parent() {
-        Some(p) => Ok(p.to_path_buf()),
-        None => Err(anyhow::anyhow!("Invalid HF cache path: {}", p.display())),
     }
 }
 
-fn is_image(s: &str) -> bool {
-    s.ends_with(".png")
-        || s.ends_with("PNG")
-        || s.ends_with(".jpg")
-        || s.ends_with("JPG")
-        || s.ends_with(".jpeg")
-        || s.ends_with("JPEG")
+// Direct download using the ModelExpress client.
+async fn mx_download_direct(model_name: &str, ignore_weights: bool) -> anyhow::Result<PathBuf> {
+    let cache_dir = get_model_express_cache_dir();
+    mx::download_model(
+        model_name,
+        MxModelProvider::HuggingFace,
+        Some(cache_dir),
+        ignore_weights,
+    )
+    .await
+}
+
+// TODO: remove in the future. This is a temporary workaround to find common
+// cache directory between client and server.
+fn get_model_express_cache_dir() -> PathBuf {
+    if let Ok(cache_path) = env::var("HF_HUB_CACHE") {
+        return PathBuf::from(cache_path);
+    }
+
+    if let Ok(cache_path) = env::var("MODEL_EXPRESS_CACHE_PATH") {
+        return PathBuf::from(cache_path);
+    }
+    let home = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+
+    PathBuf::from(home).join(".cache/huggingface/hub")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_from_hf_with_model_express() {
+        let test_path = PathBuf::from("test-model");
+        let _result: anyhow::Result<PathBuf> = from_hf(test_path, false).await;
+    }
+
+    #[test]
+    fn test_get_model_express_cache_dir() {
+        let cache_dir = get_model_express_cache_dir();
+        assert!(!cache_dir.to_string_lossy().is_empty());
+        assert!(cache_dir.is_absolute() || cache_dir.starts_with("."));
+    }
 }

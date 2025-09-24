@@ -4,7 +4,6 @@
 
 import logging
 import os
-import sys
 from typing import Optional
 
 from vllm.config import KVTransferConfig
@@ -12,12 +11,14 @@ from vllm.distributed.kv_events import KVEventsConfig
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.utils import FlexibleArgumentParser
 
+from dynamo._core import get_reasoning_parser_names, get_tool_parser_names
+from dynamo.runtime import DistributedRuntime
+
 from . import __version__
 from .ports import (
     DEFAULT_DYNAMO_PORT_MAX,
     DEFAULT_DYNAMO_PORT_MIN,
     DynamoPortRange,
-    EtcdContext,
     PortAllocationRequest,
     PortMetadata,
     allocate_and_reserve_port,
@@ -27,7 +28,6 @@ from .ports import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ENDPOINT = "dyn://dynamo.backend.generate"
 DEFAULT_MODEL = "Qwen/Qwen3-0.6B"
 
 VALID_CONNECTORS = {"nixl", "lmcache", "kvbm", "null", "none"}
@@ -47,6 +47,7 @@ class Config:
     migration_limit: int = 0
     kv_port: Optional[int] = None
     port_range: DynamoPortRange
+    custom_jinja_template: Optional[str] = None
 
     # mirror vLLM
     model: str
@@ -69,12 +70,6 @@ def parse_args() -> Config:
     )
     parser.add_argument(
         "--version", action="version", version=f"Dynamo Backend VLLM {__version__}"
-    )
-    parser.add_argument(
-        "--endpoint",
-        type=str,
-        default=DEFAULT_ENDPOINT,
-        help=f"Dynamo endpoint string in 'dyn://namespace.component.endpoint' format. Default: {DEFAULT_ENDPOINT}",
     )
     parser.add_argument(
         "--is-prefill-worker",
@@ -106,18 +101,26 @@ def parse_args() -> Config:
         help="List of connectors to use in order (e.g., --connector nixl lmcache). "
         "Options: nixl, lmcache, kvbm, null, none. Default: nixl. Order will be preserved in MultiConnector.",
     )
-    # To avoid name conflicts with different backends, adoped prefix "dyn-" for dynamo specific args
+    # To avoid name conflicts with different backends, adopted prefix "dyn-" for dynamo specific args
     parser.add_argument(
         "--dyn-tool-call-parser",
         type=str,
         default=None,
-        help="Tool call parser name for the model. Available options: 'hermes', 'nemotron_deci', 'llama3_json', 'mistral', 'phi4'.",
+        choices=get_tool_parser_names(),
+        help="Tool call parser name for the model.",
     )
     parser.add_argument(
         "--dyn-reasoning-parser",
         type=str,
         default=None,
-        help="Reasoning parser name for the model. Available options: 'basic', 'deepseek_r1', 'gpt_oss'.",
+        choices=get_reasoning_parser_names(),
+        help="Reasoning parser name for the model. If not specified, no reasoning parsing is performed.",
+    )
+    parser.add_argument(
+        "--custom-jinja-template",
+        type=str,
+        default=None,
+        help="Path to a custom Jinja template file to override the model's default chat template. This template will take precedence over any template found in the model repository.",
     )
 
     parser = AsyncEngineArgs.add_cli_args(parser)
@@ -141,27 +144,9 @@ def parse_args() -> Config:
         # This becomes an `Option` on the Rust side
         config.served_model_name = None
 
-    namespace = os.environ.get("DYNAMO_NAMESPACE", "dynamo")
-
-    if args.is_prefill_worker:
-        args.endpoint = f"dyn://{namespace}.prefill.generate"
-    else:
-        # For decode workers, also use the provided namespace instead of hardcoded "dynamo"
-        args.endpoint = f"dyn://{namespace}.backend.generate"
-
-    endpoint_str = args.endpoint.replace("dyn://", "", 1)
-    endpoint_parts = endpoint_str.split(".")
-    if len(endpoint_parts) != 3:
-        logger.error(
-            f"Invalid endpoint format: '{args.endpoint}'. Expected 'dyn://namespace.component.endpoint' or 'namespace.component.endpoint'."
-        )
-        sys.exit(1)
-
-    parsed_namespace, parsed_component_name, parsed_endpoint_name = endpoint_parts
-
-    config.namespace = parsed_namespace
-    config.component = parsed_component_name
-    config.endpoint = parsed_endpoint_name
+    config.namespace = os.environ.get("DYN_NAMESPACE", "dynamo")
+    config.component = "prefill" if args.is_prefill_worker else "backend"
+    config.endpoint = "generate"
     config.engine_args = engine_args
     config.is_prefill_worker = args.is_prefill_worker
     config.migration_limit = args.migration_limit
@@ -170,6 +155,7 @@ def parse_args() -> Config:
     )
     config.tool_call_parser = args.dyn_tool_call_parser
     config.reasoning_parser = args.dyn_reasoning_parser
+    config.custom_jinja_template = args.custom_jinja_template
     # Check for conflicting flags
     has_kv_transfer_config = (
         hasattr(engine_args, "kv_transfer_config")
@@ -209,10 +195,8 @@ def parse_args() -> Config:
     return config
 
 
-async def configure_ports_with_etcd(config: Config, etcd_client):
-    """Configure all settings that require ETCD, including port allocation and vLLM overrides."""
-
-    etcd_context = EtcdContext(client=etcd_client, namespace=config.namespace)
+async def configure_ports(runtime: DistributedRuntime, config: Config):
+    """Configure including port allocation and vLLM overrides."""
 
     dp_rank = config.engine_args.data_parallel_rank or 0
     worker_id = f"vllm-{config.component}-dp{dp_rank}"
@@ -221,7 +205,8 @@ async def configure_ports_with_etcd(config: Config, etcd_client):
     if config.engine_args.enable_prefix_caching:
         kv_metadata = PortMetadata(worker_id=worker_id, reason="zmq_kv_event_port")
         kv_port = await allocate_and_reserve_port(
-            etcd_context=etcd_context,
+            runtime=runtime,
+            namespace=config.namespace,
             metadata=kv_metadata,
             port_range=config.port_range,
         )
@@ -244,12 +229,13 @@ async def configure_ports_with_etcd(config: Config, etcd_client):
             worker_id=worker_id, reason="nixl_side_channel_port"
         )
         nixl_request = PortAllocationRequest(
-            etcd_context=etcd_context,
             metadata=nixl_metadata,
             port_range=config.port_range,
             block_size=tp_size,
         )
-        allocated_ports = await allocate_and_reserve_port_block(nixl_request)
+        allocated_ports = await allocate_and_reserve_port_block(
+            runtime, config.namespace, nixl_request
+        )
         first_port_for_dp_rank = allocated_ports[0]
 
         # Calculate the base port that NIXL expects
@@ -287,7 +273,7 @@ def create_kv_events_config(config: Config) -> Optional[KVEventsConfig]:
     logger.info("Creating Dynamo default kv_events_config for prefix caching")
     if config.kv_port is None:
         raise ValueError(
-            "config.kv_port is not set; call configure_ports_with_etcd(...) before overwrite_args "
+            "config.kv_port is not set; call configure_ports(...) before overwrite_args "
             "or provide --kv-event-config to supply an explicit endpoint."
         )
     dp_rank = config.engine_args.data_parallel_rank or 0

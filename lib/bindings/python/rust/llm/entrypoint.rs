@@ -6,9 +6,9 @@ use std::path::PathBuf;
 
 use pyo3::{exceptions::PyException, prelude::*};
 
-use dynamo_llm::entrypoint::input::Input;
 use dynamo_llm::entrypoint::EngineConfig as RsEngineConfig;
 use dynamo_llm::entrypoint::RouterConfig as RsRouterConfig;
+use dynamo_llm::entrypoint::input::Input;
 use dynamo_llm::kv_router::KvRouterConfig as RsKvRouterConfig;
 use dynamo_llm::local_model::DEFAULT_HTTP_PORT;
 use dynamo_llm::local_model::{LocalModel, LocalModelBuilder};
@@ -42,12 +42,15 @@ impl KvRouterConfig {
 #[pymethods]
 impl KvRouterConfig {
     #[new]
-    #[pyo3(signature = (overlap_score_weight=1.0, router_temperature=0.0, use_kv_events=true, router_replica_sync=false))]
+    #[pyo3(signature = (overlap_score_weight=1.0, router_temperature=0.0, use_kv_events=true, router_replica_sync=false, router_track_active_blocks=true, router_snapshot_threshold=10000, router_reset_states=false))]
     fn new(
         overlap_score_weight: f64,
         router_temperature: f64,
         use_kv_events: bool,
         router_replica_sync: bool,
+        router_track_active_blocks: bool,
+        router_snapshot_threshold: Option<u32>,
+        router_reset_states: bool,
     ) -> Self {
         KvRouterConfig {
             inner: RsKvRouterConfig {
@@ -55,7 +58,9 @@ impl KvRouterConfig {
                 router_temperature,
                 use_kv_events,
                 router_replica_sync,
-                ..Default::default()
+                router_track_active_blocks,
+                router_snapshot_threshold,
+                router_reset_states,
             },
         }
     }
@@ -113,13 +118,14 @@ pub(crate) struct EntrypointArgs {
     tls_cert_path: Option<PathBuf>,
     tls_key_path: Option<PathBuf>,
     extra_engine_args: Option<PathBuf>,
+    namespace: Option<String>,
 }
 
 #[pymethods]
 impl EntrypointArgs {
     #[allow(clippy::too_many_arguments)]
     #[new]
-    #[pyo3(signature = (engine_type, model_path=None, model_name=None, model_config=None, endpoint_id=None, context_length=None, template_file=None, router_config=None, kv_cache_block_size=None, http_host=None, http_port=None, tls_cert_path=None, tls_key_path=None, extra_engine_args=None))]
+    #[pyo3(signature = (engine_type, model_path=None, model_name=None, model_config=None, endpoint_id=None, context_length=None, template_file=None, router_config=None, kv_cache_block_size=None, http_host=None, http_port=None, tls_cert_path=None, tls_key_path=None, extra_engine_args=None, namespace=None))]
     pub fn new(
         engine_type: EngineType,
         model_path: Option<PathBuf>,
@@ -135,6 +141,7 @@ impl EntrypointArgs {
         tls_cert_path: Option<PathBuf>,
         tls_key_path: Option<PathBuf>,
         extra_engine_args: Option<PathBuf>,
+        namespace: Option<String>,
     ) -> PyResult<Self> {
         let endpoint_id_obj: Option<EndpointId> = endpoint_id.as_deref().map(EndpointId::from);
         if (tls_cert_path.is_some() && tls_key_path.is_none())
@@ -159,6 +166,7 @@ impl EntrypointArgs {
             tls_cert_path,
             tls_key_path,
             extra_engine_args,
+            namespace,
         })
     }
 }
@@ -191,7 +199,8 @@ pub fn make_engine<'p>(
         .tls_cert_path(args.tls_cert_path.clone())
         .tls_key_path(args.tls_key_path.clone())
         .is_mocker(matches!(args.engine_type, EngineType::Mocker))
-        .extra_engine_args(args.extra_engine_args.clone());
+        .extra_engine_args(args.extra_engine_args.clone())
+        .namespace(args.namespace.clone());
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let local_model = builder.build().await.map_err(to_pyerr)?;
         let inner = select_engine(distributed_runtime, args, local_model)
@@ -211,7 +220,7 @@ async fn select_engine(
             // There is no validation for the echo engine
             RsEngineConfig::StaticFull {
                 model: Box::new(local_model),
-                engine: dynamo_llm::engines::make_engine_full(),
+                engine: dynamo_llm::engines::make_echo_engine(),
                 is_static: false,
             }
         }

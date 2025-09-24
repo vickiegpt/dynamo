@@ -14,12 +14,12 @@ The Dynamo KV Router intelligently routes requests by evaluating their computati
 To launch the Dynamo frontend with the KV Router:
 
 ```bash
-python -m dynamo.frontend --router-mode kv --http-port 8080
+python -m dynamo.frontend --router-mode kv --http-port 8000
 ```
 
 This command:
 - Launches the Dynamo frontend service with KV routing enabled
-- Exposes the service on port 8080 (configurable)
+- Exposes the service on port 8000 (configurable)
 - Automatically handles all backend workers registered to the Dynamo endpoint
 
 Backend workers register themselves using the `register_llm` API, after which the KV Router automatically:
@@ -144,70 +144,3 @@ The `router_temperature` parameter controls routing randomness:
    - To reduce TTFT: Increase the weight
    - To reduce ITL: Decrease the weight
 4. If you observe severe load imbalance, increase the temperature setting
-
-## Using KvPushRouter Python API
-
-Instead of launching the KV Router via command line, you can create a `KvPushRouter` object directly in Python. This allows per-request routing configuration overrides.
-
-### Setup
-
-First, launch your backend engines:
-```bash
-python -m dynamo.vllm --model meta-llama/Llama-2-7b-hf --endpoint dyn://inference.vllm.generate
-```
-
-### Example Script
-
-```python
-import asyncio
-from dynamo._core import DistributedRuntime, KvPushRouter, KvRouterConfig
-
-async def main():
-    # Get runtime and create endpoint
-    runtime = DistributedRuntime.detached()
-    namespace = runtime.namespace("inference")
-    component = namespace.component("vllm")
-    endpoint = component.endpoint("generate")
-
-    # Create KV router
-    kv_router_config = KvRouterConfig()
-    router = KvPushRouter(
-        endpoint=endpoint,
-        block_size=16,
-        kv_router_config=kv_router_config
-    )
-
-    # Your input tokens
-    token_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-
-    # Generate with per-request routing override
-    stream = await router.generate(
-        token_ids=token_ids,
-        model="meta-llama/Llama-2-7b-hf",
-        stop_conditions={
-            "max_tokens": 20,        # Generate exactly 20 tokens
-            "ignore_eos": True,      # Don't stop at EOS token
-        },
-        sampling_options={
-            "temperature": 0.7,
-            "top_p": 0.9,
-        },
-        router_config_override={
-            "overlap_score_weight": 2.0,    # Prioritize cache hits for this request
-            "router_temperature": 0.5,       # Add routing randomness
-        }
-    )
-
-    # Collect generated tokens
-    generated_tokens = []
-    async for response in stream:
-        if isinstance(response, dict) and "token_ids" in response:
-            generated_tokens.extend(response["token_ids"])
-
-    print(f"Generated {len(generated_tokens)} tokens: {generated_tokens}")
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-The `router_config_override` parameter allows you to adjust routing behavior per request without recreating the router. This is useful for implementing different routing strategies based on request characteristics.

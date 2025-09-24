@@ -18,7 +18,7 @@ use crate::discovery::ModelEntry;
 use crate::entrypoint::RouterConfig;
 use crate::mocker::protocols::MockEngineArgs;
 use crate::model_card::{self, ModelDeploymentCard};
-use crate::model_type::ModelType;
+use crate::model_type::{ModelInput, ModelType};
 use crate::request_template::RequestTemplate;
 
 mod network_name;
@@ -59,6 +59,8 @@ pub struct LocalModelBuilder {
     extra_engine_args: Option<PathBuf>,
     runtime_config: ModelRuntimeConfig,
     user_data: Option<serde_json::Value>,
+    custom_template_path: Option<PathBuf>,
+    namespace: Option<String>,
 }
 
 impl Default for LocalModelBuilder {
@@ -81,6 +83,8 @@ impl Default for LocalModelBuilder {
             extra_engine_args: Default::default(),
             runtime_config: Default::default(),
             user_data: Default::default(),
+            custom_template_path: Default::default(),
+            namespace: Default::default(),
         }
     }
 }
@@ -142,8 +146,18 @@ impl LocalModelBuilder {
         self
     }
 
+    pub fn namespace(&mut self, namespace: Option<String>) -> &mut Self {
+        self.namespace = namespace;
+        self
+    }
+
     pub fn request_template(&mut self, template_file: Option<PathBuf>) -> &mut Self {
         self.template_file = template_file;
+        self
+    }
+
+    pub fn custom_template_path(&mut self, custom_template_path: Option<PathBuf>) -> &mut Self {
+        self.custom_template_path = custom_template_path;
         self
     }
 
@@ -189,13 +203,14 @@ impl LocalModelBuilder {
             .endpoint_id
             .take()
             .unwrap_or_else(|| internal_endpoint("local_model"));
+
         let template = self
             .template_file
             .as_deref()
             .map(RequestTemplate::load)
             .transpose()?;
 
-        // echo_full engine doesn't need a path. It's an edge case, move it out of the way.
+        // echo engine doesn't need a path. It's an edge case, move it out of the way.
         if self.model_path.is_none() {
             let mut card = ModelDeploymentCard::with_name_only(
                 self.model_name.as_deref().unwrap_or(DEFAULT_NAME),
@@ -215,6 +230,7 @@ impl LocalModelBuilder {
                 tls_key_path: self.tls_key_path.take(),
                 router_config: self.router_config.take().unwrap_or_default(),
                 runtime_config: self.runtime_config.clone(),
+                namespace: self.namespace.clone(),
             });
         }
 
@@ -236,7 +252,10 @@ impl LocalModelBuilder {
         // --model-config takes precedence over --model-path
         let model_config_path = self.model_config.as_ref().unwrap_or(&full_path);
 
-        let mut card = ModelDeploymentCard::load(&model_config_path).await?;
+        let mut card = ModelDeploymentCard::load_from_disk(
+            model_config_path,
+            self.custom_template_path.as_deref(),
+        )?;
 
         // Usually we infer from the path, self.model_name is user override
         let model_name = self.model_name.take().unwrap_or_else(|| {
@@ -290,6 +309,7 @@ impl LocalModelBuilder {
             tls_key_path: self.tls_key_path.take(),
             router_config: self.router_config.take().unwrap_or_default(),
             runtime_config: self.runtime_config.clone(),
+            namespace: self.namespace.clone(),
         })
     }
 }
@@ -306,6 +326,7 @@ pub struct LocalModel {
     tls_key_path: Option<PathBuf>,
     router_config: RouterConfig,
     runtime_config: ModelRuntimeConfig,
+    namespace: Option<String>,
 }
 
 impl LocalModel {
@@ -356,6 +377,10 @@ impl LocalModel {
         &self.runtime_config
     }
 
+    pub fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
+    }
+
     pub fn is_gguf(&self) -> bool {
         // GGUF is the only file (not-folder) we accept, so we don't need to check the extension
         // We will error when we come to parse it
@@ -379,6 +404,7 @@ impl LocalModel {
         &mut self,
         endpoint: &Endpoint,
         model_type: ModelType,
+        model_input: ModelInput,
     ) -> anyhow::Result<()> {
         // A static component doesn't have an etcd_client because it doesn't need to register
         let Some(etcd_client) = endpoint.drt().etcd_client() else {
@@ -407,6 +433,7 @@ impl LocalModel {
             endpoint_id: endpoint.id(),
             model_type,
             runtime_config: Some(self.runtime_config.clone()),
+            model_input,
         };
         etcd_client
             .kv_create(

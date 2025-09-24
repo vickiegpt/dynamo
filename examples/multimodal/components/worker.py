@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 import argparse
 import asyncio
@@ -25,7 +13,6 @@ from typing import Tuple
 import torch
 import uvloop
 from vllm.distributed.kv_events import ZmqEventPublisher
-from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.inputs.data import TokensPrompt
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import FlexibleArgumentParser
@@ -41,7 +28,7 @@ from publisher import StatLoggerFactory
 from utils.args import (
     Config,
     base_parse_args,
-    configure_ports_with_etcd,
+    configure_ports,
     overwrite_args,
     parse_endpoint,
 )
@@ -85,17 +72,23 @@ class VllmBaseWorker:
 
         # use endpoint_overwrite to set the default endpoint based on worker type
         def endpoint_overwrite(args):
+            DYN_NAMESPACE = os.environ.get("DYN_NAMESPACE", "dynamo")
             # default endpoint for this worker
             if args.worker_type == "prefill":
-                args.endpoint = args.endpoint or "dyn://dynamo.llm.generate"
+                args.endpoint = args.endpoint or f"dyn://{DYN_NAMESPACE}.llm.generate"
             elif args.worker_type == "decode":
-                args.endpoint = args.endpoint or "dyn://dynamo.decoder.generate"
+                args.endpoint = (
+                    args.endpoint or f"dyn://{DYN_NAMESPACE}.decoder.generate"
+                )
             elif args.worker_type == "encode_prefill":
-                args.endpoint = args.endpoint or "dyn://dynamo.encoder.generate"
+                args.endpoint = (
+                    args.endpoint or f"dyn://{DYN_NAMESPACE}.encoder.generate"
+                )
             # set downstream endpoint for disaggregated workers
             if args.enable_disagg:
                 args.downstream_endpoint = (
-                    args.downstream_endpoint or "dyn://dynamo.decoder.generate"
+                    args.downstream_endpoint
+                    or f"dyn://{DYN_NAMESPACE}.decoder.generate"
                 )
 
             return args
@@ -107,14 +100,15 @@ class VllmBaseWorker:
     def __init__(
         self,
         args: argparse.Namespace,
-        engine_args: AsyncEngineArgs,
         component: Component,
         endpoint: Endpoint,
+        config: Config,
     ):
         self.enable_disagg = args.enable_disagg
         self.endpoint = args.endpoint
         self.downstream_endpoint = args.downstream_endpoint
-        self.engine_args = engine_args
+        self.engine_args = config.engine_args
+        self.config = config
         self.setup_vllm_engine(component, endpoint)
 
     async def async_init(self, runtime: DistributedRuntime):
@@ -142,6 +136,7 @@ class VllmBaseWorker:
         self.stats_logger = StatLoggerFactory(
             component,
             self.engine_args.data_parallel_rank or 0,
+            metrics_labels=[("model", self.config.model)],
         )
         self.engine_client = AsyncLLM.from_vllm_config(
             vllm_config=vllm_config,
@@ -425,8 +420,7 @@ async def worker(runtime: DistributedRuntime):
     args, config = VllmBaseWorker.parse_args()
 
     # vLLM config overwrites
-    etcd_client = runtime.etcd_client()
-    await configure_ports_with_etcd(config, etcd_client)
+    await configure_ports(runtime, config)
     overwrite_args(config)
     await init(runtime, args, config)
 
@@ -444,20 +438,24 @@ async def init(runtime: DistributedRuntime, args: argparse.Namespace, config: Co
 
     if args.worker_type in ["prefill", "encode_prefill"]:
         handler: VllmBaseWorker = VllmPDWorker(
-            args, config.engine_args, component, generate_endpoint
+            args, component, generate_endpoint, config
         )
     elif args.worker_type == "decode":
-        handler = VllmDecodeWorker(
-            args, config.engine_args, component, generate_endpoint
-        )
+        handler = VllmDecodeWorker(args, component, generate_endpoint, config)
     await handler.async_init(runtime)
 
     logger.info(f"Starting to serve the {args.endpoint} endpoint...")
 
+    metrics_labels = [("model", config.model)]
+
     try:
         await asyncio.gather(
-            generate_endpoint.serve_endpoint(handler.generate),
-            clear_endpoint.serve_endpoint(handler.clear_kv_blocks),
+            generate_endpoint.serve_endpoint(
+                handler.generate, metrics_labels=metrics_labels
+            ),
+            clear_endpoint.serve_endpoint(
+                handler.clear_kv_blocks, metrics_labels=metrics_labels
+            ),
         )
     except Exception as e:
         logger.error(f"Failed to serve endpoints: {e}")

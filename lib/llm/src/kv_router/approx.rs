@@ -25,10 +25,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::tokens::{SequenceHash, TokenBlockSequence};
 
-use crate::kv_router::RouterEvent;
 use crate::kv_router::indexer::{
-    DumpRequest, KvIndexerInterface, KvRouterError, OverlapScores, RadixTree, WorkerId,
-    compute_block_hash_for_seq,
+    DumpRequest, KvIndexerInterface, KvRouterError, OverlapScores, RadixTree, RouterEvent,
+    WorkerId, compute_block_hash_for_seq,
 };
 use crate::kv_router::protocols::{
     ExternalSequenceBlockHash, KvCacheEvent, KvCacheEventData, KvCacheRemoveData, KvCacheStoreData,
@@ -209,10 +208,15 @@ impl ApproxKvIndexer {
                     };
 
                     tokio::select! {
-                        Some(request) = match_rx.recv() => {
-                            let scores = trie.find_matches(request.sequence, false);
-                            request.resp.send(scores).unwrap();
+                        _ = cancel_clone.cancelled() => {
+                            tracing::debug!("Approximate Indexer progress loop shutting down");
+                            return;
                         }
+
+                        Some(worker) = remove_worker_rx.recv() => {
+                            trie.remove_worker(worker);
+                        }
+
                         Some(result) = route_rx.recv() => {
                             let hashes = result.local_hashes.iter().zip(result.sequence_hashes.iter());
 
@@ -233,19 +237,22 @@ impl ApproxKvIndexer {
                                 }
                             );
 
-                            trie.apply_event(event);
+                            let _ = trie.apply_event(event);
 
                             timer_manager.insert(result.sequence_hashes.iter().map(|h| TimerEntry {
                                 key: ExternalSequenceBlockHash(*h),
                                 worker: result.worker_id,
                             }).collect());
                         }
-                        Some(worker) = remove_worker_rx.recv() => {
-                            trie.remove_worker(worker);
-                        }
+
                         Some(dump_req) = dump_rx.recv() => {
                             let events = trie.dump_tree_as_events();
                             let _ = dump_req.resp.send(events);
+                        }
+
+                        Some(request) = match_rx.recv() => {
+                            let scores = trie.find_matches(request.sequence, false);
+                            request.resp.send(scores).unwrap();
                         }
 
                         _ = expiry_fut => {
@@ -264,13 +271,8 @@ impl ApproxKvIndexer {
                                     }
                                 );
 
-                                trie.apply_event(event);
+                                let _ = trie.apply_event(event);
                             });
-                        }
-
-                        _ = cancel_clone.cancelled() => {
-                            tracing::debug!("Approximate Indexer progress loop shutting down");
-                            return;
                         }
                     }
                 }

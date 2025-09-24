@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 pub use crate::component::Component;
 use crate::transports::nats::DRTNatsClientPrometheusMetrics;
@@ -24,6 +12,7 @@ use crate::{
     transports::{etcd, nats, tcp},
 };
 
+use super::utils::GracefulShutdownTracker;
 use super::{Arc, DistributedRuntime, OK, OnceCell, Result, Runtime, SystemHealth, Weak, error};
 use std::sync::OnceLock;
 
@@ -166,6 +155,31 @@ impl DistributedRuntime {
             );
         }
 
+        // Start health check manager if enabled
+        if config.health_check_enabled {
+            let health_check_config = crate::health_check::HealthCheckConfig {
+                canary_wait_time: std::time::Duration::from_secs(config.canary_wait_time_secs),
+                request_timeout: std::time::Duration::from_secs(
+                    config.health_check_request_timeout_secs,
+                ),
+            };
+
+            // Start the health check manager (spawns per-endpoint monitoring tasks)
+            match crate::health_check::start_health_check_manager(
+                distributed_runtime.clone(),
+                Some(health_check_config),
+            )
+            .await
+            {
+                Ok(()) => tracing::info!(
+                    "Health check manager started (canary_wait_time: {}s, request_timeout: {}s)",
+                    config.canary_wait_time_secs,
+                    config.health_check_request_timeout_secs
+                ),
+                Err(e) => tracing::error!("Health check manager failed to start: {}", e),
+            }
+        }
+
         Ok(distributed_runtime)
     }
 
@@ -260,6 +274,10 @@ impl DistributedRuntime {
         self.runtime.child_token()
     }
 
+    pub(crate) fn graceful_shutdown_tracker(&self) -> Arc<GracefulShutdownTracker> {
+        self.runtime.graceful_shutdown_tracker()
+    }
+
     pub fn instance_sources(&self) -> Arc<Mutex<HashMap<Endpoint, Weak<InstanceSource>>>> {
         self.instance_sources.clone()
     }
@@ -309,6 +327,19 @@ impl DistributedRuntime {
         }
     }
 
+    /// Clear everything in etcd under a key.
+    /// todo: Remove as soon as we auto-delete the MDC.
+    pub async fn temp_clear_namespace(&self, name: &str) -> anyhow::Result<()> {
+        let Some(etcd_client) = self.etcd_client() else {
+            return Ok(()); // no etcd, nothing to clear
+        };
+        let kvs = etcd_client.kv_get_prefix(name).await?;
+        for kv in kvs {
+            etcd_client.kv_delete(kv.key(), None).await?;
+        }
+        Ok(())
+    }
+
     /// Get all registered hierarchy keys. Private because it is only used for testing.
     fn get_registered_hierarchies(&self) -> Vec<String> {
         let registries = self.hierarchy_to_metricsregistry.read().unwrap();
@@ -345,12 +376,11 @@ impl DistributedConfig {
     }
 }
 
-#[cfg(test)]
 pub mod distributed_test_utils {
     //! Common test helper functions for DistributedRuntime tests
     // TODO: Use in-memory DistributedRuntime for tests instead of full runtime when available.
 
-    /// Helper function to create a DRT instance for tests
+    /// Helper function to create a DRT instance for integration-only tests.
     /// Uses from_current to leverage existing tokio runtime
     /// Note: Settings are read from environment variables inside DistributedRuntime::from_settings_without_discovery
     #[cfg(feature = "integration")]
@@ -362,8 +392,7 @@ pub mod distributed_test_utils {
     }
 }
 
-#[cfg(feature = "integration")]
-#[cfg(test)]
+#[cfg(all(test, feature = "integration"))]
 mod tests {
     use super::distributed_test_utils::create_test_drt_async;
 

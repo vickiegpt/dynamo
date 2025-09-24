@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import json
 import logging
+import os
 import signal
 import sys
 
 import uvloop
-from tensorrt_llm import SamplingParams
 from tensorrt_llm.llmapi import (
     BuildConfig,
     CapacitySchedulerPolicy,
@@ -15,15 +16,18 @@ from tensorrt_llm.llmapi import (
     KvCacheConfig,
     SchedulerConfig,
 )
+from tensorrt_llm.llmapi.llm import SamplingParams
 from tensorrt_llm.llmapi.llm_utils import update_llm_args_with_extra_options
 from tensorrt_llm.llmapi.tokenizer import tokenizer_factory
 from torch.cuda import device_count
 from transformers import AutoConfig
 
-from dynamo.llm import ModelRuntimeConfig, ModelType, register_llm
+import dynamo.nixl_connect as nixl_connect
+from dynamo.llm import ModelInput, ModelRuntimeConfig, ModelType, register_llm
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 from dynamo.runtime.logging import configure_dynamo_logging
 from dynamo.trtllm.engine import TensorRTLLMEngine, get_llm_engine
+from dynamo.trtllm.health_check import TrtllmHealthCheckPayload
 from dynamo.trtllm.multimodal_processor import MultimodalRequestProcessor
 from dynamo.trtllm.publisher import get_publisher
 from dynamo.trtllm.request_handlers.handlers import (
@@ -33,6 +37,7 @@ from dynamo.trtllm.request_handlers.handlers import (
 from dynamo.trtllm.utils.trtllm_utils import (
     Config,
     cmd_line_args,
+    deep_update,
     is_first_worker,
     parse_endpoint,
 )
@@ -121,6 +126,21 @@ async def init(runtime: DistributedRuntime, config: Config):
             .client()
         )
 
+    encode_client = None
+    if config.encode_endpoint:
+        logging.info(
+            f"Initializing encode worker client for endpoint: {config.encode_endpoint}"
+        )
+        parsed_namespace, parsed_component_name, parsed_endpoint_name = parse_endpoint(
+            config.encode_endpoint
+        )
+        encode_client = (
+            await runtime.namespace(parsed_namespace)
+            .component(parsed_component_name)
+            .endpoint(parsed_endpoint_name)
+            .client()
+        )
+
     component = runtime.namespace(config.namespace).component(config.component)
     await component.create_service()
 
@@ -175,6 +195,17 @@ async def init(runtime: DistributedRuntime, config: Config):
     if config.extra_engine_args != "":
         # TODO: Support extra engine args from json file as well.
         arg_map = update_llm_args_with_extra_options(arg_map, config.extra_engine_args)
+
+    # Apply override_engine_args if provided
+    if config.override_engine_args != "":
+        try:
+            overrides = json.loads(config.override_engine_args)
+            logging.info(f"Applying engine arg overrides: {overrides}")
+
+            deep_update(arg_map, overrides)
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to parse override_engine_args as JSON: {e}")
+            sys.exit(1)
     if config.publish_events_and_metrics:
         # 'event_buffer_max_size' is required to enable TRTLLM to publish kv cache events.
         kv_cache_config = None
@@ -206,24 +237,38 @@ async def init(runtime: DistributedRuntime, config: Config):
     default_sampling_params = SamplingParams()
     default_sampling_params._setup(tokenizer)
     default_sampling_params.stop = None
-    modelType = ModelType.Backend
+    model_input = ModelInput.Tokens
+    model_type = ModelType.Chat | ModelType.Completions
     multimodal_processor = None
+
+    if os.getenv("DYNAMO_ENABLE_TEST_LOGITS_PROCESSOR") == "1":
+        # We need to initialize the tokenizer for the test logits processor
+        # But detokenizing still happens in the rust engine, so we do _not_ want
+        # to set default_sampling_params.detokenize to True.
+        engine_args["skip_tokenizer_init"] = False
 
     if modality == "multimodal":
         engine_args["skip_tokenizer_init"] = False
-        modelType = ModelType.Chat
+        model_input = ModelInput.Text
         model_config = AutoConfig.from_pretrained(
             config.model_path, trust_remote_code=True
         )
         multimodal_processor = MultimodalRequestProcessor(
             model_type=model_config.model_type,
             model_dir=config.model_path,
+            max_file_size_mb=config.max_file_size_mb,
             tokenizer=tokenizer,
+            allowed_local_media_path=config.allowed_local_media_path,
         )
 
     else:
         # We already detokenize inside HandlerBase. No need to also do it in TRTLLM.
         default_sampling_params.detokenize = False
+
+    connector = None
+    logging.info("Initializing NIXL Connect.")
+    connector = nixl_connect.Connector()
+    await connector.initialize()
 
     async with get_llm_engine(engine_args) as engine:
         endpoint = component.endpoint(config.endpoint)
@@ -236,20 +281,29 @@ async def init(runtime: DistributedRuntime, config: Config):
         # TODO: fix this once we have a better way to get total_kv_blocks
         runtime_config = ModelRuntimeConfig()
 
+        # Set values from config that are available immediately
+        # Note: We populate max_num_seqs and max_num_batched_tokens from config
+        # to ensure Prometheus metrics are available even without engine stats
+
+        # Naming clarification:
+        # - In vLLM: max_num_seqs = maximum concurrent requests (this is an unusual name due to vLLM's historic reasons)
+        # - In TensorRT-LLM: max_batch_size = maximum concurrent requests (clearer name)
+        # Both parameters control the same thing: how many requests can be processed simultaneously
+        runtime_config.max_num_seqs = config.max_batch_size
+        runtime_config.max_num_batched_tokens = config.max_num_tokens
         runtime_config.reasoning_parser = config.reasoning_parser
         runtime_config.tool_call_parser = config.tool_call_parser
 
-        if is_first_worker(config):
-            # Register the model with runtime config
-            await register_llm(
-                modelType,
-                endpoint,
-                config.model_path,
-                config.served_model_name,
-                kv_cache_block_size=config.kv_block_size,
-                migration_limit=config.migration_limit,
-                runtime_config=runtime_config,
-            )
+        logging.info(f"Set runtime config max_num_seqs: {runtime_config.max_num_seqs}")
+        logging.info(
+            f"Set runtime config max_num_batched_tokens: {runtime_config.max_num_batched_tokens}"
+        )
+
+        # The get_engine_runtime_config function exists but is not called here due to:
+        # 1. get_stats_async requires active requests to work properly
+        # 2. We need runtime config during registration, before any requests are made
+        # 3. total_kv_blocks would ideally come from engine stats but is not critical for basic operation
+
         # publisher will be set later if publishing is enabled.
         handler_config = RequestHandlerConfig(
             component=component,
@@ -259,8 +313,32 @@ async def init(runtime: DistributedRuntime, config: Config):
             disaggregation_mode=config.disaggregation_mode,
             disaggregation_strategy=config.disaggregation_strategy,
             next_client=next_client,
+            encode_client=encode_client,
             multimodal_processor=multimodal_processor,
+            connector=connector,
         )
+
+        if next_client:
+            logging.info(
+                f"Waiting for the next endpoint to be ready: {config.next_endpoint}"
+            )
+            await next_client.wait_for_instances()
+
+        if is_first_worker(config):
+            # Register the model with runtime config
+            await register_llm(
+                model_input,
+                model_type,
+                endpoint,
+                config.model_path,
+                config.served_model_name,
+                kv_cache_block_size=config.kv_block_size,
+                migration_limit=config.migration_limit,
+                runtime_config=runtime_config,
+            )
+
+        # Get health check payload (checks env var and falls back to TensorRT-LLM default)
+        health_check_payload = TrtllmHealthCheckPayload(tokenizer=tokenizer).to_dict()
 
         if config.publish_events_and_metrics and is_first_worker(config):
             # Initialize and pass in the publisher to the request handler to
@@ -280,11 +358,15 @@ async def init(runtime: DistributedRuntime, config: Config):
                 handler_config.publisher = publisher
                 handler = RequestHandlerFactory().get_request_handler(handler_config)
                 await endpoint.serve_endpoint(
-                    handler.generate, metrics_labels=metrics_labels
+                    handler.generate,
+                    metrics_labels=metrics_labels,
+                    health_check_payload=health_check_payload,
                 )
         else:
             handler = RequestHandlerFactory().get_request_handler(handler_config)
-            await endpoint.serve_endpoint(handler.generate)
+            await endpoint.serve_endpoint(
+                handler.generate, health_check_payload=health_check_payload
+            )
 
 
 def main():

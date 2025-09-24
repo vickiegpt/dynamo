@@ -21,3 +21,7 @@ Built with [Kubebuilder](https://book.kubebuilder.io/), it follows Kubernetes be
 ```
 make
 ```
+
+### Install
+
+See [Dynamo Kubernetes Platform Installation Guide](/docs/kubernetes/installation_guide.md) for installation instructions.

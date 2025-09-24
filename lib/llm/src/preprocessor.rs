@@ -15,15 +15,17 @@ pub mod prompt;
 pub mod tools;
 
 use anyhow::Result;
-use dynamo_async_openai::types::EncodingFormat;
+use dynamo_async_openai::types::{ChatCompletionToolChoiceOption, EncodingFormat};
+use futures::Stream;
 use futures::stream::{self, StreamExt};
 use prompt::OAIPromptFormatter;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, pin::Pin, sync::Arc};
 use tracing;
 
-use crate::model_card::{ModelDeploymentCard, ModelInfo, TokenizerKind};
+use crate::model_card::{ModelDeploymentCard, ModelInfo};
 use crate::preprocessor::prompt::OAIChatLikeRequest;
+use crate::protocols::common::preprocessor::PreprocessedRequestBuilder;
 use crate::tokenizers::Encoding;
 
 use dynamo_runtime::engine::{AsyncEngine, AsyncEngineContextProvider, ResponseStream};
@@ -36,7 +38,9 @@ use crate::protocols::{
     common::{OutputOptionsProvider, SamplingOptionsProvider, StopConditionsProvider},
     openai::{
         DeltaGeneratorExt,
-        chat_completions::{NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse},
+        chat_completions::{
+            NvCreateChatCompletionRequest, NvCreateChatCompletionStreamResponse, jail::JailedStream,
+        },
         completions::{NvCreateCompletionRequest, NvCreateCompletionResponse},
         embeddings::{NvCreateEmbeddingRequest, NvCreateEmbeddingResponse},
         nvext::NvExtProvider,
@@ -94,41 +98,47 @@ pub struct OpenAIPreprocessor {
     formatter: Arc<dyn OAIPromptFormatter>,
     tokenizer: Arc<dyn Tokenizer>,
     model_info: Arc<dyn ModelInfo>,
+    /// Per-model runtime configuration propagated to response generator (e.g., reasoning/tool parser)
+    runtime_config: crate::local_model::runtime_config::ModelRuntimeConfig,
+    tool_call_parser: Option<String>,
 }
 
 impl OpenAIPreprocessor {
-    pub async fn new(mdc: ModelDeploymentCard) -> Result<Arc<Self>> {
-        let mdcsum = mdc.mdcsum();
-        let formatter = PromptFormatter::from_mdc(mdc.clone()).await?;
-        let PromptFormatter::OAI(formatter) = formatter;
-        let tokenizer = match &mdc.tokenizer {
-            Some(TokenizerKind::HfTokenizerJson(file)) => HuggingFaceTokenizer::from_file(file)?,
-            Some(TokenizerKind::GGUF(tokenizer)) => {
-                HuggingFaceTokenizer::from_tokenizer(*tokenizer.clone())
-            }
-            None => {
-                anyhow::bail!(
-                    "Blank ModelDeploymentCard cannot be used for pre-processing, no tokenizer"
-                );
-            }
-        };
-        let tokenizer = Arc::new(tokenizer);
+    pub fn new(mdc: ModelDeploymentCard) -> Result<Arc<Self>> {
+        let formatter = PromptFormatter::from_mdc(&mdc)?;
+        let tokenizer = mdc.tokenizer_hf()?;
+        match formatter {
+            PromptFormatter::OAI(formatter) => Self::new_with_parts(mdc, formatter, tokenizer),
+        }
+    }
 
+    pub fn new_with_parts(
+        mdc: ModelDeploymentCard,
+        formatter: Arc<dyn OAIPromptFormatter>,
+        hf_tokenizer: tokenizers::Tokenizer,
+    ) -> Result<Arc<Self>> {
+        let mdcsum = mdc.mdcsum();
+        let tokenizer = Arc::new(HuggingFaceTokenizer::from_tokenizer(hf_tokenizer));
         let Some(model_info) = mdc.model_info else {
             anyhow::bail!(
                 "Blank ModelDeploymentCard cannot be used for pre-processing, no model_info"
             );
         };
-        let model_info = model_info.get_model_info().await?;
+        let model_info = model_info.get_model_info()?;
+        let tool_call_parser = mdc.runtime_config.tool_call_parser.clone();
+
+        // // Initialize runtime config from the ModelDeploymentCard
+        let runtime_config = mdc.runtime_config.clone();
 
         Ok(Arc::new(Self {
             formatter,
             tokenizer,
             model_info,
             mdcsum,
+            runtime_config,
+            tool_call_parser,
         }))
     }
-
     /// Encode a string to it's tokens
     pub fn tokenize(&self, s: &str) -> anyhow::Result<Encoding> {
         self.tokenizer.encode(s)
@@ -151,83 +161,26 @@ impl OpenAIPreprocessor {
         &self,
         request: &R,
     ) -> Result<(PreprocessedRequest, HashMap<String, String>)> {
-        let mut annotations = HashMap::new();
+        let mut builder = self.builder(request)?;
+        let formatted_prompt = self.apply_template(request)?;
+        let annotations = self.gather_tokens(request, &mut builder, formatted_prompt)?;
+
+        Ok((builder.build()?, annotations))
+    }
+
+    pub fn builder<
+        R: OAIChatLikeRequest
+            + AnnotationsProvider
+            + SamplingOptionsProvider
+            + StopConditionsProvider
+            + OutputOptionsProvider
+            + NvExtProvider,
+    >(
+        &self,
+        request: &R,
+    ) -> Result<PreprocessedRequestBuilder> {
         let mut builder = PreprocessedRequest::builder();
         builder.model(request.model());
-
-        // match request type before any conversion/processing
-        match request.prompt_input_type() {
-            PromptInput::Tokens(_) => {
-                if let Some(token_input) = request.extract_tokens() {
-                    match token_input {
-                        TokenInput::Single(tokens) => {
-                            builder.token_ids(tokens);
-                        }
-                        TokenInput::Batch(token_batches) => {
-                            if token_batches.len() == 1 {
-                                builder.token_ids(token_batches[0].clone());
-                            } else {
-                                builder.batch_token_ids(Some(token_batches));
-                                builder.token_ids(vec![]);
-                            }
-                        }
-                    }
-                }
-            }
-            PromptInput::Text(_) => {
-                if let Some(text_input) = request.extract_text() {
-                    match text_input {
-                        TextInput::Single(_) => {
-                            let use_raw_prompt = request
-                                .nvext()
-                                .is_some_and(|ext| ext.use_raw_prompt.unwrap_or(false));
-
-                            let formatted_prompt = if use_raw_prompt {
-                                match request.raw_prompt() {
-                                    Some(prompt) => prompt,
-                                    None => {
-                                        tracing::warn!("Raw prompt requested but not available");
-                                        self.formatter.render(request)?
-                                    }
-                                }
-                            } else {
-                                self.formatter.render(request)?
-                            };
-
-                            let encoding = self.tokenizer.encode(&formatted_prompt)?;
-
-                            if request.has_annotation(ANNOTATION_FORMATTED_PROMPT) {
-                                annotations.insert(
-                                    ANNOTATION_FORMATTED_PROMPT.to_string(),
-                                    formatted_prompt,
-                                );
-                            }
-
-                            if request.has_annotation(ANNOTATION_TOKEN_IDS) {
-                                annotations.insert(
-                                    ANNOTATION_TOKEN_IDS.to_string(),
-                                    serde_json::to_string(encoding.token_ids())?,
-                                );
-                            }
-
-                            builder.token_ids(encoding.token_ids().to_vec());
-                        }
-                        TextInput::Batch(texts) => {
-                            let token_batches: Vec<Vec<u32>> = texts
-                                .par_iter()
-                                .map(|text| {
-                                    self.tokenizer
-                                        .encode(text)
-                                        .map(|encoded| encoded.token_ids().to_vec())
-                                })
-                                .collect::<Result<Vec<_>>>()?;
-                            builder.batch_token_ids(Some(token_batches));
-                            builder.token_ids(vec![]);
-                        }
-                    }
-                }
-            }
-        }
 
         let mut stop_conditions = request.extract_stop_conditions()?;
         if let Some(stop_tokens) = &mut stop_conditions.stop_token_ids_hidden {
@@ -258,7 +211,149 @@ impl OpenAIPreprocessor {
             builder.backend_instance_id(nvext.backend_instance_id);
         }
 
-        Ok((builder.build()?, annotations))
+        Ok(builder)
+    }
+
+    pub fn apply_template<
+        R: OAIChatLikeRequest
+            + AnnotationsProvider
+            + SamplingOptionsProvider
+            + StopConditionsProvider
+            + OutputOptionsProvider
+            + NvExtProvider,
+    >(
+        &self,
+        request: &R,
+    ) -> Result<Option<String>> {
+        if let PromptInput::Text(_) = request.prompt_input_type()
+            && let Some(TextInput::Single(_)) = request.extract_text()
+        {
+            let use_raw_prompt = request
+                .nvext()
+                .is_some_and(|ext| ext.use_raw_prompt.unwrap_or(false));
+
+            let formatted_prompt = if use_raw_prompt {
+                match request.raw_prompt() {
+                    Some(prompt) => prompt,
+                    None => {
+                        tracing::warn!("Raw prompt requested but not available");
+                        self.formatter.render(request)?
+                    }
+                }
+            } else {
+                self.formatter.render(request)?
+            };
+            Ok(Some(formatted_prompt))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn gather_tokens<
+        R: OAIChatLikeRequest
+            + AnnotationsProvider
+            + SamplingOptionsProvider
+            + StopConditionsProvider
+            + OutputOptionsProvider
+            + NvExtProvider,
+    >(
+        &self,
+        request: &R,
+        builder: &mut PreprocessedRequestBuilder,
+        formatted_prompt: Option<String>,
+    ) -> Result<HashMap<String, String>> {
+        let mut annotations = HashMap::new();
+        // match request type before any conversion/processing
+        match request.prompt_input_type() {
+            PromptInput::Tokens(_) => {
+                if let Some(token_input) = request.extract_tokens() {
+                    match token_input {
+                        TokenInput::Single(tokens) => {
+                            builder.token_ids(tokens);
+                        }
+                        TokenInput::Batch(token_batches) => {
+                            if token_batches.len() == 1 {
+                                builder.token_ids(token_batches[0].clone());
+                            } else {
+                                builder.batch_token_ids(Some(token_batches));
+                                builder.token_ids(vec![]);
+                            }
+                        }
+                    }
+                }
+            }
+            PromptInput::Text(_) => {
+                if let Some(text_input) = request.extract_text() {
+                    match text_input {
+                        TextInput::Single(raw_prompt) => {
+                            if let Some(f) = formatted_prompt.as_ref()
+                                && request.has_annotation(ANNOTATION_FORMATTED_PROMPT)
+                            {
+                                annotations
+                                    .insert(ANNOTATION_FORMATTED_PROMPT.to_string(), f.to_string());
+                            }
+
+                            // Completions will use raw_prompt, no template
+                            let prompt = formatted_prompt.unwrap_or(raw_prompt);
+
+                            // Check if backend_instance_id is present and token_data is provided
+                            let has_backend_instance_id = request
+                                .nvext()
+                                .and_then(|ext| ext.backend_instance_id)
+                                .is_some();
+
+                            let token_data =
+                                request.nvext().and_then(|ext| ext.token_data.as_ref());
+
+                            let (tokens_vec, skip_token_annotation) = if has_backend_instance_id {
+                                if let Some(tokens) = token_data {
+                                    tracing::trace!(
+                                        "Using provided tokens from EPP: {} ids",
+                                        tokens.len()
+                                    );
+                                    // need ownership for the builder, so clone.
+                                    (tokens.clone(), true)
+                                } else {
+                                    tracing::warn!(
+                                        "backend_instance_id provided but no token_data; tokenizing prompt"
+                                    );
+                                    let encoding = self.tokenizer.encode(&prompt)?;
+                                    (encoding.token_ids().to_vec(), false)
+                                }
+                            } else {
+                                // No backend_instance_id provided, continue the normal flow.
+                                let encoding = self.tokenizer.encode(&prompt)?;
+                                (encoding.token_ids().to_vec(), false)
+                            };
+
+                            if request.has_annotation(ANNOTATION_TOKEN_IDS)
+                                && !skip_token_annotation
+                            {
+                                annotations.insert(
+                                    ANNOTATION_TOKEN_IDS.to_string(),
+                                    serde_json::to_string(&tokens_vec)?,
+                                );
+                            }
+
+                            builder.token_ids(tokens_vec);
+                        }
+                        TextInput::Batch(texts) => {
+                            let token_batches: Vec<Vec<u32>> = texts
+                                .par_iter()
+                                .map(|text| {
+                                    self.tokenizer
+                                        .encode(text)
+                                        .map(|encoded| encoded.token_ids().to_vec())
+                                })
+                                .collect::<Result<Vec<_>>>()?;
+                            builder.batch_token_ids(Some(token_batches));
+                            builder.token_ids(vec![]);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(annotations)
     }
 
     /// Preprocess an embedding request, handling both text and token ID inputs.
@@ -325,37 +420,56 @@ impl OpenAIPreprocessor {
         Ok((builder.build()?, annotations))
     }
 
-    pub fn transform_postprocessor_stream<Resp: Send + Sync + 'static + std::fmt::Debug>(
-        stream: ManyOut<Annotated<BackendOutput>>,
+    pub fn transform_postprocessor_stream<S, Resp>(
+        stream: S,
         generator: Box<dyn DeltaGeneratorExt<Resp>>,
-    ) -> ManyOut<Annotated<Resp>> {
-        let context = stream.context();
-
-        struct State<Resp: Send + Sync + 'static + std::fmt::Debug> {
-            response_stream: ManyOut<Annotated<BackendOutput>>,
+        context: Arc<dyn AsyncEngineContext>,
+    ) -> impl Stream<Item = Annotated<Resp>> + Send
+    where
+        S: Stream<Item = Annotated<BackendOutput>> + Send + 'static,
+        Resp: Send + Sync + 'static + std::fmt::Debug,
+    {
+        struct State<Resp>
+        where
+            Resp: Send + Sync + 'static + std::fmt::Debug,
+        {
+            response_stream: Pin<Box<dyn Stream<Item = Annotated<BackendOutput>> + Send>>,
             response_generator: Box<dyn DeltaGeneratorExt<Resp>>,
             context: Arc<dyn AsyncEngineContext>,
             cancelled: bool,
             cumulative_output_tokens: usize,
+            finish_reason_sent: bool,
+            usage_chunk_sent: bool,
+            finished: bool,
         }
 
         let state = State {
-            response_stream: stream,
+            response_stream: Box::pin(stream),
             response_generator: generator,
             context: context.clone(),
             cancelled: false,
             cumulative_output_tokens: 0,
+            finish_reason_sent: false,
+            usage_chunk_sent: false,
+            finished: false,
         };
 
         // transform the common response stream into a chat response stream
-        let stream = stream::unfold(state, |mut inner| {
+
+        stream::unfold(state, |mut inner| {
             async move {
+                // If already finished, return None immediately
+                if inner.finished {
+                    return None;
+                }
+
                 if let Some(response) = inner.response_stream.next().await {
                     if inner.cancelled {
                         tracing::debug!(
                             request_id = inner.context.id(),
                             "Cancellation issued last message; closing stream"
                         );
+                        inner.finished = true; // Mark as finished
                         return None;
                     }
 
@@ -364,6 +478,13 @@ impl OpenAIPreprocessor {
                         "Processing common response: {:?}",
                         response
                     );
+
+                    // Check if this response has a finish_reason
+                    let has_finish_reason = response
+                        .data
+                        .as_ref()
+                        .map(|d| d.finish_reason.is_some())
+                        .unwrap_or(false);
 
                     let (chunk_tokens, isl) = if let Some(ref backend_output) = response.data {
                         let chunk_tokens = backend_output.token_ids.len();
@@ -409,6 +530,11 @@ impl OpenAIPreprocessor {
                         }
                     }
 
+                    // Mark if we've seen a finish_reason
+                    if has_finish_reason {
+                        inner.finish_reason_sent = true;
+                    }
+
                     tracing::trace!(
                         request_id = inner.context.id(),
                         "OpenAI NvCreateChatCompletionStreamResponse: {:?}",
@@ -417,25 +543,48 @@ impl OpenAIPreprocessor {
 
                     Some((response, inner))
                 } else {
-                    // stream closed with out graceful closure
-                    // we did not detect an is_finished/completed message
-                    // Ok(None)
-                    None
+                    // Stream has ended - check if we need to send a usage chunk
+                    if inner.response_generator.is_usage_enabled()
+                        && inner.finish_reason_sent
+                        && !inner.usage_chunk_sent
+                        && !inner.finished
+                    {
+                        inner.usage_chunk_sent = true;
+
+                        // Create the final usage chunk
+                        let usage_chunk = inner.response_generator.create_usage_chunk();
+                        let annotated_usage = Annotated::<Resp> {
+                            id: None,
+                            data: Some(usage_chunk),
+                            event: Some(ANNOTATION_LLM_METRICS.to_string()),
+                            comment: None,
+                        };
+
+                        tracing::trace!(
+                            request_id = inner.context.id(),
+                            "Sending final usage chunk for OpenAI compliance"
+                        );
+
+                        Some((annotated_usage, inner))
+                    } else {
+                        // stream closed
+                        inner.finished = true; // Mark as finished
+                        None
+                    }
                 }
             }
-        });
-
-        ResponseStream::new(Box::pin(stream), context)
+        })
     }
 
     /// Transform engine embedding output stream to OpenAI embedding response stream
-    pub fn transform_embedding_postprocessor_stream(
-        stream: ManyOut<Annotated<EmbeddingsEngineOutput>>,
+    pub fn transform_embedding_postprocessor_stream<S>(
+        stream: S,
         original_request: NvCreateEmbeddingRequest,
-    ) -> ManyOut<Annotated<NvCreateEmbeddingResponse>> {
-        let context = stream.context();
-
-        let transformed_stream = stream.map(move |output| {
+    ) -> impl Stream<Item = Annotated<NvCreateEmbeddingResponse>> + Send
+    where
+        S: Stream<Item = Annotated<EmbeddingsEngineOutput>> + Send + 'static,
+    {
+        stream.map(move |output| {
             output.map_data(|engine_output| {
                 // Convert engine output to OpenAI response format
                 let embeddings: Vec<dynamo_async_openai::types::Embedding> = engine_output
@@ -463,9 +612,61 @@ impl OpenAIPreprocessor {
 
                 Ok(response)
             })
-        });
+        })
+    }
 
-        ResponseStream::new(Box::pin(transformed_stream), context)
+    /// Determine if we should apply the tool calling jail based on configuration
+    /// Returns Ok(true) if jail should be applied, Ok(false) if not, or Err if invalid config
+    pub fn should_apply_tool_jail(
+        tool_call_parser: Option<&String>,
+        tool_choice: Option<&ChatCompletionToolChoiceOption>,
+        has_tools: bool,
+    ) -> std::result::Result<bool, Error> {
+        match (tool_call_parser, tool_choice, has_tools) {
+            // No parser but tools requested - error cases
+            (None, Some(ChatCompletionToolChoiceOption::Required), true) => {
+                tracing::warn!(
+                    "Tool choice 'required' specified but no tool parser configured; proceeding without jailing"
+                );
+                Ok(false)
+            }
+            (None, Some(ChatCompletionToolChoiceOption::Auto), true) => {
+                tracing::warn!(
+                    "Tool choice 'auto' specified but no tool parser configured; proceeding without jailing"
+                );
+                Ok(false)
+            }
+            (None, Some(ChatCompletionToolChoiceOption::Named(_)), _) => {
+                tracing::warn!(
+                    "Named tool choice specified but no tool parser configured; proceeding without jailing"
+                );
+                Ok(false)
+            }
+
+            // Parser exists and tools might be called
+            (Some(_), Some(ChatCompletionToolChoiceOption::None), _) => {
+                Ok(false) // Explicitly disabled
+            }
+            (Some(_), Some(_), true) => Ok(true), // Any other tool_choice with tools
+            (Some(_), None, true) => Ok(true),    // Default behavior when tools present
+
+            // No tools or no parser
+            _ => Ok(false),
+        }
+    }
+
+    /// Apply tool calling jail to the stream if needed
+    pub fn apply_tool_calling_jail<S>(
+        tool_call_parser: String,
+        stream: S,
+    ) -> impl Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send
+    where
+        S: Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send + 'static,
+    {
+        let jail = JailedStream::builder()
+            .tool_call_parser(tool_call_parser)
+            .build();
+        jail.apply(stream)
     }
 }
 
@@ -495,10 +696,14 @@ impl
 
         // create a response generator
         let response_generator = request.response_generator(context.id().to_string());
-        let mut response_generator = Box::new(response_generator);
 
         // convert the chat completion request to a common completion request
         let (common_request, annotations) = self.preprocess_request(&request)?;
+
+        let mut response_generator = Box::new(response_generator);
+
+        // set the runtime configuration
+        response_generator.set_reasoning_parser(self.runtime_config.clone());
 
         // update isl
         response_generator.update_isl(common_request.token_ids.len() as u32);
@@ -516,14 +721,43 @@ impl
         // forward the common completion request to the next operator
         let response_stream = next.generate(common_request).await?;
 
-        // transform the postprocessor stream
-        let stream = Self::transform_postprocessor_stream(response_stream, response_generator);
-        let context = stream.context();
+        // Extract context once
+        let context = response_stream.context();
 
+        // transform the postprocessor stream (no boxing yet)
+        let stream = Self::transform_postprocessor_stream(
+            response_stream,
+            response_generator,
+            context.clone(),
+        );
+
+        // Check if tools are present and if we should apply jail
+        let has_tools =
+            request.inner.tools.is_some() && !request.inner.tools.as_ref().unwrap().is_empty();
+
+        // Context was already extracted above from response_stream
+
+        // Determine if we should apply jail (do this before moving request)
+        let should_jail = Self::should_apply_tool_jail(
+            self.tool_call_parser.as_ref(),
+            request.inner.tool_choice.as_ref(),
+            has_tools,
+        )?;
+
+        // Apply jail conditionally
+        let stream: Pin<Box<dyn Stream<Item = _> + Send>> = if should_jail {
+            if let Some(parser) = self.tool_call_parser.clone() {
+                Box::pin(Self::apply_tool_calling_jail(parser, stream))
+            } else {
+                Box::pin(stream) // Should not happen due to should_jail check
+            }
+        } else {
+            Box::pin(stream)
+        };
         // prepend the annotations to the response stream
         let stream = annotations_stream.chain(stream);
 
-        // return the response stream
+        // return the response stream - single boxing at the end
         Ok(ResponseStream::new(Box::pin(stream), context))
     }
 }
@@ -551,7 +785,9 @@ impl
         let response_generator = request.response_generator(context.id().to_string());
         let mut response_generator = Box::new(response_generator);
         // convert the chat completion request to a common completion request
-        let (common_request, annotations) = self.preprocess_request(&request)?;
+        let mut builder = self.builder(&request)?;
+        let annotations = self.gather_tokens(&request, &mut builder, None)?;
+        let common_request = builder.build()?;
 
         // update isl
         response_generator.update_isl(common_request.token_ids.len() as u32);
@@ -569,9 +805,15 @@ impl
         // forward the common completion request to the next operator
         let response_stream = next.generate(common_request).await?;
 
+        // Extract context once
+        let context = response_stream.context();
+
         // transform the postprocessor stream
-        let stream = Self::transform_postprocessor_stream(response_stream, response_generator);
-        let context = stream.context();
+        let stream = Self::transform_postprocessor_stream(
+            response_stream,
+            response_generator,
+            context.clone(),
+        );
 
         // prepend the annotations to the response stream
         let stream = annotations_stream.chain(stream);
@@ -612,9 +854,11 @@ impl
         let preprocessed_request = context.map(|_| preprocessed_request);
         let response_stream = next.generate(preprocessed_request).await?;
 
+        // Extract context once
+        let context = response_stream.context();
+
         // Transform response stream back to OpenAI format
         let stream = Self::transform_embedding_postprocessor_stream(response_stream, request);
-        let context = stream.context();
 
         // Prepend annotations
         let annotations_stream = stream::iter(
@@ -628,3 +872,5 @@ impl
         Ok(ResponseStream::new(Box::pin(combined_stream), context))
     }
 }
+
+// Note: tests for jailing and parser detection live in `lib/llm/tests/test_jail.rs`

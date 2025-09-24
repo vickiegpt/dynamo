@@ -1,17 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 use crate::{CancellationToken, ErrorContext, Result, Runtime, error};
 
@@ -25,8 +13,9 @@ use tokio::sync::{RwLock, mpsc};
 use validator::Validate;
 
 use etcd_client::{
-    Certificate, Compare, CompareOp, DeleteOptions, GetOptions, Identity, PutOptions, PutResponse,
-    TlsOptions, Txn, TxnOp, TxnOpResponse, WatchOptions, Watcher,
+    Certificate, Compare, CompareOp, DeleteOptions, GetOptions, Identity, LockClient, LockOptions,
+    LockResponse, PutOptions, PutResponse, TlsOptions, Txn, TxnOp, TxnOpResponse, WatchOptions,
+    Watcher,
 };
 pub use etcd_client::{ConnectOptions, KeyValue, LeaseClient};
 use tokio::time::{Duration, interval};
@@ -304,6 +293,32 @@ impl Client {
             .await?;
 
         Ok(get_response.take_kvs())
+    }
+
+    /// Acquire a distributed lock using etcd's native lock mechanism
+    /// Returns a LockResponse that can be used to unlock later
+    pub async fn lock(
+        &self,
+        key: impl Into<Vec<u8>>,
+        lease_id: Option<i64>,
+    ) -> Result<LockResponse> {
+        let mut lock_client = self.client.lock_client();
+        let id = lease_id.unwrap_or(self.lease_id());
+        let options = LockOptions::new().with_lease(id);
+        lock_client
+            .lock(key, Some(options))
+            .await
+            .map_err(|err| err.into())
+    }
+
+    /// Release a distributed lock using the key from the LockResponse
+    pub async fn unlock(&self, lock_key: impl Into<Vec<u8>>) -> Result<()> {
+        let mut lock_client = self.client.lock_client();
+        lock_client
+            .unlock(lock_key)
+            .await
+            .map_err(|err: etcd_client::Error| anyhow::anyhow!(err))?;
+        Ok(())
     }
 
     pub async fn kv_get_and_watch_prefix(

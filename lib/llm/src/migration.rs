@@ -17,8 +17,8 @@ use crate::{
 
 use dynamo_runtime::{
     pipeline::{
-        AsyncEngineContextProvider, ManyOut, Operator, ResponseStream, ServerStreamingEngine,
-        SingleIn, async_trait,
+        AsyncEngineContext, AsyncEngineContextProvider, Context, ManyOut, Operator, ResponseStream,
+        ServerStreamingEngine, SingleIn, async_trait, network::STREAM_ERR_MSG,
     },
     protocols::{annotated::Annotated, maybe_error::MaybeError},
 };
@@ -28,10 +28,15 @@ pub struct Migration {
 }
 
 impl Migration {
-    pub async fn from_mdc(mdc: ModelDeploymentCard) -> Result<Arc<Self>> {
-        Ok(Arc::new(Self {
+    pub fn from_mdc(mdc: &ModelDeploymentCard) -> Arc<Self> {
+        tracing::debug!(
+            "model {} migration limit {}",
+            mdc.display_name,
+            mdc.migration_limit
+        );
+        Arc::new(Self {
             migration_limit: mdc.migration_limit,
-        }))
+        })
     }
 }
 
@@ -51,19 +56,22 @@ impl
     ) -> Result<ManyOut<Annotated<LLMEngineOutput>>> {
         let (preprocessed_request, context) = request.transfer(());
         let engine_ctx = context.context();
+        let engine_ctx_ = engine_ctx.clone();
         let retry_manager =
-            RetryManager::build(preprocessed_request, next, self.migration_limit).await?;
-        let response_stream = stream::unfold(retry_manager, |mut retry_manager| async move {
+            RetryManager::build(engine_ctx, preprocessed_request, next, self.migration_limit)
+                .await?;
+        let response_stream = stream::unfold(retry_manager, move |mut retry_manager| async move {
             retry_manager
                 .next()
                 .await
                 .map(|response| (response, retry_manager))
         });
-        Ok(ResponseStream::new(Box::pin(response_stream), engine_ctx))
+        Ok(ResponseStream::new(Box::pin(response_stream), engine_ctx_))
     }
 }
 
 struct RetryManager {
+    context: Arc<dyn AsyncEngineContext>,
     request: PreprocessedRequest,
     next_generate: ServerStreamingEngine<PreprocessedRequest, Annotated<LLMEngineOutput>>,
     next_stream: Option<ManyOut<Annotated<LLMEngineOutput>>>,
@@ -72,11 +80,13 @@ struct RetryManager {
 
 impl RetryManager {
     pub async fn build(
+        context: Arc<dyn AsyncEngineContext>,
         preprocessed_request: PreprocessedRequest,
         next: ServerStreamingEngine<PreprocessedRequest, Annotated<LLMEngineOutput>>,
         retries_left: u32,
     ) -> Result<Self> {
         let mut slf = Self {
+            context,
             request: preprocessed_request,
             next_generate: next,
             next_stream: None,
@@ -98,18 +108,16 @@ impl RetryManager {
                 }
             };
             if let Some(response) = response_stream.next().await {
-                if let Some(err) = response.err() {
-                    const STREAM_ERR_MSG: &str = "Stream ended before generation completed";
-                    if err
+                if let Some(err) = response.err()
+                    && err
                         .chain()
                         .any(|e| e.to_string().starts_with(STREAM_ERR_MSG))
-                    {
-                        tracing::warn!("Stream disconnected... recreating stream...");
-                        if let Err(err) = self.new_stream().await {
-                            tracing::warn!("Cannot recreate stream: {:#}", err);
-                        } else {
-                            continue;
-                        }
+                {
+                    tracing::warn!("Stream disconnected... recreating stream...");
+                    if let Err(err) = self.new_stream().await {
+                        tracing::warn!("Cannot recreate stream: {:#}", err);
+                    } else {
+                        continue;
                     }
                 }
                 self.track_response(&response);
@@ -123,8 +131,8 @@ impl RetryManager {
         let mut response_stream: Option<Result<ManyOut<Annotated<LLMEngineOutput>>>> = None;
         while self.retries_left > 0 {
             self.retries_left -= 1;
-            // TODO: Is there anything needed to pass between context?
-            let request = SingleIn::new(self.request.clone());
+            let request = Context::with_id(self.request.clone(), self.context.id().to_string());
+            self.context.link_child(request.context());
             response_stream = Some(self.next_generate.generate(request).await);
             if let Some(err) = response_stream.as_ref().unwrap().as_ref().err()
                 && let Some(req_err) = err.downcast_ref::<NatsRequestError>()
@@ -227,15 +235,22 @@ mod tests {
         num_responses: usize,
         token_offset: u32,
         call_count: Arc<AtomicU32>,
+        context_id: String,
     }
 
     impl MockEngine {
-        fn new(behavior: MockBehavior, num_responses: usize, token_offset: u32) -> Self {
+        fn new(
+            behavior: MockBehavior,
+            num_responses: usize,
+            token_offset: u32,
+            context_id: String,
+        ) -> Self {
             Self {
                 behavior,
                 num_responses,
                 token_offset,
                 call_count: Arc::new(AtomicU32::new(0)),
+                context_id,
             }
         }
     }
@@ -253,7 +268,14 @@ mod tests {
             request: SingleIn<PreprocessedRequest>,
         ) -> Result<ManyOut<Annotated<LLMEngineOutput>>> {
             let call_num = self.call_count.fetch_add(1, Ordering::SeqCst);
-            let (preprocessed_request, _) = request.transfer(());
+            let (preprocessed_request, context) = request.transfer(());
+
+            // Assert that the context_id matches the expected one
+            assert_eq!(
+                context.id().to_string(),
+                self.context_id,
+                "Context ID mismatch"
+            );
 
             // Calculate how many responses we've already generated based on request token_ids
             // Initial request has [1, 2, 3], so anything beyond that are generated responses
@@ -309,10 +331,8 @@ mod tests {
                                 }
                             }
                             // Send the specific error that triggers retry logic
-                            let error_response = Annotated::from_err(
-                                anyhow::Error::msg("Stream ended before generation completed")
-                                    .into(),
-                            );
+                            let error_response =
+                                Annotated::from_err(anyhow::Error::msg(STREAM_ERR_MSG).into());
                             let _ = tx.send(error_response).await;
                         });
                     } else {
@@ -328,7 +348,7 @@ mod tests {
                     }
 
                     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-                    let ctx = Arc::new(Controller::default());
+                    let ctx = Arc::new(Controller::new(self.context_id.clone()));
                     Ok(dynamo_runtime::pipeline::ResponseStream::new(
                         Box::pin(stream),
                         ctx,
@@ -351,15 +371,13 @@ mod tests {
                                 }
                             }
                             // Send the specific error that triggers retry logic
-                            let error_response = Annotated::from_err(
-                                anyhow::Error::msg("Stream ended before generation completed")
-                                    .into(),
-                            );
+                            let error_response =
+                                Annotated::from_err(anyhow::Error::msg(STREAM_ERR_MSG).into());
                             let _ = tx.send(error_response).await;
                         });
 
                         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-                        let ctx = Arc::new(Controller::default());
+                        let ctx = Arc::new(Controller::new(self.context_id.clone()));
                         Ok(dynamo_runtime::pipeline::ResponseStream::new(
                             Box::pin(stream),
                             ctx,
@@ -387,15 +405,13 @@ mod tests {
                                 }
                             }
                             // Send the specific error that triggers retry logic
-                            let error_response = Annotated::from_err(
-                                anyhow::Error::msg("Stream ended before generation completed")
-                                    .into(),
-                            );
+                            let error_response =
+                                Annotated::from_err(anyhow::Error::msg(STREAM_ERR_MSG).into());
                             let _ = tx.send(error_response).await;
                         });
 
                         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-                        let ctx = Arc::new(Controller::default());
+                        let ctx = Arc::new(Controller::new(self.context_id.clone()));
                         Ok(dynamo_runtime::pipeline::ResponseStream::new(
                             Box::pin(stream),
                             ctx,
@@ -404,15 +420,13 @@ mod tests {
                         // Subsequent calls - immediately send stream error (no successful responses)
                         tokio::spawn(async move {
                             // Send the stream error immediately
-                            let error_response = Annotated::from_err(
-                                anyhow::Error::msg("Stream ended before generation completed")
-                                    .into(),
-                            );
+                            let error_response =
+                                Annotated::from_err(anyhow::Error::msg(STREAM_ERR_MSG).into());
                             let _ = tx.send(error_response).await;
                         });
 
                         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-                        let ctx = Arc::new(Controller::default());
+                        let ctx = Arc::new(Controller::new(self.context_id.clone()));
                         Ok(dynamo_runtime::pipeline::ResponseStream::new(
                             Box::pin(stream),
                             ctx,
@@ -447,7 +461,7 @@ mod tests {
             });
 
             let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-            let ctx = Arc::new(Controller::default());
+            let ctx = Arc::new(Controller::new(self.context_id.clone()));
             Ok(dynamo_runtime::pipeline::ResponseStream::new(
                 Box::pin(stream),
                 ctx,
@@ -462,12 +476,19 @@ mod tests {
     #[tokio::test]
     async fn test_retry_manager_no_migration() {
         dynamo_runtime::logging::init();
+        let context_id = uuid::Uuid::new_v4().to_string();
         let request = create_mock_request(10);
-        let mock_engine = Arc::new(MockEngine::new(MockBehavior::Success, 10, 100));
+        let mock_engine = Arc::new(MockEngine::new(
+            MockBehavior::Success,
+            10,
+            100,
+            context_id.clone(),
+        ));
         let next_generate: ServerStreamingEngine<PreprocessedRequest, Annotated<LLMEngineOutput>> =
             mock_engine;
 
-        let mut retry_manager = RetryManager::build(request, next_generate, 0)
+        let ctx = Arc::new(Controller::new(context_id.clone()));
+        let mut retry_manager = RetryManager::build(ctx, request, next_generate, 0)
             .await
             .expect("Failed to build RetryManager");
 
@@ -494,12 +515,19 @@ mod tests {
     #[tokio::test]
     async fn test_retry_manager_new_request_migration() {
         dynamo_runtime::logging::init();
+        let context_id = uuid::Uuid::new_v4().to_string();
         let request = create_mock_request(10);
-        let mock_engine = Arc::new(MockEngine::new(MockBehavior::FailThenSuccess, 10, 100));
+        let mock_engine = Arc::new(MockEngine::new(
+            MockBehavior::FailThenSuccess,
+            10,
+            100,
+            context_id.clone(),
+        ));
         let next_generate: ServerStreamingEngine<PreprocessedRequest, Annotated<LLMEngineOutput>> =
             mock_engine;
 
-        let mut retry_manager = RetryManager::build(request, next_generate, 3)
+        let ctx = Arc::new(Controller::new(context_id.clone()));
+        let mut retry_manager = RetryManager::build(ctx, request, next_generate, 3)
             .await
             .expect("Failed to build RetryManager");
 
@@ -527,16 +555,19 @@ mod tests {
     async fn test_retry_manager_ongoing_request_migration() {
         dynamo_runtime::logging::init();
 
+        let context_id = uuid::Uuid::new_v4().to_string();
         let request = create_mock_request(10);
         let mock_engine = Arc::new(MockEngine::new(
             MockBehavior::MidStreamFail { fail_after: 5 },
             10,
             100,
+            context_id.clone(),
         ));
         let next_generate: ServerStreamingEngine<PreprocessedRequest, Annotated<LLMEngineOutput>> =
             mock_engine;
 
-        let mut retry_manager = RetryManager::build(request, next_generate, 3)
+        let ctx = Arc::new(Controller::new(context_id.clone()));
+        let mut retry_manager = RetryManager::build(ctx, request, next_generate, 3)
             .await
             .expect("Failed to build RetryManager");
 
@@ -564,13 +595,20 @@ mod tests {
     #[tokio::test]
     async fn test_retry_manager_new_request_migration_indefinite_failure() {
         dynamo_runtime::logging::init();
+        let context_id = uuid::Uuid::new_v4().to_string();
         let request = create_mock_request(0);
-        let mock_engine = Arc::new(MockEngine::new(MockBehavior::AlwaysFail, 0, 100));
+        let mock_engine = Arc::new(MockEngine::new(
+            MockBehavior::AlwaysFail,
+            0,
+            100,
+            context_id.clone(),
+        ));
         let next_generate: ServerStreamingEngine<PreprocessedRequest, Annotated<LLMEngineOutput>> =
             mock_engine;
 
         // Should fail to build due to initial stream creation failure after exhausting all 3 retries
-        let retry_manager_result = RetryManager::build(request, next_generate, 3).await;
+        let ctx = Arc::new(Controller::new(context_id.clone()));
+        let retry_manager_result = RetryManager::build(ctx, request, next_generate, 3).await;
 
         assert!(retry_manager_result.is_err());
         if let Err(error) = retry_manager_result {
@@ -585,16 +623,19 @@ mod tests {
     #[tokio::test]
     async fn test_retry_manager_ongoing_request_migration_indefinite_failure() {
         dynamo_runtime::logging::init();
+        let context_id = uuid::Uuid::new_v4().to_string();
         let request = create_mock_request(10);
         let mock_engine = Arc::new(MockEngine::new(
             MockBehavior::MidStreamFailAlways { fail_after: 3 },
             10,
             100,
+            context_id.clone(),
         ));
         let next_generate: ServerStreamingEngine<PreprocessedRequest, Annotated<LLMEngineOutput>> =
             mock_engine;
 
-        let mut retry_manager = RetryManager::build(request, next_generate, 3) // 3 retries
+        let ctx = Arc::new(Controller::new(context_id.clone()));
+        let mut retry_manager = RetryManager::build(ctx, request, next_generate, 3) // 3 retries
             .await
             .expect("Failed to build RetryManager");
 
@@ -620,11 +661,7 @@ mod tests {
         let error_response = &responses[3];
         assert!(error_response.err().is_some());
         if let Some(error) = error_response.err() {
-            assert!(
-                error
-                    .to_string()
-                    .contains("Stream ended before generation completed")
-            );
+            assert!(error.to_string().contains(STREAM_ERR_MSG));
         }
     }
 
@@ -635,16 +672,19 @@ mod tests {
     #[tokio::test]
     async fn test_retry_manager_ongoing_request_migration_indefinite_failure_stream_error() {
         dynamo_runtime::logging::init();
+        let context_id = uuid::Uuid::new_v4().to_string();
         let request = create_mock_request(10);
         let mock_engine = Arc::new(MockEngine::new(
             MockBehavior::MidStreamFailAlwaysStreamError { fail_after: 3 },
             10,
             100,
+            context_id.clone(),
         ));
         let next_generate: ServerStreamingEngine<PreprocessedRequest, Annotated<LLMEngineOutput>> =
             mock_engine;
 
-        let mut retry_manager = RetryManager::build(request, next_generate, 3) // 3 retries
+        let ctx = Arc::new(Controller::new(context_id.clone()));
+        let mut retry_manager = RetryManager::build(ctx, request, next_generate, 3) // 3 retries
             .await
             .expect("Failed to build RetryManager");
 
@@ -670,11 +710,7 @@ mod tests {
         let error_response = &responses[3];
         assert!(error_response.err().is_some());
         if let Some(error) = error_response.err() {
-            assert!(
-                error
-                    .to_string()
-                    .contains("Stream ended before generation completed")
-            );
+            assert!(error.to_string().contains(STREAM_ERR_MSG));
         }
     }
 }
