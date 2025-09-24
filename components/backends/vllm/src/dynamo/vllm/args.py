@@ -132,6 +132,11 @@ def parse_args() -> Config:
     args = parser.parse_args()
     engine_args = AsyncEngineArgs.from_cli_args(args)
 
+    # Testing overrides
+    engine_args.disable_custom_all_reduce = True
+    engine_args.enable_sleep_mode = True
+    engine_args.enable_companion_process = True
+
     if engine_args.enable_prefix_caching is None:
         logger.debug(
             "--enable-prefix-caching or --no-enable-prefix-caching not specified. Defaulting to True (vLLM v1 default behavior)"
