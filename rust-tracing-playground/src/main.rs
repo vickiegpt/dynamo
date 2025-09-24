@@ -49,6 +49,13 @@ where
     }
     
     fn on_event(&self, event: &Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
+        let current_span = Span::current();
+        let otel_context = current_span.context();
+        let span_ref = otel_context.span();
+        let span_context = span_ref.span_context();
+        let current_trace_id = format!("{}", span_context.trace_id());
+        let current_span_id = format!("{}", span_context.span_id());
+
         // Get the message field from the event
         let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
@@ -73,7 +80,7 @@ where
 
         // Print the message with trace context if we found one
         if let Some(message) = visitor.message {
-            println!("EVENT [trace_id={}, span_id={}] {}", trace_id, span_id, message);
+            println!("EVENT [trace_id={}, span_id={} current_trace_id {}, current_span_id {}] {}", trace_id, span_id, current_trace_id, current_span_id, message);
         }
     }
 }
