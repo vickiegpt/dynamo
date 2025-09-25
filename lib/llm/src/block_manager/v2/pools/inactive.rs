@@ -26,26 +26,26 @@ use super::{
 /// This pool handles blocks in the Registered state and provides them as
 /// RegisteredBlock RAII guards that automatically return to the pool on drop.
 #[derive(Clone)]
-pub struct RegisteredPool<T: BlockMetadata> {
+pub struct InactivePool<T: BlockMetadata> {
     // Inner state protected by mutex for thread-safe access from guards
-    inner: Arc<Mutex<RegisteredPoolInner<T>>>,
+    inner: Arc<Mutex<InactivePoolInner<T>>>,
     // Return function for MutableBlocks to return to ResetPool
     reset_return_fn: Arc<dyn Fn(Block<T, Reset>) + Send + Sync>,
 
     return_fn: Arc<dyn Fn(Arc<Block<T, Registered>>) + Send + Sync>,
 }
 
-struct RegisteredPoolInner<T: BlockMetadata> {
+struct InactivePoolInner<T: BlockMetadata> {
     // Blocks in the Registered state
     registered_blocks: HashMap<SequenceHash, Block<T, Registered>>,
     // Reuse Policy for managing block order
     reuse_policy: Box<dyn ReusePolicy>,
 }
 
-impl<T: BlockMetadata + Sync> RegisteredPool<T> {
-    /// Create a new RegisteredPool with the given reuse policy and reset pool
+impl<T: BlockMetadata + Sync> InactivePool<T> {
+    /// Create a new InactivePool with the given reuse policy and reset pool
     pub fn new(reuse_policy: Box<dyn ReusePolicy>, reset_pool: &ResetPool<T>) -> Self {
-        let inner = Arc::new(Mutex::new(RegisteredPoolInner {
+        let inner = Arc::new(Mutex::new(InactivePoolInner {
             reuse_policy,
             registered_blocks: HashMap::new(),
         }));
@@ -173,7 +173,7 @@ mod tests {
     use super::*;
 
     // private implementation for testing
-    impl<T: BlockMetadata> RegisteredPool<T> {
+    impl<T: BlockMetadata> InactivePool<T> {
         /// Return a block to the pool (called by RegisteredBlock::drop)
         /// This method is used internally and not typically called directly
         fn insert(&self, block: Block<T, Registered>) {
@@ -215,14 +215,14 @@ mod tests {
         (final_block, actual_seq_hash)
     }
 
-    fn create_test_pool() -> (RegisteredPool<TestData>, ResetPool<TestData>) {
+    fn create_test_pool() -> (InactivePool<TestData>, ResetPool<TestData>) {
         let reuse_policy = Box::new(FifoReusePolicy::new());
 
         // Create some reset blocks for the ResetPool
         let reset_blocks = (0..10).map(|i| Block::new(i)).collect();
         let reset_pool = ResetPool::new(reset_blocks);
 
-        let registered_pool = RegisteredPool::new(reuse_policy, &reset_pool);
+        let registered_pool = InactivePool::new(reuse_policy, &reset_pool);
         (registered_pool, reset_pool)
     }
 

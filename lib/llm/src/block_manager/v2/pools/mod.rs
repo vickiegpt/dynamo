@@ -6,13 +6,14 @@
 //! This module provides:
 //! - Type-safe RAII guards (MutableBlock, CompleteBlock, ImmutableBlock) for automatic resource cleanup
 //! - ResetPool: Pool for mutable blocks in reset state
-//! - RegisteredPool: Pool for immutable registered blocks
+//! - InactivePool: Pool for inactive immutable registered blocks
 //! - BlockRegistry: Global registry for block deduplication via weak references
 //! - Pluggable allocation and reuse policies
 
 pub mod block;
+pub mod frequency_sketch;
+pub mod inactive;
 pub mod registry;
-pub mod registered;
 pub mod reset;
 pub mod reuse_policy;
 
@@ -26,8 +27,7 @@ pub use crate::tokens::{SequenceHash, TokenBlock};
 use block::{Block, BlockId, Complete, Registered, Reset};
 use registry::BlockRegistrationHandle;
 
-//pub use inactive::InactiveBlockPool;
-pub use registered::RegisteredPool;
+pub use inactive::InactivePool;
 
 pub trait BlockMetadata: Clone + Send + Sync + 'static {}
 impl<T: Clone + Send + Sync + 'static> BlockMetadata for T {}

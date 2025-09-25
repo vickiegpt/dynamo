@@ -9,6 +9,7 @@
 //! - Attachment system for storing arbitrary typed data on registration handles
 
 use super::block::{Block, Registered};
+use super::frequency_sketch::FrequencyTracker;
 use super::{CompleteBlock, SequenceHash};
 use crate::block_manager::v2::pools::{BlockMetadata, RegisteredBlock};
 
@@ -454,9 +455,10 @@ impl<'a, T: Any + Send + Sync> TypedAttachments<'a, T> {
 
 /// Global registry for managing block registrations.
 /// Tracks canonical blocks and provides registration handles.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BlockRegistry {
     state: Arc<Mutex<RegistryState>>,
+    frequency_tracker: Option<Arc<dyn FrequencyTracker>>,
 }
 
 #[derive(Debug)]
@@ -470,13 +472,44 @@ impl BlockRegistry {
             state: Arc::new(Mutex::new(RegistryState {
                 canonical_blocks: HashMap::new(),
             })),
+            frequency_tracker: None,
+        }
+    }
+
+    pub fn with_frequency_tracker(frequency_tracker: Arc<dyn FrequencyTracker>) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(RegistryState {
+                canonical_blocks: HashMap::new(),
+            })),
+            frequency_tracker: Some(frequency_tracker),
+        }
+    }
+
+    pub fn has_frequency_tracking(&self) -> bool {
+        self.frequency_tracker.is_some()
+    }
+
+    pub fn touch(&self, seq_hash: SequenceHash) {
+        if let Some(tracker) = &self.frequency_tracker {
+            tracker.touch(seq_hash);
+        }
+    }
+
+    pub fn count(&self, seq_hash: SequenceHash) -> u32 {
+        if let Some(tracker) = &self.frequency_tracker {
+            tracker.count(seq_hash)
+        } else {
+            0
         }
     }
 
     /// Register a sequence hash and get a registration handle.
     /// If the sequence is already registered, returns the existing handle.
     /// Otherwise, creates a new canonical registration.
+    /// This method triggers frequency tracking.
     pub fn register_sequence_hash(&self, seq_hash: SequenceHash) -> BlockRegistrationHandle {
+        self.touch(seq_hash);
+
         let mut state = self.state.lock();
 
         // Check if we already have a canonical block for this sequence hash
@@ -503,14 +536,50 @@ impl BlockRegistry {
         BlockRegistrationHandle { inner }
     }
 
+    /// Internal method for transferring block registration without triggering frequency tracking.
+    /// Used when copying blocks between pools where we don't want to count the transfer as a new access.
+    pub(crate) fn transfer_registration(&self, seq_hash: SequenceHash) -> BlockRegistrationHandle {
+        let mut state = self.state.lock();
+
+        // Check if we already have a canonical block for this sequence hash
+        if let Some(weak_handle) = state.canonical_blocks.get(&seq_hash) {
+            if let Some(existing_handle) = weak_handle.upgrade() {
+                return BlockRegistrationHandle {
+                    inner: existing_handle,
+                };
+            }
+        }
+
+        // Create a new canonical registration without tracking
+        let inner = Arc::new(BlockRegistrationHandleInner {
+            seq_hash,
+            registry: Arc::downgrade(&self.state),
+            attachments: Mutex::new(AttachmentStore::new()),
+        });
+
+        state
+            .canonical_blocks
+            .insert(seq_hash, Arc::downgrade(&inner));
+
+        BlockRegistrationHandle { inner }
+    }
+
     /// Match a sequence hash and return a registration handle.
+    /// This method triggers frequency tracking.
     pub fn match_sequence_hash(&self, seq_hash: SequenceHash) -> Option<BlockRegistrationHandle> {
         let state = self.state.lock();
-        state
+        let result = state
             .canonical_blocks
             .get(&seq_hash)
             .and_then(|weak| weak.upgrade())
-            .map(|inner| BlockRegistrationHandle { inner })
+            .map(|inner| BlockRegistrationHandle { inner });
+
+        if result.is_some() {
+            drop(state);
+            self.touch(seq_hash);
+        }
+
+        result
     }
 
     /// Check if a sequence is currently registered (has a canonical handle).
@@ -916,9 +985,61 @@ mod tests {
     }
 
     #[test]
+    fn test_frequency_tracking() {
+        use super::super::frequency_sketch::TinyLFUTracker;
+
+        let tracker = Arc::new(TinyLFUTracker::new(100));
+        let registry = BlockRegistry::with_frequency_tracker(tracker.clone());
+
+        assert!(registry.has_frequency_tracking());
+        assert_eq!(registry.count(42), 0);
+
+        registry.touch(42);
+        assert_eq!(registry.count(42), 1);
+
+        registry.touch(42);
+        registry.touch(42);
+        assert_eq!(registry.count(42), 3);
+
+        let _handle1 = registry.register_sequence_hash(100);
+        assert_eq!(registry.count(100), 1);
+
+        let _handle2 = registry.match_sequence_hash(100);
+        assert_eq!(registry.count(100), 2);
+    }
+
+    #[test]
+    fn test_no_frequency_tracking() {
+        let registry = BlockRegistry::new();
+
+        assert!(!registry.has_frequency_tracking());
+        assert_eq!(registry.count(42), 0);
+
+        registry.touch(42);
+        assert_eq!(registry.count(42), 0);
+
+        let _handle = registry.register_sequence_hash(100);
+        assert_eq!(registry.count(100), 0);
+    }
+
+    #[test]
+    fn test_transfer_registration_no_tracking() {
+        use super::super::frequency_sketch::TinyLFUTracker;
+
+        let tracker = Arc::new(TinyLFUTracker::new(100));
+        let registry = BlockRegistry::with_frequency_tracker(tracker.clone());
+
+        let _handle1 = registry.transfer_registration(42);
+        assert_eq!(registry.count(42), 0);
+
+        let _handle2 = registry.register_sequence_hash(100);
+        assert_eq!(registry.count(100), 1);
+    }
+
+    #[test]
     fn test_concurrent_try_get_block_and_drop() {
         use super::super::{
-            BlockDuplicationPolicy, CompleteBlock, block::Block, registered::RegisteredPool,
+            BlockDuplicationPolicy, CompleteBlock, block::Block, inactive::InactivePool,
             reset::ResetPool, reuse_policy::fifo::FifoReusePolicy,
         };
         use crate::tokens::TokenBlockSequence;
@@ -945,7 +1066,7 @@ mod tests {
         let reset_blocks: Vec<_> = (0..10).map(|i| Block::new(i)).collect();
         let reset_pool = ResetPool::new(reset_blocks);
         let reuse_policy = Box::new(FifoReusePolicy::new());
-        let registered_pool = RegisteredPool::new(reuse_policy, &reset_pool);
+        let registered_pool = InactivePool::new(reuse_policy, &reset_pool);
         let pool_return_fn = registered_pool.return_fn();
 
         let complete_block = Block::new(0).complete(token_block);

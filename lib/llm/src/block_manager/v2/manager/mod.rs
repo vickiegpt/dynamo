@@ -6,7 +6,7 @@
 use super::pools::{
     BlockDuplicationPolicy, BlockMetadata, SequenceHash,
     block::{Block, Reset},
-    registered::RegisteredPool,
+    inactive::InactivePool,
     registry::BlockRegistry,
     reset::ResetPool,
     reuse_policy::fifo::FifoReusePolicy,
@@ -19,7 +19,7 @@ use derive_builder::Builder;
 #[builder(pattern = "owned")]
 pub struct BlockManager<T: BlockMetadata> {
     reset_pool: ResetPool<T>,
-    registered_pool: RegisteredPool<T>,
+    registered_pool: InactivePool<T>,
     block_registry: BlockRegistry,
     #[builder(default = "BlockDuplicationPolicy::Allow")]
     duplication_policy: BlockDuplicationPolicy,
@@ -37,7 +37,7 @@ impl<T: BlockMetadata> BlockManager<T> {
 
         let reset_pool = ResetPool::new(blocks);
         let reuse_policy = Box::new(FifoReusePolicy::new());
-        let registered_pool = RegisteredPool::new(reuse_policy, &reset_pool);
+        let registered_pool = InactivePool::new(reuse_policy, &reset_pool);
 
         Self {
             reset_pool,
