@@ -23,6 +23,8 @@
 //!   (even if just mutating the values, not the map structure), hence the mutex pattern
 //! - Consider rayon::scope for parallel processing in update_from_output when performance is critical
 
+pub mod worker;
+
 use derive_getters::Dissolve;
 use tokenizers::Token;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};

@@ -19,6 +19,8 @@
 //! mechanisms. It handles storage allocation, block management, and safe access
 //! patterns for both system memory and remote (NIXL) storage.
 
+pub mod v2;
+
 pub mod config;
 mod state;
 
