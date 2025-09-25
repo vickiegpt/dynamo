@@ -32,6 +32,7 @@ FIELD_REPO = "s_repo"
 FIELD_WORKFLOW_NAME = "s_workflow_name"
 FIELD_GITHUB_EVENT = "s_github_event"
 FIELD_BRANCH = "s_branch" #extra you can maybe delete or test
+FIELD_PR_ID = "s_pr_id"  # Pull request ID as string ("N/A" if not a PR)
 FIELD_STATUS = "s_status" #duplicate you can maybe consolidate to the common metric adding
 FIELD_STATUS_NUMBER = "l_status_number"
 FIELD_WORKFLOW_ID = "s_workflow_id"
@@ -283,7 +284,7 @@ class WorkflowMetricsUploader:
             return None
 
 
-    def add_common_context_fields(self, db_data: Dict[str, Any]) -> None:
+    def add_common_context_fields(self, db_data: Dict[str, Any], workflow_data: Dict[str, Any] = None) -> None:
         """Add common context fields used across all metric types"""
         db_data[FIELD_USER_ALIAS] = self.actor
         db_data[FIELD_REPO] = self.repo
@@ -292,6 +293,16 @@ class WorkflowMetricsUploader:
         db_data[FIELD_BRANCH] = self.ref_name
         db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
         db_data[FIELD_COMMIT_SHA] = self.sha
+        
+        # Extract PR ID from workflow data if available
+        pr_id = "N/A"  # Default to "N/A" for non-PR workflows
+        if workflow_data:
+            pull_requests = workflow_data.get('pull_requests', [])
+            if pull_requests and len(pull_requests) > 0:
+                pr_number = pull_requests[0].get('number')
+                if pr_number:
+                    pr_id = str(pr_number)
+        db_data[FIELD_PR_ID] = pr_id
 
     def add_standardized_timing_fields(self, db_data: Dict[str, Any], creation_time: str, start_time: str, end_time: str, 
                                      metric_type: str = "workflow") -> None:
@@ -338,11 +349,13 @@ class WorkflowMetricsUploader:
         for attempt in range(max_retries):
             # Get workflow and jobs data from GitHub API
             workflow_data = self.get_github_api_data(f"/repos/{self.repo}/actions/runs/{self.run_id}")
+            print(f"Workflow data: {workflow_data}")
             if not workflow_data:
                 print("Could not fetch workflow data from GitHub API")
                 return
                 
             jobs_data = self.get_github_api_data(f"/repos/{self.repo}/actions/runs/{self.run_id}/jobs")
+            print(f"Jobs data: {jobs_data}")
             if not jobs_data or 'jobs' not in jobs_data:
                 print("Could not fetch jobs data from GitHub API")
                 return
@@ -429,7 +442,7 @@ class WorkflowMetricsUploader:
         self.add_standardized_timing_fields(db_data, created_at, run_started_at, end_time, "workflow")
         
         # Common context fields
-        self.add_common_context_fields(db_data)
+        self.add_common_context_fields(db_data, workflow_data)
         
         # Override userAlias with actor from API if available
         """
@@ -572,7 +585,7 @@ class WorkflowMetricsUploader:
         db_data[FIELD_RUNNER_NAME] = str(job_data.get('runner_name', ''))
         
         # Add common context fields
-        self.add_common_context_fields(db_data)
+        self.add_common_context_fields(db_data, None)
         
         self.post_to_db(self.jobs_index, db_data)
         print(f"Uploaded metrics for job: {job_name}")
@@ -721,7 +734,7 @@ class WorkflowMetricsUploader:
         db_data[FIELD_COMMAND] = command
         
         # Add common context fields
-        self.add_common_context_fields(db_data)
+        self.add_common_context_fields(db_data, None)
         
         # Job context - Ensure all fields are strings
         #db_data[FIELD_RUNNER_NAME] = str(job_data.get('runner_name', ''))
