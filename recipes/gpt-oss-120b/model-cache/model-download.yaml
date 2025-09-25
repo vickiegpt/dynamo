@@ -28,11 +28,6 @@ spec:
               value: /model-store
             - name: HF_HUB_ENABLE_HF_TRANSFER
               value: "1"
-            - name: HF_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: hf-token-secret
-                  key: HF_TOKEN
           args:
             - |
               set -eux
