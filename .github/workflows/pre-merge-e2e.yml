@@ -126,11 +126,3 @@ jobs:
         echo "Namespace $NAMESPACE deletion initiated, proceeding with cleanup..."
         timeout 7200s kubectl delete namespace $NAMESPACE || true
         echo "Namespace $NAMESPACE completed."
-
-    # - name: Compile Tests
-    #   working-directory: ${{ matrix.dir }}
-    #   run: cargo test --locked --no-run --target-dir ${HOME}/tmp || df -h
-    # - name: Run Unit Tests
-    #   working-directory: ${{ matrix.dir }}
-    #   # NOTE: --all-targets doesn't run doc tests
-    #   run: cargo test --locked --all-targets --target-dir ${HOME}/tmp
