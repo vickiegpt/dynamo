@@ -20,21 +20,20 @@ if TYPE_CHECKING:
     from vllm.v1.request import Request
 
 
-# from dynamo.llm.vllm_integration.kv_cache_utils import KvbmCacheBlocks
-# from dynamo.llm.vllm_integration.rust import BlockManager, KvbmRequest
-# from dynamo.llm.vllm_integration.rust import KvConnectorLeader as RustKvConnectorLeader
-# from dynamo.llm.vllm_integration.rust import (
+# from kvbm.vllm_integration.kv_cache_utils import KvbmCacheBlocks
+# from kvbm.vllm_integration.rust import BlockManager, KvbmRequest
+# from kvbm.vllm_integration.rust import KvConnectorLeader as RustKvConnectorLeader
+# from kvbm.vllm_integration.rust import (
 #     KvConnectorMetadata as RustKvConnectorMetadata,
 # )
-# from dynamo.llm.vllm_integration.rust import SchedulerOutput as RustSchedulerOutput
+# from kvbm.vllm_integration.rust import SchedulerOutput as RustSchedulerOutput
 
-from dynamo.llm import KvbmLeader
-from dynamo.llm.vllm_integration.kv_cache_utils import (
-    find_and_set_available_port_from_env,
-)
-from dynamo.llm.vllm_integration.rust import KvbmRequest
-from dynamo.llm.vllm_integration.rust import KvConnectorLeader as RustKvConnectorLeader
-from dynamo.llm.vllm_integration.rust import SchedulerOutput as RustSchedulerOutput
+from kvbm import KvbmLeader
+from kvbm.vllm_integration.kv_cache_utils import find_and_set_available_port_from_env
+from kvbm.vllm_integration.rust import KvbmRequest
+from kvbm.vllm_integration.rust import KvConnectorLeader as RustKvConnectorLeader
+from kvbm.vllm_integration.rust import SchedulerOutput as RustSchedulerOutput
+
 from dynamo.runtime import DistributedRuntime
 
 

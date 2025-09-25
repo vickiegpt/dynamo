@@ -21,17 +21,16 @@ if TYPE_CHECKING:
     from vllm.forward_context import ForwardContext
 
 
-# from dynamo.llm.vllm_integration.kv_cache_utils import KvbmCacheBlocks
-# from dynamo.llm.vllm_integration.rust import BlockManager
-# from dynamo.llm.vllm_integration.rust import (
+# from kvbm.vllm_integration.kv_cache_utils import KvbmCacheBlocks
+# from kvbm.vllm_integration.rust import BlockManager
+# from kvbm.vllm_integration.rust import (
 #     KvConnectorMetadata as RustKvConnectorMetadata,
 #     KvConnectorWorker as RustKvConnectorWorker,
 # )
 
-from dynamo.llm.vllm_integration.kv_cache_utils import (
-    find_and_set_available_port_from_env,
-)
-from dynamo.llm.vllm_integration.rust import KvConnectorWorker as RustKvConnectorWorker
+from kvbm.vllm_integration.kv_cache_utils import find_and_set_available_port_from_env
+from kvbm.vllm_integration.rust import KvConnectorWorker as RustKvConnectorWorker
+
 from dynamo.runtime import DistributedRuntime
 
 

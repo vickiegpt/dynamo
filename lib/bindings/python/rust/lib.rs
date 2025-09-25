@@ -124,9 +124,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     engine::add_to_module(m)?;
     parsers::add_to_module(m)?;
 
-    #[cfg(feature = "block-manager")]
-    llm::block_manager::add_to_module(m)?;
-
     Ok(())
 }
 

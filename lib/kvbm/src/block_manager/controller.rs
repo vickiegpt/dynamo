@@ -3,6 +3,7 @@
 
 use super::*;
 
+use dynamo_runtime::component::Component;
 pub use dynamo_llm::block_manager::controller::client::ControlClient;
 pub use dynamo_llm::block_manager::controller::{CacheLevel, Controller};
 

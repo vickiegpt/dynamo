@@ -11,10 +11,9 @@ import os
 import socket
 from typing import List
 
+from kvbm.vllm_integration.rust import BlockState, BlockStates, KvbmBlockList
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks
 from vllm.v1.core.kv_cache_utils import KVCacheBlock
-
-from dynamo.llm.vllm_integration.rust import BlockState, BlockStates, KvbmBlockList
 
 # from vllm.logger import init_logger
 # logger = init_logger(__name__)

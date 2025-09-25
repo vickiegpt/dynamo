@@ -26,10 +26,10 @@ if TYPE_CHECKING:
     from vllm.v1.core.kv_cache_manager import KVCacheBlocks
     from vllm.v1.request import Request
 
-from dynamo.llm.vllm_integration.kv_cache_utils import KvbmCacheBlocks
-from dynamo.llm.vllm_integration.rust import BlockManager
-from dynamo.llm.vllm_integration.rust import KvbmCacheManager as RustKvbmCacheManager
-from dynamo.llm.vllm_integration.rust import KvbmRequest, SlotUpdate
+from kvbm.vllm_integration.kv_cache_utils import KvbmCacheBlocks
+from kvbm.vllm_integration.rust import BlockManager
+from kvbm.vllm_integration.rust import KvbmCacheManager as RustKvbmCacheManager
+from kvbm.vllm_integration.rust import KvbmRequest, SlotUpdate
 
 
 class KvbmCacheManager(KVConnectorBase_V1):

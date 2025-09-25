@@ -1,24 +1,52 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use super::*;
+pub mod recorder;
+pub mod slot;
 
-use crate::DistributedRuntime as PyDistributedRuntime;
-use crate::llm::block_manager::BlockManagerBuilder;
-use crate::llm::block_manager::vllm::connector::leader::slot::{
-    ConnectorSlotManager, SlotManager, SlotState,
-};
-use crate::llm::block_manager::{distributed::KvbmLeader as PyKvbmLeader, vllm::KvbmRequest};
-use anyhow;
+use super::*;
 use dynamo_llm::block_manager::metrics_kvbm::KvbmMetrics;
+use dynamo_runtime::DistributedRuntime;
+use slot::{ConnectorSlotManager, SlotError, SlotManager, SlotState};
+
+use dynamo_runtime::DistributedRuntime as PyDistributedRuntime;
+use crate::block_manager::BlockManagerBuilder;
+use crate::block_manager::{
+    VllmBlockManager, distributed::KvbmLeader as PyKvbmLeader, vllm::KvbmRequest,
+    vllm::connector::leader::slot::VllmConnectorSlot,
+};
 use dynamo_runtime::metrics::prometheus_names::kvbm_connector;
-use std::collections::HashSet;
+
+use dynamo_llm::block_manager::{
+    BasicMetadata, DiskStorage, ImmutableBlock, PinnedStorage,
+    block::{
+        data::logical::distributed_leader_worker::DistributedLeaderWorkerResources,
+        locality::Logical,
+    },
+    connector::*,
+};
+use dynamo_llm::tokens::{SaltHash, TokenBlockSequence, Tokens};
 use std::sync::{Arc, OnceLock};
+use std::{collections::HashSet, sync::Mutex};
+use tokio;
 use tokio::runtime::Handle;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+
+type VllmLocality = Logical<DistributedLeaderWorkerResources>;
+
+impl From<SlotError> for PyErr {
+    fn from(err: SlotError) -> Self {
+        to_pyerr(err)
+    }
+}
+use anyhow;
+use dynamo_llm::recorder::Recorder;
+use tokio_util::sync::CancellationToken;
 
 pub trait Leader: Send + Sync + std::fmt::Debug {
     fn get_num_new_matched_tokens(
-        &mut self,
+        &self,
         request_id: String,
         request_num_tokens: usize,
         num_computed_tokens: usize,
@@ -28,7 +56,7 @@ pub trait Leader: Send + Sync + std::fmt::Debug {
         &mut self,
         request_id: String,
         block_ids: Vec<BlockId>,
-        context_current_position: usize,
+        num_external_tokens: usize,
     ) -> anyhow::Result<()>;
 
     fn build_connector_metadata(
@@ -56,13 +84,12 @@ pub struct KvConnectorLeader {
     inflight_requests: HashSet<String>,
     onboarding_slots: HashSet<String>,
     iteration_counter: u64,
-    inflight_request_to_num_external_tokens: HashMap<String, usize>,
     kvbm_metrics: KvbmMetrics,
 }
 
 impl KvConnectorLeader {
     fn new(
-        worker_id: u64,
+        worker_id: String,
         drt: PyDistributedRuntime,
         page_size: usize,
         leader_py: PyKvbmLeader,
@@ -84,6 +111,7 @@ impl KvConnectorLeader {
         let kvbm_metrics_clone = kvbm_metrics.clone();
 
         let slot_manager_cell = Arc::new(OnceLock::new());
+        let (leader_ready_tx, leader_ready_rx) = oneshot::channel::<String>();
 
         {
             let slot_manager_cell = slot_manager_cell.clone();
@@ -123,11 +151,22 @@ impl KvConnectorLeader {
                 let _ = slot_manager_cell.set(sm);
 
                 // another barrier sync to make sure worker init won't return before leader is ready
-                leader.spawn_leader_readiness_barrier(drt);
+                let _ = leader.run_leader_readiness_barrier_blocking(drt);
 
-                tracing::info!("KvConnectorLeader init complete.");
+                if leader_ready_tx.send("finished".to_string()).is_err() {
+                    tracing::error!("main routine receiver dropped before result was sent");
+                }
             });
         }
+
+        tokio::task::block_in_place(|| {
+            handle.block_on(async {
+                match leader_ready_rx.await {
+                    Ok(_) => tracing::info!("KvConnectorLeader init complete."),
+                    Err(_) => tracing::warn!("KvConnectorLeader init channel dropped"),
+                }
+            });
+        });
 
         Self {
             slot_manager: slot_manager_cell,
@@ -135,7 +174,6 @@ impl KvConnectorLeader {
             inflight_requests: HashSet::new(),
             onboarding_slots: HashSet::new(),
             iteration_counter: 0,
-            inflight_request_to_num_external_tokens: HashMap::new(),
             kvbm_metrics,
         }
     }
@@ -150,14 +188,14 @@ impl Leader for KvConnectorLeader {
     }
 
     /// Match the tokens in the request with the available block pools.
-    /// Note: the necessary details of the request are captured prior to this call. For trtllm,
+    /// Note: the necessary details of the request are captured prior to this call. For vllm,
     /// we make a create slot call prior to this call, so a slot is guaranteed to exist.
     ///
     /// To align with the connector interface, we must ensure that if no blocks are matched, we return (0, false).
     /// In our implementation, if we match any block, we return (num_matched_tokens, true).
     #[tracing::instrument(level = "debug", skip(self, request_num_tokens, num_computed_tokens))]
     fn get_num_new_matched_tokens(
-        &mut self,
+        &self,
         request_id: String,
         request_num_tokens: usize,
         num_computed_tokens: usize,
@@ -166,23 +204,38 @@ impl Leader for KvConnectorLeader {
             "request_num_tokens: {request_num_tokens}; num_computed_tokens: {num_computed_tokens}"
         );
 
-        // TRTLLM could match partial blocks if enable_partial_reuse = True,
-        // immediately return 0 to simplify things.
-        if num_computed_tokens % self.block_size != 0 {
-            return Ok((0, false));
-        }
+        // the number of device matched tokens should be less than or equal to the number of tokens in the request
+        debug_assert!(num_computed_tokens % self.block_size == 0);
 
         let shared_slot = self.slot_manager().get_slot(&request_id)?;
         let mut slot = shared_slot
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to lock slot: {}", e))?;
 
+        debug_assert!(
+            slot.state() != SlotState::Prefilling && slot.state() != SlotState::Decoding,
+            "slot is in the Prefilled state or Decoding; shouldn't happen"
+        );
+
+        if slot.state() == SlotState::SkippedPrefill || slot.state() == SlotState::SkippedDecode {
+            tracing::debug!(
+                "slot is in the SkippedPrefill or SkippedDecode state; will resume from skipped and return early"
+            );
+            match slot.state() {
+                SlotState::SkippedPrefill => {
+                    slot.mark_as_prefilling(self.iteration_counter)?;
+                    return Ok((0, false));
+                }
+                SlotState::SkippedDecode => {
+                    slot.mark_as_decoding(self.iteration_counter)?;
+                    return Ok((0, false));
+                }
+                _ => unreachable!("slot is not in the SkippedPrefill or SkippedDecode state"),
+            }
+        }
+
         // early exit if we cannot match full block
         if (slot.sequence().total_tokens() - num_computed_tokens) < self.block_size {
-            let total_tokens = slot.sequence().total_tokens();
-            tracing::debug!(
-                "total_tokens in sequence: {total_tokens}; num_computed_tokens: {num_computed_tokens}; can not match full block."
-            );
             return Ok((0, false));
         }
 
@@ -199,10 +252,6 @@ impl Leader for KvConnectorLeader {
                 "scheduling onboarding for {} external tokens",
                 num_external_tokens
             );
-            // Add to the map so that onboarding can be triggered in update_state_after_alloc.
-            self.inflight_request_to_num_external_tokens
-                .insert(request_id, num_external_tokens);
-
             self.kvbm_metrics
                 .matched_tokens
                 .inc_by(num_external_tokens as u64);
@@ -212,20 +261,20 @@ impl Leader for KvConnectorLeader {
         }
     }
 
-    /// Note: TRTLLM will not provide any scheduler output data for requests that are onboarding. it is entirely
+    /// Note: vLLM will not provide any scheduler output data for requests that are onboarding. it is entirely
     /// on the connector's implementation to handle this case.
     #[tracing::instrument(level = "debug", skip_all, fields(request_id))]
     fn update_state_after_alloc(
         &mut self,
         request_id: String,
         block_ids: Vec<BlockId>,
-        context_current_position: usize,
+        num_external_tokens: usize,
     ) -> anyhow::Result<()> {
         tracing::debug!(
             request_id,
-            "num_device_blocks: {}, context_current_position: {}",
+            "num_device_blocks: {}; num_external_tokens: {}",
             block_ids.len(),
-            context_current_position
+            num_external_tokens
         );
 
         let shared_slot = self.slot_manager().get_slot(&request_id)?;
@@ -238,26 +287,20 @@ impl Leader for KvConnectorLeader {
 
         slot.append_mutable_device_blocks(&block_ids)?;
 
-        if let Some(&num_external_tokens) = self
-            .inflight_request_to_num_external_tokens
-            .get(&request_id)
-        {
-            if num_external_tokens > 0 {
-                let num_computed_tokens = context_current_position - num_external_tokens;
-                slot.record_cached_device_tokens(num_computed_tokens);
-                slot.advance_computed_position(num_computed_tokens)?;
+        // the second call will show num_external_tokens == 0
+        // this call is just letting us know the other blocks that are being used for the remainder of the prefill
+        if num_external_tokens > 0 {
+            let num_computed_tokens = block_ids.len() * self.block_size - num_external_tokens;
+            slot.record_cached_device_tokens(num_computed_tokens);
+            slot.advance_computed_position(num_computed_tokens)?;
 
-                tracing::debug!(
-                    request_id = request_id,
-                    "triggering onboarding for {} external tokens",
-                    num_external_tokens
-                );
-                slot.trigger_onboarding(num_external_tokens)?;
-                self.onboarding_slots.insert(request_id.clone());
-            }
-
-            self.inflight_request_to_num_external_tokens
-                .remove(&request_id);
+            tracing::debug!(
+                request_id = request_id,
+                "triggering onboarding for {} external tokens",
+                num_external_tokens
+            );
+            slot.trigger_onboarding(num_external_tokens)?;
+            self.onboarding_slots.insert(request_id);
         }
 
         Ok(())
@@ -301,8 +344,16 @@ impl Leader for KvConnectorLeader {
                 tracing::debug!("adding {} pending onboarding operations", pending_ops.len());
                 md.add_operations(pending_ops);
             }
+
+            assert!(
+                inflight_requests.remove(request_id),
+                "request_id {request_id} not found in inflight_requests: "
+            );
         }
 
+        // vLLM provides us with "new_requests" which are "new" after onboarding, but not before or during.
+        // this makes the lifecyle a potentially two-phase lifecycle.
+        //
         // todo: update the code and abstraction to account for this two-phase lifecycle.
         for new_req in &scheduler_output.new_requests {
             let request_id = &new_req.request_id;
@@ -330,11 +381,12 @@ impl Leader for KvConnectorLeader {
                 slot.state()
             );
 
-            slot.apply_scheduler_output_with_computed_position(
-                &new_req.prompt_token_ids,
-                &new_req.block_ids,
-                new_req.num_computed_tokens,
-            )?;
+            let scheduled_tokens = *scheduler_output
+                .num_scheduled_tokens
+                .get(request_id)
+                .unwrap_or(&0);
+
+            slot.apply_scheduler_output(&[], &[], new_req.num_computed_tokens, scheduled_tokens)?;
 
             if let Some(pending_ops) = slot.take_pending_operations() {
                 tracing::debug!(
@@ -349,7 +401,33 @@ impl Leader for KvConnectorLeader {
         for cached_req in &scheduler_output.cached_requests {
             let request_id = &cached_req.request_id;
 
-            // note: evicition might trigger this assert
+            if cached_req.resumed_from_preemption {
+                // we really do not know what to expect here:
+                // first let's try to get the slot, it might fail because maybe preemption put us thru
+                // a finished cycle -- who knows
+                let shared_slot = self.slot_manager().get_slot(request_id);
+                match &shared_slot {
+                    Ok(_) => {
+                        tracing::info!("after preemption, slot is still alive");
+                    }
+                    Err(_) => {
+                        tracing::info!("after preemption, slot is not alive");
+                    }
+                }
+
+                let shared_slot = shared_slot?;
+                let mut slot = shared_slot
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("Failed to lock slot: {}", e))?;
+
+                // todo: we probably need to reset the slot state and reload it from `cache_req`; however, we do not
+                // know if it will take another pass at `get_num_new_matched_tokens` or `update_state_after_alloc`.
+                slot.reset_after_preemption();
+
+                // note, we can not trigger onboarding here -- perhaps we are supposed to or perhaps will get another
+                // pass at `get_num_new_matched_tokens` or `update_state_after_alloc`.
+            }
+
             assert!(
                 inflight_requests.remove(request_id),
                 "request_id {request_id} not found in inflight_requests: "
@@ -360,10 +438,16 @@ impl Leader for KvConnectorLeader {
                 .lock()
                 .map_err(|e| anyhow::anyhow!("Failed to lock slot: {}", e))?;
 
-            slot.apply_scheduler_output_with_computed_position(
+            let scheduled_tokens = *scheduler_output
+                .num_scheduled_tokens
+                .get(request_id)
+                .unwrap_or(&0);
+
+            slot.apply_scheduler_output(
                 &cached_req.new_token_ids,
                 &cached_req.new_block_ids,
                 cached_req.num_computed_tokens,
+                scheduled_tokens,
             )?;
 
             if let Some(pending_ops) = slot.take_pending_operations() {
@@ -374,6 +458,20 @@ impl Leader for KvConnectorLeader {
                 );
                 md.add_operations(pending_ops);
             }
+        }
+
+        for unscheduled_req in inflight_requests.iter() {
+            let shared_slot = self.slot_manager().get_slot(unscheduled_req)?;
+            let mut slot_guard = shared_slot
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Failed to lock slot: {}", e))?;
+
+            let slot = slot_guard
+                .as_any_mut()
+                .downcast_mut::<VllmConnectorSlot>()
+                .ok_or_else(|| anyhow::anyhow!("Expected VllmConnectorSlot, got different type"))?;
+
+            slot.mark_as_skipped()?;
         }
 
         tracing::debug!("metadata: {md:#?}");
@@ -387,6 +485,15 @@ impl Leader for KvConnectorLeader {
         block_ids: Vec<BlockId>,
     ) -> anyhow::Result<bool> {
         tracing::debug!("Request finished: {request_id}; block_ids: {block_ids:?}");
+
+        if !self.slot_manager().has_slot(&request_id) {
+            tracing::warn!(
+                "request_finished called for request_id: {request_id} but slot is not found"
+            );
+            self.inflight_requests.remove(&request_id);
+            return Ok(false);
+        }
+
         // grab the slot
         let shared_slot = self.slot_manager().get_slot(&request_id)?;
 
@@ -401,15 +508,16 @@ impl Leader for KvConnectorLeader {
         // we would like to inform it to shutdown, then have it signal to the work that is officially gone,
         // then we can remove the slot and trigger the worker to clean up as well.
 
+        // remove the request from the inflight requests
+        self.inflight_requests.remove(&request_id);
+
         // remove it from the manager as we will never use it again
         self.slot_manager().remove_slot(&request_id)?;
-        self.inflight_request_to_num_external_tokens
-            .remove(&request_id);
 
-        // if the slot has finished, we can return false to trtllm, indicating all gpu blocks are free to be reused
+        // if the slot has finished, we can return false to vllm, indicating all gpu blocks are free to be reused
         // otherwise, we return true, which means there are still outstanding operations on gpu blocks which
         // must be awaited before the gpu blocks can be reused. if we return true, then it is the worker side
-        // of the connector api which will be used to inform trtllm that the request is finished.
+        // of the connector api which will be used to inform vllm that the request is finished.
         if let SlotState::Finished = slot.state() {
             Ok(false)
         } else {
@@ -435,27 +543,36 @@ impl Leader for KvConnectorLeader {
 }
 
 #[pyclass]
-pub struct PyTrtllmKvConnectorLeader {
+pub struct PyKvConnectorLeader {
     connector_leader: Box<dyn Leader>,
 }
 
 #[pymethods]
-impl PyTrtllmKvConnectorLeader {
+impl PyKvConnectorLeader {
     #[new]
     #[pyo3(signature = (worker_id, drt, page_size, leader))]
     pub fn new(
-        worker_id: u64,
+        worker_id: String,
         drt: PyDistributedRuntime,
         page_size: usize,
         leader: PyKvbmLeader,
     ) -> Self {
-        let connector_leader: Box<dyn Leader> =
-            Box::new(KvConnectorLeader::new(worker_id, drt, page_size, leader));
+        let enable_kvbm_record = std::env::var("ENABLE_KVBM_RECORD")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        let connector_leader: Box<dyn Leader> = if enable_kvbm_record {
+            Box::new(recorder::KvConnectorLeaderRecorder::new(
+                worker_id, drt, page_size, leader,
+            ))
+        } else {
+            Box::new(KvConnectorLeader::new(worker_id, drt, page_size, leader))
+        };
         Self { connector_leader }
     }
 
     fn get_num_new_matched_tokens(
-        &mut self,
+        &self,
         request_id: String,
         request_num_tokens: usize,
         num_computed_tokens: usize,
@@ -469,10 +586,10 @@ impl PyTrtllmKvConnectorLeader {
         &mut self,
         request_id: String,
         block_ids: Vec<BlockId>,
-        context_current_position: usize,
+        num_external_tokens: usize,
     ) -> PyResult<()> {
         self.connector_leader
-            .update_state_after_alloc(request_id, block_ids, context_current_position)
+            .update_state_after_alloc(request_id, block_ids, num_external_tokens)
             .map_err(to_pyerr)
     }
 

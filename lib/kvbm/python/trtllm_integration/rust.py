@@ -2,47 +2,43 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Loader for the Rust-based vLLM integration objects.
+Loader for the Rust-based TensorRT-LLM integration objects, using objects from _vllm_integration for now
 """
 
 try:
-    from dynamo._core import _vllm_integration
+    # TODO: use TRTLLM own integration module
+    from kvbm._core import _vllm_integration
 
     # Runtime - dynamically loaded classes from Rust extension
-    KvbmCacheManager = getattr(_vllm_integration, "KvbmCacheManager")
     KvbmRequest = getattr(_vllm_integration, "KvbmRequest")
     KvbmBlockList = getattr(_vllm_integration, "KvbmBlockList")
     BlockState = getattr(_vllm_integration, "BlockState")
     BlockStates = getattr(_vllm_integration, "BlockStates")
     SlotUpdate = getattr(_vllm_integration, "SlotUpdate")
 
-    KvConnectorWorker = getattr(_vllm_integration, "PyKvConnectorWorker")
-    KvConnectorLeader = getattr(_vllm_integration, "PyKvConnectorLeader")
+    KvConnectorWorker = getattr(_vllm_integration, "PyTrtllmKvConnectorWorker")
+    KvConnectorLeader = getattr(_vllm_integration, "PyTrtllmKvConnectorLeader")
     SchedulerOutput = getattr(_vllm_integration, "SchedulerOutput")
 
-    from dynamo.llm import BlockManager
-
 except ImportError:
-    print("Failed to import Dynamo KVBM. vLLM integration will not be available.")
-    KvbmCacheManager = None
+    print(
+        "Failed to import Dynamo KVBM. TensorRT-LLM integration will not be available."
+    )
     KvbmRequest = None
     KvbmBlockList = None
     BlockState = None
     BlockStates = None
     SlotUpdate = None
-    BlockManager = None
     KvConnectorWorker = None
     KvConnectorLeader = None
     SchedulerOutput = None
 
 __all__ = [
-    "KvbmCacheManager",
     "KvbmRequest",
     "KvbmBlockList",
     "BlockState",
     "BlockStates",
     "SlotUpdate",
-    "BlockManager",
     "KvConnectorWorker",
     "KvConnectorLeader",
     "SchedulerOutput",

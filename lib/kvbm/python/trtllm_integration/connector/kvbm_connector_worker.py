@@ -2,13 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from kvbm.trtllm_integration.rust import KvConnectorWorker as RustKvConnectorWorker
 from tensorrt_llm import logger
 from tensorrt_llm._torch.pyexecutor.kv_cache_connector import KvCacheConnectorWorker
 from tensorrt_llm.llmapi.llm_args import TorchLlmArgs
 
-from dynamo.llm.trtllm_integration.rust import (
-    KvConnectorWorker as RustKvConnectorWorker,
-)
 from dynamo.runtime import DistributedRuntime
 
 

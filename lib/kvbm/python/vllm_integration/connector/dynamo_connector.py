@@ -26,9 +26,9 @@ if TYPE_CHECKING:
     from vllm.v1.request import Request
 
 
-# from dynamo.llm.vllm_integration.kv_cache_utils import KvbmCacheBlocks
-from dynamo.llm.vllm_integration.connector_leader import KvConnectorLeader
-from dynamo.llm.vllm_integration.connector_worker import KvConnectorWorker
+# from kvbm.vllm_integration.kv_cache_utils import KvbmCacheBlocks
+from kvbm.vllm_integration.connector_leader import KvConnectorLeader
+from kvbm.vllm_integration.connector_worker import KvConnectorWorker
 
 EngineId = str
 

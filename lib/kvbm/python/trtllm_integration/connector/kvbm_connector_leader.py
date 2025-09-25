@@ -4,6 +4,10 @@
 
 from typing import List
 
+from kvbm import KvbmLeader
+from kvbm.trtllm_integration.rust import KvbmRequest
+from kvbm.trtllm_integration.rust import KvConnectorLeader as RustKvConnectorLeader
+from kvbm.trtllm_integration.rust import SchedulerOutput as RustSchedulerOutput
 from tensorrt_llm._torch.pyexecutor.kv_cache_connector import (
     KvCacheConnectorScheduler,
     SchedulerOutput,
@@ -11,12 +15,6 @@ from tensorrt_llm._torch.pyexecutor.kv_cache_connector import (
 from tensorrt_llm.bindings.internal.batch_manager import LlmRequest
 from tensorrt_llm.llmapi.llm_args import TorchLlmArgs
 
-from dynamo.llm import KvbmLeader
-from dynamo.llm.trtllm_integration.rust import KvbmRequest
-from dynamo.llm.trtllm_integration.rust import (
-    KvConnectorLeader as RustKvConnectorLeader,
-)
-from dynamo.llm.trtllm_integration.rust import SchedulerOutput as RustSchedulerOutput
 from dynamo.runtime import DistributedRuntime
 
 

@@ -23,8 +23,8 @@ use dynamo_llm::{
 };
 
 // use crate::llm::block_manager::BlockManager as PyBlockManager;
-use crate::llm::block_manager::BlockManager as PyBlockManager;
-use crate::llm::block_manager::VllmBlockManager;
+use crate::block_manager::BlockManager as PyBlockManager;
+use crate::block_manager::VllmBlockManager;
 
 use crate::to_pyerr;
 

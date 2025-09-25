@@ -3,6 +3,8 @@
 
 use super::*;
 use utils::get_barrier_id_prefix;
+use std::sync::Arc;
+use dynamo_runtime::DistributedRuntime;
 
 use derive_getters::Dissolve;
 use llm_rs::block_manager::distributed::{
