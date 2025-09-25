@@ -16,7 +16,11 @@ import re
 
 # FILTERING CONFIGURATION - Only upload data for specific workflow/job combinations
 TARGET_WORKFLOW_NAME = "NVIDIA Dynamo Backends Github Validation"
-TARGET_JOB_NAME = "Build and Test - vllm"
+TARGET_JOB_NAMES = [
+    "Build and Test - vllm",
+    "Build and Test - sglang", 
+    "Build and Test - trtllm"
+]
 
 # NEW STANDARDIZED FIELD SCHEMA - Using consistent prefixes for OpenSearch mapping
 # Using prefixes: s_ for strings, l_ for longs, ts_ for timestamps
@@ -29,6 +33,7 @@ FIELD_WORKFLOW_NAME = "s_workflow_name"
 FIELD_GITHUB_EVENT = "s_github_event"
 FIELD_BRANCH = "s_branch" #extra you can maybe delete or test
 FIELD_STATUS = "s_status" #duplicate you can maybe consolidate to the common metric adding
+FIELD_STATUS_NUMBER = "l_status_number"
 FIELD_WORKFLOW_ID = "s_workflow_id"
 
 # Timing fields
@@ -286,6 +291,7 @@ class WorkflowMetricsUploader:
         db_data[FIELD_GITHUB_EVENT] = self.event_name
         db_data[FIELD_BRANCH] = self.ref_name
         db_data[FIELD_WORKFLOW_ID] = str(self.run_id)
+        db_data[FIELD_COMMIT_SHA] = self.sha
 
     def add_standardized_timing_fields(self, db_data: Dict[str, Any], creation_time: str, start_time: str, end_time: str, 
                                      metric_type: str = "workflow") -> None:
@@ -348,21 +354,24 @@ class WorkflowMetricsUploader:
                 print(f"❌ Skipping upload - Workflow '{workflow_name}' does not match target '{TARGET_WORKFLOW_NAME}'")
                 return
             
-            # Check if target job exists in this workflow
-            target_job_found = False
-            for job in jobs_data.get('jobs', []):
-                if job.get('name') == TARGET_JOB_NAME:
-                    target_job_found = True
-                    break
+            # Check if any target jobs exist in this workflow
+            target_jobs_found = []
+            available_jobs = [job.get('name') for job in jobs_data.get('jobs', [])]
             
-            if not target_job_found:
-                print(f"❌ Skipping upload - Target job '{TARGET_JOB_NAME}' not found in workflow")
-                print(f"   Available jobs: {[job.get('name') for job in jobs_data.get('jobs', [])]}")
+            for job in jobs_data.get('jobs', []):
+                job_name = job.get('name')
+                if job_name in TARGET_JOB_NAMES:
+                    target_jobs_found.append(job_name)
+            
+            if not target_jobs_found:
+                print(f"❌ Skipping upload - No target jobs found in workflow")
+                print(f"   Target jobs: {TARGET_JOB_NAMES}")
+                print(f"   Available jobs: {available_jobs}")
                 return
             
             print(f"✅ Workflow and job match criteria - proceeding with upload")
             print(f"   Workflow: '{workflow_name}'")
-            print(f"   Target job found: '{TARGET_JOB_NAME}'")
+            print(f"   Target jobs found: {target_jobs_found}")
             
             # Check if workflow is completed
             workflow_status = workflow_data.get('status', '')
@@ -405,9 +414,13 @@ class WorkflowMetricsUploader:
         # Schema fields
         # Use conclusion for completed workflows, fallback to status
         db_data[FIELD_STATUS] = str(workflow_data.get('conclusion') or workflow_data.get('status', 'unknown'))
+        if db_data[FIELD_STATUS] is "success":
+            db_data[FIELD_STATUS_NUMBER] = 1
+        elif db_data[FIELD_STATUS] is "failure":
+            db_data[FIELD_STATUS_NUMBER] = 0
         #db_data[FIELD_BRANCH] = str(workflow_data.get('head_branch', self.ref_name))
         print(f"Checking branch: {str(workflow_data.get('head_branch'))}")
-        db_data[FIELD_COMMIT_SHA] = str(workflow_data.get('head_sha', self.sha))        
+        #db_data[FIELD_COMMIT_SHA] = str(workflow_data.get('head_sha', self.sha))        
         # Timing fields - Fix parameter order for correct duration/queue time calculation
         created_at = workflow_data.get('created_at')
         run_started_at = workflow_data.get('run_started_at')
@@ -449,9 +462,9 @@ class WorkflowMetricsUploader:
             try:
                 job_name = job.get('name', '')
                 
-                # FILTER: Only upload the target job
-                if job_name != TARGET_JOB_NAME:
-                    print(f"⏭️  Skipping job '{job_name}' - not target job '{TARGET_JOB_NAME}'")
+                # FILTER: Only upload target jobs
+                if job_name not in TARGET_JOB_NAMES:
+                    print(f"⏭️  Skipping job '{job_name}' - not in target jobs {TARGET_JOB_NAMES}")
                     continue
                 
                 print(f"📤 Uploading target job: '{job_name}'")
@@ -519,6 +532,10 @@ class WorkflowMetricsUploader:
         if job_status is None:
             job_status = 'in_progress'
         db_data[FIELD_STATUS] = str(job_status)
+        if db_data[FIELD_STATUS] is "success":
+            db_data[FIELD_STATUS_NUMBER] = 1
+        elif db_data[FIELD_STATUS] is "failure":
+            db_data[FIELD_STATUS_NUMBER] = 0
         #db_data[FIELD_RUNNER_INFO] = str(job_data.get('runner_name', 'unknown'))
         
         db_data[FIELD_JOB_NAME] = str(job_name)
@@ -560,8 +577,8 @@ class WorkflowMetricsUploader:
         self.post_to_db(self.jobs_index, db_data)
         print(f"Uploaded metrics for job: {job_name}")
         
-        # Upload container metrics if this is the target job and metrics are available
-        if job_name == TARGET_JOB_NAME:
+        # Upload container metrics if this is a target job and metrics are available
+        if job_name in TARGET_JOB_NAMES:
             self._upload_container_metrics(job_data)
 
     def _upload_container_metrics(self, job_data: Dict[str, Any], build_metrics: Optional[Dict[str, Any]] = None) -> None:
@@ -604,6 +621,10 @@ class WorkflowMetricsUploader:
         # Status & Events - using common field names
         container_data[FIELD_STATUS] = str(job_data.get('conclusion') or job_data.get('status', 'unknown'))
         container_data[FIELD_GITHUB_EVENT] = self.event_name
+        if container_data[FIELD_STATUS] is "success":
+            container_data[FIELD_STATUS_NUMBER] = 1
+        elif container_data[FIELD_STATUS] is "failure":
+            container_data[FIELD_STATUS_NUMBER] = 0
         
         # Container Info (only truly container-specific fields)
         container_data[CONTAINER_FIELD_FRAMEWORK] = build_metrics.get('framework', 'unknown')
@@ -679,6 +700,10 @@ class WorkflowMetricsUploader:
         db_data[FIELD_STEP_NUMBER] = int(step_number)  # Using l_ prefix, should be integer
         db_data[FIELD_STATUS] = str(step_data.get('conclusion', step_data.get('status', 'unknown')))
         db_data[FIELD_JOB_NAME] = str(job_name)
+        if db_data[FIELD_STATUS] is "success":
+            db_data[FIELD_STATUS_NUMBER] = 1
+        elif db_data[FIELD_STATUS] is "failure":
+            db_data[FIELD_STATUS_NUMBER] = 0
         
         # Timing fields using standardized method - Fix parameter order for steps
         started_at = step_data.get('started_at')
