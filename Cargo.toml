@@ -12,6 +12,7 @@ members = [
     "lib/parsers",
     "lib/bindings/c",
     "lib/engines/*",
+    "lib/kvbm",
 ]
 resolver = "3"
 
