@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Reuse policy for inactive blocks.
+//! Reuse policies for determining block allocation priority.
+//!
+//! Different policies (FIFO, LRU, etc.) control which inactive registered
+//! block should be allocated next when the reset pool is exhausted.
 
 pub mod fifo;
 

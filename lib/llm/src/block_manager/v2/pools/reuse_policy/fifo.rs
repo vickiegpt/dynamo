@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! FIFO Reuse policy for [InactiveBlocks][InactiveBlock].
+//! FIFO reuse policy for inactive registered blocks.
+//!
+//! Allocates blocks in first-in-first-out order based on insertion time.
+//! Uses BTreeMap for O(log n) insertion/removal with priority key ordering.
 
 use super::*;
 

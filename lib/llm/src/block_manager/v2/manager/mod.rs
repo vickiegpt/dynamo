@@ -15,7 +15,8 @@ use super::pools::{
 
 use derive_builder::Builder;
 
-#[derive(Clone, Builder)]
+#[derive(Builder)]
+#[builder(pattern = "owned")]
 pub struct BlockManager<T: BlockMetadata> {
     reset_pool: ResetPool<T>,
     registered_pool: RegisteredPool<T>,

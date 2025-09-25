@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Registered block pool for managing immutable blocks in Registered state.
+//! Thread-safe pool for registered immutable blocks with automatic RAII return.
 //!
-//! This pool manages blocks that have been registered and are available for finding
-//! by sequence hash. It uses RAII guards (RegisteredBlock) for automatic return.
+//! Manages blocks in the Registered state, providing:
+//! - Finding blocks by sequence hash with O(1) lookup
+//! - Conversion of registered blocks back to mutable blocks for reuse
+//! - Thread-safe access via interior mutability
+//! - Automatic block return via RAII ImmutableBlock guards
 
 use std::{
     collections::HashMap,
@@ -32,7 +35,6 @@ pub struct RegisteredPool<T: BlockMetadata> {
     return_fn: Arc<dyn Fn(Arc<Block<T, Registered>>) + Send + Sync>,
 }
 
-#[derive(Debug)]
 struct RegisteredPoolInner<T: BlockMetadata> {
     // Blocks in the Registered state
     registered_blocks: HashMap<SequenceHash, Block<T, Registered>>,
@@ -289,14 +291,9 @@ mod tests {
 
         {
             let _found_blocks = pool.find_blocks(&[seq_hash]);
-            assert_eq!(pool.len(), 0); // Block removed from pool
-            // Blocks will auto-return when _found_blocks is dropped
+            assert_eq!(pool.len(), 0);
         }
 
-        // Brief pause to allow async return (if any)
-        std::thread::sleep(std::time::Duration::from_millis(1));
-
-        // Block should be back in pool due to RAII drop
         assert_eq!(pool.len(), 1);
         assert!(pool.has_block(seq_hash));
     }
@@ -327,17 +324,10 @@ mod tests {
         let block_ids: Vec<u64> = mutable_blocks.iter().map(|b| b.block_id()).collect();
         assert!(block_ids.contains(&1) || block_ids.contains(&2) || block_ids.contains(&3));
 
-        // When dropped, MutableBlocks should return to ResetPool, not RegisteredPool
         drop(mutable_blocks);
 
-        // Brief pause to ensure return has happened
-        std::thread::sleep(std::time::Duration::from_millis(1));
-
-        // RegisteredPool should still have 2 blocks (allocation removed 1)
         assert_eq!(pool.len(), 2);
-
-        // ResetPool should have gained 1 block (plus original 10)
-        assert_eq!(reset_pool.available_blocks(), 11); // 10 original + 1 returned
+        assert_eq!(reset_pool.available_blocks(), 11);
     }
 
     #[test]

@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! V2 Block implementation
+//! Type-state pattern for block lifecycle with compile-time state enforcement.
+//!
+//! Blocks transition through states: Reset → Complete → Registered → Reset.
+//! The type system prevents invalid state transitions at compile time.
 
 use super::registry::BlockRegistrationHandle;
 use crate::tokens::{SequenceHash, TokenBlock};

@@ -1,22 +1,23 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Block pool implementations for managing active and inactive blocks.
+//! Block pool RAII guards and allocation traits for thread-safe block management.
 //!
-//! This module contains the core pool structures that track blocks in different states:
-//! - `ActiveBlockPool`: Tracks registered blocks via weak references
-//! - `InactiveBlockPool`: Manages available blocks via a free list
+//! This module provides:
+//! - Type-safe RAII guards (MutableBlock, CompleteBlock, ImmutableBlock) for automatic resource cleanup
+//! - ResetPool: Pool for mutable blocks in reset state
+//! - RegisteredPool: Pool for immutable registered blocks
+//! - BlockRegistry: Global registry for block deduplication via weak references
+//! - Pluggable allocation and reuse policies
 
 pub mod block;
 pub mod registry;
-
-// pub mod inactive;
 pub mod registered;
 pub mod reset;
 pub mod reuse_policy;
 
-//#h[cfg(test)]
-//mod test_raii;
+#[cfg(test)]
+mod test_utils;
 
 use std::{ops::Deref, sync::Arc};
 

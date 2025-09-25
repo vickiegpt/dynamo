@@ -1,7 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Global block registry for managing block registration handles.
+//! Global registry for block deduplication via weak references and sequence hash matching.
+//!
+//! The registry provides:
+//! - Sequence hash → block mapping using weak references
+//! - Automatic cleanup when all strong references are dropped
+//! - Attachment system for storing arbitrary typed data on registration handles
 
 use super::block::{Block, Registered};
 use super::{CompleteBlock, SequenceHash};
@@ -294,35 +299,37 @@ impl BlockRegistrationHandle {
         pool_return_fn: Arc<dyn Fn(Arc<Block<T, Registered>>) + Send + Sync>,
     ) -> Option<super::ImmutableBlock<T>> {
         let type_id = TypeId::of::<Weak<Block<T, Registered>>>();
-        let mut attachments = self.inner.attachments.lock();
+        let attachments = self.inner.attachments.lock();
 
         let weak_block = attachments
             .weak_blocks
             .get(&type_id)
             .and_then(|weak_any| weak_any.downcast_ref::<WeakBlock<T>>())?;
 
-        // Try to upgrade the PrimaryBlock first
         if let Some(primary_arc) = weak_block.reg_block.upgrade() {
+            drop(attachments);
             return Some(super::ImmutableBlock {
                 block: primary_arc as Arc<dyn super::RegisteredBlock<T>>,
             });
         }
 
-        // Try to upgrade the raw Block<T, Registered>
         if let Some(raw_arc) = weak_block.raw_block.upgrade() {
-            // Create new PrimaryBlock from the raw block
             let primary = super::PrimaryBlock::new(raw_arc, pool_return_fn);
             let primary_arc = Arc::new(primary);
 
-            // Update the weak reference
             let new_weak = Arc::downgrade(&primary_arc);
             let weak_block_mut = WeakBlock {
                 raw_block: weak_block.raw_block.clone(),
                 reg_block: new_weak,
             };
+
+            drop(attachments);
+
+            let mut attachments = self.inner.attachments.lock();
             attachments
                 .weak_blocks
                 .insert(type_id, Box::new(weak_block_mut));
+            drop(attachments);
 
             return Some(super::ImmutableBlock {
                 block: primary_arc as Arc<dyn super::RegisteredBlock<T>>,
@@ -331,53 +338,6 @@ impl BlockRegistrationHandle {
 
         None
     }
-
-    // /// Attach a weak reference to a registered block.
-    // /// If a weak reference already exists for this type, asserts that its strong count is 0 before replacing it.
-    // pub(crate) fn attach_weak_block<T: BlockMetadata + Sync>(
-    //     &self,
-    //     weak: Weak<Block<T, Registered>>,
-    // ) {
-    //     let type_id = TypeId::of::<Weak<Block<T, Registered>>>();
-    //     let mut attachments = self.inner.attachments.lock();
-
-    //     // Check if we already have a weak reference for this type
-    //     #[cfg(debug_assertions)]
-    //     {
-    //         if let Some(existing_weak_any) = attachments.weak_blocks.get(&type_id) {
-    //             if let Some(existing_weak) =
-    //                 existing_weak_any.downcast_ref::<Weak<Block<T, Registered>>>()
-    //             {
-    //                 // Assert that the existing weak reference has no strong references
-    //                 assert_eq!(
-    //                     existing_weak.strong_count(),
-    //                     0,
-    //                     "Attempted to attach weak block reference when existing weak reference still has strong references"
-    //                 );
-    //             }
-    //         }
-    //     }
-
-    //     // Store the new weak reference keyed by type
-    //     attachments.weak_blocks.insert(type_id, Box::new(weak));
-    // }
-
-    // /// Retrieve and upgrade the stored weak block reference for type T.
-    // /// Returns None if no weak reference is stored for this type or if the upgrade fails.
-    // pub(crate) fn try_get_block<T: BlockMetadata + Sync>(
-    //     &self,
-    // ) -> Option<Arc<Block<T, Registered>>> {
-    //     let type_id = TypeId::of::<Weak<Block<T, Registered>>>();
-    //     let attachments = self.inner.attachments.lock();
-
-    //     if let Some(weak_any) = attachments.weak_blocks.get(&type_id) {
-    //         if let Some(weak) = weak_any.downcast_ref::<Weak<Block<T, Registered>>>() {
-    //             return weak.upgrade();
-    //         }
-    //     }
-
-    //     None
-    // }
 }
 
 impl<'a, T: Any + Send + Sync> TypedAttachments<'a, T> {
@@ -579,6 +539,8 @@ impl Default for BlockRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread;
 
     #[test]
     fn test_register_new_sequence() {
@@ -951,5 +913,77 @@ mod tests {
             .get::<MultipleValue>()
             .with_multiple(|values| values.iter().map(|v| v.0).sum::<i32>());
         assert_eq!(total, 5); // 2 + 3
+    }
+
+    #[test]
+    fn test_concurrent_try_get_block_and_drop() {
+        use super::super::{
+            BlockDuplicationPolicy, CompleteBlock, block::Block, registered::RegisteredPool,
+            reset::ResetPool, reuse_policy::fifo::FifoReusePolicy,
+        };
+        use crate::tokens::TokenBlockSequence;
+
+        #[derive(Debug, Clone, PartialEq)]
+        struct TestData {
+            value: u64,
+        }
+
+        let registry = BlockRegistry::new();
+
+        let tokens = vec![1u32, 2, 3, 4];
+        let sequence = TokenBlockSequence::from_slice(&tokens, 4, Some(42));
+        let token_block = if let Some(block) = sequence.blocks().first() {
+            block.clone()
+        } else {
+            let mut partial = sequence.into_parts().1;
+            partial.commit().expect("Should be able to commit")
+        };
+
+        let seq_hash = token_block.sequence_hash();
+        let handle = registry.register_sequence_hash(seq_hash);
+
+        let reset_blocks: Vec<_> = (0..10).map(|i| Block::new(i)).collect();
+        let reset_pool = ResetPool::new(reset_blocks);
+        let reuse_policy = Box::new(FifoReusePolicy::new());
+        let registered_pool = RegisteredPool::new(reuse_policy, &reset_pool);
+        let pool_return_fn = registered_pool.return_fn();
+
+        let complete_block = Block::new(0).complete(token_block);
+
+        let immutable_block = handle.register_block(
+            CompleteBlock {
+                block: Some(complete_block),
+                return_fn: reset_pool.return_fn(),
+            },
+            BlockDuplicationPolicy::Allow,
+            pool_return_fn.clone(),
+        );
+
+        let handle_clone = handle.clone();
+        let pool_return_fn_clone = pool_return_fn.clone();
+        let success_count = Arc::new(AtomicUsize::new(0));
+        let success_clone = success_count.clone();
+
+        let handle1 = thread::spawn(move || {
+            for _ in 0..100 {
+                if let Some(_block) =
+                    handle_clone.try_get_block::<TestData>(pool_return_fn_clone.clone())
+                {
+                    success_clone.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+
+        let handle2 = thread::spawn(move || {
+            drop(immutable_block);
+        });
+
+        handle1.join().unwrap();
+        handle2.join().unwrap();
+
+        assert!(
+            success_count.load(Ordering::Relaxed) >= 1,
+            "Should successfully upgrade at least once"
+        );
     }
 }
