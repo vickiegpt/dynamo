@@ -691,9 +691,8 @@ mod tests {
     mod layout_transfer_tests {
         use super::*;
         use crate::block_manager::layout::{
-            FullyContiguous, GenericBlockLayout, LayerSeparate, LayoutConfig, LayoutType,
+            FullyContiguous, GenericBlockLayout, LayerSeparate, LayoutConfig,
         };
-        use crate::block_manager::storage::{DeviceStorage, PinnedStorage, SystemStorage};
 
         const TEST_NUM_BLOCKS: usize = 4;
         const TEST_NUM_LAYERS: usize = 3;

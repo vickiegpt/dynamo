@@ -187,7 +187,7 @@ impl KvbmWorker {
                     inner_dim,
                 )
             }
-            LayoutType::LayerSeparate { outer_contiguous } => {
+            LayoutType::LayerSeparate { outer_contiguous: _ } => {
                 let (outer_contiguous, outer_dim) = if shape[0] >= config.num_device_blocks {
                     (false, shape[1])
                 } else if shape[1] >= config.num_device_blocks {
@@ -564,7 +564,7 @@ impl KvbmWorker {
         device_layout: Box<dyn NixlLayout<StorageType = DeviceStorage>>,
         mut layout_builder: LayoutConfigBuilder,
         leader_data: KvbmLeaderData,
-        layout_type: LayoutType,
+        _layout_type: LayoutType,
         config: KvbmWorkerConfig,
         cancel_token: CancellationToken,
         handler_tx: oneshot::Sender<BlockTransferHandler>,
