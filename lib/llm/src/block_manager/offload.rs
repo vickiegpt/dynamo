@@ -739,7 +739,7 @@ mod tests {
         let disk_pool = if let Some(disk_blocks) = disk_blocks {
             config.num_blocks = disk_blocks;
             Some(build_layout(
-                config,
+                config.clone(),
                 layout_type,
                 agent,
                 &DiskAllocator,
@@ -1419,10 +1419,14 @@ mod tests {
             .onboard(immutable_disk_blocks.clone(), None)
             .await??;
 
-        assert_eq!(device_blocks.len(), immutable_disk_blocks.len());
+        assert_eq!(device_blocks.len(), 2 * MAX_TRANSFER_BATCH_SIZE + 1);
 
-        for (i, disk_block) in immutable_disk_blocks.iter().enumerate() {
-            check_block_contents(disk_block, &device_blocks[i], i as u8)?;
+        for (i, device_block) in device_blocks.iter().enumerate() {
+            let blocks = device_pool
+                .match_sequence_hashes(vec![device_block.sequence_hash()].as_slice())
+                .await?;
+            check_block_contents(device_block, &blocks[0], i as u8)?;
+            assert_eq!(blocks.len(), 1);
         }
 
         Ok(())
@@ -1434,10 +1438,7 @@ mod tests {
 
     mod gds_compatible_disk_tests {
         use super::*;
-        use crate::block_manager::layout::utils::worker_verification::{
-            WorkerLayoutVerifier, verify_layout_compatibility,
-        };
-        use std::os::unix::fs::MetadataExt;
+
 
         /// Test disk storage with proper GDS alignment requirements
         #[tokio::test]
@@ -1449,7 +1450,7 @@ mod tests {
             // GDS requires 4KB alignment for optimal performance
             const GDS_ALIGNMENT: usize = 4096;
 
-            let (offload_manager, device_pool, host_pool, disk_pool) = build_pools_with_layout(
+            let (offload_manager, _, host_pool, disk_pool) = build_pools_with_layout(
                 4,
                 Some(4),
                 Some(4),
@@ -1460,7 +1461,6 @@ mod tests {
 
             let host_pool = host_pool.as_ref().unwrap();
             let disk_pool = disk_pool.as_ref().unwrap();
-            let device_pool = device_pool.as_ref().unwrap();
 
             // Create and populate host block
             let host_block = completed_block(host_pool, [0, 1, 2, 3]).await?;
@@ -1501,7 +1501,7 @@ mod tests {
         #[tokio::test]
         async fn test_cross_layout_compatibility_verification() -> Result<()> {
             // Test FullyContiguous host with LayerSeparate device - common scenario
-            let (offload_manager, device_pool, host_pool, disk_pool) = build_pools_mixed_layouts(
+            let (offload_manager, _, host_pool, disk_pool) = build_pools_mixed_layouts(
                 4,                                      // blocks
                 Some((4, LayoutType::FullyContiguous)), // host: FC
                 Some((
@@ -1515,7 +1515,6 @@ mod tests {
 
             let host_pool = host_pool.as_ref().unwrap();
             let disk_pool = disk_pool.as_ref().unwrap();
-            let device_pool = device_pool.as_ref().unwrap();
 
             // Create test data with unique patterns for each layer
             let host_block = completed_block(host_pool, [0, 1, 2, 3]).await?;
@@ -1667,7 +1666,7 @@ mod tests {
             );
 
             // This should succeed, but we'll test behavior under constrained conditions
-            let (offload_manager, _, _, disk_pool) = result?;
+            let (_, _, _, disk_pool) = result?;
             let disk_pool = disk_pool
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("Disk pool was not created"))?;
@@ -1692,7 +1691,7 @@ mod tests {
         #[tokio::test]
         async fn test_constrained_host_buffer_disk_operations() -> Result<()> {
             // Simulate constrained host buffer by using minimal host blocks
-            let (offload_manager, device_pool, host_pool, disk_pool) = build_pools_with_layout(
+            let (offload_manager, _, host_pool, disk_pool) = build_pools_with_layout(
                 8,          // More blocks than host buffer
                 Some(2),    // Very limited host buffer
                 Some(8),    // Plenty of disk space
@@ -1703,7 +1702,6 @@ mod tests {
 
             let host_pool = host_pool.as_ref().unwrap();
             let disk_pool = disk_pool.as_ref().unwrap();
-            let device_pool = device_pool.as_ref().unwrap();
 
             // Create multiple blocks that exceed host capacity
             let mut host_blocks = Vec::new();
@@ -1942,11 +1940,6 @@ mod tests {
                         unsafe {
                             let slice =
                                 std::slice::from_raw_parts(layer_view.as_ptr(), layer_view.size());
-
-                            // Look for common garbage patterns
-                            let has_null_bytes = slice.iter().any(|&b| b == 0x00);
-                            let has_max_bytes = slice.iter().any(|&b| b == 0xFF);
-                            let has_expected = slice.iter().any(|&b| b == expected_value);
 
                             // In a properly functioning system, we should see mostly expected values
                             let expected_count =
