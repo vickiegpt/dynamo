@@ -36,6 +36,21 @@ inputs:
     description: 'Azure ACR password'
     required: false
 
+env:
+  AWS_ACCESS_KEY_ID: ${{ inputs.aws_access_key_id || '' }}
+  AWS_SECRET_ACCESS_KEY: ${{ inputs.aws_secret_access_key || '' }}
+  AWS_REGION: ${{ inputs.aws_default_region || '' }}
+  AWS_ACCOUNT_ID: ${{ inputs.aws_account_id || '' }}
+  AWS_PUSH: ${{ inputs.aws_push || '' }}
+
+  AZURE_ACR_USER: ${{ inputs.azure_acr_user || '' }}
+  AZURE_ACR_PASSWORD: ${{ inputs.azure_acr_password || '' }}
+  AZURE_ACR_HOSTNAME: ${{ inputs.azure_acr_hostname || '' }}
+  ACR_PUSH: ${{ inputs.azure_push || '' }}
+
+  LOCAL_IMAGE: ${{ inputs.local_image || '' }}
+  PUSH_TAG: ${{ inputs.push_tag || '' }}
+
 outputs:
   image_tag:
     description: 'Image Tag'
@@ -49,15 +64,18 @@ runs:
     # - name: Install tools
     - name: ECR Login
       if: ${{ inputs.aws_push == 'true' }}
+      shell: bash
       env:
         ECR_HOSTNAME: ${{ inputs.aws_account_id }}.dkr.ecr.${{ inputs.aws_default_region }}.amazonaws.com
       run: |
         aws ecr get-login-password --region ${{ inputs.aws_default_region }} | docker login --username AWS --password-stdin ${ECR_HOSTNAME}
     - name: ACR Login
+      shell: bash
       if: ${{ inputs.azure_push == 'true' }}
       run: |
         echo "${{ inputs.azure_acr_password }}" | docker login ${{ inputs.azure_acr_hostname }} --username ${{ inputs.azure_acr_user }} --password-stdin
     - name: ECR Tag and Push
+      shell: bash
       if: ${{ inputs.aws_push == 'true' }}
       env:
         LOCAL_IMAGE: ${{ inputs.local_image }}
@@ -67,11 +85,12 @@ runs:
         docker tag ${LOCAL_IMAGE} ${ECR_HOSTNAME}/${PUSH_TAG}
         docker push ${ECR_HOSTNAME}/${PUSH_TAG}
     - name: ACR Tag and Push
+      shell: bash
+      if: ${{ env.ACR_PUSH == 'true' }}
       env:
         LOCAL_IMAGE: ${{ inputs.local_image }}
         PUSH_TAG: ${{ inputs.push_tag }}
         AZURE_ACR_HOSTNAME: ${{ inputs.azure_acr_hostname }}
-      if: ${{ env.ACR_PUSH == 'true' }}
       run: |
         docker tag ${LOCAL_IMAGE} ${AZURE_ACR_HOSTNAME}/${PUSH_TAG}
         docker push ${AZURE_ACR_HOSTNAME}/${PUSH_TAG}
