@@ -160,6 +160,7 @@ jobs:
     - uses: actions/checkout@v4
     - name: Before Script
       run: |
+        set -x
         # Install dependencies
         sudo apt-get update && sudo apt-get install -y curl bash openssl gettext git jq
 
@@ -170,9 +171,11 @@ jobs:
         # find dynamo -type f -exec sed -i 's|https://charts.bitnami.com/bitnami|oci://dockerhub.nvidia.com/bitnamicharts|g' {} +
         # echo $DYNAMO_REPO_CI_COMMIT_SHA | tee -a build.env
 
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        export PATH="/root/.local/bin:/opt/dynamo/venv/bin:$PATH"
-        uv sync
+        # WE MOST LIKELY DON'T NEED uv
+        # curl -LsSf https://astral.sh/uv/install.sh | sh
+        # export PATH="/root/.local/bin:/opt/dynamo/venv/bin:$PATH"
+        # uv sync
+
         # Install yq
         echo "Installing yq..."
         curl -L https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o yq
