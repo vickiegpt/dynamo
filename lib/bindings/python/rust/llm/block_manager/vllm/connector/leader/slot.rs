@@ -115,6 +115,7 @@ pub trait Slot: std::fmt::Debug {
         tokens: &[u32],
         block_ids: &[usize],
         computed_position: usize,
+        num_new_matched_tokens: usize,
     ) -> Result<(), SlotError>;
 
     fn record_start_iteration(&mut self, iteration: u64) -> Result<(), SlotError>;
@@ -592,6 +593,7 @@ impl Slot for VllmConnectorSlot {
         tokens: &[u32],
         block_ids: &[usize],
         computed_position: usize,
+        num_external_tokens: usize,
     ) -> Result<(), SlotError> {
         // TRTLLM's KV Connector Manager will have (computed_position - external matches)
         // in onborading case
@@ -606,9 +608,12 @@ impl Slot for VllmConnectorSlot {
 
         // now we decide what we should do for the new computed tokens
         tracing::debug!(
-            "applying scheduler output, computed_position={}, sequence_total_tokens={}",
+            "applying scheduler output, computed_position={}, sequence_total_tokens={}, current_position={}, num_external_tokens={}, evaluated_blocks={}",
             computed_position,
-            self.sequence.total_tokens()
+            self.sequence.total_tokens(),
+            self.current_position,
+            num_external_tokens,
+            self.evaluated_blocks,
         );
 
         if computed_position < self.sequence.total_tokens() {
@@ -633,7 +638,15 @@ impl Slot for VllmConnectorSlot {
         let num_candidate_blocks =
             ((computed_position + 1) / self.block_size) - self.evaluated_blocks;
 
-        if num_candidate_blocks != 0 {
+        let onboarding_finished = self.evaluated_blocks >= (num_external_tokens / self.block_size);
+
+        tracing::debug!(
+            "applying scheduler output, computed_position={}, sequence_total_tokens={}",
+            computed_position,
+            self.sequence.total_tokens()
+        );
+
+        if num_candidate_blocks != 0 && onboarding_finished {
             // do we have a mechanism for skipping gpu cache hit blocks?  not sure yet.
             // for now, offload all the blocks to the host
             let offload_block_ids: Vec<usize> = self
@@ -668,9 +681,10 @@ impl Slot for VllmConnectorSlot {
 
         // done applying policy
         tracing::debug!(
-            "done applying kv cache policy at current_position: {}; computed_position: {}",
+            "done applying kv cache policy at current_position: {}; computed_position: {}.",
             self.current_position,
             computed_position,
+            num_external_tokens,
         );
 
         // advance current position to computed position
