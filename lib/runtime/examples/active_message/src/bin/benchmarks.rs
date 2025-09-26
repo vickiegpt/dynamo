@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use async_trait::async_trait;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},
-    handler::{ActiveMessage, AckHandler, ResponseHandler, HandlerType},
+    handler::{AckHandler, ActiveMessage, HandlerType, ResponseHandler},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
 };
-use async_trait::async_trait;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
@@ -142,22 +142,24 @@ impl BenchmarkStats {
     }
 
     fn print(&self, test_name: &str) {
-        info!("=== {} Results ===", test_name);
-        info!("Successful operations: {}", self.successful_ops);
-        info!("Failed operations: {}", self.failed_ops);
-        info!("Total duration: {:.2}s", self.total_duration.as_secs_f64());
-        info!("Throughput: {:.2} msgs/sec", self.throughput_msgs_per_sec);
-        info!("Latency statistics:");
-        info!("  Min:    {:?}", self.min);
-        info!("  Mean:   {:?}", self.mean);
-        info!("  Median: {:?}", self.median);
-        info!("  P95:    {:?}", self.p95);
-        info!("  P99:    {:?}", self.p99);
-        info!("  Max:    {:?}", self.max);
+        println!("=== {} Results ===", test_name);
+        println!("Successful operations: {}", self.successful_ops);
+        println!("Failed operations: {}", self.failed_ops);
+        println!("Total duration: {:.2}s", self.total_duration.as_secs_f64());
+        println!("Throughput: {:.2} msgs/sec", self.throughput_msgs_per_sec);
+        println!("Latency statistics:");
+        println!("  Min:    {:?}", self.min);
+        println!("  Mean:   {:?}", self.mean);
+        println!("  Median: {:?}", self.median);
+        println!("  P95:    {:?}", self.p95);
+        println!("  P99:    {:?}", self.p99);
+        println!("  Max:    {:?}", self.max);
     }
 }
 
-async fn create_managers(max_concurrent: Option<usize>) -> Result<(ZmqActiveMessageManager, ZmqActiveMessageManager)> {
+async fn create_managers(
+    max_concurrent: Option<usize>,
+) -> Result<(ZmqActiveMessageManager, ZmqActiveMessageManager)> {
     let cancel_token = CancellationToken::new();
 
     let server_manager = if let Some(max) = max_concurrent {
@@ -169,7 +171,8 @@ async fn create_managers(max_concurrent: Option<usize>) -> Result<(ZmqActiveMess
         ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?
     };
 
-    let client_manager = ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token).await?;
+    let client_manager =
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token).await?;
 
     Ok((server_manager, client_manager))
 }
@@ -179,19 +182,25 @@ async fn benchmark_ping_pong(
     max_concurrent: Option<usize>,
     num_operations: usize,
 ) -> Result<BenchmarkStats> {
-    info!("Running {} benchmark with {} operations...", name, num_operations);
+    info!(
+        "Running {} benchmark with {} operations...",
+        name, num_operations
+    );
 
     let (server_manager, client_manager) = create_managers(max_concurrent).await?;
 
     // Register ping handler
     let ping_handler = Arc::new(PingHandler);
     let handler_type = HandlerType::ack((*ping_handler).clone());
-    server_manager.register_handler_typed(handler_type, None).await?;
+    server_manager
+        .register_handler_typed(handler_type, None)
+        .await?;
 
     let server_client = server_manager.zmq_client();
     let client_client = client_manager.zmq_client();
 
-    // Connect clients
+    // Connect client to server (one-way connection)
+    // Auto-registration will handle the reverse connection when ACK is needed
     let server_peer = PeerInfo::new(
         server_client.instance_id(),
         server_client.endpoint().to_string(),
@@ -201,11 +210,25 @@ async fn benchmark_ping_pong(
     // Wait for connection
     tokio::time::sleep(Duration::from_millis(100)).await;
 
+    // Warmup to establish publisher tasks (not measured)
+    let warmup_result = client_client
+        .message("ping")?
+        .payload("warmup")?
+        .send_and_confirm(server_client.instance_id())
+        .await;
+
+    if warmup_result.is_err() {
+        anyhow::bail!("Warmup ping failed - benchmark cannot proceed");
+    }
+
+    // Small delay after warmup
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
     let start_time = Instant::now();
     let mut durations = Vec::with_capacity(num_operations);
     let mut failed_ops = 0;
 
-    // Run benchmark
+    // Run fast-path benchmark (excludes initial connection overhead)
     for i in 0..num_operations {
         let op_start = Instant::now();
 
@@ -234,7 +257,11 @@ async fn benchmark_ping_pong(
     server_manager.shutdown().await?;
     client_manager.shutdown().await?;
 
-    Ok(BenchmarkStats::calculate(&mut durations, total_duration, failed_ops))
+    Ok(BenchmarkStats::calculate(
+        &mut durations,
+        total_duration,
+        failed_ops,
+    ))
 }
 
 async fn benchmark_echo_throughput(
@@ -244,20 +271,25 @@ async fn benchmark_echo_throughput(
     payload_size: usize,
     concurrent_requests: usize,
 ) -> Result<BenchmarkStats> {
-    info!("Running {} benchmark with {} operations, {} byte payloads, {} concurrent requests...",
-          name, num_operations, payload_size, concurrent_requests);
+    info!(
+        "Running {} benchmark with {} operations, {} byte payloads, {} concurrent requests...",
+        name, num_operations, payload_size, concurrent_requests
+    );
 
     let (server_manager, client_manager) = create_managers(max_concurrent).await?;
 
     // Register echo handler
     let echo_handler = Arc::new(EchoHandler);
     let handler_type = HandlerType::response((*echo_handler).clone());
-    server_manager.register_handler_typed(handler_type, None).await?;
+    server_manager
+        .register_handler_typed(handler_type, None)
+        .await?;
 
     let server_client = server_manager.zmq_client();
     let client_client = client_manager.zmq_client();
 
-    // Connect clients
+    // Connect client to server (one-way connection)
+    // Auto-registration will handle the reverse connection when ACK is needed
     let server_peer = PeerInfo::new(
         server_client.instance_id(),
         server_client.endpoint().to_string(),
@@ -266,6 +298,27 @@ async fn benchmark_echo_throughput(
 
     // Wait for connection
     tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Warmup to establish publisher tasks (not measured)
+    let warmup_payload = BenchmarkPayload {
+        sequence: 0,
+        data: vec![0; 64], // Small warmup payload
+    };
+    let warmup_result = client_client
+        .message("echo")?
+        .payload(warmup_payload)?
+        .expect_response::<BenchmarkPayload>()
+        .send(server_client.instance_id())
+        .await?
+        .await_response::<BenchmarkPayload>()
+        .await;
+
+    if warmup_result.is_err() {
+        anyhow::bail!("Warmup echo failed - benchmark cannot proceed");
+    }
+
+    // Small delay after warmup
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     let start_time = Instant::now();
     let mut durations = Vec::with_capacity(num_operations);
@@ -325,7 +378,11 @@ async fn benchmark_echo_throughput(
     server_manager.shutdown().await?;
     client_manager.shutdown().await?;
 
-    Ok(BenchmarkStats::calculate(&mut durations, total_duration, failed_ops))
+    Ok(BenchmarkStats::calculate(
+        &mut durations,
+        total_duration,
+        failed_ops,
+    ))
 }
 
 #[tokio::main]
@@ -334,71 +391,84 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    info!("Starting Active Message Performance Benchmarks");
-    info!("Testing both latency (ping-pong) and throughput (echo) scenarios");
+    println!("Starting Active Message Fast-Path Performance Benchmarks");
+    println!("Testing fast-path latency (ping-pong) and throughput (echo) scenarios");
+    println!("Note: Initial connection overhead excluded via warmup");
 
     // Latency benchmarks (ping-pong)
-    info!("\n🏓 LATENCY BENCHMARKS (Ping-Pong)");
+    println!("\n🏓 FAST-PATH LATENCY BENCHMARKS (Ping-Pong)");
 
     let ping_pong_stats = benchmark_ping_pong(
-        "Ping-Pong Latency",
+        "Fast-Path Ping-Pong Latency",
         None, // No concurrency limit
         1000,
-    ).await?;
-    ping_pong_stats.print("Ping-Pong Latency");
+    )
+    .await?;
+    ping_pong_stats.print("Fast-Path Ping-Pong Latency");
 
     // Throughput benchmarks with different settings
-    info!("\n🚀 THROUGHPUT BENCHMARKS (Echo)");
+    println!("\n🚀 FAST-PATH THROUGHPUT BENCHMARKS (Echo)");
 
     // Small payload, moderate concurrency
     let echo_small_stats = benchmark_echo_throughput(
-        "Echo Small Payload",
+        "Fast-Path Echo Small Payload",
         None, // No concurrency limit
         1000,
-        64,   // 64 byte payload
-        50,   // 50 concurrent requests
-    ).await?;
-    echo_small_stats.print("Echo Small Payload");
+        64, // 64 byte payload
+        50, // 50 concurrent requests
+    )
+    .await?;
+    echo_small_stats.print("Fast-Path Echo Small Payload");
 
     // Larger payload, lower concurrency
     let echo_large_stats = benchmark_echo_throughput(
-        "Echo Large Payload",
+        "Fast-Path Echo Large Payload",
         None, // No concurrency limit
         500,
         4096, // 4KB payload
         20,   // 20 concurrent requests
-    ).await?;
-    echo_large_stats.print("Echo Large Payload");
+    )
+    .await?;
+    echo_large_stats.print("Fast-Path Echo Large Payload");
 
     // Test with concurrency limits
-    info!("\n⚙️  CONCURRENCY LIMIT BENCHMARKS");
+    println!("\n⚙️  FAST-PATH CONCURRENCY LIMIT BENCHMARKS");
 
     let limited_stats = benchmark_echo_throughput(
-        "Echo with Concurrency Limit",
+        "Fast-Path Echo with Concurrency Limit",
         Some(10), // Limit to 10 concurrent messages
         500,
-        1024,     // 1KB payload
-        25,       // 25 concurrent requests (will be throttled by semaphore)
-    ).await?;
-    limited_stats.print("Echo with Concurrency Limit (10)");
+        1024, // 1KB payload
+        25,   // 25 concurrent requests (will be throttled by semaphore)
+    )
+    .await?;
+    limited_stats.print("Fast-Path Echo with Concurrency Limit (10)");
 
     // Summary comparison
-    info!("\n📊 PERFORMANCE SUMMARY");
-    info!("Ping-Pong RTT:           {:.3}ms avg, {:.2} ops/sec",
-          ping_pong_stats.mean.as_secs_f64() * 1000.0,
-          ping_pong_stats.throughput_msgs_per_sec);
-    info!("Echo Small Throughput:   {:.2} msgs/sec, {:.3}ms avg latency",
-          echo_small_stats.throughput_msgs_per_sec,
-          echo_small_stats.mean.as_secs_f64() * 1000.0);
-    info!("Echo Large Throughput:   {:.2} msgs/sec, {:.3}ms avg latency",
-          echo_large_stats.throughput_msgs_per_sec,
-          echo_large_stats.mean.as_secs_f64() * 1000.0);
-    info!("Echo Limited Throughput: {:.2} msgs/sec, {:.3}ms avg latency",
-          limited_stats.throughput_msgs_per_sec,
-          limited_stats.mean.as_secs_f64() * 1000.0);
+    println!("\n📊 FAST-PATH PERFORMANCE SUMMARY");
+    println!(
+        "Fast-Path Ping-Pong RTT:           {:.3}ms avg, {:.2} ops/sec",
+        ping_pong_stats.mean.as_secs_f64() * 1000.0,
+        ping_pong_stats.throughput_msgs_per_sec
+    );
+    println!(
+        "Fast-Path Echo Small Throughput:   {:.2} msgs/sec, {:.3}ms avg latency",
+        echo_small_stats.throughput_msgs_per_sec,
+        echo_small_stats.mean.as_secs_f64() * 1000.0
+    );
+    println!(
+        "Fast-Path Echo Large Throughput:   {:.2} msgs/sec, {:.3}ms avg latency",
+        echo_large_stats.throughput_msgs_per_sec,
+        echo_large_stats.mean.as_secs_f64() * 1000.0
+    );
+    println!(
+        "Fast-Path Echo Limited Throughput: {:.2} msgs/sec, {:.3}ms avg latency",
+        limited_stats.throughput_msgs_per_sec,
+        limited_stats.mean.as_secs_f64() * 1000.0
+    );
 
-    info!("\n✅ All benchmarks completed successfully!");
-    info!("The parallel message handling and concurrency controls are working correctly.");
+    println!("\n✅ All benchmarks completed successfully!");
+    println!("The parallel message handling and concurrency controls are working correctly.");
 
     Ok(())
 }
