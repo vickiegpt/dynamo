@@ -43,6 +43,14 @@ jobs:
         sudo apt-get update -y
         sudo apt-get install -y protobuf-compiler
 
+    - name: Set workspace paths
+      run: |
+        echo "WORKSPACE_PATHS=\
+        ${{ github.workspace }} \
+        ${{ github.workspace }}/lib/bindings/python \
+        ${{ github.workspace }}/lib/runtime/examples" >> $GITHUB_ENV
+        echo "CARGO_TARGET_DIR=${{ github.workspace }}/target" >> $GITHUB_ENV
+
     - name: Cache sccache artifacts
       uses: actions/cache@v4
       with:
@@ -59,7 +67,7 @@ jobs:
           ~/.cargo/registry/index/
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
-          target/
+          ${{ env.CARGO_TARGET_DIR }}
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
@@ -89,14 +97,6 @@ jobs:
     - name: Install cargo-deny
       run: cargo-deny --version || cargo install cargo-deny@0.16.4
 
-    - name: Set workspace paths
-      run: |
-        echo "WORKSPACE_PATHS=\
-        . \
-        lib/bindings/python \
-        lib/runtime/examples" >> $GITHUB_ENV
-        echo "CARGO_TARGET_DIR={{.github.workspace}}/target" >> $GITHUB_ENV
-
     - name: Verify Code Formatting
       run: |
         for manifest in ${{ env.WORKSPACE_PATHS }}; do
@@ -108,7 +108,7 @@ jobs:
       run: |
         for manifest in ${{ env.WORKSPACE_PATHS }}; do
           cd $manifest
-          cargo clippy --no-deps --all-targets -- -D warnings
+          cargo clippy --target-dir ${{ env.CARGO_TARGET_DIR }} --no-deps --all-targets -- -D warnings
         done
 
     - name: Run cargo-deny
@@ -122,25 +122,25 @@ jobs:
       run: |
         for manifest in ${{ env.WORKSPACE_PATHS }}; do
           cd $manifest
-          cargo test --locked --frozen --no-run
+          cargo test --target-dir ${{ env.CARGO_TARGET_DIR }} --locked --frozen --no-run
         done
 
     - name: Run Doc Tests
       run: |
-          for manifest in ${{ env.WORKSPACE_PATHS }}; do
-            cd $manifest
-            cargo doc --no-deps && cargo test --locked --doc
-          done
+        for manifest in ${{ env.WORKSPACE_PATHS }}; do
+          cd $manifest
+          cargo doc --target-dir ${{ env.CARGO_TARGET_DIR }} --no-deps && cargo test --target-dir ${{ env.CARGO_TARGET_DIR }} --locked --doc
+        done
 
     - name: Run Unit Tests
       run: |
         for manifest in ${{ env.WORKSPACE_PATHS }}; do
           cd $manifest
-          cargo test --locked --frozen --all-targets --jobs $(nproc)
+          cargo test --target-dir ${{ env.CARGO_TARGET_DIR }} --locked --frozen --all-targets --jobs $(nproc)
         done
 
     - name: Cleanup and show sccache stats
       if: always()
       run: |
         sccache --show-stats || true
-        cargo clean --target-dir target || true
+        cargo clean --target-dir ${{ env.CARGO_TARGET_DIR }} || true
