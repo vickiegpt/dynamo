@@ -684,7 +684,6 @@ impl Slot for VllmConnectorSlot {
             "done applying kv cache policy at current_position: {}; computed_position: {}.",
             self.current_position,
             computed_position,
-            num_external_tokens,
         );
 
         // advance current position to computed position
