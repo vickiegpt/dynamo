@@ -125,7 +125,6 @@ jobs:
             echo "Running doc tests for $manifest"
             cargo doc --manifest-path "$manifest" --no-deps && cargo test --manifest-path "$manifest" --locked --doc
           done
-        run: cargo doc --no-deps && cargo test --locked --doc
 
     - name: Run Unit Tests
       run: |
