@@ -24,6 +24,7 @@ use dynamo_llm::block_manager::storage::torch::TorchTensor;
 use dynamo_runtime::DistributedRuntime;
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
 use dynamo_llm::block_manager::layout::LayoutType;
+use crate::llm::block_manager::distributed::PyLayoutType;
 
 pub trait Worker: Send + Sync {
     fn register_kv_caches(
@@ -34,6 +35,9 @@ pub trait Worker: Send + Sync {
         dtype_width_bytes: usize,
         kv_caches: Vec<(String, Arc<VllmTensor>)>,
         raw_event_handles: Vec<u64>,
+        device_layout_type: Option<LayoutType>,
+        host_layout_type: Option<LayoutType>,
+        disk_layout_type: Option<LayoutType>,
     ) -> anyhow::Result<()>;
 
     fn bind_connector_metadata(&mut self, metadata: Vec<u8>) -> anyhow::Result<()>;
@@ -134,6 +138,9 @@ impl Worker for KvConnectorWorker {
         dtype_width_bytes: usize,
         kv_caches: Vec<(String, Arc<VllmTensor>)>,
         raw_event_handles: Vec<u64>,
+        device_layout_type: Option<LayoutType>,
+        host_layout_type: Option<LayoutType>,
+        disk_layout_type: Option<LayoutType>,
     ) -> anyhow::Result<()> {
         if self.kvbm_worker.get().is_some() {
             tracing::warn!("kvbm worker already registered");
@@ -169,9 +176,9 @@ impl Worker for KvConnectorWorker {
             .dtype_width_bytes(dtype_width_bytes)
             .barrier_id_prefix(get_barrier_id_prefix())
             .scheduler_client(Some(self.transfer_client.clone()))
-            .device_layout_type(LayoutType::LayerSeparate { outer_contiguous: false })
-            .host_layout_type(LayoutType::FullyContiguous)
-            .disk_layout_type(LayoutType::FullyContiguous)
+            .device_layout_type(device_layout_type.unwrap_or(LayoutType::LayerSeparate { outer_contiguous: false }))
+            .host_layout_type(host_layout_type.unwrap_or(LayoutType::FullyContiguous))
+            .disk_layout_type(disk_layout_type.unwrap_or(LayoutType::FullyContiguous))
             .build()?;
 
         let worker = self.drt.runtime().primary().block_on(async move {
@@ -420,6 +427,7 @@ impl PyKvConnectorWorker {
         Ok(Self { connector_worker })
     }
 
+    #[pyo3(signature = (num_device_blocks, page_size, device_id, dtype_width_bytes, kv_caches, raw_event_handles, device_layout_type=None, host_layout_type=None, disk_layout_type=None))]
     pub fn register_kv_caches(
         &mut self,
         num_device_blocks: usize,
@@ -428,6 +436,9 @@ impl PyKvConnectorWorker {
         dtype_width_bytes: usize,
         kv_caches: Vec<(String, Py<PyAny>)>,
         raw_event_handles: Vec<u64>,
+        device_layout_type: Option<PyLayoutType>,
+        host_layout_type: Option<PyLayoutType>,
+        disk_layout_type: Option<PyLayoutType>,
     ) -> PyResult<()> {
         // Convert Python tensors to Rust VllmTensor objects
         let mut rust_kv_caches = Vec::new();
@@ -444,6 +455,9 @@ impl PyKvConnectorWorker {
                 dtype_width_bytes,
                 rust_kv_caches,
                 raw_event_handles,
+                device_layout_type.map(|py_layout| py_layout.into()),
+                host_layout_type.map(|py_layout| py_layout.into()),
+                disk_layout_type.map(|py_layout| py_layout.into()),
             )
             .map_err(to_pyerr)
     }

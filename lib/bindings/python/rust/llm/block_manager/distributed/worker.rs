@@ -15,12 +15,29 @@ use llm_rs::block_manager::layout::LayoutType;
 
 /// A wrapper around a layout type.
 /// This is used to convert between the Python and Rust layout types.
-#[pyclass]
+#[pyclass(eq, eq_int)]
 #[derive(Clone)]
 pub enum PyLayoutType {
     FullyContiguous,
     LayerSeparateOuterContiguous,
     LayerSeparateBlockContiguous,
+}
+
+#[pymethods]
+impl PyLayoutType {
+    /// String representation of the layout type
+    fn __str__(&self) -> &'static str {
+        match self {
+            PyLayoutType::FullyContiguous => "FullyContiguous",
+            PyLayoutType::LayerSeparateOuterContiguous => "LayerSeparateOuterContiguous",
+            PyLayoutType::LayerSeparateBlockContiguous => "LayerSeparateBlockContiguous",
+        }
+    }
+
+    /// Representation for debugging
+    fn __repr__(&self) -> String {
+        format!("PyLayoutType.{}", self.__str__())
+    }
 }
 
 impl From<PyLayoutType> for LayoutType {
