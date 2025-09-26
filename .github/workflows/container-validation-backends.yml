@@ -212,13 +212,13 @@ jobs:
         # Install CRDs
         # helm upgrade --install dynamo-crds ./deploy/cloud/helm/crds/ --namespace default --wait --atomic
         # Create docker pull secret for operator image
-        kubectl create secret docker-registry docker-imagepullsecret --docker-server=${{ secret.AZURE_ACR_HOSTNAME }} --docker-username=${{ secret.AZURE_ACR_USER }} --docker-password=${{ secret.AZURE_ACR_PASSWORD }} --namespace=${NAMESPACE}
+        kubectl create secret docker-registry docker-imagepullsecret --docker-server=${{ secrets.AZURE_ACR_HOSTNAME }} --docker-username=${{ secrets.AZURE_ACR_USER }} --docker-password=${{ secrets.AZURE_ACR_PASSWORD }} --namespace=${NAMESPACE}
         # Install helm dependencies
         helm repo add bitnami https://charts.bitnami.com/bitnami
         cd deploy/cloud/helm/platform/
         helm dep build .
         # Install platform
-        helm upgrade --install dynamo-platform . --namespace ${NAMESPACE} --set dynamo-operator.namespaceRestriction.enabled=true --set dynamo-operator.controllerManager.manager.image.repository=${{ secret.AZURE_ACR_HOSTNAME }}/ai-dynamo/dynamo --set dynamo-operator.controllerManager.manager.image.tag=${{ github.sha }}-operator-amd64 --set dynamo-operator.imagePullSecrets[0].name=docker-imagepullsecret
+        helm upgrade --install dynamo-platform . --namespace ${NAMESPACE} --set dynamo-operator.namespaceRestriction.enabled=true --set dynamo-operator.controllerManager.manager.image.repository=${{ secrets.AZURE_ACR_HOSTNAME }}/ai-dynamo/dynamo --set dynamo-operator.controllerManager.manager.image.tag=${{ github.sha }}-operator-amd64 --set dynamo-operator.imagePullSecrets[0].name=docker-imagepullsecret
         # Wait for all deployments to be ready
         timeout $OPERATOR_DEPLOY_TIMEOUT kubectl rollout status deployment -n $NAMESPACE --watch
         cd -
