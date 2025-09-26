@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -33,10 +33,10 @@ pub(crate) struct HandlerEntry {
     pub task_tracker: TaskTracker,
 }
 
-pub(crate) struct ManagerState {
+pub struct ManagerState {
     pub instance_id: InstanceId,
     pub endpoint: String,
-    pub handlers: HashMap<HandlerId, HandlerEntry>,
+    pub(crate) handlers: HashMap<HandlerId, HandlerEntry>,
     pub client: Arc<ZmqActiveMessageClient>,
     pub handler_events_tx: broadcast::Sender<HandlerEvent>,
 }
@@ -57,12 +57,17 @@ pub struct ZmqActiveMessageManager {
     client: Arc<ZmqActiveMessageClient>,
     handler_events_tx: broadcast::Sender<HandlerEvent>,
     cancel_token: CancellationToken,
-    receiver_task: Option<tokio::task::JoinHandle<Result<()>>>,
+    receiver_task: Arc<Mutex<Option<tokio::task::JoinHandle<Result<()>>>>>,
+    ack_cleanup_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl ZmqActiveMessageManager {
     pub fn zmq_client(&self) -> Arc<ZmqActiveMessageClient> {
         self.client.clone()
+    }
+
+    pub fn manager_state(&self) -> Arc<RwLock<ManagerState>> {
+        self.state.clone()
     }
 
     pub async fn new(endpoint: String, cancel_token: CancellationToken) -> Result<Self> {
@@ -100,7 +105,8 @@ impl ZmqActiveMessageManager {
             client: client.clone(),
             handler_events_tx: handler_events_tx.clone(),
             cancel_token: cancel_token.clone(),
-            receiver_task: None,
+            receiver_task: Arc::new(Mutex::new(None)),
+            ack_cleanup_task: Arc::new(Mutex::new(None)),
         };
 
         manager.register_builtin_handlers().await?;
@@ -111,12 +117,14 @@ impl ZmqActiveMessageManager {
             cancel_token.clone(),
         ));
 
-        tokio::spawn(Self::ack_cleanup_loop(client.clone(), cancel_token.clone()));
+        let ack_cleanup_task =
+            tokio::spawn(Self::ack_cleanup_loop(client.clone(), cancel_token.clone()));
 
-        Ok(Self {
-            receiver_task: Some(receiver_task),
-            ..manager
-        })
+        // Store the task handles
+        *manager.receiver_task.lock().await = Some(receiver_task);
+        *manager.ack_cleanup_task.lock().await = Some(ack_cleanup_task);
+
+        Ok(manager)
     }
 
     async fn ack_cleanup_loop(
@@ -457,6 +465,22 @@ impl ActiveMessageManager for ZmqActiveMessageManager {
         info!("Shutting down ZmqActiveMessageManager");
         self.cancel_token.cancel();
 
+        // Join background tasks first
+        if let Some(receiver_task) = self.receiver_task.lock().await.take() {
+            debug!("Joining receiver task");
+            if let Err(e) = receiver_task.await {
+                warn!("Receiver task join error: {:?}", e);
+            }
+        }
+
+        if let Some(ack_cleanup_task) = self.ack_cleanup_task.lock().await.take() {
+            debug!("Joining ACK cleanup task");
+            if let Err(e) = ack_cleanup_task.await {
+                warn!("ACK cleanup task join error: {:?}", e);
+            }
+        }
+
+        // Join handler task trackers
         let state = self.state.read().await;
         for (name, entry) in &state.handlers {
             debug!("Joining task tracker for handler: {}", name);
