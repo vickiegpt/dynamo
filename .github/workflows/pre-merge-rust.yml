@@ -20,7 +20,7 @@ on:
   push:
     branches:
     - main
-    - "anants/*"
+    - anants/rust-ci
 
   # Run this workflow on pull requests targeting main but only on rust changes.
   pull_request:
