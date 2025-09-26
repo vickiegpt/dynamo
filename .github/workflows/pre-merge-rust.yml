@@ -139,8 +139,7 @@ jobs:
           cargo test --target-dir ${{ env.CARGO_TARGET_DIR }} --locked --frozen --all-targets --jobs $(nproc)
         done
 
-    - name: Cleanup and show sccache stats
+    - name: Show sccache stats
       if: always()
       run: |
         sccache --show-stats || true
-        cargo clean --target-dir ${{ env.CARGO_TARGET_DIR }} || true
