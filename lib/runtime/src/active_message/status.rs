@@ -11,13 +11,18 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+use super::response::ResponseEnvelope;
+
 /// TypeState marker: Default send-and-confirm mode
+#[derive(Debug)]
 pub struct SendAndConfirm;
 
 /// TypeState marker: Detached confirmation mode
+#[derive(Debug)]
 pub struct DetachedConfirm;
 
 /// TypeState marker: With additional response expected
+#[derive(Debug)]
 pub struct WithResponse;
 
 /// Message status object with typestate for compile-time safety
@@ -57,7 +62,8 @@ impl<Mode> MessageStatus<Mode> {
 impl MessageStatus<DetachedConfirm> {
     /// Wait for the handler to accept the message
     pub async fn await_accepted(self) -> Result<()> {
-        let rx = self.acceptance_rx
+        let rx = self
+            .acceptance_rx
             .ok_or_else(|| anyhow::anyhow!("No acceptance receiver configured"))?;
 
         tokio::time::timeout(self.timeout, rx)
@@ -73,7 +79,8 @@ impl MessageStatus<DetachedConfirm> {
 impl MessageStatus<WithResponse> {
     /// Wait for a typed response from the handler
     pub async fn await_response<T: DeserializeOwned>(self) -> Result<T> {
-        let rx = self.response_rx
+        let rx = self
+            .response_rx
             .ok_or_else(|| anyhow::anyhow!("No response receiver configured"))?;
 
         let bytes = tokio::time::timeout(self.timeout, rx)
@@ -81,13 +88,26 @@ impl MessageStatus<WithResponse> {
             .map_err(|_| anyhow::anyhow!("Response timeout after {:?}", self.timeout))?
             .map_err(|_| anyhow::anyhow!("Response channel dropped"))?;
 
-        serde_json::from_slice(&bytes)
-            .map_err(|e| anyhow::anyhow!("Failed to deserialize response: {}", e))
+        // Try to deserialize as ResponseEnvelope first (new format)
+        if let Ok(envelope) = serde_json::from_slice::<ResponseEnvelope>(&bytes) {
+            match envelope {
+                ResponseEnvelope::Ok(value) => serde_json::from_value(value)
+                    .map_err(|e| anyhow::anyhow!("Failed to deserialize response: {}", e)),
+                ResponseEnvelope::Err(error_msg) => {
+                    anyhow::bail!("{}", error_msg)
+                }
+            }
+        } else {
+            // Fall back to direct deserialization for backward compatibility
+            serde_json::from_slice(&bytes)
+                .map_err(|e| anyhow::anyhow!("Failed to deserialize response: {}", e))
+        }
     }
 
     /// Wait for raw response bytes
     pub async fn await_response_raw(self) -> Result<Bytes> {
-        let rx = self.response_rx
+        let rx = self
+            .response_rx
             .ok_or_else(|| anyhow::anyhow!("No response receiver configured"))?;
 
         let bytes = tokio::time::timeout(self.timeout, rx)

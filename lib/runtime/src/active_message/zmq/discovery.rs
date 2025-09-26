@@ -5,6 +5,7 @@ use anyhow::Result;
 use uuid::Uuid;
 
 use crate::active_message::client::{Endpoint, PeerInfo};
+use crate::active_message::utils::extract_host;
 
 pub fn detect_local_host() -> Result<String> {
     local_ip_address::local_ip()
@@ -36,18 +37,5 @@ fn is_same_host(endpoint1: &str, endpoint2: &str) -> bool {
     match (extract_host(endpoint1), extract_host(endpoint2)) {
         (Some(host1), Some(host2)) => host1 == host2,
         _ => false,
-    }
-}
-
-fn extract_host(endpoint: &str) -> Option<String> {
-    if endpoint.starts_with("tcp://") {
-        endpoint
-            .strip_prefix("tcp://")
-            .and_then(|s| s.split(':').next())
-            .map(|s| s.to_string())
-    } else if endpoint.starts_with("ipc://") {
-        Some("localhost".to_string())
-    } else {
-        None
     }
 }

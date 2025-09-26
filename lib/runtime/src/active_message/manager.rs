@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use super::client::ActiveMessageClient;
-use super::handler::{ActiveMessageHandler, HandlerEvent, HandlerId};
+use super::handler::{HandlerEvent, HandlerId, HandlerType};
 use crate::utils::tasks::tracker::TaskTracker;
 
 #[derive(Default)]
@@ -26,9 +26,10 @@ impl HandlerConfig {
 pub trait ActiveMessageManager: Send + Sync {
     fn client(&self) -> Arc<dyn ActiveMessageClient>;
 
-    async fn register_handler(
+    /// Register a handler using the handler type system
+    async fn register_handler_typed(
         &self,
-        handler: Arc<dyn ActiveMessageHandler>,
+        handler: HandlerType,
         config: Option<HandlerConfig>,
     ) -> Result<()>;
 
