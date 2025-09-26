@@ -8,6 +8,7 @@ use dynamo_runtime::active_message::{
     client::ActiveMessageClient,
     handler::{ActiveMessage, ActiveMessageHandler},
     manager::ActiveMessageManager,
+    response::ResponseContext,
     zmq::ZmqActiveMessageManager,
 };
 use std::sync::Arc;
@@ -37,7 +38,8 @@ impl ActiveMessageHandler for TestHandler {
     async fn handle(
         &self,
         message: ActiveMessage,
-        _client: Arc<dyn ActiveMessageClient>,
+        _client: &dyn ActiveMessageClient,
+        _response: ResponseContext,
     ) -> Result<()> {
         let payload = String::from_utf8(message.payload.to_vec())?;
         self.received_messages.lock().await.push(payload);

@@ -5,7 +5,10 @@ use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::time::Duration;
+use tokio::sync::oneshot;
+use uuid::Uuid;
 
+use super::builder::MessageBuilder;
 use super::handler::{ActiveMessage, HandlerId, InstanceId};
 
 pub type Endpoint = String;
@@ -71,4 +74,20 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
     ) -> Result<()>;
 
     async fn list_handlers(&self, instance_id: InstanceId) -> Result<Vec<HandlerId>>;
+
+    // New builder pattern API
+    /// Create a message builder
+    fn message(&self, handler: &str) -> MessageBuilder<'_> where Self: Sized {
+        MessageBuilder::new(self, handler)
+    }
+
+    // Internal methods for builder pattern support
+    /// Send raw ActiveMessage (internal use by builder)
+    async fn send_raw_message(&self, target: InstanceId, message: ActiveMessage) -> Result<()>;
+
+    /// Register for acceptance notification (internal use by builder)
+    async fn register_acceptance(&self, message_id: Uuid, sender: oneshot::Sender<()>) -> Result<()>;
+
+    /// Register for response notification (internal use by builder)
+    async fn register_response(&self, message_id: Uuid, sender: oneshot::Sender<Bytes>) -> Result<()>;
 }
