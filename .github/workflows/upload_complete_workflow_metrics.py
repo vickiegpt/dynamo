@@ -23,17 +23,18 @@ EXCLUDED_JOB_NAMES = [
 # NEW STANDARDIZED FIELD SCHEMA - Using consistent prefixes for OpenSearch mapping
 # Using prefixes: s_ for strings, l_ for longs, ts_ for timestamps
 
-# Common fields across all metric types
+# Common fields across all tables
 FIELD_ID = "_id"
-FIELD_USER_ALIAS = "s_user_alias" #extra you can maybe delete or test
+FIELD_USER_ALIAS = "s_user_alias"
 FIELD_REPO = "s_repo"
 FIELD_WORKFLOW_NAME = "s_workflow_name"
 FIELD_GITHUB_EVENT = "s_github_event"
-FIELD_BRANCH = "s_branch" #extra you can maybe delete or test
+FIELD_BRANCH = "s_branch"
 FIELD_PR_ID = "s_pr_id"  # Pull request ID as string ("N/A" if not a PR)
-FIELD_STATUS = "s_status" #duplicate you can maybe consolidate to the common metric adding
+FIELD_STATUS = "s_status"
 FIELD_STATUS_NUMBER = "l_status_number"
 FIELD_WORKFLOW_ID = "s_workflow_id"
+FIELD_COMMIT_SHA = "s_commit_sha"
 
 # Timing fields
 FIELD_CREATION_TIME = "ts_creation_time"
@@ -42,25 +43,17 @@ FIELD_END_TIME = "ts_end_time"
 FIELD_QUEUE_TIME = "l_queue_time_sec"  # Integer seconds as long
 FIELD_DURATION_SEC = "l_duration_sec"
 
-# Workflow-specific fields
-FIELD_COMMIT_SHA = "s_commit_sha"
-#FIELD_JOBS = "s_jobs"  # Comma-separated job IDs
-
 # Job-specific fields
 FIELD_JOB_ID = "s_job_id"
 FIELD_JOB_NAME = "s_job_name"
-#FIELD_RUNNER_INFO = "s_runner_info"
 FIELD_RUNNER_ID = "s_runner_id"
 FIELD_RUNNER_NAME = "s_runner_name"
-#FIELD_LABELS = "s_labels"  # Comma-separated labels
-#FIELD_STEPS = "s_steps"  # Comma-separated step IDs
 
 # Step-specific fields
 FIELD_STEP_ID = "s_step_id"
 FIELD_NAME = "s_step_name"
 FIELD_STEP_NUMBER = "l_step_number"
 FIELD_COMMAND = "s_command"
-#FIELD_JOB_LABELS = "s_job_labels"  # Comma-separated labels
 
 class TimingProcessor:
     """Centralized processor for all datetime and duration conversions using Python built-ins"""
@@ -253,7 +246,6 @@ class WorkflowMetricsUploader:
         if metric_type != "step":
             db_data[FIELD_QUEUE_TIME] = TimingProcessor.calculate_time_diff(creation_time, start_time)
         
-        # Add @timestamp field for Grafana/OpenSearch indexing (CRITICAL FIX!)
         # Use the end_time if available, otherwise use current time
         if end_time:
             # Ensure timestamp is in proper ISO format for OpenSearch date detection
@@ -342,37 +334,18 @@ class WorkflowMetricsUploader:
             db_data[FIELD_STATUS_NUMBER] = 1
         elif db_data[FIELD_STATUS] is "failure":
             db_data[FIELD_STATUS_NUMBER] = 0
-       #db_data[FIELD_BRANCH] = str(workflow_data.get('head_branch', self.ref_name))
         print(f"Checking branch: {str(workflow_data.get('head_branch'))}")
-        #db_data[FIELD_COMMIT_SHA] = str(workflow_data.get('head_sha', self.sha))        
-        # Timing fields - Fix parameter order for correct duration/queue time calculation
+        
+        # Timing fields
         created_at = workflow_data.get('created_at')
         run_started_at = workflow_data.get('run_started_at')
-        # Use completed_at if available, otherwise updated_at
         end_time = workflow_data.get('completed_at') or workflow_data.get('updated_at')
         self.add_standardized_timing_fields(db_data, created_at, run_started_at, end_time, "workflow")
         
         # Common context fields
         self.add_common_context_fields(db_data, workflow_data)
-        
-        # Override userAlias with actor from API if available
-        """
-        actor = workflow_data.get('actor', {})
-        if actor and actor.get('login'):
-            db_data[FIELD_USER_ALIAS] = actor.get('login')
-        """
-        actor = workflow_data.get('actor', {})
-        print(f"Checking actor: {actor.get('login')}")
-        
-        # Add jobs list as comma-separated string (using s_ prefix)
-        """
-        if jobs_data and 'jobs' in jobs_data:
-            job_ids = [str(job['id']) for job in jobs_data['jobs']]
-            db_data[FIELD_JOBS] = ','.join(job_ids)
-        else:
-            db_data[FIELD_JOBS] = ''
-        """
-        
+
+        # Post to database
         self.post_to_db(self.workflow_index, db_data)
 
     def _upload_all_job_and_step_metrics(self, jobs_data: Dict[str, Any]) -> tuple[int, int]:
@@ -454,38 +427,18 @@ class WorkflowMetricsUploader:
         if job_status is None:
             job_status = 'in_progress'
         db_data[FIELD_STATUS] = str(job_status)
-        #db_data[FIELD_RUNNER_INFO] = str(job_data.get('runner_name', 'unknown'))
         if db_data[FIELD_STATUS] is "success":
             db_data[FIELD_STATUS_NUMBER] = 1
         elif db_data[FIELD_STATUS] is "failure":
             db_data[FIELD_STATUS_NUMBER] = 0
         db_data[FIELD_JOB_NAME] = str(job_name)
         
-        # Timing fields using standardized method - Fix parameter order
+        # Timing fields
         created_at = job_data.get('created_at')
         started_at = job_data.get('started_at')
         completed_at = job_data.get('completed_at')
         
         self.add_standardized_timing_fields(db_data, created_at, started_at, completed_at, "job")
-        
-        # Labels - Convert array to comma-separated string to avoid indexing issues
-        """
-        runner_labels = job_data.get('labels', [])
-        if runner_labels:
-            db_data[FIELD_LABELS] = ','.join(runner_labels)
-        else:
-            db_data[FIELD_LABELS] = 'unknown'
-        """
-        
-        # Add steps list (get step IDs) - Convert to string to avoid array issues
-        """
-        steps = job_data.get('steps', [])
-        if steps:
-            step_ids = [f"{job_id}_{step.get('number', i+1)}" for i, step in enumerate(steps)]
-            db_data[FIELD_STEPS] = ','.join(step_ids)  # Convert array to comma-separated string
-        else:
-            db_data[FIELD_STEPS] = ''
-        """
         
         # Runner info
         runner_id = job_data.get('runner_id')
@@ -494,7 +447,6 @@ class WorkflowMetricsUploader:
         
         # Add common context fields
         self.add_common_context_fields(db_data)
-        
         self.post_to_db(self.jobs_index, db_data)
         print(f"Uploaded metrics for job: {job_name}")
 
@@ -563,20 +515,8 @@ class WorkflowMetricsUploader:
         
         # Add common context fields
         self.add_common_context_fields(db_data)
-        
-        # Job context - Ensure all fields are strings
-        #db_data[FIELD_RUNNER_NAME] = str(job_data.get('runner_name', ''))
-        #db_data[FIELD_RUNNER_ID] = str(job_data.get('runner_id')) if job_data.get('runner_id') is not None else ''
-        
-        # Job labels (separate from step labels) - Convert array to string
-        """
-        runner_labels = job_data.get('labels', [])
-        if runner_labels:
-            db_data[FIELD_JOB_LABELS] = ','.join(runner_labels)
-        else:
-            db_data[FIELD_JOB_LABELS] = 'unknown'
-        """
-        
+
+        # Post to database
         self.post_to_db(self.steps_index, db_data)
         print(f"Uploaded metrics for step: {step_name} (step {step_number})")
 
