@@ -155,8 +155,15 @@ impl Worker for KvConnectorWorker {
 
         // Process kv_caches in layer execution order (already sorted by layer index)
         let mut vllm_tensors = Vec::new();
+        let mut first_tensor_shape: Option<Vec<usize>> = None;
+
         for (layer_name, vllm_tensor) in kv_caches {
             tracing::trace!("Registering KV cache layer: {layer_name}, tensor: {vllm_tensor:?}");
+
+            // Capture the shape of the first tensor for layout detection
+            if first_tensor_shape.is_none() {
+                first_tensor_shape = Some(vllm_tensor.shape());
+            }
 
             // Store for later lookup by name
             self.kv_cache_layers.push((layer_name, vllm_tensor.clone()));
@@ -167,6 +174,28 @@ impl Worker for KvConnectorWorker {
 
         self.layer_events = raw_event_handles;
 
+        // Auto-detect device layout type if not explicitly provided
+        let detected_device_layout_type = match device_layout_type {
+            Some(layout) => layout,
+            None => {
+                if let Some(ref shape) = first_tensor_shape {
+                    match LayoutType::layer_separate_auto(shape, num_device_blocks) {
+                        Ok(detected) => {
+                            tracing::info!("Auto-detected device layout from tensor shape: {:?}", detected);
+                            detected
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to auto-detect layout from shape {:?}: {}. Using default.", shape, e);
+                            LayoutType::layer_separate_auto_default()
+                        }
+                    }
+                } else {
+                    tracing::warn!("No tensors available for layout detection. Using default.");
+                    LayoutType::layer_separate_auto_default()
+                }
+            }
+        };
+
         let config = KvbmWorkerConfig::builder()
             .drt(self.drt.clone())
             .num_device_blocks(num_device_blocks)
@@ -176,7 +205,7 @@ impl Worker for KvConnectorWorker {
             .dtype_width_bytes(dtype_width_bytes)
             .barrier_id_prefix(get_barrier_id_prefix())
             .scheduler_client(Some(self.transfer_client.clone()))
-            .device_layout_type(device_layout_type.unwrap_or(LayoutType::layer_separate_auto()))
+            .device_layout_type(detected_device_layout_type)
             .host_layout_type(host_layout_type.unwrap_or(LayoutType::FullyContiguous))
             .disk_layout_type(disk_layout_type.unwrap_or(LayoutType::FullyContiguous))
             .build()?;

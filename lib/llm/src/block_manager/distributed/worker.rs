@@ -187,40 +187,30 @@ impl KvbmWorker {
                     inner_dim,
                 )
             }
-            LayoutType::LayerSeparate {
-                outer_contiguous: _,
-            } => {
-                let (detected_outer_contiguous, outer_dim) = if shape[0] >= config.num_device_blocks
-                {
-                    (false, shape[1])
-                } else if shape[1] >= config.num_device_blocks {
-                    (true, shape[0])
+            LayoutType::LayerSeparate { outer_contiguous } => {
+                // Use the already-detected layout type from config (no re-detection needed)
+                let layout_type = config.device_layout_type;
+
+                // Extract outer_dim based on the provided outer_contiguous value
+                let outer_dim = if outer_contiguous {
+                    shape[0] // Outer contiguous: [outer_dim, n_blocks, ...]
                 } else {
-                    return Err(anyhow::anyhow!(format!(
-                        "Unsupported kv cache layout. Got shape: {:?}",
-                        shape
-                    )));
+                    shape[1] // Block contiguous: [n_blocks, outer_dim, ...]
                 };
+
                 let num_layers = device_tensors.len();
                 let inner_dim = shape[2..].iter().product::<usize>() / config.page_size;
 
                 tracing::info!(
-                    "Detected layout: num_layers={}, outer_dim={}, outer_contiguous={}, page_size={}, inner_dim={}",
-                    device_tensors.len(),
+                    "Inferred layout: num_layers={}, outer_dim={}, outer_contiguous={}, page_size={}, inner_dim={}",
+                    num_layers,
                     outer_dim,
-                    detected_outer_contiguous,
+                    outer_contiguous,
                     config.page_size,
                     inner_dim
                 );
 
-                (
-                    LayoutType::LayerSeparate {
-                        outer_contiguous: detected_outer_contiguous,
-                    },
-                    num_layers,
-                    outer_dim,
-                    inner_dim,
-                )
+                (layout_type, num_layers, outer_dim, inner_dim)
             }
         };
 
