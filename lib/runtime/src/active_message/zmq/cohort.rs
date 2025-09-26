@@ -4,6 +4,7 @@
 use anyhow::Result;
 use bytes::Bytes;
 use derive_builder::Builder;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
@@ -557,6 +558,279 @@ impl LeaderWorkerCohort {
         }
 
         Ok(())
+    }
+
+    /// Rayon-style parallel map over workers with rank-ordered results
+    /// Sends a message to all workers and collects their responses in rank order
+    pub async fn par_map<T, F, Fut, R>(
+        &self,
+        handler: &str,
+        mapper: F,
+        timeout: Duration,
+    ) -> Result<Vec<R>>
+    where
+        T: Serialize + Clone + Send + 'static,
+        R: for<'a> Deserialize<'a> + Send + 'static,
+        F: Fn(usize, InstanceId) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<T>> + Send,
+    {
+        let workers = self.get_workers_by_rank().await;
+        let state = self.state.read().await;
+        let client = state.client.clone();
+        drop(state);
+
+        let mut tasks = Vec::new();
+        let mapper = Arc::new(mapper);
+
+        // Spawn tasks for each worker in parallel
+        for (rank, worker_id) in workers {
+            let client = client.clone();
+            let handler = handler.to_string();
+            let mapper = mapper.clone();
+
+            let task = tokio::spawn(async move {
+                // Call mapper to get the payload for this worker
+                let payload = mapper(rank, worker_id).await?;
+
+                // Send message and await response
+                let response: R = client
+                    .message(&handler)?
+                    .payload(payload)?
+                    .expect_response::<R>()
+                    .send(worker_id)
+                    .await?
+                    .await_response::<R>()
+                    .await?;
+
+                Ok::<(usize, R), anyhow::Error>((rank, response))
+            });
+
+            tasks.push(task);
+        }
+
+        // Collect results and sort by rank
+        let mut results = Vec::new();
+        for task in tasks {
+            match tokio::time::timeout(timeout, task).await {
+                Ok(Ok(Ok((rank, response)))) => {
+                    results.push((rank, response));
+                }
+                Ok(Ok(Err(e))) => {
+                    return Err(anyhow::anyhow!("Worker task failed: {}", e));
+                }
+                Ok(Err(e)) => {
+                    return Err(anyhow::anyhow!("Worker task panicked: {}", e));
+                }
+                Err(_) => {
+                    return Err(anyhow::anyhow!("Timeout waiting for worker response"));
+                }
+            }
+        }
+
+        // Sort by rank and extract responses
+        results.sort_by_key(|(rank, _)| *rank);
+        Ok(results.into_iter().map(|(_, response)| response).collect())
+    }
+
+    /// Rayon-style parallel broadcast with ACK collection in rank order
+    /// Returns a Map of worker_id -> Result for all workers
+    pub async fn par_broadcast_acks<T>(
+        &self,
+        handler: &str,
+        payload: T,
+        timeout: Duration,
+    ) -> Result<HashMap<InstanceId, Result<(), String>>>
+    where
+        T: Serialize + Clone + Send + 'static,
+    {
+        let workers = self.get_workers_by_rank().await;
+        let state = self.state.read().await;
+        let client = state.client.clone();
+        drop(state);
+
+        let mut tasks = Vec::new();
+
+        // Spawn tasks for each worker in parallel
+        for (_rank, worker_id) in workers {
+            let client = client.clone();
+            let handler = handler.to_string();
+            let payload = payload.clone();
+
+            let task = tokio::spawn(async move {
+                let result = client
+                    .message(&handler)?
+                    .payload(payload)?
+                    .send_and_confirm(worker_id)
+                    .await;
+
+                let worker_result = match result {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e.to_string()),
+                };
+
+                Ok::<(InstanceId, Result<(), String>), anyhow::Error>((worker_id, worker_result))
+            });
+
+            tasks.push(task);
+        }
+
+        // Collect results
+        let mut results = HashMap::new();
+        for task in tasks {
+            match tokio::time::timeout(timeout, task).await {
+                Ok(Ok(Ok((worker_id, worker_result)))) => {
+                    results.insert(worker_id, worker_result);
+                }
+                Ok(Ok(Err(e))) => {
+                    warn!("Worker communication failed: {}", e);
+                }
+                Ok(Err(e)) => {
+                    warn!("Worker task panicked: {}", e);
+                }
+                Err(_) => {
+                    warn!("Timeout waiting for worker");
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Rayon-style parallel broadcast with response collection in rank order
+    /// Returns responses in rank order as Vec<T>
+    pub async fn par_broadcast_responses<P, R>(
+        &self,
+        handler: &str,
+        payload: P,
+        timeout: Duration,
+    ) -> Result<Vec<R>>
+    where
+        P: Serialize + Clone + Send + 'static,
+        R: for<'a> Deserialize<'a> + Send + 'static,
+    {
+        let workers = self.get_workers_by_rank().await;
+        let state = self.state.read().await;
+        let client = state.client.clone();
+        drop(state);
+
+        let mut tasks = Vec::new();
+
+        // Spawn tasks for each worker in parallel
+        for (rank, worker_id) in workers {
+            let client = client.clone();
+            let handler = handler.to_string();
+            let payload = payload.clone();
+
+            let task = tokio::spawn(async move {
+                let response: R = client
+                    .message(&handler)?
+                    .payload(payload)?
+                    .expect_response::<R>()
+                    .send(worker_id)
+                    .await?
+                    .await_response::<R>()
+                    .await?;
+
+                Ok::<(usize, R), anyhow::Error>((rank, response))
+            });
+
+            tasks.push(task);
+        }
+
+        // Collect results and sort by rank
+        let mut results = Vec::new();
+        for task in tasks {
+            match tokio::time::timeout(timeout, task).await {
+                Ok(Ok(Ok((rank, response)))) => {
+                    results.push((rank, response));
+                }
+                Ok(Ok(Err(e))) => {
+                    warn!("Worker task failed: {}", e);
+                    // Continue collecting other results rather than failing entirely
+                }
+                Ok(Err(e)) => {
+                    warn!("Worker task panicked: {}", e);
+                }
+                Err(_) => {
+                    warn!("Timeout waiting for worker task");
+                }
+            }
+        }
+
+        // Sort by rank and extract responses
+        results.sort_by_key(|(rank, _)| *rank);
+        Ok(results.into_iter().map(|(_, response)| response).collect())
+    }
+
+    /// Indexed version of par_map that provides both rank and worker_id to the mapper
+    pub async fn par_map_indexed<T, F, Fut, R>(
+        &self,
+        handler: &str,
+        mapper: F,
+        timeout: Duration,
+    ) -> Result<Vec<(usize, R)>>
+    where
+        T: Serialize + Clone + Send + 'static,
+        R: for<'a> Deserialize<'a> + Send + 'static,
+        F: Fn(usize, InstanceId) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<T>> + Send,
+    {
+        let workers = self.get_workers_by_rank().await;
+        let state = self.state.read().await;
+        let client = state.client.clone();
+        drop(state);
+
+        let mut tasks = Vec::new();
+        let mapper = Arc::new(mapper);
+
+        // Spawn tasks for each worker in parallel
+        for (rank, worker_id) in workers {
+            let client = client.clone();
+            let handler = handler.to_string();
+            let mapper = mapper.clone();
+
+            let task = tokio::spawn(async move {
+                // Call mapper to get the payload for this worker
+                let payload = mapper(rank, worker_id).await?;
+
+                // Send message and await response
+                let response: R = client
+                    .message(&handler)?
+                    .payload(payload)?
+                    .expect_response::<R>()
+                    .send(worker_id)
+                    .await?
+                    .await_response::<R>()
+                    .await?;
+
+                Ok::<(usize, R), anyhow::Error>((rank, response))
+            });
+
+            tasks.push(task);
+        }
+
+        // Collect results and sort by rank
+        let mut results = Vec::new();
+        for task in tasks {
+            match tokio::time::timeout(timeout, task).await {
+                Ok(Ok(Ok((rank, response)))) => {
+                    results.push((rank, response));
+                }
+                Ok(Ok(Err(e))) => {
+                    return Err(anyhow::anyhow!("Worker task failed: {}", e));
+                }
+                Ok(Err(e)) => {
+                    return Err(anyhow::anyhow!("Worker task panicked: {}", e));
+                }
+                Err(_) => {
+                    return Err(anyhow::anyhow!("Timeout waiting for worker response"));
+                }
+            }
+        }
+
+        // Sort by rank
+        results.sort_by_key(|(rank, _)| *rank);
+        Ok(results)
     }
 
     pub async fn list_workers(&self) -> Vec<InstanceId> {
