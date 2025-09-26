@@ -188,7 +188,7 @@ jobs:
         sudo ./get_helm.sh
         # Install kubectl
         curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-        sudo 755 +x kubectl
+        sudo chmod 755 +x kubectl
         sudo mv kubectl /usr/local/bin/
 
         # Make sure the right context is used
