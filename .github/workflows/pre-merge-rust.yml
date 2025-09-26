@@ -90,9 +90,9 @@ jobs:
     - name: Set workspace paths
       run: |
         echo "WORKSPACE_PATHS=\
-        Cargo.toml \
-        lib/bindings/python/Cargo.toml \
-        lib/runtime/examples/Cargo.toml" >> $GITHUB_ENV
+        {{ github.workspace }}/Cargo.toml \
+        {{ github.workspace }}/lib/bindings/python/Cargo.toml \
+        {{ github.workspace }}/lib/runtime/examples/Cargo.toml" >> $GITHUB_ENV
 
     - name: Verify Code Formatting
       run: |
