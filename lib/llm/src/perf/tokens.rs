@@ -14,10 +14,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::perf::RecordedStream;
-use crate::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse;
 use crate::protocols::TokenIdType;
-use crate::tokenizers::traits::TokenCounter;
+use crate::protocols::openai::chat_completions::NvCreateChatCompletionStreamResponse;
 use crate::tokenizers::Encoding;
+use crate::tokenizers::traits::TokenCounter;
 
 pub type TokenCount = usize;
 pub type ForwardPassDuration = Duration;
@@ -318,12 +318,13 @@ pub fn analyze_token_counting<T: TokenExtractor>(
 
             // Check if choice was already finished
             if let Some(finish_pos) = finished_choices.get(&choice_index)
-                && choice_token_data.token_count > 0 {
-                    validation_errors.push(format!(
-                        "Choice {} generated {} tokens at position {} after finishing at position {}",
-                        choice_index, choice_token_data.token_count, stream_pos, finish_pos
-                    ));
-                }
+                && choice_token_data.token_count > 0
+            {
+                validation_errors.push(format!(
+                    "Choice {} generated {} tokens at position {} after finishing at position {}",
+                    choice_index, choice_token_data.token_count, stream_pos, finish_pos
+                ));
+            }
 
             // Update total tokens
             choice_analysis.total_tokens += choice_token_data.token_count;
@@ -955,10 +956,12 @@ mod tests {
 
         assert!(!analysis.is_stream_complete);
         assert!(analysis.has_errors());
-        assert!(analysis
-            .validation_errors
-            .iter()
-            .any(|err| err.contains("did not finish")));
+        assert!(
+            analysis
+                .validation_errors
+                .iter()
+                .any(|err| err.contains("did not finish"))
+        );
     }
 
     #[test]
@@ -973,10 +976,12 @@ mod tests {
         );
 
         assert!(analysis.has_errors());
-        assert!(analysis
-            .validation_errors
-            .iter()
-            .any(|err| err.contains("after finishing")));
+        assert!(
+            analysis
+                .validation_errors
+                .iter()
+                .any(|err| err.contains("after finishing"))
+        );
     }
 
     #[test]
@@ -1132,10 +1137,11 @@ mod tests {
 
         // Should detect the validation error
         assert!(analysis.has_errors());
-        assert!(analysis
-            .validation_errors
-            .iter()
-            .any(|err| err.contains("Choice 0") && err.contains("after finishing at position 1")));
+        assert!(
+            analysis.validation_errors.iter().any(
+                |err| err.contains("Choice 0") && err.contains("after finishing at position 1")
+            )
+        );
 
         // Choice 0 should still show as complete (finished at position 1)
         let choice0 = &analysis.choice_analyses[&0];
@@ -1171,10 +1177,12 @@ mod tests {
         // Stream should be incomplete
         assert!(!analysis.is_stream_complete);
         assert!(analysis.has_errors());
-        assert!(analysis
-            .validation_errors
-            .iter()
-            .any(|err| err.contains("choices [1]") && err.contains("did not finish")));
+        assert!(
+            analysis
+                .validation_errors
+                .iter()
+                .any(|err| err.contains("choices [1]") && err.contains("did not finish"))
+        );
 
         // Choice 0 should be complete
         let choice0 = &analysis.choice_analyses[&0];

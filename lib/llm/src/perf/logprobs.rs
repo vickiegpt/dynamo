@@ -1450,7 +1450,7 @@ mod tests {
         let token_logprobs = vec![
             create_token_logprob_from_linear_probs("Hello", 0.6, vec![("Hi", 0.35)]), // varied
             create_token_logprob_from_linear_probs(" world", 0.51, vec![(" earth", 0.49)]), // close
-            create_token_logprob_from_linear_probs("!", 0.8, vec![(".", 0.15)]), // greedy
+            create_token_logprob_from_linear_probs("!", 0.8, vec![(".", 0.15)]),      // greedy
             create_token_logprob_from_linear_probs(" How", 0.65, vec![(" What", 0.3)]), // varied
             create_token_logprob_from_linear_probs(" are", 0.52, vec![(" were", 0.48)]), // close
             create_token_logprob_from_linear_probs(" you", 0.85, vec![(" they", 0.12)]), // greedy

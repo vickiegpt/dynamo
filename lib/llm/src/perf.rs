@@ -12,8 +12,8 @@ pub mod tokens;
 use anyhow::Context as ErrorContext;
 use dynamo_runtime::protocols::annotated::Annotated;
 use futures::Stream;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use std::pin::Pin;
 use std::task::{Context, Poll};

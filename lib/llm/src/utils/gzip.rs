@@ -233,8 +233,8 @@ impl GzipExtraction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::io::Write;
 
     /// Create a test gzip file with known content for testing
@@ -333,10 +333,12 @@ mod tests {
     fn test_missing_source_path_error() {
         let result = GzipExtractor::builder().extract();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("source_path is required"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("source_path is required")
+        );
     }
 
     #[test]
@@ -435,14 +437,15 @@ mod tests {
     #[test]
     fn test_extract_and_validate_with_mock_tokenizer() -> Result<()> {
         // Use the existing mock tokenizer instead of the deepseek one
-        let _tokenizer_file_path = "tests/data/sample-models/mock-llama-3.1-8b-instruct/tokenizer.json";
+        let _tokenizer_file_path =
+            "tests/data/sample-models/mock-llama-3.1-8b-instruct/tokenizer.json";
 
         // For this test, we'll just read the file and validate it exists and is readable
         // Since it's not compressed, we'll test a different aspect of the gzip functionality
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
         use std::io::Write;
         use tempfile::NamedTempFile;
-        use flate2::write::GzEncoder;
-        use flate2::Compression;
 
         // Create a temporary gzipped file for testing
         let test_content = r#"{"test": "tokenizer", "vocab_size": 1000}"#;
@@ -473,9 +476,7 @@ mod tests {
         let extracted_content = std::fs::read_to_string(extraction.file_path())?;
         assert_eq!(extracted_content, test_content);
 
-        println!(
-            "Successfully created, compressed, and extracted test tokenizer file"
-        );
+        println!("Successfully created, compressed, and extracted test tokenizer file");
 
         Ok(())
     }
