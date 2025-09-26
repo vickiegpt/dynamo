@@ -8,15 +8,21 @@ pub mod client;
 pub mod handler;
 pub mod manager;
 pub mod response;
+pub mod responses;
 pub mod status;
 pub mod transport;
+pub(crate) mod utils;
 
 pub use builder::MessageBuilder;
 pub use client::ActiveMessageClient;
-pub use handler::{ActiveMessage, ActiveMessageHandler};
+pub use handler::{AckHandler, ActiveMessage, HandlerType, NoReturnHandler, ResponseHandler};
 pub use manager::ActiveMessageManager;
-pub use response::{ResponseContext, SingleResponseSender};
-pub use status::{MessageStatus, SendAndConfirm, DetachedConfirm, WithResponse};
+pub use response::SingleResponseSender;
+pub use responses::{
+    HealthCheckResponse, JoinCohortResponse, ListHandlersResponse, RegisterServiceResponse,
+    RemoveServiceResponse, RequestShutdownResponse, WaitForHandlerResponse,
+};
+pub use status::{DetachedConfirm, MessageStatus, SendAndConfirm, WithResponse};
 pub use transport::Transport;
 
 pub mod zmq;
