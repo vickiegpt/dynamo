@@ -228,33 +228,39 @@ impl ZmqActiveMessageManager {
 
         debug!("Dispatching message to handler: {}", handler_name);
 
-        // Check for acceptance confirmation and send it before handler execution
-        let acceptance_mode = message.metadata.get("_mode").and_then(|v| v.as_str());
-        if matches!(acceptance_mode, Some("confirmed") | Some("with_response")) {
-            if let Some(accept_id_str) = message.metadata.get("_accept_id").and_then(|v| v.as_str()) {
-                if let Ok(accept_id) = Uuid::parse_str(accept_id_str) {
-                    let accept_message = ActiveMessage {
-                        message_id: Uuid::new_v4(),
-                        handler_name: "_accept".to_string(),
-                        sender_instance: client.instance_id(),
-                        payload: Bytes::new(),
-                        metadata: serde_json::json!({
-                            "_accept_for": accept_id.to_string()
-                        }),
-                    };
-
-                    if let Err(e) = client.send_raw_message(message.sender_instance, accept_message).await {
-                        error!("Failed to send acceptance: {}", e);
-                    } else {
-                        debug!("Sent automatic acceptance for message {}", accept_id);
-                    }
-                }
-            }
-        }
+        // Extract acceptance and response configuration
+        let acceptance_mode = message
+            .metadata
+            .get("_mode")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let accept_id = if matches!(acceptance_mode.as_deref(), Some("confirmed")) {
+            message
+                .metadata
+                .get("_accept_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+        } else {
+            None
+        };
+        let with_response_accept_id = if matches!(acceptance_mode.as_deref(), Some("with_response"))
+        {
+            message
+                .metadata
+                .get("_accept_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+        } else {
+            None
+        };
 
         // Set up response context based on message metadata
-        let response_context = if matches!(acceptance_mode, Some("with_response")) {
-            if let Some(response_id_str) = message.metadata.get("_response_id").and_then(|v| v.as_str()) {
+        let response_context = if matches!(acceptance_mode.as_deref(), Some("with_response")) {
+            if let Some(response_id_str) = message
+                .metadata
+                .get("_response_id")
+                .and_then(|v| v.as_str())
+            {
                 if let Ok(response_id) = Uuid::parse_str(response_id_str) {
                     ResponseContext::Single(SingleResponseSender::new(
                         client.clone(),
@@ -273,6 +279,58 @@ impl ZmqActiveMessageManager {
         };
 
         task_tracker.spawn(async move {
+            // Validate payload first if ACK is expected
+            if let Some(accept_id) = accept_id {
+                match handler.validate_schema(&message.payload) {
+                    Ok(()) => {
+                        // Payload validation succeeded - send ACK
+                        if let Err(e) = client.send_ack(message.sender_instance, accept_id).await {
+                            error!("Failed to send ACK for {}: {}", accept_id, e);
+                        } else {
+                            debug!("Sent ACK for message {}", accept_id);
+                        }
+                    }
+                    Err(validation_error) => {
+                        // Payload validation failed - send NACK
+                        let error_msg = format!("Payload validation failed: {}", validation_error);
+                        if let Err(e) = client
+                            .send_nack(message.sender_instance, accept_id, error_msg.clone())
+                            .await
+                        {
+                            error!("Failed to send NACK for {}: {}", accept_id, e);
+                        } else {
+                            debug!("Sent NACK for message {}: {}", accept_id, error_msg);
+                        }
+                        // Don't execute handler if validation failed
+                        return Ok(());
+                    }
+                }
+            }
+
+            // Handle acceptance for with_response mode
+            if let Some(accept_id) = with_response_accept_id {
+                // Send acceptance message
+                let accept_message = ActiveMessage {
+                    message_id: Uuid::new_v4(),
+                    handler_name: "_accept".to_string(),
+                    sender_instance: client.instance_id(),
+                    payload: Bytes::new(),
+                    metadata: serde_json::json!({
+                        "_accept_for": accept_id.to_string()
+                    }),
+                };
+
+                if let Err(e) = client
+                    .send_raw_message(message.sender_instance, accept_message)
+                    .await
+                {
+                    error!("Failed to send acceptance for {}: {}", accept_id, e);
+                } else {
+                    debug!("Sent acceptance for message {}", accept_id);
+                }
+            }
+
+            // Execute handler if validation passed (or no validation required)
             if let Err(e) = handler.handle(message, &*client, response_context).await {
                 error!("Handler '{}' failed: {}", handler_name, e);
             }
@@ -286,11 +344,14 @@ impl ZmqActiveMessageManager {
         state: Arc<RwLock<ManagerState>>,
         message: ActiveMessage,
     ) -> Result<()> {
-        if let Some(accept_for_str) = message.metadata.get("_accept_for").and_then(|v| v.as_str()) {
-            if let Ok(accept_id) = Uuid::parse_str(accept_for_str) {
-                let state_read = state.read().await;
-                return state_read.client.complete_acceptance(accept_id, message.sender_instance).await;
-            }
+        if let Some(accept_for_str) = message.metadata.get("_accept_for").and_then(|v| v.as_str())
+            && let Ok(accept_id) = Uuid::parse_str(accept_for_str)
+        {
+            let state_read = state.read().await;
+            return state_read
+                .client
+                .complete_acceptance(accept_id, message.sender_instance)
+                .await;
         }
         error!("Invalid acceptance message: {:?}", message);
         Ok(())
@@ -300,11 +361,17 @@ impl ZmqActiveMessageManager {
         state: Arc<RwLock<ManagerState>>,
         message: ActiveMessage,
     ) -> Result<()> {
-        if let Some(response_to_str) = message.metadata.get("_response_to").and_then(|v| v.as_str()) {
-            if let Ok(response_id) = Uuid::parse_str(response_to_str) {
-                let state_read = state.read().await;
-                return state_read.client.complete_response(response_id, message.sender_instance, message.payload).await;
-            }
+        if let Some(response_to_str) = message
+            .metadata
+            .get("_response_to")
+            .and_then(|v| v.as_str())
+            && let Ok(response_id) = Uuid::parse_str(response_to_str)
+        {
+            let state_read = state.read().await;
+            return state_read
+                .client
+                .complete_response(response_id, message.sender_instance, message.payload)
+                .await;
         }
         error!("Invalid response message: {:?}", message);
         Ok(())
