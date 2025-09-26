@@ -162,8 +162,25 @@ pub enum LayoutType {
 }
 
 impl LayoutType {
-    /// Create a LayerSeparate layout type with auto-detection (defaults to outer_contiguous=true)
-    pub fn layer_separate_auto() -> Self {
+    /// Create a LayerSeparate layout type with auto-detection based on tensor shapes
+    pub fn layer_separate_auto(shape: &[usize], num_device_blocks: usize) -> anyhow::Result<Self> {
+        let outer_contiguous = if shape[0] >= num_device_blocks {
+            false // Block contiguous: [n_blocks, outer_dim, ...]
+        } else if shape[1] >= num_device_blocks {
+            true // Outer contiguous: [outer_dim, n_blocks, ...]
+        } else {
+            return Err(anyhow::anyhow!(format!(
+                "Unsupported kv cache layout. Got shape: {:?}",
+                shape
+            )));
+        };
+
+        Ok(LayoutType::LayerSeparate { outer_contiguous })
+    }
+
+    /// Create a LayerSeparate layout type with default auto-detection (defaults to outer_contiguous=true)
+    /// Use this when tensor shapes are not available
+    pub fn layer_separate_auto_default() -> Self {
         LayoutType::LayerSeparate {
             outer_contiguous: true,
         }

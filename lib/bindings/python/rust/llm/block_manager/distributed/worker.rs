@@ -43,7 +43,7 @@ impl From<PyLayoutType> for LayoutType {
         match py_layout {
             PyLayoutType::FullyContiguous => LayoutType::FullyContiguous,
             // Layout (outer_contiguous vs block_contiguous) is auto-detected from tensor shapes
-            PyLayoutType::LayerSeparate => LayoutType::layer_separate_auto(),
+            PyLayoutType::LayerSeparate => LayoutType::layer_separate_auto_default(),
         }
     }
 }
