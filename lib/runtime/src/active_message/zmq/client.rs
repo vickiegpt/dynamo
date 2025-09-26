@@ -21,7 +21,7 @@ use crate::active_message::{
 };
 
 struct AckEntry {
-    sender: oneshot::Sender<()>,
+    sender: oneshot::Sender<Result<(), String>>,
     deadline: tokio::time::Instant,
 }
 
@@ -104,7 +104,7 @@ impl ZmqActiveMessageClient {
         &self,
         ack_id: Uuid,
         timeout: Duration,
-    ) -> Result<oneshot::Receiver<()>> {
+    ) -> Result<oneshot::Receiver<Result<(), String>>> {
         let (tx, rx) = oneshot::channel();
         let deadline = tokio::time::Instant::now() + timeout;
 
@@ -129,6 +129,25 @@ impl ZmqActiveMessageClient {
     pub async fn send_ack(&self, target: InstanceId, ack_id: Uuid) -> Result<()> {
         let payload = serde_json::json!({
             "ack_id": ack_id.to_string(),
+            "status": {
+                "type": "Ack"
+            }
+        });
+
+        let payload_bytes = Bytes::from(serde_json::to_vec(&payload)?);
+
+        self.send_message(target, "_ack", payload_bytes).await
+    }
+
+    pub async fn send_nack(&self, target: InstanceId, ack_id: Uuid, error: String) -> Result<()> {
+        let payload = serde_json::json!({
+            "ack_id": ack_id.to_string(),
+            "status": {
+                "type": "Nack",
+                "data": {
+                    "error": error
+                }
+            }
         });
 
         let payload_bytes = Bytes::from(serde_json::to_vec(&payload)?);
@@ -140,12 +159,33 @@ impl ZmqActiveMessageClient {
         let mut state = self.state.write().await;
 
         if let Some(entry) = state.pending_acks.remove(&ack_id) {
-            let _ = entry.sender.send(());
+            let _ = entry.sender.send(Ok(()));
             debug!("Completed ACK: {} from {}", ack_id, sender);
             Ok(())
         } else {
             error!("Received unexpected ACK: {} from {}", ack_id, sender);
             anyhow::bail!("Unexpected ACK: {} from {}", ack_id, sender)
+        }
+    }
+
+    pub(super) async fn complete_nack(
+        &self,
+        ack_id: Uuid,
+        sender: InstanceId,
+        error: String,
+    ) -> Result<()> {
+        let mut state = self.state.write().await;
+
+        if let Some(entry) = state.pending_acks.remove(&ack_id) {
+            let _ = entry.sender.send(Err(error.clone()));
+            debug!(
+                "Completed NACK: {} from {} with error: {}",
+                ack_id, sender, error
+            );
+            Ok(())
+        } else {
+            error!("Received unexpected NACK: {} from {}", ack_id, sender);
+            anyhow::bail!("Unexpected NACK: {} from {}", ack_id, sender)
         }
     }
 
@@ -267,30 +307,44 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
         instance_id: InstanceId,
         handler: &str,
         timeout: Option<Duration>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let payload = serde_json::json!({
             "handler_name": handler,
             "timeout_ms": timeout.map(|d| d.as_millis()),
         });
 
-        let payload_bytes = Bytes::from(serde_json::to_vec(&payload)?);
+        let mut builder =
+            self.message("_wait_for_handler")
+                .payload(payload)?
+                .expect_response::<crate::active_message::responses::WaitForHandlerResponse>();
 
-        self.send_message(instance_id, "_wait_for_handler", payload_bytes)
-            .await
+        if let Some(t) = timeout {
+            builder = builder.timeout(t);
+        }
+
+        let status = builder.send(instance_id).await?;
+        let response: crate::active_message::responses::WaitForHandlerResponse =
+            status.await_response().await?;
+        Ok(response.available)
     }
 
     async fn list_handlers(&self, instance_id: InstanceId) -> Result<Vec<HandlerId>> {
-        let payload = Bytes::new();
-
-        self.send_message(instance_id, "_list_handlers", payload)
+        let status = self
+            .message("_list_handlers")
+            .expect_response::<crate::active_message::responses::ListHandlersResponse>()
+            .send(instance_id)
             .await?;
 
-        Ok(vec![])
+        let response: crate::active_message::responses::ListHandlersResponse =
+            status.await_response().await?;
+        Ok(response.handlers)
     }
 
     async fn send_raw_message(&self, target: InstanceId, message: ActiveMessage) -> Result<()> {
         let state = self.state.read().await;
-        let peer = state.peers.get(&target)
+        let peer = state
+            .peers
+            .get(&target)
             .ok_or_else(|| anyhow::anyhow!("Peer {} not found", target))?;
 
         let endpoint = peer.endpoint.clone();
@@ -306,55 +360,83 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
         Ok(())
     }
 
-    async fn register_acceptance(&self, message_id: Uuid, sender: oneshot::Sender<()>) -> Result<()> {
+    async fn register_acceptance(
+        &self,
+        message_id: Uuid,
+        sender: oneshot::Sender<()>,
+    ) -> Result<()> {
         let mut state = self.state.write().await;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
 
-        state.pending_acceptances.insert(
-            message_id,
-            AcceptanceEntry { sender, deadline },
-        );
+        state
+            .pending_acceptances
+            .insert(message_id, AcceptanceEntry { sender, deadline });
 
         debug!("Registered acceptance for message {}", message_id);
         Ok(())
     }
 
-    async fn register_response(&self, message_id: Uuid, sender: oneshot::Sender<Bytes>) -> Result<()> {
+    async fn register_response(
+        &self,
+        message_id: Uuid,
+        sender: oneshot::Sender<Bytes>,
+    ) -> Result<()> {
         let mut state = self.state.write().await;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
 
-        state.pending_responses.insert(
-            message_id,
-            ResponseEntry { sender, deadline },
-        );
+        state
+            .pending_responses
+            .insert(message_id, ResponseEntry { sender, deadline });
 
         debug!("Registered response for message {}", message_id);
         Ok(())
     }
+
+    async fn register_ack(
+        &self,
+        ack_id: Uuid,
+        timeout: Duration,
+    ) -> Result<oneshot::Receiver<Result<(), String>>> {
+        self.register_ack(ack_id, timeout).await
+    }
 }
 
 impl ZmqActiveMessageClient {
-
-    pub(super) async fn complete_acceptance(&self, accept_id: Uuid, sender: InstanceId) -> Result<()> {
+    pub(super) async fn complete_acceptance(
+        &self,
+        accept_id: Uuid,
+        sender: InstanceId,
+    ) -> Result<()> {
         let mut state = self.state.write().await;
         if let Some(entry) = state.pending_acceptances.remove(&accept_id) {
             let _ = entry.sender.send(());
             debug!("Completed acceptance: {} from {}", accept_id, sender);
             Ok(())
         } else {
-            error!("Received unexpected acceptance: {} from {}", accept_id, sender);
+            error!(
+                "Received unexpected acceptance: {} from {}",
+                accept_id, sender
+            );
             anyhow::bail!("Unexpected acceptance: {} from {}", accept_id, sender)
         }
     }
 
-    pub(super) async fn complete_response(&self, response_id: Uuid, sender: InstanceId, payload: Bytes) -> Result<()> {
+    pub(super) async fn complete_response(
+        &self,
+        response_id: Uuid,
+        sender: InstanceId,
+        payload: Bytes,
+    ) -> Result<()> {
         let mut state = self.state.write().await;
         if let Some(entry) = state.pending_responses.remove(&response_id) {
             let _ = entry.sender.send(payload);
             debug!("Completed response: {} from {}", response_id, sender);
             Ok(())
         } else {
-            error!("Received unexpected response: {} from {}", response_id, sender);
+            error!(
+                "Received unexpected response: {} from {}",
+                response_id, sender
+            );
             anyhow::bail!("Unexpected response: {} from {}", response_id, sender)
         }
     }

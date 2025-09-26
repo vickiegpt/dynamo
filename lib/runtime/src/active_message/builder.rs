@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use bytes::Bytes;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::marker::PhantomData;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -44,11 +44,11 @@ impl<'a> MessageBuilder<'a, NeedsDeliveryMode> {
     }
 
     /// Set payload from serializable type
-    pub fn payload<T: Serialize>(mut self, data: T) -> Self {
-        self.payload = Some(Bytes::from(
-            serde_json::to_vec(&data).expect("Failed to serialize payload"),
-        ));
-        self
+    pub fn payload<T: Serialize>(mut self, data: T) -> Result<Self> {
+        let serialized = serde_json::to_vec(&data)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize payload: {}", e))?;
+        self.payload = Some(Bytes::from(serialized));
+        Ok(self)
     }
 
     /// Set raw payload bytes
@@ -83,15 +83,15 @@ impl<'a> MessageBuilder<'a, NeedsDeliveryMode> {
         self.send_and_confirm(target).await
     }
 
-    /// Explicit: Send and wait for acceptance confirmation
-    pub async fn send_and_confirm(self, target: InstanceId) -> Result<MessageStatus<SendAndConfirm>> {
+    /// Explicit: Send and wait for ACK confirmation
+    pub async fn send_and_confirm(
+        self,
+        target: InstanceId,
+    ) -> Result<MessageStatus<SendAndConfirm>> {
         let message_id = Uuid::new_v4();
-        let (accept_tx, accept_rx) = oneshot::channel();
 
-        // Register for acceptance notification
-        self.client
-            .register_acceptance(message_id, accept_tx)
-            .await?;
+        // Register for ACK notification
+        let ack_rx = self.client.register_ack(message_id, self.timeout).await?;
 
         let message = ActiveMessage {
             message_id,
@@ -106,11 +106,12 @@ impl<'a> MessageBuilder<'a, NeedsDeliveryMode> {
 
         self.client.send_raw_message(target, message).await?;
 
-        // Wait for acceptance
-        tokio::time::timeout(self.timeout, accept_rx)
+        // Wait for ACK
+        tokio::time::timeout(self.timeout, ack_rx)
             .await
-            .map_err(|_| anyhow::anyhow!("Handler acceptance timeout after {:?}", self.timeout))?
-            .map_err(|_| anyhow::anyhow!("Handler acceptance channel dropped"))?;
+            .map_err(|_| anyhow::anyhow!("Handler ACK timeout after {:?}", self.timeout))?
+            .map_err(|_| anyhow::anyhow!("Handler ACK channel dropped"))?
+            .map_err(|nack_error| anyhow::anyhow!("Handler sent NACK: {}", nack_error))?;
 
         Ok(MessageStatus::new(message_id, None, None, self.timeout))
     }
@@ -118,12 +119,9 @@ impl<'a> MessageBuilder<'a, NeedsDeliveryMode> {
     /// Send without waiting, get status object for later confirmation
     pub async fn send_detached(self, target: InstanceId) -> Result<MessageStatus<DetachedConfirm>> {
         let message_id = Uuid::new_v4();
-        let (accept_tx, accept_rx) = oneshot::channel();
 
-        // Register for acceptance notification
-        self.client
-            .register_acceptance(message_id, accept_tx)
-            .await?;
+        // Register for ACK notification
+        let ack_rx = self.client.register_ack(message_id, self.timeout).await?;
 
         let message = ActiveMessage {
             message_id,
@@ -137,6 +135,22 @@ impl<'a> MessageBuilder<'a, NeedsDeliveryMode> {
         };
 
         self.client.send_raw_message(target, message).await?;
+
+        // Convert ACK receiver to acceptance receiver for compatibility
+        let (accept_tx, accept_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            match ack_rx.await {
+                Ok(Ok(())) => {
+                    let _ = accept_tx.send(()); // ACK received, signal acceptance
+                }
+                Ok(Err(_)) => {
+                    // NACK received, don't signal acceptance (will timeout)
+                }
+                Err(_) => {
+                    // Channel closed, don't signal acceptance
+                }
+            }
+        });
 
         Ok(MessageStatus::new(
             message_id,
@@ -163,11 +177,11 @@ impl<'a> MessageBuilder<'a, NeedsDeliveryMode> {
 /// Methods available when response is expected
 impl<'a> MessageBuilder<'a, WithResponseExpected> {
     /// Set payload from serializable type
-    pub fn payload<T: Serialize>(mut self, data: T) -> Self {
-        self.payload = Some(Bytes::from(
-            serde_json::to_vec(&data).expect("Failed to serialize payload"),
-        ));
-        self
+    pub fn payload<T: Serialize>(mut self, data: T) -> Result<Self> {
+        let serialized = serde_json::to_vec(&data)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize payload: {}", e))?;
+        self.payload = Some(Bytes::from(serialized));
+        Ok(self)
     }
 
     /// Set raw payload bytes
