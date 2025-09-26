@@ -154,6 +154,7 @@ jobs:
       DYNAMO_INGRESS_SUFFIX: dev.aire.nvidia.com
     strategy:
       matrix: { FRAMEWORK: ['vllm', 'trtllm', 'sglang'] }
+      fail-fast: false
     permissions:
       contents: read
     steps:
