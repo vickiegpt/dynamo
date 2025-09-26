@@ -4,11 +4,12 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use super::client::ActiveMessageClient;
+use super::response::ResponseContext;
 
 pub type HandlerId = String;
 pub type InstanceId = Uuid;
@@ -42,6 +43,18 @@ impl ActiveMessage {
         self.sender_instance = sender;
         self
     }
+
+    /// Deserialize payload to typed request
+    pub fn deserialize<T: DeserializeOwned>(&self) -> Result<T> {
+        serde_json::from_slice(&self.payload)
+            .map_err(|e| anyhow::anyhow!("Failed to deserialize payload: {}", e))
+    }
+
+    /// Get payload as JSON value
+    pub fn as_json(&self) -> Result<serde_json::Value> {
+        serde_json::from_slice(&self.payload)
+            .map_err(|e| anyhow::anyhow!("Failed to parse payload as JSON: {}", e))
+    }
 }
 
 #[async_trait]
@@ -49,7 +62,8 @@ pub trait ActiveMessageHandler: Send + Sync + std::fmt::Debug {
     async fn handle(
         &self,
         message: ActiveMessage,
-        client: Arc<dyn ActiveMessageClient>,
+        client: &dyn ActiveMessageClient,
+        response: ResponseContext,
     ) -> Result<()>;
 
     fn name(&self) -> &str;

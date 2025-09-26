@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use dynamo_runtime::active_message::{
     client::ActiveMessageClient,
     handler::{ActiveMessage, ActiveMessageHandler},
+    response::ResponseContext,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -31,9 +32,10 @@ impl ActiveMessageHandler for ComputeHandler {
     async fn handle(
         &self,
         message: ActiveMessage,
-        _client: Arc<dyn ActiveMessageClient>,
+        _client: &dyn ActiveMessageClient,
+        response: ResponseContext,
     ) -> Result<()> {
-        let request: ComputeRequest = serde_json::from_slice(&message.payload)?;
+        let request: ComputeRequest = message.deserialize()?;
 
         let result = match request.operation.as_str() {
             "add" => request.x + request.y,
@@ -48,6 +50,18 @@ impl ActiveMessageHandler for ComputeHandler {
             "Computed {} {} {} = {}",
             request.x, request.operation, request.y, result
         );
+
+        // Handle response if one was expected
+        match response {
+            ResponseContext::Single(sender) => {
+                let response = ComputeResponse { result };
+                sender.send(response).await?;
+                info!("Sent response: {}", result);
+            }
+            ResponseContext::None => {
+                info!("No response expected");
+            }
+        }
 
         Ok(())
     }
