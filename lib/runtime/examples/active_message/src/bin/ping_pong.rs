@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use async_trait::async_trait;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},
-    handler::{ActiveMessage, AckHandler, HandlerType},
+    handler::{AckHandler, ActiveMessage, HandlerType},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
 };
-use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
@@ -52,33 +52,32 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    info!("Starting ping-pong RTT measurement example");
+    println!("Starting fast-path ping-pong RTT measurement example");
 
     let cancel_token = CancellationToken::new();
 
     // Create two managers for ping-pong
-    let server_manager = ZmqActiveMessageManager::new(
-        unique_ipc_socket_path()?,
-        cancel_token.clone(),
-    ).await?;
+    let server_manager =
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
-    let client_manager = ZmqActiveMessageManager::new(
-        unique_ipc_socket_path()?,
-        cancel_token.clone(),
-    ).await?;
+    let client_manager =
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
     // Register ping handler on server
     let ping_handler = Arc::new(PingHandler);
     let handler_type = HandlerType::ack((*ping_handler).clone());
-    server_manager.register_handler_typed(handler_type, None).await?;
+    server_manager
+        .register_handler_typed(handler_type, None)
+        .await?;
 
     let server_client = server_manager.zmq_client();
     let client_client = client_manager.zmq_client();
 
-    info!("Server listening on: {}", server_client.endpoint());
-    info!("Client endpoint: {}", client_client.endpoint());
+    println!("Server listening on: {}", server_client.endpoint());
+    println!("Client endpoint: {}", client_client.endpoint());
 
-    // Connect client to server
+    // Connect client to server (one-way connection)
+    // Auto-registration will handle the reverse connection when ACK is needed
     let server_peer = PeerInfo::new(
         server_client.instance_id(),
         server_client.endpoint().to_string(),
@@ -89,9 +88,29 @@ async fn main() -> Result<()> {
     // Wait for connection to establish
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    info!("Starting ping-pong measurements...");
+    println!("Performing warmup ping to establish publisher tasks...");
 
-    // Perform multiple ping-pong rounds for RTT measurement
+    // Warmup ping to establish the publisher task (not measured)
+    let warmup_result = client_client
+        .message("ping")?
+        .payload("warmup")?
+        .send_and_confirm(server_client.instance_id())
+        .await;
+
+    match warmup_result {
+        Ok(_) => println!("Warmup complete - publisher tasks established"),
+        Err(e) => {
+            println!("Warmup failed: {}", e);
+            return Ok(());
+        }
+    }
+
+    // Small delay after warmup
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    println!("Starting fast-path ping-pong measurements...");
+
+    // Perform multiple ping-pong rounds for RTT measurement (fast path only)
     let mut rtts = Vec::new();
     let rounds = 10;
 
@@ -111,10 +130,10 @@ async fn main() -> Result<()> {
             Ok(_) => {
                 let rtt = start.elapsed();
                 rtts.push(rtt);
-                info!("Round {}: RTT = {:?}", i, rtt);
+                println!("Fast-path round {}: RTT = {:?}", i, rtt);
             }
             Err(e) => {
-                warn!("Round {} failed: {}", i, e);
+                warn!("Fast-path round {} failed: {}", i, e);
             }
         }
 
@@ -129,26 +148,28 @@ async fn main() -> Result<()> {
         let min = rtts.iter().min().unwrap();
         let max = rtts.iter().max().unwrap();
 
-        info!("=== RTT Statistics ===");
-        info!("Rounds completed: {}/{}", rtts.len(), rounds);
-        info!("Average RTT: {:?}", avg);
-        info!("Min RTT: {:?}", min);
-        info!("Max RTT: {:?}", max);
+        println!("=== Fast-Path RTT Statistics ===");
+        println!("Fast-path rounds completed: {}/{}", rtts.len(), rounds);
+        println!("Average fast-path RTT: {:?}", avg);
+        println!("Min fast-path RTT: {:?}", min);
+        println!("Max fast-path RTT: {:?}", max);
 
         // Calculate standard deviation
-        let variance: f64 = rtts.iter()
+        let variance: f64 = rtts
+            .iter()
             .map(|rtt| {
                 let diff = rtt.as_nanos() as f64 - avg.as_nanos() as f64;
                 diff * diff
             })
-            .sum::<f64>() / rtts.len() as f64;
+            .sum::<f64>()
+            / rtts.len() as f64;
         let std_dev = Duration::from_nanos(variance.sqrt() as u64);
-        info!("Std deviation: {:?}", std_dev);
+        println!("Fast-path std deviation: {:?}", std_dev);
     } else {
-        warn!("No successful ping-pong rounds completed");
+        println!("No successful fast-path ping-pong rounds completed");
     }
 
-    info!("Shutting down...");
+    println!("Shutting down...");
     server_manager.shutdown().await?;
     client_manager.shutdown().await?;
     cancel_token.cancel();
