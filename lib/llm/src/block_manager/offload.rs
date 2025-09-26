@@ -1637,15 +1637,15 @@ mod tests {
             match result {
                 Ok((_, _, _, disk_pool)) => {
                     if disk_pool.is_some() {
-                        println!("✓ Disk pool created successfully");
+                        println!("Disk pool created successfully");
                         Ok(())
                     } else {
-                        println!("✗ Disk pool is None even though creation succeeded");
+                        println!("Disk pool is None even though creation succeeded");
                         Err(anyhow::anyhow!("Disk pool is None"))
                     }
                 }
                 Err(e) => {
-                    println!("✗ build_pools_with_layout failed: {:?}", e);
+                    println!("build_pools_with_layout failed: {:?}", e);
                     Err(e)
                 }
             }
