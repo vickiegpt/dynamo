@@ -140,7 +140,7 @@ jobs:
           local_image: ${{ steps.build-image.outputs.image_tag }}
           push_tag: ai-dynamo/dynamo:${{ github.sha }}-trtllm-amd64
           aws_push: 'true'
-          aks_push: 'true'
+          azure_push: 'true'
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
           aws_default_region: us-west-2
           azure_acr_hostname: ${{ secrets.AZURE_ACR_HOSTNAME }}
