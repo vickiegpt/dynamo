@@ -21,6 +21,11 @@ jobs:
       cache-hit-rate: ${{ steps.build-image.outputs.cache-hit-rate }}
       framework: ${{ matrix.framework }}
       target: ${{ matrix.target }}
+      sccache-cache-hits: ${{ steps.build-image.outputs.sccache-cache-hits }}
+      sccache-cache-misses: ${{ steps.build-image.outputs.sccache-cache-misses }}
+      sccache-compile-requests: ${{ steps.build-image.outputs.sccache-compile-requests }}
+      sccache-s3-reads: ${{ steps.build-image.outputs.sccache-s3-reads }}
+      sccache-s3-writes: ${{ steps.build-image.outputs.sccache-s3-writes }}
     strategy:
       fail-fast: false
       matrix:
@@ -189,61 +194,58 @@ jobs:
           # Extract cache hit rate from build output (enhanced build.sh provides this)
           CACHE_HIT_RATE=0
           
-          # Try to get final sccache stats if server is still running
-          if command -v sccache >/dev/null 2>&1; then
-            echo "🔍 Getting final sccache statistics from GitHub Actions runner..."
+          # Check if sccache metrics were extracted from the container
+          if [ -f "build-metrics/sccache.env" ]; then
+            echo "🔍 Loading sccache metrics extracted from container..."
             
-            FINAL_SCCACHE_STATS=$(sccache --show-stats 2>&1)
-            STATS_EXIT_CODE=$?
+            # Source the metrics file to get the variables
+            source build-metrics/sccache.env
             
-            if [ $STATS_EXIT_CODE -eq 0 ] && [ -n "$FINAL_SCCACHE_STATS" ]; then
-              echo "📊 Final sccache Statistics (GitHub Actions Runner):"
-              echo "---------------------------------------------------"
-              echo "$FINAL_SCCACHE_STATS"
-              echo "---------------------------------------------------"
-              echo ""
-              
-              # Parse final statistics
-              FINAL_HITS=$(echo "$FINAL_SCCACHE_STATS" | grep -E "Cache hits" | grep -oE '[0-9]+' | head -1 || echo "0")
-              FINAL_MISSES=$(echo "$FINAL_SCCACHE_STATS" | grep -E "Cache misses" | grep -oE '[0-9]+' | head -1 || echo "0")
-              FINAL_REQUESTS=$(echo "$FINAL_SCCACHE_STATS" | grep -E "Compile requests[^a-z]" | grep -oE '[0-9]+' | head -1 || echo "0")
-              
-              # Look for S3-specific metrics
-              S3_READS=$(echo "$FINAL_SCCACHE_STATS" | grep -E "(S3.*read|Remote.*read)" | grep -oE '[0-9]+' | head -1 || echo "0")
-              S3_WRITES=$(echo "$FINAL_SCCACHE_STATS" | grep -E "(S3.*write|Remote.*write)" | grep -oE '[0-9]+' | head -1 || echo "0")
-              
-              echo "🎯 GitHub Actions Final Analysis:"
-              echo "   Cache hits: $FINAL_HITS"
-              echo "   Cache misses: $FINAL_MISSES"
-              echo "   Total requests: $FINAL_REQUESTS"
-              echo "   S3 reads: $S3_READS"
-              echo "   S3 writes: $S3_WRITES"
-              
-              # Calculate final hit rate
-              TOTAL_CACHEABLE=$((FINAL_HITS + FINAL_MISSES))
-              if [ "$TOTAL_CACHEABLE" -gt 0 ]; then
-                CACHE_HIT_RATE=$((FINAL_HITS * 100 / TOTAL_CACHEABLE))
-                echo "   📈 Final hit rate: ${CACHE_HIT_RATE}% (${FINAL_HITS}/${TOTAL_CACHEABLE})"
-                
-                if [ "$CACHE_HIT_RATE" -gt 0 ]; then
-                  echo "   🎉 SUCCESS: sccache S3 integration is working!"
-                  if [ "$S3_READS" -gt 0 ] || [ "$S3_WRITES" -gt 0 ]; then
-                    echo "   ✅ S3 activity confirmed (reads: $S3_READS, writes: $S3_WRITES)"
-                    echo "   ✅ Cache persistence across builds is functioning"
-                  fi
-                else
-                  echo "   ⚠️  0% hit rate - this may be expected for first-time builds"
-                fi
-              else
-                echo "   ⚠️  No cacheable compilations in final stats"
+            echo "📊 Final sccache Statistics (Extracted from Container):"
+            echo "-------------------------------------------------------"
+            if [ -f "build-metrics/sccache.txt" ]; then
+              cat build-metrics/sccache.txt
+            fi
+            echo "-------------------------------------------------------"
+            echo ""
+            
+            echo "🎯 Container sccache Analysis:"
+            echo "   Cache hits: ${SCCACHE_CACHE_HITS:-0}"
+            echo "   Cache misses: ${SCCACHE_CACHE_MISSES:-0}"
+            echo "   Total requests: ${SCCACHE_COMPILE_REQUESTS:-0}"
+            echo "   S3 reads: ${SCCACHE_S3_READS:-0}"
+            echo "   S3 writes: ${SCCACHE_S3_WRITES:-0}"
+            echo "   Hit rate: ${SCCACHE_HIT_RATE:-0}%"
+            
+            # Use the extracted hit rate
+            CACHE_HIT_RATE=${SCCACHE_HIT_RATE:-0}
+            
+            if [ "$CACHE_HIT_RATE" -gt 0 ]; then
+              echo "   🎉 SUCCESS: sccache S3 integration is working!"
+              if [ "${SCCACHE_S3_READS:-0}" -gt 0 ] || [ "${SCCACHE_S3_WRITES:-0}" -gt 0 ]; then
+                echo "   ✅ S3 activity confirmed (reads: ${SCCACHE_S3_READS:-0}, writes: ${SCCACHE_S3_WRITES:-0})"
+                echo "   ✅ Cache persistence across builds is functioning"
               fi
             else
-              echo "⚠️  Could not get final stats from GitHub Actions runner"
-              echo "   This is normal - the enhanced build.sh script provides the main analysis"
+              echo "   ⚠️  0% hit rate - this may be expected for first-time builds"
             fi
           else
-            echo "ℹ️  sccache not available on GitHub Actions runner"
-            echo "   The enhanced build.sh script handles all sccache operations within Docker"
+            echo "ℹ️  No sccache metrics extracted from container"
+            echo "   This may indicate sccache was not enabled or failed to run properly"
+            
+            # Fallback: Try to get stats from GitHub Actions runner (will likely fail)
+            if command -v sccache >/dev/null 2>&1; then
+              echo "🔍 Attempting fallback: Getting sccache stats from GitHub Actions runner..."
+              FINAL_SCCACHE_STATS=$(sccache --show-stats 2>&1)
+              if [ $? -eq 0 ] && [ -n "$FINAL_SCCACHE_STATS" ]; then
+                echo "$FINAL_SCCACHE_STATS"
+              else
+                echo "⚠️  Could not get stats from GitHub Actions runner either"
+              fi
+            else
+              echo "ℹ️  sccache not available on GitHub Actions runner"
+              echo "   The enhanced build.sh script should handle all sccache operations within Docker"
+            fi
           fi
           
           # Post-build S3 verification
@@ -284,6 +286,11 @@ jobs:
           echo "build-start-time=${BUILD_START_TIME}" >> $GITHUB_OUTPUT
           echo "build-end-time=${BUILD_END_TIME}" >> $GITHUB_OUTPUT
           echo "cache-hit-rate=${CACHE_HIT_RATE}" >> $GITHUB_OUTPUT
+          echo "sccache-cache-hits=${SCCACHE_CACHE_HITS:-0}" >> $GITHUB_OUTPUT
+          echo "sccache-cache-misses=${SCCACHE_CACHE_MISSES:-0}" >> $GITHUB_OUTPUT
+          echo "sccache-compile-requests=${SCCACHE_COMPILE_REQUESTS:-0}" >> $GITHUB_OUTPUT
+          echo "sccache-s3-reads=${SCCACHE_S3_READS:-0}" >> $GITHUB_OUTPUT
+          echo "sccache-s3-writes=${SCCACHE_S3_WRITES:-0}" >> $GITHUB_OUTPUT
           
           # Enhanced metrics file with S3 information
           mkdir -p build-metrics
@@ -300,7 +307,13 @@ jobs:
             "sccache_enabled": true,
             "s3_bucket": "${SCCACHE_S3_BUCKET}",
             "aws_region": "${AWS_DEFAULT_REGION}",
-            "enhanced_debugging": true
+            "enhanced_debugging": true,
+            "sccache_cache_hits": ${SCCACHE_CACHE_HITS:-0},
+            "sccache_cache_misses": ${SCCACHE_CACHE_MISSES:-0},
+            "sccache_compile_requests": ${SCCACHE_COMPILE_REQUESTS:-0},
+            "sccache_s3_reads": ${SCCACHE_S3_READS:-0},
+            "sccache_s3_writes": ${SCCACHE_S3_WRITES:-0},
+            "sccache_total_cacheable": ${SCCACHE_TOTAL_CACHEABLE:-0}
           }
           EOF
           
@@ -404,6 +417,12 @@ jobs:
           # Build and container index configuration
           BUILD_INDEX: ${{ secrets.BUILD_INDEX }}
           CONTAINER_INDEX: ${{ secrets.CONTAINER_INDEX }}
+          # Additional sccache metrics (will be 0 if not available)
+          SCCACHE_CACHE_HITS: ${{ needs.build-test.outputs.sccache-cache-hits }}
+          SCCACHE_CACHE_MISSES: ${{ needs.build-test.outputs.sccache-cache-misses }}
+          SCCACHE_COMPILE_REQUESTS: ${{ needs.build-test.outputs.sccache-compile-requests }}
+          SCCACHE_S3_READS: ${{ needs.build-test.outputs.sccache-s3-reads }}
+          SCCACHE_S3_WRITES: ${{ needs.build-test.outputs.sccache-s3-writes }}
         run: |
           # Show build metrics for debugging
           echo "📊 Build Metrics Available:"
