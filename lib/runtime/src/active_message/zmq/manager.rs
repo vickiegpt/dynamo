@@ -5,8 +5,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::sync::{Mutex, RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock, Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -26,11 +27,50 @@ use super::{
     transport::ZmqTransport,
 };
 
-use crate::utils::tasks::tracker::{LogOnlyPolicy, TaskTracker, UnlimitedScheduler};
+use crate::utils::tasks::tracker::{
+    LogOnlyPolicy, TaskTracker as DynamoTaskTracker, UnlimitedScheduler,
+};
+
+/// Builder for ZmqActiveMessageManager with configurable options
+#[derive(Debug, Clone)]
+pub struct ZmqActiveMessageManagerBuilder {
+    max_concurrent_messages: Option<usize>,
+}
+
+impl Default for ZmqActiveMessageManagerBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ZmqActiveMessageManagerBuilder {
+    /// Create a new builder with default settings
+    pub fn new() -> Self {
+        Self {
+            max_concurrent_messages: None,
+        }
+    }
+
+    /// Set the maximum number of concurrent messages to process
+    /// If not set, unlimited concurrency is used
+    pub fn max_concurrent_messages(mut self, max: usize) -> Self {
+        self.max_concurrent_messages = Some(max);
+        self
+    }
+
+    /// Build the ZmqActiveMessageManager with the configured options
+    pub async fn build(
+        self,
+        endpoint: String,
+        cancel_token: CancellationToken,
+    ) -> Result<ZmqActiveMessageManager> {
+        ZmqActiveMessageManager::new_with_builder(endpoint, cancel_token, self).await
+    }
+}
 
 pub(crate) struct HandlerEntry {
     pub handler: HandlerType,
-    pub task_tracker: TaskTracker,
+    pub task_tracker: DynamoTaskTracker,
 }
 
 pub struct ManagerState {
@@ -59,6 +99,8 @@ pub struct ZmqActiveMessageManager {
     cancel_token: CancellationToken,
     receiver_task: Arc<Mutex<Option<tokio::task::JoinHandle<Result<()>>>>>,
     ack_cleanup_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    message_task_tracker: TaskTracker,
+    message_semaphore: Option<Arc<Semaphore>>,
 }
 
 impl ZmqActiveMessageManager {
@@ -70,7 +112,26 @@ impl ZmqActiveMessageManager {
         self.state.clone()
     }
 
+    /// Create a builder for configuring ZmqActiveMessageManager options
+    pub fn builder() -> ZmqActiveMessageManagerBuilder {
+        ZmqActiveMessageManagerBuilder::new()
+    }
+
     pub async fn new(endpoint: String, cancel_token: CancellationToken) -> Result<Self> {
+        // Use the builder with default settings for backward compatibility
+        Self::new_with_builder(
+            endpoint,
+            cancel_token,
+            ZmqActiveMessageManagerBuilder::new(),
+        )
+        .await
+    }
+
+    pub(crate) async fn new_with_builder(
+        endpoint: String,
+        cancel_token: CancellationToken,
+        builder: ZmqActiveMessageManagerBuilder,
+    ) -> Result<Self> {
         let instance_id = InstanceId::new_v4();
 
         let context = tmq::Context::new();
@@ -100,6 +161,12 @@ impl ZmqActiveMessageManager {
             handler_events_tx: handler_events_tx.clone(),
         }));
 
+        // Initialize concurrency controls
+        let message_task_tracker = TaskTracker::new();
+        let message_semaphore = builder
+            .max_concurrent_messages
+            .map(|max| Arc::new(Semaphore::new(max)));
+
         let manager = Self {
             state: state.clone(),
             client: client.clone(),
@@ -107,6 +174,8 @@ impl ZmqActiveMessageManager {
             cancel_token: cancel_token.clone(),
             receiver_task: Arc::new(Mutex::new(None)),
             ack_cleanup_task: Arc::new(Mutex::new(None)),
+            message_task_tracker,
+            message_semaphore,
         };
 
         manager.register_builtin_handlers().await?;
@@ -115,6 +184,8 @@ impl ZmqActiveMessageManager {
             state.clone(),
             sub_transport,
             cancel_token.clone(),
+            manager.message_task_tracker.clone(),
+            manager.message_semaphore.clone(),
         ));
 
         let ack_cleanup_task =
@@ -182,6 +253,8 @@ impl ZmqActiveMessageManager {
         state: Arc<RwLock<ManagerState>>,
         mut transport: ZmqTransport,
         cancel_token: CancellationToken,
+        message_task_tracker: TaskTracker,
+        message_semaphore: Option<Arc<Semaphore>>,
     ) -> Result<()> {
         loop {
             tokio::select! {
@@ -193,9 +266,24 @@ impl ZmqActiveMessageManager {
                 result = transport.receive() => {
                     match result {
                         Ok(message) => {
-                            if let Err(e) = Self::handle_message(state.clone(), message).await {
-                                error!("Failed to handle message: {}", e);
-                            }
+                            // Spawn message handling immediately for parallelism
+                            let state_clone = state.clone();
+                            let semaphore_clone = message_semaphore.clone();
+
+                            message_task_tracker.spawn(async move {
+                                // Acquire semaphore permit if concurrency limit is set
+                                let _permit = if let Some(ref semaphore) = semaphore_clone {
+                                    Some(semaphore.acquire().await.expect("Semaphore closed"))
+                                } else {
+                                    None
+                                };
+
+                                if let Err(e) = Self::handle_message(state_clone, message).await {
+                                    error!("Failed to handle message: {}", e);
+                                }
+
+                                // Permit is automatically released when _permit is dropped
+                            });
                         }
                         Err(e) => {
                             error!("Failed to receive message: {}", e);
@@ -205,6 +293,12 @@ impl ZmqActiveMessageManager {
                 }
             }
         }
+
+        // Wait for all spawned message handling tasks to complete
+        info!("Waiting for message handling tasks to complete...");
+        message_task_tracker.close();
+        message_task_tracker.wait().await;
+        info!("All message handling tasks completed");
 
         Ok(())
     }
@@ -540,10 +634,7 @@ impl ActiveMessageManager for ZmqActiveMessageManager {
 
         let config = config.unwrap_or_default();
         let task_tracker = config.task_tracker.unwrap_or_else(|| {
-            TaskTracker::builder()
-                .scheduler(UnlimitedScheduler::new())
-                .error_policy(LogOnlyPolicy::new())
-                .build()
+            DynamoTaskTracker::new(UnlimitedScheduler::new(), LogOnlyPolicy::new())
                 .expect("Failed to create default task tracker")
         });
 

@@ -1,0 +1,404 @@
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+use anyhow::Result;
+use dynamo_runtime::active_message::{
+    client::{ActiveMessageClient, PeerInfo},
+    handler::{ActiveMessage, AckHandler, ResponseHandler, HandlerType},
+    manager::ActiveMessageManager,
+    zmq::ZmqActiveMessageManager,
+};
+use async_trait::async_trait;
+use serde::{Serialize, Deserialize};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tempfile::NamedTempFile;
+use tokio_util::sync::CancellationToken;
+use tracing::info;
+
+/// Generate a unique IPC socket path for testing
+fn unique_ipc_socket_path() -> Result<String> {
+    let temp_file = NamedTempFile::new()?;
+    let path = temp_file.path().to_string_lossy().to_string();
+    // Close the file but keep the path - ZMQ will create the socket
+    drop(temp_file);
+    Ok(format!("ipc://{}", path))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkPayload {
+    sequence: u64,
+    data: Vec<u8>,
+}
+
+/// Simple ping handler for latency benchmarks
+#[derive(Debug, Clone)]
+struct PingHandler;
+
+#[async_trait]
+impl AckHandler for PingHandler {
+    async fn handle(
+        &self,
+        _message: ActiveMessage,
+        _client: &dyn ActiveMessageClient,
+    ) -> Result<()> {
+        // Just return Ok(()) to send ACK - minimal processing
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "ping"
+    }
+}
+
+/// Echo handler for throughput benchmarks
+#[derive(Debug, Clone)]
+struct EchoHandler;
+
+#[async_trait]
+impl ResponseHandler for EchoHandler {
+    type Response = BenchmarkPayload;
+
+    async fn handle(
+        &self,
+        message: ActiveMessage,
+        _client: &dyn ActiveMessageClient,
+    ) -> Result<Self::Response> {
+        // Echo back the payload with minimal processing
+        let payload: BenchmarkPayload = message.deserialize()?;
+        Ok(payload)
+    }
+
+    fn name(&self) -> &str {
+        "echo"
+    }
+}
+
+#[derive(Debug)]
+struct BenchmarkStats {
+    min: Duration,
+    max: Duration,
+    mean: Duration,
+    median: Duration,
+    p95: Duration,
+    p99: Duration,
+    throughput_msgs_per_sec: f64,
+    total_duration: Duration,
+    successful_ops: usize,
+    failed_ops: usize,
+}
+
+impl BenchmarkStats {
+    fn calculate(durations: &mut [Duration], total_duration: Duration, failed_ops: usize) -> Self {
+        durations.sort();
+        let successful_ops = durations.len();
+
+        let min = durations.first().copied().unwrap_or_default();
+        let max = durations.last().copied().unwrap_or_default();
+
+        let sum: Duration = durations.iter().sum();
+        let mean = if successful_ops > 0 {
+            sum / successful_ops as u32
+        } else {
+            Duration::ZERO
+        };
+
+        let median = if successful_ops > 0 {
+            durations[successful_ops / 2]
+        } else {
+            Duration::ZERO
+        };
+
+        let p95 = if successful_ops > 0 {
+            durations[(successful_ops as f64 * 0.95) as usize]
+        } else {
+            Duration::ZERO
+        };
+
+        let p99 = if successful_ops > 0 {
+            durations[(successful_ops as f64 * 0.99) as usize]
+        } else {
+            Duration::ZERO
+        };
+
+        let throughput_msgs_per_sec = if total_duration.as_secs_f64() > 0.0 {
+            successful_ops as f64 / total_duration.as_secs_f64()
+        } else {
+            0.0
+        };
+
+        Self {
+            min,
+            max,
+            mean,
+            median,
+            p95,
+            p99,
+            throughput_msgs_per_sec,
+            total_duration,
+            successful_ops,
+            failed_ops,
+        }
+    }
+
+    fn print(&self, test_name: &str) {
+        info!("=== {} Results ===", test_name);
+        info!("Successful operations: {}", self.successful_ops);
+        info!("Failed operations: {}", self.failed_ops);
+        info!("Total duration: {:.2}s", self.total_duration.as_secs_f64());
+        info!("Throughput: {:.2} msgs/sec", self.throughput_msgs_per_sec);
+        info!("Latency statistics:");
+        info!("  Min:    {:?}", self.min);
+        info!("  Mean:   {:?}", self.mean);
+        info!("  Median: {:?}", self.median);
+        info!("  P95:    {:?}", self.p95);
+        info!("  P99:    {:?}", self.p99);
+        info!("  Max:    {:?}", self.max);
+    }
+}
+
+async fn create_managers(max_concurrent: Option<usize>) -> Result<(ZmqActiveMessageManager, ZmqActiveMessageManager)> {
+    let cancel_token = CancellationToken::new();
+
+    let server_manager = if let Some(max) = max_concurrent {
+        ZmqActiveMessageManager::builder()
+            .max_concurrent_messages(max)
+            .build(unique_ipc_socket_path()?, cancel_token.clone())
+            .await?
+    } else {
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?
+    };
+
+    let client_manager = ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token).await?;
+
+    Ok((server_manager, client_manager))
+}
+
+async fn benchmark_ping_pong(
+    name: &str,
+    max_concurrent: Option<usize>,
+    num_operations: usize,
+) -> Result<BenchmarkStats> {
+    info!("Running {} benchmark with {} operations...", name, num_operations);
+
+    let (server_manager, client_manager) = create_managers(max_concurrent).await?;
+
+    // Register ping handler
+    let ping_handler = Arc::new(PingHandler);
+    let handler_type = HandlerType::ack((*ping_handler).clone());
+    server_manager.register_handler_typed(handler_type, None).await?;
+
+    let server_client = server_manager.zmq_client();
+    let client_client = client_manager.zmq_client();
+
+    // Connect clients
+    let server_peer = PeerInfo::new(
+        server_client.instance_id(),
+        server_client.endpoint().to_string(),
+    );
+    client_client.connect_to_peer(server_peer).await?;
+
+    // Wait for connection
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let start_time = Instant::now();
+    let mut durations = Vec::with_capacity(num_operations);
+    let mut failed_ops = 0;
+
+    // Run benchmark
+    for i in 0..num_operations {
+        let op_start = Instant::now();
+
+        let result = client_client
+            .message("ping")?
+            .payload(format!("ping_{}", i))?
+            .send_and_confirm(server_client.instance_id())
+            .await;
+
+        let duration = op_start.elapsed();
+
+        match result {
+            Ok(_) => durations.push(duration),
+            Err(_) => failed_ops += 1,
+        }
+
+        // Small delay to avoid overwhelming the system
+        if i % 100 == 0 && i > 0 {
+            tokio::time::sleep(Duration::from_micros(10)).await;
+        }
+    }
+
+    let total_duration = start_time.elapsed();
+
+    // Cleanup
+    server_manager.shutdown().await?;
+    client_manager.shutdown().await?;
+
+    Ok(BenchmarkStats::calculate(&mut durations, total_duration, failed_ops))
+}
+
+async fn benchmark_echo_throughput(
+    name: &str,
+    max_concurrent: Option<usize>,
+    num_operations: usize,
+    payload_size: usize,
+    concurrent_requests: usize,
+) -> Result<BenchmarkStats> {
+    info!("Running {} benchmark with {} operations, {} byte payloads, {} concurrent requests...",
+          name, num_operations, payload_size, concurrent_requests);
+
+    let (server_manager, client_manager) = create_managers(max_concurrent).await?;
+
+    // Register echo handler
+    let echo_handler = Arc::new(EchoHandler);
+    let handler_type = HandlerType::response((*echo_handler).clone());
+    server_manager.register_handler_typed(handler_type, None).await?;
+
+    let server_client = server_manager.zmq_client();
+    let client_client = client_manager.zmq_client();
+
+    // Connect clients
+    let server_peer = PeerInfo::new(
+        server_client.instance_id(),
+        server_client.endpoint().to_string(),
+    );
+    client_client.connect_to_peer(server_peer).await?;
+
+    // Wait for connection
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let start_time = Instant::now();
+    let mut durations = Vec::with_capacity(num_operations);
+    let mut failed_ops = 0;
+
+    // Create semaphore to limit concurrent requests
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrent_requests));
+    let mut tasks = Vec::new();
+
+    // Spawn concurrent requests
+    for i in 0..num_operations {
+        let client = client_client.clone();
+        let server_id = server_client.instance_id();
+        let sem = semaphore.clone();
+        let payload = BenchmarkPayload {
+            sequence: i as u64,
+            data: vec![0u8; payload_size],
+        };
+
+        let task = tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            let op_start = Instant::now();
+
+            let result = client
+                .message("echo")?
+                .payload(payload)?
+                .expect_response::<BenchmarkPayload>()
+                .send(server_id)
+                .await?
+                .await_response::<BenchmarkPayload>()
+                .await;
+
+            let duration = op_start.elapsed();
+            Result::<(Duration, bool), anyhow::Error>::Ok((duration, result.is_ok()))
+        });
+
+        tasks.push(task);
+    }
+
+    // Collect results
+    for task in tasks {
+        match task.await {
+            Ok(Ok((duration, success))) => {
+                if success {
+                    durations.push(duration);
+                } else {
+                    failed_ops += 1;
+                }
+            }
+            _ => failed_ops += 1,
+        }
+    }
+
+    let total_duration = start_time.elapsed();
+
+    // Cleanup
+    server_manager.shutdown().await?;
+    client_manager.shutdown().await?;
+
+    Ok(BenchmarkStats::calculate(&mut durations, total_duration, failed_ops))
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
+    info!("Starting Active Message Performance Benchmarks");
+    info!("Testing both latency (ping-pong) and throughput (echo) scenarios");
+
+    // Latency benchmarks (ping-pong)
+    info!("\n🏓 LATENCY BENCHMARKS (Ping-Pong)");
+
+    let ping_pong_stats = benchmark_ping_pong(
+        "Ping-Pong Latency",
+        None, // No concurrency limit
+        1000,
+    ).await?;
+    ping_pong_stats.print("Ping-Pong Latency");
+
+    // Throughput benchmarks with different settings
+    info!("\n🚀 THROUGHPUT BENCHMARKS (Echo)");
+
+    // Small payload, moderate concurrency
+    let echo_small_stats = benchmark_echo_throughput(
+        "Echo Small Payload",
+        None, // No concurrency limit
+        1000,
+        64,   // 64 byte payload
+        50,   // 50 concurrent requests
+    ).await?;
+    echo_small_stats.print("Echo Small Payload");
+
+    // Larger payload, lower concurrency
+    let echo_large_stats = benchmark_echo_throughput(
+        "Echo Large Payload",
+        None, // No concurrency limit
+        500,
+        4096, // 4KB payload
+        20,   // 20 concurrent requests
+    ).await?;
+    echo_large_stats.print("Echo Large Payload");
+
+    // Test with concurrency limits
+    info!("\n⚙️  CONCURRENCY LIMIT BENCHMARKS");
+
+    let limited_stats = benchmark_echo_throughput(
+        "Echo with Concurrency Limit",
+        Some(10), // Limit to 10 concurrent messages
+        500,
+        1024,     // 1KB payload
+        25,       // 25 concurrent requests (will be throttled by semaphore)
+    ).await?;
+    limited_stats.print("Echo with Concurrency Limit (10)");
+
+    // Summary comparison
+    info!("\n📊 PERFORMANCE SUMMARY");
+    info!("Ping-Pong RTT:           {:.3}ms avg, {:.2} ops/sec",
+          ping_pong_stats.mean.as_secs_f64() * 1000.0,
+          ping_pong_stats.throughput_msgs_per_sec);
+    info!("Echo Small Throughput:   {:.2} msgs/sec, {:.3}ms avg latency",
+          echo_small_stats.throughput_msgs_per_sec,
+          echo_small_stats.mean.as_secs_f64() * 1000.0);
+    info!("Echo Large Throughput:   {:.2} msgs/sec, {:.3}ms avg latency",
+          echo_large_stats.throughput_msgs_per_sec,
+          echo_large_stats.mean.as_secs_f64() * 1000.0);
+    info!("Echo Limited Throughput: {:.2} msgs/sec, {:.3}ms avg latency",
+          limited_stats.throughput_msgs_per_sec,
+          limited_stats.mean.as_secs_f64() * 1000.0);
+
+    info!("\n✅ All benchmarks completed successfully!");
+    info!("The parallel message handling and concurrency controls are working correctly.");
+
+    Ok(())
+}

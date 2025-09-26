@@ -5,11 +5,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use dynamo_runtime::active_message::{
     client::ActiveMessageClient,
-    handler::{ActiveMessage, ActiveMessageHandler},
-    response::ResponseContext,
+    handler::{ActiveMessage, ResponseHandler},
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tracing::info;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,13 +26,14 @@ pub struct ComputeResponse {
 pub struct ComputeHandler;
 
 #[async_trait]
-impl ActiveMessageHandler for ComputeHandler {
+impl ResponseHandler for ComputeHandler {
+    type Response = ComputeResponse;
+
     async fn handle(
         &self,
         message: ActiveMessage,
         _client: &dyn ActiveMessageClient,
-        response: ResponseContext,
-    ) -> Result<()> {
+    ) -> Result<Self::Response> {
         let request: ComputeRequest = message.deserialize()?;
 
         let result = match request.operation.as_str() {
@@ -42,7 +41,7 @@ impl ActiveMessageHandler for ComputeHandler {
             "multiply" => request.x * request.y,
             _ => {
                 info!("Unknown operation: {}", request.operation);
-                return Ok(());
+                anyhow::bail!("Unknown operation: {}", request.operation);
             }
         };
 
@@ -51,38 +50,10 @@ impl ActiveMessageHandler for ComputeHandler {
             request.x, request.operation, request.y, result
         );
 
-        // Handle response if one was expected
-        match response {
-            ResponseContext::Single(sender) => {
-                let response = ComputeResponse { result };
-                sender.send(response).await?;
-                info!("Sent response: {}", result);
-            }
-            ResponseContext::None => {
-                info!("No response expected");
-            }
-        }
-
-        Ok(())
+        Ok(ComputeResponse { result })
     }
 
     fn name(&self) -> &str {
         "compute"
-    }
-
-    fn schema(&self) -> Option<&serde_json::Value> {
-        static SCHEMA: once_cell::sync::Lazy<serde_json::Value> =
-            once_cell::sync::Lazy::new(|| {
-                serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "x": { "type": "number" },
-                        "y": { "type": "number" },
-                        "operation": { "type": "string" }
-                    },
-                    "required": ["x", "y", "operation"]
-                })
-            });
-        Some(&SCHEMA)
     }
 }
