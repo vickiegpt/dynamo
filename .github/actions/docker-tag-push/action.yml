@@ -10,8 +10,8 @@ inputs:
     description: 'Push to AWS Boolean'
     required: false
     default: 'false'
-  aks_push:
-    description: 'Push to AKS Boolean'
+  azure_push:
+    description: 'Push to Azure Container Registry (ACR) Boolean'
     required: false
     default: 'false'
 
@@ -43,13 +43,13 @@ env:
   AWS_REGION: ${{ inputs.aws_default_region || '' }}
   AWS_ACCOUNT_ID: ${{ inputs.aws_account_id || '' }}
   AWS_PUSH_TAG: ${{ inputs.aws_push_tag || '' }}
-  AWS_PUSH: ${{ inputs.AWS_PUSH }}
+  AWS_PUSH: ${{ inputs.aws_push || '' }}
 
-  AKS_USER: ${{ inputs.azure_acr_user || '' }}
-  AKS_PASSWORD: ${{ inputs.azure_acr_password || '' }}
-  AKS_HOSTNAME: ${{ inputs.azure_acr_hostname || '' }}
-  AKS_PUSH_TAG: ${{ inputs.aks_push_tag || '' }}
-  AKS_PUSH: ${{ inputs.AKS_PUSH }}
+  ACR_USER: ${{ inputs.azure_acr_user || '' }}
+  ACR_PASSWORD: ${{ inputs.azure_acr_password || '' }}
+  ACR_HOSTNAME: ${{ inputs.azure_acr_hostname || '' }}
+  ACR_PUSH_TAG: ${{ inputs.acr_push_tag || '' }}
+  ACR_PUSH: ${{ inputs.azure_push || '' }}
 
   LOCAL_IMAGE: ${{ inputs.local_image || '' }}
 
@@ -71,9 +71,9 @@ runs:
       run: |
         aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_HOSTNAME}
     - name: ACR Login
-      if: ${{ env.AKS_PUSH == 'true' }}
+      if: ${{ env.ACR_PUSH == 'true' }}
       run: |
-        
+        echo "${ACR_PASSWORD}" | docker login ${ACR_HOSTNAME} --username ${ACR_USER} --password-stdin
     - name: ECR Tag and Push
       if: ${{ env.AWS_PUSH == 'true' }}
       env:
@@ -82,7 +82,7 @@ runs:
         docker tag ${LOCAL_IMAGE} ${ECR_HOSTNAME}/${AWS_PUSH_TAG}
         docker push ${AWS_PUSH_TAG}
     - name: ACR Tag and Push
-      if: ${{ env.AKS_PUSH == 'true' }}
+      if: ${{ env.ACR_PUSH == 'true' }}
       run: |
-        docker tag ${LOCAL_IMAGE} ${AKS_HOSTNAME}/${AKS_PUSH_TAG}
-        docker push ${AKS_PUSH_TAG}
+        docker tag ${LOCAL_IMAGE} ${ACR_HOSTNAME}/${ACR_PUSH_TAG}
+        docker push ${ACR_PUSH_TAG}
