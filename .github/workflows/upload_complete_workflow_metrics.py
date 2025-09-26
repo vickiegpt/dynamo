@@ -380,37 +380,6 @@ class WorkflowMetricsUploader:
         
         return jobs_processed, steps_processed
 
-    def post_all_job_metrics(self, jobs_data: Optional[Dict[str, Any]] = None) -> None:
-        """Extract and post metrics for all jobs in the current workflow"""
-        print(f"Uploading job metrics for workflow run {self.run_id}")
-        
-        # Use provided jobs data or fetch from API if not provided
-        if not jobs_data:
-            jobs_data = self.get_github_api_data(f"/repos/{self.repo}/actions/runs/{self.run_id}/jobs")
-        
-        if not jobs_data or 'jobs' not in jobs_data:
-            print("Could not fetch jobs data from GitHub API")
-            return
-            
-        # Process all jobs in the workflow (including the current one)
-        jobs_processed = 0
-        steps_processed = 0
-        for job in jobs_data['jobs']:
-            try:
-                self._upload_single_job_metrics(job)
-                jobs_processed += 1
-                
-                # Also process steps for this job if steps index is configured
-                if self.steps_index:
-                    step_count = self._upload_job_step_metrics(job)
-                    steps_processed += step_count
-                    
-            except Exception as e:
-                print(f"Error uploading metrics for job {job.get('name', 'unknown')}: {e}")
-                continue
-        
-        print(f"Successfully processed {jobs_processed} jobs and {steps_processed} steps")
-
     def _upload_single_job_metrics(self, job_data: Dict[str, Any]) -> None:
         """Extract and post metrics for a single job"""
         # Extract job metrics using standardized functions
