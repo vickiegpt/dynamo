@@ -14,7 +14,6 @@ inputs:
     description: 'Push to Azure Container Registry (ACR) Boolean'
     required: false
     default: 'false'
-
   aws_account_id:
     description: 'AWS Account ID'
     required: false
@@ -42,16 +41,15 @@ env:
   AWS_SECRET_ACCESS_KEY: ${{ inputs.aws_secret_access_key || '' }}
   AWS_REGION: ${{ inputs.aws_default_region || '' }}
   AWS_ACCOUNT_ID: ${{ inputs.aws_account_id || '' }}
-  AWS_PUSH_TAG: ${{ inputs.aws_push_tag || '' }}
   AWS_PUSH: ${{ inputs.aws_push || '' }}
 
-  ACR_USER: ${{ inputs.azure_acr_user || '' }}
-  ACR_PASSWORD: ${{ inputs.azure_acr_password || '' }}
-  ACR_HOSTNAME: ${{ inputs.azure_acr_hostname || '' }}
-  ACR_PUSH_TAG: ${{ inputs.acr_push_tag || '' }}
+  AZURE_ACR_USER: ${{ inputs.azure_acr_user || '' }}
+  AZURE_ACR_PASSWORD: ${{ inputs.azure_acr_password || '' }}
+  AZURE_ACR_HOSTNAME: ${{ inputs.azure_acr_hostname || '' }}
   ACR_PUSH: ${{ inputs.azure_push || '' }}
 
   LOCAL_IMAGE: ${{ inputs.local_image || '' }}
+  PUSH_TAG: ${{ inputs.push_tag || '' }}
 
 outputs:
   image_tag:
@@ -79,10 +77,10 @@ runs:
       env:
         ECR_HOSTNAME: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
       run: |
-        docker tag ${LOCAL_IMAGE} ${ECR_HOSTNAME}/${AWS_PUSH_TAG}
-        docker push ${AWS_PUSH_TAG}
+        docker tag ${LOCAL_IMAGE} ${ECR_HOSTNAME}/${PUSH_TAG}
+        docker push ${ECR_HOSTNAME}/${PUSH_TAG}
     - name: ACR Tag and Push
       if: ${{ env.ACR_PUSH == 'true' }}
       run: |
-        docker tag ${LOCAL_IMAGE} ${ACR_HOSTNAME}/${ACR_PUSH_TAG}
-        docker push ${ACR_PUSH_TAG}
+        docker tag ${LOCAL_IMAGE} ${ACR_HOSTNAME}/${PUSH_TAG}
+        docker push ${ACR_HOSTNAME}/${PUSH_TAG}
