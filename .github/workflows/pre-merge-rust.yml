@@ -42,6 +42,14 @@ jobs:
       run: |
         sudo apt-get update -y
         sudo apt-get install -y protobuf-compiler
+
+    - name: Cache sccache artifacts
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/sccache/
+        key: ${{ runner.os }}-sccache-${{ matrix.dir }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-sccache-${{ matrix.dir }}-
+  
     - name: Cache cargo artifacts
       uses: actions/cache@v4
       with:
@@ -50,17 +58,18 @@ jobs:
           ~/.cargo/registry/index/
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
+          target/
+        key: ${{ runner.os }}-cargo-${{ matrix.dir }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-cargo-${{ matrix.dir }}-
 
-    - name: Cache sccache
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/sccache
-        key: ${{ runner.os }}-sccache-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-sccache-
+    - name: Install sccache
+      run: |
+        SCCACHE_VERSION="0.10.0"
+        SCCACHE_FILE="sccache-v${SCCACHE_VERSION}-$(uname -m)-unknown-linux-musl"
+        SCCACHE_URL="https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/${SCCACHE_FILE}.tar.gz"
+        curl -L "${SCCACHE_URL}" | tar xz
+        mv ${SCCACHE_FILE}/sccache /usr/local/bin/sccache
+        chmod +x /usr/local/bin/sccache
 
     - name: Install Rust in dev environment
       # Install Rust only to run GitHub Local Actions in (dev environment) using the `ACT` environment variable.
@@ -71,25 +80,19 @@ jobs:
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
         rustup toolchain install 1.86.0-x86_64-unknown-linux-gnu
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
     - name: Set up Rust Toolchain Components
       run: rustup component add rustfmt clippy
 
-    - name: Install sccache
-      run: |
-        cargo install sccache --locked
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-    - name: Configure cargo for faster builds
-      run: |
-        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
-        echo "CARGO_NET_RETRY=2" >> $GITHUB_ENV
-        echo "CARGO_HTTP_TIMEOUT=60" >> $GITHUB_ENV
     - name: Install cargo-deny
       run: cargo-deny --version || cargo install cargo-deny@0.16.4
 
     - name: Set workspace paths
       run: |
-        echo "WORKSPACE_PATHS=Cargo.toml lib/bindings/python/Cargo.toml lib/runtime/examples/Cargo.toml" >> $GITHUB_ENV
+        echo "WORKSPACE_PATHS=\
+        Cargo.toml \
+        lib/bindings/python/Cargo.toml \
+        lib/runtime/examples/Cargo.toml" >> $GITHUB_ENV
 
     - name: Verify Code Formatting
       run: |
