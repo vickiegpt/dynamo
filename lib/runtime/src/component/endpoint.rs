@@ -39,7 +39,7 @@ pub struct EndpointInstance {
     stats_handler: Option<EndpointStatsHandler>,
     metrics_labels: Option<Vec<(String, String)>>,
     graceful_shutdown: bool,
-    local_engine_key: Option<String>, // Key if engine was registered locally
+    local_engine_info: Option<(String, Arc<dyn crate::engine::AnyAsyncEngine>)>, // Prepared but not registered
 
     // Pre-computed values for start()
     lease_id: i64,
@@ -49,11 +49,23 @@ pub struct EndpointInstance {
 
 impl EndpointInstance {
     /// Start the endpoint on the network
-    pub async fn start(self) -> Result<()> {
+    pub async fn start(mut self) -> Result<()> {
         tracing::debug!(
             "Starting endpoint: {}",
             self.endpoint.etcd_path_with_lease_id(self.lease_id)
         );
+
+        // Register local engine if configured
+        let local_engine_key = if let Some((key, engine)) = self.local_engine_info.take() {
+            tracing::debug!("Registering local engine for endpoint: {}", key);
+            self.endpoint
+                .drt()
+                .register_local_engine(key.clone(), engine)
+                .await?;
+            Some(key)
+        } else {
+            None
+        };
 
         // acquire the registry lock to get the service group
         let registry = self.endpoint.drt().component_registry.inner.lock().await;
@@ -173,7 +185,7 @@ impl EndpointInstance {
         let component_name_for_task = component_name.clone();
         let endpoint_name_for_task = endpoint_name.clone();
         let drt_for_cleanup = self.endpoint.drt().clone();
-        let local_engine_key_for_task = self.local_engine_key.clone();
+        let local_engine_key_for_task = local_engine_key.clone();
         let lease_id_for_task = self.lease_id;
 
         let task = tokio::spawn(async move {
@@ -228,6 +240,69 @@ impl EndpointInstance {
         }
 
         task.await??;
+        Ok(())
+    }
+
+    /// Start the endpoint in the background as a critical task
+    ///
+    /// Returns a handle that can be used to monitor or cancel the endpoint.
+    /// If the endpoint fails critically, it will trigger parent token cancellation
+    /// (usually leading to worker shutdown).
+    pub fn start_background_handle(self) -> Result<crate::utils::tasks::critical::CriticalTaskExecutionHandle> {
+        let endpoint_name = format!(
+            "{}/{}/{}:{}",
+            self.endpoint.component.namespace.name,
+            self.endpoint.component.name,
+            self.endpoint.name,
+            self.lease_id
+        );
+
+        let parent_token = self.endpoint.drt().primary_token();
+        let endpoint_name_for_closure = endpoint_name.clone();
+
+        crate::utils::tasks::critical::CriticalTaskExecutionHandle::new(
+            |cancel_token| async move {
+                // Monitor cancellation while starting
+                tokio::select! {
+                    result = self.start() => result,
+                    _ = cancel_token.cancelled() => {
+                        tracing::info!("Endpoint {} cancelled during startup", endpoint_name_for_closure);
+                        Ok(())
+                    }
+                }
+            },
+            parent_token,
+            &format!("endpoint-{}", endpoint_name),
+        )
+    }
+
+    /// Start the endpoint in the background and register it with the distributed runtime
+    ///
+    /// This method will:
+    /// 1. Create a critical task to run the endpoint
+    /// 2. Register the task handle for tracking and cleanup
+    /// 3. If the endpoint fails critically, it will trigger worker shutdown
+    pub async fn start_background(self) -> Result<()> {
+        // Generate key for tracking (same format as local engine registry)
+        let key = if let Some((ref engine_key, _)) = self.local_engine_info {
+            engine_key.clone()
+        } else {
+            // Generate key even if no local engine
+            format!(
+                "{}/{}/{}:{}",
+                self.endpoint.component.namespace.name,
+                self.endpoint.component.name,
+                self.endpoint.name,
+                self.lease_id
+            )
+        };
+
+        let drt = self.endpoint.drt().clone();
+        let handle = self.start_background_handle()?;
+
+        // Register the handle for tracking
+        drt.register_background_endpoint(key, handle).await;
+
         Ok(())
     }
 }
@@ -329,7 +404,7 @@ impl EndpointConfigBuilder {
             .copied()
             .unwrap_or(true);
 
-        let local_engine_key = if enable_local_registry
+        let local_engine_info = if enable_local_registry
             && let Some(any_engine) = handler.as_any_engine()
         {
             use crate::v2::entity::{ComponentDescriptor, EndpointDescriptor, NamespaceDescriptor};
@@ -337,14 +412,24 @@ impl EndpointConfigBuilder {
             // Extract the full namespace hierarchy
             let namespace_segments = get_namespace_hierarchy(&endpoint.component.namespace);
 
-            // Create the descriptor for this endpoint
-            let namespace_desc = NamespaceDescriptor::new(
-                &namespace_segments
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>(),
-            )
+            // Create the descriptor for this endpoint, handling internal namespaces
+            let namespace_desc = if namespace_segments.first().is_some_and(|s| s.starts_with('_')) {
+                NamespaceDescriptor::new_internal(
+                    &namespace_segments
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                NamespaceDescriptor::new(
+                    &namespace_segments
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>(),
+                )
+            }
             .map_err(|e| anyhow::anyhow!("Invalid namespace: {}", e))?;
+
             let component_desc = namespace_desc
                 .component(&endpoint.component.name)
                 .map_err(|e| anyhow::anyhow!("Invalid component: {}", e))?;
@@ -352,14 +437,10 @@ impl EndpointConfigBuilder {
                 .endpoint(&endpoint.name)
                 .map_err(|e| anyhow::anyhow!("Invalid endpoint: {}", e))?;
 
-            // Register using the path string as key
+            // Prepare registration info but don't register yet
             let key = endpoint_desc.to_string();
-            tracing::debug!("Registering local engine for endpoint: {}", key);
-            endpoint
-                .drt()
-                .register_local_engine(key.clone(), any_engine)
-                .await?;
-            Some(key)
+            tracing::debug!("Prepared local engine registration for endpoint: {}", key);
+            Some((key, any_engine))
         } else {
             None
         };
@@ -382,7 +463,7 @@ impl EndpointConfigBuilder {
             stats_handler,
             metrics_labels,
             graceful_shutdown,
-            local_engine_key,
+            local_engine_info,
             lease_id,
             service_name,
             health_check_payload,

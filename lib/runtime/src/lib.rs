@@ -171,6 +171,10 @@ pub struct DistributedRuntime {
     // Keys are endpoint paths from EndpointDescriptor::path_string()
     local_engines: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn AnyAsyncEngine>>>>,
 
+    // Registry of background endpoint handles
+    // Key: endpoint path (same as local_engines key)
+    background_endpoints: Arc<tokio::sync::Mutex<HashMap<String, crate::utils::tasks::critical::CriticalTaskExecutionHandle>>>,
+
     // Health Status
     system_health: Arc<std::sync::Mutex<SystemHealth>>,
 

@@ -84,6 +84,7 @@ impl DistributedRuntime {
             is_static,
             instance_sources: Arc::new(Mutex::new(HashMap::new())),
             local_engines: Arc::new(Mutex::new(HashMap::new())),
+            background_endpoints: Arc::new(Mutex::new(HashMap::new())),
             hierarchy_to_metricsregistry: Arc::new(std::sync::RwLock::new(HashMap::<
                 String,
                 crate::MetricsRegistryEntry,
@@ -374,6 +375,40 @@ impl DistributedRuntime {
     ) -> Option<Arc<dyn crate::engine::AnyAsyncEngine>> {
         let mut engines = self.local_engines.lock().await;
         engines.remove(key)
+    }
+
+    /// Register a background endpoint handle
+    pub(crate) async fn register_background_endpoint(
+        &self,
+        key: String,
+        handle: crate::utils::tasks::critical::CriticalTaskExecutionHandle,
+    ) {
+        let mut endpoints = self.background_endpoints.lock().await;
+
+        // Store the handle without detaching so we can cancel it later
+        endpoints.insert(key, handle);
+    }
+
+    /// Cancel a specific background endpoint gracefully
+    pub async fn cancel_endpoint(&self, key: &str) -> bool {
+        let mut endpoints = self.background_endpoints.lock().await;
+        if let Some(handle) = endpoints.remove(key) {
+            handle.cancel();
+            handle.detach(); // Detach after cancelling so it can be dropped
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Cancel all background endpoints (for shutdown)
+    pub async fn cancel_all_endpoints(&self) {
+        let mut endpoints = self.background_endpoints.lock().await;
+        for (key, handle) in endpoints.drain() {
+            tracing::debug!("Cancelling background endpoint: {}", key);
+            handle.cancel();
+            handle.detach(); // Detach after cancelling so it can be dropped
+        }
     }
 }
 
