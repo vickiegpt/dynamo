@@ -7,14 +7,16 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{RwLock, broadcast};
-use tracing::{debug, info};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, info, warn};
 
 use crate::active_message::{
     client::{ActiveMessageClient, PeerInfo},
     handler::{ActiveMessage, ActiveMessageHandler, HandlerEvent, HandlerId},
     response::ResponseContext,
     responses::{
-        HealthCheckResponse, ListHandlersResponse, RegisterServiceResponse, WaitForHandlerResponse,
+        HealthCheckResponse, JoinCohortResponse, ListHandlersResponse, RegisterServiceResponse,
+        RemoveServiceResponse, RequestShutdownResponse, WaitForHandlerResponse,
     },
 };
 
@@ -81,17 +83,19 @@ impl ActiveMessageHandler for RegisterServiceHandler {
         "_register_service"
     }
 
-    fn schema(&self) -> Option<&serde_json::Value> {
-        static SCHEMA: once_cell::sync::Lazy<serde_json::Value> =
+    fn compiled_schema(&self) -> Option<&jsonschema::JSONSchema> {
+        static SCHEMA: once_cell::sync::Lazy<jsonschema::JSONSchema> =
             once_cell::sync::Lazy::new(|| {
-                serde_json::json!({
+                let schema_value = serde_json::json!({
                     "type": "object",
                     "properties": {
                         "instance_id": { "type": "string" },
                         "endpoint": { "type": "string" }
                     },
                     "required": ["instance_id", "endpoint"]
-                })
+                });
+                jsonschema::JSONSchema::compile(&schema_value)
+                    .expect("RegisterServiceHandler schema should be valid")
             });
         Some(&SCHEMA)
     }
@@ -241,17 +245,19 @@ impl ActiveMessageHandler for WaitForHandlerHandler {
         "_wait_for_handler"
     }
 
-    fn schema(&self) -> Option<&serde_json::Value> {
-        static SCHEMA: once_cell::sync::Lazy<serde_json::Value> =
+    fn compiled_schema(&self) -> Option<&jsonschema::JSONSchema> {
+        static SCHEMA: once_cell::sync::Lazy<jsonschema::JSONSchema> =
             once_cell::sync::Lazy::new(|| {
-                serde_json::json!({
+                let schema_value = serde_json::json!({
                     "type": "object",
                     "properties": {
                         "handler_name": { "type": "string" },
                         "timeout_ms": { "type": "number" }
                     },
                     "required": ["handler_name"]
-                })
+                });
+                jsonschema::JSONSchema::compile(&schema_value)
+                    .expect("WaitForHandlerHandler schema should be valid")
             });
         Some(&SCHEMA)
     }
@@ -348,10 +354,10 @@ impl ActiveMessageHandler for AckHandler {
         "_ack"
     }
 
-    fn schema(&self) -> Option<&serde_json::Value> {
-        static SCHEMA: once_cell::sync::Lazy<serde_json::Value> =
+    fn compiled_schema(&self) -> Option<&jsonschema::JSONSchema> {
+        static SCHEMA: once_cell::sync::Lazy<jsonschema::JSONSchema> =
             once_cell::sync::Lazy::new(|| {
-                serde_json::json!({
+                let schema_value = serde_json::json!({
                     "type": "object",
                     "properties": {
                         "ack_id": { "type": "string" },
@@ -382,9 +388,251 @@ impl ActiveMessageHandler for AckHandler {
                         }
                     },
                     "required": ["ack_id", "status"]
-                })
+                });
+                jsonschema::JSONSchema::compile(&schema_value)
+                    .expect("AckHandler schema should be valid")
             });
         Some(&SCHEMA)
+    }
+}
+
+// JoinCohortHandler for cohort membership management
+#[derive(Debug)]
+pub struct JoinCohortHandler {
+    cohort: Arc<super::cohort::LeaderWorkerCohort>,
+}
+
+impl JoinCohortHandler {
+    pub fn new(cohort: Arc<super::cohort::LeaderWorkerCohort>) -> Self {
+        Self { cohort }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct JoinCohortPayload {
+    instance_id: String,
+    rank: Option<usize>, // Worker's self-reported rank
+}
+
+#[async_trait]
+impl ActiveMessageHandler for JoinCohortHandler {
+    async fn handle(
+        &self,
+        message: ActiveMessage,
+        _client: &dyn ActiveMessageClient,
+        response: ResponseContext,
+    ) -> Result<()> {
+        let payload: JoinCohortPayload = message.deserialize()?;
+        let instance_id = uuid::Uuid::parse_str(&payload.instance_id)?;
+
+        // Validate rank consistency and add worker
+        let join_response = match self
+            .cohort
+            .validate_and_add_worker(instance_id, payload.rank)
+            .await
+        {
+            Ok(position) => {
+                use crate::active_message::responses::JoinCohortResponse;
+                JoinCohortResponse {
+                    accepted: true,
+                    reason: None,
+                    position: Some(position),
+                    expected_rank: payload.rank, // Echo back the rank
+                }
+            }
+            Err(e) => {
+                use crate::active_message::responses::JoinCohortResponse;
+                JoinCohortResponse {
+                    accepted: false,
+                    reason: Some(e.to_string()),
+                    position: None,
+                    expected_rank: None,
+                }
+            }
+        };
+
+        if let ResponseContext::Single(sender) = response {
+            sender.send(join_response).await?;
+        }
+
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "_join_cohort"
+    }
+
+    fn compiled_schema(&self) -> Option<&jsonschema::JSONSchema> {
+        static SCHEMA: once_cell::sync::Lazy<jsonschema::JSONSchema> =
+            once_cell::sync::Lazy::new(|| {
+                let schema_value = serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "instance_id": { "type": "string" },
+                        "rank": { "type": ["number", "null"] }
+                    },
+                    "required": ["instance_id"]
+                });
+                jsonschema::JSONSchema::compile(&schema_value)
+                    .expect("JoinCohortHandler schema should be valid")
+            });
+        Some(&SCHEMA)
+    }
+}
+
+// RemoveServiceHandler for graceful shutdown
+#[derive(Debug)]
+pub struct RemoveServiceHandler {
+    cohort: Arc<super::cohort::LeaderWorkerCohort>,
+}
+
+impl RemoveServiceHandler {
+    pub fn new(cohort: Arc<super::cohort::LeaderWorkerCohort>) -> Self {
+        Self { cohort }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RemoveServicePayload {
+    instance_id: String,
+    rank: Option<usize>,
+}
+
+#[async_trait]
+impl ActiveMessageHandler for RemoveServiceHandler {
+    async fn handle(
+        &self,
+        message: ActiveMessage,
+        _client: &dyn ActiveMessageClient,
+        response: ResponseContext,
+    ) -> Result<()> {
+        let payload: RemoveServicePayload = message.deserialize()?;
+        let instance_id = uuid::Uuid::parse_str(&payload.instance_id)?;
+
+        let removed = self.cohort.remove_worker(instance_id).await?;
+
+        if let ResponseContext::Single(sender) = response {
+            use crate::active_message::responses::RemoveServiceResponse;
+            let response = RemoveServiceResponse {
+                removed,
+                instance_id: payload.instance_id,
+                rank: payload.rank,
+            };
+            sender.send(response).await?;
+        }
+
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "_remove_service"
+    }
+
+    fn compiled_schema(&self) -> Option<&jsonschema::JSONSchema> {
+        static SCHEMA: once_cell::sync::Lazy<jsonschema::JSONSchema> =
+            once_cell::sync::Lazy::new(|| {
+                let schema_value = serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "instance_id": { "type": "string" },
+                        "rank": { "type": ["number", "null"] }
+                    },
+                    "required": ["instance_id"]
+                });
+                jsonschema::JSONSchema::compile(&schema_value)
+                    .expect("RemoveServiceHandler schema should be valid")
+            });
+        Some(&SCHEMA)
+    }
+}
+
+// RequestShutdownHandler for leader-initiated shutdown
+#[derive(Debug)]
+pub struct RequestShutdownHandler {
+    manager_state: Arc<RwLock<super::manager::ManagerState>>,
+    cancel_token: CancellationToken,
+}
+
+impl RequestShutdownHandler {
+    pub fn new(
+        manager_state: Arc<RwLock<super::manager::ManagerState>>,
+        cancel_token: CancellationToken,
+    ) -> Self {
+        Self {
+            manager_state,
+            cancel_token,
+        }
+    }
+}
+
+#[async_trait]
+impl ActiveMessageHandler for RequestShutdownHandler {
+    async fn handle(
+        &self,
+        _message: ActiveMessage,
+        client: &dyn ActiveMessageClient,
+        response: ResponseContext,
+    ) -> Result<()> {
+        info!("Received shutdown request from leader");
+
+        // Acknowledge the shutdown request first
+        if let ResponseContext::Single(sender) = response {
+            use crate::active_message::responses::RequestShutdownResponse;
+            let response = RequestShutdownResponse { acknowledged: true };
+            sender.send(response).await?;
+        }
+
+        // Start shutdown process in background
+        let manager_state = self.manager_state.clone();
+        let cancel_token = self.cancel_token.clone();
+        let client_id = client.instance_id();
+
+        tokio::spawn(async move {
+            // 1. Stop accepting new tasks (close all TaskTrackers)
+            let state = manager_state.read().await;
+            for (name, entry) in &state.handlers {
+                debug!("Closing task tracker for handler: {}", name);
+                entry.task_tracker.cancellation_token().cancel(); // Prevents new tasks
+            }
+            drop(state);
+
+            // 2. Drain existing tasks
+            let state = manager_state.read().await;
+            for (name, entry) in &state.handlers {
+                debug!("Draining tasks for handler: {}", name);
+                entry.task_tracker.join().await;
+            }
+            let leader_id = state.client.instance_id(); // Assuming we can get the leader ID
+            let client = state.client.clone();
+            drop(state);
+
+            // 3. Send remove_service to leader
+            debug!("Sending remove service notification to leader");
+            let payload = serde_json::json!({
+                "instance_id": client_id.to_string(),
+                "rank": std::env::var("RANK").ok().and_then(|r| r.parse::<usize>().ok())
+            });
+
+            if let Err(e) = client
+                .system_message("_remove_service")
+                .payload(payload)
+                .expect("Valid payload")
+                .fire_and_forget(leader_id)
+                .await
+            {
+                warn!("Failed to send remove_service to leader: {}", e);
+            }
+
+            // 4. Trigger local shutdown
+            info!("Triggering worker shutdown");
+            cancel_token.cancel();
+        });
+
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "_request_shutdown"
     }
 }
 
