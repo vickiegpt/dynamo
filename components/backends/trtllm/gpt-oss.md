@@ -219,7 +219,7 @@ The server exposes a standard OpenAI-compatible API endpoint that accepts JSON r
 
 Dynamo has supported reasoning and tool calling in OpenAI Chat Completion endpoint. A typical workflow for application built on top of Dynamo
 is that the application has a set of tools to aid the assistant provide accurate answer, and it is ususally
-multi-turn as it involves tool selection and generation based on the tool result. 
+multi-turn as it involves tool selection and generation based on the tool result.
 
 In addition, the reasoning effort can be configured through ```chat_template_args```. Increasing the reasoning effort makes the model more accurate but also slower. It supports three levels: ```low```, ```medium```, and ```high```.
 
