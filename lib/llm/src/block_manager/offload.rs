@@ -1418,7 +1418,6 @@ mod tests {
         let device_blocks = offload_manager
             .onboard(immutable_disk_blocks.clone(), None)
             .await??;
-
         assert_eq!(device_blocks.len(), 2 * MAX_TRANSFER_BATCH_SIZE + 1);
 
         for (i, device_block) in device_blocks.iter().enumerate() {

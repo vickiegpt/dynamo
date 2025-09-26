@@ -98,6 +98,9 @@
 //! which extends these layout concepts for NIXL (NVIDIA Interface eXchange Layer), enabling
 //! layouts to be registered and serialized for use in distributed environments.
 
+// todo: coming soon...
+// pub mod distributed;
+
 pub mod nixl;
 /// Utility functions for layout validation and verification
 pub mod utils;
