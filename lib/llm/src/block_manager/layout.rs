@@ -151,13 +151,28 @@ pub enum LayoutType {
     FullyContiguous,
 
     /// All layers are stored separately.
-    /// If outer_contiguous is true, for each layer: [outer_dim, n_blocks, ...]
-    /// If outer_contiguous is false, for each layer: [n_blocks, outer_dim, ...]
+    /// The outer_contiguous field is auto-detected from tensor shapes when not explicitly set.
+    /// If outer_contiguous: for each layer: [outer_dim, n_blocks, ...]
+    /// If !outer_contiguous: for each layer: [n_blocks, outer_dim, ...]
     /// When outer_dim is 1, these two modes are equivalent.
     LayerSeparate {
-        /// If true, the outer dimension is contiguous. Otherwise, the block dimension is contiguous.
+        /// If true, the outer dimension is contiguous. Auto-detected from tensor shapes when possible.
         outer_contiguous: bool,
     },
+}
+
+impl LayoutType {
+    /// Create a LayerSeparate layout type with auto-detection (defaults to outer_contiguous=true)
+    pub fn layer_separate_auto() -> Self {
+        LayoutType::LayerSeparate {
+            outer_contiguous: true,
+        }
+    }
+
+    /// Create a LayerSeparate layout type with explicit outer_contiguous setting
+    pub fn layer_separate(outer_contiguous: bool) -> Self {
+        LayoutType::LayerSeparate { outer_contiguous }
+    }
 }
 
 /// Local Memory Region

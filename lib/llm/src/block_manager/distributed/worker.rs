@@ -187,8 +187,11 @@ impl KvbmWorker {
                     inner_dim,
                 )
             }
-            LayoutType::LayerSeparate { outer_contiguous: _ } => {
-                let (outer_contiguous, outer_dim) = if shape[0] >= config.num_device_blocks {
+            LayoutType::LayerSeparate {
+                outer_contiguous: _,
+            } => {
+                let (detected_outer_contiguous, outer_dim) = if shape[0] >= config.num_device_blocks
+                {
                     (false, shape[1])
                 } else if shape[1] >= config.num_device_blocks {
                     (true, shape[0])
@@ -202,15 +205,18 @@ impl KvbmWorker {
                 let inner_dim = shape[2..].iter().product::<usize>() / config.page_size;
 
                 tracing::info!(
-                    "Inferred layout: num_layers={}, outer_dim={}, page_size={}, inner_dim={}",
+                    "Detected layout: num_layers={}, outer_dim={}, outer_contiguous={}, page_size={}, inner_dim={}",
                     device_tensors.len(),
                     outer_dim,
+                    detected_outer_contiguous,
                     config.page_size,
                     inner_dim
                 );
 
                 (
-                    LayoutType::LayerSeparate { outer_contiguous },
+                    LayoutType::LayerSeparate {
+                        outer_contiguous: detected_outer_contiguous,
+                    },
                     num_layers,
                     outer_dim,
                     inner_dim,

@@ -176,7 +176,7 @@ impl Worker for KvConnectorWorker {
             .dtype_width_bytes(dtype_width_bytes)
             .barrier_id_prefix(get_barrier_id_prefix())
             .scheduler_client(Some(self.transfer_client.clone()))
-            .device_layout_type(device_layout_type.unwrap_or(LayoutType::LayerSeparate { outer_contiguous: false }))
+            .device_layout_type(device_layout_type.unwrap_or(LayoutType::layer_separate_auto()))
             .host_layout_type(host_layout_type.unwrap_or(LayoutType::FullyContiguous))
             .disk_layout_type(disk_layout_type.unwrap_or(LayoutType::FullyContiguous))
             .build()?;
