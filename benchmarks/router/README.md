@@ -51,7 +51,7 @@ This will start both etcd and NATS with the required configurations in the backg
 
 ### Step 1: Launch vLLM Workers
 
-First, start the vLLM worker engines in a terminal.
+Make sure you have 8 GPUs for these examples, unless you are using mockers (see below). First, start the vLLM worker engines in a terminal.
 
 ```bash
 # Default: 8 vLLM workers with DeepSeek model (explicitly sets --block-size 64)
@@ -60,10 +60,29 @@ First, start the vLLM worker engines in a terminal.
     --model-path deepseek-ai/DeepSeek-R1-Distill-Llama-8B
 
 # Example: 4 vLLM workers with larger model using tensor parallelism (2 GPUs per worker)
+# NOTE: this would likely require each GPU having 80GB of VRAM
 ./run_engines.sh \
     --num-workers 4 \
     --model-path openai/gpt-oss-120b \
     --tensor-parallel-size 2
+```
+
+#### Prefill Workers
+
+You can also launch separate decode and prefill workers for disaggregated serving. This allows you to dedicate specific GPUs to prefill (prompt processing) and decode (token generation) tasks:
+
+```bash
+# Launch 4 decode workers (GPUs 0-3)
+./run_engines.sh \
+    --num-workers 4 \
+    --model-path deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+
+# Launch 4 prefill workers (GPUs 4-7)
+./run_engines.sh \
+    --prefills \
+    --num-workers 4 \
+    --base-gpu-offset 4 \
+    --model-path deepseek-ai/DeepSeek-R1-Distill-Llama-8B
 ```
 
 #### Alternative: Launch vLLM Mock Workers
@@ -105,6 +124,27 @@ python -m dynamo.frontend --help
 ```
 
 For detailed explanations of router arguments (especially KV cache routing parameters), see the [KV Cache Routing documentation](../../docs/architecture/kv_cache_routing.md).
+
+#### Launching a Prefill Router (Optional)
+
+If you're using disaggregated serving with separate prefill and decode workers, you should also launch a prefill router. The prefill router handles routing prefill requests to dedicated prefill workers. When using a prefill router, it's recommended to start the frontend (decode router) with `--kv-overlap-score-weight 0` for pure load balancing (as prefix-aware routing is now handled by the prefill router):
+
+```bash
+# Start the decode router with pure load balancing
+python -m dynamo.frontend \
+    --router-mode kv \
+    --kv-cache-block-size 64 \
+    --router-reset-states \
+    --http-port 8000 \
+    --kv-overlap-score-weight 0
+
+# In another terminal, start the prefill router (currently only supports vLLM)
+python -m dynamo.vllm_prefill_router \
+    --namespace dynamo \
+    --block-size 64
+```
+
+The prefill router will automatically coordinate with the decode router to handle request routing between prefill and decode workers.
 
 **Note**: If you're unsure whether your backend engines correctly emit KV events for certain models (e.g., hybrid models like gpt-oss or nemotron nano 2), use the `--no-kv-events` flag to disable KV event tracking and use approximate KV indexing instead:
 

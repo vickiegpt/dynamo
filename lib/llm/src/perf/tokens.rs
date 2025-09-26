@@ -132,7 +132,7 @@ impl TokenExtractor for NvCreateChatCompletionStreamResponse {
     ) -> HashMap<u32, ChoiceTokenData> {
         let mut result = HashMap::new();
 
-        for choice in &self.inner.choices {
+        for choice in &self.choices {
             let choice_index = choice.index;
             let content = choice.delta.content.as_deref().unwrap_or("");
             let finish_reason = choice.finish_reason.as_ref().map(|fr| format!("{:?}", fr));
@@ -317,14 +317,13 @@ pub fn analyze_token_counting<T: TokenExtractor>(
             choice_analysis.responses_with_choice += 1;
 
             // Check if choice was already finished
-            if let Some(finish_pos) = finished_choices.get(&choice_index) {
-                if choice_token_data.token_count > 0 {
+            if let Some(finish_pos) = finished_choices.get(&choice_index)
+                && choice_token_data.token_count > 0 {
                     validation_errors.push(format!(
                         "Choice {} generated {} tokens at position {} after finishing at position {}",
                         choice_index, choice_token_data.token_count, stream_pos, finish_pos
                     ));
                 }
-            }
 
             // Update total tokens
             choice_analysis.total_tokens += choice_token_data.token_count;
@@ -827,9 +826,8 @@ mod tests {
     use super::*;
     use crate::perf::{RecordedStream, TimestampedResponse};
     use anyhow::Result;
-    use async_openai::types::{
-        ChatChoiceStream, ChatCompletionStreamResponseDelta, CreateChatCompletionStreamResponse,
-        FinishReason, Role,
+    use dynamo_async_openai::types::{
+        ChatChoiceStream, ChatCompletionStreamResponseDelta, FinishReason, Role,
     };
     use std::time::Instant;
 
@@ -1592,8 +1590,7 @@ mod tests {
         _is_finished: bool,
         finish_reason: Option<FinishReason>,
     ) -> NvCreateChatCompletionStreamResponse {
-        #[expect(deprecated)]
-        let inner = CreateChatCompletionStreamResponse {
+        NvCreateChatCompletionStreamResponse {
             id: "test_id".to_string(),
             choices: vec![ChatChoiceStream {
                 index: choice_index,
@@ -1607,6 +1604,7 @@ mod tests {
                     tool_calls: None,
                     role: Some(Role::Assistant),
                     refusal: None,
+                    reasoning_content: None,
                 },
                 finish_reason,
                 logprobs: None,
@@ -1617,9 +1615,7 @@ mod tests {
             system_fingerprint: None,
             object: "chat.completion.chunk".to_string(),
             usage: None,
-        };
-
-        NvCreateChatCompletionStreamResponse { inner }
+        }
     }
 
     fn create_mock_response_with_multiple_choices(
@@ -1641,6 +1637,7 @@ mod tests {
                         tool_calls: None,
                         role: Some(Role::Assistant),
                         refusal: None,
+                        reasoning_content: None,
                     },
                     finish_reason,
                     logprobs: None,
@@ -1648,7 +1645,7 @@ mod tests {
             )
             .collect();
 
-        let inner = CreateChatCompletionStreamResponse {
+        NvCreateChatCompletionStreamResponse {
             id: "test_id".to_string(),
             choices,
             created: 1234567890,
@@ -1657,8 +1654,6 @@ mod tests {
             system_fingerprint: None,
             object: "chat.completion.chunk".to_string(),
             usage: None,
-        };
-
-        NvCreateChatCompletionStreamResponse { inner }
+        }
     }
 }
