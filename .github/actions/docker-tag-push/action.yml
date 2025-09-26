@@ -71,7 +71,7 @@ runs:
     - name: ACR Login
       if: ${{ env.ACR_PUSH == 'true' }}
       run: |
-        echo "${ACR_PASSWORD}" | docker login ${ACR_HOSTNAME} --username ${ACR_USER} --password-stdin
+        echo "${AZURE_ACR_PASSWORD}" | docker login ${AZURE_ACR_HOSTNAME} --username ${AZURE_ACR_USER} --password-stdin
     - name: ECR Tag and Push
       if: ${{ env.AWS_PUSH == 'true' }}
       env:
@@ -82,5 +82,5 @@ runs:
     - name: ACR Tag and Push
       if: ${{ env.ACR_PUSH == 'true' }}
       run: |
-        docker tag ${LOCAL_IMAGE} ${ACR_HOSTNAME}/${PUSH_TAG}
-        docker push ${ACR_HOSTNAME}/${PUSH_TAG}
+        docker tag ${LOCAL_IMAGE} ${AZURE_ACR_HOSTNAME}/${PUSH_TAG}
+        docker push ${AZURE_ACR_HOSTNAME}/${PUSH_TAG}
