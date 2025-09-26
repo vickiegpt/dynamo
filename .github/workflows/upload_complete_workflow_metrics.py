@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 """
 Enhanced script to upload complete GitHub Actions workflow and job metrics.
 This version runs as the final job in a workflow and captures metrics for 
@@ -194,11 +195,11 @@ class WorkflowMetricsUploader:
         }
         
         try:
-            response = requests.get(f"https://api.github.com{endpoint}", headers=headers)
+            response = requests.get(f"https://api.github.com{endpoint}", headers=headers, timeout=30)
             response.raise_for_status()
             return response.json()
-        except Exception as e:
-            print(f"Error fetching GitHub API data from {endpoint}: {e}")
+        except requests.exceptions.RequestException as e:
+            print(self.handle_upload_error(e, f"GitHub API GET {endpoint}"))
             return None
 
 
@@ -422,11 +423,7 @@ class WorkflowMetricsUploader:
         # Schema fields
         db_data[FIELD_JOB_ID] = str(job_id)
         # Handle job status - prefer conclusion for completed jobs, fallback to status
-        job_status = str(job_data.get('conclusion') or job_data.get('status', 'unknown'))
-        # Don't upload jobs with null/None status as they cause Grafana filtering issues
-        if job_status is None:
-            job_status = 'in_progress'
-        db_data[FIELD_STATUS] = str(job_status)
+        db_data[FIELD_STATUS] = str(job_data.get('conclusion') or job_data.get('status') or 'unknown')
         if db_data[FIELD_STATUS] is "success":
             db_data[FIELD_STATUS_NUMBER] = 1
         elif db_data[FIELD_STATUS] is "failure":
@@ -452,7 +449,6 @@ class WorkflowMetricsUploader:
 
     def _upload_job_step_metrics(self, job_data: Dict[str, Any]) -> int:
         """Extract and post metrics for all steps in a job"""
-        job_id = job_data['id']
         job_name = job_data['name']
         steps = job_data.get('steps', [])
         
@@ -491,7 +487,7 @@ class WorkflowMetricsUploader:
         db_data[FIELD_JOB_ID] = str(job_id)
         db_data[FIELD_NAME] = str(step_name)
         db_data[FIELD_STEP_NUMBER] = int(step_number)  # Using l_ prefix, should be integer
-        db_data[FIELD_STATUS] = str(step_data.get('conclusion', step_data.get('status', 'unknown')))
+        db_data[FIELD_STATUS] = str(step_data.get('conclusion') or step_data.get('status') or 'unknown')
         db_data[FIELD_JOB_NAME] = str(job_name)
         if db_data[FIELD_STATUS] is "success":
             db_data[FIELD_STATUS_NUMBER] = 1
