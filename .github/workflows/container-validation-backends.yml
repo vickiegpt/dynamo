@@ -61,7 +61,7 @@ jobs:
           image_tag: ${{ steps.build-image.outputs.image_tag }}
           pytest_marks: "e2e and vllm and gpu_1 and not slow"
       - name: Docker Tag and Push
-        uses: ./.github/docker-tag-push
+        uses: ./.github/actions/docker-tag-push
         with:
           local_image: ${{ steps.build-image.outputs.image_tag }}
           push_tag: ai-dynamo/dynamo:${{ github.sha }}-vllm-amd64
@@ -98,7 +98,7 @@ jobs:
           image_tag: ${{ steps.build-image.outputs.image_tag }}
           pytest_marks: "e2e and sglang and gpu_1"
       - name: Docker Tag and Push
-        uses: ./.github/docker-tag-push
+        uses: ./.github/actions/docker-tag-push
         with:
           local_image: ${{ steps.build-image.outputs.image_tag }}
           push_tag: ai-dynamo/dynamo:${{ github.sha }}-sglang-amd64
@@ -135,7 +135,7 @@ jobs:
           image_tag: ${{ steps.build-image.outputs.image_tag }}
           pytest_marks: "e2e and trtllm_marker and gpu_1 and not slow"
       - name: Docker Tag and Push
-        uses: ./.github/docker-tag-push
+        uses: ./.github/actions/docker-tag-push
         with:
           local_image: ${{ steps.build-image.outputs.image_tag }}
           push_tag: ai-dynamo/dynamo:${{ github.sha }}-trtllm-amd64
@@ -170,8 +170,7 @@ jobs:
         # find dynamo -type f -exec sed -i 's|https://charts.bitnami.com/bitnami|oci://dockerhub.nvidia.com/bitnamicharts|g' {} +
         # echo $DYNAMO_REPO_CI_COMMIT_SHA | tee -a build.env
 
-
-        # uv is already installed, but we need to sync the dependencies
+        curl -LsSf https://astral.sh/uv/install.sh | sh
         export PATH="/root/.local/bin:/opt/dynamo/venv/bin:$PATH"
         uv sync
         # Install yq
