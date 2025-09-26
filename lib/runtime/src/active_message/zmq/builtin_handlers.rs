@@ -12,8 +12,7 @@ use tracing::{debug, info, warn};
 
 use crate::active_message::{
     client::{ActiveMessageClient, PeerInfo},
-    handler::{ActiveMessage, ActiveMessageHandler, HandlerEvent, HandlerId},
-    response::ResponseContext,
+    handler::{ActiveMessage, HandlerEvent, HandlerId, NoReturnHandler, ResponseHandler},
     responses::{
         HealthCheckResponse, JoinCohortResponse, ListHandlersResponse, RegisterServiceResponse,
         RemoveServiceResponse, RequestShutdownResponse, WaitForHandlerResponse,
@@ -40,13 +39,14 @@ struct RegisterServicePayload {
 }
 
 #[async_trait]
-impl ActiveMessageHandler for RegisterServiceHandler {
+impl ResponseHandler for RegisterServiceHandler {
+    type Response = RegisterServiceResponse;
+
     async fn handle(
         &self,
         message: ActiveMessage,
         _client: &dyn ActiveMessageClient,
-        response: ResponseContext,
-    ) -> Result<()> {
+    ) -> Result<Self::Response> {
         let payload: RegisterServicePayload = message.deserialize()?;
 
         let instance_id = uuid::Uuid::parse_str(&payload.instance_id)?;
@@ -67,16 +67,13 @@ impl ActiveMessageHandler for RegisterServiceHandler {
             );
         }
 
-        if let ResponseContext::Single(sender) = response {
-            let response = RegisterServiceResponse {
-                registered,
-                instance_id: payload.instance_id,
-                endpoint: payload.endpoint,
-            };
-            sender.send(response).await?;
-        }
+        let response = RegisterServiceResponse {
+            registered,
+            instance_id: payload.instance_id,
+            endpoint: payload.endpoint,
+        };
 
-        registration_result
+        Ok(response)
     }
 
     fn name(&self) -> &str {
@@ -113,25 +110,22 @@ impl ListHandlersHandler {
 }
 
 #[async_trait]
-impl ActiveMessageHandler for ListHandlersHandler {
+impl ResponseHandler for ListHandlersHandler {
+    type Response = ListHandlersResponse;
+
     async fn handle(
         &self,
         _message: ActiveMessage,
         _client: &dyn ActiveMessageClient,
-        response: ResponseContext,
-    ) -> Result<()> {
+    ) -> Result<Self::Response> {
         let state = self.state.read().await;
         let handlers: Vec<HandlerId> = state.handlers.keys().cloned().collect();
         drop(state);
 
         debug!("Available handlers: {:?}", handlers);
 
-        if let ResponseContext::Single(sender) = response {
-            let response = ListHandlersResponse { handlers };
-            sender.send(response).await?;
-        }
-
-        Ok(())
+        let response = ListHandlersResponse { handlers };
+        Ok(response)
     }
 
     fn name(&self) -> &str {
@@ -164,28 +158,25 @@ struct WaitForHandlerPayload {
 }
 
 #[async_trait]
-impl ActiveMessageHandler for WaitForHandlerHandler {
+impl ResponseHandler for WaitForHandlerHandler {
+    type Response = WaitForHandlerResponse;
+
     async fn handle(
         &self,
         message: ActiveMessage,
         _client: &dyn ActiveMessageClient,
-        response: ResponseContext,
-    ) -> Result<()> {
+    ) -> Result<Self::Response> {
         let payload: WaitForHandlerPayload = message.deserialize()?;
 
         let state = self.state.read().await;
         if state.handlers.contains_key(&payload.handler_name) {
             debug!("Handler '{}' already registered", payload.handler_name);
 
-            if let ResponseContext::Single(sender) = response {
-                let response = WaitForHandlerResponse {
-                    handler_name: payload.handler_name,
-                    available: true,
-                };
-                sender.send(response).await?;
-            }
-
-            return Ok(());
+            let response = WaitForHandlerResponse {
+                handler_name: payload.handler_name,
+                available: true,
+            };
+            return Ok(response);
         }
         drop(state);
 
@@ -226,17 +217,15 @@ impl ActiveMessageHandler for WaitForHandlerHandler {
             }
         }
 
-        if let ResponseContext::Single(sender) = response {
-            let response = WaitForHandlerResponse {
-                handler_name: payload.handler_name.clone(),
-                available: handler_found,
-            };
-            sender.send(response).await?;
-        }
+        let response = WaitForHandlerResponse {
+            handler_name: payload.handler_name.clone(),
+            available: handler_found,
+        };
 
         if handler_found {
-            Ok(())
+            Ok(response)
         } else {
+            // Return error response - this will be converted to ResponseEnvelope::Err
             anyhow::bail!("Timeout waiting for handler '{}'", payload.handler_name)
         }
     }
@@ -267,29 +256,27 @@ impl ActiveMessageHandler for WaitForHandlerHandler {
 pub struct HealthCheckHandler;
 
 #[async_trait]
-impl ActiveMessageHandler for HealthCheckHandler {
+impl ResponseHandler for HealthCheckHandler {
+    type Response = HealthCheckResponse;
+
     async fn handle(
         &self,
         _message: ActiveMessage,
         _client: &dyn ActiveMessageClient,
-        response: ResponseContext,
-    ) -> Result<()> {
+    ) -> Result<Self::Response> {
         debug!("Health check received");
 
-        if let ResponseContext::Single(sender) = response {
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
 
-            let response = HealthCheckResponse {
-                status: "ok".to_string(),
-                timestamp,
-            };
-            sender.send(response).await?;
-        }
+        let response = HealthCheckResponse {
+            status: "ok".to_string(),
+            timestamp,
+        };
 
-        Ok(())
+        Ok(response)
     }
 
     fn name(&self) -> &str {
@@ -322,32 +309,48 @@ enum AckStatus {
 }
 
 #[async_trait]
-impl ActiveMessageHandler for AckHandler {
-    async fn handle(
-        &self,
-        message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
-        _response: ResponseContext,
-    ) -> Result<()> {
-        let payload: AckPayload = message.deserialize()?;
-        let ack_id = uuid::Uuid::parse_str(&payload.ack_id)?;
+impl NoReturnHandler for AckHandler {
+    async fn handle(&self, message: ActiveMessage, _client: &dyn ActiveMessageClient) {
+        let payload: AckPayload = match message.deserialize() {
+            Ok(payload) => payload,
+            Err(e) => {
+                tracing::error!("Failed to deserialize ACK payload: {}", e);
+                return;
+            }
+        };
+
+        let ack_id = match uuid::Uuid::parse_str(&payload.ack_id) {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::error!("Invalid ACK ID '{}': {}", payload.ack_id, e);
+                return;
+            }
+        };
 
         match payload.status {
             AckStatus::Ack => {
-                self.client
+                if let Err(e) = self
+                    .client
                     .complete_ack(ack_id, message.sender_instance)
-                    .await?;
-                debug!("Processed ACK for {}", ack_id);
+                    .await
+                {
+                    tracing::error!("Failed to complete ACK for {}: {}", ack_id, e);
+                } else {
+                    debug!("Processed ACK for {}", ack_id);
+                }
             }
             AckStatus::Nack { error } => {
-                self.client
+                if let Err(e) = self
+                    .client
                     .complete_nack(ack_id, message.sender_instance, error.clone())
-                    .await?;
-                debug!("Processed NACK for {}: {}", ack_id, error);
+                    .await
+                {
+                    tracing::error!("Failed to complete NACK for {}: {}", ack_id, e);
+                } else {
+                    debug!("Processed NACK for {}: {}", ack_id, error);
+                }
             }
         }
-
-        Ok(())
     }
 
     fn name(&self) -> &str {
@@ -415,13 +418,14 @@ struct JoinCohortPayload {
 }
 
 #[async_trait]
-impl ActiveMessageHandler for JoinCohortHandler {
+impl ResponseHandler for JoinCohortHandler {
+    type Response = JoinCohortResponse;
+
     async fn handle(
         &self,
         message: ActiveMessage,
         _client: &dyn ActiveMessageClient,
-        response: ResponseContext,
-    ) -> Result<()> {
+    ) -> Result<Self::Response> {
         let payload: JoinCohortPayload = message.deserialize()?;
         let instance_id = uuid::Uuid::parse_str(&payload.instance_id)?;
 
@@ -432,7 +436,6 @@ impl ActiveMessageHandler for JoinCohortHandler {
             .await
         {
             Ok(position) => {
-                use crate::active_message::responses::JoinCohortResponse;
                 JoinCohortResponse {
                     accepted: true,
                     reason: None,
@@ -440,22 +443,15 @@ impl ActiveMessageHandler for JoinCohortHandler {
                     expected_rank: payload.rank, // Echo back the rank
                 }
             }
-            Err(e) => {
-                use crate::active_message::responses::JoinCohortResponse;
-                JoinCohortResponse {
-                    accepted: false,
-                    reason: Some(e.to_string()),
-                    position: None,
-                    expected_rank: None,
-                }
-            }
+            Err(e) => JoinCohortResponse {
+                accepted: false,
+                reason: Some(e.to_string()),
+                position: None,
+                expected_rank: None,
+            },
         };
 
-        if let ResponseContext::Single(sender) = response {
-            sender.send(join_response).await?;
-        }
-
-        Ok(())
+        Ok(join_response)
     }
 
     fn name(&self) -> &str {
@@ -499,29 +495,26 @@ struct RemoveServicePayload {
 }
 
 #[async_trait]
-impl ActiveMessageHandler for RemoveServiceHandler {
+impl ResponseHandler for RemoveServiceHandler {
+    type Response = RemoveServiceResponse;
+
     async fn handle(
         &self,
         message: ActiveMessage,
         _client: &dyn ActiveMessageClient,
-        response: ResponseContext,
-    ) -> Result<()> {
+    ) -> Result<Self::Response> {
         let payload: RemoveServicePayload = message.deserialize()?;
         let instance_id = uuid::Uuid::parse_str(&payload.instance_id)?;
 
         let removed = self.cohort.remove_worker(instance_id).await?;
 
-        if let ResponseContext::Single(sender) = response {
-            use crate::active_message::responses::RemoveServiceResponse;
-            let response = RemoveServiceResponse {
-                removed,
-                instance_id: payload.instance_id,
-                rank: payload.rank,
-            };
-            sender.send(response).await?;
-        }
+        let response = RemoveServiceResponse {
+            removed,
+            instance_id: payload.instance_id,
+            rank: payload.rank,
+        };
 
-        Ok(())
+        Ok(response)
     }
 
     fn name(&self) -> &str {
@@ -566,21 +559,15 @@ impl RequestShutdownHandler {
 }
 
 #[async_trait]
-impl ActiveMessageHandler for RequestShutdownHandler {
+impl ResponseHandler for RequestShutdownHandler {
+    type Response = RequestShutdownResponse;
+
     async fn handle(
         &self,
         _message: ActiveMessage,
         client: &dyn ActiveMessageClient,
-        response: ResponseContext,
-    ) -> Result<()> {
+    ) -> Result<Self::Response> {
         info!("Received shutdown request from leader");
-
-        // Acknowledge the shutdown request first
-        if let ResponseContext::Single(sender) = response {
-            use crate::active_message::responses::RequestShutdownResponse;
-            let response = RequestShutdownResponse { acknowledged: true };
-            sender.send(response).await?;
-        }
 
         // Start shutdown process in background
         let manager_state = self.manager_state.clone();
@@ -628,7 +615,9 @@ impl ActiveMessageHandler for RequestShutdownHandler {
             cancel_token.cancel();
         });
 
-        Ok(())
+        // Acknowledge the shutdown request
+        let response = RequestShutdownResponse { acknowledged: true };
+        Ok(response)
     }
 
     fn name(&self) -> &str {
@@ -640,9 +629,7 @@ impl ActiveMessageHandler for RequestShutdownHandler {
 mod tests {
     use super::*;
     use crate::active_message::{
-        client::ActiveMessageClient,
-        handler::ActiveMessage,
-        response::{ResponseContext, SingleResponseSender},
+        client::ActiveMessageClient, handler::ActiveMessage, response::SingleResponseSender,
     };
     use std::sync::Arc;
     use tokio::sync::{RwLock, oneshot};
@@ -751,14 +738,6 @@ mod tests {
             endpoint: "test://localhost".to_string(),
         };
 
-        let response_sender = SingleResponseSender::new(
-            Arc::new(mock_client.clone()),
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            "_health_check".to_string(),
-        );
-        let response_context = ResponseContext::Single(response_sender);
-
         let message = ActiveMessage {
             message_id: Uuid::new_v4(),
             handler_name: "_health_check".to_string(),
@@ -767,11 +746,11 @@ mod tests {
             metadata: serde_json::Value::Null,
         };
 
-        // This should succeed without sending a response since we can't easily intercept the send
-        let result = handler
-            .handle(message, &mock_client, response_context)
-            .await;
+        // Test the new response handler directly
+        let result = handler.handle(message, &mock_client).await;
         assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status, "ok");
     }
 
     #[tokio::test]
@@ -834,5 +813,101 @@ mod tests {
 
         assert_eq!(deserialized.handler_name, "test_handler");
         assert!(deserialized.available);
+    }
+
+    #[tokio::test]
+    async fn test_join_cohort_response_structure() {
+        use crate::active_message::responses::JoinCohortResponse;
+
+        let response = JoinCohortResponse {
+            accepted: true,
+            reason: None,
+            position: Some(0),
+            expected_rank: Some(1),
+        };
+
+        let serialized = serde_json::to_string(&response).expect("Should serialize");
+        let deserialized: JoinCohortResponse =
+            serde_json::from_str(&serialized).expect("Should deserialize");
+
+        assert!(deserialized.accepted);
+        assert_eq!(deserialized.reason, None);
+        assert_eq!(deserialized.position, Some(0));
+        assert_eq!(deserialized.expected_rank, Some(1));
+
+        // Test rejection case
+        let rejection_response = JoinCohortResponse {
+            accepted: false,
+            reason: Some("Cohort is full".to_string()),
+            position: None,
+            expected_rank: None,
+        };
+
+        let serialized = serde_json::to_string(&rejection_response).expect("Should serialize");
+        let deserialized: JoinCohortResponse =
+            serde_json::from_str(&serialized).expect("Should deserialize");
+
+        assert!(!deserialized.accepted);
+        assert_eq!(deserialized.reason, Some("Cohort is full".to_string()));
+        assert_eq!(deserialized.position, None);
+        assert_eq!(deserialized.expected_rank, None);
+    }
+
+    #[tokio::test]
+    async fn test_remove_service_response_structure() {
+        use crate::active_message::responses::RemoveServiceResponse;
+
+        let response = RemoveServiceResponse {
+            removed: true,
+            instance_id: "worker-123".to_string(),
+            rank: Some(2),
+        };
+
+        let serialized = serde_json::to_string(&response).expect("Should serialize");
+        let deserialized: RemoveServiceResponse =
+            serde_json::from_str(&serialized).expect("Should deserialize");
+
+        assert!(deserialized.removed);
+        assert_eq!(deserialized.instance_id, "worker-123");
+        assert_eq!(deserialized.rank, Some(2));
+
+        // Test without rank
+        let no_rank_response = RemoveServiceResponse {
+            removed: false,
+            instance_id: "worker-456".to_string(),
+            rank: None,
+        };
+
+        let serialized = serde_json::to_string(&no_rank_response).expect("Should serialize");
+        let deserialized: RemoveServiceResponse =
+            serde_json::from_str(&serialized).expect("Should deserialize");
+
+        assert!(!deserialized.removed);
+        assert_eq!(deserialized.instance_id, "worker-456");
+        assert_eq!(deserialized.rank, None);
+    }
+
+    #[tokio::test]
+    async fn test_request_shutdown_response_structure() {
+        use crate::active_message::responses::RequestShutdownResponse;
+
+        let response = RequestShutdownResponse { acknowledged: true };
+
+        let serialized = serde_json::to_string(&response).expect("Should serialize");
+        let deserialized: RequestShutdownResponse =
+            serde_json::from_str(&serialized).expect("Should deserialize");
+
+        assert!(deserialized.acknowledged);
+
+        // Test negative acknowledgment
+        let nack_response = RequestShutdownResponse {
+            acknowledged: false,
+        };
+
+        let serialized = serde_json::to_string(&nack_response).expect("Should serialize");
+        let deserialized: RequestShutdownResponse =
+            serde_json::from_str(&serialized).expect("Should deserialize");
+
+        assert!(!deserialized.acknowledged);
     }
 }

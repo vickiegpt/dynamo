@@ -92,7 +92,8 @@ generated-values.yaml
 **/.devcontainer/.env
 TensorRT-LLM
 
-# Ruler Generated Files
+
+# START Ruler Generated Files
 /.cursor/instructions.md
 /.cursor/instructions.md.bak
 /CLAUDE.md
@@ -100,3 +101,4 @@ TensorRT-LLM
 
 # Benchmarks
 benchmarks/results
+# END Ruler Generated Files
