@@ -14,9 +14,11 @@ from typing import Dict, Any, Optional, List
 from urllib.parse import urlparse
 import re
 
-# FILTERING CONFIGURATION - Only upload data for specific workflow/job combinations
-TARGET_WORKFLOW_NAME = "NVIDIA Dynamo Backends Github Validation"
-TARGET_JOB_NAME = "Build and Test - vllm"
+# FILTERING CONFIGURATION - Process all jobs except excluded ones
+EXCLUDED_JOB_NAMES = [
+    "Upload Workflow Metrics",  # Avoid infinite loops
+    # Add other job names to exclude here as needed
+]
 
 # NEW STANDARDIZED FIELD SCHEMA - Using consistent prefixes for OpenSearch mapping
 # Using prefixes: s_ for strings, l_ for longs, ts_ for timestamps
@@ -207,7 +209,7 @@ class WorkflowMetricsUploader:
             return None
 
 
-    def add_common_context_fields(self, db_data: Dict[str, Any]) -> None:
+    def add_common_context_fields(self, db_data: Dict[str, Any], workflow_data: Optional[Dict[str, Any]] = None) -> None:
         """Add common context fields used across all metric types"""
         db_data[FIELD_USER_ALIAS] = self.actor
         db_data[FIELD_REPO] = self.repo
@@ -281,28 +283,19 @@ class WorkflowMetricsUploader:
                 print("Could not fetch jobs data from GitHub API")
                 return
             
-            # FILTER: Only upload data for specific workflow and job
+            # Count jobs to process (exclude specified jobs)
             workflow_name = workflow_data.get('name', '')
+            jobs_to_process = [job for job in jobs_data.get('jobs', []) if job.get('name') not in EXCLUDED_JOB_NAMES]
             
-            if workflow_name != TARGET_WORKFLOW_NAME:
-                print(f"❌ Skipping upload - Workflow '{workflow_name}' does not match target '{TARGET_WORKFLOW_NAME}'")
-                return
-            
-            # Check if target job exists in this workflow
-            target_job_found = False
-            for job in jobs_data.get('jobs', []):
-                if job.get('name') == TARGET_JOB_NAME:
-                    target_job_found = True
-                    break
-            
-            if not target_job_found:
-                print(f"❌ Skipping upload - Target job '{TARGET_JOB_NAME}' not found in workflow")
+            if not jobs_to_process:
+                print(f"❌ No jobs to process after excluding jobs: {EXCLUDED_JOB_NAMES}")
                 print(f"   Available jobs: {[job.get('name') for job in jobs_data.get('jobs', [])]}")
                 return
             
-            print(f"✅ Workflow and job match criteria - proceeding with upload")
+            print(f"✅ Processing workflow metrics - proceeding with upload")
             print(f"   Workflow: '{workflow_name}'")
-            print(f"   Target job found: '{TARGET_JOB_NAME}'")
+            print(f"   Jobs to process: {len(jobs_to_process)} (excluding {EXCLUDED_JOB_NAMES})")
+            print(f"   Job names: {[job.get('name') for job in jobs_to_process]}")
             
             # Check if workflow is completed
             workflow_status = workflow_data.get('status', '')
@@ -360,7 +353,7 @@ class WorkflowMetricsUploader:
         self.add_standardized_timing_fields(db_data, created_at, run_started_at, end_time, "workflow")
         
         # Common context fields
-        self.add_common_context_fields(db_data)
+        self.add_common_context_fields(db_data, workflow_data)
         
         # Override userAlias with actor from API if available
         """
@@ -387,18 +380,16 @@ class WorkflowMetricsUploader:
         jobs_processed = 0
         steps_processed = 0
         
-        # Use the configured target job name
-        
         for job in jobs_data['jobs']:
             try:
                 job_name = job.get('name', '')
                 
-                # FILTER: Only upload the target job
-                if job_name != TARGET_JOB_NAME:
-                    print(f"⏭️  Skipping job '{job_name}' - not target job '{TARGET_JOB_NAME}'")
+                # FILTER: Skip excluded jobs to avoid infinite loops and other unwanted jobs
+                if job_name in EXCLUDED_JOB_NAMES:
+                    print(f"⏭️  Skipping excluded job '{job_name}'")
                     continue
                 
-                print(f"📤 Uploading target job: '{job_name}'")
+                print(f"📤 Uploading job: '{job_name}'")
                 
                 # Upload job metrics
                 self._upload_single_job_metrics(job)
