@@ -2272,6 +2272,9 @@ dependencies = [
  "nix 0.29.0",
  "nuid",
  "once_cell",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
  "prometheus",
  "rand 0.9.2",
  "regex",
@@ -2289,6 +2292,7 @@ dependencies = [
  "tokio-util",
  "tower-http",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "url",
  "uuid 1.18.0",
@@ -4938,7 +4942,7 @@ dependencies = [
  "colored",
  "futures",
  "modelexpress-common",
- "prost",
+ "prost 0.13.5",
  "serde",
  "serde_json",
  "thiserror 2.0.16",
@@ -4961,7 +4965,7 @@ dependencies = [
  "config",
  "hf-hub",
  "jiff",
- "prost",
+ "prost 0.13.5",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -6927,7 +6931,7 @@ dependencies = [
 
 [[package]]
 name = "rust-tracing-playground"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",

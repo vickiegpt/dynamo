@@ -145,8 +145,12 @@ where
         // Enables span to be created in push_endpoint before
         // payload is parsed
 
+        // TODO: site where we are preparing nats based headers before we send it out (we might want to leverage the injector pattern here)
+        // We can use the async_nats header map to test trace boundaries with
         let mut headers = HeaderMap::new();
+        // TODO: useful for testing, we can ensure that it is properly 
         if let Some(trace_context) = get_distributed_tracing_context() {
+            // In reality, we want to call a method that can do this for us
             headers.insert("traceparent", trace_context.create_traceparent());
             if let Some(tracestate) = trace_context.tracestate {
                 headers.insert("tracestate", tracestate);

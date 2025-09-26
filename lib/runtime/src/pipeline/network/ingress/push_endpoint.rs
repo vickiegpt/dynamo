@@ -97,6 +97,9 @@ impl PushEndpoint {
 
                 let mut traceparent = TraceParent::default();
 
+                // TODO: Another site where we will want logic similar to what is detailed in docs for logging::make_request_span
+                // we potentially simplify our life to only include trace id and span id, this might be the best way to do this for now
+                // receiver
                 if let Some(headers) = req.message.headers.as_ref() {
                     traceparent = TraceParent::from_headers(headers);
                 }

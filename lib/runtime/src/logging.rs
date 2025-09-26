@@ -69,6 +69,13 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::SpanData;
 use uuid::Uuid;
 
+// OpenTelemetry imports
+use opentelemetry::global;
+use opentelemetry::trace::{TraceContextExt};
+use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};
+use opentelemetry_otlp::WithExportConfig;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+
 /// ENV used to set the log level
 const FILTER_ENV: &str = "DYN_LOG";
 
@@ -205,9 +212,11 @@ impl TraceParent {
         let mut trace_id = None;
         let mut parent_id = None;
         let mut tracestate = None;
+
         let mut x_request_id = None;
         let mut x_dynamo_request_id = None;
 
+        // TODO: these should not be extracted from the headers but rather taken from the extractor/propagator
         if let Some(header_value) = headers.get("traceparent") {
             (trace_id, parent_id) = parse_traceparent(header_value);
         }
@@ -238,14 +247,30 @@ impl TraceParent {
 }
 
 // Takes Axum request and returning a span
+// TODO: This is the entrypoint for the request
+// Create a new span for the request
+// We want to check if the headers container a parent context by calling extract_trace_context_from_headers
+// if there is a parent context, we call set_parent on the span
+// extract the trace id from the .context() and set it as a field on the span (we'll do some work to persist this in the extensions of the span)
+// Note: This is only one of the places
+
+// TODO: Create a new span for the request
+// If there is a parent context (this is part of a different request, call extract_trace_context_from_headers and set as parent). This will require implementing the extractor for http headers
+// Get trace id, write this as a field of the trace_parent
+// propagator is still needed to set the trace id and span id in ways that otel can use it and propagate it
+// IMPROVEMENT: figure out if we can use the propagator for all keys
+// (distributed_span_from_headers):This is a more general function that takes in headers, determines if there is a parent context within them, and returns a span with the parent context correctly configured passing in the trace id as needed
+// as a first pass, we can potentially have a subroutine that intializes a traceparent as well, some of the fields are read from the headers and some are read from otel extension
+// we can later figure out how to ship all the details in the otel context
 pub fn make_request_span<B>(req: &Request<B>) -> Span {
     let method = req.method();
     let uri = req.uri();
     let version = format!("{:?}", req.version());
 
+    // porentially we can preserve this API and make it a bridge to the propagation system
     let trace_parent = TraceParent::from_headers(req.headers());
 
-    tracing::info_span!(
+    let span = tracing::info_span!(
         "http-request",
         method = %method,
         uri = %uri,
@@ -254,10 +279,14 @@ pub fn make_request_span<B>(req: &Request<B>) -> Span {
         parent_id = trace_parent.parent_id,
         x_request_id = trace_parent.x_request_id,
     x_dynamo_request_id = trace_parent.x_dynamo_request_id,
+    );
 
-    )
+    span
 }
 
+// TODO: prepare_headers_from_span: method that takes the current span and prepares the headers for the outbound request (writing trace_id and span_id) to continue the distributed trace
+// just call the injector pattern after getting the context from the current span
+// improv: pass additional headers
 #[derive(Debug, Default)]
 pub struct FieldVisitor {
     pub fields: HashMap<String, String>,
@@ -274,6 +303,7 @@ impl Visit for FieldVisitor {
             .insert(field.name().to_string(), format!("{:?}", value).to_string());
     }
 }
+
 
 impl<S> Layer<S> for DistributedTraceIdLayer
 where
@@ -293,7 +323,9 @@ where
     }
 
     // Adds W3C compliant span_id, trace_id, and parent_id if not already present
+    // TODO: Change to on_enter
     fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+        println!("on_new_span");
         if let Some(span) = ctx.span(id) {
             let mut trace_id: Option<String> = None;
             let mut parent_id: Option<String> = None;
@@ -340,8 +372,9 @@ where
                 x_dynamo_request_id = Some(x_request_id_input.to_string());
             }
 
+            // TODO: If this will be on_enter, then this will not work, we need to get the parent_id from the span context, the current span will not be the parent as we reference here
             if parent_id.is_none()
-                && let Some(parent_span_id) = ctx.current_span().id()
+                && let Some(parent_span_id) = ctx.current_span().id() // parent_id is set by us setting it on the traceparent 
                 && let Some(parent_span) = ctx.span(parent_span_id)
             {
                 let parent_ext = parent_span.extensions();
@@ -359,9 +392,12 @@ where
                 span_id = None;
             }
 
+            // TODO: prevent trace id generation when using OTEL, something is wrong if it is being generated
             if trace_id.is_none() {
                 trace_id = Some(generate_trace_id());
             }
+
+            // TODO: we want to call a subroutine here to get the span id from the otel extensions that should be present
             if span_id.is_none() {
                 span_id = Some(generate_span_id());
             }
@@ -424,6 +460,7 @@ fn setup_logging() {
 }
 
 #[cfg(not(feature = "tokio-console"))]
+// TODO: Add a subroutine to format and return the otel layer here
 fn setup_logging() {
     let fmt_filter_layer = filters(load_config());
     let trace_filter_layer = filters(load_config());
@@ -1096,3 +1133,7 @@ pub mod tests {
         Ok(())
     }
 }
+
+// TODO: a new test to verify that things work
+// how do we simulate network boundaries use nats header map (new/insert) to write a field
+// overall this code will be similar to what is already present in main.rs

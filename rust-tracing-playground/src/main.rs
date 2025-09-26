@@ -204,6 +204,7 @@ fn inject_trace_context_into_headers(context: &opentelemetry::Context) -> HashMa
 async fn process_request_from_service(request_id: u32, headers: HashMap<String, String>) {
     // Extract trace context from incoming headers
     let parent_context = extract_trace_context_from_headers(&headers);
+    // parent_context.span().span_context().parent_id();
     
     // Create a span with the extracted context as parent
     let span = tracing::info_span!("process_request_from_service", request_id = request_id);
@@ -270,6 +271,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     {
         let request_span = tracing::info_span!("request_1");
+
+        let otel_context = request_span.context();
+        let span_ref = otel_context.span();
+        let span_context = span_ref.span_context();
+        println!("got here");
+        println!("Checking if this is accessible before entry: span_context: trace_id={}, span_id={}", span_context.trace_id(), span_context.span_id());
+
+
         let _enter = request_span.enter();
         info!("Processing first request");
         process_request(1).await;
