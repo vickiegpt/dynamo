@@ -690,7 +690,9 @@ mod tests {
 
     mod layout_transfer_tests {
         use super::*;
-        use crate::block_manager::layout::{FullyContiguous, LayerSeparate, LayoutConfig, LayoutType, GenericBlockLayout};
+        use crate::block_manager::layout::{
+            FullyContiguous, GenericBlockLayout, LayerSeparate, LayoutConfig, LayoutType,
+        };
         use crate::block_manager::storage::{DeviceStorage, PinnedStorage, SystemStorage};
 
         const TEST_NUM_BLOCKS: usize = 4;
@@ -732,20 +734,32 @@ mod tests {
             for block_idx in 0..TEST_NUM_BLOCKS {
                 for layer_idx in 0..TEST_NUM_LAYERS {
                     for outer_idx in 0..TEST_OUTER_DIM {
-                        let host_region = host_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
-                        let device_region = device_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let host_region = host_layout
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
+                        let device_region = device_layout
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
 
                         // Verify regions have same size
-                        assert_eq!(host_region.size(), device_region.size(),
-                            "Region size mismatch at ({}, {}, {})", block_idx, layer_idx, outer_idx);
+                        assert_eq!(
+                            host_region.size(),
+                            device_region.size(),
+                            "Region size mismatch at ({}, {}, {})",
+                            block_idx,
+                            layer_idx,
+                            outer_idx
+                        );
 
                         // Create test pattern
-                        let pattern = ((block_idx as u8) << 4) | ((layer_idx as u8) << 2) | (outer_idx as u8);
+                        let pattern =
+                            ((block_idx as u8) << 4) | ((layer_idx as u8) << 2) | (outer_idx as u8);
 
                         // Fill host memory with pattern
                         unsafe {
                             let host_slice = std::slice::from_raw_parts_mut(
-                                host_region.addr() as *mut u8, host_region.size()
+                                host_region.addr() as *mut u8,
+                                host_region.size(),
                             );
                             host_slice.fill(pattern);
                         }
@@ -756,8 +770,9 @@ mod tests {
                                 host_region.addr() as *const u8,
                                 device_region.addr() as *mut u8,
                                 host_region.size(),
-                                stream.as_ref()
-                            ).unwrap();
+                                stream.as_ref(),
+                            )
+                            .unwrap();
                         }
                     }
                 }
@@ -769,13 +784,19 @@ mod tests {
             for block_idx in 0..TEST_NUM_BLOCKS {
                 for layer_idx in 0..TEST_NUM_LAYERS {
                     for outer_idx in 0..TEST_OUTER_DIM {
-                        let host_region = host_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
-                        let device_region = device_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let host_region = host_layout
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
+                        let device_region = device_layout
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
 
-                        let expected_pattern = ((block_idx as u8) << 4) | ((layer_idx as u8) << 2) | (outer_idx as u8);
+                        let expected_pattern =
+                            ((block_idx as u8) << 4) | ((layer_idx as u8) << 2) | (outer_idx as u8);
 
                         // Create temporary verification buffer
-                        let mut verify_buffer = pinned_allocator.allocate(host_region.size()).unwrap();
+                        let mut verify_buffer =
+                            pinned_allocator.allocate(host_region.size()).unwrap();
 
                         // Copy back from device
                         unsafe {
@@ -783,20 +804,27 @@ mod tests {
                                 device_region.addr() as *const u8,
                                 verify_buffer.as_mut_ptr(),
                                 host_region.size(),
-                                stream.as_ref()
-                            ).unwrap();
+                                stream.as_ref(),
+                            )
+                            .unwrap();
                         }
                         stream.synchronize().unwrap();
 
                         // Verify pattern
                         unsafe {
                             let verify_slice = std::slice::from_raw_parts(
-                                verify_buffer.as_ptr(), host_region.size()
+                                verify_buffer.as_ptr(),
+                                host_region.size(),
                             );
-                            assert!(verify_slice.iter().all(|&x| x == expected_pattern),
+                            assert!(
+                                verify_slice.iter().all(|&x| x == expected_pattern),
                                 "Pattern mismatch at ({}, {}, {}) - expected {}, got {:?}",
-                                block_idx, layer_idx, outer_idx, expected_pattern,
-                                &verify_slice[0..std::cmp::min(8, verify_slice.len())]);
+                                block_idx,
+                                layer_idx,
+                                outer_idx,
+                                expected_pattern,
+                                &verify_slice[0..std::cmp::min(8, verify_slice.len())]
+                            );
                         }
                     }
                 }
@@ -814,7 +842,8 @@ mod tests {
             let config = create_test_config();
 
             // Create LayerSeparate device layout (block contiguous)
-            let device_layout = LayerSeparate::allocate(config.clone(), &device_allocator, false).unwrap();
+            let device_layout =
+                LayerSeparate::allocate(config.clone(), &device_allocator, false).unwrap();
 
             // Create FullyContiguous host layout
             let host_layout = FullyContiguous::allocate(config, &pinned_allocator).unwrap();
@@ -823,14 +852,21 @@ mod tests {
             for block_idx in 0..TEST_NUM_BLOCKS {
                 for layer_idx in 0..TEST_NUM_LAYERS {
                     for outer_idx in 0..TEST_OUTER_DIM {
-                        let device_region = device_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
-                        let pattern = ((block_idx as u8) << 4) | ((layer_idx as u8) << 2) | (outer_idx as u8) | 0x80;
+                        let device_region = device_layout
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
+                        let pattern = ((block_idx as u8) << 4)
+                            | ((layer_idx as u8) << 2)
+                            | (outer_idx as u8)
+                            | 0x80;
 
                         // Create temp buffer with pattern
-                        let mut temp_buffer = pinned_allocator.allocate(device_region.size()).unwrap();
+                        let mut temp_buffer =
+                            pinned_allocator.allocate(device_region.size()).unwrap();
                         unsafe {
                             let temp_slice = std::slice::from_raw_parts_mut(
-                                temp_buffer.as_mut_ptr(), device_region.size()
+                                temp_buffer.as_mut_ptr(),
+                                device_region.size(),
                             );
                             temp_slice.fill(pattern);
                         }
@@ -841,8 +877,9 @@ mod tests {
                                 temp_buffer.as_ptr(),
                                 device_region.addr() as *mut u8,
                                 device_region.size(),
-                                stream.as_ref()
-                            ).unwrap();
+                                stream.as_ref(),
+                            )
+                            .unwrap();
                         }
                     }
                 }
@@ -853,10 +890,13 @@ mod tests {
             for block_idx in 0..TEST_NUM_BLOCKS {
                 for layer_idx in 0..TEST_NUM_LAYERS {
                     for outer_idx in 0..TEST_OUTER_DIM {
-                        let host_region = host_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let host_region = host_layout
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
                         unsafe {
                             let host_slice = std::slice::from_raw_parts_mut(
-                                host_region.addr() as *mut u8, host_region.size()
+                                host_region.addr() as *mut u8,
+                                host_region.size(),
                             );
                             host_slice.fill(0);
                         }
@@ -868,16 +908,21 @@ mod tests {
             for block_idx in 0..TEST_NUM_BLOCKS {
                 for layer_idx in 0..TEST_NUM_LAYERS {
                     for outer_idx in 0..TEST_OUTER_DIM {
-                        let device_region = device_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
-                        let host_region = host_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let device_region = device_layout
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
+                        let host_region = host_layout
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
 
                         unsafe {
                             cuda_memcpy_d2h(
                                 device_region.addr() as *const u8,
                                 host_region.addr() as *mut u8,
                                 device_region.size(),
-                                stream.as_ref()
-                            ).unwrap();
+                                stream.as_ref(),
+                            )
+                            .unwrap();
                         }
                     }
                 }
@@ -888,17 +933,28 @@ mod tests {
             for block_idx in 0..TEST_NUM_BLOCKS {
                 for layer_idx in 0..TEST_NUM_LAYERS {
                     for outer_idx in 0..TEST_OUTER_DIM {
-                        let host_region = host_layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
-                        let expected_pattern = ((block_idx as u8) << 4) | ((layer_idx as u8) << 2) | (outer_idx as u8) | 0x80;
+                        let host_region = host_layout
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
+                        let expected_pattern = ((block_idx as u8) << 4)
+                            | ((layer_idx as u8) << 2)
+                            | (outer_idx as u8)
+                            | 0x80;
 
                         unsafe {
                             let host_slice = std::slice::from_raw_parts(
-                                host_region.addr() as *const u8, host_region.size()
+                                host_region.addr() as *const u8,
+                                host_region.size(),
                             );
-                            assert!(host_slice.iter().all(|&x| x == expected_pattern),
+                            assert!(
+                                host_slice.iter().all(|&x| x == expected_pattern),
                                 "Pattern mismatch at ({}, {}, {}) - expected {}, got {:?}",
-                                block_idx, layer_idx, outer_idx, expected_pattern,
-                                &host_slice[0..std::cmp::min(8, host_slice.len())]);
+                                block_idx,
+                                layer_idx,
+                                outer_idx,
+                                expected_pattern,
+                                &host_slice[0..std::cmp::min(8, host_slice.len())]
+                            );
                         }
                     }
                 }
@@ -917,44 +973,58 @@ mod tests {
 
             // Create both layout types
             let host_fc = FullyContiguous::allocate(config.clone(), &pinned_allocator).unwrap();
-            let device_ls_outer = LayerSeparate::allocate(config.clone(), &device_allocator, true).unwrap();
-            let device_ls_block = LayerSeparate::allocate(config, &device_allocator, false).unwrap();
+            let device_ls_outer =
+                LayerSeparate::allocate(config.clone(), &device_allocator, true).unwrap();
+            let device_ls_block =
+                LayerSeparate::allocate(config, &device_allocator, false).unwrap();
 
             // Test round-trip: Host FC -> Device LS (outer) -> Device LS (block) -> Host FC
             for block_idx in 0..TEST_NUM_BLOCKS {
                 for layer_idx in 0..TEST_NUM_LAYERS {
                     for outer_idx in 0..TEST_OUTER_DIM {
-                        let original_pattern = ((block_idx as u8) << 4) | ((layer_idx as u8) << 2) | (outer_idx as u8) | 0x40;
+                        let original_pattern = ((block_idx as u8) << 4)
+                            | ((layer_idx as u8) << 2)
+                            | (outer_idx as u8)
+                            | 0x40;
 
                         // Step 1: Initialize host FC with pattern
-                        let host_region = host_fc.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let host_region = host_fc
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
                         unsafe {
                             let host_slice = std::slice::from_raw_parts_mut(
-                                host_region.addr() as *mut u8, host_region.size()
+                                host_region.addr() as *mut u8,
+                                host_region.size(),
                             );
                             host_slice.fill(original_pattern);
                         }
 
                         // Step 2: Transfer to device LS outer
-                        let device_outer_region = device_ls_outer.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let device_outer_region = device_ls_outer
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
                         unsafe {
                             cuda_memcpy_h2d(
                                 host_region.addr() as *const u8,
                                 device_outer_region.addr() as *mut u8,
                                 host_region.size(),
-                                stream.as_ref()
-                            ).unwrap();
+                                stream.as_ref(),
+                            )
+                            .unwrap();
                         }
 
                         // Step 3: Transfer between device layouts (D2D)
-                        let device_block_region = device_ls_block.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let device_block_region = device_ls_block
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
                         unsafe {
                             cuda_memcpy_d2d(
                                 device_outer_region.addr() as *const u8,
                                 device_block_region.addr() as *mut u8,
                                 device_outer_region.size(),
-                                stream.as_ref()
-                            ).unwrap();
+                                stream.as_ref(),
+                            )
+                            .unwrap();
                         }
 
                         stream.synchronize().unwrap();
@@ -962,7 +1032,8 @@ mod tests {
                         // Step 4: Clear host and transfer back
                         unsafe {
                             let host_slice = std::slice::from_raw_parts_mut(
-                                host_region.addr() as *mut u8, host_region.size()
+                                host_region.addr() as *mut u8,
+                                host_region.size(),
                             );
                             host_slice.fill(0);
                         }
@@ -972,20 +1043,27 @@ mod tests {
                                 device_block_region.addr() as *const u8,
                                 host_region.addr() as *mut u8,
                                 device_block_region.size(),
-                                stream.as_ref()
-                            ).unwrap();
+                                stream.as_ref(),
+                            )
+                            .unwrap();
                         }
                         stream.synchronize().unwrap();
 
                         // Step 5: Verify pattern survived the round trip
                         unsafe {
                             let host_slice = std::slice::from_raw_parts(
-                                host_region.addr() as *const u8, host_region.size()
+                                host_region.addr() as *const u8,
+                                host_region.size(),
                             );
-                            assert!(host_slice.iter().all(|&x| x == original_pattern),
+                            assert!(
+                                host_slice.iter().all(|&x| x == original_pattern),
                                 "Round-trip pattern mismatch at ({}, {}, {}) - expected {}, got {:?}",
-                                block_idx, layer_idx, outer_idx, original_pattern,
-                                &host_slice[0..std::cmp::min(8, host_slice.len())]);
+                                block_idx,
+                                layer_idx,
+                                outer_idx,
+                                original_pattern,
+                                &host_slice[0..std::cmp::min(8, host_slice.len())]
+                            );
                         }
                     }
                 }
@@ -1012,7 +1090,8 @@ mod tests {
                     dtype_width_bytes: 4,
                 };
 
-                let host_layout = FullyContiguous::allocate(config.clone(), &pinned_allocator).unwrap();
+                let host_layout =
+                    FullyContiguous::allocate(config.clone(), &pinned_allocator).unwrap();
                 let device_layout = FullyContiguous::allocate(config, &device_allocator).unwrap();
 
                 // Measure transfer time (basic timing)
@@ -1020,16 +1099,20 @@ mod tests {
 
                 for block_idx in 0..2 {
                     for layer_idx in 0..2 {
-                        let host_region = host_layout.memory_region(block_idx, layer_idx, 0).unwrap();
-                        let device_region = device_layout.memory_region(block_idx, layer_idx, 0).unwrap();
+                        let host_region =
+                            host_layout.memory_region(block_idx, layer_idx, 0).unwrap();
+                        let device_region = device_layout
+                            .memory_region(block_idx, layer_idx, 0)
+                            .unwrap();
 
                         unsafe {
                             cuda_memcpy_h2d(
                                 host_region.addr() as *const u8,
                                 device_region.addr() as *mut u8,
                                 host_region.size(),
-                                stream.as_ref()
-                            ).unwrap();
+                                stream.as_ref(),
+                            )
+                            .unwrap();
                         }
                     }
                 }
@@ -1040,8 +1123,12 @@ mod tests {
                 // Verify alignment was applied correctly
                 let region = host_layout.memory_region(0, 0, 0).unwrap();
                 if alignment > 1 {
-                    assert_eq!(region.addr() % alignment, 0,
-                        "Memory not aligned to {} bytes", alignment);
+                    assert_eq!(
+                        region.addr() % alignment,
+                        0,
+                        "Memory not aligned to {} bytes",
+                        alignment
+                    );
                 }
 
                 println!("Transfer with alignment {} took {:?}", alignment, duration);

@@ -546,25 +546,36 @@ impl<S: Storage> BlockLayoutConfig for FullyContiguous<S> {
 impl<S: Storage> FullyContiguous<S> {
     /// Verify memory region addressing is correct for this layout
     pub fn verify_memory_regions(&self) -> Result<(), LayoutError> {
-        use crate::block_manager::layout::utils::worker_verification::WorkerLayoutVerifier;
+        use crate::block_manager::layout::utils::WorkerLayoutVerifier;
 
         let mut verifier = WorkerLayoutVerifier::new();
-        let results = verifier.verify_layout_consistency(self, false)?;
+        let results = verifier.verify_layout_consistency(self)?;
 
         if verifier.has_critical_mismatches() {
-            let report = verifier.generate_report(&results);
-            tracing::error!("FullyContiguous layout verification failed:\n{}", report);
+            tracing::error!(
+                "FullyContiguous layout verification failed: {} regions checked, {} size mismatches",
+                results.len(),
+                results.iter().filter(|r| !r.size_matches).count()
+            );
             return Err(LayoutError::InvalidConfig(
-                "Memory region verification failed".to_string()
+                "Memory region verification failed".to_string(),
             ));
         }
 
-        tracing::debug!("FullyContiguous layout verification passed: {} regions checked", results.len());
+        tracing::debug!(
+            "FullyContiguous layout verification passed: {} regions checked",
+            results.len()
+        );
         Ok(())
     }
 
     /// Get expected memory address for a region (for testing/verification)
-    pub fn expected_memory_address(&self, block_idx: usize, layer_idx: usize, outer_idx: usize) -> Result<usize, LayoutError> {
+    pub fn expected_memory_address(
+        &self,
+        block_idx: usize,
+        layer_idx: usize,
+        outer_idx: usize,
+    ) -> Result<usize, LayoutError> {
         validate_indices(&self.config, block_idx, layer_idx, outer_idx)?;
 
         let aligned_start_addr = self.storage.addr() as usize + self.base_offset;
@@ -576,7 +587,12 @@ impl<S: Storage> FullyContiguous<S> {
     }
 
     /// Verify a specific memory region matches expected calculations
-    pub fn verify_memory_region(&self, block_idx: usize, layer_idx: usize, outer_idx: usize) -> Result<bool, LayoutError> {
+    pub fn verify_memory_region(
+        &self,
+        block_idx: usize,
+        layer_idx: usize,
+        outer_idx: usize,
+    ) -> Result<bool, LayoutError> {
         let actual_region = self.memory_region(block_idx, layer_idx, outer_idx)?;
         let expected_addr = self.expected_memory_address(block_idx, layer_idx, outer_idx)?;
         let expected_size = self.config.memory_region_size;
@@ -587,9 +603,13 @@ impl<S: Storage> FullyContiguous<S> {
         if !addr_matches || !size_matches {
             tracing::warn!(
                 "Memory region mismatch at ({}, {}, {}): addr {} vs {} (expected), size {} vs {} (expected)",
-                block_idx, layer_idx, outer_idx,
-                actual_region.addr, expected_addr,
-                actual_region.size, expected_size
+                block_idx,
+                layer_idx,
+                outer_idx,
+                actual_region.addr,
+                expected_addr,
+                actual_region.size,
+                expected_size
             );
         }
 
@@ -849,28 +869,40 @@ impl<S: Storage> BlockLayoutConfig for LayerSeparate<S> {
 impl<S: Storage> LayerSeparate<S> {
     /// Verify memory region addressing is correct for this layout
     pub fn verify_memory_regions(&self) -> Result<(), LayoutError> {
-        use crate::block_manager::layout::utils::worker_verification::WorkerLayoutVerifier;
+        use crate::block_manager::layout::utils::WorkerLayoutVerifier;
 
         let mut verifier = WorkerLayoutVerifier::new();
-        let results = verifier.verify_layout_consistency(self, false)?;
+        let results = verifier.verify_layout_consistency(self)?;
 
         if verifier.has_critical_mismatches() {
-            let report = verifier.generate_report(&results);
-            tracing::error!("LayerSeparate layout verification failed:\n{}", report);
+            tracing::error!(
+                "LayerSeparate layout verification failed: {} regions checked, {} size mismatches",
+                results.len(),
+                results.iter().filter(|r| !r.size_matches).count()
+            );
             return Err(LayoutError::InvalidConfig(
-                "Memory region verification failed".to_string()
+                "Memory region verification failed".to_string(),
             ));
         }
 
-        tracing::debug!("LayerSeparate layout verification passed: {} regions checked", results.len());
+        tracing::debug!(
+            "LayerSeparate layout verification passed: {} regions checked",
+            results.len()
+        );
         Ok(())
     }
 
     /// Get expected memory address for a region (for testing/verification)
-    pub fn expected_memory_address(&self, block_idx: usize, layer_idx: usize, outer_idx: usize) -> Result<usize, LayoutError> {
+    pub fn expected_memory_address(
+        &self,
+        block_idx: usize,
+        layer_idx: usize,
+        outer_idx: usize,
+    ) -> Result<usize, LayoutError> {
         validate_indices(&self.config, block_idx, layer_idx, outer_idx)?;
 
-        let aligned_start_addr = self.storages[layer_idx].addr() as usize + self.base_offsets[layer_idx];
+        let aligned_start_addr =
+            self.storages[layer_idx].addr() as usize + self.base_offsets[layer_idx];
         let block_offset = block_idx * self.config.block_stride_in_bytes;
         let outer_offset = outer_idx * self.config.outer_dim_stride_in_bytes;
 
@@ -878,7 +910,12 @@ impl<S: Storage> LayerSeparate<S> {
     }
 
     /// Verify a specific memory region matches expected calculations
-    pub fn verify_memory_region(&self, block_idx: usize, layer_idx: usize, outer_idx: usize) -> Result<bool, LayoutError> {
+    pub fn verify_memory_region(
+        &self,
+        block_idx: usize,
+        layer_idx: usize,
+        outer_idx: usize,
+    ) -> Result<bool, LayoutError> {
         let actual_region = self.memory_region(block_idx, layer_idx, outer_idx)?;
         let expected_addr = self.expected_memory_address(block_idx, layer_idx, outer_idx)?;
         let expected_size = self.config.memory_region_size;
@@ -889,9 +926,13 @@ impl<S: Storage> LayerSeparate<S> {
         if !addr_matches || !size_matches {
             tracing::warn!(
                 "LayerSeparate memory region mismatch at ({}, {}, {}): addr {} vs {} (expected), size {} vs {} (expected)",
-                block_idx, layer_idx, outer_idx,
-                actual_region.addr, expected_addr,
-                actual_region.size, expected_size
+                block_idx,
+                layer_idx,
+                outer_idx,
+                actual_region.addr,
+                expected_addr,
+                actual_region.size,
+                expected_size
             );
         }
 
@@ -920,12 +961,17 @@ impl<S: Storage> LayerSeparate<S> {
             if storage.size() < required_size {
                 return Err(LayoutError::InvalidConfig(format!(
                     "Layer {} storage too small: {} bytes available, {} bytes required",
-                    layer_idx, storage.size(), required_size
+                    layer_idx,
+                    storage.size(),
+                    required_size
                 )));
             }
         }
 
-        tracing::debug!("LayerSeparate storage alignment verification passed for {} layers", self.storages.len());
+        tracing::debug!(
+            "LayerSeparate storage alignment verification passed for {} layers",
+            self.storages.len()
+        );
         Ok(())
     }
 }
@@ -1625,7 +1671,9 @@ pub mod tests {
             for block_idx in 0..NUM_BLOCKS {
                 for layer_idx in 0..NUM_LAYERS {
                     for outer_idx in 0..OUTER_DIM {
-                        let region = layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let region = layout
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
                         used_ranges.push((region.addr, region.addr + region.size));
                     }
                 }
@@ -1657,7 +1705,9 @@ pub mod tests {
 
                 for block_idx in 0..NUM_BLOCKS {
                     for outer_idx in 0..OUTER_DIM {
-                        let region = layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let region = layout
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
                         used_ranges.push((region.addr, region.addr + region.size));
                     }
                 }
@@ -1702,7 +1752,8 @@ pub mod tests {
                     region.addr % ALIGNMENT,
                     0,
                     "Block {} is not aligned to {} bytes",
-                    block_idx, ALIGNMENT
+                    block_idx,
+                    ALIGNMENT
                 );
             }
         }
@@ -1714,7 +1765,8 @@ pub mod tests {
 
             // Test pattern: write unique values to each memory region and verify they don't interfere
             let fc_layout = setup_layout(None).expect("FC Layout setup failed");
-            let ls_layout = setup_layer_separate_layout(None, true).expect("LS Layout setup failed");
+            let ls_layout =
+                setup_layer_separate_layout(None, true).expect("LS Layout setup failed");
 
             // For FullyContiguous layout
             test_data_integrity_for_layout(&fc_layout, "FullyContiguous");
@@ -1730,7 +1782,9 @@ pub mod tests {
             for block_idx in 0..layout.num_blocks() {
                 for layer_idx in 0..layout.num_layers() {
                     for outer_idx in 0..layout.outer_dim() {
-                        let region = layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let region = layout
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
 
                         // Create unique pattern for this location
                         let pattern = (block_idx << 16) | (layer_idx << 8) | outer_idx;
@@ -1739,13 +1793,15 @@ pub mod tests {
                         assert!(
                             !written_patterns.contains(&pattern),
                             "Duplicate pattern {} in {} layout",
-                            pattern, layout_name
+                            pattern,
+                            layout_name
                         );
                         written_patterns.insert(pattern);
 
                         // Verify the region has expected size
-                        let expected_size = layout.page_size() * layout.inner_dim() *
-                            layout.layout_config().dtype_width_bytes;
+                        let expected_size = layout.page_size()
+                            * layout.inner_dim()
+                            * layout.layout_config().dtype_width_bytes;
                         assert_eq!(
                             region.size, expected_size,
                             "Region size mismatch in {} layout at ({}, {}, {})",
@@ -1791,7 +1847,10 @@ pub mod tests {
             assert_eq!(block_stride, memory_region_size * OUTER_DIM * NUM_LAYERS);
         }
 
-        fn test_ls_stride_correctness(layout: &LayerSeparate<NullDeviceStorage>, is_outer_contiguous: bool) {
+        fn test_ls_stride_correctness(
+            layout: &LayerSeparate<NullDeviceStorage>,
+            is_outer_contiguous: bool,
+        ) {
             let memory_region_size = PAGE_SIZE * INNER_DIM * DTYPE_WIDTH_BYTES;
 
             // Test strides within the same layer
@@ -1820,7 +1879,8 @@ pub mod tests {
 
             // Scenario: FullyContiguous host buffer with LayerSeparate device
             let host_fc = setup_layout(None).expect("Host FC setup failed");
-            let device_ls = setup_layer_separate_layout(None, true).expect("Device LS setup failed");
+            let device_ls =
+                setup_layer_separate_layout(None, true).expect("Device LS setup failed");
 
             // Verify they have compatible dimensions
             assert_eq!(host_fc.num_blocks(), device_ls.num_blocks());
@@ -1833,8 +1893,12 @@ pub mod tests {
             for block_idx in 0..host_fc.num_blocks() {
                 for layer_idx in 0..host_fc.num_layers() {
                     for outer_idx in 0..host_fc.outer_dim() {
-                        let host_region = host_fc.memory_region(block_idx, layer_idx, outer_idx).unwrap();
-                        let device_region = device_ls.memory_region(block_idx, layer_idx, outer_idx).unwrap();
+                        let host_region = host_fc
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
+                        let device_region = device_ls
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
 
                         assert_eq!(
                             host_region.size, device_region.size,
@@ -1860,7 +1924,8 @@ pub mod tests {
                 dtype_width_bytes: 1,
             };
 
-            let minimal_fc = FullyContiguous::allocate(minimal_config.clone(), &SystemAllocator).unwrap();
+            let minimal_fc =
+                FullyContiguous::allocate(minimal_config.clone(), &SystemAllocator).unwrap();
             let region = minimal_fc.memory_region(0, 0, 0).unwrap();
             assert_eq!(region.size, 1);
 
@@ -1875,16 +1940,21 @@ pub mod tests {
                 dtype_width_bytes: 2,
             };
 
-            let max_outer_fc = FullyContiguous::allocate(max_outer_config, &SystemAllocator).unwrap();
+            let max_outer_fc =
+                FullyContiguous::allocate(max_outer_config, &SystemAllocator).unwrap();
 
             // Verify all combinations are accessible
             for block_idx in 0..2 {
                 for layer_idx in 0..2 {
                     for outer_idx in 0..2 {
                         let region = max_outer_fc.memory_region(block_idx, layer_idx, outer_idx);
-                        assert!(region.is_ok(),
+                        assert!(
+                            region.is_ok(),
                             "Failed to access region ({}, {}, {})",
-                            block_idx, layer_idx, outer_idx);
+                            block_idx,
+                            layer_idx,
+                            outer_idx
+                        );
                     }
                 }
             }
@@ -1919,18 +1989,23 @@ pub mod tests {
             let layout = setup_layout(None).expect("Layout setup failed");
 
             // Test overall verification
-            assert!(layout.verify_memory_regions().is_ok(),
-                "Memory region verification should pass");
+            assert!(
+                layout.verify_memory_regions().is_ok(),
+                "Memory region verification should pass"
+            );
 
             // Test individual region verification
             for block_idx in 0..NUM_BLOCKS {
                 for layer_idx in 0..NUM_LAYERS {
                     for outer_idx in 0..OUTER_DIM {
-                        let matches = layout.verify_memory_region(block_idx, layer_idx, outer_idx)
+                        let matches = layout
+                            .verify_memory_region(block_idx, layer_idx, outer_idx)
                             .expect("Memory region verification failed");
-                        assert!(matches,
+                        assert!(
+                            matches,
                             "Memory region ({}, {}, {}) should match expected calculations",
-                            block_idx, layer_idx, outer_idx);
+                            block_idx, layer_idx, outer_idx
+                        );
                     }
                 }
             }
@@ -1944,11 +2019,18 @@ pub mod tests {
             for block_idx in 0..NUM_BLOCKS {
                 for layer_idx in 0..NUM_LAYERS {
                     for outer_idx in 0..OUTER_DIM {
-                        let actual_region = layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
-                        let expected_addr = layout.expected_memory_address(block_idx, layer_idx, outer_idx).unwrap();
+                        let actual_region = layout
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
+                        let expected_addr = layout
+                            .expected_memory_address(block_idx, layer_idx, outer_idx)
+                            .unwrap();
 
-                        assert_eq!(actual_region.addr, expected_addr,
-                            "Address mismatch at ({}, {}, {})", block_idx, layer_idx, outer_idx);
+                        assert_eq!(
+                            actual_region.addr, expected_addr,
+                            "Address mismatch at ({}, {}, {})",
+                            block_idx, layer_idx, outer_idx
+                        );
                     }
                 }
             }
@@ -1959,22 +2041,29 @@ pub mod tests {
             let layout = setup_layer_separate_layout(None, true).expect("Layout setup failed");
 
             // Test overall verification
-            assert!(layout.verify_memory_regions().is_ok(),
-                "LayerSeparate memory region verification should pass");
+            assert!(
+                layout.verify_memory_regions().is_ok(),
+                "LayerSeparate memory region verification should pass"
+            );
 
             // Test storage alignment verification
-            assert!(layout.verify_storage_alignment().is_ok(),
-                "LayerSeparate storage alignment verification should pass");
+            assert!(
+                layout.verify_storage_alignment().is_ok(),
+                "LayerSeparate storage alignment verification should pass"
+            );
 
             // Test individual region verification
             for block_idx in 0..NUM_BLOCKS {
                 for layer_idx in 0..NUM_LAYERS {
                     for outer_idx in 0..OUTER_DIM {
-                        let matches = layout.verify_memory_region(block_idx, layer_idx, outer_idx)
+                        let matches = layout
+                            .verify_memory_region(block_idx, layer_idx, outer_idx)
                             .expect("Memory region verification failed");
-                        assert!(matches,
+                        assert!(
+                            matches,
                             "LayerSeparate memory region ({}, {}, {}) should match expected calculations",
-                            block_idx, layer_idx, outer_idx);
+                            block_idx, layer_idx, outer_idx
+                        );
                     }
                 }
             }
@@ -1988,11 +2077,18 @@ pub mod tests {
             for block_idx in 0..NUM_BLOCKS {
                 for layer_idx in 0..NUM_LAYERS {
                     for outer_idx in 0..OUTER_DIM {
-                        let actual_region = layout.memory_region(block_idx, layer_idx, outer_idx).unwrap();
-                        let expected_addr = layout.expected_memory_address(block_idx, layer_idx, outer_idx).unwrap();
+                        let actual_region = layout
+                            .memory_region(block_idx, layer_idx, outer_idx)
+                            .unwrap();
+                        let expected_addr = layout
+                            .expected_memory_address(block_idx, layer_idx, outer_idx)
+                            .unwrap();
 
-                        assert_eq!(actual_region.addr, expected_addr,
-                            "LayerSeparate address mismatch at ({}, {}, {})", block_idx, layer_idx, outer_idx);
+                        assert_eq!(
+                            actual_region.addr, expected_addr,
+                            "LayerSeparate address mismatch at ({}, {}, {})",
+                            block_idx, layer_idx, outer_idx
+                        );
                     }
                 }
             }
@@ -2015,14 +2111,20 @@ pub mod tests {
             let ls_layout = LayerSeparate::allocate(config, &NullDeviceAllocator, true).unwrap();
 
             // Both layouts should pass verification with alignment
-            assert!(fc_layout.verify_memory_regions().is_ok(),
-                "FullyContiguous with alignment should pass verification");
+            assert!(
+                fc_layout.verify_memory_regions().is_ok(),
+                "FullyContiguous with alignment should pass verification"
+            );
 
-            assert!(ls_layout.verify_memory_regions().is_ok(),
-                "LayerSeparate with alignment should pass verification");
+            assert!(
+                ls_layout.verify_memory_regions().is_ok(),
+                "LayerSeparate with alignment should pass verification"
+            );
 
-            assert!(ls_layout.verify_storage_alignment().is_ok(),
-                "LayerSeparate storage alignment should pass verification");
+            assert!(
+                ls_layout.verify_storage_alignment().is_ok(),
+                "LayerSeparate storage alignment should pass verification"
+            );
         }
 
         #[test]
@@ -2046,9 +2148,11 @@ pub mod tests {
                     let fc_region = fc_layout.memory_region(block_idx, layer_idx, 0).unwrap();
                     let ls_region = ls_layout.memory_region(block_idx, layer_idx, 0).unwrap();
 
-                    assert_eq!(fc_region.size, ls_region.size,
+                    assert_eq!(
+                        fc_region.size, ls_region.size,
                         "Memory region sizes should be compatible between layouts at ({}, {})",
-                        block_idx, layer_idx);
+                        block_idx, layer_idx
+                    );
                 }
             }
         }
@@ -2058,14 +2162,20 @@ pub mod tests {
             let layout = setup_layout(None).expect("Layout setup failed");
 
             // Test invalid indices
-            assert!(layout.verify_memory_region(NUM_BLOCKS, 0, 0).is_err(),
-                "Should fail for invalid block index");
+            assert!(
+                layout.verify_memory_region(NUM_BLOCKS, 0, 0).is_err(),
+                "Should fail for invalid block index"
+            );
 
-            assert!(layout.verify_memory_region(0, NUM_LAYERS, 0).is_err(),
-                "Should fail for invalid layer index");
+            assert!(
+                layout.verify_memory_region(0, NUM_LAYERS, 0).is_err(),
+                "Should fail for invalid layer index"
+            );
 
-            assert!(layout.verify_memory_region(0, 0, OUTER_DIM).is_err(),
-                "Should fail for invalid outer index");
+            assert!(
+                layout.verify_memory_region(0, 0, OUTER_DIM).is_err(),
+                "Should fail for invalid outer index"
+            );
         }
     }
 }

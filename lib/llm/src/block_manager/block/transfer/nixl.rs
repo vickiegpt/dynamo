@@ -58,7 +58,9 @@ where
                     tracing::warn!(
                         "Size mismatch in NIXL layer copy: src_size={}, dst_size={}, using copy_size={}. \
                          This may indicate a layout configuration issue.",
-                        src_size, dst_size, copy_size
+                        src_size,
+                        dst_size,
+                        copy_size
                     );
                 }
 
@@ -68,13 +70,13 @@ where
                 unsafe {
                     src_dl.add_desc(
                         src_desc.as_ptr() as usize,
-                        copy_size,  // Use the safe copy size
+                        copy_size, // Use the safe copy size
                         src_desc.device_id(),
                     )?;
 
                     dst_dl.add_desc(
                         dst_desc.as_ptr() as usize,
-                        copy_size,  // Use the safe copy size
+                        copy_size, // Use the safe copy size
                         dst_desc.device_id(),
                     )?;
                 }
