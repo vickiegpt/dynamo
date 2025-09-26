@@ -60,6 +60,18 @@ jobs:
         with:
           image_tag: ${{ steps.build-image.outputs.image_tag }}
           pytest_marks: "e2e and vllm and gpu_1 and not slow"
+      - name: Docker Tag and Push
+        uses: ./.github/docker-tag-push
+        with:
+          local_image: ${{ steps.build-image.outputs.image_tag }}
+          push_tag: ai-dynamo/dynamo:${{ github.sha }}-vllm-amd64
+          aws_push: 'true'
+          aks_push: 'true'
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_default_region: us-west-2
+          azure_acr_hostname: ${{ secrets.AZURE_ACR_HOSTNAME }}
+          azure_acr_user: ${{ secrets.AZURE_ACR_USER }}
+          azure_acr_password: ${{ secrets.AZURE_ACR_PASSWORD }}
 
   sglang:
     runs-on: gpu-l40-amd64
@@ -85,6 +97,18 @@ jobs:
         with:
           image_tag: ${{ steps.build-image.outputs.image_tag }}
           pytest_marks: "e2e and sglang and gpu_1"
+      - name: Docker Tag and Push
+        uses: ./.github/docker-tag-push
+        with:
+          local_image: ${{ steps.build-image.outputs.image_tag }}
+          push_tag: ai-dynamo/dynamo:${{ github.sha }}-sglang-amd64
+          aws_push: 'true'
+          aks_push: 'true'
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_default_region: us-west-2
+          azure_acr_hostname: ${{ secrets.AZURE_ACR_HOSTNAME }}
+          azure_acr_user: ${{ secrets.AZURE_ACR_USER }}
+          azure_acr_password: ${{ secrets.AZURE_ACR_PASSWORD }}
 
   trtllm:
     runs-on: gpu-l40-amd64
@@ -137,7 +161,7 @@ jobs:
     - name: Before Script
       run: |
         # Install dependencies
-        apt-get update && apt-get install -y curl bash openssl gettext git jq
+        sudo apt-get update && sudo apt-get install -y curl bash openssl gettext git jq
 
         # # TODO:
         # set -x
@@ -153,17 +177,17 @@ jobs:
         # Install yq
         echo "Installing yq..."
         curl -L https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o yq
-        chmod +x yq
-        mv yq /usr/local/bin/
+        sudo chmod 755 yq
+        sudo mv yq /usr/local/bin/
         # Install Helm
         echo "Installing Helm..."
         curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-        chmod 700 get_helm.sh
-        ./get_helm.sh
+        sudo chmod 700 get_helm.sh
+        sudo ./get_helm.sh
         # Install kubectl
         curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-        chmod +x kubectl
-        mv kubectl /usr/local/bin/
+        sudo 755 +x kubectl
+        sudo mv kubectl /usr/local/bin/
 
         # Make sure the right context is used
         echo "${{ secrets.AZURE_AKS_CI_KUBECONFIG_B64 }}" | base64 -d > .kubeconfig
