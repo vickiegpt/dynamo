@@ -12,17 +12,18 @@ use tracing::{debug, info};
 use crate::active_message::{
     client::{ActiveMessageClient, PeerInfo},
     handler::{ActiveMessage, ActiveMessageHandler, HandlerEvent, HandlerId},
+    response::ResponseContext,
 };
 
 use super::manager::ManagerState;
 
 #[derive(Debug)]
 pub struct RegisterServiceHandler {
-    client: Arc<dyn ActiveMessageClient>,
+    client: Arc<super::client::ZmqActiveMessageClient>,
 }
 
 impl RegisterServiceHandler {
-    pub fn new(client: Arc<dyn ActiveMessageClient>) -> Self {
+    pub fn new(client: Arc<super::client::ZmqActiveMessageClient>) -> Self {
         Self { client }
     }
 }
@@ -38,9 +39,10 @@ impl ActiveMessageHandler for RegisterServiceHandler {
     async fn handle(
         &self,
         message: ActiveMessage,
-        _client: Arc<dyn ActiveMessageClient>,
+        _client: &dyn ActiveMessageClient,
+        _response: ResponseContext,
     ) -> Result<()> {
-        let payload: RegisterServicePayload = serde_json::from_slice(&message.payload)?;
+        let payload: RegisterServicePayload = message.deserialize()?;
 
         let instance_id = uuid::Uuid::parse_str(&payload.instance_id)?;
         let peer = PeerInfo::new(instance_id, payload.endpoint.clone());
@@ -91,7 +93,8 @@ impl ActiveMessageHandler for ListHandlersHandler {
     async fn handle(
         &self,
         _message: ActiveMessage,
-        _client: Arc<dyn ActiveMessageClient>,
+        _client: &dyn ActiveMessageClient,
+        _response: ResponseContext,
     ) -> Result<()> {
         let state = self.state.read().await;
         let handlers: Vec<HandlerId> = state.handlers.keys().cloned().collect();
@@ -135,9 +138,10 @@ impl ActiveMessageHandler for WaitForHandlerHandler {
     async fn handle(
         &self,
         message: ActiveMessage,
-        _client: Arc<dyn ActiveMessageClient>,
+        _client: &dyn ActiveMessageClient,
+        _response: ResponseContext,
     ) -> Result<()> {
-        let payload: WaitForHandlerPayload = serde_json::from_slice(&message.payload)?;
+        let payload: WaitForHandlerPayload = message.deserialize()?;
 
         let state = self.state.read().await;
         if state.handlers.contains_key(&payload.handler_name) {
@@ -209,7 +213,8 @@ impl ActiveMessageHandler for HealthCheckHandler {
     async fn handle(
         &self,
         _message: ActiveMessage,
-        _client: Arc<dyn ActiveMessageClient>,
+        _client: &dyn ActiveMessageClient,
+        _response: ResponseContext,
     ) -> Result<()> {
         debug!("Health check received");
         Ok(())
@@ -241,9 +246,10 @@ impl ActiveMessageHandler for AckHandler {
     async fn handle(
         &self,
         message: ActiveMessage,
-        _client: Arc<dyn ActiveMessageClient>,
+        _client: &dyn ActiveMessageClient,
+        _response: ResponseContext,
     ) -> Result<()> {
-        let payload: AckPayload = serde_json::from_slice(&message.payload)?;
+        let payload: AckPayload = message.deserialize()?;
         let ack_id = uuid::Uuid::parse_str(&payload.ack_id)?;
 
         self.client

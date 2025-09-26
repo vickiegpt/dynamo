@@ -33,9 +33,37 @@ impl std::fmt::Debug for AckEntry {
     }
 }
 
+struct AcceptanceEntry {
+    sender: oneshot::Sender<()>,
+    deadline: tokio::time::Instant,
+}
+
+impl std::fmt::Debug for AcceptanceEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AcceptanceEntry")
+            .field("deadline", &self.deadline)
+            .finish()
+    }
+}
+
+struct ResponseEntry {
+    sender: oneshot::Sender<Bytes>,
+    deadline: tokio::time::Instant,
+}
+
+impl std::fmt::Debug for ResponseEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResponseEntry")
+            .field("deadline", &self.deadline)
+            .finish()
+    }
+}
+
 struct ClientState {
     peers: HashMap<InstanceId, PeerInfo>,
     pending_acks: HashMap<Uuid, AckEntry>,
+    pending_acceptances: HashMap<Uuid, AcceptanceEntry>,
+    pending_responses: HashMap<Uuid, ResponseEntry>,
 }
 
 impl std::fmt::Debug for ClientState {
@@ -43,6 +71,8 @@ impl std::fmt::Debug for ClientState {
         f.debug_struct("ClientState")
             .field("peers", &self.peers)
             .field("pending_acks", &self.pending_acks)
+            .field("pending_acceptances", &self.pending_acceptances)
+            .field("pending_responses", &self.pending_responses)
             .finish()
     }
 }
@@ -59,6 +89,8 @@ impl ZmqActiveMessageClient {
         let state = ClientState {
             peers: HashMap::new(),
             pending_acks: HashMap::new(),
+            pending_acceptances: HashMap::new(),
+            pending_responses: HashMap::new(),
         };
 
         Self {
@@ -254,5 +286,99 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
             .await?;
 
         Ok(vec![])
+    }
+
+    async fn send_raw_message(&self, target: InstanceId, message: ActiveMessage) -> Result<()> {
+        let state = self.state.read().await;
+        let peer = state.peers.get(&target)
+            .ok_or_else(|| anyhow::anyhow!("Peer {} not found", target))?;
+
+        let endpoint = peer.endpoint.clone();
+        drop(state);
+
+        self.send_raw(&endpoint, &message).await?;
+
+        debug!(
+            "Sent raw message to handler '{}' on peer {} at {}",
+            message.handler_name, target, endpoint
+        );
+
+        Ok(())
+    }
+
+    async fn register_acceptance(&self, message_id: Uuid, sender: oneshot::Sender<()>) -> Result<()> {
+        let mut state = self.state.write().await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+
+        state.pending_acceptances.insert(
+            message_id,
+            AcceptanceEntry { sender, deadline },
+        );
+
+        debug!("Registered acceptance for message {}", message_id);
+        Ok(())
+    }
+
+    async fn register_response(&self, message_id: Uuid, sender: oneshot::Sender<Bytes>) -> Result<()> {
+        let mut state = self.state.write().await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+
+        state.pending_responses.insert(
+            message_id,
+            ResponseEntry { sender, deadline },
+        );
+
+        debug!("Registered response for message {}", message_id);
+        Ok(())
+    }
+}
+
+impl ZmqActiveMessageClient {
+
+    pub(super) async fn complete_acceptance(&self, accept_id: Uuid, sender: InstanceId) -> Result<()> {
+        let mut state = self.state.write().await;
+        if let Some(entry) = state.pending_acceptances.remove(&accept_id) {
+            let _ = entry.sender.send(());
+            debug!("Completed acceptance: {} from {}", accept_id, sender);
+            Ok(())
+        } else {
+            error!("Received unexpected acceptance: {} from {}", accept_id, sender);
+            anyhow::bail!("Unexpected acceptance: {} from {}", accept_id, sender)
+        }
+    }
+
+    pub(super) async fn complete_response(&self, response_id: Uuid, sender: InstanceId, payload: Bytes) -> Result<()> {
+        let mut state = self.state.write().await;
+        if let Some(entry) = state.pending_responses.remove(&response_id) {
+            let _ = entry.sender.send(payload);
+            debug!("Completed response: {} from {}", response_id, sender);
+            Ok(())
+        } else {
+            error!("Received unexpected response: {} from {}", response_id, sender);
+            anyhow::bail!("Unexpected response: {} from {}", response_id, sender)
+        }
+    }
+
+    pub async fn cleanup_expired_notifications(&self) {
+        let mut state = self.state.write().await;
+        let now = tokio::time::Instant::now();
+
+        state.pending_acceptances.retain(|accept_id, entry| {
+            if now >= entry.deadline {
+                warn!("Acceptance {} expired (not received in time)", accept_id);
+                false
+            } else {
+                true
+            }
+        });
+
+        state.pending_responses.retain(|response_id, entry| {
+            if now >= entry.deadline {
+                warn!("Response {} expired (not received in time)", response_id);
+                false
+            } else {
+                true
+            }
+        });
     }
 }

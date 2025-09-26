@@ -3,15 +3,18 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::{RwLock, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 use crate::active_message::{
     client::ActiveMessageClient,
     handler::{ActiveMessage, ActiveMessageHandler, HandlerEvent, HandlerId, InstanceId},
     manager::{ActiveMessageManager, HandlerConfig},
+    response::{ResponseContext, SingleResponseSender},
 };
 
 use super::{
@@ -197,6 +200,15 @@ impl ZmqActiveMessageManager {
         state: Arc<RwLock<ManagerState>>,
         message: ActiveMessage,
     ) -> Result<()> {
+        // Handle internal response routing first
+        if message.handler_name == "_accept" {
+            return Self::handle_acceptance(state, message).await;
+        }
+
+        if message.handler_name == "_response" {
+            return Self::handle_response(state, message).await;
+        }
+
         let state_read = state.read().await;
         let handler_name = message.handler_name.clone();
 
@@ -216,13 +228,85 @@ impl ZmqActiveMessageManager {
 
         debug!("Dispatching message to handler: {}", handler_name);
 
+        // Check for acceptance confirmation and send it before handler execution
+        let acceptance_mode = message.metadata.get("_mode").and_then(|v| v.as_str());
+        if matches!(acceptance_mode, Some("confirmed") | Some("with_response")) {
+            if let Some(accept_id_str) = message.metadata.get("_accept_id").and_then(|v| v.as_str()) {
+                if let Ok(accept_id) = Uuid::parse_str(accept_id_str) {
+                    let accept_message = ActiveMessage {
+                        message_id: Uuid::new_v4(),
+                        handler_name: "_accept".to_string(),
+                        sender_instance: client.instance_id(),
+                        payload: Bytes::new(),
+                        metadata: serde_json::json!({
+                            "_accept_for": accept_id.to_string()
+                        }),
+                    };
+
+                    if let Err(e) = client.send_raw_message(message.sender_instance, accept_message).await {
+                        error!("Failed to send acceptance: {}", e);
+                    } else {
+                        debug!("Sent automatic acceptance for message {}", accept_id);
+                    }
+                }
+            }
+        }
+
+        // Set up response context based on message metadata
+        let response_context = if matches!(acceptance_mode, Some("with_response")) {
+            if let Some(response_id_str) = message.metadata.get("_response_id").and_then(|v| v.as_str()) {
+                if let Ok(response_id) = Uuid::parse_str(response_id_str) {
+                    ResponseContext::Single(SingleResponseSender::new(
+                        client.clone(),
+                        message.sender_instance,
+                        response_id,
+                        message.handler_name.clone(),
+                    ))
+                } else {
+                    ResponseContext::None
+                }
+            } else {
+                ResponseContext::None
+            }
+        } else {
+            ResponseContext::None
+        };
+
         task_tracker.spawn(async move {
-            if let Err(e) = handler.handle(message, client).await {
+            if let Err(e) = handler.handle(message, &*client, response_context).await {
                 error!("Handler '{}' failed: {}", handler_name, e);
             }
             Ok(())
         });
 
+        Ok(())
+    }
+
+    async fn handle_acceptance(
+        state: Arc<RwLock<ManagerState>>,
+        message: ActiveMessage,
+    ) -> Result<()> {
+        if let Some(accept_for_str) = message.metadata.get("_accept_for").and_then(|v| v.as_str()) {
+            if let Ok(accept_id) = Uuid::parse_str(accept_for_str) {
+                let state_read = state.read().await;
+                return state_read.client.complete_acceptance(accept_id, message.sender_instance).await;
+            }
+        }
+        error!("Invalid acceptance message: {:?}", message);
+        Ok(())
+    }
+
+    async fn handle_response(
+        state: Arc<RwLock<ManagerState>>,
+        message: ActiveMessage,
+    ) -> Result<()> {
+        if let Some(response_to_str) = message.metadata.get("_response_to").and_then(|v| v.as_str()) {
+            if let Ok(response_id) = Uuid::parse_str(response_to_str) {
+                let state_read = state.read().await;
+                return state_read.client.complete_response(response_id, message.sender_instance, message.payload).await;
+            }
+        }
+        error!("Invalid response message: {:?}", message);
         Ok(())
     }
 }
