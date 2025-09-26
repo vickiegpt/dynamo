@@ -220,7 +220,7 @@ jobs:
         export VIRTUAL_ENV=/opt/dynamo/venv
         export KUBE_NS=$NAMESPACE
         export ISTIO_ENABLED=true
-        export ISTIO_GATEWAY=istio-system/ingress-alb 
+        export ISTIO_GATEWAY=istio-system/ingress-alb
         export VIRTUAL_SERVICE_SUPPORTS_HTTPS=true
         export DYNAMO_CLOUD=https://${NAMESPACE}.${DYNAMO_INGRESS_SUFFIX}
         # export DOCKER_SERVER=$CI_REGISTRY_IMAGE
