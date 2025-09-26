@@ -1438,7 +1438,6 @@ mod tests {
     mod gds_compatible_disk_tests {
         use super::*;
 
-
         /// Test disk storage with proper GDS alignment requirements
         #[tokio::test]
         #[rstest]

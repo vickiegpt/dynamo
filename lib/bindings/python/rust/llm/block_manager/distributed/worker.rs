@@ -16,11 +16,10 @@ use llm_rs::block_manager::layout::LayoutType;
 /// A wrapper around a layout type.
 /// This is used to convert between the Python and Rust layout types.
 #[pyclass(eq, eq_int)]
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum PyLayoutType {
     FullyContiguous,
-    LayerSeparateOuterContiguous,
-    LayerSeparateBlockContiguous,
+    LayerSeparate,
 }
 
 #[pymethods]
@@ -29,8 +28,7 @@ impl PyLayoutType {
     fn __str__(&self) -> &'static str {
         match self {
             PyLayoutType::FullyContiguous => "FullyContiguous",
-            PyLayoutType::LayerSeparateOuterContiguous => "LayerSeparateOuterContiguous",
-            PyLayoutType::LayerSeparateBlockContiguous => "LayerSeparateBlockContiguous",
+            PyLayoutType::LayerSeparate => "LayerSeparate",
         }
     }
 
@@ -44,10 +42,8 @@ impl From<PyLayoutType> for LayoutType {
     fn from(py_layout: PyLayoutType) -> Self {
         match py_layout {
             PyLayoutType::FullyContiguous => LayoutType::FullyContiguous,
-            // [Block0_Outer0][Block1_Outer0][Block2_Outer0]...[Block0_Outer1][Block1_Outer1]...
-            PyLayoutType::LayerSeparateOuterContiguous => LayoutType::LayerSeparate { outer_contiguous: true },
-            // [Block0_Outer0][Block0_Outer1][Block0_Outer2]...[Block1_Outer0][Block1_Outer1]...
-            PyLayoutType::LayerSeparateBlockContiguous => LayoutType::LayerSeparate { outer_contiguous: false },
+            // Layout (outer_contiguous vs block_contiguous) is auto-detected from tensor shapes
+            PyLayoutType::LayerSeparate => LayoutType::layer_separate_auto(),
         }
     }
 }
