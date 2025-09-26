@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use super::client::ActiveMessageClient;
+use super::client::{ActiveMessageClient, validate_handler_name};
 use super::handler::{ActiveMessage, InstanceId};
 use super::status::{DetachedConfirm, MessageStatus, SendAndConfirm, WithResponse};
 
@@ -33,7 +33,13 @@ pub struct MessageBuilder<'a, Mode = NeedsDeliveryMode> {
 /// Methods available for initial builder state
 impl<'a> MessageBuilder<'a, NeedsDeliveryMode> {
     /// Create a new message builder
-    pub fn new(client: &'a dyn ActiveMessageClient, handler: &str) -> Self {
+    pub fn new(client: &'a dyn ActiveMessageClient, handler: &str) -> Result<Self> {
+        validate_handler_name(handler)?;
+        Ok(Self::new_unchecked(client, handler))
+    }
+
+    /// Create a new message builder without handler name validation (for internal system use)
+    pub(crate) fn new_unchecked(client: &'a dyn ActiveMessageClient, handler: &str) -> Self {
         Self {
             client,
             handler_name: handler.to_string(),

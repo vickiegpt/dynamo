@@ -314,7 +314,7 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
         });
 
         let mut builder =
-            self.message("_wait_for_handler")
+            self.system_message("_wait_for_handler")
                 .payload(payload)?
                 .expect_response::<crate::active_message::responses::WaitForHandlerResponse>();
 
@@ -330,7 +330,7 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
 
     async fn list_handlers(&self, instance_id: InstanceId) -> Result<Vec<HandlerId>> {
         let status = self
-            .message("_list_handlers")
+            .system_message("_list_handlers")
             .expect_response::<crate::active_message::responses::ListHandlersResponse>()
             .send(instance_id)
             .await?;

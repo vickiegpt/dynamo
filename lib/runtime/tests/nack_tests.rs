@@ -6,17 +6,26 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},
-    handler::{ActiveMessage, ActiveMessageHandler},
+    handler::{AckHandler, ActiveMessage, HandlerType},
     manager::ActiveMessageManager,
-    response::ResponseContext,
     zmq::ZmqActiveMessageManager,
 };
 use std::sync::Arc;
 use std::time::Duration;
+use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Debug)]
+/// Generate a unique IPC socket path for testing
+fn unique_ipc_socket_path() -> Result<String> {
+    let temp_file = NamedTempFile::new()?;
+    let path = temp_file.path().to_string_lossy().to_string();
+    // Close the file but keep the path - ZMQ will create the socket
+    drop(temp_file);
+    Ok(format!("ipc://{}", path))
+}
+
+#[derive(Debug, Clone)]
 struct ValidationTestHandler {
     received_messages: Arc<Mutex<Vec<String>>>,
 }
@@ -34,12 +43,11 @@ impl ValidationTestHandler {
 }
 
 #[async_trait]
-impl ActiveMessageHandler for ValidationTestHandler {
+impl AckHandler for ValidationTestHandler {
     async fn handle(
         &self,
         message: ActiveMessage,
         _client: &dyn ActiveMessageClient,
-        _response: ResponseContext,
     ) -> Result<()> {
         let payload = String::from_utf8(message.payload.to_vec())?;
         self.received_messages.lock().await.push(payload);
@@ -74,20 +82,15 @@ async fn test_nack_on_payload_validation_failure() -> Result<()> {
 
     let cancel_token = CancellationToken::new();
 
-    let manager1 = ZmqActiveMessageManager::new(
-        "ipc:///tmp/test-nack-validation-1.sock".to_string(),
-        cancel_token.clone(),
-    )
-    .await?;
-    let manager2 = ZmqActiveMessageManager::new(
-        "ipc:///tmp/test-nack-validation-2.sock".to_string(),
-        cancel_token.clone(),
-    )
-    .await?;
+    let manager1 =
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+    let manager2 =
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
     // Register handler with schema validation
     let handler = Arc::new(ValidationTestHandler::new());
-    manager2.register_handler(handler.clone(), None).await?;
+    let handler_type = HandlerType::ack((*handler).clone());
+    manager2.register_handler_typed(handler_type, None).await?;
 
     let client1 = manager1.zmq_client();
     let client2 = manager2.zmq_client();
@@ -104,7 +107,7 @@ async fn test_nack_on_payload_validation_failure() -> Result<()> {
     let valid_payload = serde_json::json!({"message": "valid message"});
 
     let _status = client1
-        .message("validation_test_handler")
+        .message("validation_test_handler")?
         .payload(valid_payload)?
         .send(client2.instance_id())
         .await?;
@@ -124,7 +127,7 @@ async fn test_nack_on_payload_validation_failure() -> Result<()> {
 
     // This should fail due to payload validation
     let result = client1
-        .message("validation_test_handler")
+        .message("validation_test_handler")?
         .payload(invalid_payload)?
         .send(client2.instance_id())
         .await;
@@ -168,30 +171,23 @@ async fn test_cohort_broadcast_with_nack() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     // Create leader and two workers
-    let leader = ZmqActiveMessageManager::new(
-        "ipc:///tmp/test-cohort-nack-leader.sock".to_string(),
-        cancel_token.clone(),
-    )
-    .await?;
+    let leader =
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
-    let worker1 = ZmqActiveMessageManager::new(
-        "ipc:///tmp/test-cohort-nack-worker1.sock".to_string(),
-        cancel_token.clone(),
-    )
-    .await?;
+    let worker1 =
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
-    let worker2 = ZmqActiveMessageManager::new(
-        "ipc:///tmp/test-cohort-nack-worker2.sock".to_string(),
-        cancel_token.clone(),
-    )
-    .await?;
+    let worker2 =
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
     // Register handlers with different validation requirements
     let handler1 = Arc::new(ValidationTestHandler::new()); // Accepts valid payloads
-    worker1.register_handler(handler1.clone(), None).await?;
+    let handler1_type = HandlerType::ack((*handler1).clone());
+    worker1.register_handler_typed(handler1_type, None).await?;
 
     let handler2 = Arc::new(ValidationTestHandler::new()); // Also accepts valid payloads
-    worker2.register_handler(handler2.clone(), None).await?;
+    let handler2_type = HandlerType::ack((*handler2).clone());
+    worker2.register_handler_typed(handler2_type, None).await?;
 
     let leader_client = leader.zmq_client();
     let worker1_client = worker1.zmq_client();
