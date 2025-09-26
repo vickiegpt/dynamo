@@ -1435,7 +1435,7 @@ mod tests {
     mod gds_compatible_disk_tests {
         use super::*;
         use crate::block_manager::layout::utils::worker_verification::{
-            WorkerLayoutVerifier, verify_layout_compatibility
+            WorkerLayoutVerifier, verify_layout_compatibility,
         };
         use std::os::unix::fs::MetadataExt;
 
@@ -1487,9 +1487,7 @@ mod tests {
             check_block_contents(&immutable_host_block, &disk_blocks[0], 0xAB)?;
 
             // Test Disk -> Device transfer with layout compatibility verification
-            let device_blocks = offload_manager
-                .onboard(disk_blocks.clone(), None)
-                .await??;
+            let device_blocks = offload_manager.onboard(disk_blocks.clone(), None).await??;
             assert_eq!(device_blocks.len(), 1);
 
             // Verify data integrity after onboarding
@@ -1504,9 +1502,14 @@ mod tests {
         async fn test_cross_layout_compatibility_verification() -> Result<()> {
             // Test FullyContiguous host with LayerSeparate device - common scenario
             let (offload_manager, device_pool, host_pool, disk_pool) = build_pools_mixed_layouts(
-                4, // blocks
+                4,                                      // blocks
                 Some((4, LayoutType::FullyContiguous)), // host: FC
-                Some((4, LayoutType::LayerSeparate { outer_contiguous: true })), // device: LS
+                Some((
+                    4,
+                    LayoutType::LayerSeparate {
+                        outer_contiguous: true,
+                    },
+                )), // device: LS
                 Some((4, LayoutType::FullyContiguous)), // disk: FC
             )?;
 
@@ -1539,9 +1542,7 @@ mod tests {
             verify_layer_patterns(&immutable_host_block, &disk_blocks[0])?;
 
             // Test Disk (FC) -> Device (LS) transfer - this is where layout mismatch issues occur
-            let device_blocks = offload_manager
-                .onboard(disk_blocks.clone(), None)
-                .await??;
+            let device_blocks = offload_manager.onboard(disk_blocks.clone(), None).await??;
             assert_eq!(device_blocks.len(), 1);
 
             // Critical: Verify layer patterns are correctly mapped across layout types
@@ -1565,7 +1566,9 @@ mod tests {
                 BlockRegistrationDuplicationSetting::Disabled,
             )?;
 
-            let disk_pool = disk_pool.as_ref().ok_or_else(|| anyhow::anyhow!("Disk pool was not created"))?;
+            let disk_pool = disk_pool
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Disk pool was not created"))?;
 
             // Create a disk block
             let disk_block = completed_block(disk_pool, [1, 2, 3, 4]).await?;
@@ -1584,13 +1587,20 @@ mod tests {
 
                     // Verify file size matches expected block size
                     let expected_size = BLOCK_SIZE * NUM_LAYERS * 2 * 13 * 4; // From test constants
-                    assert!(metadata.len() >= expected_size as u64,
+                    assert!(
+                        metadata.len() >= expected_size as u64,
                         "Disk file size {} is smaller than expected {}",
-                        metadata.len(), expected_size);
+                        metadata.len(),
+                        expected_size
+                    );
 
                     // Verify file is properly aligned for GDS operations
-                    assert_eq!(metadata.len() % 4096, 0,
-                        "Disk file size {} is not 4KB aligned for GDS", metadata.len());
+                    assert_eq!(
+                        metadata.len() % 4096,
+                        0,
+                        "Disk file size {} is not 4KB aligned for GDS",
+                        metadata.len()
+                    );
                 }
             }
 
@@ -1658,7 +1668,9 @@ mod tests {
 
             // This should succeed, but we'll test behavior under constrained conditions
             let (offload_manager, _, _, disk_pool) = result?;
-            let disk_pool = disk_pool.as_ref().ok_or_else(|| anyhow::anyhow!("Disk pool was not created"))?;
+            let disk_pool = disk_pool
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Disk pool was not created"))?;
 
             // Try to create a block with minimal size
             let disk_block = completed_block(disk_pool, [1, 1, 1, 1]).await?;
@@ -1681,9 +1693,9 @@ mod tests {
         async fn test_constrained_host_buffer_disk_operations() -> Result<()> {
             // Simulate constrained host buffer by using minimal host blocks
             let (offload_manager, device_pool, host_pool, disk_pool) = build_pools_with_layout(
-                8, // More blocks than host buffer
-                Some(2), // Very limited host buffer
-                Some(8), // Plenty of disk space
+                8,          // More blocks than host buffer
+                Some(2),    // Very limited host buffer
+                Some(8),    // Plenty of disk space
                 Some(4096), // GDS-friendly alignment
                 LayoutType::FullyContiguous,
                 BlockRegistrationDuplicationSetting::Disabled,
@@ -1695,7 +1707,8 @@ mod tests {
 
             // Create multiple blocks that exceed host capacity
             let mut host_blocks = Vec::new();
-            for i in 0..2 { // Only create as many as host can handle
+            for i in 0..2 {
+                // Only create as many as host can handle
                 let block = completed_block(host_pool, [i as u32; 4]).await?;
                 populate_block(&block, i as u8)?;
                 host_blocks.push(block);
@@ -1723,9 +1736,7 @@ mod tests {
 
             // Now test onboarding under constrained conditions
             // This is where garbage data issues typically occur
-            let device_blocks = offload_manager
-                .onboard(disk_blocks.clone(), None)
-                .await??;
+            let device_blocks = offload_manager.onboard(disk_blocks.clone(), None).await??;
 
             // Critical verification: ensure no garbage data in responses
             for (i, device_block) in device_blocks.iter().enumerate() {
@@ -1759,14 +1770,16 @@ mod tests {
                 host_config.map(|(n, _)| n),
                 device_config.map(|(n, _)| n),
                 disk_config.map(|(n, _)| n),
-                LayoutType::LayerSeparate { outer_contiguous: false }, // Most complex
+                LayoutType::LayerSeparate {
+                    outer_contiguous: false,
+                }, // Most complex
                 BlockRegistrationDuplicationSetting::Disabled,
             )
         }
 
         /// Populate block with layer-specific patterns to detect layout issues
         fn populate_block_with_layer_patterns<S, L, M>(
-            block: &ImmutableBlock<S, L, M>
+            block: &ImmutableBlock<S, L, M>,
         ) -> Result<()>
         where
             S: Storage,
@@ -1777,14 +1790,15 @@ mod tests {
             let block_data = block.block_data();
 
             for layer_idx in 0..block_data.num_layers() {
-                for outer_idx in 0..2 { // Assuming max 2 outer dimensions
+                for outer_idx in 0..2 {
+                    // Assuming max 2 outer dimensions
                     if let Ok(layer_view) = block_data.layer_view(layer_idx, outer_idx) {
                         let pattern = 0x10 + layer_idx as u8 + outer_idx as u8; // Different pattern per layer/outer
 
                         unsafe {
                             let slice = std::slice::from_raw_parts_mut(
                                 layer_view.as_ptr() as *mut u8,
-                                layer_view.size()
+                                layer_view.size(),
                             );
                             slice.fill(pattern);
                         }
@@ -1798,11 +1812,15 @@ mod tests {
         /// Verify layer-specific patterns are preserved across transfers
         fn verify_layer_patterns<S1, L1, M1, S2, L2, M2>(
             source_block: &ImmutableBlock<S1, L1, M1>,
-            dest_block: &ImmutableBlock<S2, L2, M2>
+            dest_block: &ImmutableBlock<S2, L2, M2>,
         ) -> Result<()>
         where
-            S1: Storage, L1: LocalityProvider, M1: BlockMetadata,
-            S2: Storage, L2: LocalityProvider, M2: BlockMetadata,
+            S1: Storage,
+            L1: LocalityProvider,
+            M1: BlockMetadata,
+            S2: Storage,
+            L2: LocalityProvider,
+            M2: BlockMetadata,
             ImmutableBlock<S1, L1, M1>: BlockDataProvider,
             ImmutableBlock<S2, L2, M2>: BlockDataProvider,
         {
@@ -1812,10 +1830,11 @@ mod tests {
             assert_eq!(src_data.num_layers(), dst_data.num_layers());
 
             for layer_idx in 0..src_data.num_layers() {
-                for outer_idx in 0..2 { // Assuming max 2 outer dimensions
+                for outer_idx in 0..2 {
+                    // Assuming max 2 outer dimensions
                     if let (Ok(src_layer), Ok(dst_layer)) = (
                         src_data.layer_view(layer_idx, outer_idx),
-                        dst_data.layer_view(layer_idx, outer_idx)
+                        dst_data.layer_view(layer_idx, outer_idx),
                     ) {
                         assert_eq!(src_layer.size(), dst_layer.size());
 
@@ -1839,12 +1858,20 @@ mod tests {
                             let dst_slice = std::slice::from_raw_parts(dst_ptr, dst_size);
 
                             // Verify source has expected pattern
-                            assert!(src_slice.iter().all(|&b| b == expected_pattern),
-                                "Source layer {} outer {} has incorrect pattern", layer_idx, outer_idx);
+                            assert!(
+                                src_slice.iter().all(|&b| b == expected_pattern),
+                                "Source layer {} outer {} has incorrect pattern",
+                                layer_idx,
+                                outer_idx
+                            );
 
                             // Verify destination matches source
-                            assert!(dst_slice.iter().all(|&b| b == expected_pattern),
-                                "Destination layer {} outer {} has incorrect pattern", layer_idx, outer_idx);
+                            assert!(
+                                dst_slice.iter().all(|&b| b == expected_pattern),
+                                "Destination layer {} outer {} has incorrect pattern",
+                                layer_idx,
+                                outer_idx
+                            );
                         }
                     }
                 }
@@ -1856,7 +1883,7 @@ mod tests {
         /// Verify block data integrity with specific pattern
         fn verify_block_data_integrity<S, L, M>(
             block: &ImmutableBlock<S, L, M>,
-            expected_value: u8
+            expected_value: u8,
         ) -> Result<()>
         where
             S: Storage,
@@ -1883,9 +1910,12 @@ mod tests {
 
                 // Check for expected pattern
                 let pattern_matches = slice.iter().all(|&b| b == expected_value);
-                assert!(pattern_matches,
+                assert!(
+                    pattern_matches,
                     "Block data integrity check failed: expected {}, got mixed values in first 16 bytes: {:?}",
-                    expected_value, &slice[0..std::cmp::min(16, slice.len())]);
+                    expected_value,
+                    &slice[0..std::cmp::min(16, slice.len())]
+                );
             }
 
             Ok(())
@@ -1894,7 +1924,7 @@ mod tests {
         /// Verify no garbage data in block (common issue with layout mismatches)
         fn verify_no_garbage_data<S, L, M>(
             block: &ImmutableBlock<S, L, M>,
-            expected_value: u8
+            expected_value: u8,
         ) -> Result<()>
         where
             S: Storage,
@@ -1906,36 +1936,51 @@ mod tests {
 
             // Check each layer separately for layout-specific issues
             for layer_idx in 0..block_data.num_layers() {
-                for outer_idx in 0..2 { // Assuming max 2 outer dimensions
+                for outer_idx in 0..2 {
+                    // Assuming max 2 outer dimensions
                     if let Ok(layer_view) = block_data.layer_view(layer_idx, outer_idx) {
                         unsafe {
-                            let slice = std::slice::from_raw_parts(layer_view.as_ptr(), layer_view.size());
+                            let slice =
+                                std::slice::from_raw_parts(layer_view.as_ptr(), layer_view.size());
 
-                    // Look for common garbage patterns
-                    let has_null_bytes = slice.iter().any(|&b| b == 0x00);
-                    let has_max_bytes = slice.iter().any(|&b| b == 0xFF);
-                    let has_expected = slice.iter().any(|&b| b == expected_value);
+                            // Look for common garbage patterns
+                            let has_null_bytes = slice.iter().any(|&b| b == 0x00);
+                            let has_max_bytes = slice.iter().any(|&b| b == 0xFF);
+                            let has_expected = slice.iter().any(|&b| b == expected_value);
 
-                    // In a properly functioning system, we should see mostly expected values
-                    let expected_count = slice.iter().filter(|&&b| b == expected_value).count();
-                    let total_count = slice.len();
-                    let expected_ratio = expected_count as f64 / total_count as f64;
+                            // In a properly functioning system, we should see mostly expected values
+                            let expected_count =
+                                slice.iter().filter(|&&b| b == expected_value).count();
+                            let total_count = slice.len();
+                            let expected_ratio = expected_count as f64 / total_count as f64;
 
-                    assert!(expected_ratio > 0.8,
-                        "Layer {} has too much garbage data: only {:.1}% matches expected value {}. \
+                            assert!(
+                                expected_ratio > 0.8,
+                                "Layer {} has too much garbage data: only {:.1}% matches expected value {}. \
                          First 32 bytes: {:?}",
-                        layer_idx, expected_ratio * 100.0, expected_value,
-                        &slice[0..std::cmp::min(32, slice.len())]);
+                                layer_idx,
+                                expected_ratio * 100.0,
+                                expected_value,
+                                &slice[0..std::cmp::min(32, slice.len())]
+                            );
 
-                    // Additional check: no completely zero or completely max regions
-                    // which often indicate uninitialized or corrupted memory
-                    let zero_regions = count_consecutive_bytes(slice, 0x00);
-                    let max_regions = count_consecutive_bytes(slice, 0xFF);
+                            // Additional check: no completely zero or completely max regions
+                            // which often indicate uninitialized or corrupted memory
+                            let zero_regions = count_consecutive_bytes(slice, 0x00);
+                            let max_regions = count_consecutive_bytes(slice, 0xFF);
 
-                            assert!(zero_regions < slice.len() / 4,
-                                "Layer {} outer {} has large zero regions, indicating potential garbage data", layer_idx, outer_idx);
-                            assert!(max_regions < slice.len() / 4,
-                                "Layer {} outer {} has large 0xFF regions, indicating potential garbage data", layer_idx, outer_idx);
+                            assert!(
+                                zero_regions < slice.len() / 4,
+                                "Layer {} outer {} has large zero regions, indicating potential garbage data",
+                                layer_idx,
+                                outer_idx
+                            );
+                            assert!(
+                                max_regions < slice.len() / 4,
+                                "Layer {} outer {} has large 0xFF regions, indicating potential garbage data",
+                                layer_idx,
+                                outer_idx
+                            );
                         }
                     }
                 }

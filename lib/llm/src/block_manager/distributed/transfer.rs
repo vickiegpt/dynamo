@@ -14,13 +14,13 @@ use crate::block_manager::{
     BasicMetadata, Storage,
     block::{
         Block, BlockDataProvider, BlockDataProviderMut, ReadableBlock, WritableBlock,
-        data::{local::LocalBlockData, BlockDataExt},
+        data::{BlockDataExt, local::LocalBlockData},
         locality,
         transfer::{TransferContext, WriteTo, WriteToStrategy},
     },
     connector::scheduler::{SchedulingDecision, TransferSchedulerClient},
-    offload::MAX_TRANSFER_BATCH_SIZE,
     layout::BlockLayoutConfig,
+    offload::MAX_TRANSFER_BATCH_SIZE,
     storage::{DeviceStorage, DiskStorage, Local, PinnedStorage},
 };
 
@@ -264,15 +264,28 @@ impl BlockTransferHandler {
                         if src_layer.size() != tgt_layer.size() {
                             return Err(anyhow::anyhow!(
                                 "Layout mismatch in block {} layer {}: source size {} != target size {}",
-                                i, layer_idx, src_layer.size(), tgt_layer.size()
+                                i,
+                                layer_idx,
+                                src_layer.size(),
+                                tgt_layer.size()
                             ));
                         }
                     }
                     (Err(e), _) => {
-                        tracing::warn!("Failed to get source layer view for block {} layer {}: {}", i, layer_idx, e);
+                        tracing::warn!(
+                            "Failed to get source layer view for block {} layer {}: {}",
+                            i,
+                            layer_idx,
+                            e
+                        );
                     }
                     (_, Err(e)) => {
-                        tracing::warn!("Failed to get target layer view for block {} layer {}: {}", i, layer_idx, e);
+                        tracing::warn!(
+                            "Failed to get target layer view for block {} layer {}: {}",
+                            i,
+                            layer_idx,
+                            e
+                        );
                     }
                 }
             }
@@ -308,11 +321,15 @@ impl BlockTransferHandler {
             if let (Ok(src_view), Ok(tgt_view)) = (src_data.block_view(), tgt_data.block_view()) {
                 if src_view.size() == tgt_view.size() {
                     unsafe {
-                        let src_slice = std::slice::from_raw_parts(src_view.as_ptr(), src_view.size());
-                        let tgt_slice = std::slice::from_raw_parts(tgt_view.as_ptr(), tgt_view.size());
+                        let src_slice =
+                            std::slice::from_raw_parts(src_view.as_ptr(), src_view.size());
+                        let tgt_slice =
+                            std::slice::from_raw_parts(tgt_view.as_ptr(), tgt_view.size());
 
                         // Check for data corruption
-                        let matches = src_slice.iter().zip(tgt_slice.iter())
+                        let matches = src_slice
+                            .iter()
+                            .zip(tgt_slice.iter())
                             .filter(|(a, b)| a == b)
                             .count();
 
@@ -321,23 +338,25 @@ impl BlockTransferHandler {
                         if match_ratio < 0.95 {
                             return Err(anyhow::anyhow!(
                                 "Data integrity check failed for block {}: only {:.1}% of data matches",
-                                i, match_ratio * 100.0
+                                i,
+                                match_ratio * 100.0
                             ));
                         }
 
                         // Check for specific patterns if provided
                         if let Some(patterns) = expected_patterns {
                             if let Some(&expected_pattern) = patterns.get(i) {
-                                let pattern_matches = tgt_slice.iter()
-                                    .filter(|&&b| b == expected_pattern)
-                                    .count();
+                                let pattern_matches =
+                                    tgt_slice.iter().filter(|&&b| b == expected_pattern).count();
 
                                 let pattern_ratio = pattern_matches as f64 / tgt_slice.len() as f64;
 
                                 if pattern_ratio < 0.8 {
                                     tracing::warn!(
                                         "Block {} has unexpected pattern distribution: {:.1}% matches expected pattern {}",
-                                        i, pattern_ratio * 100.0, expected_pattern
+                                        i,
+                                        pattern_ratio * 100.0,
+                                        expected_pattern
                                     );
                                 }
                             }
@@ -347,7 +366,10 @@ impl BlockTransferHandler {
             }
         }
 
-        tracing::debug!("Transfer integrity verification completed for {} blocks", sources.len());
+        tracing::debug!(
+            "Transfer integrity verification completed for {} blocks",
+            sources.len()
+        );
         Ok(())
     }
 }
