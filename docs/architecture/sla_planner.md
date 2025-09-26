@@ -108,7 +108,9 @@ Finally, SLA planner applies the change by scaling up/down the number of prefill
 
 ## Deploying
 
-For detailed deployment instructions including setup, configuration, troubleshooting, and architecture overview, see the [SLA Planner Deployment Guide](../guides/dynamo_deploy/sla_planner_deployment.md).
+### K8s Deployment
+
+For detailed deployment instructions including setup, configuration, troubleshooting, and architecture overview, see the [SLA Planner Deployment Guide](../kubernetes/sla_planner_deployment.md).
 
 **To deploy SLA Planner:**
 ```bash
@@ -118,3 +120,49 @@ kubectl apply -f disagg_planner.yaml -n {$NAMESPACE}
 
 > [!NOTE]
 > The SLA planner requires a frontend that reports metrics at the `/metrics` HTTP endpoint with the number of requests, ISL, OSL, TTFT, and ITL in the correct format. The dynamo frontend provides these metrics automatically.
+
+### Virtual Deployment
+
+The SLA planner supports virtual deployment mode for customized environments (e.g., customized cluster) through the `VirtualConnector`. This connector enables the planner to communicate scaling decisions without directly managing the deployment infrastructure.
+
+The `VirtualConnector` acts as a bridge between the SLA planner and external deployment environments. Instead of directly scaling Kubernetes resources, it writes scaling decisions and waits for the deployment environment to acknowledge completion.
+
+#### Scaling Decision Flow
+
+1. **Decision Generation**: The planner calculates optimal worker counts
+2. **Change Detection**: The planner skips scaling if the target counts match current counts, logging: `"No scaling needed (prefill=X, decode=Y)"`
+3. **Readiness Check**: Before making new decisions, the planner verifies that previous scaling operations have completed by checking if `scaled_decision_id >= decision_id`
+4. **Timeout Handling**: If a scaling decision isn't acknowledged within 30 minutes (1800 seconds), the planner proceeds with new decisions anyway
+5. **Completion Tracking**: The planner can optionally wait for scaling completion confirmation (blocking mode)
+
+#### Configuration
+
+To use virtual deployment mode:
+
+```yaml
+environment: "virtual"
+backend: "vllm"  # or "sglang"
+```
+
+#### Deployment Environment Requirements
+
+The external deployment environment must use `VirtualConnectorClient`:
+
+```
+from dynamo._core import DistributedRuntime, VirtualConnectorClient
+
+client = VirtualConnectorClient(distributed_runtime, namespace)
+```
+
+1. **Monitor Planner**: Continuously watch for scaling decisions: `await client.wait()`. This blocks until there is a change.
+2. **Parse Decisions**: Read `num_prefill_workers` and `num_decode_workers` values: `decision = await client.get()`
+3. **Execute Scaling**: Apply the scaling decisions to the actual deployment infrastructure
+4. **Acknowledge Completion**: Mark the decision completed when scaling is finished: `await client.complete(decision)`
+
+A scaling decision (returned by `client.get()`) contains the following fields, which are -1 if not set yet:
+- `num_prefill_workers`: Integer specifying the target number of prefill workers
+- `num_decode_workers`: Integer specifying the target number of decode workers
+- `decision_id`: Integer with incremental ID for each scaling decision
+
+See `components/planner/test/test_virtual_connector.py` for a full example.
+

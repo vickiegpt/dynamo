@@ -67,6 +67,7 @@ fn test_sampling_parameters_include_stop_str_in_output_extraction() {
             .build()
             .unwrap(),
         nvext: None,
+        chat_template_args: None,
     };
 
     let sampling = request.extract_sampling_options().unwrap();
@@ -185,6 +186,40 @@ fn test_chat_completions_common_overrides_nvext() {
 }
 
 #[test]
+fn test_max_thinking_tokens_extraction() {
+    // Test that max_thinking_tokens is extracted from nvext to StopConditions
+    let json_str = r#"{
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "nvext": {
+            "max_thinking_tokens": 1024
+        }
+    }"#;
+
+    let request: NvCreateChatCompletionRequest = serde_json::from_str(json_str).unwrap();
+
+    // Verify nvext parsing
+    assert_eq!(
+        request.nvext.as_ref().unwrap().max_thinking_tokens,
+        Some(1024)
+    );
+
+    // Verify extraction to StopConditions
+    let stop_conditions = request.extract_stop_conditions().unwrap();
+    assert_eq!(stop_conditions.max_thinking_tokens, Some(1024));
+
+    // Test with None value
+    let json_str_none = r#"{
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "Hello"}]
+    }"#;
+
+    let request_none: NvCreateChatCompletionRequest = serde_json::from_str(json_str_none).unwrap();
+    let stop_conditions_none = request_none.extract_stop_conditions().unwrap();
+    assert_eq!(stop_conditions_none.max_thinking_tokens, None);
+}
+
+#[test]
 fn test_chat_completions_backward_compatibility() {
     // Test backward compatibility - ignore_eos and guided_json only in nvext
     let json_str = r#"{
@@ -293,6 +328,7 @@ fn test_serialization_preserves_structure() {
             ignore_eos: Some(false),
             ..Default::default()
         }),
+        chat_template_args: None,
     };
 
     let json = serde_json::to_value(&request).unwrap();
@@ -342,6 +378,7 @@ fn test_sampling_parameters_extraction() {
             .build()
             .unwrap(),
         nvext: None,
+        chat_template_args: None,
     };
 
     let sampling_options = request.extract_sampling_options().unwrap();

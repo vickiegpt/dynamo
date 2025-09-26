@@ -18,7 +18,7 @@ use crate::discovery::ModelEntry;
 use crate::entrypoint::RouterConfig;
 use crate::mocker::protocols::MockEngineArgs;
 use crate::model_card::{self, ModelDeploymentCard};
-use crate::model_type::ModelType;
+use crate::model_type::{ModelInput, ModelType};
 use crate::request_template::RequestTemplate;
 
 mod network_name;
@@ -210,7 +210,7 @@ impl LocalModelBuilder {
             .map(RequestTemplate::load)
             .transpose()?;
 
-        // echo_full engine doesn't need a path. It's an edge case, move it out of the way.
+        // echo engine doesn't need a path. It's an edge case, move it out of the way.
         if self.model_path.is_none() {
             let mut card = ModelDeploymentCard::with_name_only(
                 self.model_name.as_deref().unwrap_or(DEFAULT_NAME),
@@ -252,9 +252,10 @@ impl LocalModelBuilder {
         // --model-config takes precedence over --model-path
         let model_config_path = self.model_config.as_ref().unwrap_or(&full_path);
 
-        let mut card =
-            ModelDeploymentCard::load(&model_config_path, self.custom_template_path.as_deref())
-                .await?;
+        let mut card = ModelDeploymentCard::load_from_disk(
+            model_config_path,
+            self.custom_template_path.as_deref(),
+        )?;
 
         // Usually we infer from the path, self.model_name is user override
         let model_name = self.model_name.take().unwrap_or_else(|| {
@@ -403,6 +404,7 @@ impl LocalModel {
         &mut self,
         endpoint: &Endpoint,
         model_type: ModelType,
+        model_input: ModelInput,
     ) -> anyhow::Result<()> {
         // A static component doesn't have an etcd_client because it doesn't need to register
         let Some(etcd_client) = endpoint.drt().etcd_client() else {
@@ -431,6 +433,7 @@ impl LocalModel {
             endpoint_id: endpoint.id(),
             model_type,
             runtime_config: Some(self.runtime_config.clone()),
+            model_input,
         };
         etcd_client
             .kv_create(
