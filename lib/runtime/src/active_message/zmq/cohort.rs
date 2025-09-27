@@ -1241,6 +1241,14 @@ mod tests {
             async fn has_incoming_connection_from(&self, _instance_id: InstanceId) -> bool {
                 false // Mock always returns false
             }
+
+            fn clone_as_arc(&self) -> std::sync::Arc<dyn ActiveMessageClient> {
+                Arc::new(MockActiveMessageClient {
+                    instance_id: self.instance_id,
+                    endpoint: self.endpoint.clone(),
+                    sent_messages: self.sent_messages.clone(),
+                })
+            }
         }
 
         pub fn test_cohort_builder() -> LeaderWorkerCohortConfig {

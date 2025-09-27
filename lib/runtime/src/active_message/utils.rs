@@ -13,8 +13,14 @@ pub(crate) fn extract_host(endpoint: &str) -> Option<String> {
             let end = stripped.find(']')?;
             return Some(stripped[..end].to_string());
         }
+        // Check for malformed IPv6 (contains ] without [)
+        if rest.contains(']') {
+            return None;
+        }
         // Handle IPv4/hostname:port format
-        rest.split(':').next().map(|s| s.to_string())
+        let host = rest.split(':').next().map(|s| s.to_string())?;
+        // Return None for empty host
+        if host.is_empty() { None } else { Some(host) }
     } else if endpoint.starts_with("ipc://") {
         Some("localhost".to_string())
     } else {

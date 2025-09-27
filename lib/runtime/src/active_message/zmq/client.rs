@@ -276,12 +276,8 @@ impl ZmqActiveMessageClient {
 
         // Process messages
         while let Some(message) = receiver.recv().await {
-            match serde_json::to_vec(&message) {
-                Ok(serialized) => {
-                    let mut parts = VecDeque::new();
-                    parts.push_back(Message::from(serialized));
-                    let multipart = Multipart(parts);
-
+            match super::transport::ZmqTransport::serialize_message(&message) {
+                Ok(multipart) => {
                     if let Err(e) = pub_socket.send(multipart).await {
                         error!(
                             "Failed to send message via publisher to {}: {}",
@@ -348,6 +344,11 @@ impl ZmqActiveMessageClient {
 
         debug!("All publisher tasks shut down");
     }
+
+    /// Get PeerInfo for this client instance
+    pub fn peer_info(&self) -> PeerInfo {
+        PeerInfo::new(self.instance_id, &self.endpoint)
+    }
 }
 
 #[async_trait]
@@ -368,7 +369,13 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
             .get(&target)
             .ok_or_else(|| anyhow::anyhow!("Unknown peer: {}", target))?;
 
-        let message = ActiveMessage::new(handler, payload).with_sender(self.instance_id);
+        let message = ActiveMessage::new(
+            Uuid::new_v4(),
+            handler.to_string(),
+            self.instance_id,
+            payload,
+            serde_json::Value::Null,
+        );
 
         // Use smart endpoint selection to prefer IPC for same-host communication
         let endpoint = peer
@@ -551,6 +558,10 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
 
     async fn has_incoming_connection_from(&self, instance_id: InstanceId) -> bool {
         self.has_incoming_connection_from(instance_id).await
+    }
+
+    fn clone_as_arc(&self) -> std::sync::Arc<dyn ActiveMessageClient> {
+        Arc::new(self.clone())
     }
 }
 

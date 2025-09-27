@@ -13,7 +13,9 @@ use uuid::Uuid;
 
 use crate::active_message::{
     client::ActiveMessageClient,
-    handler::{ActiveMessage, HandlerEvent, HandlerId, HandlerType, InstanceId},
+    handler::{
+        ActiveMessage, ActiveMessageContext, HandlerEvent, HandlerId, HandlerType, InstanceId,
+    },
     manager::{ActiveMessageManager, HandlerConfig},
     response::SingleResponseSender,
 };
@@ -96,7 +98,7 @@ pub struct ZmqActiveMessageManager {
 }
 
 impl ZmqActiveMessageManager {
-    pub fn zmq_client(&self) -> Arc<ZmqActiveMessageClient> {
+    pub fn client(&self) -> Arc<ZmqActiveMessageClient> {
         self.client.clone()
     }
 
@@ -290,26 +292,22 @@ impl ZmqActiveMessageManager {
         let handler_events_tx = state.handler_events_tx.clone();
         drop(state);
 
-        // AckHandler is now a NoReturnHandler
+        // Register built-in handlers using the new base traits
         let ack_handler = HandlerType::no_return(AckHandler::new(client.clone()));
         self.register_handler_typed(ack_handler, None).await?;
 
-        // RegisterServiceHandler is now a ResponseHandler
         let register_service = HandlerType::response(RegisterServiceHandler::new(client.clone()));
         self.register_handler_typed(register_service, None).await?;
 
-        // ListHandlersHandler is now a ResponseHandler
         let list_handlers = HandlerType::response(ListHandlersHandler::new(self.state.clone()));
         self.register_handler_typed(list_handlers, None).await?;
 
-        // WaitForHandlerHandler is now a ResponseHandler
         let wait_for_handler = HandlerType::response(WaitForHandlerHandler::new(
             self.state.clone(),
             handler_events_tx,
         ));
         self.register_handler_typed(wait_for_handler, None).await?;
 
-        // HealthCheckHandler is now a ResponseHandler
         let health_check = HandlerType::response(HealthCheckHandler);
         self.register_handler_typed(health_check, None).await?;
 
@@ -607,11 +605,29 @@ impl ZmqActiveMessageManager {
             // Execute handler based on type
             match &handler {
                 HandlerType::NoReturn(h) => {
-                    h.handle(message, &*client).await;
+                    // Create ActiveMessageContext from message
+                    let ctx = super::super::handler::ActiveMessageContext::new(
+                        message.message_id,
+                        message.sender_instance,
+                        message.handler_name.clone(),
+                        message.metadata.clone(),
+                        client.clone_as_arc(),
+                        None, // No cancellation for now
+                    );
+                    h.handle(message.payload, ctx).await;
                 }
                 HandlerType::Ack(h) => {
+                    // Create ActiveMessageContext from message
+                    let ctx = super::super::handler::ActiveMessageContext::new(
+                        message.message_id,
+                        message.sender_instance,
+                        message.handler_name.clone(),
+                        message.metadata.clone(),
+                        client.clone_as_arc(),
+                        None, // No cancellation for now
+                    );
                     // ACK handlers need to handle ACK/NACK based on Result
-                    match h.handle(message, &*client).await {
+                    match h.handle(message.payload, ctx).await {
                         Ok(()) => {
                             // Success - send ACK if needed
                             debug!("Handler '{}' completed successfully", handler_name);
@@ -645,8 +661,27 @@ impl ZmqActiveMessageManager {
                 }
                 HandlerType::Response(h) => {
                     if let Some(sender) = response_sender {
-                        if let Err(e) = h.handle_and_send(message, &*client, sender).await {
-                            error!("Response handler '{}' failed: {}", handler_name, e);
+                        // Create ActiveMessageContext from message
+                        let ctx = super::super::handler::ActiveMessageContext::new(
+                            message.message_id,
+                            message.sender_instance,
+                            message.handler_name.clone(),
+                            message.metadata.clone(),
+                            client.clone_as_arc(),
+                            None, // No cancellation for now
+                        );
+                        // Response handler returns Bytes
+                        match h.handle(message.payload, ctx).await {
+                            Ok(response_bytes) => {
+                                if let Err(e) = sender.send_raw(response_bytes).await {
+                                    error!("Failed to send response: {}", e);
+                                }
+                            }
+                            Err(e) => {
+                                if let Err(send_err) = sender.send_err(e).await {
+                                    error!("Failed to send error response: {}", send_err);
+                                }
+                            }
                         }
                     } else {
                         error!(
@@ -813,10 +848,12 @@ impl ActiveMessageManager for ZmqActiveMessageManager {
 impl ZmqActiveMessageManager {
     /// Register a closure that doesn't return a value (NoReturnHandler)
     ///
+    /// This method works with raw `Bytes` and requires manual deserialization.
+    ///
     /// # Example
     /// ```rust
-    /// manager.register_no_return_closure("log", |msg, _client| async move {
-    ///     println!("Received: {:?}", msg);
+    /// manager.register_no_return_closure("log", |input, ctx| async move {
+    ///     println!("Received {} bytes from {}", input.len(), ctx.sender_instance());
     /// }).await?;
     /// ```
     pub async fn register_no_return_closure<F, Fut>(
@@ -825,7 +862,7 @@ impl ZmqActiveMessageManager {
         closure: F,
     ) -> Result<()>
     where
-        F: Fn(ActiveMessage, &dyn ActiveMessageClient) -> Fut + Send + Sync + 'static,
+        F: Fn(Bytes, ActiveMessageContext) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         let handler = HandlerType::from_no_return_closure(name, closure);
@@ -834,10 +871,13 @@ impl ZmqActiveMessageManager {
 
     /// Register a closure that returns Result<()> (AckHandler)
     ///
+    /// This method works with raw `Bytes` and requires manual deserialization.
+    ///
     /// # Example
     /// ```rust
-    /// manager.register_ack_closure("validate", |msg, _client| async move {
-    ///     validate_data(&msg)?;
+    /// manager.register_ack_closure("validate", |input, _ctx| async move {
+    ///     let data: ValidationRequest = serde_json::from_slice(&input)?;
+    ///     validate_data(&data)?;
     ///     Ok(())
     /// }).await?;
     /// ```
@@ -847,34 +887,109 @@ impl ZmqActiveMessageManager {
         closure: F,
     ) -> Result<()>
     where
-        F: Fn(ActiveMessage, &dyn ActiveMessageClient) -> Fut + Send + Sync + 'static,
+        F: Fn(Bytes, ActiveMessageContext) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<()>> + Send + 'static,
     {
         let handler = HandlerType::from_ack_closure(name, closure);
         self.register_handler_typed(handler, None).await
     }
 
-    /// Register a closure that returns Result<T> (ResponseHandler)
+    /// Register a closure that returns Result<Bytes> (ResponseHandler)
+    ///
+    /// This method works with raw `Bytes` and requires manual serialization/deserialization.
     ///
     /// # Example
     /// ```rust
-    /// manager.register_response_closure("compute", |msg, _client| async move {
-    ///     let input: ComputeRequest = msg.deserialize()?;
-    ///     let result = compute_something(input);
-    ///     Ok(result)
+    /// manager.register_response_closure("compute", |input, _ctx| async move {
+    ///     let request: ComputeRequest = serde_json::from_slice(&input)?;
+    ///     let result = compute_something(request);
+    ///     let response = serde_json::to_vec(&result)?;
+    ///     Ok(Bytes::from(response))
     /// }).await?;
     /// ```
-    pub async fn register_response_closure<F, Fut, T>(
+    pub async fn register_response_closure<F, Fut>(
         &self,
         name: impl Into<String>,
         closure: F,
     ) -> Result<()>
     where
-        F: Fn(ActiveMessage, &dyn ActiveMessageClient) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Result<T>> + Send + 'static,
-        T: serde::Serialize + Send + Sync + 'static,
+        F: Fn(Bytes, ActiveMessageContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<Bytes>> + Send + 'static,
     {
         let handler = HandlerType::from_response_closure(name, closure);
+        self.register_handler_typed(handler, None).await
+    }
+
+    // Typed closure registration methods for better ergonomics
+
+    /// Register a typed unary (request/response) closure
+    ///
+    /// # Example
+    /// ```rust
+    /// manager.register_unary("compute", |req: ComputeRequest, _ctx| async move {
+    ///     Ok(ComputeResponse { result: req.x + req.y })
+    /// }).await?;
+    /// ```
+    pub async fn register_unary<Req, Res, F, Fut>(
+        &self,
+        name: impl Into<String>,
+        closure: F,
+    ) -> Result<()>
+    where
+        Req: serde::de::DeserializeOwned + Send + 'static,
+        Res: serde::Serialize + Send + 'static,
+        F: Fn(Req, ActiveMessageContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<Res>> + Send + 'static,
+    {
+        let handler = HandlerType::from_unary_closure(name, closure);
+        self.register_handler_typed(handler, None).await
+    }
+
+    /// Register a typed void (no return) closure
+    ///
+    /// # Example
+    /// ```rust
+    /// manager.register_void("log", |msg: String, _ctx| async move {
+    ///     println!("Received: {}", msg);
+    /// }).await?;
+    /// ```
+    pub async fn register_void<Input, F, Fut>(
+        &self,
+        name: impl Into<String>,
+        closure: F,
+    ) -> Result<()>
+    where
+        Input: serde::de::DeserializeOwned + Send + 'static,
+        F: Fn(Input, ActiveMessageContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let handler = HandlerType::from_void_closure(name, closure);
+        self.register_handler_typed(handler, None).await
+    }
+
+    /// Register a typed acknowledgment closure
+    ///
+    /// # Example
+    /// ```rust
+    /// manager.register_typed_ack("validate", |data: ValidationRequest, _ctx| async move {
+    ///     if data.is_valid() {
+    ///         Ok(())
+    ///     } else {
+    ///         Err(anyhow!("Invalid data"))
+    ///     }
+    /// }).await?;
+    /// ```
+    pub async fn register_typed_ack<Input, F, Fut>(
+        &self,
+        name: impl Into<String>,
+        closure: F,
+    ) -> Result<()>
+    where
+        Input: serde::de::DeserializeOwned + Send + 'static,
+        F: Fn(Input, ActiveMessageContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<()>> + Send + 'static,
+    {
+        let handler = HandlerType::from_typed_ack_closure(name, closure);
         self.register_handler_typed(handler, None).await
     }
 }

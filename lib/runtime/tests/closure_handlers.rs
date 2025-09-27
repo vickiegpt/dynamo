@@ -55,13 +55,10 @@ async fn test_closure_handlers_comprehensive() -> Result<()> {
     {
         let log_messages = log_messages.clone();
         manager2
-            .register_no_return_closure("log", move |msg, _client| {
+            .register_void("log", move |text: String, _ctx| {
                 let log_messages = log_messages.clone();
                 async move {
-                    // Deserialize the JSON string payload
-                    if let Ok(text) = msg.deserialize::<String>() {
-                        log_messages.lock().await.push(text);
-                    }
+                    log_messages.lock().await.push(text);
                 }
             })
             .await?;
@@ -69,7 +66,7 @@ async fn test_closure_handlers_comprehensive() -> Result<()> {
 
     // Register AckHandler closure that always fails for testing
     manager2
-        .register_ack_closure("always_fail", |_msg, _client| async move {
+        .register_typed_ack("always_fail", |_data: String, _ctx| async move {
             anyhow::bail!("This handler always fails")
         })
         .await?;
@@ -78,11 +75,9 @@ async fn test_closure_handlers_comprehensive() -> Result<()> {
     {
         let validation_results = validation_results.clone();
         manager2
-            .register_ack_closure("validate", move |msg, _client| {
+            .register_typed_ack("validate", move |text: String, _ctx| {
                 let validation_results = validation_results.clone();
                 async move {
-                    // Deserialize the JSON string payload
-                    let text: String = msg.deserialize()?;
                     let is_valid = !text.is_empty() && text.len() < 100;
                     validation_results.lock().await.push(is_valid);
 
@@ -98,15 +93,15 @@ async fn test_closure_handlers_comprehensive() -> Result<()> {
 
     // Register ResponseHandler closure - computes arithmetic
     manager2
-        .register_response_closure("compute", |msg, _client| async move {
-            let request: ComputeRequest = msg.deserialize()?;
-            let result = request.x + request.y;
-            Ok(ComputeResponse { result })
+        .register_unary("compute", |request: ComputeRequest, _ctx| async move {
+            Ok(ComputeResponse {
+                result: request.x + request.y,
+            })
         })
         .await?;
 
-    let client1 = manager1.zmq_client();
-    let client2 = manager2.zmq_client();
+    let client1 = manager1.client();
+    let client2 = manager2.client();
 
     let peer2 = PeerInfo::new(client2.instance_id(), client2.endpoint().to_string());
     let peer1 = PeerInfo::new(client1.instance_id(), client1.endpoint().to_string());
@@ -198,15 +193,15 @@ async fn test_closure_handler_type_validation() -> Result<()> {
     let manager2 =
         ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
-    // Register a NoReturnHandler closure
+    // Register a typed void handler closure
     manager2
-        .register_no_return_closure("test_handler", |_msg, _client| async move {
+        .register_void("test_handler", |_msg: String, _ctx| async move {
             // Do nothing
         })
         .await?;
 
-    let client1 = manager1.zmq_client();
-    let client2 = manager2.zmq_client();
+    let client1 = manager1.client();
+    let client2 = manager2.client();
 
     let peer2 = PeerInfo::new(client2.instance_id(), client2.endpoint().to_string());
     let peer1 = PeerInfo::new(client1.instance_id(), client1.endpoint().to_string());

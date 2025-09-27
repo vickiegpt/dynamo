@@ -317,4 +317,7 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
 
     /// Check if a peer has an incoming connection to us (internal use by builder)
     async fn has_incoming_connection_from(&self, instance_id: InstanceId) -> bool;
+
+    /// Clone this client as an Arc<dyn ActiveMessageClient> for use in contexts
+    fn clone_as_arc(&self) -> std::sync::Arc<dyn ActiveMessageClient>;
 }

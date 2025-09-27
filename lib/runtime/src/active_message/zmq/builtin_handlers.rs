@@ -3,6 +3,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -12,7 +13,10 @@ use tracing::{debug, info, warn};
 
 use crate::active_message::{
     client::{ActiveMessageClient, PeerInfo},
-    handler::{ActiveMessage, HandlerEvent, HandlerId, NoReturnHandler, ResponseHandler},
+    handler::{
+        ActiveMessage, ActiveMessageContext, HandlerEvent, HandlerId, NoReturnHandler,
+        ResponseHandler,
+    },
     responses::{
         HealthCheckResponse, JoinCohortResponse, ListHandlersResponse, RegisterServiceResponse,
         RemoveServiceResponse, RequestShutdownResponse, WaitForHandlerResponse,
@@ -48,14 +52,8 @@ struct RegisterServicePayload {
 
 #[async_trait]
 impl ResponseHandler for RegisterServiceHandler {
-    type Response = RegisterServiceResponse;
-
-    async fn handle(
-        &self,
-        message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
-    ) -> Result<Self::Response> {
-        let payload: RegisterServicePayload = message.deserialize()?;
+    async fn handle(&self, input: Bytes, _ctx: ActiveMessageContext) -> Result<Bytes> {
+        let payload: RegisterServicePayload = serde_json::from_slice(&input)?;
 
         let instance_id = uuid::Uuid::parse_str(&payload.instance_id)?;
 
@@ -111,35 +109,12 @@ impl ResponseHandler for RegisterServiceHandler {
             endpoint: response_endpoint,
         };
 
-        Ok(response)
+        let serialized = serde_json::to_vec(&response)?;
+        Ok(Bytes::from(serialized))
     }
 
     fn name(&self) -> &str {
         "_register_service"
-    }
-
-    fn compiled_schema(&self) -> Option<&jsonschema::JSONSchema> {
-        static SCHEMA: once_cell::sync::Lazy<jsonschema::JSONSchema> =
-            once_cell::sync::Lazy::new(|| {
-                let schema_value = serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "instance_id": { "type": "string" },
-                        "endpoint": { "type": "string" },
-                        "tcp_endpoint": { "type": "string" },
-                        "ipc_endpoint": { "type": "string" }
-                    },
-                    "required": ["instance_id"],
-                    "anyOf": [
-                        { "required": ["endpoint"] },
-                        { "required": ["tcp_endpoint"] },
-                        { "required": ["ipc_endpoint"] }
-                    ]
-                });
-                jsonschema::JSONSchema::compile(&schema_value)
-                    .expect("RegisterServiceHandler schema should be valid")
-            });
-        Some(&SCHEMA)
     }
 }
 
@@ -156,13 +131,7 @@ impl ListHandlersHandler {
 
 #[async_trait]
 impl ResponseHandler for ListHandlersHandler {
-    type Response = ListHandlersResponse;
-
-    async fn handle(
-        &self,
-        _message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
-    ) -> Result<Self::Response> {
+    async fn handle(&self, _input: Bytes, _ctx: ActiveMessageContext) -> Result<Bytes> {
         let state = self.state.read().await;
         let handlers: Vec<HandlerId> = state.handlers.keys().cloned().collect();
         drop(state);
@@ -170,7 +139,8 @@ impl ResponseHandler for ListHandlersHandler {
         debug!("Available handlers: {:?}", handlers);
 
         let response = ListHandlersResponse { handlers };
-        Ok(response)
+        let serialized = serde_json::to_vec(&response)?;
+        Ok(Bytes::from(serialized))
     }
 
     fn name(&self) -> &str {
@@ -204,14 +174,8 @@ struct WaitForHandlerPayload {
 
 #[async_trait]
 impl ResponseHandler for WaitForHandlerHandler {
-    type Response = WaitForHandlerResponse;
-
-    async fn handle(
-        &self,
-        message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
-    ) -> Result<Self::Response> {
-        let payload: WaitForHandlerPayload = message.deserialize()?;
+    async fn handle(&self, input: Bytes, _ctx: ActiveMessageContext) -> Result<Bytes> {
+        let payload: WaitForHandlerPayload = serde_json::from_slice(&input)?;
 
         let state = self.state.read().await;
         if state.handlers.contains_key(&payload.handler_name) {
@@ -221,7 +185,8 @@ impl ResponseHandler for WaitForHandlerHandler {
                 handler_name: payload.handler_name,
                 available: true,
             };
-            return Ok(response);
+            let serialized = serde_json::to_vec(&response)?;
+            return Ok(Bytes::from(serialized));
         }
         drop(state);
 
@@ -268,7 +233,8 @@ impl ResponseHandler for WaitForHandlerHandler {
         };
 
         if handler_found {
-            Ok(response)
+            let serialized = serde_json::to_vec(&response)?;
+            Ok(Bytes::from(serialized))
         } else {
             // Return error response - this will be converted to ResponseEnvelope::Err
             anyhow::bail!("Timeout waiting for handler '{}'", payload.handler_name)
@@ -278,23 +244,6 @@ impl ResponseHandler for WaitForHandlerHandler {
     fn name(&self) -> &str {
         "_wait_for_handler"
     }
-
-    fn compiled_schema(&self) -> Option<&jsonschema::JSONSchema> {
-        static SCHEMA: once_cell::sync::Lazy<jsonschema::JSONSchema> =
-            once_cell::sync::Lazy::new(|| {
-                let schema_value = serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "handler_name": { "type": "string" },
-                        "timeout_ms": { "type": "number" }
-                    },
-                    "required": ["handler_name"]
-                });
-                jsonschema::JSONSchema::compile(&schema_value)
-                    .expect("WaitForHandlerHandler schema should be valid")
-            });
-        Some(&SCHEMA)
-    }
 }
 
 #[derive(Debug)]
@@ -302,13 +251,7 @@ pub struct HealthCheckHandler;
 
 #[async_trait]
 impl ResponseHandler for HealthCheckHandler {
-    type Response = HealthCheckResponse;
-
-    async fn handle(
-        &self,
-        _message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
-    ) -> Result<Self::Response> {
+    async fn handle(&self, _input: Bytes, _ctx: ActiveMessageContext) -> Result<Bytes> {
         debug!("Health check received");
 
         let timestamp = SystemTime::now()
@@ -321,7 +264,8 @@ impl ResponseHandler for HealthCheckHandler {
             timestamp,
         };
 
-        Ok(response)
+        let serialized = serde_json::to_vec(&response)?;
+        Ok(Bytes::from(serialized))
     }
 
     fn name(&self) -> &str {
@@ -355,8 +299,8 @@ enum AckStatus {
 
 #[async_trait]
 impl NoReturnHandler for AckHandler {
-    async fn handle(&self, message: ActiveMessage, _client: &dyn ActiveMessageClient) {
-        let payload: AckPayload = match message.deserialize() {
+    async fn handle(&self, input: Bytes, ctx: ActiveMessageContext) {
+        let payload: AckPayload = match serde_json::from_slice(&input) {
             Ok(payload) => payload,
             Err(e) => {
                 tracing::error!("Failed to deserialize ACK payload: {}", e);
@@ -374,11 +318,7 @@ impl NoReturnHandler for AckHandler {
 
         match payload.status {
             AckStatus::Ack => {
-                if let Err(e) = self
-                    .client
-                    .complete_ack(ack_id, message.sender_instance)
-                    .await
-                {
+                if let Err(e) = self.client.complete_ack(ack_id, ctx.sender_instance).await {
                     tracing::error!("Failed to complete ACK for {}: {}", ack_id, e);
                 } else {
                     debug!("Processed ACK for {}", ack_id);
@@ -387,7 +327,7 @@ impl NoReturnHandler for AckHandler {
             AckStatus::Nack { error } => {
                 if let Err(e) = self
                     .client
-                    .complete_nack(ack_id, message.sender_instance, error.clone())
+                    .complete_nack(ack_id, ctx.sender_instance, error.clone())
                     .await
                 {
                     tracing::error!("Failed to complete NACK for {}: {}", ack_id, e);
@@ -400,47 +340,6 @@ impl NoReturnHandler for AckHandler {
 
     fn name(&self) -> &str {
         "_ack"
-    }
-
-    fn compiled_schema(&self) -> Option<&jsonschema::JSONSchema> {
-        static SCHEMA: once_cell::sync::Lazy<jsonschema::JSONSchema> =
-            once_cell::sync::Lazy::new(|| {
-                let schema_value = serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "ack_id": { "type": "string" },
-                        "status": {
-                            "oneOf": [
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "type": { "const": "Ack" }
-                                    },
-                                    "required": ["type"]
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "type": { "const": "Nack" },
-                                        "data": {
-                                            "type": "object",
-                                            "properties": {
-                                                "error": { "type": "string" }
-                                            },
-                                            "required": ["error"]
-                                        }
-                                    },
-                                    "required": ["type", "data"]
-                                }
-                            ]
-                        }
-                    },
-                    "required": ["ack_id", "status"]
-                });
-                jsonschema::JSONSchema::compile(&schema_value)
-                    .expect("AckHandler schema should be valid")
-            });
-        Some(&SCHEMA)
     }
 }
 
@@ -464,14 +363,8 @@ struct JoinCohortPayload {
 
 #[async_trait]
 impl ResponseHandler for JoinCohortHandler {
-    type Response = JoinCohortResponse;
-
-    async fn handle(
-        &self,
-        message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
-    ) -> Result<Self::Response> {
-        let payload: JoinCohortPayload = message.deserialize()?;
+    async fn handle(&self, input: Bytes, _ctx: ActiveMessageContext) -> Result<Bytes> {
+        let payload: JoinCohortPayload = serde_json::from_slice(&input)?;
         let instance_id = uuid::Uuid::parse_str(&payload.instance_id)?;
 
         // Validate rank consistency and add worker
@@ -496,28 +389,12 @@ impl ResponseHandler for JoinCohortHandler {
             },
         };
 
-        Ok(join_response)
+        let serialized = serde_json::to_vec(&join_response)?;
+        Ok(Bytes::from(serialized))
     }
 
     fn name(&self) -> &str {
         "_join_cohort"
-    }
-
-    fn compiled_schema(&self) -> Option<&jsonschema::JSONSchema> {
-        static SCHEMA: once_cell::sync::Lazy<jsonschema::JSONSchema> =
-            once_cell::sync::Lazy::new(|| {
-                let schema_value = serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "instance_id": { "type": "string" },
-                        "rank": { "type": ["number", "null"] }
-                    },
-                    "required": ["instance_id"]
-                });
-                jsonschema::JSONSchema::compile(&schema_value)
-                    .expect("JoinCohortHandler schema should be valid")
-            });
-        Some(&SCHEMA)
     }
 }
 
@@ -541,14 +418,8 @@ struct RemoveServicePayload {
 
 #[async_trait]
 impl ResponseHandler for RemoveServiceHandler {
-    type Response = RemoveServiceResponse;
-
-    async fn handle(
-        &self,
-        message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
-    ) -> Result<Self::Response> {
-        let payload: RemoveServicePayload = message.deserialize()?;
+    async fn handle(&self, input: Bytes, _ctx: ActiveMessageContext) -> Result<Bytes> {
+        let payload: RemoveServicePayload = serde_json::from_slice(&input)?;
         let instance_id = uuid::Uuid::parse_str(&payload.instance_id)?;
 
         let removed = self.cohort.remove_worker(instance_id).await?;
@@ -559,28 +430,12 @@ impl ResponseHandler for RemoveServiceHandler {
             rank: payload.rank,
         };
 
-        Ok(response)
+        let serialized = serde_json::to_vec(&response)?;
+        Ok(Bytes::from(serialized))
     }
 
     fn name(&self) -> &str {
         "_remove_service"
-    }
-
-    fn compiled_schema(&self) -> Option<&jsonschema::JSONSchema> {
-        static SCHEMA: once_cell::sync::Lazy<jsonschema::JSONSchema> =
-            once_cell::sync::Lazy::new(|| {
-                let schema_value = serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "instance_id": { "type": "string" },
-                        "rank": { "type": ["number", "null"] }
-                    },
-                    "required": ["instance_id"]
-                });
-                jsonschema::JSONSchema::compile(&schema_value)
-                    .expect("RemoveServiceHandler schema should be valid")
-            });
-        Some(&SCHEMA)
     }
 }
 
@@ -605,19 +460,13 @@ impl RequestShutdownHandler {
 
 #[async_trait]
 impl ResponseHandler for RequestShutdownHandler {
-    type Response = RequestShutdownResponse;
-
-    async fn handle(
-        &self,
-        _message: ActiveMessage,
-        client: &dyn ActiveMessageClient,
-    ) -> Result<Self::Response> {
+    async fn handle(&self, _input: Bytes, ctx: ActiveMessageContext) -> Result<Bytes> {
         info!("Received shutdown request from leader");
 
         // Start shutdown process in background
         let manager_state = self.manager_state.clone();
         let cancel_token = self.cancel_token.clone();
-        let client_id = client.instance_id();
+        let client_id = ctx.client().instance_id();
 
         tokio::spawn(async move {
             // 1. Stop accepting new tasks (close all TaskTrackers)
@@ -662,7 +511,8 @@ impl ResponseHandler for RequestShutdownHandler {
 
         // Acknowledge the shutdown request
         let response = RequestShutdownResponse { acknowledged: true };
-        Ok(response)
+        let serialized = serde_json::to_vec(&response)?;
+        Ok(Bytes::from(serialized))
     }
 
     fn name(&self) -> &str {
@@ -777,6 +627,13 @@ mod tests {
         async fn has_incoming_connection_from(&self, _instance_id: uuid::Uuid) -> bool {
             false // Mock always returns false
         }
+
+        fn clone_as_arc(&self) -> std::sync::Arc<dyn ActiveMessageClient> {
+            Arc::new(MockClient {
+                instance_id: self.instance_id,
+                endpoint: self.endpoint.clone(),
+            })
+        }
     }
 
     #[tokio::test]
@@ -795,10 +652,21 @@ mod tests {
             metadata: serde_json::Value::Null,
         };
 
+        // Create context for new signature
+        let ctx = ActiveMessageContext::new(
+            message.message_id,
+            message.sender_instance,
+            message.handler_name.clone(),
+            message.metadata.clone(),
+            Arc::new(mock_client),
+            None,
+        );
+
         // Test the new response handler directly
-        let result = handler.handle(message, &mock_client).await;
+        let result = handler.handle(message.payload, ctx).await;
         assert!(result.is_ok());
-        let response = result.unwrap();
+        let response_bytes = result.unwrap();
+        let response: HealthCheckResponse = serde_json::from_slice(&response_bytes).unwrap();
         assert_eq!(response.status, "ok");
     }
 
