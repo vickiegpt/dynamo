@@ -239,4 +239,7 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
         ack_id: Uuid,
         timeout: Duration,
     ) -> Result<oneshot::Receiver<Result<(), String>>>;
+
+    /// Check if a peer has an incoming connection to us (internal use by builder)
+    async fn has_incoming_connection_from(&self, instance_id: InstanceId) -> bool;
 }

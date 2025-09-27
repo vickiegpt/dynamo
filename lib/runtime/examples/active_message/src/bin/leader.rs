@@ -40,14 +40,10 @@ async fn main() -> Result<()> {
     println!("Leader instance ID: {}", client.instance_id());
 
     // Create cohort with 2 expected workers
-    let cohort_config = LeaderWorkerCohortConfigBuilder::default()
-        .leader_instance(client.instance_id())
-        .client(client.clone())
-        .cohort_type(CohortType::FixedSize(2))
-        .failure_policy(CohortFailurePolicy::TerminateAll)
-        .build()?;
-
-    let cohort = Arc::new(LeaderWorkerCohort::from_config(cohort_config));
+    let cohort = Arc::new(LeaderWorkerCohort::new(
+        client.clone(),
+        CohortType::FixedSize(2),
+    ));
 
     // Register cohort handlers
     let join_handler = HandlerType::response(JoinCohortHandler::new(cohort.clone()));

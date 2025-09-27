@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 use tmq::{Context, Message, Multipart, publish};
-use tokio::sync::{RwLock, oneshot, mpsc};
+use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
@@ -241,14 +241,15 @@ impl ZmqActiveMessageClient {
 
         // Auto-register sender if endpoint is provided and we don't already know them
         if let Some(endpoint) = sender_endpoint
-            && let std::collections::hash_map::Entry::Vacant(e) = state.peers.entry(sender_instance) {
-            let peer_info = crate::active_message::client::PeerInfo::new(
-                sender_instance,
-                endpoint.to_string(),
-            );
+            && let std::collections::hash_map::Entry::Vacant(e) = state.peers.entry(sender_instance)
+        {
+            let peer_info =
+                crate::active_message::client::PeerInfo::new(sender_instance, endpoint.to_string());
             e.insert(peer_info);
-            debug!("Auto-registered peer {} at {} for response delivery",
-                   sender_instance, endpoint);
+            debug!(
+                "Auto-registered peer {} at {} for response delivery",
+                sender_instance, endpoint
+            );
         }
     }
 
@@ -282,7 +283,10 @@ impl ZmqActiveMessageClient {
                     let multipart = Multipart(parts);
 
                     if let Err(e) = pub_socket.send(multipart).await {
-                        error!("Failed to send message via publisher to {}: {}", endpoint, e);
+                        error!(
+                            "Failed to send message via publisher to {}: {}",
+                            endpoint, e
+                        );
                     } else {
                         debug!("Sent message via publisher to {}", endpoint);
                     }
@@ -308,13 +312,11 @@ impl ZmqActiveMessageClient {
                 let context = self.context.clone();
                 let endpoint_owned = endpoint.to_string();
 
-                let task = tokio::spawn(Self::publisher_task(
-                    endpoint_owned.clone(),
-                    context,
-                    rx,
-                ));
+                let task = tokio::spawn(Self::publisher_task(endpoint_owned.clone(), context, rx));
 
-                state.publisher_channels.insert(endpoint_owned.clone(), tx.clone());
+                state
+                    .publisher_channels
+                    .insert(endpoint_owned.clone(), tx.clone());
                 state.publisher_tasks.insert(endpoint_owned, task);
                 debug!("Created new publisher task for endpoint: {}", endpoint);
                 tx
