@@ -3,9 +3,10 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use bytes::Bytes;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},
-    handler::{AckHandler, ActiveMessage, HandlerType},
+    handler::{AckHandler, ActiveMessageContext, HandlerType},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
 };
@@ -32,10 +33,10 @@ struct PingHandler;
 impl AckHandler for PingHandler {
     async fn handle(
         &self,
-        message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
+        input: Bytes,
+        _ctx: ActiveMessageContext,
     ) -> Result<()> {
-        let payload = String::from_utf8(message.payload.to_vec())?;
+        let payload: String = serde_json::from_slice(&input)?;
         info!("Received ping: {}", payload);
         // Just return Ok(()) to send ACK
         Ok(())
@@ -92,7 +93,7 @@ async fn main() -> Result<()> {
 
     // Warmup ping to establish the publisher task (not measured)
     let warmup_result = client_client
-        .message("ping")?
+        .active_message("ping")?
         .payload("warmup")?
         .send(server_client.instance_id())
         .await;
@@ -121,7 +122,7 @@ async fn main() -> Result<()> {
 
         // Send ping and wait for ACK
         let result = client_client
-            .message("ping")?
+            .active_message("ping")?
             .payload(&message)?
             .send(server_client.instance_id())
             .await;

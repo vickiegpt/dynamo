@@ -95,9 +95,9 @@ TensorRT-LLM
 # Benchmarks
 benchmarks/results
 
-# START Ruler Generated Files
+.sandbox/
+.claude/
 /.cursor/instructions.md
 /.cursor/instructions.md.bak
 /CLAUDE.md
 /CLAUDE.md.bak
-# END Ruler Generated Files

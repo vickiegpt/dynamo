@@ -3,9 +3,10 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use bytes::Bytes;
 use dynamo_runtime::active_message::{
     client::ActiveMessageClient,
-    handler::{ActiveMessage, HandlerType, ResponseHandler},
+    handler::{ActiveMessageContext, HandlerType, ResponseHandler},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
 };
@@ -38,27 +39,26 @@ struct HelloWorldHandler;
 
 #[async_trait]
 impl ResponseHandler for HelloWorldHandler {
-    type Response = HelloResponse;
-
     async fn handle(
         &self,
-        message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
-    ) -> Result<Self::Response> {
-        let input: String = message.deserialize()?;
-        info!("Received input: '{}'", input);
+        input: Bytes,
+        _ctx: ActiveMessageContext,
+    ) -> Result<Bytes> {
+        let input_str: String = serde_json::from_slice(&input)?;
+        info!("Received input: '{}'", input_str);
 
         // Transform the string by appending some "bits"
         let bits = " 🔥⚡🚀✨🎯";
-        let transformed = format!("{}{}", input, bits);
+        let transformed = format!("{}{}", input_str, bits);
         let bits_added = bits.len();
 
-        info!("Transformed: '{}' -> '{}'", input, transformed);
+        info!("Transformed: '{}' -> '{}'", input_str, transformed);
 
-        Ok(HelloResponse {
+        let response = HelloResponse {
             transformed,
             bits_added,
-        })
+        };
+        Ok(Bytes::from(serde_json::to_vec(&response)?))
     }
 
     fn name(&self) -> &str {
