@@ -5,16 +5,18 @@ use anyhow::Result;
 use bytes::Bytes;
 use dynamo_runtime::active_message::{
     client::ActiveMessageClient,
+    handler::HandlerType,
     manager::ActiveMessageManager,
     zmq::{
-        cohort::{LeaderWorkerCohort, LeaderWorkerCohortConfig, LeaderWorkerCohortConfigBuilder, CohortType, CohortFailurePolicy},
         builtin_handlers::{JoinCohortHandler, RemoveServiceHandler, RequestShutdownHandler},
+        cohort::{
+            CohortFailurePolicy, CohortType, LeaderWorkerCohort, LeaderWorkerCohortConfigBuilder,
+        },
         ZmqActiveMessageManager,
     },
 };
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
 
 use active_message_example::ComputeRequest;
 
@@ -24,7 +26,7 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    info!("Starting Leader");
+    println!("Starting Leader");
 
     let cancel_token = CancellationToken::new();
 
@@ -34,8 +36,8 @@ async fn main() -> Result<()> {
 
     let client = manager.zmq_client();
 
-    info!("Leader listening on: {}", client.endpoint());
-    info!("Leader instance ID: {}", client.instance_id());
+    println!("Leader listening on: {}", client.endpoint());
+    println!("Leader instance ID: {}", client.instance_id());
 
     // Create cohort with 2 expected workers
     let cohort_config = LeaderWorkerCohortConfigBuilder::default()
@@ -48,19 +50,21 @@ async fn main() -> Result<()> {
     let cohort = Arc::new(LeaderWorkerCohort::from_config(cohort_config));
 
     // Register cohort handlers
-    let join_handler = Arc::new(JoinCohortHandler::new(cohort.clone()));
-    manager.register_handler(join_handler, None).await?;
+    let join_handler = HandlerType::response(JoinCohortHandler::new(cohort.clone()));
+    manager.register_handler_typed(join_handler, None).await?;
 
-    let remove_handler = Arc::new(RemoveServiceHandler::new(cohort.clone()));
-    manager.register_handler(remove_handler, None).await?;
+    let remove_handler = HandlerType::response(RemoveServiceHandler::new(cohort.clone()));
+    manager.register_handler_typed(remove_handler, None).await?;
 
-    let shutdown_handler = Arc::new(RequestShutdownHandler::new(
+    let shutdown_handler = HandlerType::response(RequestShutdownHandler::new(
         manager.manager_state(),
         cancel_token.clone(),
     ));
-    manager.register_handler(shutdown_handler, None).await?;
+    manager
+        .register_handler_typed(shutdown_handler, None)
+        .await?;
 
-    info!("Waiting for 2 workers to join cohort...");
+    println!("Waiting for 2 workers to join cohort...");
 
     // Wait for workers to join the cohort
     let mut attempts = 0;
@@ -73,14 +77,14 @@ async fn main() -> Result<()> {
 
         attempts += 1;
         if attempts >= max_attempts {
-            info!("Cohort not ready - timeout waiting for workers");
+            println!("Cohort not ready - timeout waiting for workers");
             return Ok(());
         }
 
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
-    info!("Cohort ready! Waiting for workers to register compute handler...");
+    println!("Cohort ready! Waiting for workers to register compute handler...");
 
     // Wait for compute handler on all workers
     let workers_ready = cohort
@@ -89,7 +93,7 @@ async fn main() -> Result<()> {
         .is_ok();
 
     if !workers_ready {
-        info!("Workers do not have compute handler - skipping broadcast");
+        println!("Workers do not have compute handler - skipping broadcast");
     } else {
         let request = ComputeRequest {
             x: 10,
@@ -99,16 +103,16 @@ async fn main() -> Result<()> {
 
         let payload = Bytes::from(serde_json::to_vec(&request)?);
 
-        info!("Broadcasting compute request to workers by rank");
+        println!("Broadcasting compute request to workers by rank");
         cohort.broadcast_by_rank("compute", payload).await?;
     }
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    info!("Leader initiating graceful shutdown...");
+    println!("Leader initiating graceful shutdown...");
     cohort.initiate_graceful_shutdown().await?;
 
-    info!("Leader shutting down");
+    println!("Leader shutting down");
     manager.shutdown().await?;
     cancel_token.cancel();
 
