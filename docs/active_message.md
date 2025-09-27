@@ -113,7 +113,7 @@ impl ResponseHandler for ComputeHandler {
 client.message("log")?.payload(log_data)?.send_detached(target_id).await?;
 
 // Wait for ACK
-client.message("validate")?.payload(data)?.send_and_confirm(target_id).await?;
+client.message("validate")?.payload(data)?.send(target_id).await?;
 
 // Request-response
 let result: ComputeResult = client
@@ -137,46 +137,28 @@ manager.register_handler_typed(handler, None).await?;
 manager.start().await?;
 ```
 
-#### 4. Transport Layer - Publisher Task Pool
+#### 4. Transport Layer
 
-The ZMQ transport uses a high-performance publisher task pool:
-
-```rust
-// Per-endpoint publisher tasks with MPSC channels
-struct ClientState {
-    publisher_channels: HashMap<String, mpsc::UnboundedSender<ActiveMessage>>,
-    publisher_tasks: HashMap<String, JoinHandle<()>>,
-}
-
-// Non-blocking sends via channels
-async fn send_raw(&self, endpoint: &str, message: &ActiveMessage) -> Result<()> {
-    let sender = self.get_or_create_publisher(endpoint).await?;
-    sender.send(message.clone())?; // Non-blocking
-    Ok(())
-}
-```
+Uses high-performance ZeroMQ transport with automatic connection management and sub-millisecond latency.
 
 ### Auto-Registration
 
-Eliminates manual bidirectional connection setup:
+Eliminates manual bidirectional connection setup. When a client sends a message requiring a response, the server automatically learns the client's endpoint and establishes a return connection. No manual configuration needed.
 
 ```rust
-// Client sends message with endpoint metadata
-metadata["_sender_endpoint"] = client.endpoint();
+// Client connects to server (one-way)
+client.connect_to_peer(server_peer).await?;
 
-// Server auto-registers the client for response delivery
-if let Some(endpoint) = sender_endpoint {
-    state.peers.insert(sender_id, PeerInfo::new(sender_id, endpoint));
-}
+// Send message - server automatically registers client for ACK/response delivery
+let result = client.message("compute")?.payload(request)?.send(server_id).await?;
+// No manual setup of return connection required!
 ```
-
-Only includes endpoint metadata when:
-1. Response expected AND
-2. No existing return connection
 
 ## Performance
 
 ### Benchmark Results
+
+*Note: Performance numbers shown are for ZMQ IPC (same-host) transport.*
 
 **Fast-Path Ping-Pong Latency:**
 ```
@@ -195,18 +177,10 @@ Concurrency limited: 25,063 msgs/sec, 0.95ms avg latency
 
 ### Performance Features
 
-1. **Publisher Task Pool**: Eliminates per-message connection overhead
-2. **Shared ZMQ Context**: Efficient resource utilization
-3. **Slow Joiner Mitigation**: 2ms delay only on first connection per endpoint
-4. **Fast-Path Optimization**: Sub-millisecond performance after warmup
-
-### Before vs After
-
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| Average RTT | 23ms | 126μs | 99.45% |
-| Connection Setup | 50ms delay per message | 2ms once per endpoint | 96% reduction |
-| Failed Operations | Frequent hangs | Zero failures | 100% reliability |
+1. **Sub-millisecond latency**: Consistent microsecond response times
+2. **High throughput**: 40K+ messages per second for small payloads
+3. **Zero message failures**: Reliable delivery with proper error handling
+4. **Automatic connection management**: No manual setup overhead
 
 ## Usage Guide
 
@@ -303,15 +277,11 @@ impl ResponseHandler for InferenceHandler {
 For distributed ML workloads requiring coordinated worker management:
 
 ```rust
-// Leader setup
-let cohort_config = LeaderWorkerCohortConfigBuilder::default()
-    .leader_instance(leader_client.instance_id())
-    .client(leader_client.clone())
-    .cohort_type(CohortType::FixedSize(num_workers))
-    .failure_policy(CohortFailurePolicy::TerminateAll)
-    .build()?;
-
-let cohort = Arc::new(LeaderWorkerCohort::from_config(cohort_config));
+// Leader setup - simplified API
+let cohort = Arc::new(LeaderWorkerCohort::new(
+    leader_client.clone(),
+    CohortType::FixedSize(num_workers),
+));
 
 // Parallel operations
 let results: Vec<WorkResponse> = cohort
@@ -324,11 +294,11 @@ let results: Vec<WorkResponse> = cohort
 ### Concurrency Control
 
 ```rust
-// Limit concurrent messages per handler
-let manager = ZmqActiveMessageManager::builder()
-    .max_concurrent_messages(100)
-    .build(endpoint, cancel_token)
-    .await?;
+// Limit concurrent messages per handler (default: unbounded)
+let handler_config = HandlerConfig::default()
+    .with_max_concurrent_messages(100);
+
+manager.register_handler_typed(handler, Some(handler_config)).await?;
 ```
 
 ### Error Handling
@@ -351,66 +321,6 @@ match result {
 }
 ```
 
-## Migration Guide
-
-### From Raw RPC
-
-**Before (Manual RPC):**
-```rust
-// Manual connection management
-let mut connection = tcp_connect(endpoint).await?;
-let request_bytes = serialize_request(&request)?;
-connection.write_all(&request_bytes).await?;
-let response_bytes = read_response(&mut connection).await?;
-let response: Response = deserialize_response(&response_bytes)?;
-```
-
-**After (Active Message):**
-```rust
-// Automatic connection and serialization
-let response: Response = client
-    .message("handler_name")?
-    .payload(request)?
-    .expect_response::<Response>()
-    .send(target_id)
-    .await?
-    .await_response()
-    .await?;
-```
-
-### Converting Existing Services
-
-1. **Identify Message Patterns**:
-   - Fire-and-forget → `NoReturnHandler`
-   - Success/failure → `AckHandler`
-   - Request/response → `ResponseHandler`
-
-2. **Implement Handler Trait**:
-```rust
-// Old service function
-async fn old_compute_service(request: ComputeRequest) -> Result<ComputeResponse> {
-    // business logic
-}
-
-// New Active Message handler
-#[async_trait]
-impl ResponseHandler for ComputeHandler {
-    type Response = ComputeResponse;
-
-    async fn handle(&self, message: ActiveMessage, _client: &dyn ActiveMessageClient) -> Result<Self::Response> {
-        let request: ComputeRequest = message.deserialize()?;
-        old_compute_service(request).await  // Reuse existing logic
-    }
-
-    fn name(&self) -> &str { "compute" }
-}
-```
-
-3. **Update Client Code**:
-```rust
-// Replace direct function calls with message sends
-let response = client.message("compute")?.payload(request)?.expect_response().send(target).await?.await_response().await?;
-```
 
 ## API Reference
 
@@ -452,7 +362,7 @@ impl MessageBuilder {
     pub fn timeout(mut self, timeout: Duration) -> Self;
     pub fn expect_response<R>(self) -> MessageBuilder<ExpectResponse<R>>;
     pub async fn send(self, target: InstanceId) -> Result<MessageStatus>;
-    pub async fn send_and_confirm(self, target: InstanceId) -> Result<MessageStatus>;
+    pub async fn send(self, target: InstanceId) -> Result<MessageStatus>;
     pub async fn send_detached(self, target: InstanceId) -> Result<MessageStatus>;
 }
 ```
@@ -489,6 +399,9 @@ See the complete examples in [`lib/runtime/examples/active_message/src/bin/`](..
 
 Run examples:
 ```bash
+# Navigate to examples directory
+cd lib/runtime/examples/active_message
+
 # Basic hello world
 cargo run --bin hello_world
 

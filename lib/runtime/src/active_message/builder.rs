@@ -84,30 +84,31 @@ impl<'a> MessageBuilder<'a, NeedsDeliveryMode> {
         self.client.send_raw_message(target, message).await
     }
 
-    /// DEFAULT: Send and wait for acceptance confirmation
+    /// Send and wait for ACK confirmation
     pub async fn send(self, target: InstanceId) -> Result<MessageStatus<SendAndConfirm>> {
-        self.send_and_confirm(target).await
-    }
-
-    /// Explicit: Send and wait for ACK confirmation
-    pub async fn send_and_confirm(
-        self,
-        target: InstanceId,
-    ) -> Result<MessageStatus<SendAndConfirm>> {
         let message_id = Uuid::new_v4();
 
         // Register for ACK notification
         let ack_rx = self.client.register_ack(message_id, self.timeout).await?;
+
+        // Check if we need to include endpoint for auto-registration
+        let mut metadata = serde_json::json!({
+            "_mode": "confirmed",
+            "_accept_id": message_id.to_string()
+        });
+
+        // Include endpoint if target doesn't have return connection to us
+        if !self.client.has_incoming_connection_from(target).await {
+            metadata["_sender_endpoint"] =
+                serde_json::Value::String(self.client.endpoint().to_string());
+        }
 
         let message = ActiveMessage {
             message_id,
             handler_name: self.handler_name,
             sender_instance: self.client.instance_id(),
             payload: self.payload.unwrap_or_default(),
-            metadata: serde_json::json!({
-                "_mode": "confirmed",
-                "_accept_id": message_id.to_string()
-            }),
+            metadata,
         };
 
         self.client.send_raw_message(target, message).await?;
@@ -129,15 +130,24 @@ impl<'a> MessageBuilder<'a, NeedsDeliveryMode> {
         // Register for ACK notification
         let ack_rx = self.client.register_ack(message_id, self.timeout).await?;
 
+        // Check if we need to include endpoint for auto-registration
+        let mut metadata = serde_json::json!({
+            "_mode": "confirmed",
+            "_accept_id": message_id.to_string()
+        });
+
+        // Include endpoint if target doesn't have return connection to us
+        if !self.client.has_incoming_connection_from(target).await {
+            metadata["_sender_endpoint"] =
+                serde_json::Value::String(self.client.endpoint().to_string());
+        }
+
         let message = ActiveMessage {
             message_id,
             handler_name: self.handler_name,
             sender_instance: self.client.instance_id(),
             payload: self.payload.unwrap_or_default(),
-            metadata: serde_json::json!({
-                "_mode": "confirmed",
-                "_accept_id": message_id.to_string()
-            }),
+            metadata,
         };
 
         self.client.send_raw_message(target, message).await?;
@@ -216,16 +226,25 @@ impl<'a> MessageBuilder<'a, WithResponseExpected> {
             .register_response(message_id, response_tx)
             .await?;
 
+        // Check if we need to include endpoint for auto-registration
+        let mut metadata = serde_json::json!({
+            "_mode": "with_response",
+            "_accept_id": message_id.to_string(),
+            "_response_id": message_id.to_string()
+        });
+
+        // Include endpoint if target doesn't have return connection to us
+        if !self.client.has_incoming_connection_from(target).await {
+            metadata["_sender_endpoint"] =
+                serde_json::Value::String(self.client.endpoint().to_string());
+        }
+
         let message = ActiveMessage {
             message_id,
             handler_name: self.handler_name,
             sender_instance: self.client.instance_id(),
             payload: self.payload.unwrap_or_default(),
-            metadata: serde_json::json!({
-                "_mode": "with_response",
-                "_accept_id": message_id.to_string(),
-                "_response_id": message_id.to_string()
-            }),
+            metadata,
         };
 
         self.client.send_raw_message(target, message).await?;
