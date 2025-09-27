@@ -16,11 +16,94 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::active_message::{
+    builder::MessageBuilder,
     client::{ActiveMessageClient, PeerInfo},
     handler::InstanceId,
 };
 
 use super::client::ZmqActiveMessageClient;
+
+/// Cohort-specific message builder that extends MessageBuilder with rank targeting
+pub struct CohortMessageBuilder<'a> {
+    inner: MessageBuilder<'a>,
+    cohort: &'a LeaderWorkerCohort,
+}
+
+impl<'a> CohortMessageBuilder<'a> {
+    fn new(inner: MessageBuilder<'a>, cohort: &'a LeaderWorkerCohort) -> Self {
+        Self { inner, cohort }
+    }
+
+    /// Set payload from serializable type
+    pub fn payload<T: serde::Serialize>(mut self, data: T) -> Result<Self> {
+        self.inner = self.inner.payload(data)?;
+        Ok(self)
+    }
+
+    /// Set raw payload bytes
+    pub fn raw_payload(mut self, data: Bytes) -> Self {
+        self.inner = self.inner.raw_payload(data);
+        self
+    }
+
+    /// Set timeout for response waiting
+    pub fn timeout(mut self, duration: Duration) -> Self {
+        self.inner = self.inner.timeout(duration);
+        self
+    }
+
+    /// Target a specific worker rank
+    pub async fn target_rank(self, rank: usize) -> Result<()> {
+        let workers = self.cohort.state.read().await;
+        let worker = workers
+            .workers
+            .values()
+            .find(|w| w.rank == Some(rank))
+            .ok_or_else(|| anyhow::anyhow!("No worker found with rank {}", rank))?;
+
+        self.inner
+            .target_instance(worker.instance_id)
+            .execute()
+            .await
+    }
+
+    /// Target a range of worker ranks
+    pub async fn target_ranks(self, range: std::ops::Range<usize>) -> Result<()> {
+        let workers = self.cohort.state.read().await;
+        let mut target_workers = Vec::new();
+
+        // Collect worker IDs first
+        for rank in range {
+            if let Some(worker) = workers.workers.values().find(|w| w.rank == Some(rank)) {
+                target_workers.push(worker.instance_id);
+            }
+        }
+        drop(workers);
+
+        // Execute to each worker
+        for worker_id in target_workers {
+            let inner_clone = self.inner.clone_with_target(worker_id);
+            inner_clone.execute().await?;
+        }
+
+        Ok(())
+    }
+
+    /// Broadcast to all workers
+    pub async fn bcast(self) -> Result<()> {
+        let workers = self.cohort.state.read().await;
+        let worker_ids: Vec<InstanceId> = workers.workers.values().map(|w| w.instance_id).collect();
+        drop(workers);
+
+        // Execute to each worker
+        for worker_id in worker_ids {
+            let inner_clone = self.inner.clone_with_target(worker_id);
+            inner_clone.execute().await?;
+        }
+
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CohortType {
@@ -598,7 +681,7 @@ impl LeaderWorkerCohort {
 
                 // Send message and await response
                 let response: R = client
-                    .message(&handler)?
+                    .active_message(&handler)?
                     .payload(payload)?
                     .expect_response::<R>()
                     .send(worker_id)
@@ -662,7 +745,7 @@ impl LeaderWorkerCohort {
 
             let task = tokio::spawn(async move {
                 let result = client
-                    .message(&handler)?
+                    .active_message(&handler)?
                     .payload(payload)?
                     .send(worker_id)
                     .await;
@@ -727,7 +810,7 @@ impl LeaderWorkerCohort {
 
             let task = tokio::spawn(async move {
                 let response: R = client
-                    .message(&handler)?
+                    .active_message(&handler)?
                     .payload(payload)?
                     .expect_response::<R>()
                     .send(worker_id)
@@ -799,7 +882,7 @@ impl LeaderWorkerCohort {
 
                 // Send message and await response
                 let response: R = client
-                    .message(&handler)?
+                    .active_message(&handler)?
                     .payload(payload)?
                     .expect_response::<R>()
                     .send(worker_id)
@@ -955,7 +1038,7 @@ impl LeaderWorkerCohort {
         for worker_id in &workers {
             debug!("Sending shutdown request to worker {}", worker_id);
             if let Err(e) = client
-                .system_message("_request_shutdown")
+                .system_active_message("_request_shutdown")
                 .fire_and_forget(*worker_id)
                 .await
             {
