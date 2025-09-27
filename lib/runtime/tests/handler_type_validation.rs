@@ -91,7 +91,7 @@ async fn test_handler_type_validation_mismatch() -> Result<()> {
 
     // Try to call NoReturnHandler expecting a response - this should fail with handler type mismatch
     let result = client1
-        .message("test_handler")?
+        .active_message("test_handler")?
         .payload("test")?
         .expect_response::<serde_json::Value>()
         .send(client2.instance_id())
@@ -143,7 +143,7 @@ async fn test_handler_type_validation_correct() -> Result<()> {
 
     // Call NoReturnHandler with fire_and_forget - this should work
     let result = client1
-        .message("test_handler")?
+        .active_message("test_handler")?
         .payload("test message")?
         .fire_and_forget(client2.instance_id())
         .await;

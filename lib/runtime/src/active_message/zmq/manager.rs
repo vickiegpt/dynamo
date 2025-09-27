@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::sync::{Mutex, RwLock, Semaphore, broadcast};
+use tokio::sync::{Mutex, RwLock, Semaphore, broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
@@ -24,6 +24,7 @@ use super::{
         WaitForHandlerHandler,
     },
     client::ZmqActiveMessageClient,
+    discovery,
     transport::ZmqTransport,
 };
 
@@ -65,7 +66,8 @@ pub(crate) struct HandlerEntry {
 
 pub struct ManagerState {
     pub instance_id: InstanceId,
-    pub endpoint: String,
+    pub tcp_endpoint: Option<String>,
+    pub ipc_endpoint: Option<String>,
     pub(crate) handlers: HashMap<HandlerId, HandlerEntry>,
     pub client: Arc<ZmqActiveMessageClient>,
     pub handler_events_tx: broadcast::Sender<HandlerEvent>,
@@ -75,7 +77,8 @@ impl std::fmt::Debug for ManagerState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ManagerState")
             .field("instance_id", &self.instance_id)
-            .field("endpoint", &self.endpoint)
+            .field("tcp_endpoint", &self.tcp_endpoint)
+            .field("ipc_endpoint", &self.ipc_endpoint)
             .field("handlers", &self.handlers.keys())
             .field("client", &self.client)
             .finish()
@@ -101,6 +104,16 @@ impl ZmqActiveMessageManager {
         self.state.clone()
     }
 
+    /// Get PeerInfo representing this manager with dual endpoints
+    pub async fn peer_info(&self) -> crate::active_message::client::PeerInfo {
+        let state = self.state.read().await;
+        crate::active_message::client::PeerInfo::new_dual(
+            state.instance_id,
+            state.tcp_endpoint.clone(),
+            state.ipc_endpoint.clone(),
+        )
+    }
+
     /// Create a builder for configuring ZmqActiveMessageManager options
     pub fn builder() -> ZmqActiveMessageManagerBuilder {
         ZmqActiveMessageManagerBuilder::new()
@@ -124,27 +137,42 @@ impl ZmqActiveMessageManager {
         let instance_id = InstanceId::new_v4();
 
         let context = tmq::Context::new();
-        let sub_transport = ZmqTransport::new_subscriber_bound(&context, &endpoint)?;
-        let bound_endpoint = sub_transport
+
+        // Create TCP transport from provided endpoint
+        let tcp_transport = ZmqTransport::new_subscriber_bound(&context, &endpoint)?;
+        let tcp_endpoint = tcp_transport
             .local_endpoint()
-            .ok_or_else(|| anyhow::anyhow!("Failed to get bound endpoint"))?
+            .ok_or_else(|| anyhow::anyhow!("Failed to get bound TCP endpoint"))?
+            .clone();
+
+        // Create IPC transport for same-host optimization
+        let ipc_endpoint_addr = discovery::create_ipc_endpoint(instance_id);
+        let ipc_transport = ZmqTransport::new_subscriber_bound(&context, &ipc_endpoint_addr)?;
+        let ipc_endpoint = ipc_transport
+            .local_endpoint()
+            .ok_or_else(|| anyhow::anyhow!("Failed to get bound IPC endpoint"))?
             .clone();
 
         info!(
-            "ZmqActiveMessageManager bound to {} (instance: {})",
-            bound_endpoint, instance_id
+            "ZmqActiveMessageManager bound to TCP: {} and IPC: {} (instance: {})",
+            tcp_endpoint, ipc_endpoint, instance_id
         );
 
+        // Create MPSC channel for merging messages from both transports
+        let (message_tx, message_rx) = mpsc::unbounded_channel();
+
+        // Use TCP endpoint for client advertisement (primary endpoint)
         let client = Arc::new(ZmqActiveMessageClient::new(
             instance_id,
-            bound_endpoint.clone(),
+            tcp_endpoint.clone(),
         ));
 
         let (handler_events_tx, _) = broadcast::channel(1024);
 
         let state = Arc::new(RwLock::new(ManagerState {
             instance_id,
-            endpoint: bound_endpoint,
+            tcp_endpoint: Some(tcp_endpoint),
+            ipc_endpoint: Some(ipc_endpoint),
             handlers: HashMap::new(),
             client: client.clone(),
             handler_events_tx: handler_events_tx.clone(),
@@ -165,9 +193,25 @@ impl ZmqActiveMessageManager {
 
         manager.register_builtin_handlers().await?;
 
+        // Spawn transport reader tasks for both TCP and IPC
+        let _tcp_reader_task = tokio::spawn(Self::transport_reader_task(
+            tcp_transport,
+            message_tx.clone(),
+            cancel_token.clone(),
+            "TCP".to_string(),
+        ));
+
+        let _ipc_reader_task = tokio::spawn(Self::transport_reader_task(
+            ipc_transport,
+            message_tx,
+            cancel_token.clone(),
+            "IPC".to_string(),
+        ));
+
+        // Spawn main receive loop that reads from merged channel
         let receiver_task = tokio::spawn(Self::receive_loop(
             state.clone(),
-            sub_transport,
+            message_rx,
             cancel_token.clone(),
             manager.message_task_tracker.clone(),
         ));
@@ -179,7 +223,46 @@ impl ZmqActiveMessageManager {
         *manager.receiver_task.lock().await = Some(receiver_task);
         *manager.ack_cleanup_task.lock().await = Some(ack_cleanup_task);
 
+        // Note: We're not storing tcp_reader_task and ipc_reader_task separately
+        // They will be cancelled when cancel_token is triggered
+
         Ok(manager)
+    }
+
+    async fn transport_reader_task(
+        mut transport: ZmqTransport,
+        message_tx: mpsc::UnboundedSender<ActiveMessage>,
+        cancel_token: CancellationToken,
+        transport_name: String,
+    ) {
+        debug!("Starting {} transport reader task", transport_name);
+
+        loop {
+            tokio::select! {
+                _ = cancel_token.cancelled() => {
+                    debug!("{} transport reader task cancelled", transport_name);
+                    break;
+                }
+
+                result = transport.receive() => {
+                    match result {
+                        Ok(message) => {
+                            debug!("Received message on {} transport", transport_name);
+                            if message_tx.send(message).is_err() {
+                                debug!("{} transport reader: message channel closed", transport_name);
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to receive message on {} transport: {}", transport_name, e);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        debug!("{} transport reader task finished", transport_name);
     }
 
     async fn ack_cleanup_loop(
@@ -235,7 +318,7 @@ impl ZmqActiveMessageManager {
 
     async fn receive_loop(
         state: Arc<RwLock<ManagerState>>,
-        mut transport: ZmqTransport,
+        mut message_rx: mpsc::UnboundedReceiver<ActiveMessage>,
         cancel_token: CancellationToken,
         message_task_tracker: TaskTracker,
     ) -> Result<()> {
@@ -246,9 +329,9 @@ impl ZmqActiveMessageManager {
                     break;
                 }
 
-                result = transport.receive() => {
-                    match result {
-                        Ok(message) => {
+                message = message_rx.recv() => {
+                    match message {
+                        Some(message) => {
                             // Spawn message handling immediately for parallelism
                             let state_clone = state.clone();
 
@@ -258,8 +341,8 @@ impl ZmqActiveMessageManager {
                                 }
                             });
                         }
-                        Err(e) => {
-                            error!("Failed to receive message: {}", e);
+                        None => {
+                            debug!("Message channel closed");
                             break;
                         }
                     }

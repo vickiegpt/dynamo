@@ -27,6 +27,7 @@ pub struct MessageBuilder<'a, Mode = NeedsDeliveryMode> {
     handler_name: String,
     payload: Option<Bytes>,
     timeout: Duration,
+    target_instance: Option<InstanceId>,
     _mode: PhantomData<Mode>,
 }
 
@@ -45,6 +46,7 @@ impl<'a> MessageBuilder<'a, NeedsDeliveryMode> {
             handler_name: handler.to_string(),
             payload: None,
             timeout: Duration::from_secs(30),
+            target_instance: None,
             _mode: PhantomData,
         }
     }
@@ -67,6 +69,43 @@ impl<'a> MessageBuilder<'a, NeedsDeliveryMode> {
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.timeout = duration;
         self
+    }
+
+    /// Set target instance for the message
+    pub fn target_instance(mut self, instance_id: InstanceId) -> Self {
+        self.target_instance = Some(instance_id);
+        self
+    }
+
+    /// Clone this builder with a specific target instance (for cohort broadcasting)
+    pub fn clone_with_target(&self, target: InstanceId) -> Self {
+        Self {
+            client: self.client,
+            handler_name: self.handler_name.clone(),
+            payload: self.payload.clone(),
+            timeout: self.timeout,
+            target_instance: Some(target),
+            _mode: PhantomData,
+        }
+    }
+
+    /// Execute the message with fire and forget - no confirmation or responses
+    pub async fn execute(self) -> Result<()> {
+        let target = self
+            .target_instance
+            .ok_or_else(|| anyhow::anyhow!("target_instance must be set before execute()"))?;
+
+        let message = ActiveMessage {
+            message_id: Uuid::new_v4(),
+            handler_name: self.handler_name,
+            sender_instance: self.client.instance_id(),
+            payload: self.payload.unwrap_or_default(),
+            metadata: serde_json::json!({
+                "_mode": "fire_and_forget"
+            }),
+        };
+
+        self.client.send_raw_message(target, message).await
     }
 
     /// Fire and forget - no confirmation or responses
@@ -185,6 +224,7 @@ impl<'a> MessageBuilder<'a, NeedsDeliveryMode> {
             handler_name: self.handler_name,
             payload: self.payload,
             timeout: self.timeout,
+            target_instance: self.target_instance,
             _mode: PhantomData,
         }
     }
@@ -210,6 +250,20 @@ impl<'a> MessageBuilder<'a, WithResponseExpected> {
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.timeout = duration;
         self
+    }
+
+    /// Set target instance for the message
+    pub fn target_instance(mut self, instance_id: InstanceId) -> Self {
+        self.target_instance = Some(instance_id);
+        self
+    }
+
+    /// Execute the message and await acceptance, return status with response awaiter
+    pub async fn execute(self) -> Result<MessageStatus<WithResponse>> {
+        let target = self
+            .target_instance
+            .ok_or_else(|| anyhow::anyhow!("target_instance must be set before execute()"))?;
+        self.send(target).await
     }
 
     /// Send and await acceptance, return status with response awaiter

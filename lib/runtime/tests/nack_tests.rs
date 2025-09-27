@@ -107,7 +107,7 @@ async fn test_nack_on_payload_validation_failure() -> Result<()> {
     let valid_payload = serde_json::json!({"message": "valid message"});
 
     let _status = client1
-        .message("validation_test_handler")?
+        .active_message("validation_test_handler")?
         .payload(valid_payload)?
         .send(client2.instance_id())
         .await?;
@@ -127,7 +127,7 @@ async fn test_nack_on_payload_validation_failure() -> Result<()> {
 
     // This should fail due to payload validation
     let result = client1
-        .message("validation_test_handler")?
+        .active_message("validation_test_handler")?
         .payload(invalid_payload)?
         .send(client2.instance_id())
         .await;
@@ -216,10 +216,17 @@ async fn test_cohort_broadcast_with_nack() -> Result<()> {
 
     // Create cohort
     let cohort = dynamo_runtime::active_message::zmq::LeaderWorkerCohort::new(
-        leader_client.instance_id(),
-        vec![worker1_client.instance_id(), worker2_client.instance_id()],
         leader_client.clone(),
+        dynamo_runtime::active_message::zmq::cohort::CohortType::FixedSize(2),
     );
+
+    // Add workers to cohort
+    cohort
+        .add_worker(worker1_client.instance_id(), None)
+        .await?;
+    cohort
+        .add_worker(worker2_client.instance_id(), None)
+        .await?;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 

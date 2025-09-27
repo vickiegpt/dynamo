@@ -370,8 +370,23 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
 
         let message = ActiveMessage::new(handler, payload).with_sender(self.instance_id);
 
-        let endpoint = peer.endpoint.clone();
+        // Use smart endpoint selection to prefer IPC for same-host communication
+        let endpoint = peer
+            .select_endpoint(&self.endpoint)
+            .ok_or_else(|| anyhow::anyhow!("No available endpoint for peer: {}", target))?
+            .clone();
         drop(state);
+
+        debug!(
+            "Sending message to {} via {} endpoint: {}",
+            target,
+            if endpoint.starts_with("ipc://") {
+                "IPC"
+            } else {
+                "TCP"
+            },
+            endpoint
+        );
 
         self.send_raw(&endpoint, &message).await?;
 
@@ -443,10 +458,10 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
             "timeout_ms": timeout.map(|d| d.as_millis()),
         });
 
-        let mut builder =
-            self.system_message("_wait_for_handler")
-                .payload(payload)?
-                .expect_response::<crate::active_message::responses::WaitForHandlerResponse>();
+        let mut builder = self
+            .system_active_message("_wait_for_handler")
+            .payload(payload)?
+            .expect_response::<crate::active_message::responses::WaitForHandlerResponse>();
 
         if let Some(t) = timeout {
             builder = builder.timeout(t);
@@ -460,7 +475,7 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
 
     async fn list_handlers(&self, instance_id: InstanceId) -> Result<Vec<HandlerId>> {
         let status = self
-            .system_message("_list_handlers")
+            .system_active_message("_list_handlers")
             .expect_response::<crate::active_message::responses::ListHandlersResponse>()
             .send(instance_id)
             .await?;
@@ -477,7 +492,11 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
             .get(&target)
             .ok_or_else(|| anyhow::anyhow!("Peer {} not found", target))?;
 
-        let endpoint = peer.endpoint.clone();
+        // Use smart endpoint selection to prefer IPC for same-host communication
+        let endpoint = peer
+            .select_endpoint(&self.endpoint)
+            .ok_or_else(|| anyhow::anyhow!("No available endpoint for peer: {}", target))?
+            .clone();
         drop(state);
 
         self.send_raw(&endpoint, &message).await?;
