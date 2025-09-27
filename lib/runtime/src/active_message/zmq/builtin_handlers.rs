@@ -35,7 +35,15 @@ impl RegisterServiceHandler {
 #[derive(Debug, Serialize, Deserialize)]
 struct RegisterServicePayload {
     instance_id: String,
-    endpoint: String,
+    /// Legacy single endpoint field for backward compatibility
+    #[serde(skip_serializing_if = "Option::is_none")]
+    endpoint: Option<String>,
+    /// TCP endpoint for cross-host communication
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tcp_endpoint: Option<String>,
+    /// IPC endpoint for same-host optimization
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ipc_endpoint: Option<String>,
 }
 
 #[async_trait]
@@ -50,27 +58,57 @@ impl ResponseHandler for RegisterServiceHandler {
         let payload: RegisterServicePayload = message.deserialize()?;
 
         let instance_id = uuid::Uuid::parse_str(&payload.instance_id)?;
-        let peer = PeerInfo::new(instance_id, payload.endpoint.clone());
+
+        // Create PeerInfo with dual endpoint support, handling backward compatibility
+        let peer = if payload.tcp_endpoint.is_some() || payload.ipc_endpoint.is_some() {
+            // New dual endpoint format
+            PeerInfo::new_dual(
+                instance_id,
+                payload.tcp_endpoint.clone(),
+                payload.ipc_endpoint.clone(),
+            )
+        } else if let Some(ref endpoint) = payload.endpoint {
+            // Legacy single endpoint format
+            PeerInfo::new(instance_id, endpoint.clone())
+        } else {
+            anyhow::bail!("No endpoint provided in registration payload");
+        };
 
         let registration_result = self.client.connect_to_peer(peer).await;
         let registered = registration_result.is_ok();
 
         if registered {
+            let endpoint_desc = match (&payload.tcp_endpoint, &payload.ipc_endpoint) {
+                (Some(tcp), Some(ipc)) => format!("TCP: {}, IPC: {}", tcp, ipc),
+                (Some(tcp), None) => format!("TCP: {}", tcp),
+                (None, Some(ipc)) => format!("IPC: {}", ipc),
+                (None, None) => payload
+                    .endpoint
+                    .as_ref()
+                    .unwrap_or(&"unknown".to_string())
+                    .clone(),
+            };
             info!(
                 "Registered service {} at {}",
-                payload.instance_id, payload.endpoint
+                payload.instance_id, endpoint_desc
             );
         } else {
             debug!(
-                "Failed to register service {} at {}: {:?}",
-                payload.instance_id, payload.endpoint, registration_result
+                "Failed to register service {}: {:?}",
+                payload.instance_id, registration_result
             );
         }
+
+        // For response, use the primary endpoint (TCP if available, otherwise legacy endpoint)
+        let response_endpoint = payload
+            .tcp_endpoint
+            .or(payload.endpoint)
+            .unwrap_or_else(|| "unknown".to_string());
 
         let response = RegisterServiceResponse {
             registered,
             instance_id: payload.instance_id,
-            endpoint: payload.endpoint,
+            endpoint: response_endpoint,
         };
 
         Ok(response)
@@ -87,9 +125,16 @@ impl ResponseHandler for RegisterServiceHandler {
                     "type": "object",
                     "properties": {
                         "instance_id": { "type": "string" },
-                        "endpoint": { "type": "string" }
+                        "endpoint": { "type": "string" },
+                        "tcp_endpoint": { "type": "string" },
+                        "ipc_endpoint": { "type": "string" }
                     },
-                    "required": ["instance_id", "endpoint"]
+                    "required": ["instance_id"],
+                    "anyOf": [
+                        { "required": ["endpoint"] },
+                        { "required": ["tcp_endpoint"] },
+                        { "required": ["ipc_endpoint"] }
+                    ]
                 });
                 jsonschema::JSONSchema::compile(&schema_value)
                     .expect("RegisterServiceHandler schema should be valid")
@@ -601,7 +646,7 @@ impl ResponseHandler for RequestShutdownHandler {
             });
 
             if let Err(e) = client
-                .system_message("_remove_service")
+                .system_active_message("_remove_service")
                 .payload(payload)
                 .expect("Valid payload")
                 .fire_and_forget(leader_id)

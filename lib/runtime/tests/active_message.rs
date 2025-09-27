@@ -95,7 +95,7 @@ async fn test_basic_message_send_receive() -> Result<()> {
 
     let test_message = "Hello from manager1";
     client1
-        .message("test_handler")?
+        .active_message("test_handler")?
         .payload(test_message)?
         .fire_and_forget(client2.instance_id())
         .await?;
@@ -334,7 +334,7 @@ async fn test_message_builder_fire_and_forget() -> Result<()> {
     // Test fire and forget
     let test_message = "Fire and forget message";
     client1
-        .message("test_handler")?
+        .active_message("test_handler")?
         .payload(test_message)?
         .fire_and_forget(client2.instance_id())
         .await?;
@@ -423,7 +423,7 @@ async fn test_single_response_error_handling() -> Result<()> {
     // Test success case
     handler.set_should_error(false).await;
     let status = client1
-        .message("error_test_handler")?
+        .active_message("error_test_handler")?
         .payload("test")?
         .expect_response::<serde_json::Value>()
         .send(client2.instance_id())
@@ -435,7 +435,7 @@ async fn test_single_response_error_handling() -> Result<()> {
     // Test error case
     handler.set_should_error(true).await;
     let status = client1
-        .message("error_test_handler")?
+        .active_message("error_test_handler")?
         .payload("test")?
         .expect_response::<serde_json::Value>()
         .send(client2.instance_id())
@@ -534,7 +534,7 @@ async fn test_new_style_response_handler() -> Result<()> {
     // Test success case
     handler.set_should_error(false).await;
     let status = client1
-        .message("new_style_test_handler")?
+        .active_message("new_style_test_handler")?
         .payload("test")?
         .expect_response::<TestResponse>()
         .send(client2.instance_id())
@@ -546,7 +546,7 @@ async fn test_new_style_response_handler() -> Result<()> {
     // Test error case
     handler.set_should_error(true).await;
     let status = client1
-        .message("new_style_test_handler")?
+        .active_message("new_style_test_handler")?
         .payload("test")?
         .expect_response::<TestResponse>()
         .send(client2.instance_id())

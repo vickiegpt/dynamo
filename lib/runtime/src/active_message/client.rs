@@ -43,25 +43,84 @@ pub type Endpoint = String;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PeerInfo {
     pub instance_id: InstanceId,
+    /// Primary endpoint (TCP) - maintained for backward compatibility
     pub endpoint: Endpoint,
+    /// Optional TCP endpoint for cross-host communication
+    pub tcp_endpoint: Option<Endpoint>,
+    /// Optional IPC endpoint for same-host optimization
+    pub ipc_endpoint: Option<Endpoint>,
 }
 
 impl PeerInfo {
+    /// Create PeerInfo with single endpoint (backward compatibility)
     pub fn new(instance_id: InstanceId, endpoint: impl Into<String>) -> Self {
+        let endpoint = endpoint.into();
         Self {
             instance_id,
-            endpoint: endpoint.into(),
+            endpoint: endpoint.clone(),
+            tcp_endpoint: Some(endpoint),
+            ipc_endpoint: None,
         }
     }
 
+    /// Create PeerInfo with both TCP and IPC endpoints
+    pub fn new_dual(
+        instance_id: InstanceId,
+        tcp_endpoint: Option<Endpoint>,
+        ipc_endpoint: Option<Endpoint>,
+    ) -> Self {
+        // Use TCP endpoint as primary for backward compatibility
+        let primary_endpoint = tcp_endpoint
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| "tcp://unknown:0".to_string());
+
+        Self {
+            instance_id,
+            endpoint: primary_endpoint,
+            tcp_endpoint,
+            ipc_endpoint,
+        }
+    }
+
+    /// Get the best endpoint for connection based on local preferences
+    pub fn select_endpoint(&self, my_endpoint: &str) -> Option<&Endpoint> {
+        // Prefer IPC for same-host communication if available
+        if let Some(ref ipc_ep) = self.ipc_endpoint
+            && self.is_local(my_endpoint)
+        {
+            return Some(ipc_ep);
+        }
+
+        // Fall back to TCP endpoint
+        self.tcp_endpoint.as_ref().or(Some(&self.endpoint))
+    }
+
     pub fn is_local(&self, my_endpoint: &str) -> bool {
-        if self.endpoint.starts_with("ipc://") {
+        // Extract our host from our endpoint
+        let my_host = match extract_host(my_endpoint) {
+            Some(host) => host,
+            None => return false,
+        };
+
+        // If peer has IPC endpoint, check if we're on the same host as their TCP endpoint
+        if self.ipc_endpoint.is_some() {
+            let peer_tcp_endpoint = self.tcp_endpoint.as_ref().unwrap_or(&self.endpoint);
+            if let Some(peer_host) = extract_host(peer_tcp_endpoint) {
+                return my_host == peer_host;
+            }
+        }
+
+        // Fall back to host comparison using available TCP endpoint
+        let peer_endpoint = self.tcp_endpoint.as_ref().unwrap_or(&self.endpoint);
+
+        // IPC endpoints are always local
+        if peer_endpoint.starts_with("ipc://") {
             return true;
         }
 
-        if let (Some(my_host), Some(peer_host)) =
-            (extract_host(my_endpoint), extract_host(&self.endpoint))
-        {
+        // Compare hosts for TCP endpoints
+        if let Some(peer_host) = extract_host(peer_endpoint) {
             my_host == peer_host
         } else {
             false
@@ -111,7 +170,7 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
         Self: Sized,
     {
         let status = self
-            .system_message("_health_check")
+            .system_active_message("_health_check")
             .expect_response::<HealthCheckResponse>()
             .send(instance_id)
             .await?;
@@ -124,13 +183,27 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
     where
         Self: Sized,
     {
-        let payload = serde_json::json!({
+        // Create payload with dual endpoint support
+        let mut payload = serde_json::json!({
             "instance_id": service.instance_id.to_string(),
-            "endpoint": service.endpoint,
         });
 
+        // Add endpoints based on what's available
+        if service.tcp_endpoint.is_some() || service.ipc_endpoint.is_some() {
+            // Use new dual endpoint format
+            if let Some(ref tcp_ep) = service.tcp_endpoint {
+                payload["tcp_endpoint"] = serde_json::Value::String(tcp_ep.clone());
+            }
+            if let Some(ref ipc_ep) = service.ipc_endpoint {
+                payload["ipc_endpoint"] = serde_json::Value::String(ipc_ep.clone());
+            }
+        } else {
+            // Fallback to legacy endpoint format for backward compatibility
+            payload["endpoint"] = serde_json::Value::String(service.endpoint);
+        }
+
         let status = self
-            .system_message("_register_service")
+            .system_active_message("_register_service")
             .payload(payload)?
             .expect_response::<RegisterServiceResponse>()
             .send(instance_id)
@@ -155,7 +228,7 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
         });
 
         let status = self
-            .system_message("_join_cohort")
+            .system_active_message("_join_cohort")
             .payload(payload)?
             .expect_response::<JoinCohortResponse>()
             .send(leader_instance_id)
@@ -165,16 +238,16 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
     }
 
     // New builder pattern API
-    /// Create a message builder
-    fn message(&self, handler: &str) -> Result<MessageBuilder<'_>>
+    /// Create an active message builder
+    fn active_message(&self, handler: &str) -> Result<MessageBuilder<'_>>
     where
         Self: Sized,
     {
         MessageBuilder::new(self, handler)
     }
 
-    /// Internal method to create message builder for system handlers (bypasses validation)
-    fn system_message(&self, handler: &str) -> MessageBuilder<'_, NeedsDeliveryMode>
+    /// Internal method to create active message builder for system handlers (bypasses validation)
+    fn system_active_message(&self, handler: &str) -> MessageBuilder<'_, NeedsDeliveryMode>
     where
         Self: Sized,
     {
@@ -185,8 +258,10 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
     /// Send a message with payload serialization - DEPRECATED
     ///
     /// # Deprecated
-    /// Use `client.message(handler).payload(data).send(target)` instead for better type safety and features.
-    #[deprecated(note = "Use client.message(handler).payload(data).send(target) instead")]
+    /// Use `client.active_message(handler).payload(data).target_instance(target).execute()` instead for better type safety and features.
+    #[deprecated(
+        note = "Use client.active_message(handler).payload(data).target_instance(target).execute() instead"
+    )]
     async fn send<P: IntoPayload>(
         &self,
         target: InstanceId,
@@ -204,8 +279,8 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
     /// Broadcast a message with payload serialization - DEPRECATED
     ///
     /// # Deprecated
-    /// Use `client.message(handler).payload(data).fire_and_forget(target)` for each target instead.
-    #[deprecated(note = "Use message builder pattern instead")]
+    /// Use `client.active_message(handler).payload(data).target_instance(target).execute()` for each target instead.
+    #[deprecated(note = "Use active_message builder pattern instead")]
     async fn broadcast<P: IntoPayload>(&self, handler: &str, payload: P) -> Result<()>
     where
         Self: Sized,

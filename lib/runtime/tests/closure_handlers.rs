@@ -118,7 +118,7 @@ async fn test_closure_handlers_comprehensive() -> Result<()> {
 
     // Test NoReturnHandler (fire_and_forget)
     client1
-        .message("log")?
+        .active_message("log")?
         .payload("Hello from closure!")?
         .fire_and_forget(client2.instance_id())
         .await?;
@@ -127,7 +127,7 @@ async fn test_closure_handlers_comprehensive() -> Result<()> {
 
     // Test AckHandler that always fails
     let fail_result = client1
-        .message("always_fail")?
+        .active_message("always_fail")?
         .payload("doesn't matter")?
         .send(client2.instance_id())
         .await;
@@ -138,7 +138,7 @@ async fn test_closure_handlers_comprehensive() -> Result<()> {
 
     // Test AckHandler (send) - valid data
     let ack_result = client1
-        .message("validate")?
+        .active_message("validate")?
         .payload("Valid data")?
         .send(client2.instance_id())
         .await;
@@ -147,7 +147,7 @@ async fn test_closure_handlers_comprehensive() -> Result<()> {
     // Test AckHandler (send) - invalid data
     tokio::time::sleep(Duration::from_millis(100)).await;
     let ack_result = client1
-        .message("validate")?
+        .active_message("validate")?
         .payload("")? // Empty string should be invalid
         .send(client2.instance_id())
         .await;
@@ -156,7 +156,7 @@ async fn test_closure_handlers_comprehensive() -> Result<()> {
     // Test ResponseHandler (expect_response)
     let compute_request = ComputeRequest { x: 5, y: 10 };
     let response: ComputeResponse = client1
-        .message("compute")?
+        .active_message("compute")?
         .payload(compute_request)?
         .expect_response::<ComputeResponse>()
         .send(client2.instance_id())
@@ -218,7 +218,7 @@ async fn test_closure_handler_type_validation() -> Result<()> {
 
     // Test correct usage - NoReturnHandler with fire_and_forget
     let result = client1
-        .message("test_handler")?
+        .active_message("test_handler")?
         .payload("test")?
         .fire_and_forget(client2.instance_id())
         .await;
@@ -226,7 +226,7 @@ async fn test_closure_handler_type_validation() -> Result<()> {
 
     // Test incorrect usage - NoReturnHandler with expect_response should fail
     let result = client1
-        .message("test_handler")?
+        .active_message("test_handler")?
         .payload("test")?
         .expect_response::<serde_json::Value>()
         .send(client2.instance_id())

@@ -139,9 +139,9 @@ async fn test_basic_cohort_formation() -> Result<()> {
 
     // Set up workers
     let (worker1_manager, worker1_cancel) =
-        setup_worker(&leader_endpoint, leader_id, None, leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, None, leader_client.clone()).await?;
     let (worker2_manager, worker2_cancel) =
-        setup_worker(&leader_endpoint, leader_id, None, leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, None, leader_client.clone()).await?;
 
     // Wait for cohort to be full
     let cohort_full = timeout(Duration::from_secs(5), async {
@@ -181,11 +181,11 @@ async fn test_cohort_with_ranks() -> Result<()> {
 
     // Set up workers with ranks (not in order)
     let (worker0_manager, worker0_cancel) =
-        setup_worker(&leader_endpoint, leader_id, Some(0), leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, Some(0), leader_client.clone()).await?;
     let (worker2_manager, worker2_cancel) =
-        setup_worker(&leader_endpoint, leader_id, Some(2), leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, Some(2), leader_client.clone()).await?;
     let (worker1_manager, worker1_cancel) =
-        setup_worker(&leader_endpoint, leader_id, Some(1), leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, Some(1), leader_client.clone()).await?;
 
     // Wait for cohort to be full
     let cohort_full = timeout(Duration::from_secs(5), async {
@@ -235,9 +235,9 @@ async fn test_cohort_rejects_excess_workers() -> Result<()> {
 
     // Set up 2 workers (should succeed)
     let (worker1_manager, worker1_cancel) =
-        setup_worker(&leader_endpoint, leader_id, None, leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, None, leader_client.clone()).await?;
     let (worker2_manager, worker2_cancel) =
-        setup_worker(&leader_endpoint, leader_id, None, leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, None, leader_client.clone()).await?;
 
     // Wait for cohort to be full
     timeout(Duration::from_secs(5), async {
@@ -250,7 +250,7 @@ async fn test_cohort_rejects_excess_workers() -> Result<()> {
 
     // Try to add a third worker (should fail or timeout)
     let worker3_result = timeout(Duration::from_secs(5), async {
-        setup_worker(&leader_endpoint, leader_id, None, leader_client.clone()).await
+        setup_worker(leader_endpoint, leader_id, None, leader_client.clone()).await
     })
     .await;
 
@@ -286,11 +286,11 @@ async fn test_mixed_rank_presence_rejected() -> Result<()> {
 
     // First worker with rank should succeed
     let (worker0_manager, worker0_cancel) =
-        setup_worker(&leader_endpoint, leader_id, Some(0), leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, Some(0), leader_client.clone()).await?;
 
     // Second worker without rank should fail (mixed presence)
     let worker1_result =
-        setup_worker(&leader_endpoint, leader_id, None, leader_client.clone()).await;
+        setup_worker(leader_endpoint, leader_id, None, leader_client.clone()).await;
     assert!(
         worker1_result.is_err(),
         "Worker without rank should be rejected after first worker had rank"
@@ -317,11 +317,11 @@ async fn test_duplicate_rank_rejected() -> Result<()> {
 
     // First worker with rank 0 should succeed
     let (worker0_manager, worker0_cancel) =
-        setup_worker(&leader_endpoint, leader_id, Some(0), leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, Some(0), leader_client.clone()).await?;
 
     // Second worker with same rank should fail
     let worker1_result =
-        setup_worker(&leader_endpoint, leader_id, Some(0), leader_client.clone()).await;
+        setup_worker(leader_endpoint, leader_id, Some(0), leader_client.clone()).await;
     assert!(
         worker1_result.is_err(),
         "Worker with duplicate rank should be rejected"
@@ -348,9 +348,9 @@ async fn test_graceful_shutdown_flow() -> Result<()> {
 
     // Set up workers
     let (worker1_manager, worker1_cancel) =
-        setup_worker(&leader_endpoint, leader_id, None, leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, None, leader_client.clone()).await?;
     let (worker2_manager, worker2_cancel) =
-        setup_worker(&leader_endpoint, leader_id, None, leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, None, leader_client.clone()).await?;
 
     // Wait for cohort to be full
     timeout(Duration::from_secs(5), async {
@@ -399,9 +399,9 @@ async fn test_broadcasting_to_workers() -> Result<()> {
 
     // Set up workers with ranks
     let (worker0_manager, worker0_cancel) =
-        setup_worker(&leader_endpoint, leader_id, Some(0), leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, Some(0), leader_client.clone()).await?;
     let (worker1_manager, worker1_cancel) =
-        setup_worker(&leader_endpoint, leader_id, Some(1), leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, Some(1), leader_client.clone()).await?;
 
     // Wait for cohort to be full
     timeout(Duration::from_secs(5), async {
@@ -455,7 +455,7 @@ async fn test_incremental_cohort_formation() -> Result<()> {
     assert!(!cohort.is_full().await);
 
     let (worker0_manager, worker0_cancel) =
-        setup_worker(&leader_endpoint, leader_id, Some(0), leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, Some(0), leader_client.clone()).await?;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     assert_eq!(cohort.worker_count().await, 1);
@@ -463,7 +463,7 @@ async fn test_incremental_cohort_formation() -> Result<()> {
     assert!(!cohort.is_cohort_complete().await); // Missing ranks 1, 2
 
     let (worker1_manager, worker1_cancel) =
-        setup_worker(&leader_endpoint, leader_id, Some(1), leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, Some(1), leader_client.clone()).await?;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     assert_eq!(cohort.worker_count().await, 2);
@@ -471,7 +471,7 @@ async fn test_incremental_cohort_formation() -> Result<()> {
     assert!(!cohort.is_cohort_complete().await); // Missing rank 2
 
     let (worker2_manager, worker2_cancel) =
-        setup_worker(&leader_endpoint, leader_id, Some(2), leader_client.clone()).await?;
+        setup_worker(leader_endpoint, leader_id, Some(2), leader_client.clone()).await?;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     assert_eq!(cohort.worker_count().await, 3);
