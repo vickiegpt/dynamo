@@ -728,6 +728,10 @@ mod tests {
             let (_tx, rx) = oneshot::channel();
             Ok(rx)
         }
+
+        async fn has_incoming_connection_from(&self, _instance_id: uuid::Uuid) -> bool {
+            false // Mock always returns false
+        }
     }
 
     #[tokio::test]

@@ -33,9 +33,7 @@ use crate::utils::tasks::tracker::{
 
 /// Builder for ZmqActiveMessageManager with configurable options
 #[derive(Debug, Clone)]
-pub struct ZmqActiveMessageManagerBuilder {
-    max_concurrent_messages: Option<usize>,
-}
+pub struct ZmqActiveMessageManagerBuilder {}
 
 impl Default for ZmqActiveMessageManagerBuilder {
     fn default() -> Self {
@@ -46,16 +44,7 @@ impl Default for ZmqActiveMessageManagerBuilder {
 impl ZmqActiveMessageManagerBuilder {
     /// Create a new builder with default settings
     pub fn new() -> Self {
-        Self {
-            max_concurrent_messages: None,
-        }
-    }
-
-    /// Set the maximum number of concurrent messages to process
-    /// If not set, unlimited concurrency is used
-    pub fn max_concurrent_messages(mut self, max: usize) -> Self {
-        self.max_concurrent_messages = Some(max);
-        self
+        Self {}
     }
 
     /// Build the ZmqActiveMessageManager with the configured options
@@ -71,6 +60,7 @@ impl ZmqActiveMessageManagerBuilder {
 pub(crate) struct HandlerEntry {
     pub handler: HandlerType,
     pub task_tracker: DynamoTaskTracker,
+    pub semaphore: Option<Arc<Semaphore>>,
 }
 
 pub struct ManagerState {
@@ -100,7 +90,6 @@ pub struct ZmqActiveMessageManager {
     receiver_task: Arc<Mutex<Option<tokio::task::JoinHandle<Result<()>>>>>,
     ack_cleanup_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     message_task_tracker: TaskTracker,
-    message_semaphore: Option<Arc<Semaphore>>,
 }
 
 impl ZmqActiveMessageManager {
@@ -130,7 +119,7 @@ impl ZmqActiveMessageManager {
     pub(crate) async fn new_with_builder(
         endpoint: String,
         cancel_token: CancellationToken,
-        builder: ZmqActiveMessageManagerBuilder,
+        _builder: ZmqActiveMessageManagerBuilder,
     ) -> Result<Self> {
         let instance_id = InstanceId::new_v4();
 
@@ -163,9 +152,6 @@ impl ZmqActiveMessageManager {
 
         // Initialize concurrency controls
         let message_task_tracker = TaskTracker::new();
-        let message_semaphore = builder
-            .max_concurrent_messages
-            .map(|max| Arc::new(Semaphore::new(max)));
 
         let manager = Self {
             state: state.clone(),
@@ -175,7 +161,6 @@ impl ZmqActiveMessageManager {
             receiver_task: Arc::new(Mutex::new(None)),
             ack_cleanup_task: Arc::new(Mutex::new(None)),
             message_task_tracker,
-            message_semaphore,
         };
 
         manager.register_builtin_handlers().await?;
@@ -185,7 +170,6 @@ impl ZmqActiveMessageManager {
             sub_transport,
             cancel_token.clone(),
             manager.message_task_tracker.clone(),
-            manager.message_semaphore.clone(),
         ));
 
         let ack_cleanup_task =
@@ -254,7 +238,6 @@ impl ZmqActiveMessageManager {
         mut transport: ZmqTransport,
         cancel_token: CancellationToken,
         message_task_tracker: TaskTracker,
-        message_semaphore: Option<Arc<Semaphore>>,
     ) -> Result<()> {
         loop {
             tokio::select! {
@@ -268,21 +251,11 @@ impl ZmqActiveMessageManager {
                         Ok(message) => {
                             // Spawn message handling immediately for parallelism
                             let state_clone = state.clone();
-                            let semaphore_clone = message_semaphore.clone();
 
                             message_task_tracker.spawn(async move {
-                                // Acquire semaphore permit if concurrency limit is set
-                                let _permit = if let Some(ref semaphore) = semaphore_clone {
-                                    Some(semaphore.acquire().await.expect("Semaphore closed"))
-                                } else {
-                                    None
-                                };
-
                                 if let Err(e) = Self::handle_message(state_clone, message).await {
                                     error!("Failed to handle message: {}", e);
                                 }
-
-                                // Permit is automatically released when _permit is dropped
                             });
                         }
                         Err(e) => {
@@ -316,6 +289,19 @@ impl ZmqActiveMessageManager {
             return Self::handle_response(state, message).await;
         }
 
+        // Track incoming connection from sender and auto-register if endpoint provided
+        {
+            let state_read = state.read().await;
+            let sender_endpoint = message
+                .metadata
+                .get("_sender_endpoint")
+                .and_then(|v| v.as_str());
+            state_read
+                .client
+                .track_incoming_and_auto_register(message.sender_instance, sender_endpoint)
+                .await;
+        }
+
         let state_read = state.read().await;
         let handler_name = message.handler_name.clone();
 
@@ -330,10 +316,23 @@ impl ZmqActiveMessageManager {
         let handler = handler_entry.handler.clone();
         let client = state_read.client.clone();
         let task_tracker = handler_entry.task_tracker.clone();
+        let semaphore = handler_entry.semaphore.clone();
 
         drop(state_read);
 
         debug!("Dispatching message to handler: {}", handler_name);
+
+        // Acquire per-handler semaphore permit if concurrency limit is set
+        let _permit = if let Some(ref handler_semaphore) = semaphore {
+            Some(
+                handler_semaphore
+                    .acquire()
+                    .await
+                    .expect("Handler semaphore closed"),
+            )
+        } else {
+            None
+        };
 
         // Extract acceptance and response configuration
         let acceptance_mode = message
@@ -638,6 +637,11 @@ impl ActiveMessageManager for ZmqActiveMessageManager {
                 .expect("Failed to create default task tracker")
         });
 
+        // Create per-handler semaphore if concurrency limit is set
+        let semaphore = config
+            .max_concurrent_messages
+            .map(|max| Arc::new(Semaphore::new(max)));
+
         let mut state = self.state.write().await;
 
         if state.handlers.contains_key(&handler_name) {
@@ -647,6 +651,7 @@ impl ActiveMessageManager for ZmqActiveMessageManager {
         let entry = HandlerEntry {
             handler,
             task_tracker,
+            semaphore,
         };
 
         state.handlers.insert(handler_name.clone(), entry);

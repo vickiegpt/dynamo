@@ -129,27 +129,27 @@ async fn test_closure_handlers_comprehensive() -> Result<()> {
     let fail_result = client1
         .message("always_fail")?
         .payload("doesn't matter")?
-        .send_and_confirm(client2.instance_id())
+        .send(client2.instance_id())
         .await;
     assert!(
         fail_result.is_err(),
         "always_fail handler should return error"
     );
 
-    // Test AckHandler (send_and_confirm) - valid data
+    // Test AckHandler (send) - valid data
     let ack_result = client1
         .message("validate")?
         .payload("Valid data")?
-        .send_and_confirm(client2.instance_id())
+        .send(client2.instance_id())
         .await;
     assert!(ack_result.is_ok());
 
-    // Test AckHandler (send_and_confirm) - invalid data
+    // Test AckHandler (send) - invalid data
     tokio::time::sleep(Duration::from_millis(100)).await;
     let ack_result = client1
         .message("validate")?
         .payload("")? // Empty string should be invalid
-        .send_and_confirm(client2.instance_id())
+        .send(client2.instance_id())
         .await;
     assert!(ack_result.is_err(), "Empty string validation should fail");
 

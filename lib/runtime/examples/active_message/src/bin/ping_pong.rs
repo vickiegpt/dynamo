@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
     let warmup_result = client_client
         .message("ping")?
         .payload("warmup")?
-        .send_and_confirm(server_client.instance_id())
+        .send(server_client.instance_id())
         .await;
 
     match warmup_result {
@@ -123,7 +123,7 @@ async fn main() -> Result<()> {
         let result = client_client
             .message("ping")?
             .payload(&message)?
-            .send_and_confirm(server_client.instance_id())
+            .send(server_client.instance_id())
             .await;
 
         match result {

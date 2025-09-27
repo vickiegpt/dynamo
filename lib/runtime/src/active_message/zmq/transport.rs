@@ -3,6 +3,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use std::collections::VecDeque;
 use tmq::{
@@ -10,6 +11,7 @@ use tmq::{
     publish::{Publish, publish},
     subscribe::{Subscribe, subscribe},
 };
+use uuid::Uuid;
 
 use crate::active_message::{client::Endpoint, handler::ActiveMessage};
 
@@ -62,7 +64,11 @@ impl ZmqTransport {
         let transport_type = Self::detect_transport_type(address);
         let socket = publish(context).bind(address)?;
 
-        let bound_endpoint = socket.get_socket().get_last_endpoint().unwrap().unwrap();
+        let bound_endpoint = socket
+            .get_socket()
+            .get_last_endpoint()
+            .expect("Failed to retrieve bound endpoint")
+            .expect("Socket did not report bound endpoint");
 
         Ok(Self::Publisher {
             socket,
@@ -75,7 +81,11 @@ impl ZmqTransport {
         let transport_type = Self::detect_transport_type(address);
         let socket = subscribe(context).bind(address)?.subscribe(b"")?;
 
-        let bound_endpoint = socket.get_socket().get_last_endpoint().unwrap().unwrap();
+        let bound_endpoint = socket
+            .get_socket()
+            .get_last_endpoint()
+            .expect("Failed to retrieve bound endpoint")
+            .expect("Socket did not report bound endpoint");
 
         Ok(Self::Subscriber {
             socket,
@@ -115,20 +125,65 @@ impl ZmqTransport {
     }
 
     fn serialize_message(message: &ActiveMessage) -> Result<Multipart> {
-        let serialized = serde_json::to_vec(message)?;
         let mut parts = VecDeque::new();
-        parts.push_back(Message::from(serialized));
+
+        // Part 1: Metadata (everything except payload)
+        let metadata = serde_json::json!({
+            "message_id": message.message_id,
+            "handler_name": message.handler_name,
+            "sender_instance": message.sender_instance,
+            "metadata": message.metadata,
+        });
+        parts.push_back(Message::from(serde_json::to_vec(&metadata)?));
+
+        // Part 2: Raw payload bytes (no JSON serialization overhead)
+        parts.push_back(Message::from(message.payload.as_ref()));
+
         Ok(Multipart(parts))
     }
 
     fn deserialize_message(multipart: Multipart) -> Result<ActiveMessage> {
-        if multipart.is_empty() {
-            anyhow::bail!("Empty multipart message");
+        if multipart.len() < 2 {
+            anyhow::bail!(
+                "Invalid multipart message: expected 2 parts, got {}",
+                multipart.len()
+            );
         }
 
-        let bytes = &*multipart[0];
-        let message: ActiveMessage = serde_json::from_slice(bytes)?;
-        Ok(message)
+        // Part 1: Metadata
+        let metadata_bytes = &*multipart[0];
+        let metadata: serde_json::Value = serde_json::from_slice(metadata_bytes)?;
+
+        // Extract fields from metadata
+        let message_id = metadata["message_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing message_id in metadata"))?
+            .parse::<Uuid>()
+            .map_err(|e| anyhow::anyhow!("Invalid message_id: {}", e))?;
+
+        let handler_name = metadata["handler_name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing handler_name in metadata"))?
+            .to_string();
+
+        let sender_instance = metadata["sender_instance"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing sender_instance in metadata"))?
+            .parse::<Uuid>()
+            .map_err(|e| anyhow::anyhow!("Invalid sender_instance: {}", e))?;
+
+        let message_metadata = metadata["metadata"].clone();
+
+        // Part 2: Raw payload
+        let payload = Bytes::from(multipart[1].to_vec());
+
+        Ok(ActiveMessage {
+            message_id,
+            handler_name,
+            sender_instance,
+            payload,
+            metadata: message_metadata,
+        })
     }
 
     pub fn local_endpoint(&self) -> Option<&Endpoint> {

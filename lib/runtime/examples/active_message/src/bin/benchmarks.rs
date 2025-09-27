@@ -214,7 +214,7 @@ async fn benchmark_ping_pong(
     let warmup_result = client_client
         .message("ping")?
         .payload("warmup")?
-        .send_and_confirm(server_client.instance_id())
+        .send(server_client.instance_id())
         .await;
 
     if warmup_result.is_err() {
@@ -235,7 +235,7 @@ async fn benchmark_ping_pong(
         let result = client_client
             .message("ping")?
             .payload(format!("ping_{}", i))?
-            .send_and_confirm(server_client.instance_id())
+            .send(server_client.instance_id())
             .await;
 
         let duration = op_start.elapsed();

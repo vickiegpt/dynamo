@@ -168,15 +168,11 @@ async fn main() -> Result<()> {
         worker_clients.push(worker_client);
     }
 
-    // Create cohort configuration
-    let cohort_config = LeaderWorkerCohortConfigBuilder::default()
-        .leader_instance(leader_client.instance_id())
-        .client(leader_client.clone())
-        .cohort_type(CohortType::FixedSize(3))
-        .failure_policy(CohortFailurePolicy::TerminateAll)
-        .build()?;
-
-    let cohort = Arc::new(LeaderWorkerCohort::from_config(cohort_config));
+    // Create cohort with 3 workers
+    let cohort = Arc::new(LeaderWorkerCohort::new(
+        leader_client.clone(),
+        CohortType::FixedSize(3),
+    ));
 
     // Connect workers to leader
     let leader_peer = PeerInfo::new(

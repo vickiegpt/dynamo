@@ -95,6 +95,37 @@ pub struct LeaderWorkerCohort {
 }
 
 impl LeaderWorkerCohort {
+    /// Create a new cohort with simplified API
+    pub fn new(client: Arc<ZmqActiveMessageClient>, cohort_type: CohortType) -> Self {
+        Self::new_with_policy(client, cohort_type, CohortFailurePolicy::TerminateAll)
+    }
+
+    /// Create a new cohort with custom failure policy
+    pub fn new_with_policy(
+        client: Arc<ZmqActiveMessageClient>,
+        cohort_type: CohortType,
+        failure_policy: CohortFailurePolicy,
+    ) -> Self {
+        let leader_instance = client.instance_id();
+        let state = CohortState {
+            leader_instance,
+            workers: HashMap::new(),
+            workers_by_rank: BTreeMap::new(),
+            cohort_type,
+            failure_policy,
+            registration_closed: false,
+            requires_ranks: None,
+            client,
+            cancel_token: CancellationToken::new(),
+            heartbeat_interval: Duration::from_secs(30),
+            heartbeat_timeout: Duration::from_secs(120),
+        };
+
+        Self {
+            state: Arc::new(RwLock::new(state)),
+        }
+    }
+
     // Builder pattern constructor
     pub fn builder() -> LeaderWorkerCohortConfigBuilder {
         LeaderWorkerCohortConfigBuilder::default()
@@ -119,38 +150,6 @@ impl LeaderWorkerCohort {
         Self {
             state: Arc::new(RwLock::new(state)),
         }
-    }
-
-    // Legacy constructor for backward compatibility
-    #[deprecated(note = "Use builder() pattern instead")]
-    pub fn new(
-        leader_instance: InstanceId,
-        worker_instances: Vec<InstanceId>,
-        client: Arc<ZmqActiveMessageClient>,
-    ) -> Self {
-        let config = LeaderWorkerCohortConfig {
-            leader_instance,
-            client,
-            cohort_type: CohortType::FixedSize(worker_instances.len()),
-            failure_policy: CohortFailurePolicy::TerminateAll,
-            heartbeat_interval: Duration::from_secs(30),
-            heartbeat_timeout: Duration::from_secs(120),
-            cancel_token: CancellationToken::new(),
-        };
-
-        let cohort = Self::from_config(config);
-
-        // Add the pre-specified workers for backward compatibility
-        tokio::spawn({
-            let cohort = cohort.clone();
-            async move {
-                for worker_id in worker_instances {
-                    let _ = cohort.add_worker(worker_id, None).await;
-                }
-            }
-        });
-
-        cohort
     }
 
     // Worker management methods
@@ -532,6 +531,11 @@ impl LeaderWorkerCohort {
                     "_ack_id".to_string(),
                     serde_json::Value::String(ack_id.to_string()),
                 );
+            } else {
+                anyhow::bail!(
+                    "broadcast_acks requires JSON object payload, got: {}",
+                    payload_with_ack.to_string()
+                );
             }
 
             let modified_payload = Bytes::from(serde_json::to_vec(&payload_with_ack)?);
@@ -660,7 +664,7 @@ impl LeaderWorkerCohort {
                 let result = client
                     .message(&handler)?
                     .payload(payload)?
-                    .send_and_confirm(worker_id)
+                    .send(worker_id)
                     .await;
 
                 let worker_result = match result {
@@ -1150,6 +1154,10 @@ mod tests {
                 let (_tx, rx) = oneshot::channel();
                 Ok(rx)
             }
+
+            async fn has_incoming_connection_from(&self, _instance_id: InstanceId) -> bool {
+                false // Mock always returns false
+            }
         }
 
         pub fn test_cohort_builder() -> LeaderWorkerCohortConfig {
@@ -1271,25 +1279,25 @@ mod tests {
         let cohort = LeaderWorkerCohort::from_config(config);
 
         let mut last_result = Ok(0);
-        for (_idx, rank) in test_case.worker_ranks.iter().enumerate() {
+        for rank in test_case.worker_ranks.iter() {
             let worker_id = Uuid::new_v4();
             last_result = cohort.validate_and_add_worker(worker_id, *rank).await;
 
             // If we expect an error on this specific addition, check it
-            if let ExpectedResult::RankError(expected_msg) = &test_case.expected_result {
-                if last_result.is_err() {
-                    assert!(
-                        last_result
-                            .as_ref()
-                            .unwrap_err()
-                            .to_string()
-                            .contains(expected_msg),
-                        "Expected error containing '{}', got: {:?}",
-                        expected_msg,
-                        last_result
-                    );
-                    return; // Test passed
-                }
+            if let ExpectedResult::RankError(expected_msg) = &test_case.expected_result
+                && last_result.is_err()
+            {
+                assert!(
+                    last_result
+                        .as_ref()
+                        .unwrap_err()
+                        .to_string()
+                        .contains(expected_msg),
+                    "Expected error containing '{}', got: {:?}",
+                    expected_msg,
+                    last_result
+                );
+                return; // Test passed
             }
         }
 
@@ -1371,7 +1379,7 @@ mod tests {
         let position = cohort
             .validate_and_add_worker(worker_id, Some(0))
             .await
-            .unwrap();
+            .expect("Failed to add worker with rank 0");
         assert_eq!(position, 0);
         assert_eq!(cohort.worker_count().await, 1);
         assert!(cohort.has_ranks().await);
