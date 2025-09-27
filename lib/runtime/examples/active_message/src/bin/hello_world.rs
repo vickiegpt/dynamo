@@ -4,7 +4,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use dynamo_runtime::active_message::{
-    client::{ActiveMessageClient, PeerInfo},
+    client::ActiveMessageClient,
     handler::{ActiveMessage, HandlerType, ResponseHandler},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
@@ -97,10 +97,7 @@ async fn main() -> Result<()> {
     println!("Client endpoint: {}", client_client.endpoint());
 
     // Connect client to server
-    let server_peer = PeerInfo::new(
-        server_client.instance_id(),
-        server_client.endpoint().to_string(),
-    );
+    let server_peer = server_client.peer_info();
 
     client_client.connect_to_peer(server_peer).await?;
 
@@ -123,7 +120,7 @@ async fn main() -> Result<()> {
 
         // Send string and wait for transformed response
         let result = client_client
-            .message("hello_world")?
+            .active_message("hello_world")?
             .payload(input)?
             .expect_response::<HelloResponse>()
             .send(server_client.instance_id())
@@ -156,7 +153,7 @@ async fn main() -> Result<()> {
 
     // This should work since we're sending a string
     let result = client_client
-        .message("hello_world")?
+        .active_message("hello_world")?
         .payload("Valid String")?
         .expect_response::<HelloResponse>()
         .send(server_client.instance_id())
