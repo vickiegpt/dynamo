@@ -3,9 +3,10 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use bytes::Bytes;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},
-    handler::{AckHandler, ActiveMessage, HandlerType, ResponseHandler},
+    handler::{AckHandler, ActiveMessageContext, HandlerType, ResponseHandler},
     manager::ActiveMessageManager,
     zmq::{
         cohort::{
@@ -58,14 +59,12 @@ impl WorkHandler {
 
 #[async_trait]
 impl ResponseHandler for WorkHandler {
-    type Response = WorkResponse;
-
     async fn handle(
         &self,
-        message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
-    ) -> Result<Self::Response> {
-        let request: WorkRequest = message.deserialize()?;
+        input: Bytes,
+        _ctx: ActiveMessageContext,
+    ) -> Result<Bytes> {
+        let request: WorkRequest = serde_json::from_slice(&input)?;
 
         info!(
             "Worker {} processing work: {} (multiplier: {})",
@@ -81,11 +80,12 @@ impl ResponseHandler for WorkHandler {
             self.worker_rank, processed_length
         );
 
-        Ok(WorkResponse {
+        let response = WorkResponse {
             rank: self.worker_rank,
             result,
             processed_length,
-        })
+        };
+        Ok(Bytes::from(serde_json::to_vec(&response)?))
     }
 
     fn name(&self) -> &str {
@@ -109,10 +109,10 @@ impl CohortPingHandler {
 impl AckHandler for CohortPingHandler {
     async fn handle(
         &self,
-        message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
+        input: Bytes,
+        _ctx: ActiveMessageContext,
     ) -> Result<()> {
-        let ping_msg = String::from_utf8(message.payload.to_vec())?;
+        let ping_msg: String = serde_json::from_slice(&input)?;
         info!("Worker {} received ping: {}", self.worker_rank, ping_msg);
         // Just return Ok(()) to send ACK
         Ok(())
