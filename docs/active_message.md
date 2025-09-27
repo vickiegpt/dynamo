@@ -369,12 +369,89 @@ impl MessageBuilder {
 
 ### Registration
 
+#### Typed Handler Registration
+
+Use these ergonomic typed methods with automatic serialization:
+
+```rust
+impl ZmqActiveMessageManager {
+    // Request/Response handlers - automatic serialization of request and response types
+    pub async fn register_unary<Req, Res, F, Fut>(
+        &self,
+        name: impl Into<String>,
+        closure: F
+    ) -> Result<()>
+    where
+        Req: DeserializeOwned + Send + 'static,
+        Res: Serialize + Send + 'static,
+        F: Fn(Req, ActiveMessageContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Res>> + Send + 'static;
+
+    // Void handlers - no response, automatic deserialization of input
+    pub async fn register_void<Input, F, Fut>(
+        &self,
+        name: impl Into<String>,
+        closure: F,
+    ) -> Result<()>
+    where
+        Input: DeserializeOwned + Send + 'static,
+        F: Fn(Input, ActiveMessageContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static;
+
+    // Acknowledgment handlers - returns success/failure, automatic deserialization
+    pub async fn register_typed_ack<Input, F, Fut>(
+        &self,
+        name: impl Into<String>,
+        closure: F,
+    ) -> Result<()>
+    where
+        Input: DeserializeOwned + Send + 'static,
+        F: Fn(Input, ActiveMessageContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static;
+}
+```
+
+#### Examples
+
+**Request/Response Pattern:**
+```rust
+#[derive(Deserialize)]
+struct ComputeRequest { x: i32, y: i32 }
+
+#[derive(Serialize)]
+struct ComputeResponse { result: i32 }
+
+// Clean, typed handler with automatic serialization
+manager.register_unary("compute", |req: ComputeRequest, _ctx| async move {
+    Ok(ComputeResponse { result: req.x + req.y })
+}).await?;
+```
+
+**Void Pattern (Fire and Forget):**
+```rust
+manager.register_void("log", |message: String, _ctx| async move {
+    println!("Received: {}", message);
+}).await?;
+```
+
+**Acknowledgment Pattern:**
+```rust
+manager.register_typed_ack("validate", |data: ValidationRequest, _ctx| async move {
+    if data.is_valid() {
+        Ok(()) // Success - ACK sent
+    } else {
+        anyhow::bail!("Invalid data") // Failure - NACK sent
+    }
+}).await?;
+```
+
+#### Advanced Registration
+
+For advanced use cases requiring custom serialization or trait-based handlers:
+
 ```rust
 impl ZmqActiveMessageManager {
     pub async fn register_handler_typed(&self, handler: HandlerType, config: Option<HandlerConfig>) -> Result<()>;
-    pub async fn register_no_return_closure<F, Fut>(&self, name: &str, handler: F) -> Result<()>;
-    pub async fn register_ack_closure<F, Fut>(&self, name: &str, handler: F) -> Result<()>;
-    pub async fn register_response_closure<F, Fut, T>(&self, name: &str, handler: F) -> Result<()>;
 }
 ```
 

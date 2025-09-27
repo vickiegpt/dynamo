@@ -124,7 +124,7 @@ impl ZmqTransport {
         }
     }
 
-    fn serialize_message(message: &ActiveMessage) -> Result<Multipart> {
+    pub fn serialize_message(message: &ActiveMessage) -> Result<Multipart> {
         let mut parts = VecDeque::new();
 
         // Part 1: Metadata (everything except payload)

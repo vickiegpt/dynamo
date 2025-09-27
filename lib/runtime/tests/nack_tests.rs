@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},
-    handler::{AckHandler, ActiveMessage, HandlerType},
+    handler::{AckHandler, ActiveMessageContext, HandlerType},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
 };
@@ -44,13 +44,9 @@ impl ValidationTestHandler {
 
 #[async_trait]
 impl AckHandler for ValidationTestHandler {
-    async fn handle(
-        &self,
-        message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
-    ) -> Result<()> {
-        let payload = String::from_utf8(message.payload.to_vec())?;
-        self.received_messages.lock().await.push(payload);
+    async fn handle(&self, payload: Bytes, _ctx: ActiveMessageContext) -> Result<()> {
+        let payload_str = String::from_utf8(payload.to_vec())?;
+        self.received_messages.lock().await.push(payload_str);
         Ok(())
     }
 
@@ -92,8 +88,8 @@ async fn test_nack_on_payload_validation_failure() -> Result<()> {
     let handler_type = HandlerType::ack((*handler).clone());
     manager2.register_handler_typed(handler_type, None).await?;
 
-    let client1 = manager1.zmq_client();
-    let client2 = manager2.zmq_client();
+    let client1 = manager1.client();
+    let client2 = manager2.client();
 
     let peer2 = PeerInfo::new(client2.instance_id(), client2.endpoint().to_string());
     let peer1 = PeerInfo::new(client1.instance_id(), client1.endpoint().to_string());
@@ -189,9 +185,9 @@ async fn test_cohort_broadcast_with_nack() -> Result<()> {
     let handler2_type = HandlerType::ack((*handler2).clone());
     worker2.register_handler_typed(handler2_type, None).await?;
 
-    let leader_client = leader.zmq_client();
-    let worker1_client = worker1.zmq_client();
-    let worker2_client = worker2.zmq_client();
+    let leader_client = leader.client();
+    let worker1_client = worker1.client();
+    let worker2_client = worker2.client();
 
     // Connect leader to workers
     let worker1_peer = PeerInfo::new(
