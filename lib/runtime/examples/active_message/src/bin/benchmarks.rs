@@ -3,9 +3,10 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use bytes::Bytes;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},
-    handler::{AckHandler, ActiveMessage, HandlerType, ResponseHandler},
+    handler::{AckHandler, ActiveMessageContext, HandlerType, ResponseHandler},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
 };
@@ -39,8 +40,8 @@ struct PingHandler;
 impl AckHandler for PingHandler {
     async fn handle(
         &self,
-        _message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
+        _input: Bytes,
+        _ctx: ActiveMessageContext,
     ) -> Result<()> {
         // Just return Ok(()) to send ACK - minimal processing
         Ok(())
@@ -57,16 +58,14 @@ struct EchoHandler;
 
 #[async_trait]
 impl ResponseHandler for EchoHandler {
-    type Response = BenchmarkPayload;
-
     async fn handle(
         &self,
-        message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
-    ) -> Result<Self::Response> {
+        input: Bytes,
+        _ctx: ActiveMessageContext,
+    ) -> Result<Bytes> {
         // Echo back the payload with minimal processing
-        let payload: BenchmarkPayload = message.deserialize()?;
-        Ok(payload)
+        let payload: BenchmarkPayload = serde_json::from_slice(&input)?;
+        Ok(Bytes::from(serde_json::to_vec(&payload)?))
     }
 
     fn name(&self) -> &str {
@@ -162,14 +161,8 @@ async fn create_managers(
 ) -> Result<(ZmqActiveMessageManager, ZmqActiveMessageManager)> {
     let cancel_token = CancellationToken::new();
 
-    let server_manager = if let Some(max) = max_concurrent {
-        ZmqActiveMessageManager::builder()
-            .max_concurrent_messages(max)
-            .build(unique_ipc_socket_path()?, cancel_token.clone())
-            .await?
-    } else {
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?
-    };
+    let server_manager =
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
     let client_manager =
         ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token).await?;
@@ -212,7 +205,7 @@ async fn benchmark_ping_pong(
 
     // Warmup to establish publisher tasks (not measured)
     let warmup_result = client_client
-        .message("ping")?
+        .active_message("ping")?
         .payload("warmup")?
         .send(server_client.instance_id())
         .await;
@@ -233,7 +226,7 @@ async fn benchmark_ping_pong(
         let op_start = Instant::now();
 
         let result = client_client
-            .message("ping")?
+            .active_message("ping")?
             .payload(format!("ping_{}", i))?
             .send(server_client.instance_id())
             .await;
@@ -305,7 +298,7 @@ async fn benchmark_echo_throughput(
         data: vec![0; 64], // Small warmup payload
     };
     let warmup_result = client_client
-        .message("echo")?
+        .active_message("echo")?
         .payload(warmup_payload)?
         .expect_response::<BenchmarkPayload>()
         .send(server_client.instance_id())
@@ -343,7 +336,7 @@ async fn benchmark_echo_throughput(
             let op_start = Instant::now();
 
             let result = client
-                .message("echo")?
+                .active_message("echo")?
                 .payload(payload)?
                 .expect_response::<BenchmarkPayload>()
                 .send(server_id)

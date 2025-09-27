@@ -3,9 +3,9 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use bytes::Bytes;
 use dynamo_runtime::active_message::{
-    client::ActiveMessageClient,
-    handler::{ActiveMessage, ResponseHandler},
+    handler::{ActiveMessageContext, ResponseHandler},
 };
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -27,14 +27,12 @@ pub struct ComputeHandler;
 
 #[async_trait]
 impl ResponseHandler for ComputeHandler {
-    type Response = ComputeResponse;
-
     async fn handle(
         &self,
-        message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
-    ) -> Result<Self::Response> {
-        let request: ComputeRequest = message.deserialize()?;
+        input: Bytes,
+        _ctx: ActiveMessageContext,
+    ) -> Result<Bytes> {
+        let request: ComputeRequest = serde_json::from_slice(&input)?;
 
         let result = match request.operation.as_str() {
             "add" => request.x + request.y,
@@ -50,7 +48,8 @@ impl ResponseHandler for ComputeHandler {
             request.x, request.operation, request.y, result
         );
 
-        Ok(ComputeResponse { result })
+        let response = ComputeResponse { result };
+        Ok(Bytes::from(serde_json::to_vec(&response)?))
     }
 
     fn name(&self) -> &str {
