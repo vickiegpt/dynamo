@@ -13,11 +13,17 @@ use crate::utils::tasks::tracker::TaskTracker;
 #[derive(Default)]
 pub struct HandlerConfig {
     pub task_tracker: Option<TaskTracker>,
+    pub max_concurrent_messages: Option<usize>,
 }
 
 impl HandlerConfig {
     pub fn with_task_tracker(mut self, tracker: TaskTracker) -> Self {
         self.task_tracker = Some(tracker);
+        self
+    }
+
+    pub fn with_max_concurrent_messages(mut self, max: usize) -> Self {
+        self.max_concurrent_messages = Some(max);
         self
     }
 }
