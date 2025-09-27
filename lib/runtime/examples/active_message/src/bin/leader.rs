@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
         ZmqActiveMessageManager::new("tcp://0.0.0.0:5555".to_string(), cancel_token.clone())
             .await?;
 
-    let client = manager.zmq_client();
+    let client = manager.client();
 
     println!("Leader listening on: {}", client.endpoint());
     println!("Leader instance ID: {}", client.instance_id());

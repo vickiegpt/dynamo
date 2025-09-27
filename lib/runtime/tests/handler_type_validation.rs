@@ -3,9 +3,10 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use bytes::Bytes;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},
-    handler::{ActiveMessage, HandlerType, NoReturnHandler},
+    handler::{ActiveMessageContext, HandlerType, NoReturnHandler},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
 };
@@ -39,12 +40,12 @@ impl TestHandler {
 
 #[async_trait]
 impl NoReturnHandler for TestHandler {
-    async fn handle(&self, message: ActiveMessage, _client: &dyn ActiveMessageClient) {
+    async fn handle(&self, payload: Bytes, _ctx: ActiveMessageContext) {
         // Try to deserialize as JSON string first, fallback to raw string
-        let payload = if let Ok(json_str) = serde_json::from_slice::<String>(&message.payload) {
+        let payload_str = if let Ok(json_str) = serde_json::from_slice::<String>(&payload) {
             json_str
         } else {
-            match String::from_utf8(message.payload.to_vec()) {
+            match String::from_utf8(payload.to_vec()) {
                 Ok(s) => s,
                 Err(e) => {
                     tracing::error!("Failed to decode message payload: {}", e);
@@ -52,7 +53,7 @@ impl NoReturnHandler for TestHandler {
                 }
             }
         };
-        self.received_messages.lock().await.push(payload);
+        self.received_messages.lock().await.push(payload_str);
     }
 
     fn name(&self) -> &str {
@@ -78,8 +79,8 @@ async fn test_handler_type_validation_mismatch() -> Result<()> {
     let handler_type = HandlerType::no_return(handler);
     manager2.register_handler_typed(handler_type, None).await?;
 
-    let client1 = manager1.zmq_client();
-    let client2 = manager2.zmq_client();
+    let client1 = manager1.client();
+    let client2 = manager2.client();
 
     let peer2 = PeerInfo::new(client2.instance_id(), client2.endpoint().to_string());
     let peer1 = PeerInfo::new(client1.instance_id(), client1.endpoint().to_string());
@@ -130,8 +131,8 @@ async fn test_handler_type_validation_correct() -> Result<()> {
     let handler_type = HandlerType::no_return(handler);
     manager2.register_handler_typed(handler_type, None).await?;
 
-    let client1 = manager1.zmq_client();
-    let client2 = manager2.zmq_client();
+    let client1 = manager1.client();
+    let client2 = manager2.client();
 
     let peer2 = PeerInfo::new(client2.instance_id(), client2.endpoint().to_string());
     let peer1 = PeerInfo::new(client1.instance_id(), client1.endpoint().to_string());

@@ -137,7 +137,7 @@ async fn main() -> Result<()> {
     let leader_manager =
         ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
-    let leader_client = leader_manager.zmq_client();
+    let leader_client = leader_manager.client();
     println!("Leader listening on: {}", leader_client.endpoint());
 
     // Create worker managers (3 workers with ranks 0, 1, 2)
@@ -161,7 +161,7 @@ async fn main() -> Result<()> {
             .register_handler_typed(ping_handler_type, None)
             .await?;
 
-        let worker_client = worker_manager.zmq_client();
+        let worker_client = worker_manager.client();
         println!("Worker {} listening on: {}", rank, worker_client.endpoint());
 
         worker_managers.push(worker_manager);

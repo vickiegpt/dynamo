@@ -3,9 +3,10 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use bytes::Bytes;
 use dynamo_runtime::active_message::{
-    client::{ActiveMessageClient, PeerInfo},
-    handler::{ActiveMessage, HandlerType, NoReturnHandler, ResponseHandler},
+    client::ActiveMessageClient,
+    handler::{ActiveMessageContext, HandlerType, NoReturnHandler, ResponseHandler},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
 };
@@ -44,12 +45,12 @@ impl TestHandler {
 
 #[async_trait]
 impl NoReturnHandler for TestHandler {
-    async fn handle(&self, message: ActiveMessage, _client: &dyn ActiveMessageClient) {
+    async fn handle(&self, payload: Bytes, _ctx: ActiveMessageContext) {
         // Try to deserialize as JSON string first, fallback to raw string
-        let payload = if let Ok(json_str) = serde_json::from_slice::<String>(&message.payload) {
+        let payload_str = if let Ok(json_str) = serde_json::from_slice::<String>(&payload) {
             json_str
         } else {
-            match String::from_utf8(message.payload.to_vec()) {
+            match String::from_utf8(payload.to_vec()) {
                 Ok(s) => s,
                 Err(e) => {
                     tracing::error!("Failed to decode message payload: {}", e);
@@ -57,7 +58,7 @@ impl NoReturnHandler for TestHandler {
                 }
             }
         };
-        self.received_messages.lock().await.push(payload);
+        self.received_messages.lock().await.push(payload_str);
     }
 
     fn name(&self) -> &str {
@@ -82,11 +83,11 @@ async fn test_basic_message_send_receive() -> Result<()> {
     let handler_type = HandlerType::no_return((*handler).clone());
     manager2.register_handler_typed(handler_type, None).await?;
 
-    let client1 = manager1.zmq_client();
-    let client2 = manager2.zmq_client();
+    let client1 = manager1.client();
+    let client2 = manager2.client();
 
-    let peer2 = PeerInfo::new(client2.instance_id(), client2.endpoint().to_string());
-    let peer1 = PeerInfo::new(client1.instance_id(), client1.endpoint().to_string());
+    let peer2 = client2.peer_info();
+    let peer1 = client1.peer_info();
 
     client1.connect_to_peer(peer2).await?;
     client2.connect_to_peer(peer1).await?;
@@ -154,11 +155,11 @@ async fn test_register_service_handler_with_response() -> Result<()> {
     let manager2 =
         ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
-    let client1 = manager1.zmq_client();
-    let client2 = manager2.zmq_client();
+    let client1 = manager1.client();
+    let client2 = manager2.client();
 
-    let peer2 = PeerInfo::new(client2.instance_id(), client2.endpoint().to_string());
-    let peer1 = PeerInfo::new(client1.instance_id(), client1.endpoint().to_string());
+    let peer2 = client2.peer_info();
+    let peer1 = client1.peer_info();
 
     client1.connect_to_peer(peer2).await?;
     client2.connect_to_peer(peer1).await?;
@@ -166,7 +167,7 @@ async fn test_register_service_handler_with_response() -> Result<()> {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Test register service with response using convenience method
-    let service_info = PeerInfo::new(client1.instance_id(), client1.endpoint().to_string());
+    let service_info = client1.peer_info();
     let registered = client1
         .register_service(client2.instance_id(), service_info)
         .await?;
@@ -198,11 +199,11 @@ async fn test_list_handlers_with_response() -> Result<()> {
     let handler_type = HandlerType::no_return(handler);
     manager2.register_handler_typed(handler_type, None).await?;
 
-    let client1 = manager1.zmq_client();
-    let client2 = manager2.zmq_client();
+    let client1 = manager1.client();
+    let client2 = manager2.client();
 
-    let peer2 = PeerInfo::new(client2.instance_id(), client2.endpoint().to_string());
-    let peer1 = PeerInfo::new(client1.instance_id(), client1.endpoint().to_string());
+    let peer2 = client2.peer_info();
+    let peer1 = client1.peer_info();
 
     client1.connect_to_peer(peer2).await?;
     client2.connect_to_peer(peer1).await?;
@@ -237,11 +238,11 @@ async fn test_wait_for_handler_with_response() -> Result<()> {
     let manager2 =
         ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
-    let client1 = manager1.zmq_client();
-    let client2 = manager2.zmq_client();
+    let client1 = manager1.client();
+    let client2 = manager2.client();
 
-    let peer2 = PeerInfo::new(client2.instance_id(), client2.endpoint().to_string());
-    let peer1 = PeerInfo::new(client1.instance_id(), client1.endpoint().to_string());
+    let peer2 = client2.peer_info();
+    let peer1 = client1.peer_info();
 
     client1.connect_to_peer(peer2).await?;
     client2.connect_to_peer(peer1).await?;
@@ -279,11 +280,11 @@ async fn test_health_check_with_response() -> Result<()> {
     let manager2 =
         ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
-    let client1 = manager1.zmq_client();
-    let client2 = manager2.zmq_client();
+    let client1 = manager1.client();
+    let client2 = manager2.client();
 
-    let peer2 = PeerInfo::new(client2.instance_id(), client2.endpoint().to_string());
-    let peer1 = PeerInfo::new(client1.instance_id(), client1.endpoint().to_string());
+    let peer2 = client2.peer_info();
+    let peer1 = client1.peer_info();
 
     client1.connect_to_peer(peer2).await?;
     client2.connect_to_peer(peer1).await?;
@@ -320,11 +321,11 @@ async fn test_message_builder_fire_and_forget() -> Result<()> {
     let handler_type = HandlerType::no_return((*handler).clone());
     manager2.register_handler_typed(handler_type, None).await?;
 
-    let client1 = manager1.zmq_client();
-    let client2 = manager2.zmq_client();
+    let client1 = manager1.client();
+    let client2 = manager2.client();
 
-    let peer2 = PeerInfo::new(client2.instance_id(), client2.endpoint().to_string());
-    let peer1 = PeerInfo::new(client1.instance_id(), client1.endpoint().to_string());
+    let peer2 = client2.peer_info();
+    let peer1 = client1.peer_info();
 
     client1.connect_to_peer(peer2).await?;
     client2.connect_to_peer(peer1).await?;
@@ -371,19 +372,14 @@ impl ErrorTestHandler {
 
 #[async_trait]
 impl ResponseHandler for ErrorTestHandler {
-    type Response = serde_json::Value;
-
-    async fn handle(
-        &self,
-        _message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
-    ) -> Result<Self::Response> {
+    async fn handle(&self, _payload: Bytes, _ctx: ActiveMessageContext) -> Result<Bytes> {
         let should_error = *self.should_error.lock().await;
         if should_error {
             anyhow::bail!("Test error from handler");
         } else {
             let test_response = serde_json::json!({"message": "success"});
-            Ok(test_response)
+            let response_bytes = serde_json::to_vec(&test_response)?;
+            Ok(Bytes::from(response_bytes))
         }
     }
 
@@ -409,11 +405,11 @@ async fn test_single_response_error_handling() -> Result<()> {
     let handler_type = HandlerType::response((*handler).clone());
     manager2.register_handler_typed(handler_type, None).await?;
 
-    let client1 = manager1.zmq_client();
-    let client2 = manager2.zmq_client();
+    let client1 = manager1.client();
+    let client2 = manager2.client();
 
-    let peer2 = PeerInfo::new(client2.instance_id(), client2.endpoint().to_string());
-    let peer1 = PeerInfo::new(client1.instance_id(), client1.endpoint().to_string());
+    let peer2 = client2.peer_info();
+    let peer1 = client1.peer_info();
 
     client1.connect_to_peer(peer2).await?;
     client2.connect_to_peer(peer1).await?;
@@ -478,20 +474,16 @@ struct TestResponse {
 
 #[async_trait]
 impl ResponseHandler for NewStyleTestHandler {
-    type Response = TestResponse;
-
-    async fn handle(
-        &self,
-        _message: ActiveMessage,
-        _client: &dyn ActiveMessageClient,
-    ) -> Result<Self::Response> {
+    async fn handle(&self, _payload: Bytes, _ctx: ActiveMessageContext) -> Result<Bytes> {
         let should_error = *self.should_error.lock().await;
         if should_error {
             anyhow::bail!("Test error from new style handler");
         } else {
-            Ok(TestResponse {
+            let response = TestResponse {
                 message: "success from new style handler".to_string(),
-            })
+            };
+            let response_bytes = serde_json::to_vec(&response)?;
+            Ok(Bytes::from(response_bytes))
         }
     }
 
@@ -520,11 +512,11 @@ async fn test_new_style_response_handler() -> Result<()> {
     let handler_type = HandlerType::response(handler_for_registration);
     manager2.register_handler_typed(handler_type, None).await?;
 
-    let client1 = manager1.zmq_client();
-    let client2 = manager2.zmq_client();
+    let client1 = manager1.client();
+    let client2 = manager2.client();
 
-    let peer2 = PeerInfo::new(client2.instance_id(), client2.endpoint().to_string());
-    let peer1 = PeerInfo::new(client1.instance_id(), client1.endpoint().to_string());
+    let peer2 = client2.peer_info();
+    let peer1 = client1.peer_info();
 
     client1.connect_to_peer(peer2).await?;
     client2.connect_to_peer(peer1).await?;

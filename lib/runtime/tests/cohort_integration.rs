@@ -39,7 +39,7 @@ async fn setup_leader(
 )> {
     let cancel_token = CancellationToken::new();
     let manager = ZmqActiveMessageManager::new(endpoint.to_string(), cancel_token.clone()).await?;
-    let client = manager.zmq_client();
+    let client = manager.client();
 
     // Create cohort configuration
     let cohort_config = LeaderWorkerCohortConfigBuilder::default()
@@ -87,7 +87,7 @@ async fn setup_worker(
     let cancel_token = CancellationToken::new();
     let manager =
         ZmqActiveMessageManager::new("tcp://0.0.0.0:0".to_string(), cancel_token.clone()).await?;
-    let client = manager.zmq_client();
+    let client = manager.client();
 
     // Establish bidirectional peer connection
     let leader_peer = dynamo_runtime::active_message::client::PeerInfo::new(
@@ -133,7 +133,7 @@ async fn test_basic_cohort_formation() -> Result<()> {
     tracing_subscriber::fmt().try_init().ok();
 
     let (leader_manager, cohort, leader_cancel) = setup_leader("tcp://0.0.0.0:0", 2).await?;
-    let leader_client = leader_manager.zmq_client();
+    let leader_client = leader_manager.client();
     let leader_endpoint = leader_client.endpoint();
     let leader_id = leader_client.instance_id();
 
@@ -175,7 +175,7 @@ async fn test_cohort_with_ranks() -> Result<()> {
     tracing_subscriber::fmt().try_init().ok();
 
     let (leader_manager, cohort, leader_cancel) = setup_leader("tcp://0.0.0.0:0", 3).await?;
-    let leader_client = leader_manager.zmq_client();
+    let leader_client = leader_manager.client();
     let leader_endpoint = leader_client.endpoint();
     let leader_id = leader_client.instance_id();
 
@@ -229,7 +229,7 @@ async fn test_cohort_rejects_excess_workers() -> Result<()> {
     tracing_subscriber::fmt().try_init().ok();
 
     let (leader_manager, cohort, leader_cancel) = setup_leader("tcp://0.0.0.0:0", 2).await?;
-    let leader_client = leader_manager.zmq_client();
+    let leader_client = leader_manager.client();
     let leader_endpoint = leader_client.endpoint();
     let leader_id = leader_client.instance_id();
 
@@ -280,7 +280,7 @@ async fn test_mixed_rank_presence_rejected() -> Result<()> {
     tracing_subscriber::fmt().try_init().ok();
 
     let (leader_manager, _cohort, leader_cancel) = setup_leader("tcp://0.0.0.0:0", 3).await?;
-    let leader_client = leader_manager.zmq_client();
+    let leader_client = leader_manager.client();
     let leader_endpoint = leader_client.endpoint();
     let leader_id = leader_client.instance_id();
 
@@ -311,7 +311,7 @@ async fn test_duplicate_rank_rejected() -> Result<()> {
     tracing_subscriber::fmt().try_init().ok();
 
     let (leader_manager, _cohort, leader_cancel) = setup_leader("tcp://0.0.0.0:0", 3).await?;
-    let leader_client = leader_manager.zmq_client();
+    let leader_client = leader_manager.client();
     let leader_endpoint = leader_client.endpoint();
     let leader_id = leader_client.instance_id();
 
@@ -342,7 +342,7 @@ async fn test_graceful_shutdown_flow() -> Result<()> {
     tracing_subscriber::fmt().try_init().ok();
 
     let (leader_manager, cohort, leader_cancel) = setup_leader("tcp://0.0.0.0:0", 2).await?;
-    let leader_client = leader_manager.zmq_client();
+    let leader_client = leader_manager.client();
     let leader_endpoint = leader_client.endpoint();
     let leader_id = leader_client.instance_id();
 
@@ -393,7 +393,7 @@ async fn test_broadcasting_to_workers() -> Result<()> {
     tracing_subscriber::fmt().try_init().ok();
 
     let (leader_manager, cohort, leader_cancel) = setup_leader("tcp://0.0.0.0:0", 2).await?;
-    let leader_client = leader_manager.zmq_client();
+    let leader_client = leader_manager.client();
     let leader_endpoint = leader_client.endpoint();
     let leader_id = leader_client.instance_id();
 
@@ -446,7 +446,7 @@ async fn test_incremental_cohort_formation() -> Result<()> {
     tracing_subscriber::fmt().try_init().ok();
 
     let (leader_manager, cohort, leader_cancel) = setup_leader("tcp://0.0.0.0:0", 3).await?;
-    let leader_client = leader_manager.zmq_client();
+    let leader_client = leader_manager.client();
     let leader_endpoint = leader_client.endpoint();
     let leader_id = leader_client.instance_id();
 

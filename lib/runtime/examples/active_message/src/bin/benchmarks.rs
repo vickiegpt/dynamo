@@ -196,8 +196,8 @@ async fn benchmark_ping_pong(
         .register_handler_typed(handler_type, None)
         .await?;
 
-    let server_client = server_manager.zmq_client();
-    let client_client = client_manager.zmq_client();
+    let server_client = server_manager.client();
+    let client_client = client_manager.client();
 
     // Connect client to server (one-way connection)
     // Auto-registration will handle the reverse connection when ACK is needed
@@ -285,8 +285,8 @@ async fn benchmark_echo_throughput(
         .register_handler_typed(handler_type, None)
         .await?;
 
-    let server_client = server_manager.zmq_client();
-    let client_client = client_manager.zmq_client();
+    let server_client = server_manager.client();
+    let client_client = client_manager.client();
 
     // Connect client to server (one-way connection)
     // Auto-registration will handle the reverse connection when ACK is needed

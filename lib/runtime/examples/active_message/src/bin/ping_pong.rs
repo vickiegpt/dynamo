@@ -70,8 +70,8 @@ async fn main() -> Result<()> {
         .register_handler_typed(handler_type, None)
         .await?;
 
-    let server_client = server_manager.zmq_client();
-    let client_client = client_manager.zmq_client();
+    let server_client = server_manager.client();
+    let client_client = client_manager.client();
 
     println!("Server listening on: {}", server_client.endpoint());
     println!("Client endpoint: {}", client_client.endpoint());
