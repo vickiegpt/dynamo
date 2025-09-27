@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use async_trait::async_trait;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},
-    handler::{ActiveMessage, ResponseHandler, HandlerType},
+    handler::{ActiveMessage, HandlerType, ResponseHandler},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
 };
-use async_trait::async_trait;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::NamedTempFile;
@@ -72,31 +72,29 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    info!("Starting hello-world transformation example");
+    println!("Starting hello-world transformation example");
 
     let cancel_token = CancellationToken::new();
 
     // Create two managers for request-response
-    let server_manager = ZmqActiveMessageManager::new(
-        unique_ipc_socket_path()?,
-        cancel_token.clone(),
-    ).await?;
+    let server_manager =
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
-    let client_manager = ZmqActiveMessageManager::new(
-        unique_ipc_socket_path()?,
-        cancel_token.clone(),
-    ).await?;
+    let client_manager =
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
     // Register hello world handler on server
     let hello_handler = Arc::new(HelloWorldHandler);
     let handler_type = HandlerType::response((*hello_handler).clone());
-    server_manager.register_handler_typed(handler_type, None).await?;
+    server_manager
+        .register_handler_typed(handler_type, None)
+        .await?;
 
     let server_client = server_manager.zmq_client();
     let client_client = client_manager.zmq_client();
 
-    info!("Server listening on: {}", server_client.endpoint());
-    info!("Client endpoint: {}", client_client.endpoint());
+    println!("Server listening on: {}", server_client.endpoint());
+    println!("Client endpoint: {}", client_client.endpoint());
 
     // Connect client to server
     let server_peer = PeerInfo::new(
@@ -109,10 +107,10 @@ async fn main() -> Result<()> {
     // Wait for connection to establish
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    info!("Starting hello-world transformations...");
+    println!("Starting hello-world transformations...");
 
     // Test various inputs
-    let test_inputs = vec![
+    let test_inputs = [
         "Hello World",
         "Active Messages Rock",
         "Rust is Awesome",
@@ -121,7 +119,7 @@ async fn main() -> Result<()> {
     ];
 
     for (i, input) in test_inputs.iter().enumerate() {
-        info!("=== Test {} ===", i + 1);
+        println!("=== Test {} ===", i + 1);
 
         // Send string and wait for transformed response
         let result = client_client
@@ -135,13 +133,17 @@ async fn main() -> Result<()> {
 
         match result {
             Ok(response) => {
-                info!("Input: '{}'", input);
-                info!("Output: '{}'", response.transformed);
-                info!("Bits added: {} characters", response.bits_added);
-                info!("Length: {} -> {} characters", input.len(), response.transformed.len());
+                println!("Input: '{}'", input);
+                println!("Output: '{}'", response.transformed);
+                println!("Bits added: {} characters", response.bits_added);
+                println!(
+                    "Length: {} -> {} characters",
+                    input.len(),
+                    response.transformed.len()
+                );
             }
             Err(e) => {
-                info!("Transformation failed: {}", e);
+                println!("Transformation failed: {}", e);
             }
         }
 
@@ -150,7 +152,7 @@ async fn main() -> Result<()> {
     }
 
     // Test error handling with invalid JSON
-    info!("=== Testing Error Handling ===");
+    println!("=== Testing Error Handling ===");
 
     // This should work since we're sending a string
     let result = client_client
@@ -164,16 +166,16 @@ async fn main() -> Result<()> {
 
     match result {
         Ok(response) => {
-            info!("Valid string handled correctly: '{}'", response.transformed);
+            println!("Valid string handled correctly: '{}'", response.transformed);
         }
         Err(e) => {
-            info!("Unexpected error with valid string: {}", e);
+            println!("Unexpected error with valid string: {}", e);
         }
     }
 
-    info!("Hello-world example completed!");
+    println!("Hello-world example completed!");
 
-    info!("Shutting down...");
+    println!("Shutting down...");
     server_manager.shutdown().await?;
     client_manager.shutdown().await?;
     cancel_token.cancel();
