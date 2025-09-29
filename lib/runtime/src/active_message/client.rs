@@ -7,10 +7,12 @@ use bytes::Bytes;
 use serde::Serialize;
 use std::time::Duration;
 use tokio::sync::oneshot;
+use tracing::debug;
 use uuid::Uuid;
 
 use super::builder::{MessageBuilder, NeedsDeliveryMode};
 use super::handler::{ActiveMessage, HandlerId, InstanceId};
+use super::receipt_ack::ReceiptAck;
 use super::responses::{
     HealthCheckResponse, JoinCohortResponse, ListHandlersResponse, RegisterServiceResponse,
     WaitForHandlerResponse,
@@ -132,7 +134,7 @@ impl PeerInfo {
 pub(crate) fn validate_handler_name(handler: &str) -> Result<()> {
     if handler.starts_with('_') {
         anyhow::bail!(
-            "Cannot directly call system handler '{}'. Use client convenience methods instead: health_check(), register_service(), list_handlers(), await_handler()",
+            "Cannot directly call system handler '{}'. Use client convenience methods instead: health_check(), ensure_bidirectional_connection(), list_handlers(), await_handler()",
             handler
         );
     }
@@ -144,6 +146,8 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
     fn instance_id(&self) -> InstanceId;
 
     fn endpoint(&self) -> &str;
+
+    fn peer_info(&self) -> PeerInfo;
 
     async fn send_message(&self, target: InstanceId, handler: &str, payload: Bytes) -> Result<()>;
 
@@ -178,28 +182,35 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
         status.await_response().await
     }
 
-    /// Register a service with a remote instance
-    async fn register_service(&self, instance_id: InstanceId, service: PeerInfo) -> Result<bool>
+    /// Ensure bidirectional connection by registering our info with a remote instance
+    ///
+    /// This is used when we have connected to a remote instance, but that instance
+    /// doesn't know how to connect back to us. This method sends our PeerInfo to
+    /// the remote instance so it can establish a bidirectional connection.
+    async fn ensure_bidirectional_connection(&self, instance_id: InstanceId) -> Result<bool>
     where
         Self: Sized,
     {
+        // Get our own peer info
+        let my_info = self.peer_info();
+
         // Create payload with dual endpoint support
         let mut payload = serde_json::json!({
-            "instance_id": service.instance_id.to_string(),
+            "instance_id": my_info.instance_id.to_string(),
         });
 
         // Add endpoints based on what's available
-        if service.tcp_endpoint.is_some() || service.ipc_endpoint.is_some() {
+        if my_info.tcp_endpoint.is_some() || my_info.ipc_endpoint.is_some() {
             // Use new dual endpoint format
-            if let Some(ref tcp_ep) = service.tcp_endpoint {
+            if let Some(ref tcp_ep) = my_info.tcp_endpoint {
                 payload["tcp_endpoint"] = serde_json::Value::String(tcp_ep.clone());
             }
-            if let Some(ref ipc_ep) = service.ipc_endpoint {
+            if let Some(ref ipc_ep) = my_info.ipc_endpoint {
                 payload["ipc_endpoint"] = serde_json::Value::String(ipc_ep.clone());
             }
         } else {
             // Fallback to legacy endpoint format for backward compatibility
-            payload["endpoint"] = serde_json::Value::String(service.endpoint);
+            payload["endpoint"] = serde_json::Value::String(my_info.endpoint);
         }
 
         let status = self
@@ -255,44 +266,21 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
         MessageBuilder::new_unchecked(self, handler)
     }
 
-    /// Send a message with payload serialization - DEPRECATED
-    ///
-    /// # Deprecated
-    /// Use `client.active_message(handler).payload(data).target_instance(target).execute()` instead for better type safety and features.
-    #[deprecated(
-        note = "Use client.active_message(handler).payload(data).target_instance(target).execute() instead"
-    )]
-    async fn send<P: IntoPayload>(
-        &self,
-        target: InstanceId,
-        handler: &str,
-        payload: P,
-    ) -> Result<()>
-    where
-        Self: Sized,
-    {
-        validate_handler_name(handler)?;
-        let bytes = payload.into_payload()?;
-        self.send_message(target, handler, bytes).await
-    }
-
-    /// Broadcast a message with payload serialization - DEPRECATED
-    ///
-    /// # Deprecated
-    /// Use `client.active_message(handler).payload(data).target_instance(target).execute()` for each target instead.
-    #[deprecated(note = "Use active_message builder pattern instead")]
-    async fn broadcast<P: IntoPayload>(&self, handler: &str, payload: P) -> Result<()>
-    where
-        Self: Sized,
-    {
-        validate_handler_name(handler)?;
-        let bytes = payload.into_payload()?;
-        self.broadcast_message(handler, bytes).await
-    }
-
     // Internal methods for builder pattern support
+
     /// Send raw ActiveMessage (internal use by builder)
     async fn send_raw_message(&self, target: InstanceId, message: ActiveMessage) -> Result<()>;
+
+    /// Check if a peer has an incoming connection to us (internal use by builder)
+    async fn has_incoming_connection_from(&self, instance_id: InstanceId) -> bool;
+
+    /// Clone this client as an Arc<dyn ActiveMessageClient> for use in contexts
+    fn clone_as_arc(&self) -> std::sync::Arc<dyn ActiveMessageClient>;
+
+    // Response correlation methods (delegated to ResponseManager)
+    //
+    // These methods provide transport-agnostic response correlation. Implementations
+    // should delegate to a ResponseManager instance for centralized correlation handling.
 
     /// Register for acceptance notification (internal use by builder)
     async fn register_acceptance(
@@ -315,9 +303,93 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
         timeout: Duration,
     ) -> Result<oneshot::Receiver<Result<(), String>>>;
 
-    /// Check if a peer has an incoming connection to us (internal use by builder)
-    async fn has_incoming_connection_from(&self, instance_id: InstanceId) -> bool;
+    /// Register for receipt ACK notification (internal use by builder)
+    async fn register_receipt(
+        &self,
+        receipt_id: Uuid,
+        timeout: Duration,
+    ) -> Result<oneshot::Receiver<Result<ReceiptAck, String>>>;
 
-    /// Clone this client as an Arc<dyn ActiveMessageClient> for use in contexts
-    fn clone_as_arc(&self) -> std::sync::Arc<dyn ActiveMessageClient>;
+    // Helper methods for response handling (crate-visible only)
+
+    /// Send an ACK response for a message
+    #[doc(hidden)]
+    async fn send_ack(&self, response_id: Uuid, sender_id: InstanceId) -> Result<()> {
+        let ack_payload = serde_json::json!({
+            "response_id": response_id.to_string(),
+            "status": "ok"
+        });
+        let ack_bytes = Bytes::from(serde_json::to_vec(&ack_payload)?);
+        // V2 pattern: use any handler name (not "_response") with "_response_to" metadata
+        let message = super::handler::ActiveMessage {
+            message_id: Uuid::new_v4(),
+            handler_name: "ack_response".to_string(), // Use a regular handler name, not "_response"
+            sender_instance: self.instance_id(),
+            payload: ack_bytes,
+            metadata: serde_json::json!({
+                "_response_to": response_id.to_string()
+            }),
+        };
+        self.send_raw_message(sender_id, message).await
+    }
+
+    /// Send a response with payload for a message
+    #[doc(hidden)]
+    async fn send_response(
+        &self,
+        response_id: Uuid,
+        sender_id: InstanceId,
+        payload: Bytes,
+    ) -> Result<()> {
+        debug!(
+            "Sending response for {} to {} with {} bytes",
+            response_id,
+            sender_id,
+            payload.len()
+        );
+        let metadata = serde_json::json!({
+            "_response_to": response_id.to_string()
+        });
+        // V2 pattern: use any handler name (not "_response") with "_response_to" metadata
+        // This allows the response to be routed correctly
+        let message = super::handler::ActiveMessage {
+            message_id: Uuid::new_v4(),
+            handler_name: "response_message".to_string(), // Use a regular handler name, not "_response"
+            sender_instance: self.instance_id(),
+            payload,
+            metadata,
+        };
+        debug!(
+            "Response message created with handler_name='{}' and metadata={:?}",
+            message.handler_name, message.metadata
+        );
+        self.send_raw_message(sender_id, message).await
+    }
+
+    /// Send an error/NACK response for a message
+    #[doc(hidden)]
+    async fn send_error(
+        &self,
+        response_id: Uuid,
+        sender_id: InstanceId,
+        error_msg: String,
+    ) -> Result<()> {
+        let error_payload = serde_json::json!({
+            "response_id": response_id.to_string(),
+            "status": "error",
+            "message": error_msg
+        });
+        let error_bytes = Bytes::from(serde_json::to_vec(&error_payload)?);
+        // V2 pattern: use any handler name (not "_response") with "_response_to" metadata
+        let message = super::handler::ActiveMessage {
+            message_id: Uuid::new_v4(),
+            handler_name: "error_response".to_string(), // Use a regular handler name, not "_response"
+            sender_instance: self.instance_id(),
+            payload: error_bytes,
+            metadata: serde_json::json!({
+                "_response_to": response_id.to_string()
+            }),
+        };
+        self.send_raw_message(sender_id, message).await
+    }
 }

@@ -12,7 +12,10 @@
       "Bash(cargo clippy:*)",
       "Bash(cargo fmt:*)",
       "Bash(cargo run:*)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(cargo build:*)",
+      "Bash(chmod:*)",
+      "Bash(timeout 5 cargo test -p dynamo-runtime --lib active_message)"
     ],
     "deny": [],
     "ask": []

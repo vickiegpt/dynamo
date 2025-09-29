@@ -204,7 +204,7 @@ impl EndpointConfigBuilder {
 
         // make the components service endpoint discovery in etcd
 
-        // client.register_service()
+        // client.ensure_bidirectional_connection()
         let info = Instance {
             component: component_name,
             endpoint: endpoint_name,

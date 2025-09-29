@@ -1,13 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::Result;
-use async_trait::async_trait;
-use bytes::Bytes;
 use dynamo_runtime::active_message::{
-    handler::{ActiveMessageContext, ResponseHandler},
+    dispatcher::ActiveMessageDispatcher,
+    handler_impls::{typed_unary_handler, TypedContext},
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tracing::info;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -22,37 +21,29 @@ pub struct ComputeResponse {
     pub result: i32,
 }
 
-#[derive(Debug)]
-pub struct ComputeHandler;
+/// Create a compute handler using the new v2 pattern
+pub fn create_compute_handler() -> Arc<dyn ActiveMessageDispatcher> {
+    typed_unary_handler(
+        "compute".to_string(),
+        |ctx: TypedContext<ComputeRequest>| {
+            let request = ctx.input;
 
-#[async_trait]
-impl ResponseHandler for ComputeHandler {
-    async fn handle(
-        &self,
-        input: Bytes,
-        _ctx: ActiveMessageContext,
-    ) -> Result<Bytes> {
-        let request: ComputeRequest = serde_json::from_slice(&input)?;
+            let result = match request.operation.as_str() {
+                "add" => request.x + request.y,
+                "multiply" => request.x * request.y,
+                _ => {
+                    info!("Unknown operation: {}", request.operation);
+                    return Err(format!("Unknown operation: {}", request.operation));
+                }
+            };
 
-        let result = match request.operation.as_str() {
-            "add" => request.x + request.y,
-            "multiply" => request.x * request.y,
-            _ => {
-                info!("Unknown operation: {}", request.operation);
-                anyhow::bail!("Unknown operation: {}", request.operation);
-            }
-        };
+            info!(
+                "Computed {} {} {} = {}",
+                request.x, request.operation, request.y, result
+            );
 
-        info!(
-            "Computed {} {} {} = {}",
-            request.x, request.operation, request.y, result
-        );
-
-        let response = ComputeResponse { result };
-        Ok(Bytes::from(serde_json::to_vec(&response)?))
-    }
-
-    fn name(&self) -> &str {
-        "compute"
-    }
+            let response = ComputeResponse { result };
+            Ok(response)
+        },
+    )
 }

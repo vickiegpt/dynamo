@@ -4,8 +4,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::sync::{Mutex, RwLock, Semaphore, broadcast, mpsc};
+use std::{sync::Arc, time::Duration};
+use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
@@ -13,26 +13,13 @@ use uuid::Uuid;
 
 use crate::active_message::{
     client::ActiveMessageClient,
-    handler::{
-        ActiveMessage, ActiveMessageContext, HandlerEvent, HandlerId, HandlerType, InstanceId,
-    },
-    manager::{ActiveMessageManager, HandlerConfig},
-    response::SingleResponseSender,
+    dispatcher::{ControlMessage, DispatchMessage, MessageDispatcher, SenderIdentity},
+    handler::{ActiveMessage, HandlerEvent, HandlerId, InstanceId},
+    manager::ActiveMessageManager,
+    response_manager::{ResponseManager, SharedResponseManager},
 };
 
-use super::{
-    builtin_handlers::{
-        AckHandler, HealthCheckHandler, ListHandlersHandler, RegisterServiceHandler,
-        WaitForHandlerHandler,
-    },
-    client::ZmqActiveMessageClient,
-    discovery,
-    transport::ZmqTransport,
-};
-
-use crate::utils::tasks::tracker::{
-    LogOnlyPolicy, TaskTracker as DynamoTaskTracker, UnlimitedScheduler,
-};
+use super::{client::ZmqActiveMessageClient, discovery, transport::ZmqTransport};
 
 /// Builder for ZmqActiveMessageManager with configurable options
 #[derive(Debug, Clone)]
@@ -60,17 +47,10 @@ impl ZmqActiveMessageManagerBuilder {
     }
 }
 
-pub(crate) struct HandlerEntry {
-    pub handler: HandlerType,
-    pub task_tracker: DynamoTaskTracker,
-    pub semaphore: Option<Arc<Semaphore>>,
-}
-
 pub struct ManagerState {
     pub instance_id: InstanceId,
     pub tcp_endpoint: Option<String>,
     pub ipc_endpoint: Option<String>,
-    pub(crate) handlers: HashMap<HandlerId, HandlerEntry>,
     pub client: Arc<ZmqActiveMessageClient>,
     pub handler_events_tx: broadcast::Sender<HandlerEvent>,
 }
@@ -81,7 +61,6 @@ impl std::fmt::Debug for ManagerState {
             .field("instance_id", &self.instance_id)
             .field("tcp_endpoint", &self.tcp_endpoint)
             .field("ipc_endpoint", &self.ipc_endpoint)
-            .field("handlers", &self.handlers.keys())
             .field("client", &self.client)
             .finish()
     }
@@ -95,6 +74,12 @@ pub struct ZmqActiveMessageManager {
     receiver_task: Arc<Mutex<Option<tokio::task::JoinHandle<Result<()>>>>>,
     ack_cleanup_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     message_task_tracker: TaskTracker,
+    response_manager: SharedResponseManager,
+
+    // v2 Dispatcher integration
+    dispatch_tx: mpsc::Sender<DispatchMessage>,
+    control_tx: mpsc::Sender<ControlMessage>,
+    dispatcher_task: Arc<Mutex<Option<tokio::task::JoinHandle<Result<()>>>>>,
 }
 
 impl ZmqActiveMessageManager {
@@ -104,6 +89,23 @@ impl ZmqActiveMessageManager {
 
     pub fn manager_state(&self) -> Arc<RwLock<ManagerState>> {
         self.state.clone()
+    }
+
+    /// Register a handler with the message dispatcher
+    pub async fn register_handler(
+        &self,
+        name: String,
+        handler: Arc<dyn crate::active_message::dispatcher::ActiveMessageDispatcher>,
+    ) -> Result<()> {
+        use crate::active_message::dispatcher::ControlMessage;
+
+        self.control_tx
+            .send(ControlMessage::Register {
+                name,
+                dispatcher: handler,
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to register handler: {}", e))
     }
 
     /// Get PeerInfo representing this manager with dual endpoints
@@ -141,7 +143,7 @@ impl ZmqActiveMessageManager {
         let context = tmq::Context::new();
 
         // Create TCP transport from provided endpoint
-        let tcp_transport = ZmqTransport::new_subscriber_bound(&context, &endpoint)?;
+        let tcp_transport = ZmqTransport::new_puller_bound(&context, &endpoint)?;
         let tcp_endpoint = tcp_transport
             .local_endpoint()
             .ok_or_else(|| anyhow::anyhow!("Failed to get bound TCP endpoint"))?
@@ -149,7 +151,7 @@ impl ZmqActiveMessageManager {
 
         // Create IPC transport for same-host optimization
         let ipc_endpoint_addr = discovery::create_ipc_endpoint(instance_id);
-        let ipc_transport = ZmqTransport::new_subscriber_bound(&context, &ipc_endpoint_addr)?;
+        let ipc_transport = ZmqTransport::new_puller_bound(&context, &ipc_endpoint_addr)?;
         let ipc_endpoint = ipc_transport
             .local_endpoint()
             .ok_or_else(|| anyhow::anyhow!("Failed to get bound IPC endpoint"))?
@@ -163,10 +165,14 @@ impl ZmqActiveMessageManager {
         // Create MPSC channel for merging messages from both transports
         let (message_tx, message_rx) = mpsc::unbounded_channel();
 
+        // Create shared response manager for concurrent access from both client and manager
+        let response_manager = Arc::new(ResponseManager::new());
+
         // Use TCP endpoint for client advertisement (primary endpoint)
         let client = Arc::new(ZmqActiveMessageClient::new(
             instance_id,
             tcp_endpoint.clone(),
+            response_manager.clone(),
         ));
 
         let (handler_events_tx, _) = broadcast::channel(1024);
@@ -175,13 +181,27 @@ impl ZmqActiveMessageManager {
             instance_id,
             tcp_endpoint: Some(tcp_endpoint),
             ipc_endpoint: Some(ipc_endpoint),
-            handlers: HashMap::new(),
             client: client.clone(),
             handler_events_tx: handler_events_tx.clone(),
         }));
 
         // Initialize concurrency controls
         let message_task_tracker = TaskTracker::new();
+
+        // Set up MessageDispatcher channels
+        let (dispatch_tx, dispatch_rx) = mpsc::channel(1000); // Buffered channel for dispatch
+        let (control_tx, control_rx) = mpsc::channel(100); // Control channel for handler registration
+
+        // Create MessageDispatcher
+        let dispatcher = MessageDispatcher::new(
+            client.clone() as Arc<dyn ActiveMessageClient>,
+            dispatch_rx,
+            control_rx,
+            message_task_tracker.clone(),
+        );
+
+        // Spawn dispatcher task
+        let dispatcher_task = tokio::spawn(async move { dispatcher.run().await });
 
         let manager = Self {
             state: state.clone(),
@@ -191,6 +211,10 @@ impl ZmqActiveMessageManager {
             receiver_task: Arc::new(Mutex::new(None)),
             ack_cleanup_task: Arc::new(Mutex::new(None)),
             message_task_tracker,
+            response_manager: response_manager.clone(),
+            dispatch_tx,
+            control_tx,
+            dispatcher_task: Arc::new(Mutex::new(Some(dispatcher_task))),
         };
 
         manager.register_builtin_handlers().await?;
@@ -215,11 +239,12 @@ impl ZmqActiveMessageManager {
             state.clone(),
             message_rx,
             cancel_token.clone(),
-            manager.message_task_tracker.clone(),
+            manager.dispatch_tx.clone(),
+            response_manager.clone(),
         ));
 
         let ack_cleanup_task =
-            tokio::spawn(Self::ack_cleanup_loop(client.clone(), cancel_token.clone()));
+            tokio::spawn(Self::ack_cleanup_loop(response_manager.clone(), cancel_token.clone()));
 
         // Store the task handles
         *manager.receiver_task.lock().await = Some(receiver_task);
@@ -268,7 +293,7 @@ impl ZmqActiveMessageManager {
     }
 
     async fn ack_cleanup_loop(
-        client: Arc<ZmqActiveMessageClient>,
+        response_manager: SharedResponseManager,
         cancel_token: CancellationToken,
     ) {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
@@ -276,7 +301,10 @@ impl ZmqActiveMessageManager {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    client.cleanup_expired_acks().await;
+                    let cleaned = response_manager.cleanup_expired();
+                    if cleaned > 0 {
+                        debug!("Cleaned up {} expired entries", cleaned);
+                    }
                 }
                 _ = cancel_token.cancelled() => {
                     debug!("ACK cleanup loop cancelled");
@@ -287,29 +315,20 @@ impl ZmqActiveMessageManager {
     }
 
     async fn register_builtin_handlers(&self) -> Result<()> {
+        // Register system handlers using the MessageDispatcher
+        use crate::active_message::system_handlers::register_system_handlers;
+
         let state = self.state.read().await;
         let client = state.client.clone();
-        let handler_events_tx = state.handler_events_tx.clone();
         drop(state);
 
-        // Register built-in handlers using the new base traits
-        let ack_handler = HandlerType::no_return(AckHandler::new(client.clone()));
-        self.register_handler_typed(ack_handler, None).await?;
-
-        let register_service = HandlerType::response(RegisterServiceHandler::new(client.clone()));
-        self.register_handler_typed(register_service, None).await?;
-
-        let list_handlers = HandlerType::response(ListHandlersHandler::new(self.state.clone()));
-        self.register_handler_typed(list_handlers, None).await?;
-
-        let wait_for_handler = HandlerType::response(WaitForHandlerHandler::new(
-            self.state.clone(),
-            handler_events_tx,
-        ));
-        self.register_handler_typed(wait_for_handler, None).await?;
-
-        let health_check = HandlerType::response(HealthCheckHandler);
-        self.register_handler_typed(health_check, None).await?;
+        // Register system handlers with the dispatcher
+        register_system_handlers(
+            &self.control_tx,
+            client.clone() as Arc<dyn ActiveMessageClient>,
+            self.message_task_tracker.clone(),
+        )
+        .await?;
 
         Ok(())
     }
@@ -318,7 +337,8 @@ impl ZmqActiveMessageManager {
         state: Arc<RwLock<ManagerState>>,
         mut message_rx: mpsc::UnboundedReceiver<ActiveMessage>,
         cancel_token: CancellationToken,
-        message_task_tracker: TaskTracker,
+        dispatch_tx: mpsc::Sender<DispatchMessage>,
+        response_manager: SharedResponseManager,
     ) -> Result<()> {
         loop {
             tokio::select! {
@@ -330,14 +350,55 @@ impl ZmqActiveMessageManager {
                 message = message_rx.recv() => {
                     match message {
                         Some(message) => {
-                            // Spawn message handling immediately for parallelism
-                            let state_clone = state.clone();
-
-                            message_task_tracker.spawn(async move {
-                                if let Err(e) = Self::handle_message(state_clone, message).await {
-                                    error!("Failed to handle message: {}", e);
+                            // Handle special internal messages that bypass the dispatcher
+                            if message.handler_name == "_accept" {
+                                if let Err(e) = Self::handle_acceptance(state.clone(), message, response_manager.clone()).await {
+                                    error!("Failed to handle acceptance: {}", e);
                                 }
-                            });
+                                continue;
+                            }
+
+                            // Check if this is a response message based on metadata (v2 pattern)
+                            // v2 handlers send responses with original handler name but include _response_to metadata
+                            if let Some(response_to) = message.metadata.get("_response_to").and_then(|v| v.as_str()) {
+                                let response_to = response_to.to_string();  // Clone before moving message
+                                debug!("Received response message for request {}", response_to);
+                                if let Err(e) = Self::handle_response_unified(state.clone(), &response_to, message, response_manager.clone()).await {
+                                    error!("Failed to handle response: {}", e);
+                                }
+                                continue;
+                            }
+
+                            // Legacy v1 response pattern (uses "_response" handler name)
+                            if message.handler_name == "_response" {
+                                if let Err(e) = Self::handle_response(state.clone(), message, response_manager.clone()).await {
+                                    error!("Failed to handle response: {}", e);
+                                }
+                                continue;
+                            }
+
+                            // Auto-register sender before processing the message
+                            // This ensures the peer is registered when handlers try to send responses
+                            {
+                                let state_read = state.read().await;
+                                let sender_endpoint = message
+                                    .metadata
+                                    .get("_sender_endpoint")
+                                    .and_then(|v| v.as_str());
+                                state_read
+                                    .client
+                                    .track_incoming_and_auto_register(message.sender_instance, sender_endpoint)
+                                    .await;
+                            }
+
+                            // Convert ActiveMessage to DispatchMessage
+                            let dispatch_message = Self::convert_to_dispatch_message(message, &state).await;
+
+                            // Forward to MessageDispatcher
+                            if let Err(e) = dispatch_tx.send(dispatch_message).await {
+                                error!("Failed to send message to dispatcher: {}", e);
+                                break;
+                            }
                         }
                         None => {
                             debug!("Message channel closed");
@@ -348,375 +409,125 @@ impl ZmqActiveMessageManager {
             }
         }
 
-        // Wait for all spawned message handling tasks to complete
-        info!("Waiting for message handling tasks to complete...");
-        message_task_tracker.close();
-        message_task_tracker.wait().await;
-        info!("All message handling tasks completed");
+        info!("Receive loop finished");
 
         Ok(())
     }
 
-    async fn handle_message(
-        state: Arc<RwLock<ManagerState>>,
+    /// Convert ActiveMessage to DispatchMessage for the v2 dispatcher
+    async fn convert_to_dispatch_message(
         message: ActiveMessage,
-    ) -> Result<()> {
-        // Handle internal response routing first
-        if message.handler_name == "_accept" {
-            return Self::handle_acceptance(state, message).await;
-        }
+        _state: &Arc<RwLock<ManagerState>>,
+    ) -> DispatchMessage {
+        use std::time::Instant;
 
-        if message.handler_name == "_response" {
-            return Self::handle_response(state, message).await;
-        }
+        // Determine sender identity - for now, assume all senders are known
+        // The existing auto-registration logic will handle unknown senders
+        // TODO: Check if sender is actually registered and use Unknown if not
+        let sender_identity = SenderIdentity::Known(message.sender_instance);
 
-        // Track incoming connection from sender and auto-register if endpoint provided
-        {
-            let state_read = state.read().await;
-            let sender_endpoint = message
-                .metadata
-                .get("_sender_endpoint")
-                .and_then(|v| v.as_str());
-            state_read
-                .client
-                .track_incoming_and_auto_register(message.sender_instance, sender_endpoint)
-                .await;
-        }
-
-        let state_read = state.read().await;
-        let handler_name = message.handler_name.clone();
-
-        let handler_entry = match state_read.handlers.get(&handler_name) {
-            Some(entry) => entry,
-            None => {
-                warn!("No handler found for: {}", handler_name);
-                return Ok(());
-            }
-        };
-
-        let handler = handler_entry.handler.clone();
-        let client = state_read.client.clone();
-        let task_tracker = handler_entry.task_tracker.clone();
-        let semaphore = handler_entry.semaphore.clone();
-
-        drop(state_read);
-
-        debug!("Dispatching message to handler: {}", handler_name);
-
-        // Acquire per-handler semaphore permit if concurrency limit is set
-        let _permit = if let Some(ref handler_semaphore) = semaphore {
-            Some(
-                handler_semaphore
-                    .acquire()
-                    .await
-                    .expect("Handler semaphore closed"),
-            )
-        } else {
-            None
-        };
-
-        // Extract acceptance and response configuration
-        let acceptance_mode = message
-            .metadata
-            .get("_mode")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let accept_id = if matches!(acceptance_mode.as_deref(), Some("confirmed")) {
-            message
-                .metadata
-                .get("_accept_id")
-                .and_then(|v| v.as_str())
-                .and_then(|s| Uuid::parse_str(s).ok())
-        } else {
-            None
-        };
-        let with_response_accept_id = if matches!(acceptance_mode.as_deref(), Some("with_response"))
-        {
-            message
-                .metadata
-                .get("_accept_id")
-                .and_then(|v| v.as_str())
-                .and_then(|s| Uuid::parse_str(s).ok())
-        } else {
-            None
-        };
-
-        // Set up response sender for Response handlers
-        let response_sender = if matches!(acceptance_mode.as_deref(), Some("with_response")) {
-            if let Some(response_id_str) = message
-                .metadata
-                .get("_response_id")
-                .and_then(|v| v.as_str())
-            {
-                if let Ok(response_id) = Uuid::parse_str(response_id_str) {
-                    Some(SingleResponseSender::new(
-                        client.clone(),
-                        message.sender_instance,
-                        response_id,
-                        message.handler_name.clone(),
-                    ))
-                } else {
+        // Convert metadata from serde_json::Value to bytes if present
+        let metadata = if message.metadata != serde_json::Value::Null {
+            match serde_json::to_vec(&message.metadata) {
+                Ok(bytes) => Some(bytes::Bytes::from(bytes)),
+                Err(e) => {
+                    error!("Failed to serialize metadata: {}", e);
                     None
                 }
-            } else {
-                None
             }
         } else {
             None
         };
 
-        task_tracker.spawn(async move {
-            // Validate handler type matches client expectations first
-            let is_handler_type_valid = match (&handler, acceptance_mode.as_deref()) {
-                (HandlerType::NoReturn(_), Some("fire_and_forget")) => true,
-                (HandlerType::Ack(_), Some("confirmed")) => true,
-                (HandlerType::Response(_), Some("with_response")) => true,
-                (HandlerType::NoReturn(_), None) => true, // No mode means fire_and_forget for backward compatibility
-                _ => false,
-            };
-
-            if !is_handler_type_valid {
-                let handler_type_name = match &handler {
-                    HandlerType::NoReturn(_) => "NoReturn",
-                    HandlerType::Ack(_) => "Ack",
-                    HandlerType::Response(_) => "Response",
-                };
-                let expected_mode = acceptance_mode.as_deref().unwrap_or("fire_and_forget");
-                let error_msg = format!(
-                    "Handler type mismatch: client expects '{}' but handler is '{}'",
-                    expected_mode, handler_type_name
-                );
-
-                // Send NACK for type mismatch if ACK was expected
-                if let Some(accept_id) = accept_id {
-                    if let Err(e) = client
-                        .send_nack(message.sender_instance, accept_id, error_msg.clone())
-                        .await
-                    {
-                        error!(
-                            "Failed to send NACK for handler type mismatch {}: {}",
-                            accept_id, e
-                        );
-                    } else {
-                        debug!(
-                            "Sent NACK for handler type mismatch {}: {}",
-                            accept_id, error_msg
-                        );
-                    }
-                }
-
-                // Send NACK for type mismatch if response was expected
-                if let Some(accept_id) = with_response_accept_id {
-                    if let Err(e) = client
-                        .send_nack(message.sender_instance, accept_id, error_msg.clone())
-                        .await
-                    {
-                        error!(
-                            "Failed to send NACK for handler type mismatch {}: {}",
-                            accept_id, e
-                        );
-                    } else {
-                        debug!(
-                            "Sent NACK for handler type mismatch {}: {}",
-                            accept_id, error_msg
-                        );
-                    }
-                }
-
-                error!("Handler type validation failed: {}", error_msg);
-                return Ok(());
-            }
-
-            // Validate payload if ACK is expected
-            // For AckHandler, delay ACK until after handler execution
-            let should_send_early_ack =
-                accept_id.is_some() && !matches!(handler, HandlerType::Ack(_));
-
-            if should_send_early_ack {
-                let accept_id = accept_id.unwrap();
-                match handler.validate_schema(&message.payload) {
-                    Ok(()) => {
-                        // Payload validation succeeded - send ACK for non-AckHandler
-                        if let Err(e) = client.send_ack(message.sender_instance, accept_id).await {
-                            error!("Failed to send ACK for {}: {}", accept_id, e);
-                        } else {
-                            debug!("Sent ACK for message {}", accept_id);
-                        }
-                    }
-                    Err(validation_error) => {
-                        // Payload validation failed - send NACK
-                        let error_msg = format!("Payload validation failed: {}", validation_error);
-                        if let Err(e) = client
-                            .send_nack(message.sender_instance, accept_id, error_msg.clone())
-                            .await
-                        {
-                            error!("Failed to send NACK for {}: {}", accept_id, e);
-                        } else {
-                            debug!("Sent NACK for message {}: {}", accept_id, error_msg);
-                        }
-                        // Don't execute handler if validation failed
-                        return Ok(());
-                    }
-                }
-            } else if let Some(accept_id) = accept_id {
-                // For AckHandler, just validate schema but don't send ACK yet
-                if let Err(validation_error) = handler.validate_schema(&message.payload) {
-                    // Payload validation failed - send NACK
-                    let error_msg = format!("Payload validation failed: {}", validation_error);
-                    if let Err(e) = client
-                        .send_nack(message.sender_instance, accept_id, error_msg.clone())
-                        .await
-                    {
-                        error!("Failed to send NACK for {}: {}", accept_id, e);
-                    } else {
-                        debug!("Sent NACK for message {}: {}", accept_id, error_msg);
-                    }
-                    // Don't execute handler if validation failed
-                    return Ok(());
-                }
-            }
-
-            // Handle acceptance for with_response mode
-            if let Some(accept_id) = with_response_accept_id {
-                // Send acceptance message
-                let accept_message = ActiveMessage {
-                    message_id: Uuid::new_v4(),
-                    handler_name: "_accept".to_string(),
-                    sender_instance: client.instance_id(),
-                    payload: Bytes::new(),
-                    metadata: serde_json::json!({
-                        "_accept_for": accept_id.to_string()
-                    }),
-                };
-
-                if let Err(e) = client
-                    .send_raw_message(message.sender_instance, accept_message)
-                    .await
-                {
-                    error!("Failed to send acceptance for {}: {}", accept_id, e);
-                } else {
-                    debug!("Sent acceptance for message {}", accept_id);
-                }
-            }
-
-            // Extract sender_instance before moving message to handler
-            let sender_instance = message.sender_instance;
-
-            // Execute handler based on type
-            match &handler {
-                HandlerType::NoReturn(h) => {
-                    // Create ActiveMessageContext from message
-                    let ctx = super::super::handler::ActiveMessageContext::new(
-                        message.message_id,
-                        message.sender_instance,
-                        message.handler_name.clone(),
-                        message.metadata.clone(),
-                        client.clone_as_arc(),
-                        None, // No cancellation for now
-                    );
-                    h.handle(message.payload, ctx).await;
-                }
-                HandlerType::Ack(h) => {
-                    // Create ActiveMessageContext from message
-                    let ctx = super::super::handler::ActiveMessageContext::new(
-                        message.message_id,
-                        message.sender_instance,
-                        message.handler_name.clone(),
-                        message.metadata.clone(),
-                        client.clone_as_arc(),
-                        None, // No cancellation for now
-                    );
-                    // ACK handlers need to handle ACK/NACK based on Result
-                    match h.handle(message.payload, ctx).await {
-                        Ok(()) => {
-                            // Success - send ACK if needed
-                            debug!("Handler '{}' completed successfully", handler_name);
-                            if let Some(accept_id) = accept_id {
-                                if let Err(e) = client.send_ack(sender_instance, accept_id).await {
-                                    error!("Failed to send ACK for {}: {}", accept_id, e);
-                                } else {
-                                    debug!("Sent ACK for message {}", accept_id);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            // Error - send NACK if needed
-                            error!("Handler '{}' failed: {}", handler_name, e);
-                            if let Some(accept_id) = accept_id {
-                                let error_msg = format!("Handler execution failed: {}", e);
-                                if let Err(send_err) = client
-                                    .send_nack(sender_instance, accept_id, error_msg.clone())
-                                    .await
-                                {
-                                    error!("Failed to send NACK for {}: {}", accept_id, send_err);
-                                } else {
-                                    debug!(
-                                        "Sent NACK for message {} due to handler error: {}",
-                                        accept_id, error_msg
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-                HandlerType::Response(h) => {
-                    if let Some(sender) = response_sender {
-                        // Create ActiveMessageContext from message
-                        let ctx = super::super::handler::ActiveMessageContext::new(
-                            message.message_id,
-                            message.sender_instance,
-                            message.handler_name.clone(),
-                            message.metadata.clone(),
-                            client.clone_as_arc(),
-                            None, // No cancellation for now
-                        );
-                        // Response handler returns Bytes
-                        match h.handle(message.payload, ctx).await {
-                            Ok(response_bytes) => {
-                                if let Err(e) = sender.send_raw(response_bytes).await {
-                                    error!("Failed to send response: {}", e);
-                                }
-                            }
-                            Err(e) => {
-                                if let Err(send_err) = sender.send_err(e).await {
-                                    error!("Failed to send error response: {}", send_err);
-                                }
-                            }
-                        }
-                    } else {
-                        error!(
-                            "Response handler '{}' called without response sender",
-                            handler_name
-                        );
-                    }
-                }
-            }
-            Ok(())
-        });
-
-        Ok(())
+        DispatchMessage {
+            message_id: message.message_id,
+            handler_name: message.handler_name,
+            payload: message.payload,
+            sender_identity,
+            metadata,
+            received_at: Instant::now(),
+        }
     }
 
     async fn handle_acceptance(
-        state: Arc<RwLock<ManagerState>>,
+        _state: Arc<RwLock<ManagerState>>,
         message: ActiveMessage,
+        response_manager: SharedResponseManager,
     ) -> Result<()> {
         if let Some(accept_for_str) = message.metadata.get("_accept_for").and_then(|v| v.as_str())
             && let Ok(accept_id) = Uuid::parse_str(accept_for_str)
         {
-            let state_read = state.read().await;
-            return state_read
-                .client
-                .complete_acceptance(accept_id, message.sender_instance)
-                .await;
+            response_manager.complete_acceptance(accept_id);
+            return Ok(());
         }
         error!("Invalid acceptance message: {:?}", message);
         Ok(())
     }
 
-    async fn handle_response(
-        state: Arc<RwLock<ManagerState>>,
+    /// Handle unified response messages (with metadata-based routing)
+    async fn handle_response_unified(
+        _state: Arc<RwLock<ManagerState>>,
+        response_to: &str,
         message: ActiveMessage,
+        response_manager: SharedResponseManager,
+    ) -> Result<()> {
+        let response_id = Uuid::parse_str(response_to)?;
+
+        debug!(
+            "Handling v2 response to {} from {}",
+            response_id, message.sender_instance
+        );
+        debug!("Response payload size: {} bytes", message.payload.len());
+
+        // Try to parse the payload as JSON to determine if it's an ACK/NACK or full response
+        if let Ok(json_value) = serde_json::from_slice::<serde_json::Value>(&message.payload) {
+            debug!("Parsed response as JSON: {:?}", json_value);
+            if let Some(status) = json_value.get("status").and_then(|s| s.as_str()) {
+                debug!("Found status field: {}", status);
+                match status {
+                    "ok" => {
+                        // This is an ACK
+                        debug!("Completing as ACK");
+                        response_manager.complete_ack(response_id, Ok(()));
+                        return Ok(());
+                    }
+                    "error" => {
+                        // This is a NACK
+                        let error_msg = json_value
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("Unknown error")
+                            .to_string();
+                        debug!("Completing as NACK: {}", error_msg);
+                        response_manager.complete_ack(response_id, Err(error_msg));
+                        return Ok(());
+                    }
+                    _ => {
+                        // Not an ACK/NACK status, treat as full response
+                        debug!("Unknown status value, treating as full response");
+                    }
+                }
+            } else {
+                debug!("No status field found, treating as full response");
+            }
+        } else {
+            debug!("Could not parse as JSON, treating as full response");
+        }
+
+        // This is a full response message
+        debug!(
+            "Completing as full response with {} bytes",
+            message.payload.len()
+        );
+        response_manager.complete_response(response_id, message.payload);
+        Ok(())
+    }
+
+    /// Handle legacy v1 response messages
+    async fn handle_response(
+        _state: Arc<RwLock<ManagerState>>,
+        message: ActiveMessage,
+        response_manager: SharedResponseManager,
     ) -> Result<()> {
         if let Some(response_to_str) = message
             .metadata
@@ -724,11 +535,61 @@ impl ZmqActiveMessageManager {
             .and_then(|v| v.as_str())
             && let Ok(response_id) = Uuid::parse_str(response_to_str)
         {
-            let state_read = state.read().await;
-            return state_read
-                .client
-                .complete_response(response_id, message.sender_instance, message.payload)
-                .await;
+            debug!(
+                "Handling legacy response to {} from {}",
+                response_id, message.sender_instance
+            );
+
+            // Try to parse the payload as JSON to determine if it's an ACK/NACK or full response
+            if let Ok(json_value) = serde_json::from_slice::<serde_json::Value>(&message.payload) {
+                // Check if this is an ACK/NACK message based on the status field
+                if let Some(status) = json_value.get("status").and_then(|s| s.as_str()) {
+                    match status {
+                        "ok" => {
+                            // This is an ACK - complete it as an ACK
+                            debug!("Routing ACK response {} to complete_ack", response_id);
+                            response_manager.complete_ack(response_id, Ok(()));
+                            return Ok(());
+                        }
+                        "error" => {
+                            // This is a NACK - extract error message and complete as NACK
+                            let error_msg = json_value
+                                .get("message")
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("Unknown error")
+                                .to_string();
+                            debug!(
+                                "Routing NACK response {} to complete_nack: {}",
+                                response_id, error_msg
+                            );
+                            response_manager.complete_ack(response_id, Err(error_msg));
+                            return Ok(());
+                        }
+                        _ => {
+                            // Unknown status, treat as full response
+                            debug!(
+                                "Unknown status '{}' in response {}, treating as full response",
+                                status, response_id
+                            );
+                        }
+                    }
+                }
+                // JSON but no status field - this is a full response
+                debug!(
+                    "Routing full JSON response {} to complete_response",
+                    response_id
+                );
+            } else {
+                // Not JSON - definitely a full response
+                debug!(
+                    "Routing non-JSON response {} to complete_response",
+                    response_id
+                );
+            }
+
+            // Not an ACK/NACK or couldn't parse as JSON - treat as full response
+            response_manager.complete_response(response_id, message.payload);
+            return Ok(());
         }
         error!("Invalid response message: {:?}", message);
         Ok(())
@@ -741,73 +602,37 @@ impl ActiveMessageManager for ZmqActiveMessageManager {
         self.client.clone()
     }
 
-    /// Register a handler using the new handler type system
-    async fn register_handler_typed(
-        &self,
-        handler: HandlerType,
-        config: Option<HandlerConfig>,
-    ) -> Result<()> {
-        let handler_name = handler.name().to_string();
-
-        let config = config.unwrap_or_default();
-        let task_tracker = config.task_tracker.unwrap_or_else(|| {
-            DynamoTaskTracker::new(UnlimitedScheduler::new(), LogOnlyPolicy::new())
-                .expect("Failed to create default task tracker")
-        });
-
-        // Create per-handler semaphore if concurrency limit is set
-        let semaphore = config
-            .max_concurrent_messages
-            .map(|max| Arc::new(Semaphore::new(max)));
-
-        let mut state = self.state.write().await;
-
-        if state.handlers.contains_key(&handler_name) {
-            anyhow::bail!("Handler '{}' already registered", handler_name);
-        }
-
-        let entry = HandlerEntry {
-            handler,
-            task_tracker,
-            semaphore,
-        };
-
-        state.handlers.insert(handler_name.clone(), entry);
-
-        let event = HandlerEvent::Registered {
-            name: handler_name.clone(),
-            instance: state.instance_id,
-        };
-
-        let _ = state.handler_events_tx.send(event);
-
-        debug!("Registered handler: {}", handler_name);
-
-        Ok(())
-    }
-
     async fn deregister_handler(&self, name: &str) -> Result<()> {
-        let mut state = self.state.write().await;
+        // v2 handlers are managed by MessageDispatcher
+        // Send deregistration through control channel
+        let control_msg = ControlMessage::Unregister {
+            name: name.to_string(),
+        };
 
-        if state.handlers.remove(name).is_none() {
-            anyhow::bail!("Handler '{}' not found", name);
+        if let Err(e) = self.control_tx.send(control_msg).await {
+            anyhow::bail!(
+                "Failed to deregister handler '{}' with dispatcher: {}",
+                name,
+                e
+            );
         }
 
+        let state = self.state.read().await;
         let event = HandlerEvent::Deregistered {
             name: name.to_string(),
             instance: state.instance_id,
         };
-
         let _ = state.handler_events_tx.send(event);
 
         debug!("Deregistered handler: {}", name);
-
         Ok(())
     }
 
     async fn list_handlers(&self) -> Vec<HandlerId> {
-        let state = self.state.read().await;
-        state.handlers.keys().cloned().collect()
+        // v2 handlers are managed by MessageDispatcher
+        // For now, return empty list since we don't have a way to query the dispatcher
+        // This could be enhanced later if needed
+        Vec::new()
     }
 
     fn handler_events(&self) -> broadcast::Receiver<HandlerEvent> {
@@ -817,6 +642,12 @@ impl ActiveMessageManager for ZmqActiveMessageManager {
     async fn shutdown(&self) -> Result<()> {
         info!("Shutting down ZmqActiveMessageManager");
         self.cancel_token.cancel();
+
+        // Send shutdown signal to the dispatcher
+        debug!("Sending shutdown to dispatcher");
+        if let Err(e) = self.control_tx.send(ControlMessage::Shutdown).await {
+            warn!("Failed to send shutdown to dispatcher: {}", e);
+        }
 
         // Join background tasks first
         if let Some(receiver_task) = self.receiver_task.lock().await.take() {
@@ -833,163 +664,21 @@ impl ActiveMessageManager for ZmqActiveMessageManager {
             }
         }
 
-        // Join handler task trackers
-        let state = self.state.read().await;
-        for (name, entry) in &state.handlers {
-            debug!("Joining task tracker for handler: {}", name);
-            entry.task_tracker.join().await;
+        // Wait for dispatcher to shut down
+        if let Some(dispatcher_task) = self.dispatcher_task.lock().await.take() {
+            debug!("Joining dispatcher task");
+            if let Err(e) = dispatcher_task.await {
+                warn!("Dispatcher task join error: {:?}", e);
+            }
         }
 
+        // v2 handlers are managed by MessageDispatcher
+        // The message_task_tracker will handle cleanup of v2 handler tasks
+        debug!("Waiting for all message handlers to complete");
+        self.message_task_tracker.close();
+        self.message_task_tracker.wait().await;
+
+        info!("ZmqActiveMessageManager shutdown complete");
         Ok(())
-    }
-}
-
-// Additional convenience methods for closure registration
-impl ZmqActiveMessageManager {
-    /// Register a closure that doesn't return a value (NoReturnHandler)
-    ///
-    /// This method works with raw `Bytes` and requires manual deserialization.
-    ///
-    /// # Example
-    /// ```rust
-    /// manager.register_no_return_closure("log", |input, ctx| async move {
-    ///     println!("Received {} bytes from {}", input.len(), ctx.sender_instance());
-    /// }).await?;
-    /// ```
-    pub async fn register_no_return_closure<F, Fut>(
-        &self,
-        name: impl Into<String>,
-        closure: F,
-    ) -> Result<()>
-    where
-        F: Fn(Bytes, ActiveMessageContext) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = ()> + Send + 'static,
-    {
-        let handler = HandlerType::from_no_return_closure(name, closure);
-        self.register_handler_typed(handler, None).await
-    }
-
-    /// Register a closure that returns Result<()> (AckHandler)
-    ///
-    /// This method works with raw `Bytes` and requires manual deserialization.
-    ///
-    /// # Example
-    /// ```rust
-    /// manager.register_ack_closure("validate", |input, _ctx| async move {
-    ///     let data: ValidationRequest = serde_json::from_slice(&input)?;
-    ///     validate_data(&data)?;
-    ///     Ok(())
-    /// }).await?;
-    /// ```
-    pub async fn register_ack_closure<F, Fut>(
-        &self,
-        name: impl Into<String>,
-        closure: F,
-    ) -> Result<()>
-    where
-        F: Fn(Bytes, ActiveMessageContext) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Result<()>> + Send + 'static,
-    {
-        let handler = HandlerType::from_ack_closure(name, closure);
-        self.register_handler_typed(handler, None).await
-    }
-
-    /// Register a closure that returns Result<Bytes> (ResponseHandler)
-    ///
-    /// This method works with raw `Bytes` and requires manual serialization/deserialization.
-    ///
-    /// # Example
-    /// ```rust
-    /// manager.register_response_closure("compute", |input, _ctx| async move {
-    ///     let request: ComputeRequest = serde_json::from_slice(&input)?;
-    ///     let result = compute_something(request);
-    ///     let response = serde_json::to_vec(&result)?;
-    ///     Ok(Bytes::from(response))
-    /// }).await?;
-    /// ```
-    pub async fn register_response_closure<F, Fut>(
-        &self,
-        name: impl Into<String>,
-        closure: F,
-    ) -> Result<()>
-    where
-        F: Fn(Bytes, ActiveMessageContext) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Result<Bytes>> + Send + 'static,
-    {
-        let handler = HandlerType::from_response_closure(name, closure);
-        self.register_handler_typed(handler, None).await
-    }
-
-    // Typed closure registration methods for better ergonomics
-
-    /// Register a typed unary (request/response) closure
-    ///
-    /// # Example
-    /// ```rust
-    /// manager.register_unary("compute", |req: ComputeRequest, _ctx| async move {
-    ///     Ok(ComputeResponse { result: req.x + req.y })
-    /// }).await?;
-    /// ```
-    pub async fn register_unary<Req, Res, F, Fut>(
-        &self,
-        name: impl Into<String>,
-        closure: F,
-    ) -> Result<()>
-    where
-        Req: serde::de::DeserializeOwned + Send + 'static,
-        Res: serde::Serialize + Send + 'static,
-        F: Fn(Req, ActiveMessageContext) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Result<Res>> + Send + 'static,
-    {
-        let handler = HandlerType::from_unary_closure(name, closure);
-        self.register_handler_typed(handler, None).await
-    }
-
-    /// Register a typed void (no return) closure
-    ///
-    /// # Example
-    /// ```rust
-    /// manager.register_void("log", |msg: String, _ctx| async move {
-    ///     println!("Received: {}", msg);
-    /// }).await?;
-    /// ```
-    pub async fn register_void<Input, F, Fut>(
-        &self,
-        name: impl Into<String>,
-        closure: F,
-    ) -> Result<()>
-    where
-        Input: serde::de::DeserializeOwned + Send + 'static,
-        F: Fn(Input, ActiveMessageContext) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = ()> + Send + 'static,
-    {
-        let handler = HandlerType::from_void_closure(name, closure);
-        self.register_handler_typed(handler, None).await
-    }
-
-    /// Register a typed acknowledgment closure
-    ///
-    /// # Example
-    /// ```rust
-    /// manager.register_typed_ack("validate", |data: ValidationRequest, _ctx| async move {
-    ///     if data.is_valid() {
-    ///         Ok(())
-    ///     } else {
-    ///         Err(anyhow!("Invalid data"))
-    ///     }
-    /// }).await?;
-    /// ```
-    pub async fn register_typed_ack<Input, F, Fut>(
-        &self,
-        name: impl Into<String>,
-        closure: F,
-    ) -> Result<()>
-    where
-        Input: serde::de::DeserializeOwned + Send + 'static,
-        F: Fn(Input, ActiveMessageContext) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Result<()>> + Send + 'static,
-    {
-        let handler = HandlerType::from_typed_ack_closure(name, closure);
-        self.register_handler_typed(handler, None).await
     }
 }

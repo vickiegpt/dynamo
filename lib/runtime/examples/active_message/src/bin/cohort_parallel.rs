@@ -2,18 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use async_trait::async_trait;
-use bytes::Bytes;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},
-    handler::{AckHandler, ActiveMessageContext, HandlerType, ResponseHandler},
+    cohort::{CohortType, LeaderWorkerCohort},
+    handler_impls::{am_handler_with_tracker, typed_unary_handler_with_tracker, AmContext, TypedContext},
     manager::ActiveMessageManager,
-    zmq::{
-        cohort::{
-            CohortFailurePolicy, CohortType, LeaderWorkerCohort, LeaderWorkerCohortConfigBuilder,
-        },
-        ZmqActiveMessageManager,
-    },
+    zmq::ZmqActiveMessageManager,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -45,83 +39,7 @@ struct WorkResponse {
     processed_length: usize,
 }
 
-/// Work handler that processes requests and returns responses
-#[derive(Debug, Clone)]
-struct WorkHandler {
-    worker_rank: usize,
-}
-
-impl WorkHandler {
-    fn new(worker_rank: usize) -> Self {
-        Self { worker_rank }
-    }
-}
-
-#[async_trait]
-impl ResponseHandler for WorkHandler {
-    async fn handle(
-        &self,
-        input: Bytes,
-        _ctx: ActiveMessageContext,
-    ) -> Result<Bytes> {
-        let request: WorkRequest = serde_json::from_slice(&input)?;
-
-        info!(
-            "Worker {} processing work: {} (multiplier: {})",
-            self.worker_rank, request.workload, request.multiplier
-        );
-
-        // Simulate some work by repeating the string
-        let result = request.workload.repeat(request.multiplier as usize);
-        let processed_length = result.len();
-
-        info!(
-            "Worker {} completed work, result length: {}",
-            self.worker_rank, processed_length
-        );
-
-        let response = WorkResponse {
-            rank: self.worker_rank,
-            result,
-            processed_length,
-        };
-        Ok(Bytes::from(serde_json::to_vec(&response)?))
-    }
-
-    fn name(&self) -> &str {
-        "work"
-    }
-}
-
-/// Simple ping handler for cohort ping-pong test
-#[derive(Debug, Clone)]
-struct CohortPingHandler {
-    worker_rank: usize,
-}
-
-impl CohortPingHandler {
-    fn new(worker_rank: usize) -> Self {
-        Self { worker_rank }
-    }
-}
-
-#[async_trait]
-impl AckHandler for CohortPingHandler {
-    async fn handle(
-        &self,
-        input: Bytes,
-        _ctx: ActiveMessageContext,
-    ) -> Result<()> {
-        let ping_msg: String = serde_json::from_slice(&input)?;
-        info!("Worker {} received ping: {}", self.worker_rank, ping_msg);
-        // Just return Ok(()) to send ACK
-        Ok(())
-    }
-
-    fn name(&self) -> &str {
-        "cohort_ping"
-    }
-}
+// Handler implementations are now inline in main() using the new v2 pattern
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -148,18 +66,54 @@ async fn main() -> Result<()> {
         let worker_manager =
             ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
-        // Register handlers on each worker
-        let work_handler = Arc::new(WorkHandler::new(rank));
-        let work_handler_type = HandlerType::response((*work_handler).clone());
-        worker_manager
-            .register_handler_typed(work_handler_type, None)
-            .await?;
+        // Register handlers on each worker using the new v2 pattern
+        let task_tracker = tokio_util::task::TaskTracker::new();
 
-        let ping_handler = Arc::new(CohortPingHandler::new(rank));
-        let ping_handler_type = HandlerType::ack((*ping_handler).clone());
-        worker_manager
-            .register_handler_typed(ping_handler_type, None)
-            .await?;
+        // Capture rank by value for use in closures
+        let worker_rank = rank;
+
+        // Work handler (unary - returns responses)
+        let work_handler = typed_unary_handler_with_tracker(
+            "work".to_string(),
+            move |ctx: TypedContext<WorkRequest>| {
+                let request = ctx.input;
+                info!(
+                    "Worker {} processing work: {} (multiplier: {})",
+                    worker_rank, request.workload, request.multiplier
+                );
+
+                // Simulate some work by repeating the string
+                let result = request.workload.repeat(request.multiplier as usize);
+                let processed_length = result.len();
+
+                info!(
+                    "Worker {} completed work, result length: {}",
+                    worker_rank, processed_length
+                );
+
+                let response = WorkResponse {
+                    rank: worker_rank,
+                    result,
+                    processed_length,
+                };
+                Ok(response)
+            },
+            task_tracker.clone(),
+        );
+        worker_manager.register_handler("work".to_string(), work_handler).await?;
+
+        // Ping handler (active message - no response)
+        let ping_handler = am_handler_with_tracker(
+            "cohort_ping".to_string(),
+            move |ctx: AmContext| async move {
+                let ping_msg: String = serde_json::from_slice(&ctx.payload)
+                    .map_err(|e| format!("Failed to deserialize ping message: {}", e))?;
+                info!("Worker {} received ping: {}", worker_rank, ping_msg);
+                Ok(())
+            },
+            task_tracker,
+        );
+        worker_manager.register_handler("cohort_ping".to_string(), ping_handler).await?;
 
         let worker_client = worker_manager.client();
         println!("Worker {} listening on: {}", rank, worker_client.endpoint());

@@ -2,15 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use async_trait::async_trait;
-use bytes::Bytes;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},
-    handler::{AckHandler, ActiveMessageContext, HandlerType},
+    handler_impls::{unary_handler, UnaryContext},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
 };
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
 use tokio_util::sync::CancellationToken;
@@ -23,28 +20,6 @@ fn unique_ipc_socket_path() -> Result<String> {
     // Close the file but keep the path - ZMQ will create the socket
     drop(temp_file);
     Ok(format!("ipc://{}", path))
-}
-
-/// Simple ping handler that responds with ACK
-#[derive(Debug, Clone)]
-struct PingHandler;
-
-#[async_trait]
-impl AckHandler for PingHandler {
-    async fn handle(
-        &self,
-        input: Bytes,
-        _ctx: ActiveMessageContext,
-    ) -> Result<()> {
-        let payload: String = serde_json::from_slice(&input)?;
-        info!("Received ping: {}", payload);
-        // Just return Ok(()) to send ACK
-        Ok(())
-    }
-
-    fn name(&self) -> &str {
-        "ping"
-    }
 }
 
 #[tokio::main]
@@ -64,11 +39,17 @@ async fn main() -> Result<()> {
     let client_manager =
         ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
-    // Register ping handler on server
-    let ping_handler = Arc::new(PingHandler);
-    let handler_type = HandlerType::ack((*ping_handler).clone());
+    // Register ping handler on server using unary handler (sends ACK)
+    let ping_handler = unary_handler("ping".to_string(), |ctx: UnaryContext| {
+        let message: String = serde_json::from_slice(&ctx.payload)
+            .map_err(|e| format!("Failed to deserialize ping payload: {}", e))?;
+        info!("Received ping: {}", message);
+        // Return Ok(None) to send ACK without payload
+        Ok(None)
+    });
+
     server_manager
-        .register_handler_typed(handler_type, None)
+        .register_handler("ping".to_string(), ping_handler)
         .await?;
 
     let server_client = server_manager.client();
@@ -113,7 +94,7 @@ async fn main() -> Result<()> {
 
     // Perform multiple ping-pong rounds for RTT measurement (fast path only)
     let mut rtts = Vec::new();
-    let rounds = 10;
+    let rounds = 1000;
 
     for i in 1..=rounds {
         let start = Instant::now();
@@ -131,7 +112,9 @@ async fn main() -> Result<()> {
             Ok(_) => {
                 let rtt = start.elapsed();
                 rtts.push(rtt);
-                println!("Fast-path round {}: RTT = {:?}", i, rtt);
+                if i % 100 == 0 {
+                    println!("Fast-path round {}: RTT = {:?}", i, rtt);
+                }
             }
             Err(e) => {
                 warn!("Fast-path round {} failed: {}", i, e);
@@ -139,7 +122,7 @@ async fn main() -> Result<()> {
         }
 
         // Small delay between rounds
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        // tokio::time::sleep(Duration::from_millis(1)).await;
     }
 
     // Calculate statistics
