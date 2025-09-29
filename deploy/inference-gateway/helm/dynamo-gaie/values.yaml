@@ -59,11 +59,11 @@ epp:
   # Add env in name/value pairs
   extraEnv:
   - name: DYNAMO_NAMESPACE
-    value: "vllm-agg"
+    value: "vllm-agg"  # Match your DGD deployment
   - name: DYNAMO_COMPONENT
     value: "backend"  # Match actual DGD service name
   - name: DYNAMO_KV_BLOCK_SIZE
-    value: "16"    # Check your worker configuration
+    value: "16"    # Check your model card
   # If you ever want to completely override args, supply a list here.
   # When empty, chart will render sane defaults
   argsOverride: []
