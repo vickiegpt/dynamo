@@ -21,7 +21,10 @@ class DynamoKVBMConnectorWorker(KvCacheConnectorWorker):
         mappings = self._llm_args.parallel_config.to_mapping()
         self.rank = mappings.rank
 
-        self._connector = RustKvConnectorWorker(self.drt, str(self.rank))
+        offload_trigger = "ForwardPass" if self._llm_args.cuda_graph_config is not None else "Layerwise"
+        print(f"Offload trigger is set to: {offload_trigger}")
+
+        self._connector = RustKvConnectorWorker(self.drt, str(self.rank), offload_trigger)
 
     def register_kv_caches(self, kv_cache_tensor: torch.Tensor):
         """
@@ -70,6 +73,7 @@ class DynamoKVBMConnectorWorker(KvCacheConnectorWorker):
         Args:
             metadata (bytes): the connector metadata.
         """
+        print(f"Binding connector metadata: {metadata}")
         super().bind_connector_meta(metadata)
         self._connector.bind_connector_meta(metadata)
 
@@ -78,13 +82,15 @@ class DynamoKVBMConnectorWorker(KvCacheConnectorWorker):
         Begin loading the KV cache in preparation for the next forward pass.
         Specific blocks to transfer are indicated by the scheduler's metadata.
         """
+        print(f"Start loading of kv")
         self._connector.start_load_kv()
 
     def wait_for_save(self, stream: torch.cuda.Stream):
         """
         Block until all synchronous saving operations are complete. Called at the end of the forward pass.
         """
-        pass
+        print(f"Calling wait_for_save with stream: {stream}")
+        self._connector.wait_for_save()
 
     def wait_for_layer_load(self, layer_idx: int, stream: torch.cuda.Stream):
         """
@@ -104,6 +110,7 @@ class DynamoKVBMConnectorWorker(KvCacheConnectorWorker):
             layer_idx: The index of the layer to save.
             stream: The stream the forward pass is being executed on.
         """
+        print(f"Saving layer index: {layer_idx}")
         self.events[layer_idx].record(stream)
         self._connector.save_kv_layer(layer_idx)
 
