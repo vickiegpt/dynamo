@@ -243,8 +243,10 @@ impl ZmqActiveMessageManager {
             response_manager.clone(),
         ));
 
-        let ack_cleanup_task =
-            tokio::spawn(Self::ack_cleanup_loop(response_manager.clone(), cancel_token.clone()));
+        let ack_cleanup_task = tokio::spawn(Self::ack_cleanup_loop(
+            response_manager.clone(),
+            cancel_token.clone(),
+        ));
 
         // Store the task handles
         *manager.receiver_task.lock().await = Some(receiver_task);

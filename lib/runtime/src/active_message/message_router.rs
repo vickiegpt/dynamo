@@ -15,7 +15,7 @@
 use anyhow::Result;
 use bytes::Bytes;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
@@ -81,9 +81,7 @@ impl MessageRouter {
         {
             let response_to = response_to.to_string(); // Clone before moving message
             debug!("Received response message for request {}", response_to);
-            return self
-                .handle_response_unified(&response_to, message)
-                .await;
+            return self.handle_response_unified(&response_to, message).await;
         }
 
         // Legacy v1 response pattern (uses "_response" handler name)
@@ -107,10 +105,7 @@ impl MessageRouter {
 
     /// Handle acceptance messages for pending requests
     async fn handle_acceptance(&self, message: ActiveMessage) -> Result<()> {
-        if let Some(accept_for_str) = message
-            .metadata
-            .get("_accept_for")
-            .and_then(|v| v.as_str())
+        if let Some(accept_for_str) = message.metadata.get("_accept_for").and_then(|v| v.as_str())
             && let Ok(accept_id) = Uuid::parse_str(accept_for_str)
         {
             self.response_manager.complete_acceptance(accept_id);
@@ -324,9 +319,7 @@ mod tests {
             Ok(())
         }
 
-        async fn list_peers(
-            &self,
-        ) -> anyhow::Result<Vec<crate::active_message::client::PeerInfo>> {
+        async fn list_peers(&self) -> anyhow::Result<Vec<crate::active_message::client::PeerInfo>> {
             Ok(vec![])
         }
 
