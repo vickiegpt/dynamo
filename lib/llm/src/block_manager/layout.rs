@@ -145,7 +145,7 @@ pub enum LayoutError {
 }
 
 /// Storage pattern for layers
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum LayoutType {
     /// All layers are contiguous in memory [n_blocks, n_layers, outer_dim, ...]
     FullyContiguous,

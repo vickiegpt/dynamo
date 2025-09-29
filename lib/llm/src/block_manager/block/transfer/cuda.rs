@@ -280,6 +280,10 @@ where
     Source: BlockDataProvider,
     Destination: BlockDataProviderMut,
 {
+    // Benchmark hook for CUDA transfers
+    #[cfg(feature = "block-manager")]
+    crate::block_manager::bench::hooks::hook_cuda_single_transfer(sources, destinations);
+
     let src_data = sources.block_data();
     let dst_data = destinations.block_data_mut();
     let memcpy_fn = cuda_memcpy_fn_ptr(&strategy)?;

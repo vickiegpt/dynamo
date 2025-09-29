@@ -90,6 +90,10 @@ where
     }
     assert_eq!(src.len(), dst.len());
 
+    // Benchmark hook for NIXL transfers
+    #[cfg(feature = "block-manager")]
+    crate::block_manager::bench::hooks::hook_nixl_transfer(src, dst);
+
     let nixl_agent_arc = ctx.as_ref().nixl_agent();
     let nixl_agent = nixl_agent_arc
         .as_ref()

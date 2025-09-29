@@ -2153,6 +2153,7 @@ dependencies = [
  "bytes",
  "candle-core 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono",
+ "clap 4.5.48",
  "criterion 0.3.6",
  "cudarc 0.17.3",
  "dashmap",

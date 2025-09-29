@@ -10,6 +10,7 @@
 pub mod config;
 mod state;
 
+pub mod bench;
 pub mod block;
 pub mod connector;
 pub mod distributed;

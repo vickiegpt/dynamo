@@ -45,6 +45,7 @@ async-trait = { version = "0.1" }
 async_zmq = { version = "0.4.0" }
 blake3 = { version = "1" }
 bytes = { version = "1" }
+clap = { version = "4.5", features = ["derive", "env"] }
 chrono = { version = "0.4", default-features = false, features = [
     "alloc",
     "std",

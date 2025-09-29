@@ -12,6 +12,10 @@ where
     Source: ReadableBlock,
     Destination: WritableBlock,
 {
+    // Benchmark hook for memcpy transfers
+    #[cfg(feature = "block-manager")]
+    crate::block_manager::bench::hooks::hook_memcpy_single_transfer(sources, destinations);
+
     let src_data = sources.block_data();
     let dst_data = destinations.block_data_mut();
 

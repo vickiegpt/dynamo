@@ -33,6 +33,11 @@ harness = false
 name = "transfer_context_v2"
 harness = false
 required-features = ["block-manager", "testing-cuda"]
+
+[[bin]]
+name = "bench_layout_transfers"
+path = "../../scripts/bench_layout_transfers.rs"
+required-features = ["block-manager"]
 [dependencies]
 # repo
 dynamo-runtime = { workspace = true }
@@ -62,6 +67,7 @@ prometheus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 strum = { workspace = true }
+clap = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tmq = "0.5.0"
