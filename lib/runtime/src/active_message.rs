@@ -10,6 +10,7 @@ pub mod dispatcher;
 pub mod handler;
 pub mod handler_impls;
 pub mod manager;
+pub mod message_router;
 pub mod receipt_ack;
 pub mod response;
 pub mod response_manager;
@@ -40,6 +41,6 @@ pub use responses::{
 };
 pub use status::{DetachedConfirm, MessageStatus, SendAndConfirm, WithResponse};
 pub use system_handlers::create_core_system_handlers;
-pub use transport::Transport;
+pub use transport::{RawTransport, Transport, TransportFactory, TransportType};
 
 pub mod zmq;
