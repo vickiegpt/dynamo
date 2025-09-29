@@ -76,7 +76,7 @@ echo "   Library: ${DYNAMO_LIB_DIR}/libdynamo_llm_capi.a"
 echo "🔧 Applying Dynamo patch..."
 cd "${EPP_DIR}"
 
-PATCH_FILE="${DYNAMO_DIR}/deploy/inference-gateway/epp-patches/v0.5.1-1/epp-v0.5.1-dyn1.patch"
+PATCH_FILE="${DYNAMO_DIR}/deploy/inference-gateway/epp-patches/v0.5.1-2/epp-v0.5.1-dyn2.patch"
 if [[ -f "${PATCH_FILE}" ]]; then
     if git apply --check "${PATCH_FILE}" 2>/dev/null; then
         git apply "${PATCH_FILE}"
@@ -88,8 +88,8 @@ else
     echo "No patch file found at ${PATCH_FILE}"
 fi
 
-# Step 6: Build and push EPP image
-echo "Building and pushing EPP image..."
-make dynamo-image-push
+# Step 6: Build the EPP image
+echo "Building the EPP image..."
+make dynamo-image-local-load
 
-echo "EPP with Dynamo KV routing built and pushed successfully!"
+echo "EPP with Dynamo KV routing built"

@@ -5,7 +5,7 @@ This guide demonstrates two setups.
 - The basic setup treats each Dynamo deployment as a black box and routes traffic randomly among the deployments.
 - The EPP-aware setup uses a custom Dynamo plugin `dyn-kv` to pick the best worker.
 
-EPP’s default approach is token-aware only `by approximation` because it relies on the non-model tokenized text in the prompt. But the Dynamo plugin uses a token-aware KV algorithm. It employs the dynamo router which implements kv routing by running your model’s tokenizer inline. The EPP plugin configuration lives in [`helm/dynamo-gaie/epp-config-dynamo.yaml`](helm/dynamo-gaie/epp-config-dynamo.yaml) per EPP [convention](https://gateway-api-inference-extension.sigs.k8s.io/guides/epp-configuration/config-text/).
+EPP’s default kv-routing approach is token-aware only `by approximation` because the prompt is tokenized with a generic tokenizer unaware of the model deployed. But the Dynamo plugin uses a token-aware KV algorithm. It employs the dynamo router which implements kv routing by running your model’s tokenizer inline. The EPP plugin configuration lives in [`helm/dynamo-gaie/epp-config-dynamo.yaml`](helm/dynamo-gaie/epp-config-dynamo.yaml) per EPP [convention](https://gateway-api-inference-extension.sigs.k8s.io/guides/epp-configuration/config-text/).
 
 Currently, these setups are only supported with the kGateway based Inference Gateway.
 
@@ -105,9 +105,9 @@ kubectl create secret generic hf-token-secret \
   -n ${NAMESPACE}
 ```
 
-Create a model configuraiont file similar to the vllm_agg_qwen.yaml for you model.
+Create a model configuraion file similar to the vllm_agg_qwen.yaml for you model.
 This file demonstrates the values needed for the Vllm Agg setup in [agg.yaml](../../components/backends/vllm/deploy/agg.yaml)
-
+Take a note of the model's block size provided in the model card.
 
 ### 4. Install Dynamo GAIE helm chart ###
 
@@ -137,20 +137,42 @@ cd gateway-api-inference-extension
 git checkout v0.5.1
 ```
 
-##### 1.2 Run the script to build Dynamo Custom EPP #####
+##### 1.2 Build the Dynamo Custom EPP #####
+
+Dynamo provides a custom routing plugin `pkg/epp/scheduling/plugins/dynamo_kv_scorer/plugin.go` to perform efficient kv routing.
+The Dynamo router is built as a static library the EPP router will call to provide fast inference.
+
+###### 1.2.1 Clone the official EPP repo ######
+
+```bash
+# Clone the official GAIE repo in a separate folder
+cd path/to/gateway-api-inference-extension
+git clone git@github.com:kubernetes-sigs/gateway-api-inference-extension.git
+git checkout v0.5.1
+```
+
+###### 1.2.2 Run the script to build the EPP image ######
+
+The script will apply a custom patch to the code with your GAIE repo and build the image for you to use.
 
 ```bash
 # Use your custom paths
-cd deploy/inference-gateway
 export DYNAMO_DIR=/path/to/dynamo
-export EPP_DIR=/path/to/gateway-api-inference-extension-dynamo
+export EPP_DIR=/path/to/gateway-api-inference-extension
 
 # Run the script
+cd deploy/inference-gateway
 ./build-epp-dynamo.sh
 ```
 
 Under the hood the script applies the Dynamo Patch to the EPP code base; creates a Dynamo Router static library and builds a custom EPP image with it.
-Retag the freshly built image and push it to your registry.
+Re-tag the freshly built image and push it to your registry.
+
+```bash
+docker images
+docker tag <your-new-id> <your-image-tag>
+docker push  <your-image-tag>
+```
 
 ##### 2. Deploy through helm #####
 
@@ -159,7 +181,8 @@ cd deploy/inference-gateway
 
 # Export the Dynamo image you have used when deploying your model in Step 3.
 export DYNAMO_IMAGE=<the-dynamo-image-you-have-used-when-deploying-the-model>
-export EPP_IMAGE=<the-epp-image-you-built>  # i.e. docker.io/lambda108/epp-inference-extension-dynamo:v0.5.1-1
+# Export the image tag you have used when building the EPP i.e. docker.io/lambda108/epp-inference-extension-dynamo:v0.5.1-2
+export EPP_IMAGE=<the-epp-image-you-built>
 ```
 
 Overwrite the `DYNAMO_KV_BLOCK_SIZE` in your [values-epp-aware.yaml](./values-epp-aware.yaml) to match your model's block size.
