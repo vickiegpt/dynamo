@@ -87,7 +87,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
                 break
 
             if context.is_stopped() or context.is_killed():
-                logging.debug(f"Aborted Remote Request ID: {context.id()}")
+                logging.debug(f"Aborted Request ID: {context.id()}")
                 return
 
             if not bootstrap_info:
@@ -140,7 +140,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
 
             # Check for cancellation on each iteration
             if context.is_stopped() or context.is_killed():
-                logging.debug(f"Stream cancelled for Context: {context.id()}")
+                logging.debug(f"Aborted Request ID: {context.id()}")
                 break
 
             finish_reason = res["meta_info"]["finish_reason"]
@@ -162,8 +162,8 @@ class DecodeWorkerHandler(BaseWorkerHandler):
         if cancellation_task is not None:
             try:
                 await cancellation_context.__aexit__(None, None, None)
-            except Exception:
-                pass
+            except Exception as e:
+                logging.error(f"Error cleaning up cancellation monitor for token stream: {e}")
 
     async def _process_text_stream(self, stream_source, context):
         """Process stream for text input mode"""
@@ -184,7 +184,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
 
             # Check for cancellation on each iteration
             if context.is_stopped() or context.is_killed():
-                logging.debug(f"Stream cancelled for Context: {context.id()}")
+                logging.debug(f"Aborted Request ID: {context.id()}")
                 break
 
             index = res.get("index", 0)
@@ -215,5 +215,5 @@ class DecodeWorkerHandler(BaseWorkerHandler):
         if cancellation_task is not None:
             try:
                 await cancellation_context.__aexit__(None, None, None)
-            except Exception:
-                pass
+            except Exception as e:
+                logging.error(f"Error cleaning up cancellation monitor for text stream: {e}")

@@ -87,12 +87,12 @@ class PrefillWorkerHandler(BaseWorkerHandler):
 
             # Check for cancellation on each iteration
             if context.is_stopped() or context.is_killed():
-                logging.debug(f"Prefill stream cancelled for Context: {context.id()}")
+                logging.info(f"Aborted Prefill Request ID: {context.id()}")
                 break
 
         # Clean up cancellation monitor if it was created
         if cancellation_task is not None:
             try:
                 await cancellation_context.__aexit__(None, None, None)
-            except Exception:
-                pass
+            except Exception as e:
+                logging.error(f"Error cleaning up cancellation monitor for prefill stream: {e}")
