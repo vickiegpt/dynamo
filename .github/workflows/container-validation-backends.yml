@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-name: NVIDIA Dynamo Backends Github Validation
+name: Docker Build and Test
 
 on:
   push:
@@ -9,9 +9,37 @@ on:
       - main
       - "pull-request/[0-9]+"
 
+concurrency:
+    group: ${{ github.workflow }}-build-test-${{ github.ref_name || github.run_id }}
+    cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
-  build-test:
+  changed-files:
+    runs-on: ubuntu-latest
+    outputs:
+      has_code_changes: ${{ steps.filter.outputs.has_code_changes }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
+      - name: Check for changes
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36  # v3.0.2
+        id: filter
+        with:
+          filters: .github/filters.yaml
+
+  backend-status-check:
+    runs-on: ubuntu-latest
+    needs: [vllm, sglang, trtllm]
+    if: always()
+    steps:
+      - name: "Check all dependent jobs"
+        run: |
+          echo '${{ toJson(needs) }}' | jq -e 'to_entries | map(.value.result) | all(. as $result | ["success", "skipped"] | any($result == .))'
+
+  vllm:
     runs-on: gpu-l40-amd64
+    needs: changed-files
+    if: needs.changed-files.outputs.has_code_changes == 'true'
     outputs:
       build-duration-sec: ${{ steps.build-image.outputs.build-duration-sec }}
       image-size-bytes: ${{ steps.build-image.outputs.image-size-bytes }}
@@ -19,364 +47,97 @@ jobs:
       build-start-time: ${{ steps.build-image.outputs.build-start-time }}
       build-end-time: ${{ steps.build-image.outputs.build-end-time }}
       cache-hit-rate: ${{ steps.build-image.outputs.cache-hit-rate }}
-      framework: ${{ matrix.framework }}
-      target: ${{ matrix.target }}
-      sccache-cache-hits: ${{ steps.build-image.outputs.sccache-cache-hits }}
-      sccache-cache-misses: ${{ steps.build-image.outputs.sccache-cache-misses }}
-      sccache-compile-requests: ${{ steps.build-image.outputs.sccache-compile-requests }}
-      sccache-s3-reads: ${{ steps.build-image.outputs.sccache-s3-reads }}
-      sccache-s3-writes: ${{ steps.build-image.outputs.sccache-s3-writes }}
-    strategy:
-      fail-fast: false
-      matrix:
-        framework: [vllm, sglang, trtllm]
-        include:
-          - framework: vllm
-            target: runtime
-            pytest_marks: "e2e and vllm and gpu_1 and not slow"
-          - framework: sglang
-            target: runtime
-            pytest_marks: "e2e and sglang and gpu_1 and not slow"
-          - framework: trtllm
-            target: runtime
-            pytest_marks: "e2e and trtllm_marker and gpu_1 and not slow"
-
-    # Do not cancel main branch runs
-    concurrency:
-      group: ${{ github.workflow }}-${{ matrix.framework }}-build-test-${{ github.ref_name || github.run_id }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
-    name: Build and Test - ${{ matrix.framework }}
-    env:
-      CONTAINER_ID: test_${{ github.run_id }}_${{ github.run_attempt }}_${{ github.job }}_${{ matrix.framework }}
-      PYTEST_XML_FILE: pytest_test_report.xml
-      FRAMEWORK: ${{ matrix.framework }}
-      TARGET: ${{ matrix.target }}
-      PYTEST_MARKS: ${{ matrix.pytest_marks }}
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to NGC
-        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'
-        run: |
-          echo "${{ secrets.NGC_CI_ACCESS_TOKEN }}" | docker login nvcr.io -u '$oauthtoken' --password-stdin
-      - name: Cleanup
-        if: always()
-        run: |
-          docker system prune -af
-      - name: Build image with Enhanced sccache S3 Debugging
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
+      - name: Build Container
         id: build-image
-        env:
-          GITHUB_TOKEN: ${{ secrets.CI_TOKEN }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
-          SCCACHE_S3_BUCKET: ${{ secrets.SCCACHE_S3_BUCKET }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        run: |
-          # Capture build start time
-          BUILD_START_TIME=$(date +%s)
-          echo "Build started at: $(date -u -d @$BUILD_START_TIME)"
-          
-          # === ENHANCED SCCACHE S3 DEBUGGING IN GITHUB ACTIONS ===
-          echo "🔧 === ENHANCED SCCACHE S3 DEBUGGING IN GITHUB ACTIONS ==="
-          echo "=========================================================="
-          echo ""
-          echo "This enhanced debugging integrates with the improved container/build.sh script"
-          echo "to provide comprehensive S3 cache testing and analysis."
-          echo ""
-          
-          # Pre-build environment check
-          echo "📋 Pre-Build Environment Check:"
-          echo "   Runner: ${{ runner.name }} (${{ runner.os }})"
-          echo "   Workflow: ${{ github.workflow }}"
-          echo "   Framework: ${{ matrix.framework }}"
-          echo "   Target: ${{ matrix.target }}"
-          echo ""
-          
-          # Check secrets availability
-          echo "🔐 Secrets Availability Check:"
-          if [ -n "${SCCACHE_S3_BUCKET:-}" ]; then
-            echo "   ✅ SCCACHE_S3_BUCKET: ${SCCACHE_S3_BUCKET}"
-          else
-            echo "   ❌ SCCACHE_S3_BUCKET: NOT SET"
-          fi
-          
-          if [ -n "${AWS_DEFAULT_REGION:-}" ]; then
-            echo "   ✅ AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}"
-          else
-            echo "   ❌ AWS_DEFAULT_REGION: NOT SET"
-          fi
-          
-          if [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
-            echo "   ✅ AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:0:8}... (truncated)"
-          else
-            echo "   ❌ AWS_ACCESS_KEY_ID: NOT SET"
-          fi
-          
-          if [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then
-            echo "   ✅ AWS_SECRET_ACCESS_KEY: [REDACTED]"
-          else
-            echo "   ❌ AWS_SECRET_ACCESS_KEY: NOT SET"
-          fi
-          echo ""
-          
-          # Pre-build S3 connectivity test using AWS CLI (if available)
-          echo "🔍 Pre-Build S3 Connectivity Test:"
-          if command -v aws >/dev/null 2>&1; then
-            echo "   AWS CLI available, testing S3 bucket access..."
-            
-            # Test S3 access
-            AWS_TEST_OUTPUT=$(aws s3 ls "s3://${SCCACHE_S3_BUCKET}/" --region "${AWS_DEFAULT_REGION}" 2>&1 || echo "AWS_TEST_FAILED")
-            if echo "$AWS_TEST_OUTPUT" | grep -q "AWS_TEST_FAILED"; then
-              echo "   ❌ S3 access test failed:"
-              echo "$AWS_TEST_OUTPUT" | head -5 | sed 's/^/      /'
-              echo "   ⚠️  Build will continue, but sccache S3 functionality may be limited"
-            else
-              echo "   ✅ S3 bucket is accessible"
-              echo "   📁 Bucket contents preview:"
-              echo "$AWS_TEST_OUTPUT" | head -3 | sed 's/^/      /'
-              
-              # Check for existing sccache data
-              SCCACHE_TEST_OUTPUT=$(aws s3 ls "s3://${SCCACHE_S3_BUCKET}/sccache-dynamo/" --region "${AWS_DEFAULT_REGION}" 2>&1 || echo "NO_SCCACHE_DATA")
-              if echo "$SCCACHE_TEST_OUTPUT" | grep -q "NO_SCCACHE_DATA"; then
-                echo "   ℹ️  No existing sccache data found (first-time use expected)"
-              else
-                echo "   🎯 Existing sccache data found - cache hits possible!"
-                echo "$SCCACHE_TEST_OUTPUT" | head -2 | sed 's/^/      /'
-              fi
-            fi
-          else
-            echo "   ⚠️  AWS CLI not available - skipping pre-build S3 test"
-            echo "   The enhanced build.sh script will handle S3 testing internally"
-          fi
-          echo ""
-          
-          # === RUN ENHANCED BUILD WITH COMPREHENSIVE S3 DEBUGGING ===
-          echo "🏗️  === RUNNING ENHANCED BUILD WITH S3 DEBUGGING ==="
-          echo "=================================================="
-          echo ""
-          echo "The enhanced build.sh script will now:"
-          echo "  1. Auto-install sccache if needed"
-          echo "  2. Test S3 connectivity and credentials"
-          echo "  3. Run live compilation tests to verify cache"
-          echo "  4. Provide detailed S3 upload/download analysis"
-          echo "  5. Report comprehensive cache effectiveness metrics"
-          echo ""
-          echo "Build command: ./container/build.sh --tag ${{ matrix.framework }}:latest --target ${{ matrix.target }} --framework ${{ matrix.framework }} --use-sccache --sccache-bucket \"$SCCACHE_S3_BUCKET\" --sccache-region \"$AWS_DEFAULT_REGION\""
-          echo ""
-          
-          # Run the enhanced build script
-          ./container/build.sh --tag ${{ matrix.framework }}:latest \
-            --target ${{ matrix.target }} \
-            --framework ${{ matrix.framework }} \
-            --use-sccache \
-            --sccache-bucket "$SCCACHE_S3_BUCKET" \
-            --sccache-region "$AWS_DEFAULT_REGION"
-          
-          BUILD_RESULT=$?
-          
-          # Capture build end time and calculate duration
-          BUILD_END_TIME=$(date +%s)
-          BUILD_DURATION=$((BUILD_END_TIME - BUILD_START_TIME))
-          echo ""
-          echo "🏁 Build completed at: $(date -u -d @$BUILD_END_TIME)"
-          echo "   Build duration: ${BUILD_DURATION} seconds"
-          echo "   Build exit code: $BUILD_RESULT"
-          
-          # === POST-BUILD S3 VERIFICATION ===
-          echo ""
-          echo "☁️  === POST-BUILD S3 VERIFICATION ==="
-          echo "===================================="
-          
-          # Extract cache hit rate from build output (enhanced build.sh provides this)
-          CACHE_HIT_RATE=0
-          
-          # Check if sccache metrics were extracted from the container
-          if [ -f "build-metrics/sccache.env" ]; then
-            echo "🔍 Loading sccache metrics extracted from container..."
-            
-            # Source the metrics file to get the variables
-            source build-metrics/sccache.env
-            
-            echo "📊 Final sccache Statistics (Extracted from Container):"
-            echo "-------------------------------------------------------"
-            if [ -f "build-metrics/sccache.txt" ]; then
-              cat build-metrics/sccache.txt
-            fi
-            echo "-------------------------------------------------------"
-            echo ""
-            
-            echo "🎯 Container sccache Analysis:"
-            echo "   Cache hits: ${SCCACHE_CACHE_HITS:-0}"
-            echo "   Cache misses: ${SCCACHE_CACHE_MISSES:-0}"
-            echo "   Total requests: ${SCCACHE_COMPILE_REQUESTS:-0}"
-            echo "   S3 reads: ${SCCACHE_S3_READS:-0}"
-            echo "   S3 writes: ${SCCACHE_S3_WRITES:-0}"
-            echo "   Hit rate: ${SCCACHE_HIT_RATE:-0}%"
-            
-            # Use the extracted hit rate
-            CACHE_HIT_RATE=${SCCACHE_HIT_RATE:-0}
-            
-            if [ "$CACHE_HIT_RATE" -gt 0 ]; then
-              echo "   🎉 SUCCESS: sccache S3 integration is working!"
-              if [ "${SCCACHE_S3_READS:-0}" -gt 0 ] || [ "${SCCACHE_S3_WRITES:-0}" -gt 0 ]; then
-                echo "   ✅ S3 activity confirmed (reads: ${SCCACHE_S3_READS:-0}, writes: ${SCCACHE_S3_WRITES:-0})"
-                echo "   ✅ Cache persistence across builds is functioning"
-              fi
-            else
-              echo "   ⚠️  0% hit rate - this may be expected for first-time builds"
-            fi
-          else
-            echo "ℹ️  No sccache metrics extracted from container"
-            echo "   This may indicate sccache was not enabled or failed to run properly"
-            
-            # Fallback: Try to get stats from GitHub Actions runner (will likely fail)
-            if command -v sccache >/dev/null 2>&1; then
-              echo "🔍 Attempting fallback: Getting sccache stats from GitHub Actions runner..."
-              FINAL_SCCACHE_STATS=$(sccache --show-stats 2>&1)
-              if [ $? -eq 0 ] && [ -n "$FINAL_SCCACHE_STATS" ]; then
-                echo "$FINAL_SCCACHE_STATS"
-              else
-                echo "⚠️  Could not get stats from GitHub Actions runner either"
-              fi
-            else
-              echo "ℹ️  sccache not available on GitHub Actions runner"
-              echo "   The enhanced build.sh script should handle all sccache operations within Docker"
-            fi
-          fi
-          
-          # Post-build S3 verification
-          if command -v aws >/dev/null 2>&1 && [ -n "${SCCACHE_S3_BUCKET}" ]; then
-            echo ""
-            echo "🔍 Post-Build S3 Cache Verification:"
-            
-            # Check if new sccache data was written
-            POST_BUILD_S3_OUTPUT=$(aws s3 ls "s3://${SCCACHE_S3_BUCKET}/sccache-dynamo/" --region "${AWS_DEFAULT_REGION}" 2>&1 || echo "S3_CHECK_FAILED")
-            if echo "$POST_BUILD_S3_OUTPUT" | grep -q "S3_CHECK_FAILED"; then
-              echo "   ⚠️  Could not verify S3 cache contents after build"
-            else
-              echo "   📁 S3 cache contents after build:"
-              echo "$POST_BUILD_S3_OUTPUT" | head -5 | sed 's/^/      /'
-              
-              # Count cache objects
-              CACHE_OBJECT_COUNT=$(echo "$POST_BUILD_S3_OUTPUT" | wc -l)
-              echo "   📊 Total cache objects in S3: $CACHE_OBJECT_COUNT"
-              
-              if [ "$CACHE_OBJECT_COUNT" -gt 0 ]; then
-                echo "   ✅ S3 cache data is present - future builds should benefit"
-              else
-                echo "   ⚠️  No cache objects found - check S3 permissions and connectivity"
-              fi
-            fi
-          fi
-          
-          # Get Docker image size
-          IMAGE_SIZE_BYTES=$(docker image inspect ${{ matrix.framework }}:latest --format='{{.Size}}')
-          IMAGE_SIZE_MB=$((IMAGE_SIZE_BYTES / 1024 / 1024))
-          echo ""
-          echo "📦 Docker image size: ${IMAGE_SIZE_MB} MB (${IMAGE_SIZE_BYTES} bytes)"
-          
-          # Set outputs for other jobs to use
-          echo "build-duration-sec=${BUILD_DURATION}" >> $GITHUB_OUTPUT
-          echo "image-size-bytes=${IMAGE_SIZE_BYTES}" >> $GITHUB_OUTPUT
-          echo "image-size-mb=${IMAGE_SIZE_MB}" >> $GITHUB_OUTPUT
-          echo "build-start-time=${BUILD_START_TIME}" >> $GITHUB_OUTPUT
-          echo "build-end-time=${BUILD_END_TIME}" >> $GITHUB_OUTPUT
-          echo "cache-hit-rate=${CACHE_HIT_RATE}" >> $GITHUB_OUTPUT
-          echo "sccache-cache-hits=${SCCACHE_CACHE_HITS:-0}" >> $GITHUB_OUTPUT
-          echo "sccache-cache-misses=${SCCACHE_CACHE_MISSES:-0}" >> $GITHUB_OUTPUT
-          echo "sccache-compile-requests=${SCCACHE_COMPILE_REQUESTS:-0}" >> $GITHUB_OUTPUT
-          echo "sccache-s3-reads=${SCCACHE_S3_READS:-0}" >> $GITHUB_OUTPUT
-          echo "sccache-s3-writes=${SCCACHE_S3_WRITES:-0}" >> $GITHUB_OUTPUT
-          
-          # Enhanced metrics file with S3 information
-          mkdir -p build-metrics
-          cat > build-metrics/metrics.json << EOF
-          {
-            "build_duration_sec": ${BUILD_DURATION},
-            "image_size_bytes": ${IMAGE_SIZE_BYTES},
-            "image_size_mb": ${IMAGE_SIZE_MB},
-            "build_start_time": ${BUILD_START_TIME},
-            "build_end_time": ${BUILD_END_TIME},
-            "cache_hit_rate": ${CACHE_HIT_RATE},
-            "framework": "${{ matrix.framework }}",
-            "target": "${{ matrix.target }}",
-            "sccache_enabled": true,
-            "s3_bucket": "${SCCACHE_S3_BUCKET}",
-            "aws_region": "${AWS_DEFAULT_REGION}",
-            "enhanced_debugging": true,
-            "sccache_cache_hits": ${SCCACHE_CACHE_HITS:-0},
-            "sccache_cache_misses": ${SCCACHE_CACHE_MISSES:-0},
-            "sccache_compile_requests": ${SCCACHE_COMPILE_REQUESTS:-0},
-            "sccache_s3_reads": ${SCCACHE_S3_READS:-0},
-            "sccache_s3_writes": ${SCCACHE_S3_WRITES:-0},
-            "sccache_total_cacheable": ${SCCACHE_TOTAL_CACHEABLE:-0}
-          }
-          EOF
-          
-          # === GITHUB ACTIONS SUMMARY ===
-          echo ""
-          echo "🏁 === ENHANCED SCCACHE S3 DEBUGGING COMPLETE ==="
-          echo "==============================================="
-          echo "📊 Build Summary:"
-          echo "  Framework: ${{ matrix.framework }}"
-          echo "  Target: ${{ matrix.target }}"
-          echo "  Duration: ${BUILD_DURATION}s"
-          echo "  Image Size: ${IMAGE_SIZE_MB} MB"
-          echo "  Cache Hit Rate: ${CACHE_HIT_RATE}%"
-          echo "  S3 Bucket: ${SCCACHE_S3_BUCKET}"
-          echo "  AWS Region: ${AWS_DEFAULT_REGION}"
-          echo ""
-          echo "🔍 Key Insights:"
-          if [ "$CACHE_HIT_RATE" -eq 0 ]; then
-            echo "  ⚠️  0% cache hit rate detected"
-            echo "     This may be expected for first-time builds or indicate configuration issues"
-            echo "     Check the detailed build.sh output above for specific diagnostics"
-          else
-            echo "  ✅ Cache hit rate: ${CACHE_HIT_RATE}%"
-            echo "     sccache S3 integration is working effectively!"
-          fi
-          echo ""
-          echo "📋 The enhanced build.sh script provided detailed analysis of:"
-          echo "  1. sccache installation and S3 connectivity"
-          echo "  2. AWS credentials and bucket accessibility"
-          echo "  3. Live compilation testing with cache verification"
-          echo "  4. S3 upload/download activity monitoring"
-          echo "  5. Comprehensive cache performance metrics"
-          echo ""
-          echo "🎯 Next builds should show improved cache hit rates as S3 cache accumulates"
-          echo "==============================================="
-          
-          # Exit with build result
-          exit $BUILD_RESULT
-      - name: Run pytest
-        env:
-          HF_HOME: /runner/_work/_temp
-        run: |
-          docker run --runtime=nvidia --rm --gpus all -w /workspace \
-            --network host \
-            --name ${{ env.CONTAINER_ID }}_pytest \
-            ${{ matrix.framework }}:latest \
-            bash -c "pytest -xsv --basetemp=/tmp --junitxml=${{ env.PYTEST_XML_FILE }} -m \"${{ env.PYTEST_MARKS }}\""
-      
-      - name: Upload build metrics
-        uses: actions/upload-artifact@v4
-        if: always()  # Upload even if tests fail
+        uses: ./.github/actions/docker-build
         with:
-          name: build-metrics-${{ matrix.framework }}
-          path: build-metrics/metrics.json
-          retention-days: 7
+          framework: vllm
+          target: runtime
+          ngc_ci_access_token: ${{ secrets.NGC_CI_ACCESS_TOKEN }}
+          ci_token: ${{ secrets.CI_TOKEN }}
+          aws_default_region: ${{ secrets.AWS_DEFAULT_REGION }}
+          sccache_s3_bucket: ${{ secrets.SCCACHE_S3_BUCKET }}
+          aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Run tests
+        uses: ./.github/actions/pytest
+        with:
+          image_tag: ${{ steps.build-image.outputs.image_tag }}
+          pytest_marks: "e2e and vllm and gpu_1 and not slow"
 
-  
+  sglang:
+    runs-on: gpu-l40-amd64
+    needs: changed-files
+    if: needs.changed-files.outputs.has_code_changes == 'true'
+    outputs:
+      build-duration-sec: ${{ steps.build-image.outputs.build-duration-sec }}
+      image-size-bytes: ${{ steps.build-image.outputs.image-size-bytes }}
+      image-size-mb: ${{ steps.build-image.outputs.image-size-mb }}
+      build-start-time: ${{ steps.build-image.outputs.build-start-time }}
+      build-end-time: ${{ steps.build-image.outputs.build-end-time }}
+      cache-hit-rate: ${{ steps.build-image.outputs.cache-hit-rate }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
+      - name: Build Container
+        id: build-image
+        uses: ./.github/actions/docker-build
+        with:
+          framework: sglang
+          target: runtime
+          ngc_ci_access_token: ${{ secrets.NGC_CI_ACCESS_TOKEN }}
+          ci_token: ${{ secrets.CI_TOKEN }}
+          aws_default_region: ${{ secrets.AWS_DEFAULT_REGION }}
+          sccache_s3_bucket: ${{ secrets.SCCACHE_S3_BUCKET }}
+          aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Run tests
+        uses: ./.github/actions/pytest
+        with:
+          image_tag: ${{ steps.build-image.outputs.image_tag }}
+          pytest_marks: "e2e and sglang and gpu_1"
+
+  trtllm:
+    runs-on: gpu-l40-amd64
+    needs: changed-files
+    if: needs.changed-files.outputs.has_code_changes == 'true'
+    outputs:
+      build-duration-sec: ${{ steps.build-image.outputs.build-duration-sec }}
+      image-size-bytes: ${{ steps.build-image.outputs.image-size-bytes }}
+      image-size-mb: ${{ steps.build-image.outputs.image-size-mb }}
+      build-start-time: ${{ steps.build-image.outputs.build-start-time }}
+      build-end-time: ${{ steps.build-image.outputs.build-end-time }}
+      cache-hit-rate: ${{ steps.build-image.outputs.cache-hit-rate }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
+      - name: Build Container
+        id: build-image
+        uses: ./.github/actions/docker-build
+        with:
+          framework: trtllm
+          target: runtime
+          ngc_ci_access_token: ${{ secrets.NGC_CI_ACCESS_TOKEN }}
+          ci_token: ${{ secrets.CI_TOKEN }}
+          aws_default_region: ${{ secrets.AWS_DEFAULT_REGION }}
+          sccache_s3_bucket: ${{ secrets.SCCACHE_S3_BUCKET }}
+          aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: Run tests
+        uses: ./.github/actions/pytest
+        with:
+          image_tag: ${{ steps.build-image.outputs.image_tag }}
+          pytest_marks: "e2e and trtllm_marker and gpu_1 and not slow"
+
   # Upload metrics for this workflow and all its jobs
   upload-workflow-metrics:
     name: Upload Workflow Metrics
     runs-on: gitlab
     if: always()  # Always run, even if other jobs fail
-    needs: [build-test]  # Wait for the main job to complete
+    needs: [vllm, sglang, trtllm]  # Wait for all framework jobs to complete
     
     steps:
       - name: Check out repository
@@ -392,53 +153,40 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
-      - name: Download build metrics
-        uses: actions/download-artifact@v4
-        with:
-          name: build-metrics-vllm
-          path: build-metrics/
-        continue-on-error: true  # Don't fail if artifact doesn't exist
-
       - name: Upload Complete Workflow Metrics
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WORKFLOW_INDEX: ${{ secrets.WORKFLOW_INDEX }}
           JOB_INDEX: ${{ secrets.JOB_INDEX }}
           STEPS_INDEX: ${{ secrets.STEPS_INDEX }}
-          # Pass build metrics as environment variables
-          BUILD_DURATION_SEC: ${{ needs.build-test.outputs.build-duration-sec }}
-          IMAGE_SIZE_BYTES: ${{ needs.build-test.outputs.image-size-bytes }}
-          IMAGE_SIZE_MB: ${{ needs.build-test.outputs.image-size-mb }}
-          BUILD_START_TIME: ${{ needs.build-test.outputs.build-start-time }}
-          BUILD_END_TIME: ${{ needs.build-test.outputs.build-end-time }}
-          CACHE_HIT_RATE: ${{ needs.build-test.outputs.cache-hit-rate }}
-          BUILD_FRAMEWORK: ${{ needs.build-test.outputs.framework }}
-          BUILD_TARGET: ${{ needs.build-test.outputs.target }}
-          # Build and container index configuration
-          BUILD_INDEX: ${{ secrets.BUILD_INDEX }}
           CONTAINER_INDEX: ${{ secrets.CONTAINER_INDEX }}
-          # Additional sccache metrics (will be 0 if not available)
-          SCCACHE_CACHE_HITS: ${{ needs.build-test.outputs.sccache-cache-hits }}
-          SCCACHE_CACHE_MISSES: ${{ needs.build-test.outputs.sccache-cache-misses }}
-          SCCACHE_COMPILE_REQUESTS: ${{ needs.build-test.outputs.sccache-compile-requests }}
-          SCCACHE_S3_READS: ${{ needs.build-test.outputs.sccache-s3-reads }}
-          SCCACHE_S3_WRITES: ${{ needs.build-test.outputs.sccache-s3-writes }}
+          # Build metrics for vllm
+          VLLM_BUILD_DURATION_SEC: ${{ needs.vllm.outputs.build-duration-sec }}
+          VLLM_IMAGE_SIZE_BYTES: ${{ needs.vllm.outputs.image-size-bytes }}
+          VLLM_IMAGE_SIZE_MB: ${{ needs.vllm.outputs.image-size-mb }}
+          VLLM_BUILD_START_TIME: ${{ needs.vllm.outputs.build-start-time }}
+          VLLM_BUILD_END_TIME: ${{ needs.vllm.outputs.build-end-time }}
+          VLLM_CACHE_HIT_RATE: ${{ needs.vllm.outputs.cache-hit-rate }}
+          # Build metrics for sglang
+          SGLANG_BUILD_DURATION_SEC: ${{ needs.sglang.outputs.build-duration-sec }}
+          SGLANG_IMAGE_SIZE_BYTES: ${{ needs.sglang.outputs.image-size-bytes }}
+          SGLANG_IMAGE_SIZE_MB: ${{ needs.sglang.outputs.image-size-mb }}
+          SGLANG_BUILD_START_TIME: ${{ needs.sglang.outputs.build-start-time }}
+          SGLANG_BUILD_END_TIME: ${{ needs.sglang.outputs.build-end-time }}
+          SGLANG_CACHE_HIT_RATE: ${{ needs.sglang.outputs.cache-hit-rate }}
+          # Build metrics for trtllm
+          TRTLLM_BUILD_DURATION_SEC: ${{ needs.trtllm.outputs.build-duration-sec }}
+          TRTLLM_IMAGE_SIZE_BYTES: ${{ needs.trtllm.outputs.image-size-bytes }}
+          TRTLLM_IMAGE_SIZE_MB: ${{ needs.trtllm.outputs.image-size-mb }}
+          TRTLLM_BUILD_START_TIME: ${{ needs.trtllm.outputs.build-start-time }}
+          TRTLLM_BUILD_END_TIME: ${{ needs.trtllm.outputs.build-end-time }}
+          TRTLLM_CACHE_HIT_RATE: ${{ needs.trtllm.outputs.cache-hit-rate }}
         run: |
           # Show build metrics for debugging
           echo "📊 Build Metrics Available:"
-          echo "  Duration: ${BUILD_DURATION_SEC} seconds"
-          echo "  Image Size: ${IMAGE_SIZE_MB} MB (${IMAGE_SIZE_BYTES} bytes)"
-          echo "  Cache Hit Rate: ${CACHE_HIT_RATE}%"
-          echo "  Framework: ${BUILD_FRAMEWORK}"
-          echo "  Target: ${BUILD_TARGET}"
-          
-          # Check if build metrics file exists
-          if [ -f "build-metrics/metrics.json" ]; then
-            echo "📁 Build metrics file found:"
-            cat build-metrics/metrics.json
-          else
-            echo "⚠️  Build metrics file not found, using job outputs only"
-          fi
+          echo "VLLM - Duration: ${VLLM_BUILD_DURATION_SEC}s, Size: ${VLLM_IMAGE_SIZE_MB}MB, Cache: ${VLLM_CACHE_HIT_RATE}%"
+          echo "SGLANG - Duration: ${SGLANG_BUILD_DURATION_SEC}s, Size: ${SGLANG_IMAGE_SIZE_MB}MB, Cache: ${SGLANG_CACHE_HIT_RATE}%"
+          echo "TRTLLM - Duration: ${TRTLLM_BUILD_DURATION_SEC}s, Size: ${TRTLLM_IMAGE_SIZE_MB}MB, Cache: ${TRTLLM_CACHE_HIT_RATE}%"
           
           # Run the enhanced metrics upload script
           python3 .github/workflows/upload_complete_workflow_metrics.py
