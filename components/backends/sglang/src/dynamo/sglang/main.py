@@ -88,10 +88,10 @@ async def init(runtime: DistributedRuntime, config: Config):
     # Readiness gate: requests wait until model is registered
     ready_event = asyncio.Event()
 
-    async def gated_generate(request):
+    async def gated_generate(request, context):
         """Queue requests until model registration completes"""
         await ready_event.wait()  # Block until model is ready
-        async for response in handler.generate(request):
+        async for response in handler.generate(request, context):
             yield response
 
     handler = DecodeWorkerHandler(
@@ -123,7 +123,7 @@ async def init(runtime: DistributedRuntime, config: Config):
         # Requests queue until ready_event is set
         await asyncio.gather(
             generate_endpoint.serve_endpoint(
-                handler.generate,
+                gated_generate,
                 graceful_shutdown=True,
                 metrics_labels=metrics_labels,
                 health_check_payload=health_check_payload,
