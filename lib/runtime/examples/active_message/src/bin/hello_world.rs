@@ -2,16 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use async_trait::async_trait;
 use bytes::Bytes;
 use dynamo_runtime::active_message::{
     client::ActiveMessageClient,
-    handler::{ActiveMessageContext, HandlerType, ResponseHandler},
+    handler_impls::{typed_unary_handler, TypedContext},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::time::Duration;
 use tempfile::NamedTempFile;
 use tokio_util::sync::CancellationToken;
@@ -33,39 +31,6 @@ struct HelloResponse {
     bits_added: usize,
 }
 
-/// Hello world handler that appends bits to strings
-#[derive(Debug, Clone)]
-struct HelloWorldHandler;
-
-#[async_trait]
-impl ResponseHandler for HelloWorldHandler {
-    async fn handle(
-        &self,
-        input: Bytes,
-        _ctx: ActiveMessageContext,
-    ) -> Result<Bytes> {
-        let input_str: String = serde_json::from_slice(&input)?;
-        info!("Received input: '{}'", input_str);
-
-        // Transform the string by appending some "bits"
-        let bits = " 🔥⚡🚀✨🎯";
-        let transformed = format!("{}{}", input_str, bits);
-        let bits_added = bits.len();
-
-        info!("Transformed: '{}' -> '{}'", input_str, transformed);
-
-        let response = HelloResponse {
-            transformed,
-            bits_added,
-        };
-        Ok(Bytes::from(serde_json::to_vec(&response)?))
-    }
-
-    fn name(&self) -> &str {
-        "hello_world"
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -83,11 +48,32 @@ async fn main() -> Result<()> {
     let client_manager =
         ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
-    // Register hello world handler on server
-    let hello_handler = Arc::new(HelloWorldHandler);
-    let handler_type = HandlerType::response((*hello_handler).clone());
+    // Register hello world handler on server using typed unary handler
+    let hello_handler = typed_unary_handler(
+        "hello_world".to_string(),
+        |ctx: TypedContext<String>| {
+            println!("Hello world handler invoked!");
+            let input_str = ctx.input;
+            info!("Received input: '{}'", input_str);
+            println!("Received input: '{}'", input_str);
+
+            // Transform the string by appending some "bits"
+            let bits = " 🔥⚡🚀✨🎯";
+            let transformed = format!("{}{}", input_str, bits);
+            let bits_added = bits.len();
+
+            info!("Transformed: '{}' -> '{}'", input_str, transformed);
+
+            let response = HelloResponse {
+                transformed,
+                bits_added,
+            };
+            Ok(response)
+        },
+    );
+
     server_manager
-        .register_handler_typed(handler_type, None)
+        .register_handler("hello_world".to_string(), hello_handler)
         .await?;
 
     let server_client = server_manager.client();
@@ -119,14 +105,16 @@ async fn main() -> Result<()> {
         println!("=== Test {} ===", i + 1);
 
         // Send string and wait for transformed response
-        let result = client_client
+        let handle = client_client
             .active_message("hello_world")?
             .payload(input)?
             .expect_response::<HelloResponse>()
             .send(server_client.instance_id())
-            .await?
-            .await_response::<HelloResponse>()
-            .await;
+            .await?;
+
+        println!("DEBUG: About to await response...");
+        let result = handle.await_response::<HelloResponse>().await;
+        println!("DEBUG: Response awaited!");
 
         match result {
             Ok(response) => {

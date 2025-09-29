@@ -17,7 +17,7 @@ use super::handler::InstanceId;
 /// Response context provided to handlers indicating what kind of response is expected
 #[derive(Debug)]
 pub enum ResponseContext {
-    /// No response expected - fire and forget
+    /// No response expected - active message
     None,
     /// Single typed response expected
     Single(SingleResponseSender),

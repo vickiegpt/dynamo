@@ -10,7 +10,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tmq::{Context, Message, Multipart, publish};
+use tmq::{Context, Message, Multipart, push};
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, warn};
@@ -19,53 +19,13 @@ use uuid::Uuid;
 use crate::active_message::{
     client::{ActiveMessageClient, Endpoint, PeerInfo},
     handler::{ActiveMessage, HandlerId, InstanceId},
+    receipt_ack::ReceiptAck,
+    response_manager::SharedResponseManager,
 };
-
-struct AckEntry {
-    sender: oneshot::Sender<Result<(), String>>,
-    deadline: tokio::time::Instant,
-}
-
-impl std::fmt::Debug for AckEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AckEntry")
-            .field("deadline", &self.deadline)
-            .finish()
-    }
-}
-
-struct AcceptanceEntry {
-    sender: oneshot::Sender<()>,
-    deadline: tokio::time::Instant,
-}
-
-impl std::fmt::Debug for AcceptanceEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AcceptanceEntry")
-            .field("deadline", &self.deadline)
-            .finish()
-    }
-}
-
-struct ResponseEntry {
-    sender: oneshot::Sender<Bytes>,
-    deadline: tokio::time::Instant,
-}
-
-impl std::fmt::Debug for ResponseEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResponseEntry")
-            .field("deadline", &self.deadline)
-            .finish()
-    }
-}
 
 struct ClientState {
     peers: HashMap<InstanceId, PeerInfo>,
     incoming_peers: HashSet<InstanceId>, // Track who has connected TO us
-    pending_acks: HashMap<Uuid, AckEntry>,
-    pending_acceptances: HashMap<Uuid, AcceptanceEntry>,
-    pending_responses: HashMap<Uuid, ResponseEntry>,
     publisher_channels: HashMap<String, mpsc::UnboundedSender<ActiveMessage>>,
     publisher_tasks: HashMap<String, JoinHandle<()>>,
 }
@@ -75,9 +35,6 @@ impl std::fmt::Debug for ClientState {
         f.debug_struct("ClientState")
             .field("peers", &self.peers)
             .field("incoming_peers", &self.incoming_peers)
-            .field("pending_acks", &self.pending_acks)
-            .field("pending_acceptances", &self.pending_acceptances)
-            .field("pending_responses", &self.pending_responses)
             .field("publisher_channels_count", &self.publisher_channels.len())
             .field("publisher_tasks_count", &self.publisher_tasks.len())
             .finish()
@@ -90,6 +47,7 @@ pub struct ZmqActiveMessageClient {
     endpoint: Endpoint,
     state: Arc<RwLock<ClientState>>,
     context: Arc<Context>,
+    response_manager: SharedResponseManager,
 }
 
 impl std::fmt::Debug for ZmqActiveMessageClient {
@@ -102,13 +60,14 @@ impl std::fmt::Debug for ZmqActiveMessageClient {
 }
 
 impl ZmqActiveMessageClient {
-    pub fn new(instance_id: InstanceId, endpoint: Endpoint) -> Self {
+    pub fn new(
+        instance_id: InstanceId,
+        endpoint: Endpoint,
+        response_manager: SharedResponseManager,
+    ) -> Self {
         let state = ClientState {
             peers: HashMap::new(),
             incoming_peers: HashSet::new(),
-            pending_acks: HashMap::new(),
-            pending_acceptances: HashMap::new(),
-            pending_responses: HashMap::new(),
             publisher_channels: HashMap::new(),
             publisher_tasks: HashMap::new(),
         };
@@ -118,6 +77,7 @@ impl ZmqActiveMessageClient {
             endpoint,
             state: Arc::new(RwLock::new(state)),
             context: Arc::new(Context::new()),
+            response_manager,
         }
     }
 
@@ -127,24 +87,42 @@ impl ZmqActiveMessageClient {
         timeout: Duration,
     ) -> Result<oneshot::Receiver<Result<(), String>>> {
         let (tx, rx) = oneshot::channel();
-        let deadline = tokio::time::Instant::now() + timeout;
 
-        let mut state = self.state.write().await;
-        if state.pending_acks.contains_key(&ack_id) {
-            anyhow::bail!("ACK {} already registered", ack_id);
-        }
-
-        state.pending_acks.insert(
-            ack_id,
-            AckEntry {
-                sender: tx,
-                deadline,
-            },
-        );
+        self.response_manager.register_ack(ack_id, tx, timeout);
 
         debug!("Registered ACK expectation: {}", ack_id);
 
         Ok(rx)
+    }
+
+    pub async fn register_receipt(
+        &self,
+        receipt_id: Uuid,
+        timeout: Duration,
+    ) -> Result<oneshot::Receiver<Result<ReceiptAck, String>>> {
+        let (tx, rx) = oneshot::channel();
+
+        self.response_manager
+            .register_receipt(receipt_id, tx, timeout);
+
+        debug!("Registered receipt expectation: {}", receipt_id);
+
+        Ok(rx)
+    }
+
+    pub async fn complete_receipt(&self, receipt_ack: ReceiptAck) -> Result<()> {
+        if self.response_manager
+            .complete_receipt(receipt_ack.message_id, Ok(receipt_ack.clone()))
+        {
+            debug!("Completing receipt for message {}", receipt_ack.message_id);
+        } else {
+            warn!(
+                "Received receipt ACK for unknown message {}",
+                receipt_ack.message_id
+            );
+        }
+
+        Ok(())
     }
 
     pub async fn send_ack(&self, target: InstanceId, ack_id: Uuid) -> Result<()> {
@@ -177,10 +155,7 @@ impl ZmqActiveMessageClient {
     }
 
     pub(super) async fn complete_ack(&self, ack_id: Uuid, sender: InstanceId) -> Result<()> {
-        let mut state = self.state.write().await;
-
-        if let Some(entry) = state.pending_acks.remove(&ack_id) {
-            let _ = entry.sender.send(Ok(()));
+        if self.response_manager.complete_ack(ack_id, Ok(())) {
             debug!("Completed ACK: {} from {}", ack_id, sender);
             Ok(())
         } else {
@@ -195,10 +170,10 @@ impl ZmqActiveMessageClient {
         sender: InstanceId,
         error: String,
     ) -> Result<()> {
-        let mut state = self.state.write().await;
-
-        if let Some(entry) = state.pending_acks.remove(&ack_id) {
-            let _ = entry.sender.send(Err(error.clone()));
+        if self
+            .response_manager
+            .complete_ack(ack_id, Err(error.clone()))
+        {
             debug!(
                 "Completed NACK: {} from {} with error: {}",
                 ack_id, sender, error
@@ -211,17 +186,10 @@ impl ZmqActiveMessageClient {
     }
 
     pub async fn cleanup_expired_acks(&self) {
-        let mut state = self.state.write().await;
-        let now = tokio::time::Instant::now();
-
-        state.pending_acks.retain(|ack_id, entry| {
-            if now >= entry.deadline {
-                warn!("ACK {} expired (not received in time)", ack_id);
-                false
-            } else {
-                true
-            }
-        });
+        let cleaned = self.response_manager.cleanup_expired();
+        if cleaned > 0 {
+            debug!("Cleaned up {} expired entries", cleaned);
+        }
     }
 
     pub async fn has_incoming_connection_from(&self, instance_id: InstanceId) -> bool {
@@ -259,32 +227,27 @@ impl ZmqActiveMessageClient {
         context: Arc<Context>,
         mut receiver: mpsc::UnboundedReceiver<ActiveMessage>,
     ) {
-        debug!("Starting publisher task for endpoint: {}", endpoint);
+        debug!("Starting push task for endpoint: {}", endpoint);
 
         // Connect socket
-        let mut pub_socket = match publish(&context).connect(&endpoint) {
+        let mut push_socket = match push(&context).connect(&endpoint) {
             Ok(socket) => socket,
             Err(e) => {
-                error!("Failed to connect publisher socket to {}: {}", endpoint, e);
+                error!("Failed to connect push socket to {}: {}", endpoint, e);
                 return;
             }
         };
 
-        // Small delay for slow joiner (only once at startup)
-        tokio::time::sleep(Duration::from_millis(2)).await;
-        debug!("Publisher task for {} ready to process messages", endpoint);
+        debug!("Push task for {} ready to process messages", endpoint);
 
         // Process messages
         while let Some(message) = receiver.recv().await {
             match super::transport::ZmqTransport::serialize_message(&message) {
                 Ok(multipart) => {
-                    if let Err(e) = pub_socket.send(multipart).await {
-                        error!(
-                            "Failed to send message via publisher to {}: {}",
-                            endpoint, e
-                        );
+                    if let Err(e) = push_socket.send(multipart).await {
+                        error!("Failed to send message via push to {}: {}", endpoint, e);
                     } else {
-                        debug!("Sent message via publisher to {}", endpoint);
+                        debug!("Sent message via push to {}", endpoint);
                     }
                 }
                 Err(e) => {
@@ -293,7 +256,7 @@ impl ZmqActiveMessageClient {
             }
         }
 
-        debug!("Publisher task for {} shutting down", endpoint);
+        debug!("Push task for {} shutting down", endpoint);
     }
 
     async fn send_raw(&self, endpoint: &str, message: &ActiveMessage) -> Result<()> {
@@ -344,11 +307,6 @@ impl ZmqActiveMessageClient {
 
         debug!("All publisher tasks shut down");
     }
-
-    /// Get PeerInfo for this client instance
-    pub fn peer_info(&self) -> PeerInfo {
-        PeerInfo::new(self.instance_id, &self.endpoint)
-    }
 }
 
 #[async_trait]
@@ -359,6 +317,10 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
 
     fn endpoint(&self) -> &str {
         &self.endpoint
+    }
+
+    fn peer_info(&self) -> PeerInfo {
+        PeerInfo::new(self.instance_id, &self.endpoint)
     }
 
     async fn send_message(&self, target: InstanceId, handler: &str, payload: Bytes) -> Result<()> {
@@ -521,12 +483,8 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
         message_id: Uuid,
         sender: oneshot::Sender<()>,
     ) -> Result<()> {
-        let mut state = self.state.write().await;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-
-        state
-            .pending_acceptances
-            .insert(message_id, AcceptanceEntry { sender, deadline });
+        self.response_manager
+            .register_acceptance(message_id, sender, Duration::from_secs(30));
 
         debug!("Registered acceptance for message {}", message_id);
         Ok(())
@@ -537,12 +495,8 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
         message_id: Uuid,
         sender: oneshot::Sender<Bytes>,
     ) -> Result<()> {
-        let mut state = self.state.write().await;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-
-        state
-            .pending_responses
-            .insert(message_id, ResponseEntry { sender, deadline });
+        self.response_manager
+            .register_response(message_id, sender, Duration::from_secs(30));
 
         debug!("Registered response for message {}", message_id);
         Ok(())
@@ -554,6 +508,14 @@ impl ActiveMessageClient for ZmqActiveMessageClient {
         timeout: Duration,
     ) -> Result<oneshot::Receiver<Result<(), String>>> {
         self.register_ack(ack_id, timeout).await
+    }
+
+    async fn register_receipt(
+        &self,
+        receipt_id: Uuid,
+        timeout: Duration,
+    ) -> Result<oneshot::Receiver<Result<ReceiptAck, String>>> {
+        self.register_receipt(receipt_id, timeout).await
     }
 
     async fn has_incoming_connection_from(&self, instance_id: InstanceId) -> bool {
@@ -571,9 +533,7 @@ impl ZmqActiveMessageClient {
         accept_id: Uuid,
         sender: InstanceId,
     ) -> Result<()> {
-        let mut state = self.state.write().await;
-        if let Some(entry) = state.pending_acceptances.remove(&accept_id) {
-            let _ = entry.sender.send(());
+        if self.response_manager.complete_acceptance(accept_id) {
             debug!("Completed acceptance: {} from {}", accept_id, sender);
             Ok(())
         } else {
@@ -591,9 +551,10 @@ impl ZmqActiveMessageClient {
         sender: InstanceId,
         payload: Bytes,
     ) -> Result<()> {
-        let mut state = self.state.write().await;
-        if let Some(entry) = state.pending_responses.remove(&response_id) {
-            let _ = entry.sender.send(payload);
+        if self
+            .response_manager
+            .complete_response(response_id, payload)
+        {
             debug!("Completed response: {} from {}", response_id, sender);
             Ok(())
         } else {
@@ -606,25 +567,9 @@ impl ZmqActiveMessageClient {
     }
 
     pub async fn cleanup_expired_notifications(&self) {
-        let mut state = self.state.write().await;
-        let now = tokio::time::Instant::now();
-
-        state.pending_acceptances.retain(|accept_id, entry| {
-            if now >= entry.deadline {
-                warn!("Acceptance {} expired (not received in time)", accept_id);
-                false
-            } else {
-                true
-            }
-        });
-
-        state.pending_responses.retain(|response_id, entry| {
-            if now >= entry.deadline {
-                warn!("Response {} expired (not received in time)", response_id);
-                false
-            } else {
-                true
-            }
-        });
+        let cleaned = self.response_manager.cleanup_expired();
+        if cleaned > 0 {
+            debug!("Cleaned up {} expired entries", cleaned);
+        }
     }
 }
