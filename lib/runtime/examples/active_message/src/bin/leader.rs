@@ -5,15 +5,10 @@ use anyhow::Result;
 use bytes::Bytes;
 use dynamo_runtime::active_message::{
     client::ActiveMessageClient,
-    handler::HandlerType,
+    cohort::{CohortType, LeaderWorkerCohort},
+    create_core_system_handlers,
     manager::ActiveMessageManager,
-    zmq::{
-        builtin_handlers::{JoinCohortHandler, RemoveServiceHandler, RequestShutdownHandler},
-        cohort::{
-            CohortFailurePolicy, CohortType, LeaderWorkerCohort, LeaderWorkerCohortConfigBuilder,
-        },
-        ZmqActiveMessageManager,
-    },
+    zmq::ZmqActiveMessageManager,
 };
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
@@ -45,20 +40,15 @@ async fn main() -> Result<()> {
         CohortType::FixedSize(2),
     ));
 
-    // Register cohort handlers
-    let join_handler = HandlerType::response(JoinCohortHandler::new(cohort.clone()));
-    manager.register_handler_typed(join_handler, None).await?;
+    // Register system handlers (includes cohort management)
+    let system_handlers = create_core_system_handlers(
+        client.clone_as_arc(),
+        tokio_util::task::TaskTracker::new(),
+    );
 
-    let remove_handler = HandlerType::response(RemoveServiceHandler::new(cohort.clone()));
-    manager.register_handler_typed(remove_handler, None).await?;
-
-    let shutdown_handler = HandlerType::response(RequestShutdownHandler::new(
-        manager.manager_state(),
-        cancel_token.clone(),
-    ));
-    manager
-        .register_handler_typed(shutdown_handler, None)
-        .await?;
+    for (name, dispatcher) in system_handlers {
+        manager.register_handler(name, dispatcher).await?;
+    }
 
     println!("Waiting for 2 workers to join cohort...");
 

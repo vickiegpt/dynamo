@@ -8,8 +8,8 @@ use futures::{SinkExt, StreamExt};
 use std::collections::VecDeque;
 use tmq::{
     AsZmqSocket, Context, Message, Multipart,
-    publish::{Publish, publish},
-    subscribe::{Subscribe, subscribe},
+    pull::{Pull, pull},
+    push::{Push, push},
 };
 use uuid::Uuid;
 
@@ -22,13 +22,13 @@ pub enum TransportType {
 }
 
 pub enum ZmqTransport {
-    Publisher {
-        socket: Publish,
+    Pusher {
+        socket: Push,
         endpoint: Option<Endpoint>,
         transport_type: TransportType,
     },
-    Subscriber {
-        socket: Subscribe,
+    Puller {
+        socket: Pull,
         endpoint: Option<Endpoint>,
         transport_type: TransportType,
     },
@@ -37,21 +37,21 @@ pub enum ZmqTransport {
 impl std::fmt::Debug for ZmqTransport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Publisher {
+            Self::Pusher {
                 endpoint,
                 transport_type,
                 ..
             } => f
-                .debug_struct("Publisher")
+                .debug_struct("Pusher")
                 .field("endpoint", endpoint)
                 .field("transport_type", transport_type)
                 .finish(),
-            Self::Subscriber {
+            Self::Puller {
                 endpoint,
                 transport_type,
                 ..
             } => f
-                .debug_struct("Subscriber")
+                .debug_struct("Puller")
                 .field("endpoint", endpoint)
                 .field("transport_type", transport_type)
                 .finish(),
@@ -60,9 +60,9 @@ impl std::fmt::Debug for ZmqTransport {
 }
 
 impl ZmqTransport {
-    pub fn new_publisher_bound(context: &Context, address: &str) -> Result<Self> {
+    pub fn new_pusher_bound(context: &Context, address: &str) -> Result<Self> {
         let transport_type = Self::detect_transport_type(address);
-        let socket = publish(context).bind(address)?;
+        let socket = push(context).bind(address)?;
 
         let bound_endpoint = socket
             .get_socket()
@@ -70,16 +70,16 @@ impl ZmqTransport {
             .expect("Failed to retrieve bound endpoint")
             .expect("Socket did not report bound endpoint");
 
-        Ok(Self::Publisher {
+        Ok(Self::Pusher {
             socket,
             endpoint: Some(bound_endpoint),
             transport_type,
         })
     }
 
-    pub fn new_subscriber_bound(context: &Context, address: &str) -> Result<Self> {
+    pub fn new_puller_bound(context: &Context, address: &str) -> Result<Self> {
         let transport_type = Self::detect_transport_type(address);
-        let socket = subscribe(context).bind(address)?.subscribe(b"")?;
+        let socket = pull(context).bind(address)?;
 
         let bound_endpoint = socket
             .get_socket()
@@ -87,29 +87,29 @@ impl ZmqTransport {
             .expect("Failed to retrieve bound endpoint")
             .expect("Socket did not report bound endpoint");
 
-        Ok(Self::Subscriber {
+        Ok(Self::Puller {
             socket,
             endpoint: Some(bound_endpoint),
             transport_type,
         })
     }
 
-    pub fn new_publisher_connected(context: &Context, endpoint: &str) -> Result<Self> {
+    pub fn new_pusher_connected(context: &Context, endpoint: &str) -> Result<Self> {
         let transport_type = Self::detect_transport_type(endpoint);
-        let socket = publish(context).connect(endpoint)?;
+        let socket = push(context).connect(endpoint)?;
 
-        Ok(Self::Publisher {
+        Ok(Self::Pusher {
             socket,
             endpoint: Some(endpoint.to_string()),
             transport_type,
         })
     }
 
-    pub fn new_subscriber_connected(context: &Context, endpoint: &str) -> Result<Self> {
+    pub fn new_puller_connected(context: &Context, endpoint: &str) -> Result<Self> {
         let transport_type = Self::detect_transport_type(endpoint);
-        let socket = subscribe(context).connect(endpoint)?.subscribe(b"")?;
+        let socket = pull(context).connect(endpoint)?;
 
-        Ok(Self::Subscriber {
+        Ok(Self::Puller {
             socket,
             endpoint: Some(endpoint.to_string()),
             transport_type,
@@ -188,22 +188,22 @@ impl ZmqTransport {
 
     pub fn local_endpoint(&self) -> Option<&Endpoint> {
         match self {
-            Self::Publisher { endpoint, .. } => endpoint.as_ref(),
-            Self::Subscriber { endpoint, .. } => endpoint.as_ref(),
+            Self::Pusher { endpoint, .. } => endpoint.as_ref(),
+            Self::Puller { endpoint, .. } => endpoint.as_ref(),
         }
     }
 
     pub async fn receive(&mut self) -> Result<ActiveMessage> {
         match self {
-            Self::Subscriber { socket, .. } => {
+            Self::Puller { socket, .. } => {
                 if let Some(Ok(multipart)) = socket.next().await {
                     Self::deserialize_message(multipart)
                 } else {
                     anyhow::bail!("Failed to receive message")
                 }
             }
-            Self::Publisher { .. } => {
-                anyhow::bail!("Cannot receive on publisher socket")
+            Self::Pusher { .. } => {
+                anyhow::bail!("Cannot receive on pusher socket")
             }
         }
     }

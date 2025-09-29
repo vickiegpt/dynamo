@@ -4,14 +4,13 @@
 use anyhow::Result;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},
-    handler::HandlerType,
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
 };
 use std::env;
 use tokio_util::sync::CancellationToken;
 
-use active_message_example::ComputeHandler;
+use active_message_example::create_compute_handler;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -41,8 +40,8 @@ async fn main() -> Result<()> {
     println!("Worker listening on: {}", client.endpoint());
     println!("Worker instance ID: {}", client.instance_id());
 
-    let handler = HandlerType::response(ComputeHandler);
-    manager.register_handler_typed(handler, None).await?;
+    let compute_handler = create_compute_handler();
+    manager.register_handler("compute".to_string(), compute_handler).await?;
 
     println!("Registered compute handler");
 
