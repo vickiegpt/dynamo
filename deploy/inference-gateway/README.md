@@ -160,7 +160,13 @@ cd deploy/inference-gateway
 # Export the Dynamo image you have used when deploying your model in Step 3.
 export DYNAMO_IMAGE=<the-dynamo-image-you-have-used-when-deploying-the-model>
 export EPP_IMAGE=<the-epp-image-you-built>  # i.e. docker.io/lambda108/epp-inference-extension-dynamo:v0.5.1-1
+```
 
+Overwrite the `DYNAMO_KV_BLOCK_SIZE` in your [values-epp-aware.yaml](./values-epp-aware.yaml) to match your model's block size.
+The `DYNAMO_KV_BLOCK_SIZE` env var is **MANDATORY** to prevent silent KV routing failures.
+Overwrite the `DYNAMO_NAMESPACE` env var if needed to match your model's dynamo namespace.
+
+```bash
 helm upgrade --install dynamo-gaie ./helm/dynamo-gaie \
   -n my-model \
   -f ./vllm_agg_qwen.yaml \
