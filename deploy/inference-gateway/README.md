@@ -105,7 +105,7 @@ kubectl create secret generic hf-token-secret \
   -n ${NAMESPACE}
 ```
 
-Create a model configuraion file similar to the vllm_agg_qwen.yaml for you model.
+Create a model configuration file similar to the vllm_agg_qwen.yaml for you model.
 This file demonstrates the values needed for the Vllm Agg setup in [agg.yaml](../../components/backends/vllm/deploy/agg.yaml)
 Take a note of the model's block size provided in the model card.
 
@@ -117,7 +117,7 @@ Deploy the Inference Gateway resources to your Kubernetes cluster by running one
 
 #### Basic Black Box Integration ####
 
-For the basic black box integration run:
+The basic black box integration uses a standard EPP image`us-central1-docker.pkg.dev/k8s-staging-images/gateway-api-inference-extension/epp:v0.4.0`. For the basic black box integration run:
 
 ```bash
 cd deploy/inference-gateway
