@@ -111,7 +111,8 @@ impl ZmqActiveMessageClient {
     }
 
     pub async fn complete_receipt(&self, receipt_ack: ReceiptAck) -> Result<()> {
-        if self.response_manager
+        if self
+            .response_manager
             .complete_receipt(receipt_ack.message_id, Ok(receipt_ack.clone()))
         {
             debug!("Completing receipt for message {}", receipt_ack.message_id);

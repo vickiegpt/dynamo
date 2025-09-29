@@ -370,7 +370,6 @@ impl<'a> MessageBuilder<'a, NeedsDeliveryMode> {
         self.client.send_raw_message(target, message).await
     }
 
-
     /// Send and wait for ACK confirmation
     pub async fn send(self, target: InstanceId) -> Result<MessageStatus<SendAndConfirm>> {
         let message_id = Uuid::new_v4();
