@@ -78,7 +78,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
                     request=request,
                     sampling_params=sampling_params,
                 ).model_dump(),
-                context=context
+                context=context,
             )
 
             bootstrap_info = None
@@ -114,7 +114,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
                 sampling_params=sampling_params,
                 stream=True,
             )
-            
+
             if self.skip_tokenizer_init:
                 async for out in self._process_token_stream(agg, context):
                     yield out
@@ -133,14 +133,16 @@ class DecodeWorkerHandler(BaseWorkerHandler):
                 sglang_request_id = meta_info.get("id")
                 if sglang_request_id:
                     # Now we have the request ID, start the cancellation monitor
-                    cancellation_context = self._cancellation_monitor(sglang_request_id, context)
+                    cancellation_context = self._cancellation_monitor(
+                        sglang_request_id, context
+                    )
                     cancellation_task = await cancellation_context.__aenter__()
-            
+
             # Check for cancellation on each iteration
             if context.is_stopped() or context.is_killed():
                 logging.debug(f"Stream cancelled for Context: {context.id()}")
                 break
-            
+
             finish_reason = res["meta_info"]["finish_reason"]
             if finish_reason:
                 out = {"token_ids": [], "finish_reason": finish_reason["type"]}
@@ -155,7 +157,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
                 num_output_tokens_so_far = next_total_toks
 
             yield out
-        
+
         # Clean up cancellation monitor if it was created
         if cancellation_task is not None:
             try:
@@ -175,14 +177,16 @@ class DecodeWorkerHandler(BaseWorkerHandler):
                 sglang_request_id = meta_info.get("id")
                 if sglang_request_id:
                     # Now we have the request ID, start the cancellation monitor
-                    cancellation_context = self._cancellation_monitor(sglang_request_id, context)
+                    cancellation_context = self._cancellation_monitor(
+                        sglang_request_id, context
+                    )
                     cancellation_task = await cancellation_context.__aenter__()
-            
+
             # Check for cancellation on each iteration
             if context.is_stopped() or context.is_killed():
                 logging.debug(f"Stream cancelled for Context: {context.id()}")
                 break
-            
+
             index = res.get("index", 0)
             text = res.get("text", "")
 
@@ -206,7 +210,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
             }
             yield response
             count = next_count
-        
+
         # Clean up cancellation monitor if it was created
         if cancellation_task is not None:
             try:

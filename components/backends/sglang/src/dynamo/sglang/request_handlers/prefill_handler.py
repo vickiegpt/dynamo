@@ -72,7 +72,7 @@ class PrefillWorkerHandler(BaseWorkerHandler):
 
     async def _consume_results(self, results, context):
         cancellation_task = None
-        
+
         async for res in results:
             # Extract SGLang request ID from the first response and start cancellation monitoring
             if cancellation_task is None:
@@ -80,14 +80,16 @@ class PrefillWorkerHandler(BaseWorkerHandler):
                 sglang_request_id = meta_info.get("id")
                 if sglang_request_id:
                     # Now we have the request ID, start the cancellation monitor
-                    cancellation_context = self._cancellation_monitor(sglang_request_id, context)
+                    cancellation_context = self._cancellation_monitor(
+                        sglang_request_id, context
+                    )
                     cancellation_task = await cancellation_context.__aenter__()
-            
+
             # Check for cancellation on each iteration
             if context.is_stopped() or context.is_killed():
                 logging.debug(f"Prefill stream cancelled for Context: {context.id()}")
                 break
-        
+
         # Clean up cancellation monitor if it was created
         if cancellation_task is not None:
             try:

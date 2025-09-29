@@ -5,7 +5,7 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator
+from typing import AsyncGenerator
 
 import sglang as sgl
 
@@ -58,15 +58,26 @@ class BaseWorkerHandler(ABC):
             # Wait asynchronously for cancellation signal instead of polling
             await context.async_killed_or_stopped()
             # Call abort_request on the tokenizer_manager through the engine
-            if hasattr(self.engine, "tokenizer_manager") and self.engine.tokenizer_manager:
+            if (
+                hasattr(self.engine, "tokenizer_manager")
+                and self.engine.tokenizer_manager
+            ):
                 try:
                     # Use SGLang's abort_request API
-                    self.engine.tokenizer_manager.abort_request(rid=sglang_request_id, abort_all=False)
-                    logging.debug(f"Aborted SGLang Request ID {sglang_request_id} for Context: {context.id()}")
+                    self.engine.tokenizer_manager.abort_request(
+                        rid=sglang_request_id, abort_all=False
+                    )
+                    logging.debug(
+                        f"Aborted SGLang Request ID {sglang_request_id} for Context: {context.id()}"
+                    )
                 except Exception as e:
-                    logging.error(f"Failed to abort SGLang request {sglang_request_id}: {e}")
+                    logging.error(
+                        f"Failed to abort SGLang request {sglang_request_id}: {e}"
+                    )
             else:
-                logging.error(f"SGLang tokenizer_manager not found for abort request: {context.id()}")
+                logging.error(
+                    f"SGLang tokenizer_manager not found for abort request: {context.id()}"
+                )
         except asyncio.CancelledError:
             # Task was cancelled, which is expected when generation completes
             pass
