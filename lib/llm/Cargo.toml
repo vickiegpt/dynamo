@@ -47,6 +47,11 @@ harness = false
 name = "transfer_context_v2"
 harness = false
 required-features = ["block-manager", "testing-cuda"]
+
+[[bench]]
+name = "block_manager_v2"
+harness = false
+required-features = ["block-manager"]
 [dependencies]
 # repo
 dynamo-runtime = { workspace = true }
@@ -102,6 +107,7 @@ offset-allocator = "0.2"
 regex = "1"
 rayon = "1"
 dashmap = { version = "5.5.3" }
+lru = "0.16"
 
 # input/text
 dialoguer = { version = "0.11", default-features = false, features = ["editor", "history"] }

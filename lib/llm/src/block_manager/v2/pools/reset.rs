@@ -15,17 +15,19 @@ use std::{collections::VecDeque, sync::Arc};
 pub struct ResetPool<T> {
     block_allocator: Arc<Mutex<dyn BlockAllocator<T> + Send + Sync>>,
     return_fn: Arc<dyn Fn(Block<T, Reset>) + Send + Sync>,
+    block_size: usize,
 }
 
 impl<T: BlockMetadata> ResetPool<T> {
-    pub fn new(blocks: Vec<Block<T, Reset>>) -> Self {
+    pub fn new(blocks: Vec<Block<T, Reset>>, block_size: usize) -> Self {
         let allocator = DequeBlockAllocator::new();
-        Self::from_block_allocator(allocator, blocks)
+        Self::from_block_allocator(allocator, blocks, block_size)
     }
 
     pub fn from_block_allocator(
         mut allocator: impl BlockAllocator<T> + Send + Sync + 'static,
         blocks: Vec<Block<T, Reset>>,
+        block_size: usize,
     ) -> Self {
         for (i, block) in blocks.iter().enumerate() {
             if block.block_id() != i as u64 {
@@ -47,6 +49,7 @@ impl<T: BlockMetadata> ResetPool<T> {
         Self {
             block_allocator,
             return_fn,
+            block_size,
         }
     }
 
@@ -96,25 +99,26 @@ impl<T: BlockMetadata> ResetPool<T> {
     pub(crate) fn return_fn(&self) -> Arc<dyn Fn(Block<T, Reset>) + Send + Sync> {
         self.return_fn.clone()
     }
+
+    /// Get the expected block size for this pool
+    pub(crate) fn block_size(&self) -> usize {
+        self.block_size
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[derive(Debug, Clone, PartialEq)]
-    struct TestData {
-        value: u64,
-    }
+    use crate::block_manager::v2::pools::test_utils::TestData;
 
     fn create_test_blocks(count: usize) -> Vec<Block<TestData, Reset>> {
-        (0..count as u64).map(Block::new).collect()
+        (0..count as u64).map(|id| Block::new(id, 4)).collect()
     }
 
     #[test]
     fn test_mutable_block_raii_return() {
         let blocks = create_test_blocks(3);
-        let pool = ResetPool::new(blocks);
+        let pool = ResetPool::new(blocks, 4);
 
         assert_eq!(pool.len(), 3);
 
@@ -130,7 +134,7 @@ mod tests {
     #[test]
     fn test_pool_allocation_and_return_cycle() {
         let blocks = create_test_blocks(5);
-        let pool = ResetPool::new(blocks);
+        let pool = ResetPool::new(blocks, 4);
 
         for _ in 0..3 {
             assert_eq!(pool.len(), 5);
@@ -148,7 +152,7 @@ mod tests {
     #[test]
     fn test_try_allocate_blocks_partial() {
         let blocks = create_test_blocks(3);
-        let pool = ResetPool::new(blocks);
+        let pool = ResetPool::new(blocks, 4);
 
         let allocated = pool.try_allocate_blocks(5);
         assert_eq!(allocated.len(), 3);
@@ -158,7 +162,7 @@ mod tests {
     #[test]
     fn test_allocate_blocks_insufficient() {
         let blocks = create_test_blocks(2);
-        let pool = ResetPool::new(blocks);
+        let pool = ResetPool::new(blocks, 4);
 
         let result = pool.allocate_blocks(3);
         assert!(result.is_none());
@@ -169,6 +173,12 @@ mod tests {
 #[derive(Debug)]
 pub struct DequeBlockAllocator<T: BlockMetadata> {
     blocks: VecDeque<Block<T, Reset>>,
+}
+
+impl<T: BlockMetadata> Default for DequeBlockAllocator<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T: BlockMetadata> DequeBlockAllocator<T> {

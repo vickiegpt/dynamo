@@ -10,15 +10,14 @@
 
 use super::block::{Block, Registered};
 use super::frequency_sketch::FrequencyTracker;
-use super::{CompleteBlock, SequenceHash};
-use crate::block_manager::v2::pools::{BlockMetadata, RegisteredBlock};
+use super::{BlockMetadata, CompleteBlock, RegisteredBlock, SequenceHash};
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::{Arc, Weak};
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
 /// Error types for attachment operations
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,13 +107,14 @@ struct BlockRegistrationHandleInner {
     /// Attachments for the block
     attachments: Mutex<AttachmentStore>,
     /// Weak reference to the registry - allows us to remove the block from the registry on drop
-    registry: Weak<Mutex<RegistryState>>,
+    registry: Weak<RwLock<RegistryState>>,
 }
 
 impl Drop for BlockRegistrationHandleInner {
+    #[inline]
     fn drop(&mut self) {
         if let Some(registry) = self.registry.upgrade() {
-            let mut state = registry.lock();
+            let mut state = registry.write();
             state.canonical_blocks.remove(&self.seq_hash);
         }
     }
@@ -184,20 +184,23 @@ impl BlockRegistrationHandle {
     pub(crate) fn attach_block<T: BlockMetadata + Sync>(
         &self,
         block: super::PrimaryBlock<T>,
-    ) -> super::ImmutableBlock<T> {
+    ) -> Arc<dyn RegisteredBlock<T>> {
         let type_id = TypeId::of::<Weak<Block<T, Registered>>>();
         let mut attachments = self.inner.attachments.lock();
 
-        if let Some(weak_any) = attachments.weak_blocks.get(&type_id) {
-            if let Some(weak) = weak_any.downcast_ref::<WeakBlock<T>>() {
-                debug_assert!(
-                    weak.raw_block.upgrade().is_none(),
-                    "Attempted to reattach block when raw block is still alive"
-                );
-                debug_assert!(
-                    weak.reg_block.upgrade().is_none(),
-                    "Attempted to reattach block when registered block is still alive"
-                );
+        #[cfg(debug_assertions)]
+        {
+            if let Some(weak_any) = attachments.weak_blocks.get(&type_id) {
+                if let Some(weak) = weak_any.downcast_ref::<WeakBlock<T>>() {
+                    debug_assert!(
+                        weak.raw_block.upgrade().is_none(),
+                        "Attempted to reattach block when raw block is still alive"
+                    );
+                    debug_assert!(
+                        weak.reg_block.upgrade().is_none(),
+                        "Attempted to reattach block when registered block is still alive"
+                    );
+                }
             }
         }
 
@@ -213,7 +216,7 @@ impl BlockRegistrationHandle {
             }),
         );
 
-        super::ImmutableBlock { block: reg_arc }
+        reg_arc as Arc<dyn super::RegisteredBlock<T>>
     }
 
     pub(crate) fn register_block<T: BlockMetadata + Sync>(
@@ -221,7 +224,7 @@ impl BlockRegistrationHandle {
         mut block: CompleteBlock<T>,
         duplication_policy: super::BlockDuplicationPolicy,
         pool_return_fn: Arc<dyn Fn(Arc<Block<T, Registered>>) + Send + Sync>,
-    ) -> super::ImmutableBlock<T> {
+    ) -> Arc<dyn RegisteredBlock<T>> {
         let type_id = TypeId::of::<Weak<Block<T, Registered>>>();
         let block_id = block.block_id();
 
@@ -253,16 +256,12 @@ impl BlockRegistrationHandle {
                                 existing_primary.clone(),
                                 reset_return_fn,
                             );
-                            return super::ImmutableBlock {
-                                block: Arc::new(duplicate),
-                            };
+                            return Arc::new(duplicate);
                         }
                         super::BlockDuplicationPolicy::Reject => {
                             // Return existing primary, discard new block
                             // The registered_block will be dropped and eventually returned to reset pool
-                            return super::ImmutableBlock {
-                                block: existing_primary,
-                            };
+                            return existing_primary as Arc<dyn super::RegisteredBlock<T>>;
                         }
                     }
                 }
@@ -290,15 +289,14 @@ impl BlockRegistrationHandle {
 
         drop(attachments); // Release lock
 
-        super::ImmutableBlock {
-            block: primary_arc as Arc<dyn super::RegisteredBlock<T>>,
-        }
+        primary_arc as Arc<dyn super::RegisteredBlock<T>>
     }
 
+    #[inline]
     pub(crate) fn try_get_block<T: BlockMetadata + Sync>(
         &self,
         pool_return_fn: Arc<dyn Fn(Arc<Block<T, Registered>>) + Send + Sync>,
-    ) -> Option<super::ImmutableBlock<T>> {
+    ) -> Option<Arc<dyn RegisteredBlock<T>>> {
         let type_id = TypeId::of::<Weak<Block<T, Registered>>>();
         let attachments = self.inner.attachments.lock();
 
@@ -309,9 +307,7 @@ impl BlockRegistrationHandle {
 
         if let Some(primary_arc) = weak_block.reg_block.upgrade() {
             drop(attachments);
-            return Some(super::ImmutableBlock {
-                block: primary_arc as Arc<dyn super::RegisteredBlock<T>>,
-            });
+            return Some(primary_arc as Arc<dyn super::RegisteredBlock<T>>);
         }
 
         if let Some(raw_arc) = weak_block.raw_block.upgrade() {
@@ -332,9 +328,7 @@ impl BlockRegistrationHandle {
                 .insert(type_id, Box::new(weak_block_mut));
             drop(attachments);
 
-            return Some(super::ImmutableBlock {
-                block: primary_arc as Arc<dyn super::RegisteredBlock<T>>,
-            });
+            return Some(primary_arc as Arc<dyn super::RegisteredBlock<T>>);
         }
 
         None
@@ -457,7 +451,7 @@ impl<'a, T: Any + Send + Sync> TypedAttachments<'a, T> {
 /// Tracks canonical blocks and provides registration handles.
 #[derive(Clone)]
 pub struct BlockRegistry {
-    state: Arc<Mutex<RegistryState>>,
+    state: Arc<RwLock<RegistryState>>,
     frequency_tracker: Option<Arc<dyn FrequencyTracker>>,
 }
 
@@ -469,7 +463,7 @@ struct RegistryState {
 impl BlockRegistry {
     pub fn new() -> Self {
         Self {
-            state: Arc::new(Mutex::new(RegistryState {
+            state: Arc::new(RwLock::new(RegistryState {
                 canonical_blocks: HashMap::new(),
             })),
             frequency_tracker: None,
@@ -478,7 +472,7 @@ impl BlockRegistry {
 
     pub fn with_frequency_tracker(frequency_tracker: Arc<dyn FrequencyTracker>) -> Self {
         Self {
-            state: Arc::new(Mutex::new(RegistryState {
+            state: Arc::new(RwLock::new(RegistryState {
                 canonical_blocks: HashMap::new(),
             })),
             frequency_tracker: Some(frequency_tracker),
@@ -507,12 +501,27 @@ impl BlockRegistry {
     /// If the sequence is already registered, returns the existing handle.
     /// Otherwise, creates a new canonical registration.
     /// This method triggers frequency tracking.
+    #[inline]
     pub fn register_sequence_hash(&self, seq_hash: SequenceHash) -> BlockRegistrationHandle {
         self.touch(seq_hash);
 
-        let mut state = self.state.lock();
+        // First try to get existing registration with read lock
+        {
+            let state = self.state.read();
+            if let Some(weak_handle) = state.canonical_blocks.get(&seq_hash) {
+                if let Some(existing_handle) = weak_handle.upgrade() {
+                    // Return a clone of the existing canonical handle
+                    return BlockRegistrationHandle {
+                        inner: existing_handle,
+                    };
+                }
+            }
+        }
 
-        // Check if we already have a canonical block for this sequence hash
+        // Need to create new registration, acquire write lock
+        let mut state = self.state.write();
+
+        // Double-check after acquiring write lock (another thread might have inserted)
         if let Some(weak_handle) = state.canonical_blocks.get(&seq_hash) {
             if let Some(existing_handle) = weak_handle.upgrade() {
                 // Return a clone of the existing canonical handle
@@ -539,9 +548,22 @@ impl BlockRegistry {
     /// Internal method for transferring block registration without triggering frequency tracking.
     /// Used when copying blocks between pools where we don't want to count the transfer as a new access.
     pub(crate) fn transfer_registration(&self, seq_hash: SequenceHash) -> BlockRegistrationHandle {
-        let mut state = self.state.lock();
+        // First try to get existing registration with read lock
+        {
+            let state = self.state.read();
+            if let Some(weak_handle) = state.canonical_blocks.get(&seq_hash) {
+                if let Some(existing_handle) = weak_handle.upgrade() {
+                    return BlockRegistrationHandle {
+                        inner: existing_handle,
+                    };
+                }
+            }
+        }
 
-        // Check if we already have a canonical block for this sequence hash
+        // Need to create new registration, acquire write lock
+        let mut state = self.state.write();
+
+        // Double-check after acquiring write lock
         if let Some(weak_handle) = state.canonical_blocks.get(&seq_hash) {
             if let Some(existing_handle) = weak_handle.upgrade() {
                 return BlockRegistrationHandle {
@@ -566,15 +588,20 @@ impl BlockRegistry {
 
     /// Match a sequence hash and return a registration handle.
     /// This method triggers frequency tracking.
-    pub fn match_sequence_hash(&self, seq_hash: SequenceHash) -> Option<BlockRegistrationHandle> {
-        let state = self.state.lock();
+    #[inline]
+    pub fn match_sequence_hash(
+        &self,
+        seq_hash: SequenceHash,
+        touch: bool,
+    ) -> Option<BlockRegistrationHandle> {
+        let state = self.state.read();
         let result = state
             .canonical_blocks
             .get(&seq_hash)
             .and_then(|weak| weak.upgrade())
             .map(|inner| BlockRegistrationHandle { inner });
 
-        if result.is_some() {
+        if result.is_some() && touch {
             drop(state);
             self.touch(seq_hash);
         }
@@ -583,8 +610,9 @@ impl BlockRegistry {
     }
 
     /// Check if a sequence is currently registered (has a canonical handle).
+    #[inline]
     pub fn is_registered(&self, seq_hash: SequenceHash) -> bool {
-        let state = self.state.lock();
+        let state = self.state.read();
         state
             .canonical_blocks
             .get(&seq_hash)
@@ -594,8 +622,13 @@ impl BlockRegistry {
 
     /// Get the current number of registered blocks.
     pub fn registered_count(&self) -> usize {
-        let state = self.state.lock();
+        let state = self.state.read();
         state.canonical_blocks.len()
+    }
+
+    /// Get the frequency tracker if frequency tracking is enabled.
+    pub fn frequency_tracker(&self) -> Option<Arc<dyn FrequencyTracker>> {
+        self.frequency_tracker.clone()
     }
 }
 
@@ -1004,7 +1037,10 @@ mod tests {
         let _handle1 = registry.register_sequence_hash(100);
         assert_eq!(registry.count(100), 1);
 
-        let _handle2 = registry.match_sequence_hash(100);
+        let _handle2 = registry.match_sequence_hash(100, true);
+        assert_eq!(registry.count(100), 2);
+
+        let _handle3 = registry.match_sequence_hash(100, false);
         assert_eq!(registry.count(100), 2);
     }
 
@@ -1038,9 +1074,12 @@ mod tests {
 
     #[test]
     fn test_concurrent_try_get_block_and_drop() {
+        use super::super::super::policies::reuse::fifo::FifoReusePolicy;
         use super::super::{
-            BlockDuplicationPolicy, CompleteBlock, block::Block, inactive::InactivePool,
-            reset::ResetPool, reuse_policy::fifo::FifoReusePolicy,
+            BlockDuplicationPolicy, CompleteBlock,
+            block::Block,
+            inactive::{InactivePool, backends::hashmap_backend::HashMapBackend},
+            reset::ResetPool,
         };
         use crate::tokens::TokenBlockSequence;
 
@@ -1063,13 +1102,16 @@ mod tests {
         let seq_hash = token_block.sequence_hash();
         let handle = registry.register_sequence_hash(seq_hash);
 
-        let reset_blocks: Vec<_> = (0..10).map(|i| Block::new(i)).collect();
-        let reset_pool = ResetPool::new(reset_blocks);
+        let reset_blocks: Vec<_> = (0..10).map(|i| Block::new(i, 4)).collect();
+        let reset_pool = ResetPool::new(reset_blocks, 4);
         let reuse_policy = Box::new(FifoReusePolicy::new());
-        let registered_pool = InactivePool::new(reuse_policy, &reset_pool);
+        let backend = Box::new(HashMapBackend::new(reuse_policy));
+        let registered_pool = InactivePool::new(backend, &reset_pool);
         let pool_return_fn = registered_pool.return_fn();
 
-        let complete_block = Block::new(0).complete(token_block);
+        let complete_block = Block::new(0, 4)
+            .complete(token_block)
+            .expect("Block size should match");
 
         let immutable_block = handle.register_block(
             CompleteBlock {
