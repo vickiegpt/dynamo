@@ -55,11 +55,6 @@ jobs:
           sccache_s3_bucket: ${{ secrets.SCCACHE_S3_BUCKET }}
           aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      - name: Run tests
-        uses: ./.github/actions/pytest
-        with:
-          image_tag: ${{ steps.build-image.outputs.image_tag }}
-          pytest_marks: "e2e and vllm and gpu_1 and not slow"
       - name: Docker Tag and Push
         uses: ./.github/actions/docker-tag-push
         with:
@@ -72,6 +67,11 @@ jobs:
           azure_acr_hostname: ${{ secrets.AZURE_ACR_HOSTNAME }}
           azure_acr_user: ${{ secrets.AZURE_ACR_USER }}
           azure_acr_password: ${{ secrets.AZURE_ACR_PASSWORD }}
+      - name: Run tests
+        uses: ./.github/actions/pytest
+        with:
+          image_tag: ${{ steps.build-image.outputs.image_tag }}
+          pytest_marks: "e2e and vllm and gpu_1 and not slow"
 
   sglang:
     runs-on: gpu-l40-amd64
@@ -92,11 +92,6 @@ jobs:
           sccache_s3_bucket: ${{ secrets.SCCACHE_S3_BUCKET }}
           aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      - name: Run tests
-        uses: ./.github/actions/pytest
-        with:
-          image_tag: ${{ steps.build-image.outputs.image_tag }}
-          pytest_marks: "e2e and sglang and gpu_1"
       - name: Docker Tag and Push
         uses: ./.github/actions/docker-tag-push
         with:
@@ -109,6 +104,11 @@ jobs:
           azure_acr_hostname: ${{ secrets.AZURE_ACR_HOSTNAME }}
           azure_acr_user: ${{ secrets.AZURE_ACR_USER }}
           azure_acr_password: ${{ secrets.AZURE_ACR_PASSWORD }}
+      - name: Run tests
+        uses: ./.github/actions/pytest
+        with:
+          image_tag: ${{ steps.build-image.outputs.image_tag }}
+          pytest_marks: "e2e and sglang and gpu_1"
 
   trtllm:
     runs-on: gpu-l40-amd64
@@ -129,11 +129,6 @@ jobs:
           sccache_s3_bucket: ${{ secrets.SCCACHE_S3_BUCKET }}
           aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      - name: Run tests
-        uses: ./.github/actions/pytest
-        with:
-          image_tag: ${{ steps.build-image.outputs.image_tag }}
-          pytest_marks: "e2e and trtllm_marker and gpu_1 and not slow"
       - name: Docker Tag and Push
         uses: ./.github/actions/docker-tag-push
         with:
@@ -146,6 +141,11 @@ jobs:
           azure_acr_hostname: ${{ secrets.AZURE_ACR_HOSTNAME }}
           azure_acr_user: ${{ secrets.AZURE_ACR_USER }}
           azure_acr_password: ${{ secrets.AZURE_ACR_PASSWORD }}
+      - name: Run tests
+        uses: ./.github/actions/pytest
+        with:
+          image_tag: ${{ steps.build-image.outputs.image_tag }}
+          pytest_marks: "e2e and trtllm_marker and gpu_1 and not slow"
 
   e2e-tests:
     runs-on: cpu-amd-m5-2xlarge
