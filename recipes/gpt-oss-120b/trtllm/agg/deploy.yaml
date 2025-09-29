@@ -27,7 +27,7 @@ spec:
           command:
           - /bin/sh
           - -c
-          image: nvcr.io/nvidian/nim-llm-dev/vllm-runtime:gpt-oss-dynamo-nvl72-debug-trtllm-tot
+          image: nvcr.io/nvidian/dynamo-dev/dynamo-trtllm-runtime:7fdf50fec2cae9112224f5cea26cef3dde78506f-35606896-trtllm-arm64
       pvc:
         create: false
         mountPoint: /model-store
@@ -60,16 +60,17 @@ spec:
           args:
           - |
             python3 -m dynamo.trtllm \
-              --model-path "/model-store/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a" \
+              --model-path "${MODEL_PATH}" \
               --served-model-name "openai/gpt-oss-120b" \
               --extra-engine-args "${ENGINE_ARGS}" \
-              --max-num-tokens 20000 \
-              --max-batch-size 640 \
+              --tensor-parallel-size 4 \
+              --expert-parallel-size 4 \
+              --max-batch-size 800 \
               --free-gpu-memory-fraction 0.9
           command:
           - /bin/sh
           - -c
-          image: nvcr.io/nvidian/nim-llm-dev/vllm-runtime:gpt-oss-dynamo-nvl72-debug-trtllm-tot
+          image: nvcr.io/nvidian/dynamo-dev/dynamo-trtllm-runtime:7fdf50fec2cae9112224f5cea26cef3dde78506f-35606896-trtllm-arm64
           env:
           - name: TRTLLM_ENABLE_PDL
             value: "1"
