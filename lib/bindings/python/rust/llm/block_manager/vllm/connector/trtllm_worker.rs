@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 use super::*;
-use crate::llm::block_manager::distributed::get_barrier_id_prefix;
+use crate::llm::block_manager::distributed::get_kvbm_leader_port;
 use crate::llm::block_manager::vllm::connector::worker::event_sync_blocking;
 use crate::{
     DistributedRuntime as PyDistributedRuntime, llm::block_manager::distributed::VllmTensor,
@@ -49,6 +49,7 @@ pub trait Worker: Send + Sync {
 
 pub struct KvConnectorWorker {
     drt: DistributedRuntime,
+    rank: usize,
     kvbm_worker: OnceLock<KvbmWorker>,
     connector: WorkerSchedulerClient,
     transfer_client: TransferSchedulerClient,
@@ -71,7 +72,7 @@ pub struct KvConnectorWorker {
 }
 
 impl KvConnectorWorker {
-    fn new(py_drt: PyDistributedRuntime, trtllm_rank: String) -> anyhow::Result<Self> {
+    fn new(py_drt: PyDistributedRuntime, trtllm_rank: usize) -> anyhow::Result<Self> {
         let drt = py_drt.inner.clone();
         let runtime = drt.runtime().primary();
 
@@ -95,6 +96,7 @@ impl KvConnectorWorker {
 
         Ok(Self {
             drt,
+            rank: trtllm_rank,
             kvbm_worker: OnceLock::new(),
             connector: worker_client,
             transfer_client,
@@ -129,13 +131,14 @@ impl Worker for KvConnectorWorker {
 
         let config = KvbmWorkerConfig::builder()
             .drt(self.drt.clone())
+            .rank(self.rank)
             .num_device_blocks(num_device_blocks)
             .page_size(page_size)
             .tensors(kv_cache_tensors)
             .device_id(device_id)
             .dtype_width_bytes(dtype_width_bytes)
             .is_fully_contiguous_layout(true)
-            .barrier_id_prefix(get_barrier_id_prefix())
+            .leader_port(get_kvbm_leader_port())
             .scheduler_client(Some(self.transfer_client.clone()))
             .build()?;
 
@@ -391,7 +394,7 @@ pub struct PyTrtllmKvConnectorWorker {
 impl PyTrtllmKvConnectorWorker {
     #[new]
     #[pyo3(signature = (py_drt, trtllm_rank))]
-    pub fn new(py_drt: PyDistributedRuntime, trtllm_rank: String) -> PyResult<Self> {
+    pub fn new(py_drt: PyDistributedRuntime, trtllm_rank: usize) -> PyResult<Self> {
         let connector_worker: Box<dyn Worker> =
             Box::new(KvConnectorWorker::new(py_drt, trtllm_rank).map_err(to_pyerr)?);
         Ok(Self { connector_worker })

@@ -4,6 +4,7 @@
 
 from typing import List
 
+from tensorrt_llm import logger
 from tensorrt_llm._torch.pyexecutor.kv_cache_connector import (
     KvCacheConnectorScheduler,
     SchedulerOutput,
@@ -33,7 +34,7 @@ class DynamoKVBMConnectorLeader(KvCacheConnectorScheduler):
         # Set bytes_per_block to 0, because we will retrieve the actual value from the worker side.
         leader = KvbmLeader(world_size, drt=self.drt)
 
-        print(f"KvConnectorLeader initialized with rank: {mappings.rank}")
+        logger.info(f"KvConnectorLeader initialized with rank: {mappings.rank}")
         self._connector = RustKvConnectorLeader(
             mappings.rank, self.drt, self.block_size, leader
         )

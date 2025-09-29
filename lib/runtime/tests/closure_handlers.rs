@@ -43,9 +43,9 @@ async fn test_closure_handlers_comprehensive() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let manager1 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
     let manager2 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     // Shared state for testing
     let log_messages = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -194,9 +194,9 @@ async fn test_closure_handler_type_validation() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let manager1 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
     let manager2 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     // Register a NoReturnHandler closure
     manager2

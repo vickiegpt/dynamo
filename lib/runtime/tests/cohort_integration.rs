@@ -38,7 +38,8 @@ async fn setup_leader(
     CancellationToken,
 )> {
     let cancel_token = CancellationToken::new();
-    let manager = ZmqActiveMessageManager::new(endpoint.to_string(), cancel_token.clone()).await?;
+    let manager =
+        ZmqActiveMessageManager::new(endpoint.to_string(), cancel_token.clone(), None).await?;
     let client = manager.zmq_client();
 
     // Create cohort configuration
@@ -86,7 +87,8 @@ async fn setup_worker(
 ) -> Result<(Arc<ZmqActiveMessageManager>, CancellationToken)> {
     let cancel_token = CancellationToken::new();
     let manager =
-        ZmqActiveMessageManager::new("tcp://0.0.0.0:0".to_string(), cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new("tcp://0.0.0.0:0".to_string(), cancel_token.clone(), None)
+            .await?;
     let client = manager.zmq_client();
 
     // Establish bidirectional peer connection

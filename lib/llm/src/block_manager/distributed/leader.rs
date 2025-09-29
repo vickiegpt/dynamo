@@ -2,32 +2,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-
-use dynamo_runtime::DistributedRuntime;
+use dynamo_runtime::active_message::handler::InstanceId;
 use utils::*;
-use zmq::*;
 
-use dynamo_runtime::utils::leader_worker_barrier::LeaderBarrier;
-
-use anyhow::{Context, anyhow};
+use anyhow::{Context, Result, bail};
 use derive_builder::Builder;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Notify;
-use tokio::sync::OnceCell;
 use tokio::sync::oneshot;
-use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
-/// Data that is sent to workers over ETCD to establish a ZMQ connection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KvbmLeaderData {
-    pub pub_url: String,
-    pub ack_url: String,
-    pub num_host_blocks: usize,
-    pub num_disk_blocks: usize,
-}
+use dynamo_runtime::active_message::{
+    client::ActiveMessageClient,
+    handler::HandlerType,
+    manager::ActiveMessageManager,
+    zmq::{
+        ZmqActiveMessageManager,
+        builtin_handlers::JoinCohortHandler,
+        cohort::{CohortType, LeaderWorkerCohort},
+    },
+};
 
 #[derive(Builder, Clone, Debug, Default)]
 pub struct KvbmLeaderNumBlocksConfig {
@@ -51,10 +48,6 @@ fn compute_num_blocks(
 
 #[derive(Builder, Clone, Debug)]
 pub struct KvbmLeaderConfig {
-    /// The barrier id to use for syncing with workers.
-    #[builder(default = "String::from(\"kvbm\")")]
-    barrier_id_prefix: String,
-
     /// The world size.
     #[builder(default = "1")]
     world_size: usize,
@@ -63,8 +56,8 @@ pub struct KvbmLeaderConfig {
     #[builder(default = "120")]
     leader_init_timeout_secs: u64,
 
-    #[builder(setter(strip_option))]
-    drt: Option<DistributedRuntime>,
+    #[builder(default = "5555")]
+    leader_port: u16,
 
     #[builder(default = "KvbmLeaderNumBlocksConfig::default()")]
     host_blocks_config: KvbmLeaderNumBlocksConfig,
@@ -125,300 +118,196 @@ pub struct KvbmLeaderState {
 /// - Sending messages to workers.
 pub struct KvbmLeader {
     state: Arc<KvbmLeaderState>,
-    zmq_leader: Arc<OnceCell<ZmqActiveMessageLeader>>,
     config: KvbmLeaderConfig,
-    //readiness flags
-    workers_sync_ready: Arc<AtomicBool>,
-    workers_sync_ready_notify: Arc<Notify>,
-    workers_sync_done: Arc<AtomicBool>,
+    am_manager: Arc<ZmqActiveMessageManager>,
+    cohort: Arc<LeaderWorkerCohort>,
 }
 
 impl KvbmLeader {
-    pub async fn new(mut config: KvbmLeaderConfig) -> anyhow::Result<Self> {
-        let drt = match config.drt.take() {
-            Some(dtr) => dtr,
-            None => {
-                anyhow::bail!("No distributed runtime provided");
-            }
-        };
+    pub async fn new(config: KvbmLeaderConfig) -> anyhow::Result<Self> {
+        let cancel_token = CancellationToken::new();
 
-        let leader_sockets = new_leader_sockets("tcp://127.0.0.1")?;
+        let leader_sub_endpoint = format!("tcp://0.0.0.0:{}", config.leader_port);
+        let leader_uuid = InstanceId::new_v5(&Uuid::NAMESPACE_DNS, b"kvbm_leader");
+        let am_manager = Arc::new(
+            ZmqActiveMessageManager::new(
+                leader_sub_endpoint,
+                cancel_token.clone(),
+                Some(leader_uuid),
+            )
+            .await?,
+        );
+        let leader_client = am_manager.zmq_client();
+
+        tracing::debug!("Leader listening on: {}", leader_client.endpoint());
+        tracing::debug!("Leader instance ID: {}", leader_client.instance_id());
+
+        // Create cohort with {world_size} expected workers
+        let cohort: Arc<LeaderWorkerCohort> = Arc::new(LeaderWorkerCohort::new(
+            leader_client.clone(),
+            CohortType::FixedSize(config.world_size),
+        ));
 
         let leader = Self {
             state: Arc::new(KvbmLeaderState::default()),
-            zmq_leader: Arc::new(tokio::sync::OnceCell::new()),
             config,
-            workers_sync_ready: Arc::new(AtomicBool::new(false)),
-            workers_sync_ready_notify: Arc::new(Notify::new()),
-            workers_sync_done: Arc::new(AtomicBool::new(false)),
+            am_manager,
+            cohort,
         };
 
-        let cancel_token = tokio_util::sync::CancellationToken::new();
+        // Register cohort handlers
+        let join_handler = HandlerType::response(JoinCohortHandler::new(leader.cohort.clone()));
+        leader
+            .am_manager
+            .register_handler_typed(join_handler, None)
+            .await?;
 
-        // The leader_sockets struct cannot be cloned,
-        // so we use a tuple to "struct" the two urls
-        let leader_urls = (
-            leader_sockets.pub_url.clone(),
-            leader_sockets.ack_url.clone(),
-        );
-        leader.spawn_barrier_task(drt, leader_urls);
-        leader.spawn_zmq_task(leader_sockets, cancel_token);
+        leader.spawn_background_initialization(cancel_token);
 
         Ok(leader)
     }
 
-    fn spawn_barrier_task(&self, drt: DistributedRuntime, leader_urls: (String, String)) {
+    fn spawn_background_initialization(&self, cancel_token: CancellationToken) {
+        let cohort = self.cohort.clone();
         let state = self.state.clone();
-        let leader_config = self.config.clone();
-        let ready = Arc::clone(&self.workers_sync_ready);
-        let notify = Arc::clone(&self.workers_sync_ready_notify);
-        let done = Arc::clone(&self.workers_sync_done);
+        let cfg = self.config.clone();
+        // clone if you need am_manager inside; not necessary below:
+        // let am_manager = self.am_manager.clone();
 
         tokio::spawn(async move {
-            match KvbmLeader::run_barrier_sync(drt, leader_urls, leader_config).await {
-                Ok((num_device_blocks, num_host_blocks, num_disk_blocks)) => {
-                    // write back results
-                    state
-                        .num_device_blocks
-                        .store(num_device_blocks, Ordering::Release);
-                    state
-                        .num_host_blocks
-                        .store(num_host_blocks, Ordering::Release);
-                    state
-                        .num_disk_blocks
-                        .store(num_disk_blocks, Ordering::Release);
-                    ready.store(true, Ordering::Release);
-                    done.store(true, Ordering::Release);
-                    notify.notify_waiters();
-                }
-                Err(e) => {
-                    tracing::error!("Barrier sync failed: {e:?}");
-                    done.store(true, Ordering::Release);
-                    notify.notify_waiters();
-                }
+            if let Err(e) =
+                Self::do_background_initialization(cohort, state, cfg, cancel_token.clone()).await
+            {
+                tracing::error!(error = %e, "Leader background initialization failed");
+                // decide your policy: cancel runtime so callers can detect failure
+                cancel_token.cancel();
+            } else {
+                tracing::info!("Leader background initialization completed successfully.");
             }
         });
     }
 
-    async fn run_barrier_sync(
-        drt: DistributedRuntime,
-        leader_urls: (String, String),
-        leader_config: KvbmLeaderConfig,
-    ) -> anyhow::Result<(usize, usize, usize)> {
-        let barrier_id_worker_to_leader =
-            format!("{}{}", leader_config.barrier_id_prefix, "-worker-to-leader");
-        tracing::info!(
-            "Syncing leader barrier with {} workers on barrier id {}",
-            leader_config.world_size,
-            barrier_id_worker_to_leader
-        );
+    async fn do_background_initialization(
+        cohort: Arc<LeaderWorkerCohort>,
+        state: Arc<KvbmLeaderState>,
+        cfg: KvbmLeaderConfig,
+        _cancel_token: CancellationToken, // available if you want cooperative checks
+    ) -> Result<()> {
+        // (1) Wait for workers to join
+        let mut attempts = 0;
+        let max_attempts = cfg.leader_init_timeout_secs;
+        loop {
+            if cohort.is_full().await {
+                break;
+            }
+            attempts += 1;
+            if attempts >= max_attempts {
+                bail!("Cohort not ready - timeout waiting for workers");
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
 
-        // Build our leader barrier and publish the data.
-        // TODO: Use a separate timeout parameter from the ZMQ connection timeout
-        let worker_to_leader_barrier: LeaderBarrier<(), worker::KvbmWorkerData> =
-            LeaderBarrier::new(
-                barrier_id_worker_to_leader.clone(),
-                leader_config.world_size,
-                Some(Duration::from_secs(leader_config.leader_init_timeout_secs)),
-            );
-
-        let worker_data = worker_to_leader_barrier
-            .sync(&drt, &())
+        // (1b) Ensure workers have the metadata handler
+        let ok = cohort
+            .await_handler_on_all_workers(AM_MSG_WORKER_METADATA, Some(Duration::from_secs(30)))
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to sync worker to leader barrier: {:?}", e))?;
+            .is_ok();
+        if !ok {
+            bail!(
+                "Workers missing required handler: {}",
+                AM_MSG_WORKER_METADATA
+            );
+        }
 
-        let num_device_blocks = worker_data
-            .values()
-            .map(|data| data.num_device_blocks)
+        // Gather worker metadata
+        let worker_metas: Vec<KvbmWorkerData> = cohort
+            .par_broadcast_responses(AM_MSG_WORKER_METADATA, (), Duration::from_secs(30))
+            .await
+            .context("collect worker metadata via par_broadcast_responses")?;
+
+        let min_device_blocks = worker_metas
+            .iter()
+            .map(|m| m.num_device_blocks)
             .min()
-            .unwrap();
+            .ok_or_else(|| anyhow::anyhow!("empty worker metadata vector"))?;
 
-        // TODO: this works for TP, need to redefine bytes_per_block when we enable the DP/PP
-        let bytes_per_block: usize = worker_data.values().map(|d| d.bytes_per_block).sum();
+        let bytes_per_block_sum: usize = worker_metas.iter().map(|m| m.bytes_per_block).sum();
+        if bytes_per_block_sum == 0 {
+            bail!("bytes_per_block sum computed as 0");
+        }
 
-        assert!(
-            bytes_per_block > 0,
-            "bytes_per_block must be greater than 0"
-        );
+        // (2) Compute host/disk blocks
+        let num_host_blocks = compute_num_blocks(&cfg.host_blocks_config, bytes_per_block_sum);
+        let num_disk_blocks = compute_num_blocks(&cfg.disk_blocks_config, bytes_per_block_sum);
 
-        tracing::info!(
-            "Worker to leader barrier synced with {} workers",
-            leader_config.world_size
-        );
-        tracing::debug!("Worker data: {:?}", worker_data);
+        // Store in state
+        state
+            .num_device_blocks
+            .store(min_device_blocks, Ordering::Release);
+        state
+            .num_host_blocks
+            .store(num_host_blocks, Ordering::Release);
+        state
+            .num_disk_blocks
+            .store(num_disk_blocks, Ordering::Release);
 
-        let num_host_blocks =
-            compute_num_blocks(&leader_config.host_blocks_config, bytes_per_block);
-        let num_disk_blocks =
-            compute_num_blocks(&leader_config.disk_blocks_config, bytes_per_block);
-
-        // Start the second sync to transfer num_host_blocks and num_disk_blocks to worker
-        let barrier_id_leader_to_worker =
-            format!("{}{}", leader_config.barrier_id_prefix, "-leader-to-worker");
-        tracing::info!(
-            "Syncing leader barrier with {} workers on barrier id {}",
-            leader_config.world_size,
-            barrier_id_leader_to_worker
-        );
-
-        let (leader_pub_url, leader_ack_url) = leader_urls;
-        let zmq_data_leader_to_worker = Arc::new(KvbmLeaderData {
-            pub_url: leader_pub_url,
-            ack_url: leader_ack_url,
+        let leader_metadata = KvbmLeaderData {
             num_host_blocks,
             num_disk_blocks,
-        });
+        };
 
-        let leader_to_worker_barrier: LeaderBarrier<KvbmLeaderData, ()> = LeaderBarrier::new(
-            barrier_id_leader_to_worker.clone(),
-            leader_config.world_size,
-            Some(Duration::from_secs(leader_config.leader_init_timeout_secs)),
-        );
-
-        let _worker_data = leader_to_worker_barrier
-            .sync(&drt, zmq_data_leader_to_worker.as_ref())
+        // (3) Ensure leader-metadata handler, then broadcast and collect ACKs
+        let ok = cohort
+            .await_handler_on_all_workers(AM_MSG_LEADER_METADATA, Some(Duration::from_secs(30)))
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to sync leader to worker barrier: {:?}", e))?;
+            .is_ok();
+        if !ok {
+            bail!(
+                "Workers missing required handler: {}",
+                AM_MSG_LEADER_METADATA
+            );
+        }
 
-        tracing::info!(
-            "Worker to leader barrier synced with {} workers",
-            leader_config.world_size
-        );
-        Ok((num_device_blocks, num_host_blocks, num_disk_blocks))
-    }
-
-    fn spawn_zmq_task(
-        &self,
-        leader_sockets: LeaderSockets,
-        cancel: tokio_util::sync::CancellationToken,
-    ) {
-        let cell = self.zmq_leader.clone();
-        let state = self.state.clone();
-        let world_size = self.config.world_size;
-        let timeout = self.config.leader_init_timeout_secs;
-
-        tokio::spawn(async move {
-            let res = ZmqActiveMessageLeader::new(
-                leader_sockets,
-                world_size,
-                std::time::Duration::from_secs(timeout),
-                cancel,
+        let ack_results = cohort
+            .par_broadcast_acks(
+                AM_MSG_LEADER_METADATA,
+                leader_metadata,
+                Duration::from_secs(30),
             )
-            .await;
-
-            match res {
-                Ok(zmq) => {
-                    let _ = cell.set(zmq);
-                    // mark ready
-                    state
-                        .workers_allocation_ready
-                        .store(true, Ordering::Release);
-                    state.workers_ready_notify.notify_waiters();
-                }
-                Err(e) => {
-                    tracing::error!("ZMQ init failed: {e:?}");
-                }
-            }
-        });
-    }
-
-    // This is supposed to be used in non-blocking leader initialization
-    pub fn spawn_leader_readiness_barrier(&self, drt: DistributedRuntime) {
-        let timeout_secs = self.config.leader_init_timeout_secs;
-        let state = self.state.clone();
-        let leader_config = self.config.clone();
-        let handle = drt.runtime().primary();
-        handle.spawn(async move {
-            if !state.workers_allocation_ready.load(Ordering::Acquire) {
-                // Wait until ZMQ marks ready or we time out.
-                let waited = tokio::time::timeout(
-                    Duration::from_secs(timeout_secs),
-                    state.workers_ready_notify.notified(),
-                )
-                .await;
-                if waited.is_err() {
-                    tracing::error!(
-                        "leader readiness barrier wait timed out after {timeout_secs} seconds"
-                    );
-                    return;
-                }
-                // Double-check the flag (Acquire) after wakeup.
-                if !state.workers_allocation_ready.load(Ordering::Acquire) {
-                    tracing::error!("leader readiness notify fired but flag not set; aborting");
-                    return;
-                }
-            }
-
-            match KvbmLeader::run_leader_readiness(drt, leader_config).await {
-                Ok(()) => {
-                    tracing::info!("leader readiness barrier synced!");
-                }
-                Err(e) => {
-                    tracing::error!("leader readiness barrier failed: {e:?}");
-                }
-            }
-        });
-    }
-
-    // This is supposed to be used in blocking leader initialization
-    pub fn run_leader_readiness_barrier_blocking(
-        &self,
-        drt: DistributedRuntime,
-    ) -> anyhow::Result<()> {
-        let state = self.state.clone();
-        let timeout_secs = self.config.leader_init_timeout_secs;
-        let leader_config = self.config.clone();
-
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async move {
-                    // Create the future *before* checking the flag to avoid a lost-notify race.
-                    let notified = state.workers_ready_notify.notified();
-
-                    if !state.workers_allocation_ready.load(Ordering::Acquire) {
-                        // Wait (with timeout) until ZMQ task marks ready.
-                        tokio::time::timeout(Duration::from_secs(timeout_secs), notified)
-                            .await
-                            .map_err(|_| anyhow!("timed out waiting for workers_allocation_ready after {timeout_secs} seconds"))?;
-
-                        // Double-check after wake to ensure the flag is actually set.
-                        if !state.workers_allocation_ready.load(Ordering::Acquire) {
-                            return Err(anyhow!(
-                                "notified but workers_allocation_ready is still false"
-                            ));
-                        }
-                    }
-
-                    KvbmLeader::run_leader_readiness(drt, leader_config).await
-                })
-                .context("leader readiness barrier failed")
-        })
-    }
-
-    async fn run_leader_readiness(
-        drt: DistributedRuntime,
-        leader_config: KvbmLeaderConfig,
-    ) -> anyhow::Result<()> {
-        let barrier_id_leader_ready =
-            format!("{}{}", leader_config.barrier_id_prefix, "-leader-ready");
-        tracing::info!(
-            "Syncing leader readiness barrier with {} workers on barrier id {}",
-            leader_config.world_size,
-            barrier_id_leader_ready
-        );
-
-        let leader_readiness_barrier: LeaderBarrier<(), ()> = LeaderBarrier::new(
-            barrier_id_leader_ready.clone(),
-            leader_config.world_size,
-            Some(Duration::from_secs(leader_config.leader_init_timeout_secs)),
-        );
-
-        let _ = leader_readiness_barrier
-            .sync(&drt, &())
             .await
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to sync leader readiness barrier on leader: {:?}", e)
-            })?;
+            .context("broadcast leader metadata and collect ACKs")?;
+
+        let mut ready_failures = 0usize;
+        for (wid, res) in &ack_results {
+            if let Err(e) = res {
+                ready_failures += 1;
+                tracing::warn!(worker_id=%wid, err=%e, "Leader metadata READY ack failed");
+            }
+        }
+        if ready_failures > 0 {
+            bail!("{ready_failures} worker(s) failed to ACK leader metadata READY");
+        }
+
+        // (4) Verify block transfer handler is registered on all workers
+        let ok = cohort
+            .await_handler_on_all_workers(
+                AM_MSG_TRANSFER_BLOCKS,
+                Some(Duration::from_secs(cfg.leader_init_timeout_secs)),
+            )
+            .await
+            .is_ok();
+        if !ok {
+            bail!(
+                "Workers missing required handler: {}",
+                AM_MSG_TRANSFER_BLOCKS
+            );
+        }
+
+        // (5) Signal ready
+        state
+            .workers_allocation_ready
+            .store(true, Ordering::Release);
+        state.workers_ready_notify.notify_waiters();
 
         Ok(())
     }
@@ -427,20 +316,42 @@ impl KvbmLeader {
         &self,
         request: BlockTransferRequest,
     ) -> anyhow::Result<oneshot::Receiver<()>> {
-        let zmq = self
-            .zmq_leader
-            .get()
-            .ok_or_else(|| anyhow::anyhow!("ZMQ leader not ready"))?;
-        let data = vec![serde_json::to_vec(&request)?];
-        zmq.broadcast(ZMQ_TRANSFER_BLOCKS_MESSAGE, data).await
-    }
+        let (tx, rx) = oneshot::channel();
+        let cohort = self.cohort.clone();
 
-    pub fn is_worker_sync_ready(&self) -> bool {
-        self.workers_sync_ready.load(Ordering::Acquire)
-    }
+        tokio::spawn(async move {
+            let result = cohort
+                .par_broadcast_acks(AM_MSG_TRANSFER_BLOCKS, request, Duration::from_secs(15))
+                .await;
 
-    pub fn is_worker_sync_done(&self) -> bool {
-        self.workers_sync_done.load(Ordering::Acquire)
+            match result {
+                Ok(acks) => {
+                    // Succeed only if every worker ACKed Ok(())
+                    let mut failures = 0usize;
+                    for (wid, res) in acks {
+                        if let Err(err) = res {
+                            failures += 1;
+                            tracing::warn!(%wid, %err, "transfer_blocks: worker failed to ACK");
+                        }
+                    }
+
+                    if failures == 0 {
+                        // Signal success to caller
+                        let _ = tx.send(());
+                    } else {
+                        // On any failure, drop sender so receiver gets Canceled
+                        tracing::error!("transfer_blocks: {} worker ACK failures", failures);
+                    }
+                }
+                Err(e) => {
+                    // par_broadcast_acks itself failed (e.g., client error)
+                    tracing::error!("transfer_blocks: broadcast failed: {e:#}");
+                    // Drop sender so receiver gets Canceled
+                }
+            }
+        });
+
+        Ok(rx)
     }
 
     pub fn num_device_blocks(&self) -> usize {
@@ -456,27 +367,24 @@ impl KvbmLeader {
     }
 
     pub async fn wait_worker_sync_ready(&self) -> bool {
-        if self.is_worker_sync_ready() {
+        // fast path
+        if self.state.workers_allocation_ready.load(Ordering::Acquire) {
             return true;
         }
-        if self.is_worker_sync_done() {
-            return false;
-        }
 
-        let notified = self.workers_sync_ready_notify.notified();
-        if self.is_worker_sync_ready() {
+        let notified = self.state.workers_ready_notify.notified();
+
+        // Double-check after creating future to avoid lost-notify race.
+        if self.state.workers_allocation_ready.load(Ordering::Acquire) {
             return true;
         }
-        if self.is_worker_sync_done() {
-            return false;
-        }
 
-        // bounded wait
+        // bounded wait using the leader's configured timeout
         tokio::select! {
             _ = notified => {
-                self.is_worker_sync_ready()
+                self.state.workers_allocation_ready.load(Ordering::Acquire)
             }
-            _ = sleep(Duration::from_secs(self.config.leader_init_timeout_secs)) => false,
+            _ = tokio::time::sleep(Duration::from_secs(self.config.leader_init_timeout_secs)) => false,
         }
     }
 }

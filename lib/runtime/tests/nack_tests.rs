@@ -8,7 +8,7 @@ use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},
     handler::{AckHandler, ActiveMessage, HandlerType},
     manager::ActiveMessageManager,
-    zmq::ZmqActiveMessageManager,
+    zmq::{ZmqActiveMessageManager, cohort::CohortType},
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -83,9 +83,9 @@ async fn test_nack_on_payload_validation_failure() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let manager1 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
     let manager2 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     // Register handler with schema validation
     let handler = Arc::new(ValidationTestHandler::new());
@@ -172,13 +172,13 @@ async fn test_cohort_broadcast_with_nack() -> Result<()> {
 
     // Create leader and two workers
     let leader =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     let worker1 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     let worker2 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     // Register handlers with different validation requirements
     let handler1 = Arc::new(ValidationTestHandler::new()); // Accepts valid payloads
@@ -216,9 +216,8 @@ async fn test_cohort_broadcast_with_nack() -> Result<()> {
 
     // Create cohort
     let cohort = dynamo_runtime::active_message::zmq::LeaderWorkerCohort::new(
-        leader_client.instance_id(),
-        vec![worker1_client.instance_id(), worker2_client.instance_id()],
         leader_client.clone(),
+        CohortType::FixedSize(2),
     );
 
     tokio::time::sleep(Duration::from_millis(100)).await;

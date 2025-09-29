@@ -4,7 +4,7 @@
 use super::*;
 
 use std::sync::Arc;
-use utils::get_barrier_id_prefix;
+use utils::get_kvbm_leader_port;
 
 use llm_rs::block_manager::distributed::{
     BlockTransferHandler as RustBlockTransferHandler, KvbmWorker as KvbmWorkerImpl,
@@ -132,8 +132,6 @@ impl KvbmWorker {
             vllm_tensors.push(Arc::new(vllm_tensor));
         }
 
-        let barrier_id_prefix = get_barrier_id_prefix();
-
         let config = KvbmWorkerConfig::builder()
             .drt(drt)
             .num_device_blocks(num_device_blocks)
@@ -141,7 +139,7 @@ impl KvbmWorker {
             .tensors(vllm_tensors)
             .device_id(device_id)
             .dtype_width_bytes(dtype_width_bytes)
-            .barrier_id_prefix(barrier_id_prefix)
+            .leader_port(get_kvbm_leader_port())
             .build()
             .map_err(to_pyerr)?;
 

@@ -74,9 +74,9 @@ async fn test_basic_message_send_receive() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let manager1 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
     let manager2 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     let handler = Arc::new(TestHandler::new());
     let handler_type = HandlerType::no_return((*handler).clone());
@@ -118,7 +118,8 @@ async fn test_handler_registration_events() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let manager =
-        ZmqActiveMessageManager::new("tcp://127.0.0.1:0".to_string(), cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new("tcp://127.0.0.1:0".to_string(), cancel_token.clone(), None)
+            .await?;
 
     let mut events_rx = manager.handler_events();
 
@@ -150,9 +151,9 @@ async fn test_register_service_handler_with_response() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let manager1 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
     let manager2 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     let client1 = manager1.zmq_client();
     let client2 = manager2.zmq_client();
@@ -189,9 +190,9 @@ async fn test_list_handlers_with_response() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let manager1 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
     let manager2 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     // Register a test handler
     let handler = TestHandler::new();
@@ -233,9 +234,9 @@ async fn test_wait_for_handler_with_response() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let manager1 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
     let manager2 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     let client1 = manager1.zmq_client();
     let client2 = manager2.zmq_client();
@@ -275,9 +276,9 @@ async fn test_health_check_with_response() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let manager1 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
     let manager2 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     let client1 = manager1.zmq_client();
     let client2 = manager2.zmq_client();
@@ -312,9 +313,9 @@ async fn test_message_builder_fire_and_forget() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let manager1 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
     let manager2 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     let handler = Arc::new(TestHandler::new());
     let handler_type = HandlerType::no_return((*handler).clone());
@@ -401,9 +402,9 @@ async fn test_single_response_error_handling() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let manager1 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
     let manager2 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     let handler = Arc::new(ErrorTestHandler::new());
     let handler_type = HandlerType::response((*handler).clone());
@@ -509,9 +510,9 @@ async fn test_new_style_response_handler() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let manager1 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
     let manager2 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     let handler = Arc::new(NewStyleTestHandler::new());
     let handler_for_registration = NewStyleTestHandler {

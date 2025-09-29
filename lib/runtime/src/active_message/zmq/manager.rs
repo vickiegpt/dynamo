@@ -52,8 +52,9 @@ impl ZmqActiveMessageManagerBuilder {
         self,
         endpoint: String,
         cancel_token: CancellationToken,
+        instance_id: Option<InstanceId>,
     ) -> Result<ZmqActiveMessageManager> {
-        ZmqActiveMessageManager::new_with_builder(endpoint, cancel_token, self).await
+        ZmqActiveMessageManager::new_with_builder(endpoint, cancel_token, instance_id, self).await
     }
 }
 
@@ -101,16 +102,25 @@ impl ZmqActiveMessageManager {
         self.state.clone()
     }
 
+    pub fn handler_events_tx(&self) -> broadcast::Sender<HandlerEvent> {
+        self.handler_events_tx.clone()
+    }
+
     /// Create a builder for configuring ZmqActiveMessageManager options
     pub fn builder() -> ZmqActiveMessageManagerBuilder {
         ZmqActiveMessageManagerBuilder::new()
     }
 
-    pub async fn new(endpoint: String, cancel_token: CancellationToken) -> Result<Self> {
+    pub async fn new(
+        endpoint: String,
+        cancel_token: CancellationToken,
+        instance_id: Option<InstanceId>,
+    ) -> Result<Self> {
         // Use the builder with default settings for backward compatibility
         Self::new_with_builder(
             endpoint,
             cancel_token,
+            instance_id,
             ZmqActiveMessageManagerBuilder::new(),
         )
         .await
@@ -119,9 +129,10 @@ impl ZmqActiveMessageManager {
     pub(crate) async fn new_with_builder(
         endpoint: String,
         cancel_token: CancellationToken,
+        instance_id: Option<InstanceId>,
         _builder: ZmqActiveMessageManagerBuilder,
     ) -> Result<Self> {
-        let instance_id = InstanceId::new_v4();
+        let instance_id = instance_id.unwrap_or_else(InstanceId::new_v4);
 
         let context = tmq::Context::new();
         let sub_transport = ZmqTransport::new_subscriber_bound(&context, &endpoint)?;

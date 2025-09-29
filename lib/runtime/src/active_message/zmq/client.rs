@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::active_message::{
     client::{ActiveMessageClient, Endpoint, PeerInfo},
     handler::{ActiveMessage, HandlerId, InstanceId},
+    zmq::ZmqTransport,
 };
 
 struct AckEntry {
@@ -276,12 +277,8 @@ impl ZmqActiveMessageClient {
 
         // Process messages
         while let Some(message) = receiver.recv().await {
-            match serde_json::to_vec(&message) {
-                Ok(serialized) => {
-                    let mut parts = VecDeque::new();
-                    parts.push_back(Message::from(serialized));
-                    let multipart = Multipart(parts);
-
+            match ZmqTransport::serialize_message(&message) {
+                Ok(multipart) => {
                     if let Err(e) = pub_socket.send(multipart).await {
                         error!(
                             "Failed to send message via publisher to {}: {}",

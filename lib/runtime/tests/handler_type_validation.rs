@@ -69,9 +69,9 @@ async fn test_handler_type_validation_mismatch() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let manager1 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
     let manager2 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     // Register a NoReturnHandler but try to call it expecting a response (mismatch)
     let handler = TestHandler::new();
@@ -121,9 +121,9 @@ async fn test_handler_type_validation_correct() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     let manager1 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
     let manager2 =
-        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
+        ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone(), None).await?;
 
     // Register a NoReturnHandler and call it with fire_and_forget (correct match)
     let handler = TestHandler::new();

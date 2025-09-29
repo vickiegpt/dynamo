@@ -6,7 +6,6 @@ use super::*;
 use futures::future::try_join_all;
 use nixl_sys::NixlDescriptor;
 use utils::*;
-use zmq::*;
 
 use BlockTransferPool::*;
 
@@ -22,6 +21,8 @@ use crate::block_manager::{
     offload::MAX_TRANSFER_BATCH_SIZE,
     storage::{DeviceStorage, DiskStorage, Local, PinnedStorage},
 };
+
+use dynamo_runtime::active_message::{ActiveMessage, ActiveMessageClient, handler::AckHandler};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -211,15 +212,13 @@ impl BlockTransferHandler {
 }
 
 #[async_trait]
-impl Handler for BlockTransferHandler {
-    async fn handle(&self, mut message: MessageHandle) -> Result<()> {
-        if message.data.len() != 1 {
-            return Err(anyhow::anyhow!(
-                "Block transfer request must have exactly one data element"
-            ));
-        }
-
-        let mut request: BlockTransferRequest = serde_json::from_slice(&message.data[0])?;
+impl AckHandler for BlockTransferHandler {
+    async fn handle(
+        &self,
+        message: ActiveMessage,
+        _client: &dyn ActiveMessageClient,
+    ) -> Result<()> {
+        let mut request: BlockTransferRequest = message.deserialize()?;
 
         let result = if let Some(req) = request.connector_req.take() {
             let operation_id = req.uuid;
@@ -255,10 +254,21 @@ impl Handler for BlockTransferHandler {
             self.execute_transfer(request).await
         };
 
-        // we always ack regardless of if we error or not
-        message.ack().await?;
-
         // the error may trigger a cancellation
         result
+    }
+
+    fn name(&self) -> &str {
+        AM_MSG_TRANSFER_BLOCKS
+    }
+}
+
+impl std::fmt::Debug for BlockTransferHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BlockTransferHandler")
+            .field("device", &self.device.is_some())
+            .field("host", &self.host.is_some())
+            .field("disk", &self.disk.is_some())
+            .finish()
     }
 }
