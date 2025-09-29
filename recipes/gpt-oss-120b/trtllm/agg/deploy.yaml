@@ -47,15 +47,6 @@ spec:
                   operator: In
                   values:
                   - "true"
-          podAntiAffinity:
-            requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchExpressions:
-                - key: nvidia.com/dynamo-graph-deployment-name
-                  operator: In
-                  values:
-                  - gpt-oss-agg
-              topologyKey: kubernetes.io/hostname
         mainContainer:
           args:
           - |
