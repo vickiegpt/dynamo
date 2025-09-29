@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Enhanced script to upload complete GitHub Actions workflow and job metrics.
 This version runs as the final job in a workflow and captures metrics for 
@@ -15,11 +14,11 @@ from urllib.parse import urlparse
 import re
 
 # FILTERING CONFIGURATION - Only upload data for specific workflow/job combinations
-TARGET_WORKFLOW_NAME = "NVIDIA Dynamo Backends Github Validation"
+TARGET_WORKFLOW_NAME = "Docker Build and Test"
 TARGET_JOB_NAMES = [
-    "Build and Test - vllm",
-    "Build and Test - sglang", 
-    "Build and Test - trtllm"
+    "vllm",
+    "sglang", 
+    "trtllm"
 ]
 
 # NEW STANDARDIZED FIELD SCHEMA - Using consistent prefixes for OpenSearch mapping
@@ -83,21 +82,35 @@ class BuildMetricsReader:
     """Reader for Docker build metrics from environment variables and artifacts"""
     
     @staticmethod
-    def get_build_metrics() -> Optional[Dict[str, Any]]:
-        """Get build metrics from environment variables and/or JSON file"""
+    def get_build_metrics(framework: str = None) -> Optional[Dict[str, Any]]:
+        """Get build metrics from environment variables and/or JSON file for a specific framework"""
         metrics = {}
         
-        # Try to read from environment variables first
-        env_metrics = {
-            'build_duration_sec': os.getenv('BUILD_DURATION_SEC'),
-            'image_size_bytes': os.getenv('IMAGE_SIZE_BYTES'),
-            'image_size_mb': os.getenv('IMAGE_SIZE_MB'),
-            'build_start_time': os.getenv('BUILD_START_TIME'),
-            'build_end_time': os.getenv('BUILD_END_TIME'),
-            'cache_hit_rate': os.getenv('CACHE_HIT_RATE'),
-            'framework': os.getenv('BUILD_FRAMEWORK'),
-            'target': os.getenv('BUILD_TARGET')
-        }
+        # If framework is provided, try framework-specific environment variables first
+        if framework:
+            framework_upper = framework.upper()
+            env_metrics = {
+                'build_duration_sec': os.getenv(f'{framework_upper}_BUILD_DURATION_SEC'),
+                'image_size_bytes': os.getenv(f'{framework_upper}_IMAGE_SIZE_BYTES'),
+                'image_size_mb': os.getenv(f'{framework_upper}_IMAGE_SIZE_MB'),
+                'build_start_time': os.getenv(f'{framework_upper}_BUILD_START_TIME'),
+                'build_end_time': os.getenv(f'{framework_upper}_BUILD_END_TIME'),
+                'cache_hit_rate': os.getenv(f'{framework_upper}_CACHE_HIT_RATE'),
+                'framework': framework,
+                'target': 'runtime'  # Default target
+            }
+        else:
+            # Fallback to generic environment variables
+            env_metrics = {
+                'build_duration_sec': os.getenv('BUILD_DURATION_SEC'),
+                'image_size_bytes': os.getenv('IMAGE_SIZE_BYTES'),
+                'image_size_mb': os.getenv('IMAGE_SIZE_MB'),
+                'build_start_time': os.getenv('BUILD_START_TIME'),
+                'build_end_time': os.getenv('BUILD_END_TIME'),
+                'cache_hit_rate': os.getenv('CACHE_HIT_RATE'),
+                'framework': os.getenv('BUILD_FRAMEWORK'),
+                'target': os.getenv('BUILD_TARGET')
+            }
         
         # Filter out None values and convert to appropriate types
         for key, value in env_metrics.items():
@@ -592,9 +605,9 @@ class WorkflowMetricsUploader:
         
         # Upload container metrics if this is a target job and metrics are available
         if job_name in TARGET_JOB_NAMES:
-            self._upload_container_metrics(job_data)
+            self._upload_container_metrics(job_data, job_name)
 
-    def _upload_container_metrics(self, job_data: Dict[str, Any], build_metrics: Optional[Dict[str, Any]] = None) -> None:
+    def _upload_container_metrics(self, job_data: Dict[str, Any], framework: str, build_metrics: Optional[Dict[str, Any]] = None) -> None:
         """Upload container-specific metrics to CONTAINER_INDEX"""
         container_index = os.getenv('CONTAINER_INDEX')
         if not container_index:
@@ -603,7 +616,7 @@ class WorkflowMetricsUploader:
         
         # Get build metrics if not provided
         if build_metrics is None:
-            build_metrics = BuildMetricsReader.get_build_metrics()
+            build_metrics = BuildMetricsReader.get_build_metrics(framework)
         
         if not build_metrics:
             print("⚠️  No build metrics available for container upload")
