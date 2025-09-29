@@ -76,7 +76,7 @@ runs:
         docker push ${ECR_HOSTNAME}/${PUSH_TAG}
     - name: ACR Tag and Push
       shell: bash
-      if: ${{ env.ACR_PUSH == 'true' }}
+      if: ${{ inputs.azure_push == 'true' }}
       env:
         LOCAL_IMAGE: ${{ inputs.local_image }}
         PUSH_TAG: ${{ inputs.push_tag }}
