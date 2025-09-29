@@ -331,9 +331,9 @@ class WorkflowMetricsUploader:
         # Schema fields
         # Use conclusion for completed workflows, fallback to status
         db_data[FIELD_STATUS] = str(workflow_data.get('conclusion') or workflow_data.get('status', 'unknown'))
-        if db_data[FIELD_STATUS] is "success":
+        if db_data[FIELD_STATUS] == "success":
             db_data[FIELD_STATUS_NUMBER] = 1
-        elif db_data[FIELD_STATUS] is "failure":
+        elif db_data[FIELD_STATUS] == "failure":
             db_data[FIELD_STATUS_NUMBER] = 0
         print(f"Checking branch: {str(workflow_data.get('head_branch'))}")
         
@@ -393,9 +393,9 @@ class WorkflowMetricsUploader:
         db_data[FIELD_JOB_ID] = str(job_id)
         # Handle job status - prefer conclusion for completed jobs, fallback to status
         db_data[FIELD_STATUS] = str(job_data.get('conclusion') or job_data.get('status') or 'unknown')
-        if db_data[FIELD_STATUS] is "success":
+        if db_data[FIELD_STATUS] == "success":
             db_data[FIELD_STATUS_NUMBER] = 1
-        elif db_data[FIELD_STATUS] is "failure":
+        elif db_data[FIELD_STATUS] == "failure":
             db_data[FIELD_STATUS_NUMBER] = 0
         db_data[FIELD_JOB_NAME] = str(job_name)
         
@@ -458,9 +458,9 @@ class WorkflowMetricsUploader:
         db_data[FIELD_STEP_NUMBER] = int(step_number)  # Using l_ prefix, should be integer
         db_data[FIELD_STATUS] = str(step_data.get('conclusion') or step_data.get('status') or 'unknown')
         db_data[FIELD_JOB_NAME] = str(job_name)
-        if db_data[FIELD_STATUS] is "success":
+        if db_data[FIELD_STATUS] == "success":
             db_data[FIELD_STATUS_NUMBER] = 1
-        elif db_data[FIELD_STATUS] is "failure":
+        elif db_data[FIELD_STATUS] == "failure":
             db_data[FIELD_STATUS_NUMBER] = 0
         
         # Timing fields using standardized method - Fix parameter order for steps
