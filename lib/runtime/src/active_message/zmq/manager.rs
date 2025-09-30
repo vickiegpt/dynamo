@@ -70,7 +70,7 @@ impl std::fmt::Debug for ManagerState {
 
 pub struct ZmqActiveMessageManager {
     state: Arc<RwLock<ManagerState>>,
-    client: Arc<dyn ActiveMessageClient>,
+    client: Arc<NetworkClient>,
     handler_events_tx: broadcast::Sender<HandlerEvent>,
     cancel_token: CancellationToken,
     receiver_task: Arc<Mutex<Option<tokio::task::JoinHandle<Result<()>>>>>,
@@ -86,7 +86,8 @@ pub struct ZmqActiveMessageManager {
 }
 
 impl ZmqActiveMessageManager {
-    pub fn client(&self) -> Arc<dyn ActiveMessageClient> {
+    /// Get the client (now returns concrete NetworkClient)
+    pub fn client(&self) -> Arc<NetworkClient> {
         self.client.clone()
     }
 
@@ -171,12 +172,15 @@ impl ZmqActiveMessageManager {
         // Create shared response manager for concurrent access from both client and manager
         let response_manager = Arc::new(ResponseManager::new());
 
-        // Create thin ZMQ transport and NetworkClient
-        let transport = Arc::new(ZmqThinTransport::new());
-        let client: Arc<dyn ActiveMessageClient> = Arc::new(NetworkClient::<ZmqWireFormat>::new(
+        // Create thin ZMQ transport and wrap in BoxedTransport for type erasure
+        let zmq_transport = Arc::new(ZmqThinTransport::new());
+        let boxed_transport = crate::active_message::boxed_transport::BoxedTransport::new(zmq_transport);
+
+        // Create NetworkClient (now concrete, no generics!)
+        let client = Arc::new(NetworkClient::new(
             instance_id,
             tcp_endpoint.clone(),
-            transport,
+            boxed_transport,
             response_manager.clone(),
         ));
 

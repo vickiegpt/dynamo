@@ -3,6 +3,7 @@
 
 #![doc = include_str!("../docs/active_message.md")]
 
+pub mod boxed_transport;
 pub mod builder;
 pub mod client;
 pub mod cohort;

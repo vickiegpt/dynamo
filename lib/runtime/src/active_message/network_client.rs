@@ -18,11 +18,11 @@ use tokio::sync::{RwLock, oneshot};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
+use super::boxed_transport::{BoxedConnectionHandle, BoxedTransport};
 use super::client::{ActiveMessageClient, Endpoint, PeerInfo, WorkerAddress};
 use super::handler::{ActiveMessage, HandlerId, InstanceId};
 use super::receipt_ack::ReceiptAck;
 use super::response_manager::SharedResponseManager;
-use super::transport::{ConnectionHandle, ThinTransport};
 
 /// Internal state for the network client
 struct NetworkClientState {
@@ -36,25 +36,23 @@ struct NetworkClientState {
 ///
 /// The NetworkClient implements the ActiveMessageClient trait and provides
 /// high-level operations like peer management, service discovery, and message
-/// sending. It delegates actual transport operations to a ThinTransport implementation.
-///
-/// Generic over WireFormat to support different transport implementations.
-pub struct NetworkClient<WireFormat: Send + 'static> {
+/// sending. It uses a type-erased BoxedTransport internally to avoid generic parameters.
+pub struct NetworkClient {
     instance_id: InstanceId,
     endpoint: Endpoint,
     state: Arc<RwLock<NetworkClientState>>,
 
     /// Connection handles for each peer (InstanceId -> ConnectionHandle)
-    connections: Arc<DashMap<InstanceId, ConnectionHandle<WireFormat>>>,
+    connections: Arc<DashMap<InstanceId, BoxedConnectionHandle>>,
 
-    /// The underlying transport implementation
-    transport: Arc<dyn ThinTransport<WireFormat = WireFormat>>,
+    /// The underlying transport implementation (type-erased)
+    transport: Arc<BoxedTransport>,
 
     /// Response manager for correlating responses, ACKs, and receipts
     response_manager: SharedResponseManager,
 }
 
-impl<WireFormat: Send + 'static> std::fmt::Debug for NetworkClient<WireFormat> {
+impl std::fmt::Debug for NetworkClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NetworkClient")
             .field("instance_id", &self.instance_id)
@@ -64,12 +62,12 @@ impl<WireFormat: Send + 'static> std::fmt::Debug for NetworkClient<WireFormat> {
     }
 }
 
-impl<WireFormat: Send + 'static> NetworkClient<WireFormat> {
-    /// Create a new NetworkClient with a transport implementation
+impl NetworkClient {
+    /// Create a new NetworkClient with a type-erased transport implementation
     pub fn new(
         instance_id: InstanceId,
         endpoint: Endpoint,
-        transport: Arc<dyn ThinTransport<WireFormat = WireFormat>>,
+        transport: BoxedTransport,
         response_manager: SharedResponseManager,
     ) -> Self {
         let state = NetworkClientState {
@@ -82,7 +80,7 @@ impl<WireFormat: Send + 'static> NetworkClient<WireFormat> {
             endpoint,
             state: Arc::new(RwLock::new(state)),
             connections: Arc::new(DashMap::new()),
-            transport,
+            transport: Arc::new(transport),
             response_manager,
         }
     }
@@ -133,7 +131,7 @@ impl<WireFormat: Send + 'static> NetworkClient<WireFormat> {
 }
 
 #[async_trait]
-impl<WireFormat: Send + 'static> ActiveMessageClient for NetworkClient<WireFormat> {
+impl ActiveMessageClient for NetworkClient {
     fn instance_id(&self) -> InstanceId {
         self.instance_id
     }
@@ -191,11 +189,11 @@ impl<WireFormat: Send + 'static> ActiveMessageClient for NetworkClient<WireForma
             }
         );
 
-        // Establish connection via thin transport - returns mpsc::Sender
+        // Establish connection via thin transport - returns boxed sender
         let sender = self.transport.connect(endpoint).await?;
 
-        // Create ConnectionHandle with the sender
-        let conn_handle = ConnectionHandle::new(peer.instance_id, sender, endpoint.to_string());
+        // Create BoxedConnectionHandle with the sender
+        let conn_handle = BoxedConnectionHandle::new(peer.instance_id, sender, endpoint.to_string());
 
         // Store in connections map
         self.connections.insert(peer.instance_id, conn_handle);
