@@ -11,13 +11,16 @@ import os
 
 QWEN = "Qwen/Qwen3-0.6B"
 LLAMA = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"  # on an l4 gpu, must limit --max-seq-len, otherwise it will not fit
+TINY_LLAMA = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
 TEST_MODELS = [
     QWEN,
     LLAMA,
+    TINY_LLAMA
 ]
 
 # Env-driven defaults for specific test groups
 # Allows overriding via environment variables
 ROUTER_MODEL_NAME = os.environ.get("ROUTER_MODEL_NAME", QWEN)
 FAULT_TOLERANCE_MODEL_NAME = os.environ.get("FAULT_TOLERANCE_MODEL_NAME", QWEN)
+TINY_LLAMA_MODEL_NAME = os.environ.get("TINY_LLAMA_MODEL_NAME", TINY_LLAMA)
