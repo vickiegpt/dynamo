@@ -55,14 +55,8 @@ async fn main() -> Result<()> {
 
     println!("Connected to leader at {}", leader_endpoint);
 
-    // Join cohort with optional rank (use free function for trait objects)
-    match dynamo_runtime::active_message::client::join_cohort(
-        client.as_ref(),
-        leader_instance_id,
-        worker_rank,
-    )
-    .await
-    {
+    // Join cohort with optional rank - now works directly on concrete client!
+    match client.join_cohort(leader_instance_id, worker_rank).await {
         Ok(response) => {
             if response.accepted {
                 println!(
