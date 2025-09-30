@@ -4,7 +4,7 @@ This guide will help you run the GPT-OSS-120B language model using Dynamo's opti
 
 ## Prerequisites
 
-follow the instructions in recipe [README.md](../README.md) to create a namespace and kubernetes secret for huggingface token.
+Follow the instructions in recipe [README.md](../README.md) to create a namespace and kubernetes secret for huggingface token.
 
 ## Quick Start
 
