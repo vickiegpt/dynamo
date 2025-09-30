@@ -34,8 +34,16 @@ kubectl apply -n $NAMESPACE -f ./trtllm/agg
 ### Container Image
 This recipe was tested with dynamo trtllm runtime container for ARM64 processors.
 
+**Important Note:**
+
+Before dynamo v0.5.1 release, following container image is supported:
 ```
 nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.5.1-rc0.pre3
+```
+
+After dynamo v0.5.1 release, following container image will be supported:
+```
+nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.5.1
 ```
 
 ## Notes
