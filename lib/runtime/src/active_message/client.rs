@@ -278,17 +278,14 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
     async fn list_handlers(&self, instance_id: InstanceId) -> Result<Vec<HandlerId>>;
 
     /// Send a health check request and get the response
+    ///
+    /// Note: This method requires `Self: Sized`. When working with trait objects (`&dyn ActiveMessageClient`),
+    /// use the free function `active_message::client::health_check(client, instance_id)` instead.
     async fn health_check(&self, instance_id: InstanceId) -> Result<HealthCheckResponse>
     where
         Self: Sized,
     {
-        let status = self
-            .system_active_message("_health_check")
-            .expect_response::<HealthCheckResponse>()
-            .send(instance_id)
-            .await?;
-
-        status.await_response().await
+        health_check(self, instance_id).await
     }
 
     /// Ensure bidirectional connection by registering our info with a remote instance
@@ -296,44 +293,20 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
     /// This is used when we have connected to a remote instance, but that instance
     /// doesn't know how to connect back to us. This method sends our PeerInfo to
     /// the remote instance so it can establish a bidirectional connection.
+    ///
+    /// Note: This method requires `Self: Sized`. When working with trait objects (`&dyn ActiveMessageClient`),
+    /// use the free function `active_message::client::ensure_bidirectional_connection(client, instance_id)` instead.
     async fn ensure_bidirectional_connection(&self, instance_id: InstanceId) -> Result<bool>
     where
         Self: Sized,
     {
-        // Get our own peer info
-        let my_info = self.peer_info();
-
-        // Create payload with dual endpoint support
-        let mut payload = serde_json::json!({
-            "instance_id": my_info.instance_id.to_string(),
-        });
-
-        // Add endpoints based on what's available
-        if my_info.tcp_endpoint().is_some() || my_info.ipc_endpoint().is_some() {
-            // Use new dual endpoint format
-            if let Some(tcp_ep) = my_info.tcp_endpoint() {
-                payload["tcp_endpoint"] = serde_json::Value::String(tcp_ep.to_string());
-            }
-            if let Some(ipc_ep) = my_info.ipc_endpoint() {
-                payload["ipc_endpoint"] = serde_json::Value::String(ipc_ep.to_string());
-            }
-        } else {
-            // Fallback to legacy endpoint format for backward compatibility
-            payload["endpoint"] = serde_json::Value::String(my_info.endpoint);
-        }
-
-        let status = self
-            .system_active_message("_register_service")
-            .payload(payload)?
-            .expect_response::<RegisterServiceResponse>()
-            .send(instance_id)
-            .await?;
-
-        let response: RegisterServiceResponse = status.await_response().await?;
-        Ok(response.registered)
+        ensure_bidirectional_connection(self, instance_id).await
     }
 
     /// Join a leader-worker cohort
+    ///
+    /// Note: This method requires `Self: Sized`. When working with trait objects (`&dyn ActiveMessageClient`),
+    /// use the free function `active_message::client::join_cohort(client, leader_id, rank)` instead.
     async fn join_cohort(
         &self,
         leader_instance_id: InstanceId,
@@ -342,19 +315,7 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
     where
         Self: Sized,
     {
-        let payload = serde_json::json!({
-            "instance_id": self.instance_id().to_string(),
-            "rank": rank,
-        });
-
-        let status = self
-            .system_active_message("_join_cohort")
-            .payload(payload)?
-            .expect_response::<JoinCohortResponse>()
-            .send(leader_instance_id)
-            .await?;
-
-        status.await_response().await
+        join_cohort(self, leader_instance_id, rank).await
     }
 
     // New builder pattern API
@@ -501,4 +462,71 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
         };
         self.send_raw_message(sender_id, message).await
     }
+}
+
+// Helper functions that work with trait objects (&dyn ActiveMessageClient)
+
+/// Send a health check request and get the response (works with trait objects)
+pub async fn health_check(
+    client: &dyn ActiveMessageClient,
+    instance_id: InstanceId,
+) -> Result<HealthCheckResponse> {
+    let status = MessageBuilder::new_unchecked(client, "_health_check")
+        .expect_response::<HealthCheckResponse>()
+        .send(instance_id)
+        .await?;
+
+    status.await_response().await
+}
+
+/// Ensure bidirectional connection (works with trait objects)
+pub async fn ensure_bidirectional_connection(
+    client: &dyn ActiveMessageClient,
+    instance_id: InstanceId,
+) -> Result<bool> {
+    let my_info = client.peer_info();
+
+    let mut payload = serde_json::json!({
+        "instance_id": my_info.instance_id.to_string(),
+    });
+
+    if my_info.tcp_endpoint().is_some() || my_info.ipc_endpoint().is_some() {
+        if let Some(tcp_ep) = my_info.tcp_endpoint() {
+            payload["tcp_endpoint"] = serde_json::Value::String(tcp_ep.to_string());
+        }
+        if let Some(ipc_ep) = my_info.ipc_endpoint() {
+            payload["ipc_endpoint"] = serde_json::Value::String(ipc_ep.to_string());
+        }
+    } else {
+        payload["endpoint"] = serde_json::Value::String(my_info.endpoint);
+    }
+
+    let status = MessageBuilder::new_unchecked(client, "_register_service")
+        .payload(payload)?
+        .expect_response::<RegisterServiceResponse>()
+        .send(instance_id)
+        .await?;
+
+    let response: RegisterServiceResponse = status.await_response().await?;
+    Ok(response.registered)
+}
+
+/// Join a leader-worker cohort (works with trait objects)
+pub async fn join_cohort(
+    client: &dyn ActiveMessageClient,
+    leader_instance_id: InstanceId,
+    rank: Option<usize>,
+) -> Result<JoinCohortResponse> {
+    let payload = serde_json::json!({
+        "instance_id": client.instance_id().to_string(),
+        "rank": rank,
+    });
+
+    let status = MessageBuilder::new_unchecked(client, "_join_cohort")
+        .payload(payload)?
+        .expect_response::<JoinCohortResponse>()
+        .send(leader_instance_id)
+        .await?;
+
+    status.await_response().await
 }
