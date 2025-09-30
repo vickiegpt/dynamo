@@ -30,7 +30,9 @@ spec:
           image: gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/dynamo:fresh-main
           workingDir: /workspace/components/backends/vllm
           command:
-            - /bin/sh
-            - -c
+          - python3
+          - -m
+          - dynamo.vllm
           args:
-            - python3 -m dynamo.vllm --model Qwen/Qwen3-0.6B
+            - --model
+            - Qwen/Qwen3-0.6B

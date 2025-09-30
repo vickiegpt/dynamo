@@ -210,7 +210,7 @@ impl LocalModelBuilder {
             .map(RequestTemplate::load)
             .transpose()?;
 
-        // echo_full engine doesn't need a path. It's an edge case, move it out of the way.
+        // echo engine doesn't need a path. It's an edge case, move it out of the way.
         if self.model_path.is_none() {
             let mut card = ModelDeploymentCard::with_name_only(
                 self.model_name.as_deref().unwrap_or(DEFAULT_NAME),
@@ -252,8 +252,10 @@ impl LocalModelBuilder {
         // --model-config takes precedence over --model-path
         let model_config_path = self.model_config.as_ref().unwrap_or(&full_path);
 
-        let mut card =
-            ModelDeploymentCard::load(model_config_path, self.custom_template_path.as_deref())?;
+        let mut card = ModelDeploymentCard::load_from_disk(
+            model_config_path,
+            self.custom_template_path.as_deref(),
+        )?;
 
         // Usually we infer from the path, self.model_name is user override
         let model_name = self.model_name.take().unwrap_or_else(|| {
@@ -408,6 +410,8 @@ impl LocalModel {
         let Some(etcd_client) = endpoint.drt().etcd_client() else {
             anyhow::bail!("Cannot attach to static endpoint");
         };
+        self.card.model_type = model_type;
+        self.card.model_input = model_input;
 
         // Store model config files in NATS object store
         let nats_client = endpoint.drt().nats_client();
@@ -429,9 +433,7 @@ impl LocalModel {
         let model_registration = ModelEntry {
             name: self.display_name().to_string(),
             endpoint_id: endpoint.id(),
-            model_type,
             runtime_config: Some(self.runtime_config.clone()),
-            model_input,
         };
         etcd_client
             .kv_create(
