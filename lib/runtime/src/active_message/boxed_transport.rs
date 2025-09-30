@@ -98,11 +98,7 @@ pub struct BoxedConnectionHandle {
 
 impl BoxedConnectionHandle {
     /// Create a new connection handle with just a primary sender
-    pub fn new(
-        instance_id: InstanceId,
-        primary_sender: BoxedSender,
-        endpoint: String,
-    ) -> Self {
+    pub fn new(instance_id: InstanceId, primary_sender: BoxedSender, endpoint: String) -> Self {
         Self {
             instance_id,
             primary_sender,
@@ -137,9 +133,7 @@ pub struct BoxedTransport {
 
 impl BoxedTransport {
     /// Wrap a concrete transport implementation
-    pub fn new<W: Send + 'static>(
-        transport: Arc<dyn ThinTransport<WireFormat = W>>,
-    ) -> Self {
+    pub fn new<W: Send + 'static>(transport: Arc<dyn ThinTransport<WireFormat = W>>) -> Self {
         Self {
             inner: Arc::new(TypedTransport { transport }),
         }
@@ -151,11 +145,7 @@ impl BoxedTransport {
     }
 
     /// Serialize and send a message
-    pub fn serialize_and_send(
-        &self,
-        message: &ActiveMessage,
-        sender: &BoxedSender,
-    ) -> Result<()> {
+    pub fn serialize_and_send(&self, message: &ActiveMessage, sender: &BoxedSender) -> Result<()> {
         let boxed_msg = self.inner.serialize_to_boxed(message)?;
         sender.try_send(boxed_msg)
     }
