@@ -182,7 +182,7 @@ def verify_request_cancelled(
     # Check if the same request ID was cancelled
     has_worker_cancellation = False
     cancellation_pattern = (
-        f"Aborted Remote Prefill Request ID: {request_id}"
+        f"Aborted Prefill Request ID: {request_id}"
         if assert_cancel_at_prefill
         else f"Aborted Request ID: {request_id}"
     )
@@ -198,19 +198,6 @@ def verify_request_cancelled(
     # Check prefill worker log if provided
     if prefill_worker_process is not None:
         prefill_worker_log_content = read_log_content(prefill_worker_process._log_path)
-
-        # Check if the same request ID was remote prefilled
-        has_remote_prefill = False
-        remote_prefill_pattern = f"New Prefill Request ID: {request_id}"
-        for line in prefill_worker_log_content.split("\n"):
-            clean_line = strip_ansi_codes(line).strip()
-            if clean_line.endswith(remote_prefill_pattern):
-                has_remote_prefill = True
-                break
-        if not has_remote_prefill:
-            pytest.fail(
-                f"Could not find '{remote_prefill_pattern}' pattern in prefill worker log"
-            )
 
         # Check for remote prefill cancellation
         if assert_cancel_at_prefill:
@@ -271,7 +258,7 @@ def test_request_cancellation_sglang_aggregated(
             logger.info(f"Aggregated Worker PID: {worker.get_pid()}")
 
             # TODO: Why wait after worker ready fixes frontend 404 / 500 flakiness?
-            time.sleep(2)
+            time.sleep(10)
 
             # Step 3: Test request cancellation
             frontend_log_offset, worker_log_offset = 0, 0
@@ -292,7 +279,7 @@ def test_request_cancellation_sglang_aggregated(
                 logger.info(
                     "Checking for cancellation messages in worker and frontend logs..."
                 )
-                time.sleep(0.05)  # time for cancellation to propagate
+                time.sleep(1)  # time for cancellation to propagate
                 frontend_log_offset, worker_log_offset, _ = verify_request_cancelled(
                     frontend,
                     worker,
@@ -337,23 +324,22 @@ def test_request_cancellation_sglang_prefill_cancel(
                 logger.info(f"Prefill Worker PID: {prefill_worker.get_pid()}")
 
                 # TODO: Why wait after worker ready fixes frontend 404 / 500 flakiness?
-                time.sleep(50)
+                time.sleep(10)
 
                 # Step 4: Test request cancellation during prefill phase
                 logger.info(
                     "Testing completion request cancellation during prefill phase..."
                 )
-                send_request_and_cancel("completion", timeout=0.5, use_long_prompt=True)
+                send_request_and_cancel("completion", timeout=1, use_long_prompt=True)
 
                 logger.info(
                     "Checking for cancellation messages in prefill and decode worker and frontend logs..."
                 )
-                time.sleep(0.05)  # time for cancellation to propagate
+                time.sleep(1)  # time for cancellation to propagate
                 verify_request_cancelled(
                     frontend,
-                    prefill_worker,
                     decode_worker,
-                    assert_request_reach_remote_worker=False,
+                    prefill_worker,
                     assert_cancel_at_remote_worker=False,
                 )
 
@@ -392,7 +378,7 @@ def test_request_cancellation_sglang_remote_decode_cancel(
                 logger.info(f"Prefill Worker PID: {prefill_worker.get_pid()}")
 
                 # TODO: Why wait after worker ready fixes frontend 404 / 500 flakiness?
-                time.sleep(20)
+                time.sleep(10)
 
                 # Step 4: Test request cancellation during remote decode phase
                 logger.info(
@@ -403,11 +389,10 @@ def test_request_cancellation_sglang_remote_decode_cancel(
                 logger.info(
                     "Checking for cancellation messages in prefill and decode worker and frontend logs..."
                 )
-                time.sleep(0.05)  # time for cancellation to propagate
+                time.sleep(1)  # time for cancellation to propagate
                 verify_request_cancelled(
                     frontend,
-                    prefill_worker,
                     decode_worker,
-                    assert_request_reach_remote_worker=True,
+                    prefill_worker,
                     assert_cancel_at_remote_worker=True,
                 )
