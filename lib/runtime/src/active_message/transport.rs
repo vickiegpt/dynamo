@@ -15,9 +15,11 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
+use std::collections::HashMap;
+use tokio::sync::mpsc;
 
 use super::client::Endpoint;
-use super::handler::ActiveMessage;
+use super::handler::{ActiveMessage, InstanceId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportType {
@@ -25,66 +27,136 @@ pub enum TransportType {
     Ipc,
 }
 
-/// High-level transport trait that works with ActiveMessage structs.
+/// Thin transport trait optimized for fast send path.
 ///
-/// This is the legacy transport interface that still mixes business logic
-/// with transport concerns. Prefer RawTransport for new implementations.
+/// This trait represents the ideal transport abstraction where:
+/// - Connection establishment returns an mpsc::Sender handle
+/// - Serialization happens on caller's thread via serialize_and_send()
+/// - Transport workers are dumb - they just write pre-serialized bytes
+/// - No routing logic, no peer management in the transport layer
 #[async_trait]
-pub trait Transport: Send + Sync + std::fmt::Debug {
-    async fn bind(&mut self, address: &str) -> Result<Endpoint>;
+pub trait ThinTransport: Send + Sync + std::fmt::Debug {
+    /// Opaque wire format type specific to this transport.
+    /// For ZMQ: Multipart message
+    /// For TCP: Framed bytes
+    /// For HTTP: Serialized request body
+    type WireFormat: Send + 'static;
 
-    async fn connect(&mut self, endpoint: &Endpoint) -> Result<()>;
+    /// Establish a connection to an endpoint and return a sender channel.
+    /// The sender is used to push pre-serialized messages.
+    /// Returns a channel that feeds a dedicated transport worker.
+    async fn connect(&self, endpoint: &str) -> Result<tokio::sync::mpsc::Sender<Self::WireFormat>>;
 
-    async fn disconnect(&mut self, endpoint: &Endpoint) -> Result<()>;
+    /// Serialize an ActiveMessage to transport-specific wire format on the caller's thread.
+    /// This allows the caller to do the CPU work of serialization before sending.
+    fn serialize_to_wire(&self, message: &ActiveMessage) -> Result<Self::WireFormat>;
 
-    async fn send(&mut self, message: &ActiveMessage) -> Result<()>;
+    /// Convenience method: serialize on caller's thread and send via the channel.
+    /// This is the hot path - just a serialize + try_send.
+    fn serialize_and_send(
+        &self,
+        message: &ActiveMessage,
+        sender: &tokio::sync::mpsc::Sender<Self::WireFormat>,
+    ) -> Result<()> {
+        // Serialize on caller's thread
+        let wire_format = self.serialize_to_wire(message)?;
 
-    async fn receive(&mut self) -> Result<ActiveMessage>;
+        // Just push to channel - transport worker handles the rest
+        sender
+            .try_send(wire_format)
+            .map_err(|e| anyhow::anyhow!("Failed to send to transport channel: {}", e))?;
 
-    fn transport_type(&self) -> TransportType;
+        Ok(())
+    }
 
-    fn local_endpoint(&self) -> Option<&Endpoint>;
-}
-
-/// Low-level transport trait that only handles raw bytes.
-///
-/// This trait represents a pure transport abstraction that separates
-/// transport concerns from business logic. Implementations should:
-/// - Only handle byte-level message delivery
-/// - Manage connection lifecycle
-/// - Not parse or interpret message contents
-/// - Be agnostic to the active message protocol
-#[async_trait]
-pub trait RawTransport: Send + Sync + std::fmt::Debug {
-    /// Bind the transport to a local address and return the bound endpoint.
-    async fn bind(&mut self, address: &str) -> Result<String>;
-
-    /// Connect to a remote endpoint.
-    async fn connect(&mut self, endpoint: &str) -> Result<()>;
-
-    /// Disconnect from a remote endpoint.
-    async fn disconnect(&mut self, endpoint: &str) -> Result<()>;
-
-    /// Send raw bytes to a specific target.
-    /// The target format is transport-specific (e.g., socket address for TCP).
-    async fn send(&mut self, target: &str, data: &[u8]) -> Result<()>;
-
-    /// Receive raw bytes from the transport.
-    /// Returns the data and sender information (transport-specific format).
-    async fn receive(&mut self) -> Result<(Bytes, String)>;
+    /// Disconnect from an endpoint and clean up associated resources.
+    async fn disconnect(&self, endpoint: &str) -> Result<()>;
 
     /// Get the transport type.
     fn transport_type(&self) -> TransportType;
 
     /// Get the local endpoint this transport is bound to.
     fn local_endpoint(&self) -> Option<&str>;
-
-    /// Check if the transport is connected to a specific endpoint.
-    fn is_connected(&self, endpoint: &str) -> bool;
 }
 
-/// Transport factory for creating different transport implementations.
-pub trait TransportFactory: Send + Sync {
-    /// Create a new raw transport instance.
-    fn create_raw_transport(&self, transport_type: TransportType) -> Result<Box<dyn RawTransport>>;
+/// Handle to an established connection with a peer.
+///
+/// This struct holds the mpsc::Sender channels for communicating with
+/// a specific peer. All messages to the same InstanceId go through the
+/// same sender to maintain ordering guarantees.
+#[derive(Clone, Debug)]
+pub struct ConnectionHandle<WireFormat: Send + 'static> {
+    /// Instance ID of the connected peer
+    pub instance_id: InstanceId,
+
+    /// Primary sender for the best/preferred endpoint (e.g., IPC for same-host)
+    pub primary_sender: mpsc::Sender<WireFormat>,
+
+    /// Alternative senders for failover (e.g., TCP fallback)
+    /// Priority determines order: lower number = higher priority
+    pub alt_senders: HashMap<u8, mpsc::Sender<WireFormat>>,
+
+    /// The endpoint currently being used
+    pub active_endpoint: String,
+}
+
+impl<WireFormat: Send + 'static> ConnectionHandle<WireFormat> {
+    /// Create a new connection handle with just a primary sender
+    pub fn new(
+        instance_id: InstanceId,
+        primary_sender: mpsc::Sender<WireFormat>,
+        endpoint: String,
+    ) -> Self {
+        Self {
+            instance_id,
+            primary_sender,
+            alt_senders: HashMap::new(),
+            active_endpoint: endpoint,
+        }
+    }
+
+    /// Create a connection handle with both primary and alternative senders
+    pub fn with_alternatives(
+        instance_id: InstanceId,
+        primary_sender: mpsc::Sender<WireFormat>,
+        endpoint: String,
+        alt_senders: HashMap<u8, mpsc::Sender<WireFormat>>,
+    ) -> Self {
+        Self {
+            instance_id,
+            primary_sender,
+            alt_senders,
+            active_endpoint: endpoint,
+        }
+    }
+
+    /// Get the primary sender for fast-path sending
+    pub fn sender(&self) -> &mpsc::Sender<WireFormat> {
+        &self.primary_sender
+    }
+
+    /// Try to send with failover to alternative senders
+    pub async fn send_with_failover(&self, msg: WireFormat) -> Result<()>
+    where
+        WireFormat: Clone,
+    {
+        // Try primary first
+        if self.primary_sender.send(msg.clone()).await.is_ok() {
+            return Ok(());
+        }
+
+        // Try alternatives in priority order
+        let mut priorities: Vec<_> = self.alt_senders.keys().copied().collect();
+        priorities.sort();
+
+        for priority in priorities {
+            if let Some(sender) = self.alt_senders.get(&priority)
+                && sender.send(msg.clone()).await.is_ok()
+            {
+                return Ok(());
+            }
+        }
+
+        anyhow::bail!("All senders failed for instance {}", self.instance_id)
+    }
 }

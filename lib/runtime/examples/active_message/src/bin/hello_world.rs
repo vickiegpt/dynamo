@@ -2,12 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use bytes::Bytes;
 use dynamo_runtime::active_message::{
-    client::ActiveMessageClient,
     handler_impls::{typed_unary_handler, TypedContext},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
+    MessageBuilder,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -49,9 +48,8 @@ async fn main() -> Result<()> {
         ZmqActiveMessageManager::new(unique_ipc_socket_path()?, cancel_token.clone()).await?;
 
     // Register hello world handler on server using typed unary handler
-    let hello_handler = typed_unary_handler(
-        "hello_world".to_string(),
-        |ctx: TypedContext<String>| {
+    let hello_handler =
+        typed_unary_handler("hello_world".to_string(), |ctx: TypedContext<String>| {
             println!("Hello world handler invoked!");
             let input_str = ctx.input;
             info!("Received input: '{}'", input_str);
@@ -69,8 +67,7 @@ async fn main() -> Result<()> {
                 bits_added,
             };
             Ok(response)
-        },
-    );
+        });
 
     server_manager
         .register_handler("hello_world".to_string(), hello_handler)
@@ -105,8 +102,7 @@ async fn main() -> Result<()> {
         println!("=== Test {} ===", i + 1);
 
         // Send string and wait for transformed response
-        let handle = client_client
-            .active_message("hello_world")?
+        let handle = MessageBuilder::new(client_client.as_ref(), "hello_world")?
             .payload(input)?
             .expect_response::<HelloResponse>()
             .send(server_client.instance_id())
@@ -140,8 +136,7 @@ async fn main() -> Result<()> {
     println!("=== Testing Error Handling ===");
 
     // This should work since we're sending a string
-    let result = client_client
-        .active_message("hello_world")?
+    let result = MessageBuilder::new(client_client.as_ref(), "hello_world")?
         .payload("Valid String")?
         .expect_response::<HelloResponse>()
         .send(server_client.instance_id())

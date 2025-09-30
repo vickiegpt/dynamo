@@ -3,7 +3,8 @@
 
 use anyhow::Result;
 use dynamo_runtime::active_message::{
-    client::{ActiveMessageClient, PeerInfo},
+    MessageBuilder,
+    client::PeerInfo,
     handler_impls::{unary_handler, UnaryContext},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
@@ -73,8 +74,7 @@ async fn main() -> Result<()> {
     println!("Performing warmup ping to establish publisher tasks...");
 
     // Warmup ping to establish the publisher task (not measured)
-    let warmup_result = client_client
-        .active_message("ping")?
+    let warmup_result = MessageBuilder::new(client_client.as_ref(), "ping")?
         .payload("warmup")?
         .send(server_client.instance_id())
         .await;
@@ -102,8 +102,7 @@ async fn main() -> Result<()> {
         let message = format!("ping_{}", i);
 
         // Send ping and wait for ACK
-        let result = client_client
-            .active_message("ping")?
+        let result = MessageBuilder::new(client_client.as_ref(), "ping")?
             .payload(&message)?
             .send(server_client.instance_id())
             .await;

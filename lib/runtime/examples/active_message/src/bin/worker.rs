@@ -41,7 +41,9 @@ async fn main() -> Result<()> {
     println!("Worker instance ID: {}", client.instance_id());
 
     let compute_handler = create_compute_handler();
-    manager.register_handler("compute".to_string(), compute_handler).await?;
+    manager
+        .register_handler("compute".to_string(), compute_handler)
+        .await?;
 
     println!("Registered compute handler");
 
