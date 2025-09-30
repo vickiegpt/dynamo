@@ -13,7 +13,16 @@ This recipe uses the following trtllm container image based on pre release/0.5.1
 You might need to build the images to reproduce the benchmark.
 
 * dynamo trtllm runtime for arm64
-based on commit [7fdf50fec2cae9112224f5cea26cef3dde78506f](https://github.com/ai-dynamo/dynamo/commit/7fdf50fec2cae9112224f5cea26cef3dde78506f)
+Below image is built based on commit [7fdf50fec2cae9112224f5cea26cef3dde78506f](https://github.com/ai-dynamo/dynamo/commit/7fdf50fec2cae9112224f5cea26cef3dde78506f)
 ```
 nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:7fdf50fec2cae9112224f5cea26cef3dde78506f-35606896-trtllm-arm64
+```
+
+Steps to build the image:
+```bash
+git clone https://github.com/ai-dynamo/dynamo.git
+cd dynamo
+git checkout 7fdf50fec2cae9112224f5cea26cef3dde78506f
+
+./container/build.sh --framework TRTLLM --target runtime
 ```
