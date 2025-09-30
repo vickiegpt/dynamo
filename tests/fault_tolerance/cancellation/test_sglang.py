@@ -340,7 +340,7 @@ def test_request_cancellation_sglang_prefill_cancel(
                     frontend,
                     decode_worker,
                     prefill_worker,
-                    assert_cancel_at_prefill=True
+                    assert_cancel_at_prefill=True,
                 )
 
 
@@ -390,8 +390,4 @@ def test_request_cancellation_sglang_remote_decode_cancel(
                     "Checking for cancellation messages in prefill and decode worker and frontend logs..."
                 )
                 time.sleep(1)  # time for cancellation to propagate
-                verify_request_cancelled(
-                    frontend,
-                    decode_worker,
-                    prefill_worker
-                )
+                verify_request_cancelled(frontend, decode_worker, prefill_worker)
