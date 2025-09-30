@@ -3,14 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Determinism test for language model API using pytest.
+Determinism test for KVBM in disaggregated mode.
 
-This test suite checks if the model produces deterministic outputs
-when given the same inputs with fixed seed and temperature=0.
+To make sure KVBM's accuracy, this test suite checks if the model produces
+deterministic outputs when same requests are served 1) without KVBM onboarded KV
+blocks and 2) with KVBM onboarded KV blocks, when given the same inputs with
+fixed seed and temperature=0.
 
-The test uses comprehensive server warmup (sending all test prompts
-before validation) to avoid server initialization effects that could
-impact determinism measurements.
+The expected results should be at least 90% match between the two cases.
+Compared to aggregated mode, disaggregated mode has some known randomness.
+Example reference: https://github.com/vllm-project/vllm/issues/7779#issuecomment-2304967870
 """
 
 import importlib.util

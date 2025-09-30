@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorRole
+from vllm.distributed.kv_transfer.kv_connector.v1.lm_cache_connector import (
+    LMCacheConnector,
+)
 from vllm.distributed.kv_transfer.kv_connector.v1.multi_connector import (
     MultiConnector,
     MultiKVConnectorMetadata,
@@ -26,15 +29,17 @@ class PdConnectorMetadata(MultiKVConnectorMetadata):
 
 class PdConnector(MultiConnector):
     """
-    A wrapper for using KVBM Connector and NIXL Connector for PD disaggregated serving.
+    A wrapper for using KV offloading Connectors (e.g. KVBM or LMCache) and NIXL Connector for PD disaggregated serving.
 
-    The current logic is: TODO
+    The current logic is:
+    - The first connector must be KVBM or LMCache and would be used by prefill worker to offload and onboard KV blocks.
+    - The second connector must be NIXL and will be used by decode worker to get KV blocks from prefill worker.
     """
 
     def __init__(self, vllm_config: "VllmConfig", role: KVConnectorRole):
         super().__init__(vllm_config=vllm_config, role=role)
         assert len(self._connectors) == 2
-        assert isinstance(self._connectors[0], DynamoConnector)
+        assert isinstance(self._connectors[0], (DynamoConnector, LMCacheConnector))
         assert isinstance(self._connectors[1], NixlConnector)
 
     # ==============================
@@ -71,9 +76,12 @@ class PdConnector(MultiConnector):
         Update the state after allocation using Dynamo Connector (KVBM) and Nixl Connector.
         """
         empty_blocks = blocks.new_empty()
+        # allocate blocks for KV offloading connector to onboard KV blocks
         self._connectors[0].update_state_after_alloc(
             request, blocks, num_external_tokens
         )
+        # no need to allocate any blocks for NIXL connector since this is in prefill worker side
+        # and it only needs to wait for decode worker to pull its data.
         self._connectors[1].update_state_after_alloc(request, empty_blocks, 0)
 
     def build_connector_meta(
