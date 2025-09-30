@@ -340,7 +340,7 @@ def test_request_cancellation_sglang_prefill_cancel(
                     frontend,
                     decode_worker,
                     prefill_worker,
-                    assert_cancel_at_remote_worker=False,
+                    assert_cancel_at_prefill=True
                 )
 
 
@@ -393,6 +393,5 @@ def test_request_cancellation_sglang_remote_decode_cancel(
                 verify_request_cancelled(
                     frontend,
                     decode_worker,
-                    prefill_worker,
-                    assert_cancel_at_remote_worker=True,
+                    prefill_worker
                 )
