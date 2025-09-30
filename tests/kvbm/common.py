@@ -457,7 +457,9 @@ def tester(llm_server):
 class TestDeterminism:
     """Test class for determinism validation."""
 
-    def test_determinism_with_cache_reset(self, tester, llm_server, runtime_services):
+    def test_determinism_with_cache_reset(
+        self, tester, llm_server, runtime_services, success_rate_threshold=1.0
+    ):
         """Test determinism across cache reset: run test with warmup, reset cache, run again without warmup."""
         print("\n" + "=" * 70)
         print("STARTING DETERMINISM TEST (WITH CACHE RESET)")
@@ -567,6 +569,12 @@ class TestDeterminism:
         print(f"Total comparisons: {total_passed + total_failed}")
         print(f"Passed (deterministic): {total_passed}")
         print(f"Failed (non-deterministic): {total_failed}")
+        success_rate = (
+            total_passed / (total_passed + total_failed)
+            if total_passed + total_failed > 0
+            else 0
+        )
+        print(f"Success rate: {success_rate:.1%}")
         print(
             "Test compared responses before cache reset (with warmup) vs after cache reset (no warmup)."
         )
@@ -575,5 +583,5 @@ class TestDeterminism:
             pytest.skip("No tests were completed - insufficient data")
 
         assert (
-            total_failed == 0
-        ), f"Model is not deterministic across cache reset: {total_failed} comparisons failed"
+            success_rate >= success_rate_threshold
+        ), f"Model is not deterministic across cache reset: {total_failed} comparisons failed, success rate {success_rate:.1%} lower than expected {success_rate_threshold*100}%"
