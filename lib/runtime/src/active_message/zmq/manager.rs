@@ -174,7 +174,8 @@ impl ZmqActiveMessageManager {
 
         // Create thin ZMQ transport and wrap in BoxedTransport for type erasure
         let zmq_transport = Arc::new(ZmqThinTransport::new());
-        let boxed_transport = crate::active_message::boxed_transport::BoxedTransport::new(zmq_transport);
+        let boxed_transport =
+            crate::active_message::boxed_transport::BoxedTransport::new(zmq_transport);
 
         // Create NetworkClient (now concrete, no generics!)
         let client = Arc::new(NetworkClient::new(

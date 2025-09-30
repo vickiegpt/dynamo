@@ -6,23 +6,25 @@ The ActiveMessage system provides a high-performance distributed messaging frame
 
 The system is built on clean architectural layers with clear separation of concerns:
 
-### Transport Layer
+### Transport Layer (Internal)
 - **ThinTransport trait**: Pure transport abstraction that only handles raw bytes
-- **WireFormat**: Transport-specific serialization (e.g., ZMQ multipart messages)
-- **ConnectionHandle**: Per-peer mpsc::Sender channels for lock-free message delivery
+- **BoxedTransport**: Type-erased wrapper for ThinTransport (hides generic parameters)
+- **BoxedConnectionHandle**: Type-erased per-peer mpsc::Sender channels
 - **Smart endpoint selection**: Automatic IPC (same-host) vs TCP (cross-host) optimization
 
-### Business Logic Layer
-- **NetworkClient**: Transport-agnostic client for managing connections and sending messages
+### Business Logic Layer (Public API)
+- **NetworkClient**: **Concrete type** (no generics!) for managing connections and sending messages
 - **MessageRouter**: Routes incoming messages to responses or handlers
 - **MessageDispatcher**: Manages handler registry and dispatches to user handlers
 - **ResponseManager**: Tracks pending responses with timeout and cleanup
 
 ### Design Principles
-1. **Serialization on caller's thread**: CPU work happens before sending to transport
-2. **Dumb transport workers**: Just write pre-serialized bytes, no business logic
-3. **Lock-free hot paths**: DashMap for concurrent peer registry access
-4. **Connection establishment returns channels**: Clean separation between connection lifecycle and message flow
+1. **Concrete types at API boundary**: Users get `Arc<NetworkClient>`, not trait objects
+2. **Type erasure at transport layer**: `BoxedTransport` hides generic parameters internally
+3. **Serialization on caller's thread**: CPU work happens before sending to transport
+4. **Dumb transport workers**: Just write pre-serialized bytes, no business logic
+5. **Lock-free hot paths**: DashMap for concurrent peer registry access
+6. **Connection establishment returns channels**: Clean separation between connection lifecycle and message flow
 
 ## Core Concepts
 
@@ -119,11 +121,13 @@ pub trait ActiveMessageClient: Send + Sync {
 }
 ```
 
-**Implementation: NetworkClient**
-- Generic over `WireFormat` type parameter
+**Implementation: NetworkClient (Concrete Type)**
+- Returns concrete `NetworkClient` struct, not a trait object
+- Uses type-erased `BoxedTransport` internally for flexibility
 - Manages peer registry using DashMap for lock-free concurrent access
 - Handles smart endpoint selection (IPC vs TCP)
 - Integrates with ResponseManager for tracking pending responses
+- All methods work directly without `Self: Sized` limitations
 
 ### Message Handlers
 
@@ -279,13 +283,16 @@ async fn main() -> Result<()> {
     );
     manager.register_handler("echo".to_string(), handler).await?;
 
-    // 3. Get client and connect to peers
-    let client = manager.client();
+    // 3. Get client (concrete NetworkClient type!)
+    let client = manager.client();  // Returns Arc<NetworkClient>
     let peer = client.connect_to_address(&worker_address).await?;
 
-    // 4. Send messages
+    // 4. Send messages - all methods work directly!
     let response = client.send_unary("echo", payload).await?
         .wait_response(Duration::from_secs(5)).await?;
+
+    // Methods like join_cohort() work without workarounds
+    client.join_cohort(leader_id, rank).await?;  // ✅ Just works!
 
     // 5. Shutdown
     manager.shutdown().await?;

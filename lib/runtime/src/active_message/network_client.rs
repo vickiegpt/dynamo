@@ -193,7 +193,8 @@ impl ActiveMessageClient for NetworkClient {
         let sender = self.transport.connect(endpoint).await?;
 
         // Create BoxedConnectionHandle with the sender
-        let conn_handle = BoxedConnectionHandle::new(peer.instance_id, sender, endpoint.to_string());
+        let conn_handle =
+            BoxedConnectionHandle::new(peer.instance_id, sender, endpoint.to_string());
 
         // Store in connections map
         self.connections.insert(peer.instance_id, conn_handle);
