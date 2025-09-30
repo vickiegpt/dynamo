@@ -670,6 +670,7 @@ pub fn get_distributed_tracing_context() -> Option<DistributedTraceContext> {
 
 /// Initialize the logger
 pub fn init() {
+    println!("init called");
     // INIT.call_once(setup_logging);
     // TODO: Restore this to call_once
     if let Err(e) = setup_logging() {
@@ -709,7 +710,8 @@ fn setup_logging() ->Result<(), Box<dyn std::error::Error>> {
         // TODO P2: Move this into its own function
         let otlp_exporter = opentelemetry_otlp::new_exporter()
             .tonic()
-            .with_endpoint("http://localhost:4317");
+            .with_endpoint("http://localhost:4317")
+            .with_timeout(std::time::Duration::from_secs(2)); // Add timeout
         let tracer = opentelemetry_otlp::new_pipeline()
             .tracing()
             .with_exporter(otlp_exporter)
@@ -720,7 +722,11 @@ fn setup_logging() ->Result<(), Box<dyn std::error::Error>> {
                         opentelemetry::KeyValue::new("service.version", "1.0.0"),
                     ]))
             )
-            .install_batch(opentelemetry_sdk::runtime::Tokio)?;
+            .install_batch(opentelemetry_sdk::runtime::Tokio)
+            .map_err(|e| {
+                eprintln!("Failed to initialize OTLP tracer: {}", e);
+                e
+            })?;
 
         let l = fmt::layer()
             .with_ansi(false)
