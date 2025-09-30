@@ -11,7 +11,7 @@ import sglang as sgl
 
 from dynamo._core import Client, Component, Context
 from dynamo.llm import WorkerMetricsPublisher, ZmqKvEventPublisher
-from dynamo.sglang.args import Config
+from dynamo.sglang.args import Config, DisaggregationMode
 
 
 class BaseWorkerHandler(ABC):
@@ -55,10 +55,14 @@ class BaseWorkerHandler(ABC):
     async def _handle_cancellation(self, sglang_request_id: str, context: Context):
         """Background task to handle cancellation by monitoring context state."""
         try:
-            logging.debug(f"Cancellation monitor started for SGLang Request ID {sglang_request_id}, Context: {context.id()}")
+            logging.debug(
+                f"Cancellation monitor started for SGLang Request ID {sglang_request_id}, Context: {context.id()}"
+            )
             # Wait asynchronously for cancellation signal instead of polling
             await context.async_killed_or_stopped()
-            logging.info(f"Cancellation signal received for SGLang Request ID {sglang_request_id}, Context: {context.id()}")
+            logging.info(
+                f"Cancellation signal received for SGLang Request ID {sglang_request_id}, Context: {context.id()}"
+            )
             # Call abort_request on the tokenizer_manager through the engine
             if (
                 hasattr(self.engine, "tokenizer_manager")
@@ -66,12 +70,16 @@ class BaseWorkerHandler(ABC):
             ):
                 try:
                     # Use SGLang's abort_request API
-                    logging.debug(f"Calling SGLang abort_request for Request ID {sglang_request_id}")
+                    logging.debug(
+                        f"Calling SGLang abort_request for Request ID {sglang_request_id}"
+                    )
                     self.engine.tokenizer_manager.abort_request(
                         rid=sglang_request_id, abort_all=False
                     )
                     is_prefill = self.serving_mode == DisaggregationMode.PREFILL
-                    logging.debug(f"Aborted {'Prefill ' if is_prefill else ''}Request ID: {context.id()}")
+                    logging.debug(
+                        f"Aborted {'Prefill ' if is_prefill else ''}Request ID: {context.id()}"
+                    )
                 except Exception as e:
                     logging.error(
                         f"Failed to abort SGLang request {sglang_request_id}: {e}"
@@ -82,7 +90,9 @@ class BaseWorkerHandler(ABC):
                 )
         except asyncio.CancelledError:
             # Task was cancelled, which is expected when generation completes
-            logging.info(f"Cancellation monitor task cancelled for SGLang Request ID {sglang_request_id}, Context: {context.id()}")
+            logging.info(
+                f"Cancellation monitor task cancelled for SGLang Request ID {sglang_request_id}, Context: {context.id()}"
+            )
             pass
 
     @asynccontextmanager
@@ -99,7 +109,9 @@ class BaseWorkerHandler(ABC):
         Yields:
             asyncio.Task: The cancellation monitoring task
         """
-        logging.info(f"Creating cancellation monitor task for SGLang Request ID {sglang_request_id}, Context: {context.id()}")
+        logging.info(
+            f"Creating cancellation monitor task for SGLang Request ID {sglang_request_id}, Context: {context.id()}"
+        )
         cancellation_task = asyncio.create_task(
             self._handle_cancellation(sglang_request_id, context)
         )
@@ -109,11 +121,15 @@ class BaseWorkerHandler(ABC):
         finally:
             # Clean up the background cancellation task
             if not cancellation_task.done():
-                logging.info(f"Cancelling cancellation monitor task for SGLang Request ID {sglang_request_id}, Context: {context.id()}")
+                logging.info(
+                    f"Cancelling cancellation monitor task for SGLang Request ID {sglang_request_id}, Context: {context.id()}"
+                )
                 cancellation_task.cancel()
                 try:
                     await cancellation_task
                 except asyncio.CancelledError:
                     pass
             else:
-                logging.info(f"Cancellation monitor task already completed for SGLang Request ID {sglang_request_id}, Context: {context.id()}")
+                logging.info(
+                    f"Cancellation monitor task already completed for SGLang Request ID {sglang_request_id}, Context: {context.id()}"
+                )

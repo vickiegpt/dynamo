@@ -163,7 +163,9 @@ class DecodeWorkerHandler(BaseWorkerHandler):
             try:
                 await cancellation_context.__aexit__(None, None, None)
             except Exception as e:
-                logging.error(f"Error cleaning up cancellation monitor for token stream: {e}")
+                logging.error(
+                    f"Error cleaning up cancellation monitor for token stream: {e}"
+                )
 
     async def _process_text_stream(self, stream_source, context):
         """Process stream for text input mode"""
@@ -216,4 +218,6 @@ class DecodeWorkerHandler(BaseWorkerHandler):
             try:
                 await cancellation_context.__aexit__(None, None, None)
             except Exception as e:
-                logging.error(f"Error cleaning up cancellation monitor for text stream: {e}")
+                logging.error(
+                    f"Error cleaning up cancellation monitor for text stream: {e}"
+                )

@@ -95,4 +95,6 @@ class PrefillWorkerHandler(BaseWorkerHandler):
             try:
                 await cancellation_context.__aexit__(None, None, None)
             except Exception as e:
-                logging.error(f"Error cleaning up cancellation monitor for prefill stream: {e}")
+                logging.error(
+                    f"Error cleaning up cancellation monitor for prefill stream: {e}"
+                )
