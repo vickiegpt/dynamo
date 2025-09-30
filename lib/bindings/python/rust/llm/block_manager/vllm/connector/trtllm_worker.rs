@@ -18,16 +18,10 @@ use crate::{
 };
 
 use anyhow;
-use anyhow::bail;
 use dynamo_llm::block_manager::distributed::{KvbmWorker, KvbmWorkerConfig};
 use dynamo_llm::block_manager::storage::torch::TorchTensor;
 use dynamo_runtime::DistributedRuntime;
 use dynamo_runtime::utils::task::CriticalTaskExecutionHandle;
-
-pub enum OffloadTrigger {
-    Layerwise,
-    ForwardPass,
-}
 
 pub trait Worker: Send + Sync {
     fn register_kv_caches(
@@ -43,8 +37,6 @@ pub trait Worker: Send + Sync {
     fn bind_connector_meta(&mut self, metadata: Vec<u8>) -> anyhow::Result<()>;
 
     fn start_load_kv(&mut self) -> anyhow::Result<()>;
-
-    fn wait_for_save(&mut self) -> anyhow::Result<()>;
 
     fn save_kv_layer(&mut self, layer_idx: usize) -> anyhow::Result<()>;
 
@@ -76,19 +68,12 @@ pub struct KvConnectorWorker {
 
     /// cuda events created by the python side
     layer_events: Vec<u64>,
-
-    offload_trigger: OffloadTrigger,
 }
 
 impl KvConnectorWorker {
-    fn new(py_drt: PyDistributedRuntime, trtllm_rank: String, trigger: String) -> anyhow::Result<Self> {
+    fn new(py_drt: PyDistributedRuntime, trtllm_rank: String) -> anyhow::Result<Self> {
         let drt = py_drt.inner.clone();
         let runtime = drt.runtime().primary();
-        let offload_trigger = match trigger.as_str() {
-            "Layerwise" => OffloadTrigger::Layerwise,
-            "ForwardPass" => OffloadTrigger::ForwardPass,
-            _ => bail!("Did not match offload trigger {}. Can only be one of 'Layerwise' or 'ForwardPass'", trigger),
-        };
 
         let (scheduler, worker_client, transfer_client) = Scheduler::new(drt.primary_token());
 
@@ -121,7 +106,6 @@ impl KvConnectorWorker {
             iteration: 0,
             layers_complete: 0,
             layer_events: Vec::new(),
-            offload_trigger,
         })
     }
 }
@@ -227,26 +211,7 @@ impl Worker for KvConnectorWorker {
         Ok(())
     }
 
-    fn wait_for_save(&mut self) -> anyhow::Result<()> {
-        if !matches!(self.offload_trigger, OffloadTrigger::ForwardPass) {
-            return Ok(());
-        }
-        
-        // Note: Delete this if we can hook into the cuda events emitted per layer in the cuda graph.
-        // We don't have to wait for the stream to synchronize because we are not 
-        // consuming the layerwise event.
-        let offloading_operations = std::mem::take(&mut self.offloading_operations);
-        for operation in offloading_operations {
-            self.connector.enqueue_request(operation);
-        }
-        Ok(())
-    }
-
     fn save_kv_layer(&mut self, _layer_idx: usize) -> anyhow::Result<()> {
-        if !matches!(self.offload_trigger, OffloadTrigger::Layerwise) {
-            return Ok(());
-        }
-
         self.layers_complete += 1;
         if self.layers_complete == self.layer_events.len() {
             let offloading_operations = std::mem::take(&mut self.offloading_operations);
@@ -425,10 +390,10 @@ pub struct PyTrtllmKvConnectorWorker {
 #[pymethods]
 impl PyTrtllmKvConnectorWorker {
     #[new]
-    #[pyo3(signature = (py_drt, trtllm_rank, trigger))]
-    pub fn new(py_drt: PyDistributedRuntime, trtllm_rank: String, trigger: String) -> PyResult<Self> {
+    #[pyo3(signature = (py_drt, trtllm_rank))]
+    pub fn new(py_drt: PyDistributedRuntime, trtllm_rank: String) -> PyResult<Self> {
         let connector_worker: Box<dyn Worker> =
-            Box::new(KvConnectorWorker::new(py_drt, trtllm_rank, trigger).map_err(to_pyerr)?);
+            Box::new(KvConnectorWorker::new(py_drt, trtllm_rank).map_err(to_pyerr)?);
         Ok(Self { connector_worker })
     }
 
@@ -459,12 +424,6 @@ impl PyTrtllmKvConnectorWorker {
     pub fn bind_connector_meta(&mut self, metadata: Vec<u8>) -> PyResult<()> {
         self.connector_worker
             .bind_connector_meta(metadata)
-            .map_err(to_pyerr)
-    }
-
-    pub fn wait_for_save(&mut self) -> PyResult<()> {
-        self.connector_worker
-            .wait_for_save()
             .map_err(to_pyerr)
     }
 
