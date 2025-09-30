@@ -16,6 +16,41 @@ impl<S> Layer<S> for CustomLayer
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
+    fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &tracing::span::Id, ctx: tracing_subscriber::layer::Context<'_, S>) {
+        if let Some(span) = ctx.span(id) {
+            // Method 2: Get from current span context (alternative approach)
+            let current_span = Span::current();
+            let otel_context = current_span.context();
+            let span_ref = otel_context.span();
+            let span_context = span_ref.span_context();
+            let current_trace_id = format!("{}", span_context.trace_id());
+            let current_span_id = format!("{}", span_context.span_id());
+
+            let span_name = span.name();
+            // Get the OpenTelemetry data from the span extensions
+            let extensions = span.extensions();
+            let (trace_id, span_id) = if let Some(otel_data) = extensions.get::<tracing_opentelemetry::OtelData>() {
+                let trace_id = otel_data.builder.trace_id
+                    .map(|id| format!("{:?}", id))
+                    .unwrap_or_else(|| "no_trace".to_string());
+                let span_id = otel_data.builder.span_id
+                    .map(|id| format!("{:?}", id))
+                    .unwrap_or_else(|| "no_span".to_string());
+                (trace_id, span_id)
+            } else {
+                ("no_otel_data".to_string(), "no_otel_data".to_string())
+            };
+            
+            // Also check the span attributes
+            let mut visitor = MessageVisitor::default();
+            attrs.record(&mut visitor);
+            let attrs_info = visitor.message.unwrap_or_else(|| "no_attrs".to_string());
+            
+            println!("[NEW_SPAN] span_name={}, attrs={}, builder_trace_id={}, builder_span_id={}, current_trace_id={}, current_span_id={}", 
+                span_name, attrs_info, trace_id, span_id, current_trace_id, current_span_id);
+        }
+    }
+
     fn on_enter(&self, id: &tracing::span::Id, ctx: tracing_subscriber::layer::Context<'_, S>) {
         if let Some(span) = ctx.span(id) {
             // Method 2: Get from current span context (alternative approach)
@@ -295,9 +330,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Simulate receiving a request from another service with trace context
         info!("Simulating request from external service with propagated trace context");
-        process_request_from_service(3, propagated_headers).await;
     }
-    
+    // can you print the hashmap using println
+    for (key, value) in &propagated_headers {
+        println!("Propagation header: key={}, value={}", key, value);
+    }
+    process_request_from_service(3, propagated_headers).await;
+
+
     // Wait between requests to clearly separate them
     tokio::time::sleep(Duration::from_secs(1)).await;
     

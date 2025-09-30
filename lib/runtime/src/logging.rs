@@ -69,12 +69,25 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::SpanData;
 use uuid::Uuid;
 
-// OpenTelemetry imports
+// // OpenTelemetry imports
+// use opentelemetry::global;
+// use opentelemetry::trace::{TraceContextExt};
+// use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};
+// use opentelemetry_otlp::WithExportConfig;
+// use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+
 use opentelemetry::global;
 use opentelemetry::trace::{TraceContextExt};
 use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};
 use opentelemetry_otlp::WithExportConfig;
+// use std::collections::HashMap;
+use std::time::Duration;
+use tracing::{info, instrument};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+// use std::fmt;
+
 
 /// ENV used to set the log level
 const FILTER_ENV: &str = "DYN_LOG";
@@ -284,9 +297,189 @@ pub fn make_request_span<B>(req: &Request<B>) -> Span {
     span
 }
 
+
+/// Create a span from NATS headers representing an entry point across a process boundary
+/// 
+/// This function extracts trace context from incoming NATS headers and creates a new span
+/// that properly continues the distributed trace. The span will have the extracted context
+/// as its parent and will include trace_id and parent_id fields for bootstrapping the
+/// distributed tracing system.
+/// 
+/// # Arguments
+/// * `headers` - Reference to async_nats::HeaderMap containing trace context headers
+/// * `span_name` - Name for the new entry span
+/// 
+/// # Returns
+/// A configured tracing::Span that represents the entry point for this service
+/// 
+/// # Example
+/// ```rust
+/// let span = create_span_from_nats_headers(&headers, "process_incoming_request");
+/// let _enter = span.enter();
+/// // All subsequent spans will be children of this entry span
+/// ```
+pub fn create_span_from_nats_headers(
+    headers: &async_nats::HeaderMap,
+) -> Span {
+    // Extract the trace context and individual IDs from headers
+    let (otel_context, trace_id, parent_span_id) = extract_otel_context_from_nats_headers(headers);
+    // TODO: expand to pass arbitrary key value pairs not set by the propagator
+    
+    // Create the span with trace context fields for bootstrapping
+    // Use span! macro with target and level to allow dynamic span names
+    let span = if let (Some(trace_id), Some(parent_id)) = (trace_id.as_ref(), parent_span_id.as_ref()) {
+        // Create span with trace_id and parent_id fields to bootstrap our distributed tracing layer
+        let span = tracing::info_span!(
+            "continuing-request-across-process-boundary",
+            trace_id = trace_id.as_str(),
+            parent_id = parent_id.as_str(),
+        );
+
+        // Set the extracted OpenTelemetry context as the parent if available
+        if let Some(context) = otel_context {
+            span.set_parent(context);
+        }
+        span
+    } else {
+        // No trace context found, create a regular span (this will generate new trace context)
+        let span = tracing::info_span!(
+            "new-request"
+        );
+        span
+    };
+    
+    span
+}
+
+/// Extract OpenTelemetry trace context from async_nats::HeaderMap
+/// 
+/// This function uses the OpenTelemetry extractor pattern to extract trace context
+/// from NATS headers for distributed tracing across service boundaries.
+/// 
+/// # Arguments
+/// * `headers` - Reference to async_nats::HeaderMap to extract context from
+/// 
+/// # Returns
+/// A tuple containing:
+/// * `Option<opentelemetry::Context>` - The extracted OTEL context (None if no traceparent found)
+/// * `Option<String>` - The trace_id from the traceparent header
+/// * `Option<String>` - The span_id from the traceparent header (this becomes the parent_id for child spans)
+pub fn extract_otel_context_from_nats_headers(
+    headers: &async_nats::HeaderMap,
+) -> (Option<opentelemetry::Context>, Option<String>, Option<String>) {
+    // First check if traceparent header exists
+    let traceparent_value = match headers.get("traceparent") {
+        Some(value) => value.as_str(),
+        None => {
+            // No traceparent header found, return None for all values
+            return (None, None, None);
+        }
+    };
+
+    // Parse the traceparent header to extract trace_id and span_id
+    let (trace_id, parent_span_id) = parse_traceparent(traceparent_value);
+
+    // Create an extractor that reads from the NATS headers map
+    struct NatsHeaderExtractor<'a>(&'a async_nats::HeaderMap);
+
+    impl<'a> Extractor for NatsHeaderExtractor<'a> {
+        fn get(&self, key: &str) -> Option<&str> {
+            self.0.get(key).map(|value| value.as_str())
+        }
+
+        fn keys(&self) -> Vec<&str> {
+            // Convert HeaderMap keys to a Vec of string references
+            // Note: async_nats::HeaderMap doesn't expose all keys directly,
+            // but the propagator typically only looks for known keys like "traceparent" and "tracestate"
+            vec!["traceparent", "tracestate"]
+                .into_iter()
+                .filter(|&key| self.0.get(key).is_some())
+                .collect()
+        }
+    }
+
+    let extractor = NatsHeaderExtractor(headers);
+    let propagator = opentelemetry::sdk::propagation::TraceContextPropagator::new();
+    
+    // Extract the context from headers using the W3C Trace Context propagation standard
+    let otel_context = propagator.extract(&extractor);
+
+    // Check if we actually got a valid context (not just the default empty context)
+    let context_with_trace = if otel_context.span().span_context().is_valid() {
+        Some(otel_context)
+    } else {
+        None
+    };
+
+    (context_with_trace, trace_id, parent_span_id)
+}
+
+
 // TODO: prepare_headers_from_span: method that takes the current span and prepares the headers for the outbound request (writing trace_id and span_id) to continue the distributed trace
 // just call the injector pattern after getting the context from the current span
 // improv: pass additional headers
+/// Simulate injecting trace context into HTTP headers (outgoing request)
+// fn inject_trace_context_into_headers(context: &opentelemetry::Context) -> HashMap<String, String> {
+//     let mut headers = HashMap::new();
+    
+//     // Create an injector that writes to our headers map
+//     struct HeaderInjector<'a>(&'a mut HashMap<String, String>);
+    
+//     impl<'a> Injector for HeaderInjector<'a> {
+//         fn set(&mut self, key: &str, value: String) {
+//             self.0.insert(key.to_string(), value);
+//         }
+//     }
+
+//     let mut injector = HeaderInjector(&mut headers);
+//     let propagator = opentelemetry::sdk::propagation::TraceContextPropagator::new();
+    
+//     // Inject the current context into headers
+//     propagator.inject_context(context, &mut injector);
+    
+//     headers
+// }
+/// Inject OpenTelemetry trace context into async_nats::HeaderMap
+/// 
+/// This function uses the OpenTelemetry propagator pattern to inject trace context
+/// into NATS headers for distributed tracing across service boundaries.
+/// 
+/// # Arguments
+/// * `headers` - Mutable reference to async_nats::HeaderMap to inject headers into
+/// * `context` - Optional OpenTelemetry context. If None, derives from current span
+pub fn inject_otel_context_into_nats_headers(
+    headers: &mut async_nats::HeaderMap,
+    context: Option<opentelemetry::Context>,
+) {
+    // Get the context from parameter or derive from current span
+    let otel_context = context.unwrap_or_else(|| {
+        let current_span = Span::current();
+        current_span.context()
+    });
+
+    // Create an injector that writes to the NATS headers map
+    struct NatsHeaderInjector<'a>(&'a mut async_nats::HeaderMap);
+
+    impl<'a> Injector for NatsHeaderInjector<'a> {
+        fn set(&mut self, key: &str, value: String) {
+            self.0.insert(key, value);
+        }
+    }
+
+    let mut injector = NatsHeaderInjector(headers);
+    let propagator = opentelemetry::sdk::propagation::TraceContextPropagator::new();
+    
+    // Inject the context into headers using the W3C Trace Context propagation standard
+    propagator.inject_context(&otel_context, &mut injector);
+}
+
+/// Convenience function to inject trace context from current span into NATS headers
+/// 
+/// This is a simplified version that automatically uses the current span's context.
+pub fn inject_current_trace_into_nats_headers(headers: &mut async_nats::HeaderMap) {
+    inject_otel_context_into_nats_headers(headers, None);
+}
+
 #[derive(Debug, Default)]
 pub struct FieldVisitor {
     pub fields: HashMap<String, String>,
@@ -326,6 +519,12 @@ where
     // TODO: Change to on_enter
     fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
         println!("on_new_span");
+        // Handling of trace_id:
+        // 1. Check if passed in (first span across a network boundary)
+        // 2. Check if set on parent span (all spans not first across a network boundary)
+        // 3. trace_id is retrieved from the builder (first span in a request)
+
+        // span id on the other hand can always be reliably retrieved from the otel extensions
         if let Some(span) = ctx.span(id) {
             let mut trace_id: Option<String> = None;
             let mut parent_id: Option<String> = None;
@@ -340,6 +539,7 @@ where
                 if !is_valid_trace_id(trace_id_input) {
                     tracing::trace!("trace id  '{}' is not valid! Ignoring.", trace_id_input);
                 } else {
+                    println!("trace id resolved from fields: {}", trace_id_input);
                     trace_id = Some(trace_id_input.to_string());
                 }
             }
@@ -372,13 +572,14 @@ where
                 x_dynamo_request_id = Some(x_request_id_input.to_string());
             }
 
-            // TODO: If this will be on_enter, then this will not work, we need to get the parent_id from the span context, the current span will not be the parent as we reference here
+            // TODO: verify that set_parent doesn't mean a parent span is set
             if parent_id.is_none()
-                && let Some(parent_span_id) = ctx.current_span().id() // parent_id is set by us setting it on the traceparent 
+                && let Some(parent_span_id) = ctx.current_span().id()
                 && let Some(parent_span) = ctx.span(parent_span_id)
             {
                 let parent_ext = parent_span.extensions();
                 if let Some(parent_tracing_context) = parent_ext.get::<DistributedTraceContext>() {
+                    println!("trace id resolved from parent span: {}", parent_tracing_context.trace_id);
                     trace_id = Some(parent_tracing_context.trace_id.clone());
                     parent_id = Some(parent_tracing_context.span_id.clone());
                     tracestate = parent_tracing_context.tracestate.clone();
@@ -392,14 +593,47 @@ where
                 span_id = None;
             }
 
-            // TODO: prevent trace id generation when using OTEL, something is wrong if it is being generated
-            if trace_id.is_none() {
-                trace_id = Some(generate_trace_id());
+            // Extract trace_id and span_id from OpenTelemetry extensions if not already set
+            if trace_id.is_none() || span_id.is_none() {
+                let extensions = span.extensions();
+                if let Some(otel_data) = extensions.get::<tracing_opentelemetry::OtelData>() {
+                    // Extract trace_id from OTEL data if not already set
+                    if trace_id.is_none() {
+                        if let Some(otel_trace_id) = otel_data.builder.trace_id {
+                            let trace_id_str = format!("{}", otel_trace_id);
+                            if is_valid_trace_id(&trace_id_str) {
+                                println!("trace id resolved from OTEL data: {}", trace_id_str);
+                                trace_id = Some(trace_id_str);
+                            } else {
+                                println!("Invalid trace_id from OTEL data: {}", trace_id_str);
+                            }
+                        }
+                    }
+                    
+                    // Extract span_id from OTEL data if not already set
+                    if span_id.is_none() {
+                        if let Some(otel_span_id) = otel_data.builder.span_id {
+                            let span_id_str = format!("{}", otel_span_id);
+                            if is_valid_span_id(&span_id_str) {
+                                span_id = Some(span_id_str);
+                            } else {
+                                println!("Invalid span_id from OTEL data: {}", span_id_str);
+                            }
+                        }
+                    }
+                } else {
+                    println!("No OpenTelemetry data found in span extensions");
+                }
             }
 
-            // TODO: we want to call a subroutine here to get the span id from the otel extensions that should be present
+            if trace_id.is_none() {
+                println!("trace id is not set");
+                panic!("trace id is not set");
+            }
+
             if span_id.is_none() {
-                span_id = Some(generate_span_id());
+                println!("span id is not set");
+                panic!("span id is not set");
             }
 
             let mut extensions = span.extensions_mut();
@@ -435,7 +669,12 @@ pub fn get_distributed_tracing_context() -> Option<DistributedTraceContext> {
 
 /// Initialize the logger
 pub fn init() {
-    INIT.call_once(setup_logging);
+    // INIT.call_once(setup_logging);
+    // TODO: Restore this to call_once
+    if let Err(e) = setup_logging() {
+        eprintln!("Failed to initialize logging: {}", e);
+        std::process::exit(1);
+    }
 }
 
 #[cfg(feature = "tokio-console")]
@@ -461,17 +700,36 @@ fn setup_logging() {
 
 #[cfg(not(feature = "tokio-console"))]
 // TODO: Add a subroutine to format and return the otel layer here
-fn setup_logging() {
+fn setup_logging() ->Result<(), Box<dyn std::error::Error>> {
     let fmt_filter_layer = filters(load_config());
     let trace_filter_layer = filters(load_config());
     if jsonl_logging_enabled() {
+        // Setup tracer
+        // TODO P2: Move this into its own function
+        let otlp_exporter = opentelemetry_otlp::new_exporter()
+            .tonic()
+            .with_endpoint("http://localhost:4317");
+        let tracer = opentelemetry_otlp::new_pipeline()
+            .tracing()
+            .with_exporter(otlp_exporter)
+            .with_trace_config(
+                opentelemetry_sdk::trace::config()
+                    .with_resource(opentelemetry_sdk::Resource::new(vec![
+                        opentelemetry::KeyValue::new("service.name", "rust-tracing-playground"),
+                        opentelemetry::KeyValue::new("service.version", "1.0.0"),
+                    ]))
+            )
+            .install_batch(opentelemetry_sdk::runtime::Tokio)?;
+
         let l = fmt::layer()
             .with_ansi(false)
             .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
             .event_format(CustomJsonFormatter::new())
             .with_writer(std::io::stderr)
             .with_filter(fmt_filter_layer);
+
         tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(tracer))
             .with(DistributedTraceIdLayer.with_filter(trace_filter_layer))
             .with(l)
             .init();
@@ -483,6 +741,8 @@ fn setup_logging() {
             .with_filter(fmt_filter_layer);
         tracing_subscriber::registry().with(l).init();
     }
+
+    Ok(())
 }
 
 fn filters(config: LoggingConfig) -> EnvFilter {
@@ -1132,8 +1392,221 @@ pub mod tests {
         .await;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_nats_header_trace_propagation() -> Result<(), anyhow::Error> {
+        #[allow(clippy::redundant_closure_call)]
+        let _ = temp_env::async_with_vars(
+            [("DYN_LOGGING_JSONL", Some("1"))],
+            (async || {
+                let tmp_file = NamedTempFile::new().unwrap();
+                let file_name = tmp_file.path().to_str().unwrap();
+                // let guard = StderrOverride::from_file(file_name)?;
+                init();
+                
+                // Execute the test scenario
+                nats_trace_scenario().await;
+                
+                // drop(guard);
+
+                // let lines = load_log(file_name)?;
+
+                // Validate trace continuity across process boundaries
+                // TODO: Uncomment, I'll check this manually
+                // validate_nats_trace_propagation(&lines)?;
+
+                Ok::<(), anyhow::Error>(())
+            })(),
+        )
+        .await;
+        Ok(())
+    }
+
+    /// Test scenario that simulates distributed tracing across NATS message boundaries
+    async fn nats_trace_scenario() {
+        let starting_span  = tracing::info_span!("starting_span");
+        let _starting_enter = starting_span.enter();
+
+        
+        // 1. Create a span with a nested span and events
+        tracing::info!(message = "Starting original request processing");
+        
+        // Create nested span within original request
+        let nested_span = tracing::info_span!("nested_processing");
+        let _nested_enter = nested_span.enter();
+        tracing::info!(message = "Processing in nested span");
+        tracing::debug!(processing_step = "validation", status = "complete");
+        drop(_nested_enter);
+        
+        // 2. Populate NATS headers with the current trace context
+        let mut nats_headers = async_nats::HeaderMap::new();
+        inject_current_trace_into_nats_headers(&mut nats_headers);
+        
+        tracing::info!(message = "Injected trace context into NATS headers");
+        
+        // Log the headers for debugging (in a real scenario, these would be sent over NATS)
+        if let Some(traceparent) = nats_headers.get("traceparent") {
+            tracing::debug!(traceparent = traceparent.as_str(), message = "NATS header populated");
+        }
+        // drop the starting span to verify the 
+        drop(_starting_enter);
+        // 3. Simulate process boundary - create new span from NATS headers
+        simulate_process_boundary(&nats_headers).await;
+        
+    }
+
+    /// Simulates receiving a NATS message in a different process/service
+    async fn simulate_process_boundary(headers: &async_nats::HeaderMap) {
+        // Extract context and create new span as entry point for this "service"
+        let boundary_span = create_span_from_nats_headers(headers);
+        let _boundary_enter = boundary_span.enter();
+        
+        tracing::info!(message = "Entered new process boundary from NATS headers");
+        
+        // 4. Create events and nested span within the new process boundary
+        tracing::info!(message = "Processing message in new service");
+        tracing::debug!(service = "message_processor", action = "received");
+        
+        // Create nested processing within the boundary span
+        let processing_span = tracing::info_span!("message_processing");
+        let _processing_enter = processing_span.enter();
+        
+        tracing::info!(message = "Deep processing in boundary service");
+        tracing::debug!(processing_phase = "transformation", result = "success");
+        
+        // Simulate some async work
+        tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+        
+        tracing::info!(message = "Completed processing in boundary service");
+        
+        drop(_processing_enter);
+        drop(_boundary_enter);
+    }
+
+    /// Validates that trace context was properly propagated across NATS headers
+    fn validate_nats_trace_propagation(lines: &[serde_json::Value]) -> Result<(), anyhow::Error> {
+        // Extract trace IDs from all log entries
+        let mut trace_ids = std::collections::HashSet::new();
+        let mut original_spans = Vec::new();
+        let mut boundary_spans = Vec::new();
+        
+        for log_line in lines {
+            if let Some(trace_id) = log_line.get("trace_id") {
+                if let Some(trace_id_str) = trace_id.as_str() {
+                    trace_ids.insert(trace_id_str.to_string());
+                }
+            }
+            
+            // Collect spans from original request
+            if let Some(message) = log_line.get("message") {
+                if let Some(msg_str) = message.as_str() {
+                    if msg_str.contains("Starting original request") || 
+                       msg_str.contains("Processing in nested span") ||
+                       msg_str.contains("Injected trace context") {
+                        original_spans.push(log_line);
+                    }
+                    
+                    // Collect spans from boundary service
+                    if msg_str.contains("Entered new process boundary") ||
+                       msg_str.contains("Processing message in new service") ||
+                       msg_str.contains("Deep processing in boundary") ||
+                       msg_str.contains("Completed processing in boundary") {
+                        boundary_spans.push(log_line);
+                    }
+                }
+            }
+        }
+        
+        // 1. Validate that all log entries share the same trace_id
+        assert_eq!(
+            trace_ids.len(), 
+            1, 
+            "Expected all log entries to share the same trace_id, found: {:?}", 
+            trace_ids
+        );
+        
+        let shared_trace_id = trace_ids.iter().next().unwrap();
+        
+        // 2. Validate that original spans have the expected trace_id
+        assert!(!original_spans.is_empty(), "No original spans found");
+        for span in &original_spans {
+            if let Some(trace_id) = span.get("trace_id") {
+                assert_eq!(
+                    trace_id.as_str().unwrap(),
+                    shared_trace_id,
+                    "Original span has incorrect trace_id"
+                );
+            }
+        }
+        
+        // 3. Validate that boundary spans have the same trace_id (continuity)
+        assert!(!boundary_spans.is_empty(), "No boundary spans found");
+        for span in &boundary_spans {
+            if let Some(trace_id) = span.get("trace_id") {
+                assert_eq!(
+                    trace_id.as_str().unwrap(),
+                    shared_trace_id,
+                    "Boundary span has incorrect trace_id - trace context not propagated"
+                );
+            }
+        }
+        
+        // 4. Validate span hierarchy - boundary spans should have different span_ids but same trace_id
+        let mut original_span_ids = std::collections::HashSet::new();
+        let mut boundary_span_ids = std::collections::HashSet::new();
+        
+        for span in &original_spans {
+            if let Some(span_id) = span.get("span_id") {
+                if let Some(span_id_str) = span_id.as_str() {
+                    original_span_ids.insert(span_id_str.to_string());
+                }
+            }
+        }
+        
+        for span in &boundary_spans {
+            if let Some(span_id) = span.get("span_id") {
+                if let Some(span_id_str) = span_id.as_str() {
+                    boundary_span_ids.insert(span_id_str.to_string());
+                }
+            }
+        }
+        
+        // Span IDs should be different (different spans) but trace should be continuous
+        assert!(
+            original_span_ids.is_disjoint(&boundary_span_ids),
+            "Original and boundary spans should have different span_ids"
+        );
+        
+        // 5. Validate that we have NATS header injection evidence
+        let has_nats_injection = lines.iter().any(|log_line| {
+            if let Some(message) = log_line.get("message") {
+                if let Some(msg_str) = message.as_str() {
+                    return msg_str.contains("Injected trace context into NATS headers");
+                }
+            }
+            false
+        });
+        
+        assert!(has_nats_injection, "No evidence of NATS header injection found");
+        
+        // 6. Validate that we have process boundary evidence
+        let has_boundary_entry = lines.iter().any(|log_line| {
+            if let Some(message) = log_line.get("message") {
+                if let Some(msg_str) = message.as_str() {
+                    return msg_str.contains("Entered new process boundary from NATS headers");
+                }
+            }
+            false
+        });
+        
+        assert!(has_boundary_entry, "No evidence of process boundary entry found");
+        
+        tracing::info!(
+            "✅ NATS header trace propagation validation successful - trace_id: {}", 
+            shared_trace_id
+        );
+        
+        Ok(())
+    }
 }
 
-// TODO: a new test to verify that things work
-// how do we simulate network boundaries use nats header map (new/insert) to write a field
-// overall this code will be similar to what is already present in main.rs
