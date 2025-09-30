@@ -55,3 +55,11 @@ pub struct RemoveServiceResponse {
 pub struct RequestShutdownResponse {
     pub acknowledged: bool,
 }
+
+/// Response from the _discover handler containing peer information
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DiscoverResponse {
+    pub instance_id: String,
+    pub tcp_endpoint: Option<String>,
+    pub ipc_endpoint: Option<String>,
+}

@@ -11,6 +11,7 @@ pub mod handler;
 pub mod handler_impls;
 pub mod manager;
 pub mod message_router;
+pub mod network_client;
 pub mod receipt_ack;
 pub mod response;
 pub mod response_manager;
@@ -32,15 +33,17 @@ pub use handler_impls::{
     unary_handler_with_tracker,
 };
 pub use manager::ActiveMessageManager;
+pub use network_client::NetworkClient;
 pub use receipt_ack::HandlerType; // Re-export for backward compatibility
 pub use response::SingleResponseSender;
 pub use response_manager::{ResponseManager, SharedResponseManager};
 pub use responses::{
-    HealthCheckResponse, JoinCohortResponse, ListHandlersResponse, RegisterServiceResponse,
-    RemoveServiceResponse, RequestShutdownResponse, WaitForHandlerResponse,
+    DiscoverResponse, HealthCheckResponse, JoinCohortResponse, ListHandlersResponse,
+    RegisterServiceResponse, RemoveServiceResponse, RequestShutdownResponse,
+    WaitForHandlerResponse,
 };
 pub use status::{DetachedConfirm, MessageStatus, SendAndConfirm, WithResponse};
 pub use system_handlers::create_core_system_handlers;
-pub use transport::{RawTransport, Transport, TransportFactory, TransportType};
+pub use transport::{ConnectionHandle, ThinTransport};
 
 pub mod zmq;

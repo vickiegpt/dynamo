@@ -21,8 +21,9 @@ use super::handler::{HandlerEvent, HandlerId, InstanceId};
 use super::handler_impls::{TypedUnaryHandler, UnaryHandler, UnifiedResponse};
 use super::receipt_ack::{ReceiptAck, ReceiptStatus};
 use super::responses::{
-    HealthCheckResponse, JoinCohortResponse, ListHandlersResponse, RegisterServiceResponse,
-    RemoveServiceResponse, RequestShutdownResponse, WaitForHandlerResponse,
+    DiscoverResponse, HealthCheckResponse, JoinCohortResponse, ListHandlersResponse,
+    RegisterServiceResponse, RemoveServiceResponse, RequestShutdownResponse,
+    WaitForHandlerResponse,
 };
 
 // Note: System handlers now use the transport-agnostic cohort module
@@ -55,6 +56,43 @@ impl TypedUnaryHandler<(), HealthCheckResponse> for HealthCheckHandler {
 
     fn name(&self) -> &str {
         "_health_check"
+    }
+}
+
+/// Discovery handler - returns instance and endpoint information for peer discovery
+#[derive(Debug)]
+pub struct DiscoverHandler {
+    client: Arc<dyn ActiveMessageClient>,
+}
+
+impl DiscoverHandler {
+    pub fn new(client: Arc<dyn ActiveMessageClient>) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl TypedUnaryHandler<(), DiscoverResponse> for DiscoverHandler {
+    async fn process(
+        &self,
+        _input: (),
+        _sender_id: InstanceId,
+        _client: Arc<dyn ActiveMessageClient>,
+    ) -> Result<DiscoverResponse, String> {
+        debug!("Discovery request received");
+
+        // Get peer info from our client
+        let peer_info = self.client.peer_info();
+
+        Ok(DiscoverResponse {
+            instance_id: peer_info.instance_id.to_string(),
+            tcp_endpoint: peer_info.tcp_endpoint().map(|s| s.to_string()),
+            ipc_endpoint: peer_info.ipc_endpoint().map(|s| s.to_string()),
+        })
+    }
+
+    fn name(&self) -> &str {
+        "_discover"
     }
 }
 
@@ -221,7 +259,7 @@ impl TypedUnaryHandler<RegisterServicePayload, RegisterServiceResponse> for Regi
 /// Create the core system handlers that don't depend on ZMQ manager state
 /// Returns a list of (name, dispatcher) pairs ready for registration
 pub fn create_core_system_handlers(
-    _client: Arc<dyn ActiveMessageClient>,
+    client: Arc<dyn ActiveMessageClient>,
     task_tracker: tokio_util::task::TaskTracker,
 ) -> Vec<(String, Arc<dyn super::dispatcher::ActiveMessageDispatcher>)> {
     use super::handler_impls::{am_handler_with_tracker, typed_unary_handler_with_tracker};
@@ -249,6 +287,24 @@ pub fn create_core_system_handlers(
 
     handlers.push(("_health_check".to_string(), health_dispatcher));
 
+    // Discovery handler (unary - returns instance and endpoint information)
+    let client_for_discover = client.clone();
+    let discover_dispatcher = typed_unary_handler_with_tracker(
+        "_discover".to_string(),
+        move |_ctx: super::handler_impls::TypedContext<()>| {
+            // Get peer info from our client
+            let peer_info = client_for_discover.peer_info();
+
+            Ok(DiscoverResponse {
+                instance_id: peer_info.instance_id.to_string(),
+                tcp_endpoint: peer_info.tcp_endpoint().map(|s| s.to_string()),
+                ipc_endpoint: peer_info.ipc_endpoint().map(|s| s.to_string()),
+            })
+        },
+        task_tracker.clone(),
+    );
+    handlers.push(("_discover".to_string(), discover_dispatcher));
+
     // Receipt ACK handler (active message - no response)
     // am_handler_with_tracker returns Arc<dyn ActiveMessageDispatcher>
     let receipt_dispatcher = am_handler_with_tracker(
@@ -263,9 +319,8 @@ pub fn create_core_system_handlers(
                 }
             };
 
-            // Complete the receipt ACK using the client
-            // Note: We need to downcast to ZmqActiveMessageClient to access complete_receipt
-            // For now, we just log - proper integration requires access to the ZMQ client
+            // Complete the receipt ACK
+            // For now, we just log - proper integration requires response manager access
             tracing::info!(
                 "Received receipt ACK for message {}: {:?}",
                 ack.message_id,
@@ -402,9 +457,9 @@ mod tests {
             Ok(())
         }
 
-        async fn broadcast_message(&self, _handler: &str, _payload: Bytes) -> anyhow::Result<()> {
-            Ok(())
-        }
+        // async fn broadcast_message(&self, _handler: &str, _payload: Bytes) -> anyhow::Result<()> {
+        //     Ok(())
+        // }
 
         async fn list_peers(&self) -> anyhow::Result<Vec<PeerInfo>> {
             Ok(vec![])

@@ -3,9 +3,11 @@
 
 use anyhow::Result;
 use dynamo_runtime::active_message::{
-    client::{ActiveMessageClient, PeerInfo},
+    client::WorkerAddress,
     cohort::{CohortType, LeaderWorkerCohort},
-    handler_impls::{am_handler_with_tracker, typed_unary_handler_with_tracker, AmContext, TypedContext},
+    handler_impls::{
+        am_handler_with_tracker, typed_unary_handler_with_tracker, AmContext, TypedContext,
+    },
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
 };
@@ -14,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::NamedTempFile;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Generate a unique IPC socket path for testing
 fn unique_ipc_socket_path() -> Result<String> {
@@ -100,7 +102,9 @@ async fn main() -> Result<()> {
             },
             task_tracker.clone(),
         );
-        worker_manager.register_handler("work".to_string(), work_handler).await?;
+        worker_manager
+            .register_handler("work".to_string(), work_handler)
+            .await?;
 
         // Ping handler (active message - no response)
         let ping_handler = am_handler_with_tracker(
@@ -113,7 +117,9 @@ async fn main() -> Result<()> {
             },
             task_tracker,
         );
-        worker_manager.register_handler("cohort_ping".to_string(), ping_handler).await?;
+        worker_manager
+            .register_handler("cohort_ping".to_string(), ping_handler)
+            .await?;
 
         let worker_client = worker_manager.client();
         println!("Worker {} listening on: {}", rank, worker_client.endpoint());
@@ -128,14 +134,12 @@ async fn main() -> Result<()> {
         CohortType::FixedSize(3),
     ));
 
-    // Connect workers to leader
-    let leader_peer = PeerInfo::new(
-        leader_client.instance_id(),
-        leader_client.endpoint().to_string(),
-    );
+    // Connect workers to leader using address-based discovery
+    let leader_address = WorkerAddress::tcp(leader_client.endpoint().to_string());
 
     for worker_client in &worker_clients {
-        worker_client.connect_to_peer(leader_peer.clone()).await?;
+        let leader_peer = worker_client.connect_to_address(&leader_address).await?;
+        debug!("Worker connected to leader: {}", leader_peer.instance_id);
     }
 
     // Add workers to cohort (auto-registration will handle leader-to-worker connections)

@@ -16,10 +16,15 @@ use crate::active_message::{
     dispatcher::{ControlMessage, DispatchMessage, MessageDispatcher, SenderIdentity},
     handler::{ActiveMessage, HandlerEvent, HandlerId, InstanceId},
     manager::ActiveMessageManager,
+    message_router::MessageRouter,
+    network_client::NetworkClient,
     response_manager::{ResponseManager, SharedResponseManager},
 };
 
-use super::{client::ZmqActiveMessageClient, discovery, transport::ZmqTransport};
+use super::{
+    discovery, thin_transport::ZmqThinTransport, thin_transport::ZmqWireFormat,
+    transport::ZmqTransport,
+};
 
 /// Builder for ZmqActiveMessageManager with configurable options
 #[derive(Debug, Clone)]
@@ -51,8 +56,6 @@ pub struct ManagerState {
     pub instance_id: InstanceId,
     pub tcp_endpoint: Option<String>,
     pub ipc_endpoint: Option<String>,
-    pub client: Arc<ZmqActiveMessageClient>,
-    pub handler_events_tx: broadcast::Sender<HandlerEvent>,
 }
 
 impl std::fmt::Debug for ManagerState {
@@ -61,20 +64,20 @@ impl std::fmt::Debug for ManagerState {
             .field("instance_id", &self.instance_id)
             .field("tcp_endpoint", &self.tcp_endpoint)
             .field("ipc_endpoint", &self.ipc_endpoint)
-            .field("client", &self.client)
             .finish()
     }
 }
 
 pub struct ZmqActiveMessageManager {
     state: Arc<RwLock<ManagerState>>,
-    client: Arc<ZmqActiveMessageClient>,
+    client: Arc<dyn ActiveMessageClient>,
     handler_events_tx: broadcast::Sender<HandlerEvent>,
     cancel_token: CancellationToken,
     receiver_task: Arc<Mutex<Option<tokio::task::JoinHandle<Result<()>>>>>,
     ack_cleanup_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     message_task_tracker: TaskTracker,
     response_manager: SharedResponseManager,
+    message_router: MessageRouter,
 
     // v2 Dispatcher integration
     dispatch_tx: mpsc::Sender<DispatchMessage>,
@@ -83,7 +86,7 @@ pub struct ZmqActiveMessageManager {
 }
 
 impl ZmqActiveMessageManager {
-    pub fn client(&self) -> Arc<ZmqActiveMessageClient> {
+    pub fn client(&self) -> Arc<dyn ActiveMessageClient> {
         self.client.clone()
     }
 
@@ -168,10 +171,12 @@ impl ZmqActiveMessageManager {
         // Create shared response manager for concurrent access from both client and manager
         let response_manager = Arc::new(ResponseManager::new());
 
-        // Use TCP endpoint for client advertisement (primary endpoint)
-        let client = Arc::new(ZmqActiveMessageClient::new(
+        // Create thin ZMQ transport and NetworkClient
+        let transport = Arc::new(ZmqThinTransport::new());
+        let client: Arc<dyn ActiveMessageClient> = Arc::new(NetworkClient::<ZmqWireFormat>::new(
             instance_id,
             tcp_endpoint.clone(),
+            transport,
             response_manager.clone(),
         ));
 
@@ -181,8 +186,6 @@ impl ZmqActiveMessageManager {
             instance_id,
             tcp_endpoint: Some(tcp_endpoint),
             ipc_endpoint: Some(ipc_endpoint),
-            client: client.clone(),
-            handler_events_tx: handler_events_tx.clone(),
         }));
 
         // Initialize concurrency controls
@@ -203,6 +206,13 @@ impl ZmqActiveMessageManager {
         // Spawn dispatcher task
         let dispatcher_task = tokio::spawn(async move { dispatcher.run().await });
 
+        // Create MessageRouter for transport-agnostic message processing
+        let message_router = MessageRouter::new(
+            response_manager.clone(),
+            client.clone() as Arc<dyn ActiveMessageClient>,
+            dispatch_tx.clone(),
+        );
+
         let manager = Self {
             state: state.clone(),
             client: client.clone(),
@@ -212,6 +222,7 @@ impl ZmqActiveMessageManager {
             ack_cleanup_task: Arc::new(Mutex::new(None)),
             message_task_tracker,
             response_manager: response_manager.clone(),
+            message_router,
             dispatch_tx,
             control_tx,
             dispatcher_task: Arc::new(Mutex::new(Some(dispatcher_task))),
@@ -236,11 +247,9 @@ impl ZmqActiveMessageManager {
 
         // Spawn main receive loop that reads from merged channel
         let receiver_task = tokio::spawn(Self::receive_loop(
-            state.clone(),
             message_rx,
             cancel_token.clone(),
-            manager.dispatch_tx.clone(),
-            response_manager.clone(),
+            manager.message_router.clone(),
         ));
 
         let ack_cleanup_task = tokio::spawn(Self::ack_cleanup_loop(
@@ -320,14 +329,10 @@ impl ZmqActiveMessageManager {
         // Register system handlers using the MessageDispatcher
         use crate::active_message::system_handlers::register_system_handlers;
 
-        let state = self.state.read().await;
-        let client = state.client.clone();
-        drop(state);
-
         // Register system handlers with the dispatcher
         register_system_handlers(
             &self.control_tx,
-            client.clone() as Arc<dyn ActiveMessageClient>,
+            self.client.clone(),
             self.message_task_tracker.clone(),
         )
         .await?;
@@ -336,11 +341,9 @@ impl ZmqActiveMessageManager {
     }
 
     async fn receive_loop(
-        state: Arc<RwLock<ManagerState>>,
         mut message_rx: mpsc::UnboundedReceiver<ActiveMessage>,
         cancel_token: CancellationToken,
-        dispatch_tx: mpsc::Sender<DispatchMessage>,
-        response_manager: SharedResponseManager,
+        message_router: MessageRouter,
     ) -> Result<()> {
         loop {
             tokio::select! {
@@ -352,54 +355,10 @@ impl ZmqActiveMessageManager {
                 message = message_rx.recv() => {
                     match message {
                         Some(message) => {
-                            // Handle special internal messages that bypass the dispatcher
-                            if message.handler_name == "_accept" {
-                                if let Err(e) = Self::handle_acceptance(state.clone(), message, response_manager.clone()).await {
-                                    error!("Failed to handle acceptance: {}", e);
-                                }
-                                continue;
-                            }
-
-                            // Check if this is a response message based on metadata (v2 pattern)
-                            // v2 handlers send responses with original handler name but include _response_to metadata
-                            if let Some(response_to) = message.metadata.get("_response_to").and_then(|v| v.as_str()) {
-                                let response_to = response_to.to_string();  // Clone before moving message
-                                debug!("Received response message for request {}", response_to);
-                                if let Err(e) = Self::handle_response_unified(state.clone(), &response_to, message, response_manager.clone()).await {
-                                    error!("Failed to handle response: {}", e);
-                                }
-                                continue;
-                            }
-
-                            // Legacy v1 response pattern (uses "_response" handler name)
-                            if message.handler_name == "_response" {
-                                if let Err(e) = Self::handle_response(state.clone(), message, response_manager.clone()).await {
-                                    error!("Failed to handle response: {}", e);
-                                }
-                                continue;
-                            }
-
-                            // Auto-register sender before processing the message
-                            // This ensures the peer is registered when handlers try to send responses
-                            {
-                                let state_read = state.read().await;
-                                let sender_endpoint = message
-                                    .metadata
-                                    .get("_sender_endpoint")
-                                    .and_then(|v| v.as_str());
-                                state_read
-                                    .client
-                                    .track_incoming_and_auto_register(message.sender_instance, sender_endpoint)
-                                    .await;
-                            }
-
-                            // Convert ActiveMessage to DispatchMessage
-                            let dispatch_message = Self::convert_to_dispatch_message(message, &state).await;
-
-                            // Forward to MessageDispatcher
-                            if let Err(e) = dispatch_tx.send(dispatch_message).await {
-                                error!("Failed to send message to dispatcher: {}", e);
-                                break;
+                            // Forward all messages to the transport-agnostic MessageRouter
+                            if let Err(e) = message_router.route_message(message).await {
+                                error!("Failed to route message: {}", e);
+                                // Continue processing other messages even if one fails
                             }
                         }
                         None => {
@@ -413,187 +372,6 @@ impl ZmqActiveMessageManager {
 
         info!("Receive loop finished");
 
-        Ok(())
-    }
-
-    /// Convert ActiveMessage to DispatchMessage for the v2 dispatcher
-    async fn convert_to_dispatch_message(
-        message: ActiveMessage,
-        _state: &Arc<RwLock<ManagerState>>,
-    ) -> DispatchMessage {
-        use std::time::Instant;
-
-        // Determine sender identity - for now, assume all senders are known
-        // The existing auto-registration logic will handle unknown senders
-        // TODO: Check if sender is actually registered and use Unknown if not
-        let sender_identity = SenderIdentity::Known(message.sender_instance);
-
-        // Convert metadata from serde_json::Value to bytes if present
-        let metadata = if message.metadata != serde_json::Value::Null {
-            match serde_json::to_vec(&message.metadata) {
-                Ok(bytes) => Some(bytes::Bytes::from(bytes)),
-                Err(e) => {
-                    error!("Failed to serialize metadata: {}", e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        DispatchMessage {
-            message_id: message.message_id,
-            handler_name: message.handler_name,
-            payload: message.payload,
-            sender_identity,
-            metadata,
-            received_at: Instant::now(),
-        }
-    }
-
-    async fn handle_acceptance(
-        _state: Arc<RwLock<ManagerState>>,
-        message: ActiveMessage,
-        response_manager: SharedResponseManager,
-    ) -> Result<()> {
-        if let Some(accept_for_str) = message.metadata.get("_accept_for").and_then(|v| v.as_str())
-            && let Ok(accept_id) = Uuid::parse_str(accept_for_str)
-        {
-            response_manager.complete_acceptance(accept_id);
-            return Ok(());
-        }
-        error!("Invalid acceptance message: {:?}", message);
-        Ok(())
-    }
-
-    /// Handle unified response messages (with metadata-based routing)
-    async fn handle_response_unified(
-        _state: Arc<RwLock<ManagerState>>,
-        response_to: &str,
-        message: ActiveMessage,
-        response_manager: SharedResponseManager,
-    ) -> Result<()> {
-        let response_id = Uuid::parse_str(response_to)?;
-
-        debug!(
-            "Handling v2 response to {} from {}",
-            response_id, message.sender_instance
-        );
-        debug!("Response payload size: {} bytes", message.payload.len());
-
-        // Try to parse the payload as JSON to determine if it's an ACK/NACK or full response
-        if let Ok(json_value) = serde_json::from_slice::<serde_json::Value>(&message.payload) {
-            debug!("Parsed response as JSON: {:?}", json_value);
-            if let Some(status) = json_value.get("status").and_then(|s| s.as_str()) {
-                debug!("Found status field: {}", status);
-                match status {
-                    "ok" => {
-                        // This is an ACK
-                        debug!("Completing as ACK");
-                        response_manager.complete_ack(response_id, Ok(()));
-                        return Ok(());
-                    }
-                    "error" => {
-                        // This is a NACK
-                        let error_msg = json_value
-                            .get("message")
-                            .and_then(|m| m.as_str())
-                            .unwrap_or("Unknown error")
-                            .to_string();
-                        debug!("Completing as NACK: {}", error_msg);
-                        response_manager.complete_ack(response_id, Err(error_msg));
-                        return Ok(());
-                    }
-                    _ => {
-                        // Not an ACK/NACK status, treat as full response
-                        debug!("Unknown status value, treating as full response");
-                    }
-                }
-            } else {
-                debug!("No status field found, treating as full response");
-            }
-        } else {
-            debug!("Could not parse as JSON, treating as full response");
-        }
-
-        // This is a full response message
-        debug!(
-            "Completing as full response with {} bytes",
-            message.payload.len()
-        );
-        response_manager.complete_response(response_id, message.payload);
-        Ok(())
-    }
-
-    /// Handle legacy v1 response messages
-    async fn handle_response(
-        _state: Arc<RwLock<ManagerState>>,
-        message: ActiveMessage,
-        response_manager: SharedResponseManager,
-    ) -> Result<()> {
-        if let Some(response_to_str) = message
-            .metadata
-            .get("_response_to")
-            .and_then(|v| v.as_str())
-            && let Ok(response_id) = Uuid::parse_str(response_to_str)
-        {
-            debug!(
-                "Handling legacy response to {} from {}",
-                response_id, message.sender_instance
-            );
-
-            // Try to parse the payload as JSON to determine if it's an ACK/NACK or full response
-            if let Ok(json_value) = serde_json::from_slice::<serde_json::Value>(&message.payload) {
-                // Check if this is an ACK/NACK message based on the status field
-                if let Some(status) = json_value.get("status").and_then(|s| s.as_str()) {
-                    match status {
-                        "ok" => {
-                            // This is an ACK - complete it as an ACK
-                            debug!("Routing ACK response {} to complete_ack", response_id);
-                            response_manager.complete_ack(response_id, Ok(()));
-                            return Ok(());
-                        }
-                        "error" => {
-                            // This is a NACK - extract error message and complete as NACK
-                            let error_msg = json_value
-                                .get("message")
-                                .and_then(|m| m.as_str())
-                                .unwrap_or("Unknown error")
-                                .to_string();
-                            debug!(
-                                "Routing NACK response {} to complete_nack: {}",
-                                response_id, error_msg
-                            );
-                            response_manager.complete_ack(response_id, Err(error_msg));
-                            return Ok(());
-                        }
-                        _ => {
-                            // Unknown status, treat as full response
-                            debug!(
-                                "Unknown status '{}' in response {}, treating as full response",
-                                status, response_id
-                            );
-                        }
-                    }
-                }
-                // JSON but no status field - this is a full response
-                debug!(
-                    "Routing full JSON response {} to complete_response",
-                    response_id
-                );
-            } else {
-                // Not JSON - definitely a full response
-                debug!(
-                    "Routing non-JSON response {} to complete_response",
-                    response_id
-                );
-            }
-
-            // Not an ACK/NACK or couldn't parse as JSON - treat as full response
-            response_manager.complete_response(response_id, message.payload);
-            return Ok(());
-        }
-        error!("Invalid response message: {:?}", message);
         Ok(())
     }
 }
@@ -624,7 +402,8 @@ impl ActiveMessageManager for ZmqActiveMessageManager {
             name: name.to_string(),
             instance: state.instance_id,
         };
-        let _ = state.handler_events_tx.send(event);
+        drop(state);
+        let _ = self.handler_events_tx.send(event);
 
         debug!("Deregistered handler: {}", name);
         Ok(())

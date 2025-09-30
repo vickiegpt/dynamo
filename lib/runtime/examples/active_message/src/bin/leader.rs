@@ -4,7 +4,6 @@
 use anyhow::Result;
 use bytes::Bytes;
 use dynamo_runtime::active_message::{
-    client::ActiveMessageClient,
     cohort::{CohortType, LeaderWorkerCohort},
     create_core_system_handlers,
     manager::ActiveMessageManager,
@@ -41,10 +40,8 @@ async fn main() -> Result<()> {
     ));
 
     // Register system handlers (includes cohort management)
-    let system_handlers = create_core_system_handlers(
-        client.clone_as_arc(),
-        tokio_util::task::TaskTracker::new(),
-    );
+    let system_handlers =
+        create_core_system_handlers(client.clone_as_arc(), tokio_util::task::TaskTracker::new());
 
     for (name, dispatcher) in system_handlers {
         manager.register_handler(name, dispatcher).await?;
