@@ -28,11 +28,13 @@ spec:
               value: /model-store
             - name: HF_HUB_ENABLE_HF_TRANSFER
               value: "1"
+            - name: MODEL_REVISION
+              value: b5c939de8f754692c1647ca79fbf85e8c1e70f8a
           args:
             - |
               set -eux
               pip install --no-cache-dir huggingface_hub hf_transfer
-              hf download $MODEL_NAME --exclude "original/*" --exclude "metal/*"
+              hf download $MODEL_NAME --revision $MODEL_REVISION --exclude "original/*" --exclude "metal/*"
           volumeMounts:
             - name: model-cache
               mountPath: /model-store
