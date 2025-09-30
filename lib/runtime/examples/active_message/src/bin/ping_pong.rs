@@ -4,7 +4,7 @@
 use anyhow::Result;
 use dynamo_runtime::active_message::{
     MessageBuilder,
-    client::PeerInfo,
+    client::{ActiveMessageClient, PeerInfo},
     handler_impls::{unary_handler, UnaryContext},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,

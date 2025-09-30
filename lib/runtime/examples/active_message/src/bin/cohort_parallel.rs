@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use dynamo_runtime::active_message::{
-    client::WorkerAddress,
+    client::{ActiveMessageClient, WorkerAddress},
     cohort::{CohortType, LeaderWorkerCohort},
     handler_impls::{
         am_handler_with_tracker, typed_unary_handler_with_tracker, AmContext, TypedContext,

@@ -3,6 +3,7 @@
 
 use anyhow::Result;
 use dynamo_runtime::active_message::{
+    client::ActiveMessageClient,
     handler_impls::{typed_unary_handler, TypedContext},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,

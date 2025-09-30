@@ -4,6 +4,7 @@
 use anyhow::Result;
 use bytes::Bytes;
 use dynamo_runtime::active_message::{
+    client::ActiveMessageClient,
     cohort::{CohortType, LeaderWorkerCohort},
     create_core_system_handlers,
     manager::ActiveMessageManager,

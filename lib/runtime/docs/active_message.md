@@ -283,16 +283,16 @@ async fn main() -> Result<()> {
     );
     manager.register_handler("echo".to_string(), handler).await?;
 
-    // 3. Get client (concrete NetworkClient type!)
+    // 3. Get client (concrete NetworkClient type)
     let client = manager.client();  // Returns Arc<NetworkClient>
     let peer = client.connect_to_address(&worker_address).await?;
 
-    // 4. Send messages - all methods work directly!
+    // 4. Send messages using the ActiveMessageClient trait methods
     let response = client.send_unary("echo", payload).await?
         .wait_response(Duration::from_secs(5)).await?;
 
-    // Methods like join_cohort() work without workarounds
-    client.join_cohort(leader_id, rank).await?;  // ✅ Just works!
+    // All methods work directly on the concrete client type
+    client.join_cohort(leader_id, rank).await?;
 
     // 5. Shutdown
     manager.shutdown().await?;
