@@ -42,30 +42,93 @@ impl<T: Serialize + Sync> IntoPayload for &T {
 
 pub type Endpoint = String;
 
+/// Represents possible connection endpoints for a worker/peer.
+/// This allows connecting to a peer without needing to know their instance_id upfront.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkerAddress {
+    /// TCP endpoint for cross-host communication
+    pub tcp_endpoint: Option<String>,
+    /// IPC endpoint for same-host optimization
+    pub ipc_endpoint: Option<String>,
+}
+
+impl WorkerAddress {
+    /// Create a WorkerAddress with just a TCP endpoint
+    pub fn tcp(endpoint: impl Into<String>) -> Self {
+        Self {
+            tcp_endpoint: Some(endpoint.into()),
+            ipc_endpoint: None,
+        }
+    }
+
+    /// Create a WorkerAddress with just an IPC endpoint
+    pub fn ipc(endpoint: impl Into<String>) -> Self {
+        Self {
+            tcp_endpoint: None,
+            ipc_endpoint: Some(endpoint.into()),
+        }
+    }
+
+    /// Create a WorkerAddress with both TCP and IPC endpoints
+    pub fn both(tcp: impl Into<String>, ipc: impl Into<String>) -> Self {
+        Self {
+            tcp_endpoint: Some(tcp.into()),
+            ipc_endpoint: Some(ipc.into()),
+        }
+    }
+
+    /// Get the best endpoint to try first (prefers IPC for same-host)
+    pub fn primary_endpoint(&self) -> Option<&str> {
+        self.ipc_endpoint
+            .as_deref()
+            .or(self.tcp_endpoint.as_deref())
+    }
+
+    /// Get all available endpoints
+    pub fn all_endpoints(&self) -> Vec<&str> {
+        let mut endpoints = Vec::new();
+        if let Some(ref ipc) = self.ipc_endpoint {
+            endpoints.push(ipc.as_str());
+        }
+        if let Some(ref tcp) = self.tcp_endpoint {
+            endpoints.push(tcp.as_str());
+        }
+        endpoints
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PeerInfo {
     pub instance_id: InstanceId,
     /// Primary endpoint (TCP) - maintained for backward compatibility
     pub endpoint: Endpoint,
-    /// Optional TCP endpoint for cross-host communication
-    pub tcp_endpoint: Option<Endpoint>,
-    /// Optional IPC endpoint for same-host optimization
-    pub ipc_endpoint: Option<Endpoint>,
+    /// All available connection endpoints for this peer
+    pub address: WorkerAddress,
 }
 
 impl PeerInfo {
     /// Create PeerInfo with single endpoint (backward compatibility)
     pub fn new(instance_id: InstanceId, endpoint: impl Into<String>) -> Self {
         let endpoint = endpoint.into();
+        let address = WorkerAddress::tcp(endpoint.clone());
         Self {
             instance_id,
-            endpoint: endpoint.clone(),
-            tcp_endpoint: Some(endpoint),
-            ipc_endpoint: None,
+            endpoint,
+            address,
         }
     }
 
-    /// Create PeerInfo with both TCP and IPC endpoints
+    /// Create PeerInfo with WorkerAddress
+    pub fn with_address(instance_id: InstanceId, address: WorkerAddress) -> Self {
+        let primary_endpoint = address.primary_endpoint().unwrap_or("unknown").to_string();
+        Self {
+            instance_id,
+            endpoint: primary_endpoint,
+            address,
+        }
+    }
+
+    /// Create PeerInfo with both TCP and IPC endpoints (backward compatibility)
     pub fn new_dual(
         instance_id: InstanceId,
         tcp_endpoint: Option<Endpoint>,
@@ -77,25 +140,29 @@ impl PeerInfo {
             .cloned()
             .unwrap_or_else(|| "tcp://unknown:0".to_string());
 
+        let address = WorkerAddress {
+            tcp_endpoint,
+            ipc_endpoint,
+        };
+
         Self {
             instance_id,
             endpoint: primary_endpoint,
-            tcp_endpoint,
-            ipc_endpoint,
+            address,
         }
     }
 
     /// Get the best endpoint for connection based on local preferences
     pub fn select_endpoint(&self, my_endpoint: &str) -> Option<&Endpoint> {
         // Prefer IPC for same-host communication if available
-        if let Some(ref ipc_ep) = self.ipc_endpoint
+        if let Some(ref ipc_ep) = self.address.ipc_endpoint
             && self.is_local(my_endpoint)
         {
             return Some(ipc_ep);
         }
 
         // Fall back to TCP endpoint
-        self.tcp_endpoint.as_ref().or(Some(&self.endpoint))
+        self.address.tcp_endpoint.as_ref().or(Some(&self.endpoint))
     }
 
     pub fn is_local(&self, my_endpoint: &str) -> bool {
@@ -106,15 +173,15 @@ impl PeerInfo {
         };
 
         // If peer has IPC endpoint, check if we're on the same host as their TCP endpoint
-        if self.ipc_endpoint.is_some() {
-            let peer_tcp_endpoint = self.tcp_endpoint.as_ref().unwrap_or(&self.endpoint);
+        if self.address.ipc_endpoint.is_some() {
+            let peer_tcp_endpoint = self.address.tcp_endpoint.as_ref().unwrap_or(&self.endpoint);
             if let Some(peer_host) = extract_host(peer_tcp_endpoint) {
                 return my_host == peer_host;
             }
         }
 
         // Fall back to host comparison using available TCP endpoint
-        let peer_endpoint = self.tcp_endpoint.as_ref().unwrap_or(&self.endpoint);
+        let peer_endpoint = self.address.tcp_endpoint.as_ref().unwrap_or(&self.endpoint);
 
         // IPC endpoints are always local
         if peer_endpoint.starts_with("ipc://") {
@@ -127,6 +194,26 @@ impl PeerInfo {
         } else {
             false
         }
+    }
+
+    /// Get the preferred endpoint for this peer (IPC if available, otherwise TCP)
+    pub fn preferred_endpoint(&self) -> &str {
+        self.address.primary_endpoint().unwrap_or(&self.endpoint)
+    }
+
+    /// Get all available endpoints for this peer
+    pub fn all_endpoints(&self) -> Vec<&str> {
+        self.address.all_endpoints()
+    }
+
+    /// Get the TCP endpoint if available
+    pub fn tcp_endpoint(&self) -> Option<&str> {
+        self.address.tcp_endpoint.as_deref()
+    }
+
+    /// Get the IPC endpoint if available
+    pub fn ipc_endpoint(&self) -> Option<&str> {
+        self.address.ipc_endpoint.as_deref()
     }
 }
 
@@ -151,11 +238,33 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
 
     async fn send_message(&self, target: InstanceId, handler: &str, payload: Bytes) -> Result<()>;
 
-    async fn broadcast_message(&self, handler: &str, payload: Bytes) -> Result<()>;
-
     async fn list_peers(&self) -> Result<Vec<PeerInfo>>;
 
     async fn connect_to_peer(&self, peer: PeerInfo) -> Result<()>;
+
+    /// Connect to a worker address and discover the peer's instance_id
+    async fn connect_to_address(&self, address: &WorkerAddress) -> Result<PeerInfo> {
+        // Default implementation tries endpoints in order
+        for endpoint in address.all_endpoints() {
+            match self.discover_peer(endpoint).await {
+                Ok(peer_info) => {
+                    self.connect_to_peer(peer_info.clone()).await?;
+                    return Ok(peer_info);
+                }
+                Err(e) => {
+                    debug!("Failed to discover peer at {}: {}", endpoint, e);
+                    continue;
+                }
+            }
+        }
+        anyhow::bail!("Failed to discover peer at any of the provided endpoints")
+    }
+
+    /// Discover peer information by sending a discovery message to an endpoint
+    async fn discover_peer(&self, _endpoint: &str) -> Result<PeerInfo> {
+        // Default implementation - subclasses should override this
+        anyhow::bail!("Discovery not implemented for this client type")
+    }
 
     async fn disconnect_from_peer(&self, instance_id: InstanceId) -> Result<()>;
 
@@ -200,13 +309,13 @@ pub trait ActiveMessageClient: Send + Sync + std::fmt::Debug {
         });
 
         // Add endpoints based on what's available
-        if my_info.tcp_endpoint.is_some() || my_info.ipc_endpoint.is_some() {
+        if my_info.tcp_endpoint().is_some() || my_info.ipc_endpoint().is_some() {
             // Use new dual endpoint format
-            if let Some(ref tcp_ep) = my_info.tcp_endpoint {
-                payload["tcp_endpoint"] = serde_json::Value::String(tcp_ep.clone());
+            if let Some(tcp_ep) = my_info.tcp_endpoint() {
+                payload["tcp_endpoint"] = serde_json::Value::String(tcp_ep.to_string());
             }
-            if let Some(ref ipc_ep) = my_info.ipc_endpoint {
-                payload["ipc_endpoint"] = serde_json::Value::String(ipc_ep.clone());
+            if let Some(ipc_ep) = my_info.ipc_endpoint() {
+                payload["ipc_endpoint"] = serde_json::Value::String(ipc_ep.to_string());
             }
         } else {
             // Fallback to legacy endpoint format for backward compatibility

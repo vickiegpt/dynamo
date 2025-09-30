@@ -14,14 +14,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
-use tmq::{Context, Message, Multipart, publish, subscribe};
+use tmq::{publish, subscribe, Context, Message, Multipart};
 use tokio::sync::mpsc;
 use tracing::info;
 
 /// Message metadata for ping-pong
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MessageMeta {
-    msg_type: String,  // "ping" or "pong"
+    msg_type: String, // "ping" or "pong"
     sequence: u64,
 }
 
@@ -53,7 +53,10 @@ fn create_message(msg_type: &str, sequence: u64, payload: &[u8]) -> Result<Multi
 /// Parse a multipart message
 fn parse_message(multipart: Multipart) -> Result<(MessageMeta, Bytes)> {
     if multipart.len() < 2 {
-        anyhow::bail!("Invalid multipart message: expected 2 parts, got {}", multipart.len());
+        anyhow::bail!(
+            "Invalid multipart message: expected 2 parts, got {}",
+            multipart.len()
+        );
     }
 
     // Part 1: Metadata
@@ -76,13 +79,10 @@ async fn run_endpoint_a(
     let ctx = Context::new();
 
     // Create publisher
-    let mut publisher = publish(&ctx)
-        .bind(&pub_socket)?;
+    let mut publisher = publish(&ctx).bind(&pub_socket)?;
 
     // Create subscriber
-    let mut subscriber = subscribe(&ctx)
-        .connect(&sub_socket)?
-        .subscribe(b"")?;
+    let mut subscriber = subscribe(&ctx).connect(&sub_socket)?.subscribe(b"")?;
 
     info!("Endpoint A: Sockets created");
 
@@ -90,7 +90,10 @@ async fn run_endpoint_a(
     ready_tx.send(()).await?;
 
     // Wait for endpoint B to be ready
-    ready_rx.recv().await.ok_or_else(|| anyhow::anyhow!("Failed to get ready signal from B"))?;
+    ready_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("Failed to get ready signal from B"))?;
 
     // Additional delay for ZMQ subscription propagation
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -167,13 +170,10 @@ async fn run_endpoint_b(
     let ctx = Context::new();
 
     // Create publisher
-    let mut publisher = publish(&ctx)
-        .bind(&pub_socket)?;
+    let mut publisher = publish(&ctx).bind(&pub_socket)?;
 
     // Create subscriber
-    let mut subscriber = subscribe(&ctx)
-        .connect(&sub_socket)?
-        .subscribe(b"")?;
+    let mut subscriber = subscribe(&ctx).connect(&sub_socket)?.subscribe(b"")?;
 
     info!("Endpoint B: Sockets created");
 
@@ -181,7 +181,10 @@ async fn run_endpoint_b(
     ready_tx.send(()).await?;
 
     // Wait for endpoint A to be ready
-    ready_rx.recv().await.ok_or_else(|| anyhow::anyhow!("Failed to get ready signal from A"))?;
+    ready_rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("Failed to get ready signal from A"))?;
 
     // Additional delay for ZMQ subscription propagation
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -200,7 +203,8 @@ async fn run_endpoint_b(
                     let pong_msg = create_message("pong", meta.sequence, &payload)?;
                     publisher.send(pong_msg).await?;
 
-                    if meta.sequence > 0 {  // Don't count warmup
+                    if meta.sequence > 0 {
+                        // Don't count warmup
                         received_count += 1;
                         if received_count >= rounds {
                             break;
@@ -302,7 +306,9 @@ async fn main() -> Result<()> {
             rounds,
             ready_b_tx,
             ready_a_rx,
-        ).await {
+        )
+        .await
+        {
             eprintln!("Endpoint B error: {}", e);
         }
     });
@@ -317,7 +323,9 @@ async fn main() -> Result<()> {
             rounds,
             ready_a_tx,
             ready_b_rx,
-        ).await {
+        )
+        .await
+        {
             Ok(rtts) => {
                 let _ = result_tx.send(rtts).await;
             }

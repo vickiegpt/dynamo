@@ -34,6 +34,7 @@ use crate::active_message::{
 /// - Managing peer auto-registration
 /// - Converting raw messages to dispatch format
 /// - Coordinating with the SharedResponseManager for response completion
+#[derive(Clone)]
 pub struct MessageRouter {
     /// Shared response manager for completing responses, ACKs, and receipts
     response_manager: SharedResponseManager,
@@ -89,11 +90,12 @@ impl MessageRouter {
             return self.handle_response(message).await;
         }
 
-        // Note: Auto-registration is handled by the transport layer (ZMQ manager)
-        // before messages reach the MessageRouter. This keeps the router transport-agnostic.
+        // Handle auto-registration for unknown senders
+        // This is transport-agnostic business logic that belongs in the router
+        self.handle_auto_registration(&message).await;
 
         // Convert ActiveMessage to DispatchMessage
-        let dispatch_message = self.convert_to_dispatch_message(message);
+        let dispatch_message = self.convert_to_dispatch_message(message).await;
 
         // Forward to MessageDispatcher
         if let Err(e) = self.dispatch_tx.send(dispatch_message).await {
@@ -246,13 +248,37 @@ impl MessageRouter {
     }
 
     /// Convert ActiveMessage to DispatchMessage for the v2 dispatcher
-    fn convert_to_dispatch_message(&self, message: ActiveMessage) -> DispatchMessage {
+    async fn convert_to_dispatch_message(&self, message: ActiveMessage) -> DispatchMessage {
         use std::time::Instant;
 
-        // Determine sender identity - for now, assume all senders are known
-        // The existing auto-registration logic will handle unknown senders
-        // TODO: Check if sender is actually registered and use Unknown if not
-        let sender_identity = SenderIdentity::Known(message.sender_instance);
+        // Determine sender identity based on whether sender is registered
+        let sender_identity = if let Ok(peers) = self.client.list_peers().await {
+            let is_known = peers
+                .iter()
+                .any(|peer| peer.instance_id == message.sender_instance);
+            if is_known {
+                SenderIdentity::Known(message.sender_instance)
+            } else {
+                // If unknown, extract endpoint from metadata and create PeerInfo
+                if let Some(endpoint) = message
+                    .metadata
+                    .get("_sender_endpoint")
+                    .and_then(|v| v.as_str())
+                {
+                    let peer_info = crate::active_message::client::PeerInfo::new(
+                        message.sender_instance,
+                        endpoint,
+                    );
+                    SenderIdentity::Unknown(peer_info)
+                } else {
+                    // No endpoint available, treat as anonymous
+                    SenderIdentity::Anonymous
+                }
+            }
+        } else {
+            // If we can't list peers, assume known to avoid disruption
+            SenderIdentity::Known(message.sender_instance)
+        };
 
         // Convert metadata from serde_json::Value to bytes if present
         let metadata = if message.metadata != serde_json::Value::Null {
@@ -274,6 +300,49 @@ impl MessageRouter {
             sender_identity,
             metadata,
             received_at: Instant::now(),
+        }
+    }
+
+    /// Handle auto-registration of unknown senders
+    async fn handle_auto_registration(&self, message: &ActiveMessage) {
+        // Check if sender is already known
+        if let Ok(peers) = self.client.list_peers().await {
+            let is_known = peers
+                .iter()
+                .any(|peer| peer.instance_id == message.sender_instance);
+
+            if !is_known {
+                // Try to auto-register the sender using endpoint from metadata
+                if let Some(endpoint) = message
+                    .metadata
+                    .get("_sender_endpoint")
+                    .and_then(|v| v.as_str())
+                {
+                    let peer_info = crate::active_message::client::PeerInfo::new(
+                        message.sender_instance,
+                        endpoint,
+                    );
+
+                    if let Err(e) = self.client.connect_to_peer(peer_info.clone()).await {
+                        warn!(
+                            "Failed to auto-register peer {} at {}: {}",
+                            message.sender_instance, endpoint, e
+                        );
+                    } else {
+                        debug!(
+                            "Auto-registered peer {} at {} for response delivery",
+                            message.sender_instance, endpoint
+                        );
+                    }
+                } else {
+                    debug!(
+                        "Unknown sender {} has no endpoint metadata for auto-registration",
+                        message.sender_instance
+                    );
+                }
+            }
+        } else {
+            warn!("Failed to check peer list for auto-registration");
         }
     }
 }
@@ -315,9 +384,9 @@ mod tests {
             Ok(())
         }
 
-        async fn broadcast_message(&self, _handler: &str, _payload: Bytes) -> anyhow::Result<()> {
-            Ok(())
-        }
+        // async fn broadcast_message(&self, _handler: &str, _payload: Bytes) -> anyhow::Result<()> {
+        //     Ok(())
+        // }
 
         async fn list_peers(&self) -> anyhow::Result<Vec<crate::active_message::client::PeerInfo>> {
             Ok(vec![])

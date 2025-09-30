@@ -1118,19 +1118,14 @@ mod tests {
         assert!(connected.peer_info().is_none());
 
         // Unconnected variant
-        let peer_info = PeerInfo {
-            instance_id,
-            endpoint: "tcp://localhost:5555".to_string(),
-            tcp_endpoint: Some("tcp://localhost:5555".to_string()),
-            ipc_endpoint: None,
-        };
+        let peer_info = PeerInfo::new(instance_id, "tcp://localhost:5555");
         let unconnected = SenderAddress::Unconnected(peer_info.clone());
         assert_eq!(unconnected.instance_id(), instance_id);
         assert!(!unconnected.is_connected());
         assert!(unconnected.peer_info().is_some());
         assert_eq!(
-            unconnected.peer_info().unwrap().tcp_endpoint,
-            peer_info.tcp_endpoint
+            unconnected.peer_info().unwrap().endpoint,
+            "tcp://localhost:5555"
         );
     }
 }
