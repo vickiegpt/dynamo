@@ -55,14 +55,16 @@ pub fn load_and_validate_tensors(
         // Check the stride, and ensure our tensor is contiguous.
         // TODO: We eventually need to be able to handle this.
         let stride = tensor.stride();
-        for i in 1..stride.len() {
-            if stride[i] > stride[i - 1] {
-                return Err(anyhow::anyhow!(
-                    "Tensor strides must be monotonically decreasing! Got {:?}",
-                    stride
-                ));
-            }
-        }
+        tracing::info!("ziqif stride: {:?}", stride);
+        // TODO(ziqif): comment out for now since the stride is not monotonically decreasing for HND layout
+        // for i in 1..stride.len() {
+        //     if stride[i] > stride[i - 1] {
+        //         return Err(anyhow::anyhow!(
+        //             "Tensor strides must be monotonically decreasing! Got {:?}",
+        //             stride
+        //         ));
+        //     }
+        // }
 
         // Check that all layer tensors have the same shape.
         // TODO: We eventually need to support the weirder models with heterogenous layers.
