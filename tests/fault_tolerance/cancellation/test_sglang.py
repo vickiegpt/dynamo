@@ -47,23 +47,25 @@ class DynamoWorkerProcess(ManagedProcess):
             "1",
             "--trust-remote-code",
         ]
-        
+
         # Add mode-specific arguments
         if mode == "null":
             # Aggregated mode - add skip-tokenizer-init like the serve test
             command.append("--skip-tokenizer-init")
         else:
             # Disaggregated mode - add disaggregation arguments like disagg.sh
-            command.extend([
-                "--disaggregation-mode",
-                mode,
-                "--disaggregation-bootstrap-port",
-                "12345",
-                "--host",
-                "0.0.0.0",
-                "--disaggregation-transfer-backend",
-                "nixl",
-            ])
+            command.extend(
+                [
+                    "--disaggregation-mode",
+                    mode,
+                    "--disaggregation-bootstrap-port",
+                    "12345",
+                    "--host",
+                    "0.0.0.0",
+                    "--disaggregation-transfer-backend",
+                    "nixl",
+                ]
+            )
 
         health_check_urls = [
             (f"http://localhost:{FRONTEND_PORT}/v1/models", check_models_api),
@@ -86,7 +88,7 @@ class DynamoWorkerProcess(ManagedProcess):
         env["DYN_SYSTEM_ENABLED"] = "true"
         env["DYN_SYSTEM_USE_ENDPOINT_HEALTH_STATUS"] = '["generate"]'
         env["DYN_SYSTEM_PORT"] = port
-        
+
         # Set GPU assignment for disaggregated mode (like disagg.sh)
         if mode == "decode":
             env["CUDA_VISIBLE_DEVICES"] = "1"  # Use GPU 1 for decode worker
@@ -301,7 +303,6 @@ def test_request_cancellation_sglang_aggregated(
                 logger.info(f"{description} detected successfully")
 
 
-
 @pytest.mark.e2e
 @pytest.mark.sglang
 @pytest.mark.gpu_1
@@ -323,18 +324,14 @@ def test_request_cancellation_sglang_prefill_cancel(
 
         # Step 2: Start the decode worker
         logger.info("Starting decode worker...")
-        decode_worker = DynamoWorkerProcess(
-            request, mode="decode"
-        )
+        decode_worker = DynamoWorkerProcess(request, mode="decode")
 
         with decode_worker:
             logger.info(f"Decode Worker PID: {decode_worker.get_pid()}")
 
             # Step 3: Start the prefill worker
             logger.info("Starting prefill worker...")
-            prefill_worker = DynamoWorkerProcess(
-                request, mode="prefill"
-            )
+            prefill_worker = DynamoWorkerProcess(request, mode="prefill")
 
             with prefill_worker:
                 logger.info(f"Prefill Worker PID: {prefill_worker.get_pid()}")
@@ -382,18 +379,14 @@ def test_request_cancellation_sglang_remote_decode_cancel(
 
         # Step 2: Start the decode worker
         logger.info("Starting decode worker...")
-        decode_worker = DynamoWorkerProcess(
-            request, mode="decode"
-        )
+        decode_worker = DynamoWorkerProcess(request, mode="decode")
 
         with decode_worker:
             logger.info(f"Decode Worker PID: {decode_worker.get_pid()}")
 
             # Step 3: Start the prefill worker
             logger.info("Starting prefill worker...")
-            prefill_worker = DynamoWorkerProcess(
-                request, mode="prefill"
-            )
+            prefill_worker = DynamoWorkerProcess(request, mode="prefill")
 
             with prefill_worker:
                 logger.info(f"Prefill Worker PID: {prefill_worker.get_pid()}")
