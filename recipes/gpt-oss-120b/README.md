@@ -1,28 +1,48 @@
-Note:
+# GPT-OSS-120B Recipe Guide
 
-- This recipe is for gpt-oss-120b in aggregated mode.
+This guide will help you run the GPT-OSS-120B language model using Dynamo's optimized setup.
 
-# Running the recipe
+## Quick Start
+
+To run the model, simply execute this command in your terminal:
+
 ```bash
 ./run.sh --model gpt-oss-120b --framework trtllm agg
 ```
 
-# Images
+## System Requirements
 
-This recipe uses the following trtllm container image based on pre release/0.5.1 commit.
-You might need to build the images to reproduce the benchmark.
+### Model Download
 
-* dynamo trtllm runtime for arm64
-Below image is built based on commit [7fdf50fec2cae9112224f5cea26cef3dde78506f](https://github.com/ai-dynamo/dynamo/commit/7fdf50fec2cae9112224f5cea26cef3dde78506f)
+### Container Image
+This recipe was tested with dynamo trtllm runtime container for ARM64 processors.
+
+**Pre-built Image:**
 ```
 nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:7fdf50fec2cae9112224f5cea26cef3dde78506f-35606896-trtllm-arm64
 ```
 
-Steps to build the image:
-```bash
-git clone https://github.com/ai-dynamo/dynamo.git
-cd dynamo
-git checkout 7fdf50fec2cae9112224f5cea26cef3dde78506f
+### Building Your Own Image (Optional)
 
-./container/build.sh --framework TRTLLM --target runtime
-```
+If you need to build the container image yourself (for example, if you're using different hardware or want to customize the setup):
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/ai-dynamo/dynamo.git
+   cd dynamo
+   ```
+
+2. **Switch to the specific version:**
+   ```bash
+   git checkout 7fdf50fec2cae9112224f5cea26cef3dde78506f
+   ```
+
+3. **Build the container:**
+   ```bash
+   ./container/build.sh --framework TRTLLM --target runtime
+   ```
+
+## Notes
+1. The benchmark container image uses a specific commit of aiperf to ensure reproducible results and compatibility with the benchmarking setup.
+
+2. storage class is not specified in the recipe, you need to specify it in the `deploy.yaml` file.
