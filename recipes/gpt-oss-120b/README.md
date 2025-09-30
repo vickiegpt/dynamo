@@ -34,30 +34,9 @@ kubectl apply -n $NAMESPACE -f ./trtllm/agg
 ### Container Image
 This recipe was tested with dynamo trtllm runtime container for ARM64 processors.
 
-**Pre-built Image:**
 ```
-nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:7fdf50fec2cae9112224f5cea26cef3dde78506f-35606896-trtllm-arm64
+nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.5.1-rc0.pre3
 ```
-
-### Building Your Own Image (Optional)
-
-If you need to build the container image yourself (for example, if you're using different hardware or want to customize the setup):
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/ai-dynamo/dynamo.git
-   cd dynamo
-   ```
-
-2. **Switch to the specific version:**
-   ```bash
-   git checkout 7fdf50fec2cae9112224f5cea26cef3dde78506f
-   ```
-
-3. **Build the container:**
-   ```bash
-   ./container/build.sh --framework TRTLLM --target runtime
-   ```
 
 ## Notes
 1. The benchmark container image uses a specific commit of aiperf to ensure reproducible results and compatibility with the benchmarking setup.
