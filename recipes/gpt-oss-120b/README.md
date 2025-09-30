@@ -2,17 +2,34 @@
 
 This guide will help you run the GPT-OSS-120B language model using Dynamo's optimized setup.
 
+## Prerequisites
+
+follow the instructions in recipe [README.md](../README.md) to create a namespace and kubernetes secret for huggingface token.
+
 ## Quick Start
 
 To run the model, simply execute this command in your terminal:
 
 ```bash
+cd recipe
 ./run.sh --model gpt-oss-120b --framework trtllm agg
 ```
 
-## System Requirements
+## (Alternative) Step by Step Guide
 
-### Model Download
+### 1. Download the Model
+
+```bash
+cd recipes/gpt-oss-120b
+kubectl apply -n $NAMESPACE -f ./model-cache
+```
+
+### 2. Deploy and Benchmark the Model
+
+```bash
+cd recipes/gpt-oss-120b
+kubectl apply -n $NAMESPACE -f ./trtllm/agg
+```
 
 ### Container Image
 This recipe was tested with dynamo trtllm runtime container for ARM64 processors.
