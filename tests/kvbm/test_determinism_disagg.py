@@ -10,7 +10,7 @@ deterministic outputs when same requests are served 1) without KVBM onboarded KV
 blocks and 2) with KVBM onboarded KV blocks, when given the same inputs with
 fixed seed and temperature=0.
 
-The expected results should be at least 90% match between the two cases.
+The expected results should be at least 95% match between the two cases.
 Compared to aggregated mode, disaggregated mode has some known randomness.
 Example reference: https://github.com/vllm-project/vllm/issues/7779#issuecomment-2304967870
 """
@@ -36,6 +36,9 @@ from .common import TestDeterminism as BaseTestDeterminism
 # Test markers to align with repository conventions
 # Todo: enable the rest when kvbm is built in the ci
 pytestmark = KVBM_PYTEST_MARKS + [pytest.mark.gpu_2]
+
+
+SUCCESS_RATE_THRESHOLD = 0.95
 
 
 # NOTE: disagg only supports vllm now, no trtllm support
@@ -236,7 +239,10 @@ class LLMServerManager:
         print(f"Prefiller process started with PID: {self.process_prefiller.pid}")
 
         # Give prefiller time to start up
-        time.sleep(5)
+        print(
+            "Sleeping for 30 seconds to wait for decoder and prefiller to start up..."
+        )
+        time.sleep(30)
 
         # Wait for health
         start_time = time.time()
@@ -653,9 +659,10 @@ class TestDeterminism(BaseTestDeterminism):
         else:
             os.environ.pop("KVBM_MAX_TOKENS", None)
 
+        # using SUCCESS_RATE_THRESHOLD to account for some known randomness in disaggregated mode
         assert (
-            success_rate == 1.0
-        ), f"Determinism failed: {deterministic_count}/{total_compared} prompts deterministic"
+            success_rate >= SUCCESS_RATE_THRESHOLD
+        ), f"Determinism failed: {deterministic_count}/{total_compared} prompts deterministic, success rate {success_rate*100}% lower than expected {SUCCESS_RATE_THRESHOLD*100}%"
 
 
 if __name__ == "__main__":
