@@ -505,6 +505,7 @@ where
     // Capture close span time
     // Currently not used but added for future use in timing
     fn on_close(&self, id: Id, ctx: Context<'_, S>) {
+        println!("on_close called for span");
         if let Some(span) = ctx.span(&id) {
             let mut extensions = span.extensions_mut();
             if let Some(distributed_tracing_context) =
@@ -1437,6 +1438,7 @@ pub mod tests {
         tracing::info!(message = "Processing in nested span");
         tracing::debug!(processing_step = "validation", status = "complete");
         drop(_nested_enter);
+        drop(nested_span);
         
         // 2. Populate NATS headers with the current trace context
         let mut nats_headers = async_nats::HeaderMap::new();
@@ -1448,8 +1450,9 @@ pub mod tests {
         if let Some(traceparent) = nats_headers.get("traceparent") {
             tracing::debug!(traceparent = traceparent.as_str(), message = "NATS header populated");
         }
-        // drop the starting span to verify the 
+        // Drop both the guard and the span to close it immediately
         drop(_starting_enter);
+        drop(starting_span);
         // 3. Simulate process boundary - create new span from NATS headers
         simulate_process_boundary(&nats_headers).await;
         
@@ -1480,7 +1483,9 @@ pub mod tests {
         tracing::info!(message = "Completed processing in boundary service");
         
         drop(_processing_enter);
+        drop(processing_span);
         drop(_boundary_enter);
+        drop(boundary_span);
     }
 
     /// Validates that trace context was properly propagated across NATS headers
