@@ -33,14 +33,12 @@ class BaseWorkerHandler(ABC):
         self.prefill_client = prefill_client
         self.serving_mode = config.serving_mode
         self.skip_tokenizer_init = config.server_args.skip_tokenizer_init
-        
+
         # Initialize engine monitor if runtime is provided
         self.engine_monitor: Optional[SglangEngineMonitor] = None
         if runtime:
             self.engine_monitor = SglangEngineMonitor(
-                runtime=runtime,
-                engine=engine,
-                endpoint_name=endpoint_name
+                runtime=runtime, engine=engine, endpoint_name=endpoint_name
             )
 
     @abstractmethod

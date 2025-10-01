@@ -27,7 +27,9 @@ class PrefillWorkerHandler(BaseWorkerHandler):
     ):
         self.engine = engine
         self.bootstrap_host, self.bootstrap_port = self._get_bootstrap_info()
-        super().__init__(component, engine, config, None, None, None, runtime, endpoint_name)
+        super().__init__(
+            component, engine, config, None, None, None, runtime, endpoint_name
+        )
         logging.info(
             f"Prefill worker handler initialized - bootstrap host: {self.bootstrap_host}, bootstrap port: {self.bootstrap_port}"
         )

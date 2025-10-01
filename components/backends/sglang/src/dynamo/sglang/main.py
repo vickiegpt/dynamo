@@ -95,8 +95,14 @@ async def init(runtime: DistributedRuntime, config: Config):
             yield response
 
     handler = DecodeWorkerHandler(
-        component, engine, config, publisher, kv_publisher, prefill_client,
-        runtime=runtime, endpoint_name=dynamo_args.endpoint
+        component,
+        engine,
+        config,
+        publisher,
+        kv_publisher,
+        prefill_client,
+        runtime=runtime,
+        endpoint_name=dynamo_args.endpoint,
     )
 
     async def register_model():
@@ -157,8 +163,7 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
     generate_endpoint = component.endpoint(dynamo_args.endpoint)
 
     handler = PrefillWorkerHandler(
-        component, engine, config,
-        runtime=runtime, endpoint_name=dynamo_args.endpoint
+        component, engine, config, runtime=runtime, endpoint_name=dynamo_args.endpoint
     )
 
     health_check_payload = SglangPrefillHealthCheckPayload(engine).to_dict()

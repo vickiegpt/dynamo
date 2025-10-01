@@ -28,8 +28,14 @@ class DecodeWorkerHandler(BaseWorkerHandler):
         endpoint_name: str = "generate",
     ):
         super().__init__(
-            component, engine, config, metrics_publisher, kv_publisher, prefill_client,
-            runtime, endpoint_name
+            component,
+            engine,
+            config,
+            metrics_publisher,
+            kv_publisher,
+            prefill_client,
+            runtime,
+            endpoint_name,
         )
         if self.serving_mode == DisaggregationMode.DECODE:
             if self.prefill_client is None:
