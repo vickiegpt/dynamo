@@ -351,23 +351,9 @@ pub fn create_core_system_handlers(
     );
     handlers.push(("_register_service".to_string(), register_dispatcher));
 
-    // Join cohort handler (unary - returns join status)
-    let join_cohort_dispatcher = typed_unary_handler_with_tracker(
-        "_join_cohort".to_string(),
-        move |ctx: super::handler_impls::TypedContext<serde_json::Value>| {
-            tracing::info!("Received cohort join request: {:?}", ctx.input);
-            // For now, always accept joins
-            // In a real implementation, this would connect to a cohort manager
-            Ok(JoinCohortResponse {
-                accepted: true,
-                reason: None,
-                position: Some(0),   // TODO: implement position assignment logic
-                expected_rank: None, // TODO: implement rank assignment logic
-            })
-        },
-        task_tracker.clone(),
-    );
-    handlers.push(("_join_cohort".to_string(), join_cohort_dispatcher));
+    // NOTE: _join_cohort handler is NOT a core system handler
+    // It should be registered by LeaderWorkerCohort instances via cohort.register_handlers()
+    // This ensures cohort logic is isolated to the leader that owns the cohort
 
     // Remove service handler (unary - returns removal status)
     let remove_service_dispatcher = typed_unary_handler_with_tracker(
@@ -409,8 +395,105 @@ pub async fn register_system_handlers(
     client: Arc<dyn ActiveMessageClient>,
     task_tracker: tokio_util::task::TaskTracker,
 ) -> anyhow::Result<()> {
-    let handlers = create_core_system_handlers(client, task_tracker);
+    use super::handler_impls::typed_unary_handler_with_tracker;
 
+    let mut handlers = create_core_system_handlers(client, task_tracker.clone());
+
+    // Add handler discovery system handlers that need access to control_tx
+    let control_tx_for_list = control_tx.clone();
+    let list_handlers_dispatcher = typed_unary_handler_with_tracker(
+        "_list_handlers".to_string(),
+        move |_ctx: super::handler_impls::TypedContext<()>| {
+            let control_tx = control_tx_for_list.clone();
+            // Use block_in_place for async work in sync handler
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
+                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                    let control_msg = super::dispatcher::ControlMessage::ListHandlers { reply_tx };
+
+                    control_tx.send(control_msg).await.map_err(|e| {
+                        format!("Failed to send ListHandlers control message: {}", e)
+                    })?;
+
+                    let handlers = reply_rx
+                        .await
+                        .map_err(|e| format!("Failed to receive handler list: {}", e))?;
+
+                    Ok(ListHandlersResponse { handlers })
+                })
+            })
+        },
+        task_tracker.clone(),
+    );
+    handlers.push(("_list_handlers".to_string(), list_handlers_dispatcher));
+
+    // Add wait_for_handler system handler
+    let control_tx_for_wait = control_tx.clone();
+    let wait_for_handler_dispatcher = typed_unary_handler_with_tracker(
+        "_wait_for_handler".to_string(),
+        move |ctx: super::handler_impls::TypedContext<serde_json::Value>| {
+            let control_tx = control_tx_for_wait.clone();
+            // Use block_in_place for async work in sync handler
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
+                    // Parse handler name and timeout from input
+                    let handler_name = ctx
+                        .input
+                        .get("handler_name")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| "Missing handler_name in request".to_string())?
+                        .to_string();
+
+                    let timeout_ms = ctx
+                        .input
+                        .get("timeout_ms")
+                        .and_then(|v| v.as_u64())
+                        .map(Duration::from_millis);
+
+                    // Poll for handler with timeout
+                    let start = std::time::Instant::now();
+                    let max_wait = timeout_ms.unwrap_or(Duration::from_secs(30));
+
+                    loop {
+                        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                        let control_msg = super::dispatcher::ControlMessage::QueryHandler {
+                            name: handler_name.clone(),
+                            reply_tx,
+                        };
+
+                        control_tx.send(control_msg).await.map_err(|e| {
+                            format!("Failed to send QueryHandler control message: {}", e)
+                        })?;
+
+                        let exists = reply_rx.await.map_err(|e| {
+                            format!("Failed to receive handler query result: {}", e)
+                        })?;
+
+                        if exists {
+                            return Ok(WaitForHandlerResponse {
+                                handler_name: handler_name.clone(),
+                                available: true,
+                            });
+                        }
+
+                        if start.elapsed() >= max_wait {
+                            return Ok(WaitForHandlerResponse {
+                                handler_name,
+                                available: false,
+                            });
+                        }
+
+                        // Wait a bit before polling again
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                })
+            })
+        },
+        task_tracker,
+    );
+    handlers.push(("_wait_for_handler".to_string(), wait_for_handler_dispatcher));
+
+    // Register all handlers
     for (name, dispatcher) in handlers {
         let control_msg = super::dispatcher::ControlMessage::Register { name, dispatcher };
         control_tx

@@ -6,7 +6,6 @@ use bytes::Bytes;
 use dynamo_runtime::active_message::{
     client::ActiveMessageClient,
     cohort::{CohortType, LeaderWorkerCohort},
-    create_core_system_handlers,
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
 };
@@ -40,13 +39,14 @@ async fn main() -> Result<()> {
         CohortType::FixedSize(2),
     ));
 
-    // Register system handlers (includes cohort management)
-    let system_handlers =
-        create_core_system_handlers(client.clone_as_arc(), tokio_util::task::TaskTracker::new());
+    // Register cohort-specific handlers (_join_cohort) with THIS cohort instance
+    // This allows workers to join this specific cohort
+    let task_tracker = tokio_util::task::TaskTracker::new();
+    cohort
+        .register_handlers(manager.control_tx(), task_tracker)
+        .await?;
 
-    for (name, dispatcher) in system_handlers {
-        manager.register_handler(name, dispatcher).await?;
-    }
+    println!("Registered cohort handlers");
 
     println!("Waiting for 2 workers to join cohort...");
 

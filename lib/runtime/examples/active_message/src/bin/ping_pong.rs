@@ -3,11 +3,11 @@
 
 use anyhow::Result;
 use dynamo_runtime::active_message::{
-    MessageBuilder,
     client::{ActiveMessageClient, PeerInfo},
     handler_impls::{unary_handler, UnaryContext},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,
+    MessageBuilder,
 };
 use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;

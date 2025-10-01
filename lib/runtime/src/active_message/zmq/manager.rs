@@ -95,6 +95,12 @@ impl ZmqActiveMessageManager {
         self.state.clone()
     }
 
+    /// Get the control channel sender for dispatcher control messages
+    /// This is needed for cohort.register_handlers() and other advanced use cases
+    pub fn control_tx(&self) -> &mpsc::Sender<ControlMessage> {
+        &self.control_tx
+    }
+
     /// Register a handler with the message dispatcher
     pub async fn register_handler(
         &self,
@@ -415,10 +421,22 @@ impl ActiveMessageManager for ZmqActiveMessageManager {
     }
 
     async fn list_handlers(&self) -> Vec<HandlerId> {
-        // v2 handlers are managed by MessageDispatcher
-        // For now, return empty list since we don't have a way to query the dispatcher
-        // This could be enhanced later if needed
-        Vec::new()
+        // Query the dispatcher for registered handlers
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let control_msg = ControlMessage::ListHandlers { reply_tx };
+
+        if let Err(e) = self.control_tx.send(control_msg).await {
+            warn!("Failed to send ListHandlers control message: {}", e);
+            return Vec::new();
+        }
+
+        match reply_rx.await {
+            Ok(handler_names) => handler_names, // HandlerId is just String
+            Err(e) => {
+                warn!("Failed to receive handler list: {}", e);
+                Vec::new()
+            }
+        }
     }
 
     fn handler_events(&self) -> broadcast::Receiver<HandlerEvent> {

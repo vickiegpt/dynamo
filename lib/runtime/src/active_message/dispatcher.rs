@@ -345,6 +345,17 @@ pub enum ControlMessage {
     /// Unregister a handler
     Unregister { name: String },
 
+    /// Query registered handlers
+    ListHandlers {
+        reply_tx: tokio::sync::oneshot::Sender<Vec<String>>,
+    },
+
+    /// Check if specific handler exists
+    QueryHandler {
+        name: String,
+        reply_tx: tokio::sync::oneshot::Sender<bool>,
+    },
+
     /// Shutdown the dispatcher
     Shutdown,
 }
@@ -421,6 +432,14 @@ impl MessageDispatcher {
                         }
                         ControlMessage::Unregister { name } => {
                             self.unregister_handler(name);
+                        }
+                        ControlMessage::ListHandlers { reply_tx } => {
+                            let handlers: Vec<String> = self.handlers.keys().cloned().collect();
+                            let _ = reply_tx.send(handlers);
+                        }
+                        ControlMessage::QueryHandler { name, reply_tx } => {
+                            let exists = self.handlers.contains_key(&name);
+                            let _ = reply_tx.send(exists);
                         }
                         ControlMessage::Shutdown => {
                             info!("Dispatcher shutting down");

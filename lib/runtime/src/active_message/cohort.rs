@@ -361,6 +361,97 @@ impl LeaderWorkerCohort {
         self.validate_and_add_worker(worker_id, rank).await
     }
 
+    /// Register cohort-specific handlers (_join_cohort) with the dispatcher
+    /// This should only be called by leaders that manage cohorts
+    pub async fn register_handlers(
+        &self,
+        control_tx: &tokio::sync::mpsc::Sender<crate::active_message::dispatcher::ControlMessage>,
+        task_tracker: tokio_util::task::TaskTracker,
+    ) -> Result<()> {
+        use crate::active_message::handler_impls::{
+            TypedContext, typed_unary_handler_with_tracker,
+        };
+        use crate::active_message::responses::JoinCohortResponse;
+
+        let cohort = self.clone();
+
+        // Create handler that captures THIS cohort instance
+        let handler = typed_unary_handler_with_tracker(
+            "_join_cohort".to_string(),
+            move |ctx: TypedContext<serde_json::Value>| {
+                let cohort = cohort.clone();
+                // Use block_in_place for async work in sync handler
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async move {
+                        // Parse rank from request
+                        let rank = ctx
+                            .input
+                            .get("rank")
+                            .and_then(|v| v.as_u64())
+                            .map(|r| r as usize);
+
+                        // Actually add worker to THIS specific cohort
+                        match cohort.add_worker(ctx.sender_id, rank).await {
+                            Ok(position) => {
+                                info!(
+                                    "Worker {} joined cohort at position {} with rank {:?}",
+                                    ctx.sender_id, position, rank
+                                );
+                                Ok(JoinCohortResponse {
+                                    accepted: true,
+                                    position: Some(position),
+                                    expected_rank: rank,
+                                    reason: None,
+                                })
+                            }
+                            Err(e) => {
+                                warn!("Worker {} failed to join cohort: {}", ctx.sender_id, e);
+                                Ok(JoinCohortResponse {
+                                    accepted: false,
+                                    position: None,
+                                    expected_rank: None,
+                                    reason: Some(e.to_string()),
+                                })
+                            }
+                        }
+                    })
+                })
+            },
+            task_tracker,
+        );
+
+        // Register with dispatcher
+        control_tx
+            .send(
+                crate::active_message::dispatcher::ControlMessage::Register {
+                    name: "_join_cohort".to_string(),
+                    dispatcher: handler,
+                },
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to register _join_cohort handler: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Connect to a worker and add it to the cohort
+    /// This is a convenience method for leader-initiated cohort building
+    pub async fn connect_and_add_worker(
+        &self,
+        address: &crate::active_message::client::WorkerAddress,
+        rank: Option<usize>,
+    ) -> Result<usize> {
+        // Connect to worker
+        let state = self.state.read().await;
+        let client = state.client.clone();
+        drop(state);
+
+        let peer_info = client.connect_to_address(address).await?;
+
+        // Add to cohort
+        self.add_worker(peer_info.instance_id, rank).await
+    }
+
     // Remove worker (called by RemoveServiceHandler)
     pub async fn remove_worker(&self, worker_id: InstanceId) -> Result<bool> {
         let mut state = self.state.write().await;
