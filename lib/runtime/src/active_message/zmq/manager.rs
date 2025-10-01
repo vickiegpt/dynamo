@@ -345,6 +345,7 @@ impl ZmqActiveMessageManager {
             &self.control_tx,
             self.client.clone(),
             self.message_task_tracker.clone(),
+            self.cancel_token.clone(),
         )
         .await?;
 

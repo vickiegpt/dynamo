@@ -119,10 +119,7 @@ async fn test_await_handler_succeeds_when_handler_exists() -> Result<()> {
 }
 
 /// Test that await_handler times out when handler doesn't exist
-/// NOTE: This test is ignored because it hangs during shutdown. The handler correctly times out
-/// and responds, but there's a race condition during cleanup that needs investigation.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
 async fn test_await_handler_times_out_when_handler_missing() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())

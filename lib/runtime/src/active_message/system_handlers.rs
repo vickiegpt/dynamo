@@ -394,6 +394,7 @@ pub async fn register_system_handlers(
     control_tx: &tokio::sync::mpsc::Sender<super::dispatcher::ControlMessage>,
     client: Arc<dyn ActiveMessageClient>,
     task_tracker: tokio_util::task::TaskTracker,
+    cancel_token: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<()> {
     let mut handlers = create_core_system_handlers(client, task_tracker.clone());
 
@@ -429,10 +430,12 @@ pub async fn register_system_handlers(
 
     // Add wait_for_handler system handler
     let control_tx_for_wait = control_tx.clone();
+    let cancel_token_for_wait = cancel_token.clone();
     let wait_for_handler_dispatcher = super::handler_impls::typed_unary_handler_async_with_tracker(
         "_wait_for_handler".to_string(),
         move |ctx: super::handler_impls::TypedContext<serde_json::Value>| {
             let control_tx = control_tx_for_wait.clone();
+            let cancel_token = cancel_token_for_wait.clone();
             async move {
                 // Parse handler name and timeout from input
                 let handler_name = ctx
@@ -453,6 +456,20 @@ pub async fn register_system_handlers(
                 let max_wait = timeout_ms.unwrap_or(Duration::from_secs(30));
 
                 loop {
+                    // Check for cancellation first
+                    tokio::select! {
+                        _ = cancel_token.cancelled() => {
+                            tracing::debug!("_wait_for_handler cancelled during shutdown");
+                            return Ok(WaitForHandlerResponse {
+                                handler_name,
+                                available: false,
+                            });
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(0)) => {
+                            // Continue with handler query
+                        }
+                    }
+
                     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                     let control_msg = super::dispatcher::ControlMessage::QueryHandler {
                         name: handler_name.clone(),
@@ -481,8 +498,19 @@ pub async fn register_system_handlers(
                         });
                     }
 
-                    // Wait a bit before polling again
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    // Wait a bit before polling again, also checking for cancellation
+                    tokio::select! {
+                        _ = cancel_token.cancelled() => {
+                            tracing::debug!("_wait_for_handler cancelled during sleep");
+                            return Ok(WaitForHandlerResponse {
+                                handler_name,
+                                available: false,
+                            });
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                            // Continue polling
+                        }
+                    }
                 }
             }
         },
