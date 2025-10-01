@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Optional
 import torch
 from vllm.config import VllmConfig
 from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorMetadata
+from vllm.distributed.parallel_state import get_tensor_model_parallel_rank
 from vllm.model_executor.models.utils import extract_layer_index
 from vllm.utils import STR_DTYPE_TO_TORCH_DTYPE
 
@@ -49,8 +50,9 @@ class KvConnectorWorker:
         else:
             self.drt = drt
 
+        self.rank = get_tensor_model_parallel_rank()
         self.vllm_config = vllm_config
-        self._connector = RustKvConnectorWorker(self.drt, engine_id)
+        self._connector = RustKvConnectorWorker(self.drt, engine_id, self.rank)
 
     # Worker
 

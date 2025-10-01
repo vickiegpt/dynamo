@@ -144,7 +144,7 @@ impl KvbmLeader {
         };
 
         let system_handlers = create_core_system_handlers(
-            leader_client.clone_as_arc(),
+            leader_client.clone(),
             tokio_util::task::TaskTracker::new(),
         );
 

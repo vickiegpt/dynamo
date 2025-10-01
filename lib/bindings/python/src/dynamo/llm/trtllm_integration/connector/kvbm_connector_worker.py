@@ -23,7 +23,7 @@ class DynamoKVBMConnectorWorker(KvCacheConnectorWorker):
         mappings = self._llm_args.parallel_config.to_mapping()
         self.rank = mappings.rank
 
-        self._connector = RustKvConnectorWorker(self.drt, str(self.rank))
+        self._connector = RustKvConnectorWorker(self.drt, self.rank)
 
     def register_kv_caches(self, kv_cache_tensor: torch.Tensor):
         """
@@ -32,7 +32,6 @@ class DynamoKVBMConnectorWorker(KvCacheConnectorWorker):
         Args:
             kv_cache_tensor: The contiguous KV cache tensor.
         """
-        print(f"Register KV Caches on rank {self.rank}")
         logger.info(
             f"KvConnectorWorker started registering the kv caches on rank {self.rank}"
         )

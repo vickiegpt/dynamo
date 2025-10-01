@@ -19,13 +19,11 @@ use crate::block_manager::{
     storage::{DeviceAllocator, DeviceStorage, DiskAllocator, PinnedAllocator, torch::TorchTensor},
 };
 use anyhow::Result;
-use async_trait::async_trait;
 
 use dynamo_runtime::active_message::{
-    client::{ActiveMessageClient, PeerInfo, WorkerAddress},
+    client::{ActiveMessageClient, WorkerAddress},
     dispatcher::ActiveMessageDispatcher,
-    handler::{ActiveMessage, InstanceId},
-    handler_impls::{AmContext, TypedContext, am_handler},
+    handler_impls::TypedContext,
     manager::ActiveMessageManager,
     typed_unary_handler,
     zmq::ZmqActiveMessageManager,
