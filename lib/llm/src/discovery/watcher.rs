@@ -14,7 +14,7 @@ use dynamo_runtime::{
         network::egress::push_router::PushRouter,
     },
     protocols::{EndpointId, annotated::Annotated},
-    transports::etcd::{KeyValue, WatchEvent},
+    transports::etcd::WatchEvent,
 };
 
 use crate::{
@@ -147,6 +147,19 @@ impl ModelWatcher {
                         continue;
                     }
 
+                    // If we already have a worker for this model, and the ModelDeploymentCard
+                    // cards don't match, alert, and don't add the new instance
+                    let can_add =
+                        self.manager
+                            .is_valid_checksum(card.model_type, card.name(), card.mdcsum());
+                    if can_add.is_some_and(|is_valid| !is_valid) {
+                        tracing::error!(
+                            model_name = card.name(),
+                            "Checksum for new model does not match existing model."
+                        );
+                        continue;
+                    }
+
                     match self.handle_put(key, &endpoint_id, &mut card).await {
                         Ok(()) => {
                             tracing::info!(
@@ -158,28 +171,34 @@ impl ModelWatcher {
                         }
                         Err(err) => {
                             tracing::error!(
+                                model_name = card.name(),
+                                namespace = endpoint_id.namespace,
                                 error = format!("{err:#}"),
-                                "error adding model {} from namespace {}",
-                                card.name(),
-                                endpoint_id.namespace,
+                                "Error adding model from discovery",
                             );
                         }
                     }
                 }
-                WatchEvent::Delete(kv) => match self
-                    .handle_delete(&kv, target_namespace, global_namespace)
-                    .await
-                {
-                    Ok(Some(model_name)) => {
-                        tracing::info!(model_name, "removed model");
+                WatchEvent::Delete(kv) => {
+                    let Ok(deleted_key) = kv.key_str() else {
+                        tracing::warn!("Invalid UTF-8 in etcd delete notification key: {kv:?}");
+                        continue;
+                    };
+                    match self
+                        .handle_delete(deleted_key, target_namespace, global_namespace)
+                        .await
+                    {
+                        Ok(Some(model_name)) => {
+                            tracing::info!(model_name, "removed model");
+                        }
+                        Ok(None) => {
+                            // There are other instances running this model, nothing to do
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "error removing model");
+                        }
                     }
-                    Ok(None) => {
-                        // There are other instances running this model, nothing to do
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "error removing model");
-                    }
-                },
+                }
             }
         }
     }
@@ -188,11 +207,10 @@ impl ModelWatcher {
     /// Returns the name of the model we just deleted, if any.
     async fn handle_delete(
         &self,
-        kv: &KeyValue,
+        key: &str,
         target_namespace: Option<&str>,
         is_global_namespace: bool,
     ) -> anyhow::Result<Option<String>> {
-        let key = kv.key_str()?;
         let card = match self.manager.remove_model_card(key) {
             Some(card) => card,
             None => {
@@ -283,21 +301,22 @@ impl ModelWatcher {
             .component(&endpoint_id.component)?;
         let client = component.endpoint(&endpoint_id.name).client().await?;
         tracing::debug!(model_name = card.name(), "adding model");
-        self.manager.save_model_card(key, card.clone());
+        self.manager.save_model_card(key, card.clone())?;
 
         if self.manager.has_model_any(card.name()) {
-            tracing::trace!(
+            tracing::debug!(
                 model_name = card.name(),
                 namespace = endpoint_id.namespace,
                 "New endpoint for existing model"
             );
-            self.notify_on_model.notify_waiters();
+            //self.notify_on_model.notify_waiters();
             return Ok(());
         }
 
         if let Some(tx) = &self.model_update_tx {
             tx.send(ModelUpdate::Added(card.clone())).await.ok();
         }
+        let checksum = card.mdcsum();
 
         if card.model_input == ModelInput::Tokens
             && (card.model_type.supports_chat() || card.model_type.supports_completions())
@@ -340,7 +359,7 @@ impl ModelWatcher {
                 .await
                 .context("build_routed_pipeline")?;
                 self.manager
-                    .add_chat_completions_model(card.name(), chat_engine)
+                    .add_chat_completions_model(card.name(), checksum, chat_engine)
                     .context("add_chat_completions_model")?;
                 tracing::info!("Chat completions is ready");
             }
@@ -370,7 +389,7 @@ impl ModelWatcher {
                 .await
                 .context("build_routed_pipeline_with_preprocessor")?;
                 self.manager
-                    .add_completions_model(card.name(), completions_engine)
+                    .add_completions_model(card.name(), checksum, completions_engine)
                     .context("add_completions_model")?;
                 tracing::info!("Completions is ready");
             }
@@ -385,7 +404,7 @@ impl ModelWatcher {
             .await?;
             let engine = Arc::new(push_router);
             self.manager
-                .add_chat_completions_model(card.name(), engine)?;
+                .add_chat_completions_model(card.name(), checksum, engine)?;
         } else if card.model_input == ModelInput::Text && card.model_type.supports_completions() {
             // Case 2: Text + Completions
             let push_router = PushRouter::<
@@ -396,7 +415,8 @@ impl ModelWatcher {
             )
             .await?;
             let engine = Arc::new(push_router);
-            self.manager.add_completions_model(card.name(), engine)?;
+            self.manager
+                .add_completions_model(card.name(), checksum, engine)?;
         } else if card.model_input == ModelInput::Tokens && card.model_type.supports_embedding() {
             // Case 4: Tokens + Embeddings
 
@@ -430,7 +450,7 @@ impl ModelWatcher {
                 .link(frontend)?;
 
             self.manager
-                .add_embeddings_model(card.name(), embedding_engine)?;
+                .add_embeddings_model(card.name(), checksum, embedding_engine)?;
         } else if card.model_input == ModelInput::Tensor && card.model_type.supports_tensor() {
             // Case 5: Tensor + Tensor (non-LLM)
             let push_router = PushRouter::<
@@ -441,7 +461,8 @@ impl ModelWatcher {
             )
             .await?;
             let engine = Arc::new(push_router);
-            self.manager.add_tensor_model(card.name(), engine)?;
+            self.manager
+                .add_tensor_model(card.name(), checksum, engine)?;
         } else {
             // Reject unsupported combinations
             anyhow::bail!(
@@ -455,54 +476,64 @@ impl ModelWatcher {
         Ok(())
     }
 
-    /// All the registered ModelDeploymentCard, one per instance
-    pub async fn all_cards(&self) -> anyhow::Result<Vec<ModelDeploymentCard>> {
+    /// All the registered ModelDeploymentCard with the EndpointId they are attached to, one per instance
+    pub async fn all_cards(&self) -> anyhow::Result<Vec<(EndpointId, ModelDeploymentCard)>> {
         let Some(etcd_client) = self.drt.etcd_client() else {
             anyhow::bail!("all_cards: Missing etcd client");
         };
         let kvs = etcd_client.kv_get_prefix(model_card::ROOT_PATH).await?;
-        let mut cards = Vec::with_capacity(kvs.len());
+        let mut results = Vec::with_capacity(kvs.len());
         for kv in kvs {
-            let card = match serde_json::from_slice::<ModelDeploymentCard>(kv.value()) {
-                Ok(card) => card,
+            let maybe_convert = serde_json::from_slice::<ModelDeploymentCard>(kv.value());
+            let r = match maybe_convert {
+                Ok(card) => {
+                    let maybe_endpoint_id = kv
+                        .key_str()
+                        .map_err(|err| err.into())
+                        .and_then(etcd_key_to_endpoint_id);
+                    let endpoint_id = match maybe_endpoint_id {
+                        Ok(eid) => eid,
+                        Err(err) => {
+                            tracing::error!(%err, "Skipping invalid etcd key, not string or not EndpointId");
+                            continue;
+                        }
+                    };
+                    (endpoint_id, card)
+                }
                 Err(err) => {
                     match kv.value_str() {
                         Ok(value) => {
-                            tracing::error!(%err, value, "Invalid JSON in model card")
+                            tracing::error!(%err, value, "Invalid JSON in model card");
                         }
                         Err(value_str_err) => {
-                            tracing::error!(original_error = %err, %value_str_err, "Invalid UTF-8 string in model card, expected JSON")
+                            tracing::error!(original_error=%err, %value_str_err, "Invalid UTF-8 string in model card, expected JSON");
                         }
                     }
                     continue;
                 }
             };
-            cards.push(card);
+            results.push(r);
         }
-        Ok(cards)
+        Ok(results)
     }
 
     pub async fn cards_for_model(
         &self,
         model_name: &str,
-        _target_namespace: Option<&str>,
-        _is_global_namespace: bool,
+        target_namespace: Option<&str>,
+        is_global_namespace: bool,
     ) -> anyhow::Result<Vec<ModelDeploymentCard>> {
         let mut all = self.all_cards().await?;
-        all.retain(|card| {
-            card.name() == model_name
-            // TODO Restore namespace matching
-            /*
+        all.retain(|(endpoint_id, card)| {
             let matches_name = card.name() == model_name;
             let matches_namespace = match (is_global_namespace, target_namespace) {
                 (true, _) => true,
                 (false, None) => true,
-                (false, Some(target_ns)) => entry.endpoint_id.namespace == target_ns,
+                (false, Some(target_ns)) => endpoint_id.namespace == target_ns,
             };
             matches_name && matches_namespace
-            */
         });
-        Ok(all)
+        Ok(all.into_iter().map(|(_eid, card)| card).collect())
     }
 }
 
