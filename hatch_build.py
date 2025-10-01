@@ -22,7 +22,6 @@ def get_components():
     components = []
     for item in os.listdir(components_dir):
         item_path = os.path.join(components_dir, item)
-        print(item_path)
         if os.path.isdir(item_path) and not item.startswith("."):
             components.append(item_path)
 
