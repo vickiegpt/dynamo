@@ -26,11 +26,11 @@ spec:
           runAsNonRoot: true
         resources:
           requests:
-            cpu: "4"
-            memory: "8Gi"
-          limits:
             cpu: "8"
             memory: "16Gi"
+          limits:
+            cpu: "16"
+            memory: "32Gi"
         env:
           - name: HUGGING_FACE_HUB_TOKEN
             valueFrom:

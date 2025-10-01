@@ -1,0 +1,205 @@
+{
+  "request_throughput": {
+    "unit": "requests/sec",
+    "avg": 2.927808419832765
+  },
+  "request_latency": {
+    "unit": "ms",
+    "avg": 3420.6283493333335,
+    "p1": 3405.5299926199996,
+    "p5": 3407.1902231,
+    "p10": 3409.2655111999998,
+    "p25": 3415.4913755,
+    "p50": 3425.867816,
+    "p75": 3428.3850565,
+    "p90": 3429.8954008,
+    "p95": 3430.3988489,
+    "p99": 3430.80160738,
+    "min": 3405.114935,
+    "max": 3430.9022969999996,
+    "std": 11.160526210506214
+  },
+  "request_count": {
+    "unit": "count",
+    "avg": 3.0
+  },
+  "time_to_first_token": {
+    "unit": "ms",
+    "avg": 3420.6283493333335,
+    "p1": 3405.5299926199996,
+    "p5": 3407.1902231,
+    "p10": 3409.2655111999998,
+    "p25": 3415.4913755,
+    "p50": 3425.867816,
+    "p75": 3428.3850565,
+    "p90": 3429.8954008,
+    "p95": 3430.3988489,
+    "p99": 3430.80160738,
+    "min": 3405.114935,
+    "max": 3430.9022969999996,
+    "std": 11.160526210506214
+  },
+  "output_token_throughput": {
+    "unit": "tokens/sec",
+    "avg": 46.55215387534097
+  },
+  "output_sequence_length": {
+    "unit": "tokens",
+    "avg": 106.0,
+    "p1": 20.62,
+    "p5": 27.1,
+    "p10": 35.2,
+    "p25": 59.5,
+    "p50": 100.0,
+    "p75": 149.5,
+    "p90": 179.2,
+    "p95": 189.1,
+    "p99": 197.02,
+    "min": 19.0,
+    "max": 199.0,
+    "std": 73.60706487831179
+  },
+  "input_sequence_length": {
+    "unit": "tokens",
+    "avg": 4003.6666666666665,
+    "p1": 3999.08,
+    "p5": 3999.4,
+    "p10": 3999.8,
+    "p25": 4001.0,
+    "p50": 4003.0,
+    "p75": 4006.0,
+    "p90": 4007.8,
+    "p95": 4008.4,
+    "p99": 4008.88,
+    "min": 3999.0,
+    "max": 4009.0,
+    "std": 4.109609335312651
+  },
+  "input_config": {
+    "model_names": [
+      "Qwen/Qwen3-32B"
+    ],
+    "subcommand": "profile",
+    "verbose": false,
+    "template_filename": "genai_perf_config.yaml",
+    "analyze": {
+      "sweep_parameters": {
+        "concurrency": {
+          "min": 1,
+          "max": 1024
+        }
+      }
+    },
+    "endpoint": {
+      "model_selection_strategy": "round_robin",
+      "backend": "tensorrtllm",
+      "custom": "v1/chat/completions",
+      "type": "chat",
+      "streaming": false,
+      "server_metrics_urls": [
+        "http://localhost:9400/metrics"
+      ],
+      "url": "http://trtllm-agg-frontend.hannahz-2.svc.cluster.local:8000",
+      "grpc_method": "",
+      "service_kind": "openai",
+      "output_format": "openai_chat_completions"
+    },
+    "perf_analyzer": {
+      "path": "perf_analyzer",
+      "verbose": false,
+      "stimulus": {
+        "concurrency": 10
+      },
+      "stability_percentage": 999,
+      "measurement": {
+        "mode": "request_count",
+        "num": ""
+      },
+      "warmup_request_count": 0
+    },
+    "input": {
+      "batch_size": 1,
+      "extra": {
+        "max_tokens": 500,
+        "min_tokens": 500,
+        "ignore_eos": true
+      },
+      "goodput": "",
+      "header": "",
+      "file": "",
+      "num_dataset_entries": 100,
+      "random_seed": 0,
+      "audio": {
+        "batch_size": 1,
+        "length": {
+          "mean": 0,
+          "stddev": 0
+        },
+        "format": "wav",
+        "depths": [
+          16
+        ],
+        "sample_rates": [
+          16
+        ],
+        "num_channels": 1
+      },
+      "image": {
+        "width": {
+          "mean": 0,
+          "stddev": 0
+        },
+        "height": {
+          "mean": 0,
+          "stddev": 0
+        },
+        "batch_size": 1,
+        "format": "png"
+      },
+      "output_tokens": {
+        "mean": 500,
+        "deterministic": false,
+        "stddev": 0
+      },
+      "synthetic_tokens": {
+        "mean": 4000,
+        "stddev": 10
+      },
+      "prefix_prompt": {
+        "num": 0,
+        "length": 100
+      },
+      "sessions": {
+        "num": 0,
+        "turns": {
+          "mean": 1,
+          "stddev": 0
+        },
+        "turn_delay": {
+          "mean": 0,
+          "ratio": 1.0,
+          "stddev": 0
+        }
+      },
+      "prompt_source": "synthetic",
+      "synthetic_files": [],
+      "payload_file": ""
+    },
+    "output": {
+      "artifact_directory": "/data/results/qwen3-32b-trtllm-aic-agg/c10",
+      "checkpoint_directory": "checkpoint",
+      "profile_export_file": "profile_export.json",
+      "generate_plots": false,
+      "enable_checkpointing": false
+    },
+    "tokenizer": {
+      "name": "Qwen/Qwen3-32B",
+      "revision": "main",
+      "trust_remote_code": false,
+      "_enable_debug_logging": true
+    },
+    "process": {
+      "input_path": "aggregated"
+    }
+  }
+}

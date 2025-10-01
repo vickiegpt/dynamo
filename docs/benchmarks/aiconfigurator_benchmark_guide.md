@@ -82,6 +82,12 @@ cd /home/ubuntu/dynamo
 git clone https://github.com/ai-dynamo/aiconfigurator.git
 cd aiconfigurator
 
+# Install Git LFS and pull performance data files
+# AIConfigurator requires performance data files stored in Git LFS
+git lfs install
+git lfs pull
+git lfs checkout
+
 # Install in editable mode
 python3 -m pip install -e .
 
@@ -325,38 +331,6 @@ Compare the actual benchmark results against AIConfigurator's predictions to eva
 - **Baseline**: `benchmarks/incluster/benchmark_baseline_job.yaml`
 - **AIConfigurator**: `benchmarks/incluster/benchmark_aic_agg_job.yaml`
 - **Parameters**: ISL=4000, OSL=500, matching AIConfigurator input
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Pods not starting**:
-   ```bash
-   kubectl describe pod <pod-name> -n $NAMESPACE
-   kubectl logs <pod-name> -n $NAMESPACE
-   ```
-
-2. **Model not found**:
-   - Verify model cache PVC is mounted and contains the model at `/workspace/model_hub/qwen3-32b`
-   - Check PVC: `kubectl get pvc -n $NAMESPACE`
-
-3. **Benchmark job failing**:
-   ```bash
-   kubectl logs job/dynamo-benchmark-baseline -n $NAMESPACE
-   kubectl describe job dynamo-benchmark-baseline -n $NAMESPACE
-   ```
-
-4. **Service not accessible**:
-   ```bash
-   kubectl get svc -n $NAMESPACE
-   kubectl get endpoints <service-name> -n $NAMESPACE
-   ```
-
-5. **GPU allocation issues**:
-   ```bash
-   kubectl describe node <node-name>
-   kubectl get pods -n $NAMESPACE -o wide
-   ```
 
 ### Cleanup
 
