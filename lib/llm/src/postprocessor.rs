@@ -148,7 +148,7 @@ impl
     }
 }
 
-/// Operator implementation for Completions  
+/// Operator implementation for Completions
 /// This transforms BackendOutput -> NvCreateCompletionResponse
 #[async_trait]
 impl
@@ -201,7 +201,7 @@ impl
 }
 
 /// Operator implementation for Embeddings
-/// This transforms EmbeddingsEngineOutput -> NvCreateEmbeddingResponse  
+/// This transforms EmbeddingsEngineOutput -> NvCreateEmbeddingResponse
 #[async_trait]
 impl
     Operator<
