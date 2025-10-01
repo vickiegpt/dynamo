@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use dynamo_llm::block_manager::{
-    block::BlockId,
-    connector::protocol::WorkerTransferRequest,
-    pool::BlockPoolError,
+    block::BlockId, connector::protocol::WorkerTransferRequest, pool::BlockPoolError,
 };
 
 pub mod leader;
