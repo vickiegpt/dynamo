@@ -12,6 +12,7 @@ import uvloop
 from sglang.srt.utils import get_ip
 
 from dynamo.llm import ModelInput, ZmqKvEventPublisher, ZmqKvEventPublisherConfig
+from dynamo.common.config_dump import dump_config
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 from dynamo.runtime.logging import configure_dynamo_logging
 from dynamo.sglang.args import Config, DisaggregationMode, parse_args, parse_endpoint
@@ -46,6 +47,7 @@ async def worker(runtime: DistributedRuntime):
     logging.info("Signal handlers will trigger a graceful shutdown of the runtime")
 
     config = parse_args(sys.argv[1:])
+    dump_config(config.dynamo_args.dump_config_to, config)
     if config.dynamo_args.multimodal_processor:
         await init_multimodal_processor(runtime, config)
     elif config.dynamo_args.multimodal_encode_worker:
