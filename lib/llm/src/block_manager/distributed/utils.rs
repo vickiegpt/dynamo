@@ -6,8 +6,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::block_manager::connector::protocol::LeaderTransferRequest;
 
-pub const ZMQ_PING_MESSAGE: &str = "ping";
-pub const ZMQ_TRANSFER_BLOCKS_MESSAGE: &str = "transfer_blocks";
+pub const AM_MSG_WORKER_METADATA: &str = "kvbm.worker_metadata";
+pub const AM_MSG_LEADER_METADATA: &str = "kvbm.leader_metadata";
+pub const AM_MSG_TRANSFER_BLOCKS: &str = "kvbm.transfer_blocks";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KvbmWorkerData {
+    pub num_device_blocks: usize,
+    pub bytes_per_block: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KvbmLeaderData {
+    pub num_host_blocks: usize,
+    pub num_disk_blocks: usize,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Copy)]
 pub enum BlockTransferPool {

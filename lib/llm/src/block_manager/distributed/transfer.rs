@@ -6,7 +6,6 @@ use super::*;
 use futures::future::try_join_all;
 use nixl_sys::NixlDescriptor;
 use utils::*;
-use zmq::*;
 
 use BlockTransferPool::*;
 
@@ -23,8 +22,11 @@ use crate::block_manager::{
     storage::{DeviceStorage, DiskStorage, Local, PinnedStorage},
 };
 
+use dynamo_runtime::active_message::{
+    dispatcher::ActiveMessageDispatcher, handler_impls::TypedContext, typed_unary_handler,
+};
+
 use anyhow::Result;
-use async_trait::async_trait;
 use std::{any::Any, sync::Arc};
 
 type LocalBlock<S, M> = Block<S, locality::Local, M>;
@@ -210,55 +212,58 @@ impl BlockTransferHandler {
     }
 }
 
-#[async_trait]
-impl Handler for BlockTransferHandler {
-    async fn handle(&self, mut message: MessageHandle) -> Result<()> {
-        if message.data.len() != 1 {
-            return Err(anyhow::anyhow!(
-                "Block transfer request must have exactly one data element"
-            ));
+pub fn create_block_transfer_message_handler(
+    block_transfer_handler: Arc<BlockTransferHandler>,
+) -> Arc<dyn ActiveMessageDispatcher> {
+    typed_unary_handler(AM_MSG_TRANSFER_BLOCKS.to_string(), {
+        let handler = Arc::clone(&block_transfer_handler);
+        move |ctx: TypedContext<BlockTransferRequest>| -> Result<(), String> {
+            // fire-and-forget; do async work inside
+            let handler = Arc::clone(&handler);
+            let mut request = ctx.input;
+
+            tokio::spawn(async move {
+                if let Some(req) = request.connector_req.take() {
+                    let operation_id = req.uuid;
+                    tracing::debug!(
+                        request_id = %req.request_id,
+                        operation_id = %operation_id,
+                        "scheduling transfer"
+                    );
+
+                    let client = handler
+                        .scheduler_client
+                        .as_ref()
+                        .expect("scheduler client is required")
+                        .clone();
+
+                    match client.schedule_transfer(req).await {
+                        Ok(handle) => {
+                            // no cancellation yet
+                            assert_eq!(handle.scheduler_decision(), SchedulingDecision::Execute);
+
+                            match handler.execute_transfer(request).await {
+                                Ok(_) => {
+                                    handle.mark_complete(Ok(())).await;
+                                }
+                                Err(e) => {
+                                    let _ =
+                                        handle.mark_complete(Err(anyhow::anyhow!("{}", e))).await;
+                                    tracing::error!("execute_transfer error: {e}");
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("schedule_transfer error: {e}");
+                        }
+                    }
+                } else if let Err(e) = handler.execute_transfer(request).await {
+                    tracing::error!("execute_transfer error: {e}");
+                }
+            });
+
+            // unary returns immediately with success; errors are logged and reported to scheduler
+            Ok(())
         }
-
-        let mut request: BlockTransferRequest = serde_json::from_slice(&message.data[0])?;
-
-        let result = if let Some(req) = request.connector_req.take() {
-            let operation_id = req.uuid;
-
-            tracing::debug!(
-                request_id = %req.request_id,
-                operation_id = %operation_id,
-                "scheduling transfer"
-            );
-
-            let client = self
-                .scheduler_client
-                .as_ref()
-                .expect("scheduler client is required")
-                .clone();
-
-            let handle = client.schedule_transfer(req).await?;
-
-            // we don't support cancellation yet
-            assert_eq!(handle.scheduler_decision(), SchedulingDecision::Execute);
-
-            match self.execute_transfer(request).await {
-                Ok(_) => {
-                    handle.mark_complete(Ok(())).await;
-                    Ok(())
-                }
-                Err(e) => {
-                    handle.mark_complete(Err(anyhow::anyhow!("{}", e))).await;
-                    Err(e)
-                }
-            }
-        } else {
-            self.execute_transfer(request).await
-        };
-
-        // we always ack regardless of if we error or not
-        message.ack().await?;
-
-        // the error may trigger a cancellation
-        result
-    }
+    })
 }
