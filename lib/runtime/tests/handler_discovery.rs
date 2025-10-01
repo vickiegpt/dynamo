@@ -119,7 +119,8 @@ async fn test_await_handler_succeeds_when_handler_exists() -> Result<()> {
 }
 
 /// Test that await_handler times out when handler doesn't exist
-/// SKIPPED: Cross-instance unary calls need investigation - possible auto-registration issue
+/// NOTE: This test is ignored because it hangs during shutdown. The handler correctly times out
+/// and responds, but there's a race condition during cleanup that needs investigation.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn test_await_handler_times_out_when_handler_missing() -> Result<()> {
@@ -177,9 +178,7 @@ async fn test_await_handler_times_out_when_handler_missing() -> Result<()> {
 }
 
 /// Test that await_handler eventually succeeds when handler is registered later
-/// SKIPPED: Cross-instance unary calls need investigation - possible auto-registration issue
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
 async fn test_await_handler_succeeds_after_registration() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -242,9 +241,7 @@ async fn test_await_handler_succeeds_after_registration() -> Result<()> {
 }
 
 /// Test that list_handlers can be called via active message
-/// SKIPPED: Cross-instance unary calls need investigation - possible auto-registration issue
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
 async fn test_list_handlers_via_active_message() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())

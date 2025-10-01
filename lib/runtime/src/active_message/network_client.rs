@@ -296,13 +296,16 @@ impl ActiveMessageClient for NetworkClient {
     }
 
     async fn list_handlers(&self, instance_id: InstanceId) -> Result<Vec<HandlerId>> {
+        debug!("list_handlers: Sending request to instance {}", instance_id);
         let status = self
             .system_active_message("_list_handlers")
             .expect_response::<super::responses::ListHandlersResponse>()
             .send(instance_id)
             .await?;
 
+        debug!("list_handlers: Message sent, waiting for response");
         let response: super::responses::ListHandlersResponse = status.await_response().await?;
+        debug!("list_handlers: Received response with {} handlers", response.handlers.len());
         Ok(response.handlers)
     }
 

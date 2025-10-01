@@ -248,9 +248,14 @@ where
         sender_id: InstanceId,
         client: Arc<dyn ActiveMessageClient>,
     ) -> UnifiedResponse {
-        // Deserialize input
-        let input: I = serde_json::from_slice(&payload)
-            .map_err(|e| format!("Failed to deserialize input: {}", e))?;
+        // Deserialize input - handle empty payload as null for unit types
+        let input: I = if payload.is_empty() {
+            serde_json::from_slice(b"null")
+                .map_err(|e| format!("Failed to deserialize empty input: {}", e))?
+        } else {
+            serde_json::from_slice(&payload)
+                .map_err(|e| format!("Failed to deserialize input: {}", e))?
+        };
 
         // Process with typed handler
         let output: O = self.handler.process(input, sender_id, client).await?;

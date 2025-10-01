@@ -404,18 +404,22 @@ pub async fn register_system_handlers(
         move |_ctx: super::handler_impls::TypedContext<()>| {
             let control_tx = control_tx_for_list.clone();
             async move {
+                tracing::debug!("_list_handlers: Handler invoked");
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 let control_msg = super::dispatcher::ControlMessage::ListHandlers { reply_tx };
 
+                tracing::debug!("_list_handlers: Sending control message to dispatcher");
                 control_tx
                     .send(control_msg)
                     .await
                     .map_err(|e| format!("Failed to send ListHandlers control message: {}", e))?;
 
+                tracing::debug!("_list_handlers: Waiting for reply from dispatcher");
                 let handlers = reply_rx
                     .await
                     .map_err(|e| format!("Failed to receive handler list: {}", e))?;
 
+                tracing::debug!("_list_handlers: Got {} handlers from dispatcher", handlers.len());
                 Ok(ListHandlersResponse { handlers })
             }
         },
