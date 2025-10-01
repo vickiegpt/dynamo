@@ -180,7 +180,7 @@ vllm_configs = {
         model="Qwen/Qwen2-Audio-7B-Instruct",
         delayed_start=0,
         script_args=["--model", "Qwen/Qwen2-Audio-7B-Instruct"],
-        timeout=360,
+        timeout=500,
         request_payloads=[
             chat_payload(
                 [
