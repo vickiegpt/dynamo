@@ -249,8 +249,20 @@ where
         client: Arc<dyn ActiveMessageClient>,
     ) -> UnifiedResponse {
         // Deserialize input
-        let input: I = serde_json::from_slice(&payload)
-            .map_err(|e| format!("Failed to deserialize input: {}", e))?;
+        let input: I = if payload.is_empty() {
+            serde_json::from_slice::<I>(b"null")
+                .or_else(|_| serde_json::from_slice::<I>(b"{}"))
+                .map_err(|e| {
+                    format!(
+                        "Empty payload not valid for {}: {}",
+                        std::any::type_name::<I>(),
+                        e
+                    )
+                })?
+        } else {
+            serde_json::from_slice::<I>(&payload)
+                .map_err(|e| format!("Failed to deserialize input: {}", e))?
+        };
 
         // Process with typed handler
         let output: O = self.handler.process(input, sender_id, client).await?;
@@ -295,8 +307,20 @@ where
         client: Arc<dyn ActiveMessageClient>,
     ) -> UnifiedResponse {
         // Deserialize input
-        let input: I = serde_json::from_slice(&payload)
-            .map_err(|e| format!("Failed to deserialize input: {}", e))?;
+        let input: I = if payload.is_empty() {
+            serde_json::from_slice::<I>(b"null")
+                .or_else(|_| serde_json::from_slice::<I>(b"{}"))
+                .map_err(|e| {
+                    format!(
+                        "Empty payload not valid for {}: {}",
+                        std::any::type_name::<I>(),
+                        e
+                    )
+                })?
+        } else {
+            serde_json::from_slice::<I>(&payload)
+                .map_err(|e| format!("Failed to deserialize input: {}", e))?
+        };
 
         // Process with bytes handler
         let output_bytes: Bytes = self.handler.process(input, sender_id, client).await?;
