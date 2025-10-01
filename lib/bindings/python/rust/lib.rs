@@ -55,6 +55,7 @@ mod http;
 mod llm;
 mod parsers;
 mod planner;
+mod prometheus_metrics;
 mod prometheus_names;
 
 type JsonServerStreamingIngress =
@@ -140,6 +141,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Namespace>()?;
     m.add_class::<Component>()?;
     m.add_class::<Endpoint>()?;
+    m.add_class::<RuntimeMetrics>()?;
     m.add_class::<Client>()?;
     m.add_class::<AsyncResponseStream>()?;
     m.add_class::<llm::disagg_router::DisaggregatedRouter>()?;
@@ -186,6 +188,10 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     engine::add_to_module(m)?;
     parsers::add_to_module(m)?;
     prometheus_names::add_to_module(m)?;
+
+    let prometheus_metrics = PyModule::new(m.py(), "prometheus_metrics")?;
+    prometheus_metrics::add_to_module(&prometheus_metrics)?;
+    m.add_submodule(&prometheus_metrics)?;
 
     #[cfg(feature = "block-manager")]
     llm::block_manager::add_to_module(m)?;
@@ -321,6 +327,12 @@ struct Component {
 struct Endpoint {
     inner: rs::component::Endpoint,
     event_loop: PyObject,
+}
+
+#[pyclass]
+#[derive(Clone)]
+struct RuntimeMetrics {
+    endpoint: rs::component::Endpoint,
 }
 
 #[pyclass]
@@ -722,6 +734,277 @@ impl Endpoint {
             .primary_lease()
             .map(|l| l.id())
             .unwrap_or(0)
+    }
+
+    /// Get a RuntimeMetrics helper for creating Prometheus metrics
+    #[getter]
+    fn metrics(&self) -> RuntimeMetrics {
+        RuntimeMetrics {
+            endpoint: self.inner.clone(),
+        }
+    }
+
+    /// Register a Python callback to be invoked before metrics are scraped
+    fn register_metrics_callback(&self, callback: PyObject, _py: Python) -> PyResult<()> {
+        use rs::metrics::MetricsRegistry;
+
+        let endpoint = &self.inner;
+        let basename = endpoint.basename();
+        let parent_hierarchy = endpoint.parent_hierarchy();
+        let hierarchy = endpoint.hierarchy();
+
+        println!("[register_metrics_callback] basename: {}", basename);
+        println!(
+            "[register_metrics_callback] parent_hierarchy: {:?}",
+            parent_hierarchy
+        );
+        println!(
+            "[register_metrics_callback] Registering callback for hierarchy: {}",
+            hierarchy
+        );
+
+        // Store the callback in the DRT's metrics callback registry using endpoint's hierarchy
+        endpoint.drt().register_metrics_callback(
+            vec![hierarchy.clone()],
+            Arc::new(move || {
+                println!(
+                    "[metrics_callback] Executing Python callback for hierarchy: {}",
+                    hierarchy
+                );
+                // Execute the Python callback in the Python event loop
+                Python::with_gil(|py| {
+                    if let Err(e) = callback.call0(py) {
+                        tracing::error!("Metrics callback failed: {}", e);
+                    } else {
+                        println!("[metrics_callback] Python callback executed successfully");
+                    }
+                });
+                Ok(())
+            }),
+        );
+
+        println!("[register_metrics_callback] Callback registered successfully");
+        Ok(())
+    }
+}
+
+#[pymethods]
+impl RuntimeMetrics {
+    // NOTE: The order of create_* methods below matches lib/runtime/src/metrics.rs::MetricsRegistry trait
+    // Keep them synchronized when adding new metric types
+
+    /// Create a Counter metric
+    #[pyo3(signature = (name, description, labels=None))]
+    fn create_counter(
+        &self,
+        name: String,
+        description: String,
+        labels: Option<Vec<(String, String)>>,
+        py: Python,
+    ) -> PyResult<Py<crate::prometheus_metrics::Counter>> {
+        use rs::metrics::MetricsRegistry;
+
+        let labels_vec: Vec<(&str, &str)> = labels
+            .as_ref()
+            .map(|v| v.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+            .unwrap_or_default();
+
+        let counter = self
+            .endpoint
+            .create_counter(&name, &description, &labels_vec)
+            .map_err(to_pyerr)?;
+
+        let metric = crate::prometheus_metrics::Counter::new_internal(name.clone());
+        metric.set_counter(counter);
+        Py::new(py, metric)
+    }
+
+    /// Create a CounterVec metric
+    fn create_countervec(
+        &self,
+        name: String,
+        description: String,
+        label_names: Vec<String>,
+        py: Python,
+    ) -> PyResult<Py<crate::prometheus_metrics::CounterVec>> {
+        use rs::metrics::MetricsRegistry;
+
+        let label_names_str: Vec<&str> = label_names.iter().map(|s| s.as_str()).collect();
+        let counter_vec = self
+            .endpoint
+            .create_countervec(&name, &description, &label_names_str, &[])
+            .map_err(to_pyerr)?;
+
+        let metric = crate::prometheus_metrics::CounterVec::new_internal(name.clone(), label_names);
+        metric.set_counter(counter_vec);
+        Py::new(py, metric)
+    }
+
+    /// Create a Gauge metric
+    #[pyo3(signature = (name, description, labels=None))]
+    fn create_gauge(
+        &self,
+        name: String,
+        description: String,
+        labels: Option<Vec<(String, String)>>,
+        py: Python,
+    ) -> PyResult<Py<crate::prometheus_metrics::Gauge>> {
+        use rs::metrics::MetricsRegistry;
+
+        let labels_vec: Vec<(&str, &str)> = labels
+            .as_ref()
+            .map(|v| v.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+            .unwrap_or_default();
+
+        let gauge = self
+            .endpoint
+            .create_gauge(&name, &description, &labels_vec)
+            .map_err(to_pyerr)?;
+
+        let metric = crate::prometheus_metrics::Gauge::new_internal(name.clone());
+        metric.set_gauge(gauge);
+        Py::new(py, metric)
+    }
+
+    /// Create a Histogram metric
+    #[pyo3(signature = (name, description, labels=None))]
+    fn create_histogram(
+        &self,
+        name: String,
+        description: String,
+        labels: Option<Vec<(String, String)>>,
+        py: Python,
+    ) -> PyResult<Py<crate::prometheus_metrics::Histogram>> {
+        use rs::metrics::MetricsRegistry;
+
+        let labels_vec: Vec<(&str, &str)> = labels
+            .as_ref()
+            .map(|v| v.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+            .unwrap_or_default();
+
+        let histogram = self
+            .endpoint
+            .create_histogram(&name, &description, &labels_vec, None)
+            .map_err(to_pyerr)?;
+
+        let metric = crate::prometheus_metrics::Histogram::new_internal(name.clone());
+        metric.set_histogram(histogram);
+        Py::new(py, metric)
+    }
+
+    /// Create an IntCounter metric
+    #[pyo3(signature = (name, description, labels=None))]
+    fn create_intcounter(
+        &self,
+        name: String,
+        description: String,
+        labels: Option<Vec<(String, String)>>,
+        py: Python,
+    ) -> PyResult<Py<crate::prometheus_metrics::IntCounter>> {
+        use rs::metrics::MetricsRegistry;
+
+        let labels_vec: Vec<(&str, &str)> = labels
+            .as_ref()
+            .map(|v| v.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+            .unwrap_or_default();
+
+        let counter = self
+            .endpoint
+            .create_intcounter(&name, &description, &labels_vec)
+            .map_err(to_pyerr)?;
+
+        let metric = crate::prometheus_metrics::IntCounter::new_internal(name.clone());
+        metric.set_counter(counter);
+        Py::new(py, metric)
+    }
+
+    /// Create an IntCounterVec metric
+    fn create_intcountervec(
+        &self,
+        name: String,
+        description: String,
+        label_names: Vec<String>,
+        py: Python,
+    ) -> PyResult<Py<crate::prometheus_metrics::IntCounterVec>> {
+        use rs::metrics::MetricsRegistry;
+
+        let label_names_str: Vec<&str> = label_names.iter().map(|s| s.as_str()).collect();
+        let counter_vec = self
+            .endpoint
+            .create_intcountervec(&name, &description, &label_names_str, &[])
+            .map_err(to_pyerr)?;
+
+        let metric = crate::prometheus_metrics::IntCounterVec::new_internal(name.clone(), label_names);
+        metric.set_counter(counter_vec);
+        Py::new(py, metric)
+    }
+
+    /// Create an IntGauge metric
+    #[pyo3(signature = (name, description, labels=None))]
+    fn create_intgauge(
+        &self,
+        name: String,
+        description: String,
+        labels: Option<Vec<(String, String)>>,
+        py: Python,
+    ) -> PyResult<Py<crate::prometheus_metrics::IntGauge>> {
+        use rs::metrics::MetricsRegistry;
+
+        let labels_vec: Vec<(&str, &str)> = labels
+            .as_ref()
+            .map(|v| v.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+            .unwrap_or_default();
+
+        let gauge = self
+            .endpoint
+            .create_intgauge(&name, &description, &labels_vec)
+            .map_err(to_pyerr)?;
+
+        let metric = crate::prometheus_metrics::IntGauge::new_internal(name.clone());
+        metric.set_gauge(gauge);
+        Py::new(py, metric)
+    }
+
+    /// Create a GaugeVec metric
+    fn create_gaugevec(
+        &self,
+        name: String,
+        description: String,
+        label_names: Vec<String>,
+        py: Python,
+    ) -> PyResult<Py<crate::prometheus_metrics::GaugeVec>> {
+        use rs::metrics::MetricsRegistry;
+
+        let label_names_str: Vec<&str> = label_names.iter().map(|s| s.as_str()).collect();
+        let gauge_vec = self
+            .endpoint
+            .create_gaugevec(&name, &description, &label_names_str, &[])
+            .map_err(to_pyerr)?;
+
+        let metric = crate::prometheus_metrics::GaugeVec::new_internal(name.clone(), label_names);
+        metric.set_gauge(gauge_vec);
+        Py::new(py, metric)
+    }
+
+    /// Create an IntGaugeVec metric
+    fn create_intgaugevec(
+        &self,
+        name: String,
+        description: String,
+        label_names: Vec<String>,
+        py: Python,
+    ) -> PyResult<Py<crate::prometheus_metrics::IntGaugeVec>> {
+        use rs::metrics::MetricsRegistry;
+
+        let label_names_str: Vec<&str> = label_names.iter().map(|s| s.as_str()).collect();
+        let gauge_vec = self
+            .endpoint
+            .create_intgaugevec(&name, &description, &label_names_str, &[])
+            .map_err(to_pyerr)?;
+
+        let metric = crate::prometheus_metrics::IntGaugeVec::new_internal(name.clone(), label_names);
+        metric.set_gauge(gauge_vec);
+        Py::new(py, metric)
     }
 }
 

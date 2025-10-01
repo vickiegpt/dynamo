@@ -1,6 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+# =============================================================================
+# ORGANIZATION NOTE:
+# =============================================================================
+# This file contains the core Dynamo runtime types and functions.
+# For better organization, related functionality is split into separate modules.
+# =============================================================================
+
 from typing import (
     Any,
     AsyncGenerator,
@@ -12,7 +19,8 @@ from typing import (
     Tuple,
 )
 
-# Prometheus metric names are defined in a separate module
+# Import from specialized modules
+from ._prometheus_metrics import RuntimeMetrics
 from ._prometheus_names import prometheus_names
 
 def log_message(level: str, message: str, module: str, file: str, line: int) -> None:
@@ -96,7 +104,7 @@ class Component:
 
     ...
 
-    def create_service(self) -> None:
+    async def create_service(self) -> None:
         """
         Create a service
         """
@@ -138,6 +146,38 @@ class Endpoint:
     async def lease_id(self) -> int:
         """
         Return primary lease id. Currently, cannot set a different lease id.
+        """
+        ...
+
+    @property
+    def metrics(self) -> RuntimeMetrics:
+        """
+        Get a Metrics helper for creating Prometheus metrics.
+
+        Returns:
+            A Metrics object that provides create_* methods for different metric types
+        """
+        ...
+
+    def register_metrics_callback(self, callback: Callable[[], None]) -> None:
+        """
+        Register a Python callback to be invoked before metrics are scraped.
+
+        This allows you to update metric values dynamically when the /metrics endpoint
+        is accessed. The callback will be executed synchronously before serving metrics.
+
+        Args:
+            callback: A callable that takes no arguments and returns None.
+                     This function should update metric values as needed.
+
+        Example:
+            ```python
+            def update_metrics():
+                gpu_cache_usage.set(get_current_cache_usage())
+                active_requests.set(get_active_request_count())
+
+            endpoint.register_metrics_callback(update_metrics)
+            ```
         """
         ...
 
@@ -1380,6 +1420,11 @@ class VirtualConnectorClient:
         ...
 
 __all__ = [
-    # ... existing exports ...
-    "prometheus_names"
+    "Backend",
+    "Client",
+    "Component",
+    "Context",
+    "ModelDeploymentCard",
+    "OAIChatPreprocessor",
+    "prometheus_names",
 ]

@@ -113,6 +113,21 @@ impl PrometheusMetric for prometheus::IntGauge {
     }
 }
 
+impl PrometheusMetric for prometheus::GaugeVec {
+    fn with_opts(_opts: prometheus::Opts) -> Result<Self, prometheus::Error> {
+        Err(prometheus::Error::Msg(
+            "GaugeVec requires label names, use with_opts_and_label_names instead".to_string(),
+        ))
+    }
+
+    fn with_opts_and_label_names(
+        opts: prometheus::Opts,
+        label_names: &[&str],
+    ) -> Result<Self, prometheus::Error> {
+        prometheus::GaugeVec::new(opts, label_names)
+    }
+}
+
 impl PrometheusMetric for prometheus::IntGaugeVec {
     fn with_opts(_opts: prometheus::Opts) -> Result<Self, prometheus::Error> {
         Err(prometheus::Error::Msg(
@@ -396,6 +411,9 @@ pub trait MetricsRegistry: Send + Sync + DistributedRuntimeProvider {
     // - Summary: create_summary() - for quantiles and sum/count metrics
     // - SummaryVec: create_summary_vec() - for labeled summaries
     // - Untyped: create_untyped() - for untyped metrics
+    //
+    // NOTE: The order of create_* methods below is mirrored in lib/bindings/python/rust/lib.rs::Metrics
+    // Keep them synchronized when adding new metric types
 
     /// Create a Counter metric
     fn create_counter(
@@ -482,6 +500,24 @@ pub trait MetricsRegistry: Send + Sync + DistributedRuntimeProvider {
         labels: &[(&str, &str)],
     ) -> anyhow::Result<prometheus::IntGauge> {
         create_metric(self, name, description, labels, None, None)
+    }
+
+    /// Create a GaugeVec metric with label names (for dynamic labels)
+    fn create_gaugevec(
+        &self,
+        name: &str,
+        description: &str,
+        const_labels: &[&str],
+        const_label_values: &[(&str, &str)],
+    ) -> anyhow::Result<prometheus::GaugeVec> {
+        create_metric(
+            self,
+            name,
+            description,
+            const_label_values,
+            None,
+            Some(const_labels),
+        )
     }
 
     /// Create an IntGaugeVec metric with label names (for dynamic labels)
