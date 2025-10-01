@@ -1,0 +1,57 @@
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: trtllm-agg
+  namespace: hannahz-2
+spec:
+  services:
+    Frontend:
+      dynamoNamespace: trtllm-agg
+      componentType: frontend
+      replicas: 1
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.5.0
+          imagePullPolicy: IfNotPresent
+    TRTLLMWorker:
+      envFromSecret: hf-token-secret
+      dynamoNamespace: trtllm-agg
+      componentType: worker
+      replicas: 1
+      resources:
+        limits:
+          gpu: '8'
+      extraPodSpec:
+        volumes:
+        - name: engine-configs
+          configMap:
+            name: engine-configs
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 10Gi
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.5.0
+          workingDir: /workspace/components/backends/trtllm
+          volumeMounts:
+          - name: engine-configs
+            mountPath: /workspace/engine_configs
+            readOnly: true
+          - name: tmp
+            mountPath: /tmp
+          resources:
+            requests:
+              cpu: '8'
+              memory: 64Gi
+              ephemeral-storage: 50Gi
+            limits:
+              cpu: '16'
+              memory: 96Gi
+              ephemeral-storage: 80Gi
+          command:
+          - /bin/bash
+          - -c
+          args:
+          - "set -euo pipefail\n\ncd \"/workspace/components/backends/trtllm\"\nargs=(\n  --model-path \"Qwen/Qwen3-32B\"\
+            \n  --served-model-name \"Qwen/Qwen3-32B\"\n  --extra-engine-args \"/workspace/engine_configs/agg_config.yaml\"\
+            \n)\nexec python3 -m dynamo.trtllm \"${args[@]}\"\n"

@@ -50,7 +50,6 @@ def run_genai_perf(
         model_name,
         "--endpoint-type",
         "chat",
-        "--streaming",
         "-u",
         service_url,
         "--synthetic-input-tokens-mean",

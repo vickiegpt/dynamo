@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dynamo-benchmark-baseline
+spec:
+  template:
+    spec:
+      serviceAccountName: dynamo-sa
+      imagePullSecrets:
+      - name: docker-imagepullsecret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: benchmark-runner
+        image: nvcr.io/nvidian/dynamo-dev/vllm-runtime:dep-458.0
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+        resources:
+          requests:
+            cpu: "8"
+            memory: "16Gi"
+          limits:
+            cpu: "16"
+            memory: "32Gi"
+        env:
+          - name: HUGGING_FACE_HUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: hf-token-secret
+                key: HF_TOKEN
+        command: ["python3", "-m", "benchmarks.utils.benchmark"]
+        args:
+          - --model
+          - "Qwen/Qwen3-32B"
+          - --isl
+          - "4000"
+          - --std
+          - "10"
+          - --osl
+          - "500"
+          - --output-dir
+          - /data/results
+          - --benchmark-name
+          - "qwen3-32b-trtllm-agg-baseline"
+          - --endpoint-url
+          - "trtllm-agg-baseline-frontend:8000"
+        volumeMounts:
+          - name: data-volume
+            mountPath: /data
+      restartPolicy: Never
+      volumes:
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: dynamo-pvc
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600  # Clean up job after 1 hour

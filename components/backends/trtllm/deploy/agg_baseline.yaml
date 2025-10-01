@@ -4,11 +4,12 @@
 apiVersion: nvidia.com/v1alpha1
 kind: DynamoGraphDeployment
 metadata:
-  name: trtllm-agg
+  name: trtllm-agg-baseline
+  namespace: hannahz
 spec:
   services:
     Frontend:
-      dynamoNamespace: trtllm-agg
+      dynamoNamespace: trtllm-agg-baseline
       componentType: frontend
       replicas: 1
       extraPodSpec:
@@ -16,7 +17,7 @@ spec:
           image: nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.5.0
     TRTLLMWorker:
       envFromSecret: hf-token-secret
-      dynamoNamespace: trtllm-agg
+      dynamoNamespace: trtllm-agg-baseline
       componentType: worker
       replicas: 8
       resources:
