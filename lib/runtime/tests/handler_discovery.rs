@@ -119,7 +119,7 @@ async fn test_await_handler_succeeds_when_handler_exists() -> Result<()> {
 }
 
 /// Test that await_handler times out when handler doesn't exist
-/// SKIPPED: This test causes shutdown to hang - needs investigation
+/// SKIPPED: Cross-instance unary calls need investigation - possible auto-registration issue
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn test_await_handler_times_out_when_handler_missing() -> Result<()> {
@@ -177,7 +177,7 @@ async fn test_await_handler_times_out_when_handler_missing() -> Result<()> {
 }
 
 /// Test that await_handler eventually succeeds when handler is registered later
-/// SKIPPED: This test times out - needs investigation
+/// SKIPPED: Cross-instance unary calls need investigation - possible auto-registration issue
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn test_await_handler_succeeds_after_registration() -> Result<()> {
@@ -242,7 +242,7 @@ async fn test_await_handler_succeeds_after_registration() -> Result<()> {
 }
 
 /// Test that list_handlers can be called via active message
-/// SKIPPED: This test times out - needs investigation
+/// SKIPPED: Cross-instance unary calls need investigation - possible auto-registration issue
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn test_list_handlers_via_active_message() -> Result<()> {
@@ -264,6 +264,9 @@ async fn test_list_handlers_via_active_message() -> Result<()> {
 
     // Connect client1 to client2
     client1.connect_to_peer(peer2_info.clone()).await?;
+
+    // Wait for connection to establish
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Register a custom handler on manager2
     let test_handler = am_handler(

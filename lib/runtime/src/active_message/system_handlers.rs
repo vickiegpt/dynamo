@@ -395,102 +395,143 @@ pub async fn register_system_handlers(
     client: Arc<dyn ActiveMessageClient>,
     task_tracker: tokio_util::task::TaskTracker,
 ) -> anyhow::Result<()> {
-    use super::handler_impls::typed_unary_handler_with_tracker;
-
     let mut handlers = create_core_system_handlers(client, task_tracker.clone());
 
     // Add handler discovery system handlers that need access to control_tx
     let control_tx_for_list = control_tx.clone();
-    let list_handlers_dispatcher = typed_unary_handler_with_tracker(
-        "_list_handlers".to_string(),
-        move |_ctx: super::handler_impls::TypedContext<()>| {
-            let control_tx = control_tx_for_list.clone();
-            // Use block_in_place for async work in sync handler
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async move {
-                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-                    let control_msg = super::dispatcher::ControlMessage::ListHandlers { reply_tx };
+    let task_tracker_for_list = task_tracker.clone();
+    let list_handlers_dispatcher = {
+        use super::dispatcher::{ActiveMessageDispatcher, DispatchMode, SpawnedDispatcher};
+        use super::handler_impls::{TypedUnaryAdapter, TypedUnaryHandler, UnaryHandlerAdapter};
 
-                    control_tx.send(control_msg).await.map_err(|e| {
-                        format!("Failed to send ListHandlers control message: {}", e)
-                    })?;
+        struct ListHandlersHandler {
+            control_tx: tokio::sync::mpsc::Sender<super::dispatcher::ControlMessage>,
+        }
 
-                    let handlers = reply_rx
-                        .await
-                        .map_err(|e| format!("Failed to receive handler list: {}", e))?;
+        #[async_trait::async_trait]
+        impl TypedUnaryHandler<(), ListHandlersResponse> for ListHandlersHandler {
+            async fn process(
+                &self,
+                _input: (),
+                _sender_id: super::handler::InstanceId,
+                _client: Arc<dyn ActiveMessageClient>,
+            ) -> Result<ListHandlersResponse, String> {
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                let control_msg = super::dispatcher::ControlMessage::ListHandlers { reply_tx };
 
-                    Ok(ListHandlersResponse { handlers })
-                })
-            })
-        },
-        task_tracker.clone(),
-    );
+                self.control_tx
+                    .send(control_msg)
+                    .await
+                    .map_err(|e| format!("Failed to send ListHandlers control message: {}", e))?;
+
+                let handlers = reply_rx
+                    .await
+                    .map_err(|e| format!("Failed to receive handler list: {}", e))?;
+
+                Ok(ListHandlersResponse { handlers })
+            }
+
+            fn name(&self) -> &str {
+                "_list_handlers"
+            }
+        }
+
+        let handler = ListHandlersHandler {
+            control_tx: control_tx_for_list,
+        };
+
+        let typed_adapter = TypedUnaryAdapter::new(handler);
+        let unary_adapter = UnaryHandlerAdapter::new(typed_adapter, DispatchMode::Spawn);
+
+        Arc::new(SpawnedDispatcher::new(unary_adapter, task_tracker_for_list))
+            as Arc<dyn ActiveMessageDispatcher>
+    };
     handlers.push(("_list_handlers".to_string(), list_handlers_dispatcher));
 
     // Add wait_for_handler system handler
     let control_tx_for_wait = control_tx.clone();
-    let wait_for_handler_dispatcher = typed_unary_handler_with_tracker(
-        "_wait_for_handler".to_string(),
-        move |ctx: super::handler_impls::TypedContext<serde_json::Value>| {
-            let control_tx = control_tx_for_wait.clone();
-            // Use block_in_place for async work in sync handler
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async move {
-                    // Parse handler name and timeout from input
-                    let handler_name = ctx
-                        .input
-                        .get("handler_name")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| "Missing handler_name in request".to_string())?
-                        .to_string();
+    let task_tracker_for_wait = task_tracker.clone();
+    let wait_for_handler_dispatcher = {
+        use super::dispatcher::{ActiveMessageDispatcher, DispatchMode, SpawnedDispatcher};
+        use super::handler_impls::{TypedUnaryAdapter, TypedUnaryHandler, UnaryHandlerAdapter};
 
-                    let timeout_ms = ctx
-                        .input
-                        .get("timeout_ms")
-                        .and_then(|v| v.as_u64())
-                        .map(Duration::from_millis);
+        struct WaitForHandlerHandler {
+            control_tx: tokio::sync::mpsc::Sender<super::dispatcher::ControlMessage>,
+        }
 
-                    // Poll for handler with timeout
-                    let start = std::time::Instant::now();
-                    let max_wait = timeout_ms.unwrap_or(Duration::from_secs(30));
+        #[async_trait::async_trait]
+        impl TypedUnaryHandler<serde_json::Value, WaitForHandlerResponse> for WaitForHandlerHandler {
+            async fn process(
+                &self,
+                input: serde_json::Value,
+                _sender_id: super::handler::InstanceId,
+                _client: Arc<dyn ActiveMessageClient>,
+            ) -> Result<WaitForHandlerResponse, String> {
+                // Parse handler name and timeout from input
+                let handler_name = input
+                    .get("handler_name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "Missing handler_name in request".to_string())?
+                    .to_string();
 
-                    loop {
-                        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-                        let control_msg = super::dispatcher::ControlMessage::QueryHandler {
-                            name: handler_name.clone(),
-                            reply_tx,
-                        };
+                let timeout_ms = input
+                    .get("timeout_ms")
+                    .and_then(|v| v.as_u64())
+                    .map(Duration::from_millis);
 
-                        control_tx.send(control_msg).await.map_err(|e| {
-                            format!("Failed to send QueryHandler control message: {}", e)
-                        })?;
+                // Poll for handler with timeout
+                let start = std::time::Instant::now();
+                let max_wait = timeout_ms.unwrap_or(Duration::from_secs(30));
 
-                        let exists = reply_rx.await.map_err(|e| {
-                            format!("Failed to receive handler query result: {}", e)
-                        })?;
+                loop {
+                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                    let control_msg = super::dispatcher::ControlMessage::QueryHandler {
+                        name: handler_name.clone(),
+                        reply_tx,
+                    };
 
-                        if exists {
-                            return Ok(WaitForHandlerResponse {
-                                handler_name: handler_name.clone(),
-                                available: true,
-                            });
-                        }
+                    self.control_tx.send(control_msg).await.map_err(|e| {
+                        format!("Failed to send QueryHandler control message: {}", e)
+                    })?;
 
-                        if start.elapsed() >= max_wait {
-                            return Ok(WaitForHandlerResponse {
-                                handler_name,
-                                available: false,
-                            });
-                        }
+                    let exists = reply_rx
+                        .await
+                        .map_err(|e| format!("Failed to receive handler query result: {}", e))?;
 
-                        // Wait a bit before polling again
-                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    if exists {
+                        return Ok(WaitForHandlerResponse {
+                            handler_name: handler_name.clone(),
+                            available: true,
+                        });
                     }
-                })
-            })
-        },
-        task_tracker,
-    );
+
+                    if start.elapsed() >= max_wait {
+                        return Ok(WaitForHandlerResponse {
+                            handler_name,
+                            available: false,
+                        });
+                    }
+
+                    // Wait a bit before polling again
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+
+            fn name(&self) -> &str {
+                "_wait_for_handler"
+            }
+        }
+
+        let handler = WaitForHandlerHandler {
+            control_tx: control_tx_for_wait,
+        };
+
+        let typed_adapter = TypedUnaryAdapter::new(handler);
+        let unary_adapter = UnaryHandlerAdapter::new(typed_adapter, DispatchMode::Spawn);
+
+        Arc::new(SpawnedDispatcher::new(unary_adapter, task_tracker_for_wait))
+            as Arc<dyn ActiveMessageDispatcher>
+    };
     handlers.push(("_wait_for_handler".to_string(), wait_for_handler_dispatcher));
 
     // Register all handlers

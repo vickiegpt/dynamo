@@ -16,7 +16,8 @@
       "Bash(cargo build:*)",
       "Bash(chmod:*)",
       "Bash(timeout 5 cargo test -p dynamo-runtime --lib active_message)",
-      "Bash(gh pr list:*)"
+      "Bash(gh pr list:*)",
+      "Bash(timeout 5 cargo test:*)"
     ],
     "deny": [],
     "ask": []
