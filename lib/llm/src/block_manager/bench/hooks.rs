@@ -13,6 +13,9 @@ use crate::block_manager::{
     storage::StorageType,
 };
 
+// Default layout type for benchmarking (since we don't track layout variations)
+const DEFAULT_LAYOUT: LayoutType = LayoutType::LayerSeparate { outer_contiguous: true };
+
 /// Calculate total transfer size for a batch of blocks
 pub fn calculate_transfer_size<Source, Target>(
     sources: &[Source],
@@ -114,7 +117,90 @@ where
         layer_total
     };
 
-    (block_size, 1) // Single block
+    (block_size, 1)
+}
+
+/// Hook for recording a single layer transfer
+pub fn hook_layer_transfer<Source, Target>(
+    source: &Source,
+    target: &Target,
+    layer_idx: usize,
+    outer_idx: usize,
+) where
+    Source: BlockDataProvider,
+    Target: BlockDataProvider,
+{
+    if global_benchmark().is_none() {
+        return;
+    }
+
+    let src_data = source.block_data();
+    let src_storage = src_data.storage_type();
+    let dst_storage = target.block_data().storage_type();
+    let transfer_path = TransferPath::from_storage_types(src_storage, dst_storage);
+
+    // Get the layer view size
+    let layer_size = match src_data.layer_view(layer_idx, outer_idx) {
+        Ok(view) => view.size() as u64,
+        Err(_) => {
+            // Fallback calculation
+            let page_size = src_data.page_size() as u64;
+            let inner_dim = src_data.num_inner_dims() as u64;
+            page_size * inner_dim * 2 // Assuming 2 bytes per element
+        }
+    };
+
+    tracing::info!(
+        "Layer transfer: {} -> {}, layer={}, outer={}, {} bytes",
+        storage_type_to_str(src_storage),
+        storage_type_to_str(dst_storage),
+        layer_idx,
+        outer_idx,
+        layer_size
+    );
+
+    // Record the transfer as LayerSeparate layout
+    let layout = LayoutType::LayerSeparate { outer_contiguous: true };
+    record_transfer(transfer_path, layout, layer_size, 1);
+}
+
+/// Hook for recording a single layer transfer with explicit size
+pub fn hook_layer_transfer_with_size(
+    src_storage: &StorageType,
+    dst_storage: &StorageType,
+    _layer_idx: usize,
+    _outer_idx: usize,
+    layer_size: usize,
+) {
+    if global_benchmark().is_none() {
+        return;
+    }
+
+    let transfer_path = TransferPath::from_storage_types(src_storage, dst_storage);
+
+    // Record the transfer as LayerSeparate layout
+    // Note: We pass blocks=0 because this is just a layer transfer, not a full block
+    // The transfer count will still increment, but block count won't
+    let layout = LayoutType::LayerSeparate { outer_contiguous: true };
+    record_transfer(transfer_path, layout, layer_size as u64, 0);
+}
+
+/// Hook for recording a contiguous block transfer with explicit size
+pub fn hook_contiguous_block_transfer_with_size(
+    src_storage: &StorageType,
+    dst_storage: &StorageType,
+    block_size: usize,
+) {
+    if global_benchmark().is_none() {
+        return;
+    }
+
+    let transfer_path = TransferPath::from_storage_types(src_storage, dst_storage);
+
+    // Record the transfer as FullyContiguous layout
+    // We pass blocks=1 because this is a full block transfer
+    let layout = LayoutType::FullyContiguous;
+    record_transfer(transfer_path, layout, block_size as u64, 1);
 }
 
 /// Hook for NIXL transfers - call this before initiating NIXL transfer
@@ -123,13 +209,12 @@ where
     Source: BlockDataProvider,
     Target: BlockDataProviderMut,
 {
+    tracing::info!("hook_nixl_transfer called with {} sources", sources.len());
+
     if sources.is_empty() || targets.is_empty() {
+        tracing::info!("hook_nixl_transfer: Empty sources or targets, returning");
         return;
     }
-
-    // Get layout types
-    let src_layout = get_layout_type_from_block(sources[0].block_data());
-    let dst_layout = get_layout_type_from_block(targets[0].block_data());
 
     // Get storage types to determine transfer path
     let src_storage = sources[0].block_data().storage_type();
@@ -139,24 +224,72 @@ where
     // Calculate transfer size
     let (total_bytes, total_blocks) = calculate_transfer_size(sources, targets);
 
-    // Record the transfer for both source and destination layouts
-    // (in case they differ, which can happen in mixed layout scenarios)
-    record_transfer(transfer_path, src_layout, total_bytes, total_blocks);
-
-    // If layouts differ, also record for destination layout
-    if src_layout != dst_layout {
-        record_transfer(transfer_path, dst_layout, total_bytes, total_blocks);
-    }
-
-    tracing::trace!(
-        "Benchmarking NIXL transfer: {} -> {}, {} blocks, {} bytes, src_layout={:?}, dst_layout={:?}",
+    tracing::info!(
+        "NIXL transfer: {} -> {}, {} blocks, {} bytes",
         storage_type_to_str(src_storage),
         storage_type_to_str(dst_storage),
         total_blocks,
-        total_bytes,
-        src_layout,
-        dst_layout
+        total_bytes
     );
+
+    // Record the transfer (using a fixed layout type since we don't track layout variations)
+    let layout = LayoutType::LayerSeparate { outer_contiguous: true };
+    record_transfer(transfer_path, layout, total_bytes, total_blocks);
+}
+
+/// Hook for single NIXL transfer - call this before initiating NIXL transfer for one block
+pub fn hook_nixl_single_transfer<Source, Target>(source: &Source, target: &Target)
+where
+    Source: BlockDataProvider,
+    Target: BlockDataProvider,
+{
+    tracing::info!("hook_nixl_single_transfer called");
+
+    // Calculate transfer size - we need to cast target to get its data
+    let src_data = source.block_data();
+    let dst_data = target.block_data();
+
+    let block_size = if src_data.is_fully_contiguous() {
+        match src_data.block_view() {
+            Ok(view) => view.size() as u64,
+            Err(_) => {
+                let layers = src_data.num_layers() as u64;
+                let outer_dims = src_data.num_outer_dims() as u64;
+                let page_size = src_data.page_size() as u64;
+                let inner_dim = src_data.num_inner_dims() as u64;
+                layers * outer_dims * page_size * inner_dim * 2
+            }
+        }
+    } else {
+        let mut layer_total = 0u64;
+        for layer_idx in 0..src_data.num_layers() {
+            for outer_idx in 0..src_data.num_outer_dims() {
+                match src_data.layer_view(layer_idx, outer_idx) {
+                    Ok(view) => layer_total += view.size() as u64,
+                    Err(_) => {
+                        let page_size = src_data.page_size() as u64;
+                        let inner_dim = src_data.num_inner_dims() as u64;
+                        layer_total += page_size * inner_dim * 2;
+                    }
+                }
+            }
+        }
+        layer_total
+    };
+
+    let src_storage = src_data.storage_type();
+    let dst_storage = dst_data.storage_type();
+    let transfer_path = TransferPath::from_storage_types(src_storage, dst_storage);
+
+    tracing::info!(
+        "NIXL single transfer: {} -> {}, 1 blocks, {} bytes",
+        storage_type_to_str(src_storage),
+        storage_type_to_str(dst_storage),
+        block_size
+    );
+
+    let layout = LayoutType::FullyContiguous;
+    record_transfer(transfer_path, layout, block_size, 1);
 }
 
 /// Hook for CUDA transfers - call this before initiating CUDA transfer
@@ -165,12 +298,15 @@ where
     Source: BlockDataProvider,
     Target: BlockDataProviderMut,
 {
+    eprintln!("[BENCH] hook_cuda_transfer called with {} sources", sources.len());
+
     if sources.is_empty() || targets.is_empty() {
+        eprintln!("[BENCH] hook_cuda_transfer: Empty sources or targets, returning");
         return;
     }
 
-    let src_layout = get_layout_type_from_block(sources[0].block_data());
-    let dst_layout = get_layout_type_from_block(targets[0].block_data());
+    let src_layout = DEFAULT_LAYOUT;
+    let dst_layout = DEFAULT_LAYOUT;
 
     let src_storage = sources[0].block_data().storage_type();
     let dst_storage = targets[0].block_data().storage_type();
@@ -178,13 +314,23 @@ where
 
     let (total_bytes, total_blocks) = calculate_transfer_size(sources, targets);
 
+    eprintln!(
+        "[BENCH] CUDA transfer: {} -> {}, {} blocks, {} bytes, src_layout={:?}, dst_layout={:?}",
+        storage_type_to_str(src_storage),
+        storage_type_to_str(dst_storage),
+        total_blocks,
+        total_bytes,
+        src_layout,
+        dst_layout
+    );
+
     record_transfer(transfer_path, src_layout, total_bytes, total_blocks);
 
     if src_layout != dst_layout {
         record_transfer(transfer_path, dst_layout, total_bytes, total_blocks);
     }
 
-    tracing::trace!(
+    tracing::info!(
         "Benchmarking CUDA transfer: {} -> {}, {} blocks, {} bytes, src_layout={:?}, dst_layout={:?}",
         storage_type_to_str(src_storage),
         storage_type_to_str(dst_storage),
@@ -201,27 +347,23 @@ where
     Source: BlockDataProvider,
     Target: BlockDataProviderMut,
 {
+    tracing::info!("hook_cuda_single_transfer called");
+
     // Calculate transfer size first before borrowing
     let (total_bytes, total_blocks) = calculate_single_transfer_size(source, target);
 
     let src_data = source.block_data();
     let dst_data = target.block_data_mut();
     {
-        let src_layout = get_layout_type_from_block(src_data);
-        let dst_layout = get_layout_type_from_block(dst_data);
+        let src_layout = DEFAULT_LAYOUT;
+        let dst_layout = DEFAULT_LAYOUT;
 
         let src_storage = src_data.storage_type();
         let dst_storage = dst_data.storage_type();
         let transfer_path = TransferPath::from_storage_types(src_storage, dst_storage);
 
-        record_transfer(transfer_path, src_layout, total_bytes, total_blocks);
-
-        if src_layout != dst_layout {
-            record_transfer(transfer_path, dst_layout, total_bytes, total_blocks);
-        }
-
-        tracing::trace!(
-            "Benchmarking CUDA single transfer: {} -> {}, {} blocks, {} bytes, src_layout={:?}, dst_layout={:?}",
+        tracing::info!(
+            "CUDA single transfer: {} -> {}, {} blocks, {} bytes, src_layout={:?}, dst_layout={:?}",
             storage_type_to_str(src_storage),
             storage_type_to_str(dst_storage),
             total_blocks,
@@ -229,6 +371,12 @@ where
             src_layout,
             dst_layout
         );
+
+        record_transfer(transfer_path, src_layout, total_bytes, total_blocks);
+
+        if src_layout != dst_layout {
+            record_transfer(transfer_path, dst_layout, total_bytes, total_blocks);
+        }
     }
 }
 
@@ -238,12 +386,15 @@ where
     Source: BlockDataProvider,
     Target: BlockDataProviderMut,
 {
+    tracing::info!("hook_memcpy_transfer called with {} sources", sources.len());
+
     if sources.is_empty() || targets.is_empty() {
+        tracing::info!("hook_memcpy_transfer: Empty sources or targets, returning");
         return;
     }
 
-    let src_layout = get_layout_type_from_block(sources[0].block_data());
-    let dst_layout = get_layout_type_from_block(targets[0].block_data());
+    let src_layout = DEFAULT_LAYOUT;
+    let dst_layout = DEFAULT_LAYOUT;
 
     let src_storage = sources[0].block_data().storage_type();
     let dst_storage = targets[0].block_data().storage_type();
@@ -251,14 +402,8 @@ where
 
     let (total_bytes, total_blocks) = calculate_transfer_size(sources, targets);
 
-    (transfer_path, src_layout, total_bytes, total_blocks);
-
-    if src_layout != dst_layout {
-        record_transfer(transfer_path, dst_layout, total_bytes, total_blocks);
-    }
-
-    tracing::trace!(
-        "Benchmarking memcpy transfer: {} -> {}, {} blocks, {} bytes, src_layout={:?}, dst_layout={:?}",
+    tracing::info!(
+        "memcpy transfer: {} -> {}, {} blocks, {} bytes, src_layout={:?}, dst_layout={:?}",
         storage_type_to_str(src_storage),
         storage_type_to_str(dst_storage),
         total_blocks,
@@ -266,6 +411,12 @@ where
         src_layout,
         dst_layout
     );
+
+    record_transfer(transfer_path, src_layout, total_bytes, total_blocks);
+
+    if src_layout != dst_layout {
+        record_transfer(transfer_path, dst_layout, total_bytes, total_blocks);
+    }
 }
 
 /// Hook for single memcpy transfer - call this before initiating memcpy transfer
@@ -274,27 +425,23 @@ where
     Source: BlockDataProvider,
     Target: BlockDataProviderMut,
 {
+    tracing::info!("hook_memcpy_single_transfer called");
+
     // Calculate transfer size first before borrowing
     let (total_bytes, total_blocks) = calculate_single_transfer_size(source, target);
 
     let src_data = source.block_data();
     let dst_data = target.block_data_mut();
     {
-        let src_layout = get_layout_type_from_block(src_data);
-        let dst_layout = get_layout_type_from_block(dst_data);
+        let src_layout = DEFAULT_LAYOUT;
+        let dst_layout = DEFAULT_LAYOUT;
 
         let src_storage = src_data.storage_type();
         let dst_storage = dst_data.storage_type();
         let transfer_path = TransferPath::from_storage_types(src_storage, dst_storage);
 
-        record_transfer(transfer_path, src_layout, total_bytes, total_blocks);
-
-        if src_layout != dst_layout {
-            record_transfer(transfer_path, dst_layout, total_bytes, total_blocks);
-        }
-
-        tracing::trace!(
-            "Benchmarking memcpy single transfer: {} -> {}, {} blocks, {} bytes, src_layout={:?}, dst_layout={:?}",
+        tracing::info!(
+            "memcpy single transfer: {} -> {}, {} blocks, {} bytes, src_layout={:?}, dst_layout={:?}",
             storage_type_to_str(src_storage),
             storage_type_to_str(dst_storage),
             total_blocks,
@@ -302,6 +449,12 @@ where
             src_layout,
             dst_layout
         );
+
+        record_transfer(transfer_path, src_layout, total_bytes, total_blocks);
+
+        if src_layout != dst_layout {
+            record_transfer(transfer_path, dst_layout, total_bytes, total_blocks);
+        }
     }
 }
 
@@ -318,8 +471,8 @@ pub fn hook_generic_transfer<Source, Target>(
         return;
     }
 
-    let src_layout = get_layout_type_from_block(sources[0].block_data());
-    let dst_layout = get_layout_type_from_block(targets[0].block_data());
+    let src_layout = DEFAULT_LAYOUT;
+    let dst_layout = DEFAULT_LAYOUT;
 
     let src_storage = sources[0].block_data().storage_type();
     let dst_storage = targets[0].block_data().storage_type();
@@ -345,22 +498,7 @@ pub fn hook_generic_transfer<Source, Target>(
     );
 }
 
-/// Extract layout type from block data
-fn get_layout_type_from_block<S: crate::block_manager::storage::Storage>(
-    block_data: &dyn BlockDataExt<S>,
-) -> LayoutType {
-    // Try to determine layout type from the block data
-    // This is a heuristic approach since we don't have direct access to the layout
-    if block_data.is_fully_contiguous() {
-        LayoutType::FullyContiguous
-    } else {
-        // For non-contiguous blocks, assume LayerSeparate with block contiguous
-        // This could be enhanced with more sophisticated detection
-        LayoutType::LayerSeparate {
-            outer_contiguous: false,
-        }
-    }
-}
+
 
 /// Convert StorageType to string representation for logging
 fn storage_type_to_str(storage_type: &StorageType) -> &'static str {

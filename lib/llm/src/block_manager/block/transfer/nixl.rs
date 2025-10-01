@@ -23,8 +23,25 @@ where
     let dst_data = dst.block_data_mut();
 
     if src_data.is_fully_contiguous() && dst_data.is_fully_contiguous() {
+        tracing::debug!("NIXL: Using CONTIGUOUS path - transferring {} bytes as single block",
+                       src_data.block_view().map(|v| v.size()).unwrap_or(0));
+
+        // Get storage types before getting mutable views to avoid borrow conflicts
+        let src_storage = src_data.storage_type().clone();
+        let dst_storage = dst_data.storage_type().clone();
+
         let src_desc = src_data.block_view()?.as_nixl_descriptor();
         let dst_desc = dst_data.block_view_mut()?.as_nixl_descriptor_mut();
+
+        // Benchmark hook for fully contiguous NIXL transfers
+        #[cfg(feature = "block-manager")]
+        {
+            crate::block_manager::bench::hooks::hook_contiguous_block_transfer_with_size(
+                &src_storage,
+                &dst_storage,
+                src_desc.size(),
+            );
+        }
 
         unsafe {
             src_dl.add_desc(
@@ -42,13 +59,32 @@ where
 
         Ok(())
     } else {
+        tracing::debug!("NIXL: Using LAYER-BY-LAYER path - transferring {} layers × {} outer_dims",
+                       src_data.num_layers(), src_data.num_outer_dims());
         assert_eq!(src_data.num_layers(), dst_data.num_layers());
+
+        // Get storage types once before the loop to avoid borrow conflicts
+        let src_storage = src_data.storage_type().clone();
+        let dst_storage = dst_data.storage_type().clone();
+
         for layer_idx in 0..src_data.num_layers() {
             for outer_idx in 0..src_data.num_outer_dims() {
                 let src_view = src_data.layer_view(layer_idx, outer_idx)?;
                 let mut dst_view = dst_data.layer_view_mut(layer_idx, outer_idx)?;
 
                 debug_assert_eq!(src_view.size(), dst_view.size());
+
+                // Benchmark hook for each layer transfer (after getting views)
+                #[cfg(feature = "block-manager")]
+                {
+                    crate::block_manager::bench::hooks::hook_layer_transfer_with_size(
+                        &src_storage,
+                        &dst_storage,
+                        layer_idx,
+                        outer_idx,
+                        src_view.size(),
+                    );
+                }
 
                 let src_desc = src_view.as_nixl_descriptor();
                 let dst_desc = dst_view.as_nixl_descriptor_mut();
@@ -89,10 +125,6 @@ where
         return Ok(Box::new(std::future::ready(())));
     }
     assert_eq!(src.len(), dst.len());
-
-    // Benchmark hook for NIXL transfers
-    #[cfg(feature = "block-manager")]
-    crate::block_manager::bench::hooks::hook_nixl_transfer(src, dst);
 
     let nixl_agent_arc = ctx.as_ref().nixl_agent();
     let nixl_agent = nixl_agent_arc

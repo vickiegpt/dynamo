@@ -110,7 +110,7 @@ impl BenchmarkReport {
             writeln!(output, "📊 {}", path.description()).unwrap();
             writeln!(output, "───────────────────────────────────────").unwrap();
 
-            for (key, metrics) in entries {
+            for (_key, metrics) in entries {
                 let count = metrics
                     .transfer_count
                     .load(std::sync::atomic::Ordering::Relaxed);
@@ -131,7 +131,6 @@ impl BenchmarkReport {
                     continue;
                 }
 
-                writeln!(output, "  Layout: {:?}", key.layout).unwrap();
                 writeln!(output, "    Transfers:     {:>12}", format_number(count)).unwrap();
                 writeln!(
                     output,

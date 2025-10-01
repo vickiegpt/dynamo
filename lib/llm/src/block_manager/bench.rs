@@ -267,6 +267,27 @@ impl TransferBenchmark {
         self.session_start.elapsed().unwrap_or(Duration::ZERO)
     }
 
+    /// Get a summary string of benchmark status
+    pub fn summary(&self) -> String {
+        let metrics = self.get_metrics();
+        let total_transfers: usize = metrics
+            .values()
+            .map(|m| m.transfer_count.load(std::sync::atomic::Ordering::Relaxed))
+            .sum();
+        let total_bytes: u64 = metrics
+            .values()
+            .map(|m| m.total_bytes.load(std::sync::atomic::Ordering::Relaxed))
+            .sum();
+
+        format!(
+            "Benchmark '{}': {} transfers, {} total bytes across {} paths",
+            self.session_name,
+            total_transfers,
+            total_bytes,
+            metrics.len()
+        )
+    }
+
     /// Generate a formatted report
     pub fn generate_report(&self) -> String {
         let report = BenchmarkReport::from_benchmark(self);
@@ -303,6 +324,40 @@ impl TransferBenchmark {
         path.push("dynamo_benchmark_session.json");
         path
     }
+
+    /// Get named save path for specific session
+    pub fn named_save_path(session_name: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("dynamo_benchmark_{}.json", session_name));
+        path
+    }
+
+    /// Get path for active session tracker file
+    pub fn active_session_path() -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push("dynamo_benchmark_active_session.txt");
+        path
+    }
+
+    /// Save active session name to file and set environment variable
+    pub fn save_active_session(session_name: &str) -> anyhow::Result<()> {
+        fs::write(Self::active_session_path(), session_name)?;
+        // Also set environment variable for child processes
+        unsafe {
+            std::env::set_var("DYNAMO_BENCHMARK_SESSION", session_name);
+        }
+        Ok(())
+    }
+
+    /// Load active session name from file or environment variable
+    pub fn load_active_session() -> Option<String> {
+        // First check environment variable
+        if let Ok(session_name) = std::env::var("DYNAMO_BENCHMARK_SESSION") {
+            return Some(session_name);
+        }
+        // Then try file
+        fs::read_to_string(Self::active_session_path()).ok()
+    }
 }
 
 /// Global benchmark instance
@@ -312,7 +367,7 @@ static GLOBAL_BENCHMARK: parking_lot::RwLock<Option<TransferBenchmark>> =
 /// Initialize global benchmark (creates new or loads existing)
 pub fn init_benchmark(session_name: impl Into<String>) -> anyhow::Result<()> {
     let session_name = session_name.into();
-    let save_path = TransferBenchmark::default_save_path();
+    let save_path = TransferBenchmark::named_save_path(&session_name);
 
     let benchmark = if save_path.exists() {
         // Try to load existing benchmark, fallback to new if load fails
@@ -325,31 +380,46 @@ pub fn init_benchmark(session_name: impl Into<String>) -> anyhow::Result<()> {
     // Save immediately to establish the file
     benchmark.save_to_file(&save_path)?;
 
+    // Mark this session as active
+    TransferBenchmark::save_active_session(&session_name)?;
+
     let mut global = GLOBAL_BENCHMARK.write();
     *global = Some(benchmark);
     Ok(())
 }
 
-/// Get global benchmark instance
+/// Get global benchmark instance (loads from active session if needed)
 pub fn global_benchmark() -> Option<TransferBenchmark> {
-    // Try to load from file if no global instance exists
-    let mut global = GLOBAL_BENCHMARK.write();
-    if global.is_none() {
-        let save_path = TransferBenchmark::default_save_path();
-        if save_path.exists() {
-            if let Ok(benchmark) = TransferBenchmark::load_from_file(&save_path) {
-                *global = Some(benchmark);
-            }
+    {
+        let global = GLOBAL_BENCHMARK.read();
+        if global.is_some() {
+            return global.as_ref().cloned();
         }
     }
 
-    global.as_ref().cloned()
+    // If no in-memory instance, try to load the active session
+    if let Some(active_session) = TransferBenchmark::load_active_session() {
+        if let Ok(benchmark) = load_benchmark(&active_session) {
+            let mut global = GLOBAL_BENCHMARK.write();
+            *global = Some(benchmark.clone());
+            return Some(benchmark);
+        }
+    }
+
+    None
+}
+
+/// Load a specific benchmark session by name
+pub fn load_benchmark(session_name: &str) -> anyhow::Result<TransferBenchmark> {
+    let save_path = TransferBenchmark::named_save_path(session_name);
+    TransferBenchmark::load_from_file(&save_path)
 }
 
 /// Save global benchmark to file
 pub fn save_global_benchmark() -> anyhow::Result<()> {
     if let Some(benchmark) = global_benchmark() {
-        benchmark.save_to_file(TransferBenchmark::default_save_path())?;
+        let save_path = TransferBenchmark::named_save_path(&benchmark.session_name);
+        benchmark.save_to_file(save_path)?;
     }
     Ok(())
 }
@@ -365,12 +435,14 @@ pub fn record_transfer(path: TransferPath, layout: LayoutType, bytes: u64, block
 
 /// Reset global benchmark
 pub fn reset_global_benchmark() -> anyhow::Result<()> {
+    if let Some(benchmark) = global_benchmark() {
+        let save_path = TransferBenchmark::named_save_path(&benchmark.session_name);
+        if save_path.exists() {
+            fs::remove_file(save_path)?;
+        }
+    }
+
     let mut global = GLOBAL_BENCHMARK.write();
     *global = None;
-
-    let save_path = TransferBenchmark::default_save_path();
-    if save_path.exists() {
-        fs::remove_file(save_path)?;
-    }
     Ok(())
 }

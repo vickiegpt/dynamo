@@ -176,21 +176,43 @@ impl Worker for KvConnectorWorker {
 
         // Auto-detect device layout type if not explicitly provided
         let detected_device_layout_type = match device_layout_type {
-            Some(layout) => layout,
+            Some(layout) => {
+                tracing::info!("LAYOUT CONFIG: Using explicitly provided layout: {:?}", layout);
+                layout
+            }
             None => {
                 if let Some(ref shape) = first_tensor_shape {
+                    tracing::info!(
+                        "LAYOUT CONFIG: Auto-detecting layout from tensor shape: {:?}, num_device_blocks: {}",
+                        shape,
+                        num_device_blocks
+                    );
+                    tracing::info!(
+                        "  LAYOUT CONFIG: shape[0] = {}, shape[1] = {}",
+                        shape.get(0).unwrap_or(&0),
+                        shape.get(1).unwrap_or(&0)
+                    );
+                    tracing::info!(
+                        "  LAYOUT CONFIG: shape[0] >= num_device_blocks? {}",
+                        shape.get(0).unwrap_or(&0) >= &num_device_blocks
+                    );
+                    tracing::info!(
+                        "  LAYOUT CONFIG: shape[1] >= num_device_blocks? {}",
+                        shape.get(1).unwrap_or(&0) >= &num_device_blocks
+                    );
+
                     match LayoutType::layer_separate_auto(shape, num_device_blocks) {
                         Ok(detected) => {
-                            tracing::info!("Auto-detected device layout from tensor shape: {:?}", detected);
+                            tracing::info!("LAYOUT CONFIG: Auto-detected device layout: {:?}", detected);
                             detected
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to auto-detect layout from shape {:?}: {}. Using default.", shape, e);
+                            tracing::warn!("LAYOUT CONFIG: Failed to auto-detect layout from shape {:?}: {}. Using default.", shape, e);
                             LayoutType::layer_separate_auto_default()
                         }
                     }
                 } else {
-                    tracing::warn!("No tensors available for layout detection. Using default.");
+                    tracing::warn!("LAYOUT CONFIG: No tensors available for layout detection. Using default.");
                     LayoutType::layer_separate_auto_default()
                 }
             }

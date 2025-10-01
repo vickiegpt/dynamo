@@ -164,17 +164,45 @@ pub enum LayoutType {
 impl LayoutType {
     /// Create a LayerSeparate layout type with auto-detection based on tensor shapes
     pub fn layer_separate_auto(shape: &[usize], num_device_blocks: usize) -> anyhow::Result<Self> {
+        tracing::info!(
+            "LAYOUT AUTO-DETECT: shape={:?}, num_device_blocks={}",
+            shape,
+            num_device_blocks
+        );
+
         let outer_contiguous = if shape[0] >= num_device_blocks {
+            tracing::info!(
+                "  LAYOUT DETECTED: BLOCK CONTIGUOUS (outer_contiguous=false) because shape[0]={} >= num_device_blocks={}",
+                shape[0],
+                num_device_blocks
+            );
             false // Block contiguous: [n_blocks, outer_dim, ...]
         } else if shape[1] >= num_device_blocks {
+            tracing::info!(
+                "  LAYOUT DETECTED: OUTER CONTIGUOUS (outer_contiguous=true) because shape[1]={} >= num_device_blocks={}",
+                shape[1],
+                num_device_blocks
+            );
             true // Outer contiguous: [outer_dim, n_blocks, ...]
         } else {
+            tracing::error!(
+                "  LAYOUT ERROR: UNSUPPORTED - shape[0]={} < num_device_blocks={} AND shape[1]={} < num_device_blocks={}",
+                shape.get(0).unwrap_or(&0),
+                num_device_blocks,
+                shape.get(1).unwrap_or(&0),
+                num_device_blocks
+            );
             return Err(anyhow::anyhow!(format!(
-                "Unsupported kv cache layout. Got shape: {:?}",
-                shape
+                "Unsupported kv cache layout. Got shape: {:?}, num_device_blocks: {}",
+                shape,
+                num_device_blocks
             )));
         };
 
+        tracing::info!(
+            "  LAYOUT RESULT: LayerSeparate {{ outer_contiguous: {} }}",
+            outer_contiguous
+        );
         Ok(LayoutType::LayerSeparate { outer_contiguous })
     }
 
