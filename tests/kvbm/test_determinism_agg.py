@@ -356,7 +356,7 @@ def tester(llm_server):
     return t
 
 
-class TestDeterminism(BaseTestDeterminism):
+class TestDeterminismAgg(BaseTestDeterminism):
     """Test class for determinism validation."""
 
     @pytest.mark.parametrize(
@@ -366,7 +366,9 @@ class TestDeterminism(BaseTestDeterminism):
         ],
         indirect=True,
     )
-    def test_determinism_with_cache_reset(self, tester, llm_server, runtime_services):
+    def test_determinism_agg_with_cache_reset(
+        self, tester, llm_server, runtime_services
+    ):
         """Test determinism across cache reset: run test with warmup, reset cache, run again without warmup."""
         # Call the base class implementation
         super().test_determinism_with_cache_reset(tester, llm_server, runtime_services)
