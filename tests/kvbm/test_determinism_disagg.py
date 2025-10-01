@@ -22,14 +22,13 @@ import signal
 import subprocess
 import time
 from datetime import datetime
-from enum import Enum
 from pathlib import Path
 from typing import Optional, TextIO
 
 import pytest
 import requests
 
-from .common import KVBM_PYTEST_MARKS, DeterminismTester
+from .common import KVBM_PYTEST_MARKS, DeterminismTester, ServerType
 from .common import TestDeterminism as BaseTestDeterminism
 
 # Test markers to align with repository conventions
@@ -38,11 +37,6 @@ pytestmark = KVBM_PYTEST_MARKS + [pytest.mark.gpu_2]
 
 
 SUCCESS_RATE_THRESHOLD = 0.95
-
-
-# NOTE: disagg only supports vllm now, no trtllm support
-class ServerType(str, Enum):
-    vllm = "vllm"
 
 
 class LLMServerManager:

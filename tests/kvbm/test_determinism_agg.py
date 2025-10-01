@@ -22,24 +22,18 @@ import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional, TextIO
 
 import pytest
 import requests
 
-from .common import KVBM_PYTEST_MARKS, DeterminismTester
+from .common import KVBM_PYTEST_MARKS, DeterminismTester, ServerType
 from .common import TestDeterminism as BaseTestDeterminism
 
 # Test markers to align with repository conventions
 # Todo: enable the rest when kvbm is built in the ci
 pytestmark = KVBM_PYTEST_MARKS + [pytest.mark.gpu_1]
-
-
-class ServerType(str, Enum):
-    vllm = "vllm"
-    trtllm = "trtllm"
 
 
 class LLMServerManager:

@@ -13,6 +13,7 @@ import os
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -28,6 +29,11 @@ KVBM_PYTEST_MARKS = [
 ]
 
 
+class ServerType(str, Enum):
+    vllm = "vllm"
+    trtllm = "trtllm"
+
+
 class DeterminismTester:
     """Test class for model determinism validation."""
 
@@ -35,7 +41,7 @@ class DeterminismTester:
         self,
         base_url: Optional[str] = None,
         model_id: Optional[str] = None,
-        server_type: Optional[str] = "vllm",
+        server_type: Optional[str] = ServerType.vllm,
     ):
         # Allow environment override for flexibility in CI/local runs
         self.base_url = (
