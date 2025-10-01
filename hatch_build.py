@@ -12,7 +12,9 @@ def get_components():
     Scan the components/src/dynamo directory to get the list of available components.
     Raises RuntimeError if no components are found.
     """
-    components_dir = os.path.join(os.path.dirname(__file__), "components", "src", "dynamo")
+    components_dir = os.path.join(
+        os.path.dirname(__file__), "components", "src", "dynamo"
+    )
     if not os.path.exists(components_dir):
         raise RuntimeError(f"Components directory not found: {components_dir}")
 
@@ -21,7 +23,7 @@ def get_components():
     if not components:
         raise RuntimeError(f"No components found in directory: {components_dir}")
 
-    return components
+    return [os.path.join(components_dir, component) for component in components]
 
 
 class VersionWriterHook(BuildHookInterface):
@@ -52,8 +54,6 @@ class VersionWriterHook(BuildHookInterface):
         version_content = f'#  SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n#  SPDX-License-Identifier: Apache-2.0\n\n# This file is auto-generated at build time\n__version__ = "{full_version}"\n'
 
         for component in get_components():
-            version_file_path = os.path.join(
-                self.root, f"components/src/dynamo/{component}/_version.py"
-            )
+            version_file_path = os.path.join(component, "_version.py")
             with open(version_file_path, "w") as f:
                 f.write(version_content)
