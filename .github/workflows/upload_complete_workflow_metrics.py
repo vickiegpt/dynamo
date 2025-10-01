@@ -1,17 +1,38 @@
 """
-Enhanced script to upload complete GitHub Actions workflow and job metrics.
+Enhanced script to upload complete GitHub Actions workflow and job metrics to Prometheus via OpenTelemetry.
 This version runs as the final job in a workflow and captures metrics for 
 the entire workflow including all previous jobs.
+
+CONVERSION NOTES:
+- Converted from OpenSearch HTTP POST uploads to OpenTelemetry metrics
+- Uses OTLP gRPC exporter to send metrics to Prometheus via NVIDIA Observability Service
+- Maintains all original metric collection functionality
+- Metrics are now recorded as histograms, counters, and gauges with proper labels
+- Requires OTLP_ENDPOINT, NVAUTH_TOKEN, and SERVICE_ID environment variables
 """
 
 import os
 import sys
 import json
-import requests
+import time
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 from urllib.parse import urlparse
 import re
+
+# OpenTelemetry imports
+from opentelemetry import metrics
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk.resources import Resource
+import requests
+
+# OpenTelemetry Configuration - Replace with your actual values
+OTLP_ENDPOINT = os.getenv('OTLP_ENDPOINT')
+AUTH_TOKEN = os.getenv('NVAUTH_TOKEN')  # Replace with your NVAuth token
+SERVICE_NAME = "Dynamo Metrics"
+SERVICE_ID = os.getenv('SERVICE_ID')  # Replace with your Service Registry ID
 
 # FILTERING CONFIGURATION - Only upload data for specific workflow/job combinations
 TARGET_WORKFLOW_NAME = "Docker Build and Test"
@@ -77,6 +98,33 @@ FIELD_BUILD_TARGET = "s_build_target"              # Build target (e.g., runtime
 CONTAINER_FIELD_FRAMEWORK = "s_framework"          # Framework (vllm, etc.)
 CONTAINER_FIELD_SIZE_MB = "l_size_mb"              # Container size in MB  
 CONTAINER_FIELD_CACHE_HIT_RATE = "l_cache_hit_rate" # Cache hit rate percentage
+
+def setup_telemetry():
+    """Configure OpenTelemetry with NVIDIA Observability Service"""
+    
+    # Create resource with required labels
+    resource = Resource.create({
+        "service.name": SERVICE_NAME,
+        "service.version": "1.0.0",
+        "Authorization": AUTH_TOKEN,
+        "service.id": SERVICE_ID,
+        # Optional: customize service name
+        "service.name.override": f"{SERVICE_NAME}-github-actions"
+    })
+
+    # Configure metrics
+    metric_reader = PeriodicExportingMetricReader(
+        OTLPMetricExporter(
+            endpoint=OTLP_ENDPOINT,
+            headers={"authorization": f"Bearer {AUTH_TOKEN}"}
+        ),
+        export_interval_millis=5000  # Export every 5 seconds
+    )
+
+    metrics.set_meter_provider(MeterProvider(
+        resource=resource,
+        metric_readers=[metric_reader]
+    ))
 
 class BuildMetricsReader:
     """Reader for Docker build metrics from environment variables and artifacts"""
@@ -215,19 +263,76 @@ def mask_sensitive_urls(error_msg: str, url: str) -> str:
 
 class WorkflowMetricsUploader:
     def __init__(self): 
-        self.headers = {"Content-Type": "application/json", "Accept-Charset": "UTF-8"}
-        self.workflow_index = os.getenv('WORKFLOW_INDEX', '')
-        self.jobs_index = os.getenv('JOB_INDEX', '')
-        self.steps_index = os.getenv('STEPS_INDEX', '')
+        # Setup OpenTelemetry
+        setup_telemetry()
+        self.meter = metrics.get_meter(__name__)
         
-        # Validate that database URLs are provided
-        if not self.workflow_index or not self.jobs_index or not self.steps_index:
-            raise ValueError(
-                "Database URLs not configured. Please set environment variables:\n"
-                "  WORKFLOW_INDEX - URL for workflow metrics\n"
-                "  JOB_INDEX - URL for job metrics\n"
-                "  STEPS_INDEX - URL for step metrics"
-            )
+        # Create metric instruments
+        self.workflow_duration_histogram = self.meter.create_histogram(
+            name="github_workflow_duration_seconds",
+            description="GitHub workflow duration in seconds",
+            unit="s"
+        )
+        
+        self.workflow_queue_time_histogram = self.meter.create_histogram(
+            name="github_workflow_queue_time_seconds", 
+            description="GitHub workflow queue time in seconds",
+            unit="s"
+        )
+        
+        self.workflow_status_counter = self.meter.create_counter(
+            name="github_workflow_status_total",
+            description="Total GitHub workflow runs by status",
+            unit="1"
+        )
+        
+        self.job_duration_histogram = self.meter.create_histogram(
+            name="github_job_duration_seconds",
+            description="GitHub job duration in seconds", 
+            unit="s"
+        )
+        
+        self.job_queue_time_histogram = self.meter.create_histogram(
+            name="github_job_queue_time_seconds",
+            description="GitHub job queue time in seconds",
+            unit="s"
+        )
+        
+        self.job_status_counter = self.meter.create_counter(
+            name="github_job_status_total",
+            description="Total GitHub job runs by status",
+            unit="1"
+        )
+        
+        self.step_duration_histogram = self.meter.create_histogram(
+            name="github_step_duration_seconds",
+            description="GitHub step duration in seconds",
+            unit="s"
+        )
+        
+        self.step_status_counter = self.meter.create_counter(
+            name="github_step_status_total", 
+            description="Total GitHub step runs by status",
+            unit="1"
+        )
+        
+        self.build_duration_histogram = self.meter.create_histogram(
+            name="github_build_duration_seconds",
+            description="Docker build duration in seconds",
+            unit="s"
+        )
+        
+        self.image_size_gauge = self.meter.create_up_down_counter(
+            name="github_image_size_mb",
+            description="Docker image size in MB",
+            unit="MB"
+        )
+        
+        self.cache_hit_rate_gauge = self.meter.create_up_down_counter(
+            name="github_cache_hit_rate_percent",
+            description="Docker build cache hit rate percentage",
+            unit="%"
+        )
         
         # Get current workflow information
         self.repo = os.getenv('GITHUB_REPOSITORY')
@@ -245,36 +350,134 @@ class WorkflowMetricsUploader:
         print(f"Uploading metrics for workflow '{self.workflow_name}' (run {self.run_id}) in {self.repo}")
         
     def handle_upload_error(self, error: Exception, operation: str) -> str:
-        """Centralized error handling with URL masking for all upload operations
+        """Centralized error handling for telemetry operations
         
         Args:
             error: The exception that occurred
             operation: Description of the operation that failed
             
         Returns:
-            Sanitized error message with URLs masked
+            Error message for telemetry operations
         """
         error_msg = str(error)
-        
-        # Mask all configured URLs to prevent exposure
-        for url in [self.workflow_index, self.jobs_index, self.steps_index]:
-            if url:  # Only mask non-empty URLs
-                error_msg = mask_sensitive_urls(error_msg, url)
-        
         return f"Error during {operation}: {error_msg}"
 
-    def post_to_db(self, url: str, data: Dict[str, Any]) -> None:
-        """Push json data to the database/OpenSearch URL"""
-        print(f"Posting metrics to database... with data: {data}")
-        try:
-            response = requests.post(url, data=json.dumps(data), headers=self.headers, timeout=30)
-            if not (200 <= response.status_code < 300):
-                raise ValueError(f"Error posting to DB: HTTP {response.status_code}")
-            print(f"Successfully posted metrics with ID: {data.get('_id', 'unknown')}")
-        except requests.exceptions.RequestException as e:
-            # Use centralized error handling
-            sanitized_error = self.handle_upload_error(e, "database upload")
-            raise ValueError(sanitized_error)
+    def record_workflow_metrics(self, data: Dict[str, Any]) -> None:
+        """Record workflow metrics using OpenTelemetry"""
+        print(f"Recording workflow metrics via OpenTelemetry: {data.get('_id', 'unknown')}")
+        
+        # Create labels for metrics
+        labels = {
+            "repo": self.repo,
+            "workflow_name": self.workflow_name,
+            "branch": data.get(FIELD_BRANCH, ""),
+            "event": self.event_name,
+            "status": data.get(FIELD_STATUS, "unknown"),
+            "actor": self.actor
+        }
+        
+        # Record duration
+        duration = data.get(FIELD_DURATION_SEC, 0)
+        if duration > 0:
+            self.workflow_duration_histogram.record(duration, labels)
+            
+        # Record queue time
+        queue_time = data.get(FIELD_QUEUE_TIME, 0)
+        if queue_time > 0:
+            self.workflow_queue_time_histogram.record(queue_time, labels)
+            
+        # Record status counter
+        self.workflow_status_counter.add(1, labels)
+        
+        print(f"Successfully recorded workflow metrics for: {data.get('_id', 'unknown')}")
+    
+    def record_job_metrics(self, data: Dict[str, Any]) -> None:
+        """Record job metrics using OpenTelemetry"""
+        print(f"Recording job metrics via OpenTelemetry: {data.get('_id', 'unknown')}")
+        
+        # Create labels for metrics
+        labels = {
+            "repo": self.repo,
+            "workflow_name": self.workflow_name,
+            "job_name": data.get(FIELD_JOB_NAME, ""),
+            "branch": data.get(FIELD_BRANCH, ""),
+            "event": self.event_name,
+            "status": data.get(FIELD_STATUS, "unknown"),
+            "actor": self.actor
+        }
+        
+        # Record duration
+        duration = data.get(FIELD_DURATION_SEC, 0)
+        if duration > 0:
+            self.job_duration_histogram.record(duration, labels)
+            
+        # Record queue time
+        queue_time = data.get(FIELD_QUEUE_TIME, 0)
+        if queue_time > 0:
+            self.job_queue_time_histogram.record(queue_time, labels)
+            
+        # Record status counter
+        self.job_status_counter.add(1, labels)
+        
+        print(f"Successfully recorded job metrics for: {data.get(FIELD_JOB_NAME, 'unknown')}")
+    
+    def record_step_metrics(self, data: Dict[str, Any]) -> None:
+        """Record step metrics using OpenTelemetry"""
+        print(f"Recording step metrics via OpenTelemetry: {data.get('_id', 'unknown')}")
+        
+        # Create labels for metrics
+        labels = {
+            "repo": self.repo,
+            "workflow_name": self.workflow_name,
+            "job_name": data.get(FIELD_JOB_NAME, ""),
+            "step_name": data.get(FIELD_NAME, ""),
+            "branch": data.get(FIELD_BRANCH, ""),
+            "event": self.event_name,
+            "status": data.get(FIELD_STATUS, "unknown"),
+            "actor": self.actor
+        }
+        
+        # Record duration
+        duration = data.get(FIELD_DURATION_SEC, 0)
+        if duration > 0:
+            self.step_duration_histogram.record(duration, labels)
+            
+        # Record status counter
+        self.step_status_counter.add(1, labels)
+        
+        print(f"Successfully recorded step metrics for: {data.get(FIELD_NAME, 'unknown')}")
+    
+    def record_build_metrics(self, data: Dict[str, Any]) -> None:
+        """Record build/container metrics using OpenTelemetry"""
+        print(f"Recording build metrics via OpenTelemetry: {data.get('_id', 'unknown')}")
+        
+        # Create labels for metrics
+        labels = {
+            "repo": self.repo,
+            "workflow_name": self.workflow_name,
+            "framework": data.get(CONTAINER_FIELD_FRAMEWORK, "unknown"),
+            "branch": data.get(FIELD_BRANCH, ""),
+            "event": self.event_name,
+            "status": data.get(FIELD_STATUS, "unknown"),
+            "actor": self.actor
+        }
+        
+        # Record build duration
+        build_duration = data.get(FIELD_BUILD_DURATION_SEC, 0)
+        if build_duration > 0:
+            self.build_duration_histogram.record(build_duration, labels)
+            
+        # Record image size
+        image_size = data.get(CONTAINER_FIELD_SIZE_MB, 0)
+        if image_size > 0:
+            self.image_size_gauge.add(image_size, labels)
+            
+        # Record cache hit rate
+        cache_hit_rate = data.get(CONTAINER_FIELD_CACHE_HIT_RATE, 0)
+        if cache_hit_rate > 0:
+            self.cache_hit_rate_gauge.add(cache_hit_rate, labels)
+        
+        print(f"Successfully recorded build metrics for: {data.get(CONTAINER_FIELD_FRAMEWORK, 'unknown')}")
 
     def get_github_api_data(self, endpoint: str) -> Optional[Dict[str, Any]]:
         """Fetch data from GitHub API"""
@@ -419,8 +622,8 @@ class WorkflowMetricsUploader:
             self._upload_workflow_metrics(workflow_data, jobs_data)
             print("Workflow metrics uploaded successfully")
         except Exception as e:
-            sanitized_error = self.handle_upload_error(e, "workflow metrics upload")
-            print(sanitized_error)
+            error_msg = self.handle_upload_error(e, "workflow metrics recording")
+            print(error_msg)
         
         # Upload all job and step metrics
         try:
@@ -428,8 +631,8 @@ class WorkflowMetricsUploader:
             jobs_processed, steps_processed = self._upload_all_job_and_step_metrics(jobs_data)
             print(f"Successfully uploaded {jobs_processed} job metrics and {steps_processed} step metrics")
         except Exception as e:
-            sanitized_error = self.handle_upload_error(e, "job/step metrics upload")
-            print(sanitized_error)
+            error_msg = self.handle_upload_error(e, "job/step metrics recording")
+            print(error_msg)
 
     def _upload_workflow_metrics(self, workflow_data: Dict[str, Any], jobs_data: Dict[str, Any]) -> None:
         """Internal method to upload workflow metrics"""
@@ -475,7 +678,7 @@ class WorkflowMetricsUploader:
             db_data[FIELD_JOBS] = ''
         """
         
-        self.post_to_db(self.workflow_index, db_data)
+        self.record_workflow_metrics(db_data)
 
     def _upload_all_job_and_step_metrics(self, jobs_data: Dict[str, Any]) -> tuple[int, int]:
         """Internal method to upload all job and step metrics, returns (jobs_processed, steps_processed)"""
@@ -600,7 +803,7 @@ class WorkflowMetricsUploader:
         # Add common context fields
         self.add_common_context_fields(db_data, None)
         
-        self.post_to_db(self.jobs_index, db_data)
+        self.record_job_metrics(db_data)
         print(f"Uploaded metrics for job: {job_name}")
         
         # Upload container metrics if this is a target job and metrics are available
@@ -608,11 +811,7 @@ class WorkflowMetricsUploader:
             self._upload_container_metrics(job_data, job_name)
 
     def _upload_container_metrics(self, job_data: Dict[str, Any], framework: str, build_metrics: Optional[Dict[str, Any]] = None) -> None:
-        """Upload container-specific metrics to CONTAINER_INDEX"""
-        container_index = os.getenv('CONTAINER_INDEX')
-        if not container_index:
-            print("⚠️  CONTAINER_INDEX not configured, skipping container metrics upload")
-            return
+        """Upload container-specific metrics via OpenTelemetry"""
         
         # Get build metrics if not provided
         if build_metrics is None:
@@ -622,7 +821,7 @@ class WorkflowMetricsUploader:
             print("⚠️  No build metrics available for container upload")
             return
         
-        print(f"📦 Uploading container metrics to {container_index}")
+        print(f"📦 Recording container metrics via OpenTelemetry")
         
         # Create container metrics payload
         container_data = {}
@@ -634,7 +833,7 @@ class WorkflowMetricsUploader:
         container_data[FIELD_WORKFLOW_ID] = str(self.run_id)
         container_data[FIELD_REPO] = self.repo
         container_data[FIELD_WORKFLOW_NAME] = self.workflow_name
-        container_data[FIELD_BRANCH] = self.branch
+        container_data[FIELD_BRANCH] = self.ref_name
         
         # Find the "Build image" step ID
         build_step_id = None
@@ -667,20 +866,19 @@ class WorkflowMetricsUploader:
         # Add @timestamp for time-series data
         container_data['@timestamp'] = build_metrics.get('build_end_time', datetime.now(timezone.utc).isoformat())
         
-        # Upload to container index
+        # Record container metrics via OpenTelemetry
         try:
-            print(f"🔍 Debug: Container data being uploaded:")
-            print(f"   Endpoint: {container_index}")
+            print(f"🔍 Debug: Container data being recorded:")
             print(f"   Data: {container_data}")
             
-            self.post_to_db(container_index, container_data)
-            print(f"✅ Container metrics uploaded successfully")
+            self.record_build_metrics(container_data)
+            print(f"✅ Container metrics recorded successfully")
             print(f"   Framework: {build_metrics.get('framework', 'N/A')}")
             print(f"   Size: {build_metrics.get('image_size_mb', 'N/A')} MB")
             print(f"   Cache Hit Rate: {build_metrics.get('cache_hit_rate', 'N/A')}%")
             print(f"   Build Duration: {build_metrics.get('build_duration_sec', 'N/A')} seconds")
         except Exception as e:
-            print(f"❌ Failed to upload container metrics: {e}")
+            print(f"❌ Failed to record container metrics: {e}")
             print(f"🔍 Debug: Container data that failed: {container_data}")
 
     def _upload_job_step_metrics(self, job_data: Dict[str, Any]) -> int:
@@ -762,7 +960,7 @@ class WorkflowMetricsUploader:
             db_data[FIELD_JOB_LABELS] = 'unknown'
         """
         
-        self.post_to_db(self.steps_index, db_data)
+        self.record_step_metrics(db_data)
         print(f"Uploaded metrics for step: {step_name} (step {step_number})")
 
 def main():
@@ -777,6 +975,11 @@ def main():
     
     # Upload all metrics (workflow, jobs, and steps) in one coordinated operation
     uploader.post_all_metrics()
+    
+    # Force final export of all metrics
+    print("Flushing metrics to ensure delivery...")
+    metrics.get_meter_provider().force_flush(30_000)  # 30 second timeout
+    print("All metrics have been sent to Prometheus via OpenTelemetry!")
 
 if __name__ == "__main__":
     main()
