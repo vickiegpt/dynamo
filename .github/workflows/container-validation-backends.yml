@@ -218,7 +218,7 @@ jobs:
         kubectl get storageclass
 
         # Install Helm chart
-        cat build.env
+        # cat build.env
         export IMAGE_TAG=$(cat build.env)
         echo $IMAGE_TAG
         export VIRTUAL_ENV=/opt/dynamo/venv
@@ -233,7 +233,7 @@ jobs:
 
         # Install dynamo env secrets
         kubectl create secret generic hf-token-secret --from-literal=HF_TOKEN=$HF_TOKEN -n $KUBE_NS || true
-        cd ${DYNAMO_REPO}
+        # cd ${DYNAMO_REPO}
     - name: Deploy Dynamo Operator
       run: |
         # Install CRDs
