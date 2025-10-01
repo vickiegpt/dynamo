@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::active_message::client::ActiveMessageClient;
+use crate::client::ActiveMessageClient;
 
 /// Message metadata and execution context passed to handlers
 #[derive(Debug)]

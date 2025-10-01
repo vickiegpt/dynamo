@@ -289,7 +289,7 @@ impl<H: ActiveMessageHandler + 'static> ActiveMessageDispatcher for SpawnedDispa
                     {
                         debug!("Sending acceptance for with_response message {}", accept_id);
 
-                        let accept_message = crate::active_message::handler::ActiveMessage {
+                        let accept_message = crate::handler::ActiveMessage {
                             message_id: uuid::Uuid::new_v4(),
                             handler_name: "_accept".to_string(),
                             sender_instance: ctx.client.instance_id(),

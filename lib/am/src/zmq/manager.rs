@@ -11,7 +11,7 @@ use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::active_message::{
+use crate::{
     client::ActiveMessageClient,
     dispatcher::{ControlMessage, DispatchMessage, MessageDispatcher, SenderIdentity},
     handler::{ActiveMessage, HandlerEvent, HandlerId, InstanceId},
@@ -105,9 +105,9 @@ impl ZmqActiveMessageManager {
     pub async fn register_handler(
         &self,
         name: String,
-        handler: Arc<dyn crate::active_message::dispatcher::ActiveMessageDispatcher>,
+        handler: Arc<dyn crate::dispatcher::ActiveMessageDispatcher>,
     ) -> Result<()> {
-        use crate::active_message::dispatcher::ControlMessage;
+        use crate::dispatcher::ControlMessage;
 
         self.control_tx
             .send(ControlMessage::Register {
@@ -119,9 +119,9 @@ impl ZmqActiveMessageManager {
     }
 
     /// Get PeerInfo representing this manager with dual endpoints
-    pub async fn peer_info(&self) -> crate::active_message::client::PeerInfo {
+    pub async fn peer_info(&self) -> crate::client::PeerInfo {
         let state = self.state.read().await;
-        crate::active_message::client::PeerInfo::new_dual(
+        crate::client::PeerInfo::new_dual(
             state.instance_id,
             state.tcp_endpoint.clone(),
             state.ipc_endpoint.clone(),
@@ -181,7 +181,7 @@ impl ZmqActiveMessageManager {
         // Create thin ZMQ transport and wrap in BoxedTransport for type erasure
         let zmq_transport = Arc::new(ZmqThinTransport::new());
         let boxed_transport =
-            crate::active_message::boxed_transport::BoxedTransport::new(zmq_transport);
+            crate::boxed_transport::BoxedTransport::new(zmq_transport);
 
         // Create NetworkClient (now concrete, no generics!)
         let client = Arc::new(NetworkClient::new(
@@ -338,7 +338,7 @@ impl ZmqActiveMessageManager {
 
     async fn register_builtin_handlers(&self) -> Result<()> {
         // Register system handlers using the MessageDispatcher
-        use crate::active_message::system_handlers::register_system_handlers;
+        use crate::system_handlers::register_system_handlers;
 
         // Register system handlers with the dispatcher
         register_system_handlers(

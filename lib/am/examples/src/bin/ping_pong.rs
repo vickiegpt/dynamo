@@ -14,7 +14,7 @@
 //! - Performance characteristics of the messaging system
 
 use anyhow::Result;
-use dynamo_runtime::active_message::{
+use dynamo_am::{
     client::{ActiveMessageClient, PeerInfo},
     handler_impls::{unary_handler, UnaryContext},
     manager::ActiveMessageManager,

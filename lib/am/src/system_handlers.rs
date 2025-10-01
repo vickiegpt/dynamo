@@ -27,7 +27,7 @@ use super::responses::{
 };
 
 // Note: System handlers now use the transport-agnostic cohort module
-// use crate::active_message::cohort::LeaderWorkerCohort; // Available if needed
+// use crate::cohort::LeaderWorkerCohort; // Available if needed
 
 /// Health check handler - returns system status
 #[derive(Debug)]
@@ -608,7 +608,7 @@ mod tests {
         async fn send_raw_message(
             &self,
             _target: Uuid,
-            _message: crate::active_message::handler::ActiveMessage,
+            _message: crate::handler::ActiveMessage,
         ) -> anyhow::Result<()> {
             Ok(())
         }
@@ -644,7 +644,7 @@ mod tests {
             _timeout: std::time::Duration,
         ) -> anyhow::Result<
             tokio::sync::oneshot::Receiver<
-                Result<crate::active_message::receipt_ack::ReceiptAck, String>,
+                Result<crate::receipt_ack::ReceiptAck, String>,
             >,
         > {
             let (_tx, rx) = tokio::sync::oneshot::channel();

@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::active_message::{
+use crate::{
     builder::MessageBuilder,
     client::{ActiveMessageClient, PeerInfo},
     handler::ActiveMessage,
@@ -365,13 +365,13 @@ impl LeaderWorkerCohort {
     /// This should only be called by leaders that manage cohorts
     pub async fn register_handlers(
         &self,
-        control_tx: &tokio::sync::mpsc::Sender<crate::active_message::dispatcher::ControlMessage>,
+        control_tx: &tokio::sync::mpsc::Sender<crate::dispatcher::ControlMessage>,
         task_tracker: tokio_util::task::TaskTracker,
     ) -> Result<()> {
-        use crate::active_message::handler_impls::{
+        use crate::handler_impls::{
             TypedContext, typed_unary_handler_with_tracker,
         };
-        use crate::active_message::responses::JoinCohortResponse;
+        use crate::responses::JoinCohortResponse;
 
         let cohort = self.clone();
 
@@ -423,7 +423,7 @@ impl LeaderWorkerCohort {
         // Register with dispatcher
         control_tx
             .send(
-                crate::active_message::dispatcher::ControlMessage::Register {
+                crate::dispatcher::ControlMessage::Register {
                     name: "_join_cohort".to_string(),
                     dispatcher: handler,
                 },
@@ -438,7 +438,7 @@ impl LeaderWorkerCohort {
     /// This is a convenience method for leader-initiated cohort building
     pub async fn connect_and_add_worker(
         &self,
-        address: &crate::active_message::client::WorkerAddress,
+        address: &crate::client::WorkerAddress,
         rank: Option<usize>,
     ) -> Result<usize> {
         // Connect to worker

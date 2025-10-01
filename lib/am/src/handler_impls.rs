@@ -439,7 +439,7 @@ where
 pub fn am_handler<F, Fut>(
     name: String,
     f: F,
-) -> Arc<dyn crate::active_message::dispatcher::ActiveMessageDispatcher>
+) -> Arc<dyn crate::dispatcher::ActiveMessageDispatcher>
 where
     F: Fn(AmContext) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<(), String>> + Send + Sync + 'static,
@@ -458,13 +458,13 @@ pub fn am_handler_with_tracker<F, Fut>(
     name: String,
     f: F,
     task_tracker: tokio_util::task::TaskTracker,
-) -> Arc<dyn crate::active_message::dispatcher::ActiveMessageDispatcher>
+) -> Arc<dyn crate::dispatcher::ActiveMessageDispatcher>
 where
     F: Fn(AmContext) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<(), String>> + Send + Sync + 'static,
 {
     let handler = AmHandler::new(f, name);
-    Arc::new(crate::active_message::dispatcher::SpawnedDispatcher::new(
+    Arc::new(crate::dispatcher::SpawnedDispatcher::new(
         handler,
         task_tracker,
     ))
@@ -482,7 +482,7 @@ where
 pub fn unary_handler<F>(
     name: String,
     f: F,
-) -> Arc<dyn crate::active_message::dispatcher::ActiveMessageDispatcher>
+) -> Arc<dyn crate::dispatcher::ActiveMessageDispatcher>
 where
     F: Fn(UnaryContext) -> UnifiedResponse + Send + Sync + 'static,
 {
@@ -502,7 +502,7 @@ pub fn unary_handler_with_tracker<F>(
     name: String,
     f: F,
     task_tracker: tokio_util::task::TaskTracker,
-) -> Arc<dyn crate::active_message::dispatcher::ActiveMessageDispatcher>
+) -> Arc<dyn crate::dispatcher::ActiveMessageDispatcher>
 where
     F: Fn(UnaryContext) -> UnifiedResponse + Send + Sync + 'static,
 {
@@ -538,7 +538,7 @@ where
     let handler = ClosureUnaryHandler { f, name };
     let adapter = UnaryHandlerAdapter::new(handler, DispatchMode::Spawn);
 
-    Arc::new(crate::active_message::dispatcher::SpawnedDispatcher::new(
+    Arc::new(crate::dispatcher::SpawnedDispatcher::new(
         adapter,
         task_tracker,
     ))
@@ -555,7 +555,7 @@ where
 pub fn typed_unary_handler<I, O, F>(
     name: String,
     f: F,
-) -> Arc<dyn crate::active_message::dispatcher::ActiveMessageDispatcher>
+) -> Arc<dyn crate::dispatcher::ActiveMessageDispatcher>
 where
     I: serde::de::DeserializeOwned + Send + Sync + 'static,
     O: serde::Serialize + Send + Sync + 'static,
@@ -576,7 +576,7 @@ pub fn typed_unary_handler_with_tracker<I, O, F>(
     name: String,
     f: F,
     task_tracker: tokio_util::task::TaskTracker,
-) -> Arc<dyn crate::active_message::dispatcher::ActiveMessageDispatcher>
+) -> Arc<dyn crate::dispatcher::ActiveMessageDispatcher>
 where
     I: serde::de::DeserializeOwned + Send + Sync + 'static,
     O: serde::Serialize + Send + Sync + 'static,
@@ -622,7 +622,7 @@ where
     let typed_adapter = TypedUnaryAdapter::new(typed_handler);
     let unary_adapter = UnaryHandlerAdapter::new(typed_adapter, DispatchMode::Spawn);
 
-    Arc::new(crate::active_message::dispatcher::SpawnedDispatcher::new(
+    Arc::new(crate::dispatcher::SpawnedDispatcher::new(
         unary_adapter,
         task_tracker,
     ))
@@ -647,7 +647,7 @@ where
 pub fn typed_unary_handler_async<I, O, F, Fut>(
     name: String,
     f: F,
-) -> Arc<dyn crate::active_message::dispatcher::ActiveMessageDispatcher>
+) -> Arc<dyn crate::dispatcher::ActiveMessageDispatcher>
 where
     I: serde::de::DeserializeOwned + Send + Sync + 'static,
     O: serde::Serialize + Send + Sync + 'static,
@@ -669,7 +669,7 @@ pub fn typed_unary_handler_async_with_tracker<I, O, F, Fut>(
     name: String,
     f: F,
     task_tracker: tokio_util::task::TaskTracker,
-) -> Arc<dyn crate::active_message::dispatcher::ActiveMessageDispatcher>
+) -> Arc<dyn crate::dispatcher::ActiveMessageDispatcher>
 where
     I: serde::de::DeserializeOwned + Send + Sync + 'static,
     O: serde::Serialize + Send + Sync + 'static,
@@ -717,7 +717,7 @@ where
     let typed_adapter = TypedUnaryAdapter::new(typed_handler);
     let unary_adapter = UnaryHandlerAdapter::new(typed_adapter, DispatchMode::Spawn);
 
-    Arc::new(crate::active_message::dispatcher::SpawnedDispatcher::new(
+    Arc::new(crate::dispatcher::SpawnedDispatcher::new(
         unary_adapter,
         task_tracker,
     ))
@@ -1207,7 +1207,7 @@ mod tests {
 
     #[test]
     fn test_sender_address_methods() {
-        use crate::active_message::client::PeerInfo;
+        use crate::client::PeerInfo;
 
         let instance_id = InstanceId::from(uuid::Uuid::new_v4());
 

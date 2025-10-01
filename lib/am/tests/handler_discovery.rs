@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use dynamo_runtime::active_message::{
+use dynamo_am::{
     client::ActiveMessageClient,
     handler_impls::{AmContext, am_handler},
     manager::ActiveMessageManager,

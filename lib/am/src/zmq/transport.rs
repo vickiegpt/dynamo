@@ -13,7 +13,7 @@ use tmq::{
 };
 use uuid::Uuid;
 
-use crate::active_message::{client::Endpoint, handler::ActiveMessage};
+use crate::{client::Endpoint, handler::ActiveMessage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportType {

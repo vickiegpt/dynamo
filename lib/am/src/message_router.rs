@@ -19,7 +19,7 @@ use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use crate::active_message::{
+use crate::{
     client::ActiveMessageClient,
     dispatcher::{DispatchMessage, SenderIdentity},
     handler::{ActiveMessage, InstanceId},
@@ -265,7 +265,7 @@ impl MessageRouter {
                     .get("_sender_endpoint")
                     .and_then(|v| v.as_str())
                 {
-                    let peer_info = crate::active_message::client::PeerInfo::new(
+                    let peer_info = crate::client::PeerInfo::new(
                         message.sender_instance,
                         endpoint,
                     );
@@ -318,7 +318,7 @@ impl MessageRouter {
                     .get("_sender_endpoint")
                     .and_then(|v| v.as_str())
                 {
-                    let peer_info = crate::active_message::client::PeerInfo::new(
+                    let peer_info = crate::client::PeerInfo::new(
                         message.sender_instance,
                         endpoint,
                     );
@@ -371,8 +371,8 @@ mod tests {
             &self.endpoint
         }
 
-        fn peer_info(&self) -> crate::active_message::client::PeerInfo {
-            crate::active_message::client::PeerInfo::new(self.instance_id, &self.endpoint)
+        fn peer_info(&self) -> crate::client::PeerInfo {
+            crate::client::PeerInfo::new(self.instance_id, &self.endpoint)
         }
 
         async fn send_message(
@@ -388,13 +388,13 @@ mod tests {
         //     Ok(())
         // }
 
-        async fn list_peers(&self) -> anyhow::Result<Vec<crate::active_message::client::PeerInfo>> {
+        async fn list_peers(&self) -> anyhow::Result<Vec<crate::client::PeerInfo>> {
             Ok(vec![])
         }
 
         async fn connect_to_peer(
             &self,
-            _peer: crate::active_message::client::PeerInfo,
+            _peer: crate::client::PeerInfo,
         ) -> anyhow::Result<()> {
             Ok(())
         }
@@ -419,7 +419,7 @@ mod tests {
         async fn send_raw_message(
             &self,
             _target: Uuid,
-            _message: crate::active_message::handler::ActiveMessage,
+            _message: crate::handler::ActiveMessage,
         ) -> anyhow::Result<()> {
             Ok(())
         }
@@ -455,7 +455,7 @@ mod tests {
             _timeout: std::time::Duration,
         ) -> anyhow::Result<
             tokio::sync::oneshot::Receiver<
-                Result<crate::active_message::receipt_ack::ReceiptAck, String>,
+                Result<crate::receipt_ack::ReceiptAck, String>,
             >,
         > {
             let (_tx, rx) = tokio::sync::oneshot::channel();
@@ -476,7 +476,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_message_router_creation() {
-        use crate::active_message::response_manager::ResponseManager;
+        use crate::response_manager::ResponseManager;
 
         let response_manager = Arc::new(ResponseManager::new());
         let client = Arc::new(MockClient {

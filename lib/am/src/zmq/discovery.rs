@@ -4,8 +4,8 @@
 use anyhow::Result;
 use uuid::Uuid;
 
-use crate::active_message::client::{Endpoint, PeerInfo};
-use crate::active_message::utils::extract_host;
+use crate::client::{Endpoint, PeerInfo};
+use crate::utils::extract_host;
 
 pub fn detect_local_host() -> Result<String> {
     local_ip_address::local_ip()

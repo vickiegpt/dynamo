@@ -15,7 +15,7 @@
 
 use anyhow::Result;
 use bytes::Bytes;
-use dynamo_runtime::active_message::{
+use dynamo_am::{
     client::ActiveMessageClient,
     cohort::{CohortType, LeaderWorkerCohort},
     manager::ActiveMessageManager,

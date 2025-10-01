@@ -18,7 +18,7 @@
 //! - Long-running worker processes
 
 use anyhow::Result;
-use dynamo_runtime::active_message::{
+use dynamo_am::{
     client::{ActiveMessageClient, PeerInfo},
     manager::ActiveMessageManager,
     zmq::ZmqActiveMessageManager,

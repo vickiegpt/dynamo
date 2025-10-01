@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dynamo-am"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Dynamo Active Message System - High-performance distributed messaging"
+
+[dependencies]
+# Workspace dependencies
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+async_zmq = { workspace = true }
+bytes = { workspace = true, features = ["serde"] }
+chrono = { workspace = true }
+derive_builder = { workspace = true }
+futures = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+# Crate-specific dependencies
+arc-swap = { version = "1" }
+dashmap = { version = "6.1.0" }
+local-ip-address = { version = "0.6.3" }
+nuid = { version = "0.5" }
+once_cell = { version = "1" }
+tmq = { version = "0.5.0" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

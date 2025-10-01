@@ -13,7 +13,7 @@
 //! - Response collection from distributed workers
 
 use anyhow::Result;
-use dynamo_runtime::active_message::{
+use dynamo_am::{
     client::{ActiveMessageClient, WorkerAddress},
     cohort::{CohortType, LeaderWorkerCohort},
     handler_impls::{

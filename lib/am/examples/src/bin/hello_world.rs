@@ -14,7 +14,7 @@
 //! - Peer connection establishment
 
 use anyhow::Result;
-use dynamo_runtime::active_message::{
+use dynamo_am::{
     client::ActiveMessageClient,
     handler_impls::{typed_unary_handler, TypedContext},
     manager::ActiveMessageManager,

@@ -10,7 +10,7 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-dynamo-runtime = { workspace = true }
+dynamo-am = { path = ".." }
 
 anyhow = "1.0"
 async-trait = "0.1"

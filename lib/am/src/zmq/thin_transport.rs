@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
 
-use crate::active_message::{
+use crate::{
     handler::ActiveMessage,
     transport::{ThinTransport, TransportType},
 };
