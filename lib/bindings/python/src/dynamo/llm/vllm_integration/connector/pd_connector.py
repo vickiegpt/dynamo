@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorRole
-from vllm.distributed.kv_transfer.kv_connector.v1.lm_cache_connector import (
-    LMCacheConnector,
+from vllm.distributed.kv_transfer.kv_connector.v1.lmcache_connector import (
+    LMCacheConnectorV1,
 )
 from vllm.distributed.kv_transfer.kv_connector.v1.multi_connector import (
     MultiConnector,
@@ -42,7 +42,7 @@ class PdConnector(MultiConnector):
             raise ValueError(
                 f"PdConnector requires exactly two connectors (got {len(self._connectors)})"
             )
-        if not isinstance(self._connectors[0], (DynamoConnector, LMCacheConnector)):
+        if not isinstance(self._connectors[0], (DynamoConnector, LMCacheConnectorV1)):
             raise TypeError(
                 f"Expected first connector to be DynamoConnector or LMCacheConnector, "
                 f"got {type(self._connectors[0]).__name__}"
