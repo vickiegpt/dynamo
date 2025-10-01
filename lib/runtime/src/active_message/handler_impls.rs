@@ -623,6 +623,101 @@ where
     ))
 }
 
+/// Create a typed unary handler with async closures (no wrapper needed!)
+///
+/// **Important**: The returned Result<O, String> IS sent back to the message sender.
+/// - Ok(output) = Response with automatically serialized output
+/// - Err(string) = Error/NACK sent to sender
+///
+/// This variant accepts async closures, allowing you to use `.await` naturally:
+/// ```ignore
+/// typed_unary_handler_async("my_handler".to_string(), |ctx| async move {
+///     let result = some_async_operation().await?;
+///     Ok(MyResponse { value: result })
+/// })
+/// ```
+///
+/// Returns an Arc<dyn ActiveMessageDispatcher> ready for registration.
+/// Creates its own TaskTracker for simplicity - use `typed_unary_handler_async_with_tracker` for production.
+pub fn typed_unary_handler_async<I, O, F, Fut>(
+    name: String,
+    f: F,
+) -> Arc<dyn crate::active_message::dispatcher::ActiveMessageDispatcher>
+where
+    I: serde::de::DeserializeOwned + Send + Sync + 'static,
+    O: serde::Serialize + Send + Sync + 'static,
+    F: Fn(TypedContext<I>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<O, String>> + Send + Sync + 'static,
+{
+    let task_tracker = tokio_util::task::TaskTracker::new();
+    typed_unary_handler_async_with_tracker(name, f, task_tracker)
+}
+
+/// Create a typed unary handler with async closures and a specific task tracker
+///
+/// **Important**: The returned Result<O, String> IS sent back to the message sender.
+/// - Ok(output) = Response with automatically serialized output
+/// - Err(string) = Error/NACK sent to sender
+///
+/// Use this version in production code where you need graceful shutdown tracking.
+pub fn typed_unary_handler_async_with_tracker<I, O, F, Fut>(
+    name: String,
+    f: F,
+    task_tracker: tokio_util::task::TaskTracker,
+) -> Arc<dyn crate::active_message::dispatcher::ActiveMessageDispatcher>
+where
+    I: serde::de::DeserializeOwned + Send + Sync + 'static,
+    O: serde::Serialize + Send + Sync + 'static,
+    F: Fn(TypedContext<I>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<O, String>> + Send + Sync + 'static,
+{
+    struct AsyncTypedUnaryHandler<I, O, F, Fut> {
+        f: F,
+        name: String,
+        _phantom: PhantomData<(I, O, Fut)>,
+    }
+
+    #[async_trait]
+    impl<I, O, F, Fut> TypedUnaryHandler<I, O> for AsyncTypedUnaryHandler<I, O, F, Fut>
+    where
+        I: serde::de::DeserializeOwned + Send + Sync,
+        O: serde::Serialize + Send + Sync,
+        F: Fn(TypedContext<I>) -> Fut + Send + Sync,
+        Fut: Future<Output = Result<O, String>> + Send + Sync + 'static,
+    {
+        async fn process(
+            &self,
+            input: I,
+            sender_id: InstanceId,
+            client: Arc<dyn ActiveMessageClient>,
+        ) -> Result<O, String> {
+            let ctx = TypedContext {
+                input,
+                sender_id,
+                client,
+            };
+            (self.f)(ctx).await
+        }
+
+        fn name(&self) -> &str {
+            &self.name
+        }
+    }
+
+    let typed_handler = AsyncTypedUnaryHandler {
+        f,
+        name,
+        _phantom: PhantomData,
+    };
+    let typed_adapter = TypedUnaryAdapter::new(typed_handler);
+    let unary_adapter = UnaryHandlerAdapter::new(typed_adapter, DispatchMode::Spawn);
+
+    Arc::new(crate::active_message::dispatcher::SpawnedDispatcher::new(
+        unary_adapter,
+        task_tracker,
+    ))
+}
+
 /// Create a bytes unary handler with typed input but raw bytes output
 ///
 /// **Important**: The returned Result<Bytes, String> IS sent back to the message sender.
