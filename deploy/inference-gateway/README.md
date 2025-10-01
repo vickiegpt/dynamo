@@ -126,8 +126,13 @@ helm install dynamo-gaie ./helm/dynamo-gaie -n my-model -f ./vllm_agg_qwen.yaml
 
 #### EPP-aware Integration with the custom Dynamo Plugin ####
 
+Dynamo provides a custom routing plugin `pkg/epp/scheduling/plugins/dynamo_kv_scorer/plugin.go` to perform efficient kv routing.
+The Dynamo router is built as a static library, the EPP router will call to provide fast inference.
+You can either use the image `nvcr.io/nvstaging/ai-dynamo/epp-inference-extension-dynamo:v0.6.0-1` for the EPP_IMAGE in the Helm deployment command and proceed to the step 2 or you can build the image yourself following the steps below.
+
 ##### 1. Build the custom EPP image #####
 
+If you choose to build your own image use the steps below. Proceed to step 2 otherwise to deploy with Helm.
 
 ##### 1.1 Clone the official GAIE repo in a separate folder #####
 
@@ -139,8 +144,7 @@ git checkout v0.5.1
 
 ##### 1.2 Build the Dynamo Custom EPP #####
 
-Dynamo provides a custom routing plugin `pkg/epp/scheduling/plugins/dynamo_kv_scorer/plugin.go` to perform efficient kv routing.
-The Dynamo router is built as a static library the EPP router will call to provide fast inference.
+
 
 ###### 1.2.1 Clone the official EPP repo ######
 
