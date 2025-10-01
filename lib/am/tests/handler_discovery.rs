@@ -151,8 +151,8 @@ async fn test_await_handler_times_out_when_handler_missing() -> Result<()> {
 
     match result {
         Ok(available) => {
-            assert_eq!(
-                available, false,
+            assert!(
+                !available,
                 "Handler should not be available after timeout"
             );
         }

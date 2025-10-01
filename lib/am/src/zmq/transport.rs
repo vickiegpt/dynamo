@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use std::collections::VecDeque;
 use tmq::{
     AsZmqSocket, Context, Message, Multipart,

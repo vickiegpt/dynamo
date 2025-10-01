@@ -3,42 +3,34 @@
 
 [package]
 name = "dynamo-am"
-readme = "README.md"
 version = "0.0.0"
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-homepage.workspace = true
-repository.workspace = true
+edition = "2024"
+authors = ["NVIDIA Inc. <sw-dl-dynamo@nvidia.com>"]
+license = "Apache-2.0"
+homepage = "https://github.com/ai-dynamo/dynamo"
+repository = "https://github.com/ai-dynamo/dynamo.git"
+readme = "README.md"
 description = "Dynamo Active Message System - High-performance distributed messaging"
 
 [dependencies]
-# Workspace dependencies
-anyhow = { workspace = true }
-async-trait = { workspace = true }
-async_zmq = { workspace = true }
-bytes = { workspace = true, features = ["serde"] }
-chrono = { workspace = true }
-derive_builder = { workspace = true }
-futures = { workspace = true }
-rand = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
-tokio = { workspace = true }
-tokio-stream = { workspace = true }
-tokio-util = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-uuid = { workspace = true }
+anyhow = "1"
+async-trait = "0.1"
+bytes = { version = "1", features = ["serde"] }
+derive_builder = "0.20"
+futures = "0.3"
+rand = "0.9.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
+uuid = { version = "1.17", features = ["v4", "serde"] }
 
 # Crate-specific dependencies
-arc-swap = { version = "1" }
-dashmap = { version = "6.1.0" }
-local-ip-address = { version = "0.6.3" }
-nuid = { version = "0.5" }
-once_cell = { version = "1" }
-tmq = { version = "0.5.0" }
+dashmap = "6.1.0"
+local-ip-address = "0.6.3"
+tmq = "0.5.0"
 
 [dev-dependencies]
-tempfile = { workspace = true }
+tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

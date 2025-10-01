@@ -19,9 +19,6 @@ testing-etcd = [] # Tests that require an active ETCD server
 tokio-console = ["dep:console-subscriber", "tokio/tracing"]
 
 [dependencies]
-# Local workspace crates
-dynamo-am = { workspace = true }
-
 # Use workspace dependencies where available
 anyhow = { workspace = true }
 async-nats = { workspace = true }

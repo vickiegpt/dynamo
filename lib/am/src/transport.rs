@@ -14,11 +14,9 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use bytes::Bytes;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-use super::client::Endpoint;
 use super::handler::{ActiveMessage, InstanceId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

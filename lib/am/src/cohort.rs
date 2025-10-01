@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::{
     builder::MessageBuilder,
-    client::{ActiveMessageClient, PeerInfo},
+    client::ActiveMessageClient,
     handler::ActiveMessage,
     handler::InstanceId,
 };
@@ -29,10 +29,6 @@ pub struct CohortMessageBuilder<'a> {
 }
 
 impl<'a> CohortMessageBuilder<'a> {
-    fn new(inner: MessageBuilder<'a>, cohort: &'a LeaderWorkerCohort) -> Self {
-        Self { inner, cohort }
-    }
-
     /// Set payload from serializable type
     pub fn payload<T: serde::Serialize>(mut self, data: T) -> Result<Self> {
         self.inner = self.inner.payload(data)?;
@@ -120,7 +116,6 @@ pub enum CohortFailurePolicy {
 pub struct WorkerInfo {
     instance_id: InstanceId,
     rank: Option<usize>, // Worker-reported rank (e.g., from torch.distributed)
-    joined_at: Instant,
     last_heartbeat: Arc<RwLock<Instant>>,
 }
 
@@ -130,7 +125,6 @@ impl WorkerInfo {
         Self {
             instance_id,
             rank,
-            joined_at: now,
             last_heartbeat: Arc::new(RwLock::new(now)),
         }
     }
@@ -143,7 +137,6 @@ struct CohortState {
     workers_by_rank: BTreeMap<usize, InstanceId>, // For rank-ordered operations
     cohort_type: CohortType,
     failure_policy: CohortFailurePolicy,
-    registration_closed: bool,
     requires_ranks: Option<bool>, // None=unknown, Some(true)=all must have ranks, Some(false)=none have ranks
     client: Arc<dyn ActiveMessageClient>,
     cancel_token: CancellationToken,
@@ -199,7 +192,6 @@ impl LeaderWorkerCohort {
             workers_by_rank: BTreeMap::new(),
             cohort_type,
             failure_policy,
-            registration_closed: false,
             requires_ranks: None,
             client,
             cancel_token: CancellationToken::new(),
@@ -226,7 +218,6 @@ impl LeaderWorkerCohort {
             workers_by_rank: BTreeMap::new(),
             cohort_type: config.cohort_type,
             failure_policy: config.failure_policy,
-            registration_closed: false,
             requires_ranks: None,
             client: config.client,
             cancel_token: config.cancel_token,

@@ -8,22 +8,18 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::{RwLock, broadcast};
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::client::{ActiveMessageClient, PeerInfo};
-use super::handler::{HandlerEvent, HandlerId, InstanceId};
-use super::handler_impls::{TypedUnaryHandler, UnaryHandler, UnifiedResponse};
+use super::handler::InstanceId;
+use super::handler_impls::TypedUnaryHandler;
 use super::receipt_ack::{ReceiptAck, ReceiptStatus};
 use super::responses::{
-    DiscoverResponse, HealthCheckResponse, JoinCohortResponse, ListHandlersResponse,
-    RegisterServiceResponse, RemoveServiceResponse, RequestShutdownResponse,
-    WaitForHandlerResponse,
+    DiscoverResponse, HealthCheckResponse, ListHandlersResponse, RegisterServiceResponse,
+    RemoveServiceResponse, RequestShutdownResponse, WaitForHandlerResponse,
 };
 
 // Note: System handlers now use the transport-agnostic cohort module
@@ -544,6 +540,7 @@ pub async fn register_system_handlers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -643,9 +640,7 @@ mod tests {
             _receipt_id: Uuid,
             _timeout: std::time::Duration,
         ) -> anyhow::Result<
-            tokio::sync::oneshot::Receiver<
-                Result<crate::receipt_ack::ReceiptAck, String>,
-            >,
+            tokio::sync::oneshot::Receiver<Result<crate::receipt_ack::ReceiptAck, String>>,
         > {
             let (_tx, rx) = tokio::sync::oneshot::channel();
             Ok(rx)

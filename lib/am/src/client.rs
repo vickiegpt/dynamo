@@ -14,8 +14,7 @@ use super::builder::{MessageBuilder, NeedsDeliveryMode};
 use super::handler::{ActiveMessage, HandlerId, InstanceId};
 use super::receipt_ack::ReceiptAck;
 use super::responses::{
-    HealthCheckResponse, JoinCohortResponse, ListHandlersResponse, RegisterServiceResponse,
-    WaitForHandlerResponse,
+    HealthCheckResponse, JoinCohortResponse, RegisterServiceResponse,
 };
 use super::utils::extract_host;
 

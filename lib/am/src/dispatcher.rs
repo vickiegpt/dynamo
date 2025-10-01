@@ -10,12 +10,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, mpsc};
-use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -636,17 +634,6 @@ impl MessageDispatcher {
         {
             let trace_data = trace.read().await.clone();
             let _ = tx.send(trace_data).await;
-        }
-    }
-
-    /// Check if a message might need a response based on metadata
-    fn handler_needs_response(&self, message: &DispatchMessage) -> bool {
-        if let Some(ref metadata) = message.metadata {
-            // Quick check for response-related fields
-            // This is a heuristic - can be improved with proper metadata parsing
-            !metadata.is_empty()
-        } else {
-            false
         }
     }
 

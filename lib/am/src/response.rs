@@ -8,7 +8,6 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
-use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use super::client::ActiveMessageClient;
@@ -42,21 +41,6 @@ pub struct SingleResponseSender {
 }
 
 impl SingleResponseSender {
-    /// Create a new single response sender
-    pub(crate) fn new(
-        client: Arc<dyn ActiveMessageClient>,
-        target: InstanceId,
-        message_id: Uuid,
-        handler_name: String,
-    ) -> Self {
-        Self {
-            client,
-            target,
-            message_id,
-            handler_name,
-        }
-    }
-
     /// Send a typed response back to the requester
     pub async fn send<T: Serialize>(&self, response: T) -> Result<()> {
         let response_value = serde_json::to_value(&response)?;

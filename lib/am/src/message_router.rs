@@ -13,16 +13,15 @@
 //! - Better maintainability and modularity
 
 use anyhow::Result;
-use bytes::Bytes;
 use std::sync::Arc;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::{
     client::ActiveMessageClient,
     dispatcher::{DispatchMessage, SenderIdentity},
-    handler::{ActiveMessage, InstanceId},
+    handler::ActiveMessage,
     response_manager::SharedResponseManager,
 };
 
@@ -351,6 +350,7 @@ impl MessageRouter {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use bytes::Bytes;
     use tokio::sync::mpsc;
     use uuid::Uuid;
 

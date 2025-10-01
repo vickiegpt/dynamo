@@ -4,7 +4,7 @@
 use anyhow::Result;
 use uuid::Uuid;
 
-use crate::client::{Endpoint, PeerInfo};
+use crate::client::Endpoint;
 use crate::utils::extract_host;
 
 pub fn detect_local_host() -> Result<String> {

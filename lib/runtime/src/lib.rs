@@ -33,9 +33,6 @@ use async_once_cell::OnceCell;
 mod config;
 pub use config::RuntimeConfig;
 
-// Re-export active message from dynamo-am crate
-pub use dynamo_am as active_message;
-
 pub mod component;
 pub mod discovery;
 pub mod engine;

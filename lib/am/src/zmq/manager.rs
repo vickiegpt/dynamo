@@ -3,17 +3,15 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use bytes::Bytes;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 
 use crate::{
     client::ActiveMessageClient,
-    dispatcher::{ControlMessage, DispatchMessage, MessageDispatcher, SenderIdentity},
+    dispatcher::{ControlMessage, MessageDispatcher},
     handler::{ActiveMessage, HandlerEvent, HandlerId, InstanceId},
     manager::ActiveMessageManager,
     message_router::MessageRouter,
@@ -22,7 +20,7 @@ use crate::{
 };
 
 use super::{
-    discovery, thin_transport::ZmqThinTransport, thin_transport::ZmqWireFormat,
+    discovery, thin_transport::ZmqThinTransport,
     transport::ZmqTransport,
 };
 
@@ -76,11 +74,9 @@ pub struct ZmqActiveMessageManager {
     receiver_task: Arc<Mutex<Option<tokio::task::JoinHandle<Result<()>>>>>,
     ack_cleanup_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     message_task_tracker: TaskTracker,
-    response_manager: SharedResponseManager,
     message_router: MessageRouter,
 
     // v2 Dispatcher integration
-    dispatch_tx: mpsc::Sender<DispatchMessage>,
     control_tx: mpsc::Sender<ControlMessage>,
     dispatcher_task: Arc<Mutex<Option<tokio::task::JoinHandle<Result<()>>>>>,
 }
@@ -232,9 +228,7 @@ impl ZmqActiveMessageManager {
             receiver_task: Arc::new(Mutex::new(None)),
             ack_cleanup_task: Arc::new(Mutex::new(None)),
             message_task_tracker,
-            response_manager: response_manager.clone(),
             message_router,
-            dispatch_tx,
             control_tx,
             dispatcher_task: Arc::new(Mutex::new(Some(dispatcher_task))),
         };

@@ -44,7 +44,7 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 use super::client::ActiveMessageClient;
-use super::dispatcher::{ActiveMessageHandler, DispatchContext, DispatchMode, SenderAddress};
+use super::dispatcher::{ActiveMessageHandler, DispatchMode, SenderAddress};
 use super::handler::InstanceId;
 use super::receipt_ack::{ContractInfo, HandlerType};
 
@@ -778,6 +778,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::dispatcher::DispatchContext;
+
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
     use tokio::sync::Mutex;
@@ -878,7 +880,7 @@ mod tests {
         }
     }
 
-    /// Example struct-based typed handler for calculator operations
+    /// Types for calculator operations (used in typed_unary_handler tests)
     #[derive(Deserialize)]
     struct CalculatorRequest {
         operation: String,
@@ -889,76 +891,6 @@ mod tests {
     #[derive(Serialize, Debug, Clone)]
     struct CalculatorResponse {
         result: f64,
-    }
-
-    pub struct CalculatorHandler;
-
-    impl CalculatorHandler {
-        pub fn new() -> Self {
-            Self
-        }
-
-        fn calculate(&self, req: CalculatorRequest) -> Result<CalculatorResponse, String> {
-            let result = match req.operation.as_str() {
-                "add" => req.a + req.b,
-                "subtract" => req.a - req.b,
-                "multiply" => req.a * req.b,
-                "divide" => {
-                    if req.b == 0.0 {
-                        return Err("Division by zero".to_string());
-                    }
-                    req.a / req.b
-                }
-                _ => return Err(format!("Unknown operation: {}", req.operation)),
-            };
-
-            Ok(CalculatorResponse { result })
-        }
-    }
-
-    #[async_trait]
-    impl ActiveMessageHandler for CalculatorHandler {
-        fn dispatch_mode(&self) -> DispatchMode {
-            DispatchMode::Spawn
-        }
-
-        async fn handle(
-            &self,
-            _message_id: uuid::Uuid,
-            payload: Bytes,
-            sender: SenderAddress,
-            _client: Arc<dyn ActiveMessageClient>,
-        ) {
-            let sender_id = match sender {
-                SenderAddress::Connected(id) => id,
-                SenderAddress::Unconnected(peer_info) => peer_info.instance_id,
-            };
-
-            // Deserialize request
-            let request: CalculatorRequest = match serde_json::from_slice(&payload) {
-                Ok(req) => req,
-                Err(e) => {
-                    error!("Failed to deserialize calculator request: {}", e);
-                    return;
-                }
-            };
-
-            // Process calculation
-            let response = match self.calculate(request) {
-                Ok(resp) => resp,
-                Err(e) => {
-                    error!("Calculator operation failed: {}", e);
-                    return;
-                }
-            };
-
-            // This is an active message handler - no automatic responses
-            println!("Calculator processed for {}: {:?}", sender_id, response);
-        }
-
-        fn name(&self) -> &str {
-            "calculator"
-        }
     }
 
     /// Example struct-based active message handler for logging
@@ -1191,18 +1123,26 @@ mod tests {
         // ACK pattern (success, no payload)
         let ack_response: UnifiedResponse = Ok(None);
         assert!(ack_response.is_ok());
-        assert!(ack_response.unwrap().is_none());
+        assert!(matches!(ack_response, Ok(None)));
 
         // Response pattern (success with payload)
         let response_data = Bytes::from("response data");
         let response: UnifiedResponse = Ok(Some(response_data.clone()));
         assert!(response.is_ok());
-        assert_eq!(response.unwrap().unwrap(), response_data);
+        if let Ok(Some(data)) = response {
+            assert_eq!(data, response_data);
+        } else {
+            panic!("Expected Ok(Some(...))");
+        }
 
         // Error pattern (NACK)
         let error_response: UnifiedResponse = Err("Something went wrong".to_string());
         assert!(error_response.is_err());
-        assert_eq!(error_response.unwrap_err(), "Something went wrong");
+        if let Err(msg) = error_response {
+            assert_eq!(msg, "Something went wrong");
+        } else {
+            panic!("Expected Err(...)");
+        }
     }
 
     #[test]

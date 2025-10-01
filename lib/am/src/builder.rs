@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use super::client::{ActiveMessageClient, validate_handler_name};
 use super::handler::{ActiveMessage, InstanceId};
-use super::receipt_ack::{ClientExpectation, ContractInfo, ReceiptAck, ReceiptStatus};
+use super::receipt_ack::{ClientExpectation, ReceiptAck, ReceiptStatus};
 use super::status::{DetachedConfirm, MessageStatus, SendAndConfirm, WithResponse};
 
 /// TypeState marker: Builder needs delivery mode selection
