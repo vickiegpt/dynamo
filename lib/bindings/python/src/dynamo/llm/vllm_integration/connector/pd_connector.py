@@ -38,9 +38,20 @@ class PdConnector(MultiConnector):
 
     def __init__(self, vllm_config: "VllmConfig", role: KVConnectorRole):
         super().__init__(vllm_config=vllm_config, role=role)
-        assert len(self._connectors) == 2
-        assert isinstance(self._connectors[0], (DynamoConnector, LMCacheConnector))
-        assert isinstance(self._connectors[1], NixlConnector)
+        if len(self._connectors) != 2:
+            raise ValueError(
+                f"PdConnector requires exactly two connectors (got {len(self._connectors)})"
+            )
+        if not isinstance(self._connectors[0], (DynamoConnector, LMCacheConnector)):
+            raise TypeError(
+                f"Expected first connector to be DynamoConnector or LMCacheConnector, "
+                f"got {type(self._connectors[0]).__name__}"
+            )
+        if not isinstance(self._connectors[1], NixlConnector):
+            raise TypeError(
+                f"Expected second connector to be NixlConnector, "
+                f"got {type(self._connectors[1]).__name__}"
+            )
 
     # ==============================
     # Worker-side methods

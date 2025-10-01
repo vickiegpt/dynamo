@@ -254,7 +254,7 @@ class LLMServerManager:
                     or self.process_prefiller.poll() is not None
                     or self.process_decoder.poll() is not None
                 ):
-                    self._close_log_files()
+                    self.stop_server()
                     return False
             except Exception as e:
                 print(f"Error checking server status: {e}")
