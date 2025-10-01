@@ -1,6 +1,18 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Basic request-response example demonstrating typed unary handlers.
+//!
+//! This example creates a server that registers a handler to transform strings
+//! by appending decorative characters. A client sends multiple string requests
+//! and receives typed responses containing the transformed string and metadata.
+//!
+//! **Demonstrates:**
+//! - Typed unary handlers with automatic serialization
+//! - Request-response messaging patterns
+//! - Handler registration and invocation
+//! - Peer connection establishment
+
 use anyhow::Result;
 use dynamo_runtime::active_message::{
     client::ActiveMessageClient,

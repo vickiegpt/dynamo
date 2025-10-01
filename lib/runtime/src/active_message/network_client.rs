@@ -305,7 +305,10 @@ impl ActiveMessageClient for NetworkClient {
 
         debug!("list_handlers: Message sent, waiting for response");
         let response: super::responses::ListHandlersResponse = status.await_response().await?;
-        debug!("list_handlers: Received response with {} handlers", response.handlers.len());
+        debug!(
+            "list_handlers: Received response with {} handlers",
+            response.handlers.len()
+        );
         Ok(response.handlers)
     }
 

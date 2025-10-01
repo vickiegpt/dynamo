@@ -1,6 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Cohort-based parallel processing example with leader-worker coordination.
+//!
+//! This example demonstrates parallel work distribution across a cohort of workers.
+//! A leader broadcasts work requests to multiple workers and collects their responses.
+//!
+//! **Demonstrates:**
+//! - Cohort creation and worker registration
+//! - Parallel broadcast to multiple workers
+//! - Leader-worker coordination patterns
+//! - Response collection from distributed workers
+
 use anyhow::Result;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, WorkerAddress},

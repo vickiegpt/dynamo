@@ -1,6 +1,18 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Leader process for distributed cohort coordination.
+//!
+//! This leader waits for workers to register, then broadcasts computation requests
+//! across the cohort. Run multiple `worker` processes to join this leader's cohort.
+//!
+//! **Usage:** `cargo run --bin leader`
+//!
+//! **Demonstrates:**
+//! - Cohort leader coordination with dynamic worker registration
+//! - Broadcasting messages to all cohort members
+//! - Managing distributed worker lifecycle
+
 use anyhow::Result;
 use bytes::Bytes;
 use dynamo_runtime::active_message::{

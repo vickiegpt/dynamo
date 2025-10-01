@@ -1,6 +1,22 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Worker process that joins a leader's cohort.
+//!
+//! This worker connects to a leader endpoint, registers as a cohort member,
+//! and handles computation requests. Multiple workers can run concurrently.
+//!
+//! **Usage:** `LEADER_ENDPOINT=tcp://127.0.0.1:5555 cargo run --bin worker`
+//!
+//! **Environment:**
+//! - `LEADER_ENDPOINT`: Leader address to connect to (default: tcp://127.0.0.1:5555)
+//! - `RANK`: Optional worker rank identifier
+//!
+//! **Demonstrates:**
+//! - Worker registration with cohort leader
+//! - Handler registration for distributed processing
+//! - Long-running worker processes
+
 use anyhow::Result;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},

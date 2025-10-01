@@ -1,6 +1,18 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Latency measurement example using unary handlers with ACK-only responses.
+//!
+//! This example measures round-trip time (RTT) by sending ping messages that
+//! receive acknowledgement responses without payload data. The client tracks
+//! latency statistics across multiple iterations.
+//!
+//! **Demonstrates:**
+//! - Unary handlers returning ACK without response payload
+//! - Latency measurement and statistics
+//! - High-frequency message patterns
+//! - Performance characteristics of the messaging system
+
 use anyhow::Result;
 use dynamo_runtime::active_message::{
     client::{ActiveMessageClient, PeerInfo},

@@ -388,8 +388,16 @@ pub fn create_core_system_handlers(
     handlers
 }
 
-/// Register system handlers with a control message sender
-/// This is the recommended way to add system handlers to a running dispatcher
+/// Register system handlers with a control message sender.
+///
+/// This is the recommended way to add system handlers to a running dispatcher.
+/// Handlers support graceful cancellation via the provided cancel token.
+///
+/// # Arguments
+/// * `control_tx` - Channel to send control messages to the dispatcher
+/// * `client` - Active message client for handler context
+/// * `task_tracker` - Tracker for managing handler task lifecycle
+/// * `cancel_token` - Token for graceful shutdown of long-running handlers
 pub async fn register_system_handlers(
     control_tx: &tokio::sync::mpsc::Sender<super::dispatcher::ControlMessage>,
     client: Arc<dyn ActiveMessageClient>,
@@ -420,7 +428,10 @@ pub async fn register_system_handlers(
                     .await
                     .map_err(|e| format!("Failed to receive handler list: {}", e))?;
 
-                tracing::debug!("_list_handlers: Got {} handlers from dispatcher", handlers.len());
+                tracing::debug!(
+                    "_list_handlers: Got {} handlers from dispatcher",
+                    handlers.len()
+                );
                 Ok(ListHandlersResponse { handlers })
             }
         },
