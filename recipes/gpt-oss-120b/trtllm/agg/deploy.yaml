@@ -6,6 +6,9 @@ metadata:
   name: gpt-oss-agg
 spec:
   backendFramework: trtllm
+  pvcs:
+    - name: model-cache-oss-gpt120b
+      create: false
   services:
     Frontend:
       componentType: frontend
@@ -37,6 +40,11 @@ spec:
       componentType: main
       dynamoNamespace: gpt-oss-agg
       envFromSecret: hf-token-secret
+      volumeMounts:
+        - name: model-cache-oss-gpt120b
+          mountPoint: /root/.cache/huggingface
+      sharedMemory:
+        size: 80Gi
       extraPodSpec:
         affinity:
           nodeAffinity:
