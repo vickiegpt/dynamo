@@ -233,10 +233,6 @@ jobs:
 
         # Install dynamo env secrets
         kubectl create secret generic hf-token-secret --from-literal=HF_TOKEN=$HF_TOKEN -n $KUBE_NS || true
-        kubectl create secret docker-registry docker-imagepullsecret --docker-server=${{ secrets.AZURE_ACR_HOSTNAME }} --docker-username=${{ secrets.AZURE_ACR_USER }} --docker-password=${{ secrets.AZURE_ACR_PASSWORD }} --namespace=${NAMESPACE}
-        # cd ${DYNAMO_REPO}
-    - name: Deploy Dynamo Operator
-      run: |
         # Install CRDs
         # helm upgrade --install dynamo-crds ./deploy/cloud/helm/crds/ --namespace default --wait --atomic
         # Create docker pull secret for operator image
