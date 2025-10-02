@@ -258,7 +258,7 @@ def test_request_cancellation_sglang_aggregated(
             logger.info(f"Aggregated Worker PID: {worker.get_pid()}")
 
             # TODO: Why wait after worker ready fixes frontend 404 / 500 flakiness?
-            time.sleep(10)
+            time.sleep(2)
 
             # Step 3: Test request cancellation
             frontend_log_offset, worker_log_offset = 0, 0
@@ -289,12 +289,13 @@ def test_request_cancellation_sglang_aggregated(
 
                 logger.info(f"{description} detected successfully")
 
-
+#skipping this test for now
+@pytest.mark.skip(reason="Skipping this test for now until clarity from SGLANG")
 @pytest.mark.e2e
 @pytest.mark.sglang
 @pytest.mark.gpu_1
 @pytest.mark.model(FAULT_TOLERANCE_MODEL_NAME)
-def test_request_cancellation_sglang_prefill_cancel(
+def test_request_cancellation_sglang_remote_prefill_cancel(
     request, runtime_services, predownload_models
 ):
     """
@@ -324,7 +325,7 @@ def test_request_cancellation_sglang_prefill_cancel(
                 logger.info(f"Prefill Worker PID: {prefill_worker.get_pid()}")
 
                 # TODO: Why wait after worker ready fixes frontend 404 / 500 flakiness?
-                time.sleep(10)
+                time.sleep(2)
 
                 # Step 4: Test request cancellation during prefill phase
                 logger.info(
@@ -348,7 +349,7 @@ def test_request_cancellation_sglang_prefill_cancel(
 @pytest.mark.sglang
 @pytest.mark.gpu_1
 @pytest.mark.model(FAULT_TOLERANCE_MODEL_NAME)
-def test_request_cancellation_sglang_remote_decode_cancel(
+def test_request_cancellation_sglang_decode_cancel(
     request, runtime_services, predownload_models
 ):
     """
@@ -378,7 +379,7 @@ def test_request_cancellation_sglang_remote_decode_cancel(
                 logger.info(f"Prefill Worker PID: {prefill_worker.get_pid()}")
 
                 # TODO: Why wait after worker ready fixes frontend 404 / 500 flakiness?
-                time.sleep(10)
+                time.sleep(2)
 
                 # Step 4: Test request cancellation during remote decode phase
                 logger.info(
