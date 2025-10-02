@@ -157,6 +157,8 @@ jobs:
         uses: ./.github/actions/docker-build
         with:
           framework: operator
+          ngc_ci_access_token: ${{ secrets.NGC_CI_ACCESS_TOKEN }}
+          ci_token: ${{ secrets.CI_TOKEN }}
       - name: Docker Tag and Push
         uses: ./.github/actions/docker-tag-push
         with:
