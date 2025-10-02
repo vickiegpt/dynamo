@@ -705,6 +705,10 @@ async def run_profile(args):
             deployment_clients.remove(client)
             logger.info("Deployment deleted")
 
+        # generate DGD with planner based on profiling results
+        with open(args.config, "r") as f:
+            config = yaml.safe_load(f)
+
     except Exception as e:
         logger.error(f"Profile job failed with error: {e}")
         raise
