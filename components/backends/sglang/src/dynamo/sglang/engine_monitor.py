@@ -133,22 +133,39 @@ class SglangEngineMonitor:
             True if server is up, False if timeout reached
         """
         start_time = time.time()
-        loop = asyncio.get_running_loop()
 
         logger.info(
             f"Waiting for SGLang server to be ready (max wait: {MAX_STARTUP_WAIT_TIME}s)..."
         )
 
+        iteration_count = 0
         while (time.time() - start_time) < MAX_STARTUP_WAIT_TIME:
+            iteration_count += 1
+            elapsed_time = int(time.time() - start_time)
+
+            logger.info(
+                f"Check iteration #{iteration_count} at {elapsed_time}s elapsed - attempting to get server info..."
+            )
+
             try:
-                # Must use run_in_executor because get_server_info() internally
-                # uses run_until_complete() which can't be called from async context
-                server_info = await loop.run_in_executor(
-                    None, self.engine.get_server_info
+                # Run get_server_info in a thread to avoid event loop conflicts
+                # SGLang's get_server_info uses run_until_complete internally
+                # logger.info(f"TzuLing using to_thread to get server info")
+                # server_info = await asyncio.wait_for(
+                #     asyncio.to_thread(self.engine.get_server_info),
+                #     timeout=HEALTH_CHECK_TIMEOUT,
+                # )
+                logger.info("TzuLing using get_running_loop to get server info")
+                loop = asyncio.get_running_loop()
+                server_info = await asyncio.wait_for(
+                    loop.run_in_executor(None, self._get_server_info_with_loop),
+                    timeout=HEALTH_CHECK_TIMEOUT,
                 )
+                logger.info(f"Got server_info response: {server_info}")
 
                 # Extract server status
                 server_status = self._extract_server_status(server_info)
+                logger.info(f"Extracted server status: {server_status}")
 
                 if server_status in HEALTHY_STATUS:
                     logger.info(
@@ -156,24 +173,33 @@ class SglangEngineMonitor:
                     )
                     return True
                 elif server_status in STARTING_STATUS:
-                    logger.debug(
-                        f"SGLang server still starting... Status: {server_status}"
+                    logger.info(
+                        f"SGLang server still starting... Status: {server_status} (iteration #{iteration_count}, {elapsed_time}s elapsed)"
                     )
                 else:
                     logger.warning(
-                        f"SGLang server reporting unexpected status during startup: {server_status}"
+                        f"SGLang server reporting unexpected status during startup: {server_status} (iteration #{iteration_count})"
                     )
 
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Server info request timed out after {HEALTH_CHECK_TIMEOUT}s (iteration #{iteration_count}, {elapsed_time}s elapsed)"
+                )
             except Exception as e:
-                logger.debug(f"Server not ready yet: {e}")
+                logger.info(
+                    f"Server not ready yet (iteration #{iteration_count}, {elapsed_time}s elapsed): {type(e).__name__}: {e}"
+                )
+                # Log full exception details at info level for debugging
+                logger.info("Full exception details:", exc_info=True)
 
             # Wait before retrying
+            logger.info(f"Waiting {STARTUP_WAIT_INTERVAL}s before next check...")
             await asyncio.sleep(STARTUP_WAIT_INTERVAL)
 
         # Timeout reached
         elapsed = int(time.time() - start_time)
         logger.error(
-            f"SGLang server failed to become ready after {elapsed}s (timeout: {MAX_STARTUP_WAIT_TIME}s)"
+            f"SGLang server failed to become ready after {elapsed}s (timeout: {MAX_STARTUP_WAIT_TIME}s, iterations: {iteration_count})"
         )
         return False
 
@@ -203,16 +229,32 @@ class SglangEngineMonitor:
             logger.exception(f"Unexpected error in monitoring task: {e}")
             self._shutdown_unhealthy(f"Unexpected error in monitoring task: {e}")
 
+    def _get_server_info_with_loop(self):
+        """Wrapper that creates an event loop for the executor thread"""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return self.engine.get_server_info()
+        finally:
+            loop.close()
+
     async def _check_engine_health(self):
         """Periodically check if the SGLang engine is responsive."""
-        loop = asyncio.get_running_loop()
-
         while True:
             try:
-                # Must use run_in_executor because get_server_info() internally
-                # uses run_until_complete() which can't be called from async context
-                server_info = await loop.run_in_executor(
-                    None, self.engine.get_server_info
+                # Run get_server_info in a thread to avoid event loop conflicts
+                # SGLang's get_server_info uses run_until_complete internally
+                # logger.info(f"TzuLing using to_thread to get server info"):s
+
+                # server_info = await asyncio.wait_for(
+                #     asyncio.to_thread(self.engine.get_server_info),
+                #     timeout=HEALTH_CHECK_TIMEOUT,
+                # )
+                logger.info("TzuLing using get_running_loop to get server info")
+                loop = asyncio.get_running_loop()
+                server_info = await asyncio.wait_for(
+                    loop.run_in_executor(None, self._get_server_info_with_loop),
+                    timeout=HEALTH_CHECK_TIMEOUT,
                 )
                 server_status = self._extract_server_status(server_info)
 
@@ -243,6 +285,12 @@ class SglangEngineMonitor:
                 # This is expected when the monitor is being shut down
                 logger.debug("Health check loop cancelled, shutting down gracefully")
                 break
+            except asyncio.TimeoutError:
+                self.consecutive_failures += 1
+                logger.error(
+                    f"SGLang engine health check timed out after {HEALTH_CHECK_TIMEOUT}s (attempt {self.consecutive_failures})"
+                )
+                self._update_health_status("NotReady")
             except (ConnectionError, RuntimeError) as e:
                 # Expected communication/engine errors
                 self.consecutive_failures += 1
