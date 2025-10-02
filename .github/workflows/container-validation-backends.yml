@@ -149,12 +149,12 @@ jobs:
 
   e2e-tests:
     runs-on: cpu-amd-m5-2xlarge
-    env:
-      NAMESPACE: gh-job-id-${{ github.run_id }}
-      DYNAMO_INGRESS_SUFFIX: dev.aire.nvidia.com
     strategy:
       matrix: { FRAMEWORK: ['vllm', 'trtllm', 'sglang'] }
       fail-fast: false
+    env:
+      NAMESPACE: gh-job-id-${{ github.run_id }}-${{ matrix.FRAMEWORK }}
+      DYNAMO_INGRESS_SUFFIX: dev.aire.nvidia.com
     permissions:
       contents: read
     steps:
@@ -233,6 +233,7 @@ jobs:
 
         # Install dynamo env secrets
         kubectl create secret generic hf-token-secret --from-literal=HF_TOKEN=$HF_TOKEN -n $KUBE_NS || true
+        kubectl create secret docker-registry docker-imagepullsecret --docker-server=${{ secrets.AZURE_ACR_HOSTNAME }} --docker-username=${{ secrets.AZURE_ACR_USER }} --docker-password=${{ secrets.AZURE_ACR_PASSWORD }} --namespace=${NAMESPACE}
         # cd ${DYNAMO_REPO}
     - name: Deploy Dynamo Operator
       run: |
