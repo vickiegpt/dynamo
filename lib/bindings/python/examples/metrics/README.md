@@ -9,6 +9,8 @@ This directory demonstrates two methods for passing metrics between Python and R
 
 Python maintains its own metrics dictionary, serializes it, and publishes to NATS. Rust subscribes to NATS, deserializes the metrics, and updates Prometheus gauges.
 
+**Communication pattern**: Unidirectional (Python → NATS → Rust). Python publishes metrics; no feedback from Rust to Python.
+
 **Example**: Used by `WorkerMetricsPublisher` in production code
 
 ```python
@@ -36,7 +38,7 @@ publisher.publish(metrics)
 
 When you need to add or modify metrics in Method 1 (ForwardPassMetrics Pub/Sub via NATS), you must update **multiple files**:
 
-1. **`lib/llm/src/kv_router/protocols.rs`** - Add field to struct:
+1. **`lib/llm/src/kv_router/protocols.rs`** - Add field to struct (WorkerStats is part of ForwardPassMetrics):
    ```rust
    pub struct WorkerStats {
        pub request_active_slots: u64,
@@ -92,12 +94,23 @@ When you need to add or modify metrics in Method 1 (ForwardPassMetrics Pub/Sub v
 
 ## Method 2: Dynamic Registration (New method for passing metrics)
 
-Python creates typed metric objects using `endpoint.metrics.create_*()` methods, which automatically register with the endpoint. Python updates values through these objects using type-safe methods. Rust creates the underlying Prometheus metrics and calls Python callbacks before scraping.
+Python creates typed metric objects using `endpoint.metrics.create_*()` methods, which automatically register with the endpoint. Python updates values through these objects with methods that have type hints (via `.pyi` files). Rust creates the underlying Prometheus metrics and calls Python callbacks before scraping.
 
-**Example**: `server.py`
+**Communication pattern**: Currently unidirectional (Python → Rust for updates, Rust → Python for callback invocation). Could be extended to bidirectional communication in the future (e.g., Rust notifying Python of scrape events, configuration changes) without major architectural changes.
+
+**Key advantage:** No Rust code modifications needed - metrics are defined and updated entirely in Python.
+
+This method supports two update patterns:
+
+### Example A: Background Thread Updates (server_with_loop.py)
+
+Update metrics continuously from a background thread, independent of scraping:
 
 ```python
 # Create metric objects (automatically registered)
+# Note: Prometheus prefixes these with "dynamo_component_", so they appear as:
+#   - dynamo_component_request_total_slots
+#   - dynamo_component_gpu_cache_usage_percent
 request_slots: IntGauge = endpoint.metrics.create_intgauge(
     "request_total_slots", "Total request slots available"
 )
@@ -105,27 +118,52 @@ gpu_usage: Gauge = endpoint.metrics.create_gauge(
     "gpu_cache_usage_percent", "GPU cache usage percentage"
 )
 
+# Background thread continuously updates metrics
+def update_metrics_in_loop():
+    count = 0
+    while True:
+        count += 1
+        request_slots.set(1024 + count)
+        gpu_usage.set(0.01 + (count * 0.01))
+        time.sleep(2)
+
+updater = threading.Thread(target=update_metrics_in_loop, daemon=True)
+updater.start()
+```
+
+### Example B: Callback-based Updates (server_with_callback.py)
+
+Register a callback that updates metrics on-demand when Prometheus scrapes the `/metrics` endpoint:
+
+```python
+# Create metric objects (automatically registered)
+# Note: Prometheus prefixes these with "dynamo_component_", so they appear as:
+#   - dynamo_component_request_total_slots
+#   - dynamo_component_gpu_cache_usage_percent
+request_slots: IntGauge = endpoint.metrics.create_intgauge(
+    "request_total_slots", "Total request slots available"
+)
+gpu_usage: Gauge = endpoint.metrics.create_gauge(
+    "gpu_cache_usage_percent", "GPU cache usage percentage"
+)
+
+# Register callback for dynamic updates before scraping
+def update_metrics():
+    request_slots.set(compute_current_slots())
+    gpu_usage.set(get_gpu_usage())
+
+endpoint.metrics.register_update_callback(update_metrics)
+```
+
+Both examples support vector metrics with labels:
+
+```python
 # Create vector metrics with labels
 worker_requests: IntGaugeVec = endpoint.metrics.create_intgaugevec(
     "worker_active_requests",
     "Active requests per worker",
     ["worker_id", "model"]
 )
-
-# Create counters with constant label values
-update_count: IntCounter = endpoint.metrics.create_intcounter(
-    "internal_update_count",
-    "Number of times metrics callback was invoked",
-    [("type", "internal")]
-)
-
-# Register callback for dynamic updates before scraping
-def update_metrics():
-    request_slots.set(compute_slots())
-    gpu_usage.set(compute_gpu_usage())
-    update_count.inc()
-
-endpoint.register_metrics_callback(update_metrics)
 
 # Update vector metrics with specific label values
 worker_requests.set(5, {"worker_id": "worker_1", "model": "llama-3"})
@@ -176,9 +214,9 @@ When you need to add or modify metrics in Method 2 (Dynamic Registration), you o
 
 **Result**: Changes only require modifying Python code. No Rust changes needed. Metrics are automatically created and registered with Prometheus by the Rust runtime when you call `create_*()`.
 
-### Type-Safe Methods
+### Type-Hinted Methods
 
-Dynamic Registration provides type safety through typed metric classes:
+Dynamic Registration provides type hints (via `.pyi` stub files) for typed metric classes:
 
 - **Gauges** use `.set()`, `.get()`, `.inc()`, `.dec()`, `.add()`, `.sub()`
 - **Counters** use `.inc()`, `.inc_by()`, `.get()` (counters only increase)
@@ -250,23 +288,25 @@ graph TB
 #### Method 2: Dynamic Registration - Component View
 
 ```mermaid
-graph TB
-    subgraph "Python Layer"
+graph TD
+    subgraph Python["Python Layer"]
         PY[Python Application<br/>main.py]
         style PY fill:#3776ab,color:#fff
     end
 
-    subgraph "Python/Rust Interface (PyO3)"
-        MT[Metric Types<br/>bindings/python/rust/metrics.rs]
+    subgraph PyO3["Python/Rust Interface - PyO3"]
+        PMU[PrometheusMetricsUtils<br/>bindings/python/rust/prometheus_metrics.rs]
+        MT["Metric Types: IntGauge, Gauge, etc.<br/>bindings/python/rust/prometheus_metrics.rs"]
         EP[Endpoint Bindings<br/>bindings/python/rust/lib.rs]
+        style PMU fill:#f4a261,color:#000
         style MT fill:#f4a261,color:#000
         style EP fill:#f4a261,color:#000
     end
 
-    subgraph "Rust Core"
+    subgraph Rust["Rust Core"]
         MR[MetricsRegistry Trait<br/>runtime/src/metrics.rs]
         DRT[DistributedRuntime<br/>runtime/src/distributed.rs]
-        PROM[Prometheus Crate<br/>prometheus::Gauge/IntGauge]
+        PROM["Prometheus Crate<br/>prometheus::Gauge/IntGauge"]
         SS[System Status Server<br/>runtime/src/system_status_server.rs]
         style MR fill:#ce422b,color:#fff
         style DRT fill:#ce422b,color:#fff
@@ -274,98 +314,18 @@ graph TB
         style SS fill:#ce422b,color:#fff
     end
 
-    PY -->|"metrics.create_intgauge(name, help)"| MR
-    PY -->|"register_metrics_callback(callback)"| EP
-    MR -->|"create & return IntGauge"| PROM
-    PROM -.->|"set(value) / get() -> value"| PY
-    EP -->|"register_metrics_callback(hierarchies, callback)"| DRT
-    MR -->|"register_metric(metric)"| PROM
-    DRT -->|"execute_metrics_callbacks(hierarchy)"| EP
-    EP -.->|"callback() -> None"| PY
-    SS -->|"execute_metrics_callbacks(all hierarchies)"| DRT
-    SS -->|"prometheus_metrics_fmt() -> String"| PROM
-```
-
-### Sequence Diagrams
-
-#### Method 1: ForwardPassMetrics Pub/Sub via NATS
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant P as Python Worker<br/>(components/backends/sglang)
-    participant WMP as WorkerMetricsPublisher<br/>(bindings/python/rust/llm/kv.rs)
-    participant N as NATS
-    participant A as Aggregator<br/>(llm/src/kv_router/metrics_aggregator.rs)
-    participant PR as Prometheus Registry<br/>(runtime/src/metrics.rs)
-    participant S as /metrics Scraper<br/>(runtime/src/system_status_server.rs)
-
-    Note over P,WMP: Setup Phase
-    P->>WMP: WorkerMetricsPublisher()<br/>kv.rs:WorkerMetricsPublisher::new()
-    WMP->>WMP: create watch channel<br/>publisher.rs:WorkerMetricsPublisher::new()
-    P->>WMP: register_prometheus_metrics(component)<br/>kv.rs:register_prometheus_metrics()
-    WMP->>PR: register KvStats gauges<br/>publisher.rs:KvStatsPrometheusGauges::new()
-    WMP->>N: subscribe to KV_METRICS_SUBJECT<br/>publisher.rs:start_nats_metrics_publishing()
-
-    Note over P,WMP: Runtime Phase (continuous)
-    P->>P: compute WorkerStats, KvStats, SpecDecodeStats
-    P->>P: ForwardPassMetrics(worker_stats, kv_stats, spec_decode_stats)<br/>kv.rs:ForwardPassMetrics::new()
-    P->>WMP: publish(metrics)<br/>kv.rs:WorkerMetricsPublisher::publish()
-    WMP->>PR: update local gauges immediately<br/>publisher.rs:update_from_kvstats()
-    WMP->>WMP: watch channel (debounce 1ms)<br/>publisher.rs:start_nats_metrics_publishing()
-    WMP->>WMP: serde_json::to_vec(LoadEvent)<br/>component/namespace.rs:EventPublisher::publish()
-    WMP->>N: NATS publish(json_bytes)<br/>component/namespace.rs:publish_bytes()
-
-    Note over N,A: Aggregation Phase
-    N->>A: receive LoadEvent message<br/>component/namespace.rs:subscribe_with_type()
-    A->>A: serde_json::from_slice()<br/>component/namespace.rs:subscribe_with_type()
-    A->>A: aggregate metrics from workers<br/>metrics_aggregator.rs:KvMetricsAggregator
-    A->>PR: update aggregated gauges<br/>metrics_aggregator.rs:update_gauges()
-
-    Note over S,PR: Scrape Phase (worker or aggregator)
-    S->>A: GET /metrics (aggregator)<br/>system_status_server.rs:metrics_handler()
-    A->>PR: gather() aggregated<br/>metrics.rs:prometheus_metrics_fmt()
-    PR-->>S: Prometheus text format
-    S->>WMP: GET /metrics (worker)<br/>system_status_server.rs:metrics_handler()
-    WMP->>PR: gather() local<br/>metrics.rs:prometheus_metrics_fmt()
-    PR-->>S: Prometheus text format
-```
-
-#### Method 2: Dynamic Registration
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant P as Python
-    participant IG as IntGauge<br/>(bindings/python/rust/metrics.rs)
-    participant R as Rust Endpoint<br/>(bindings/python/rust/lib.rs)
-    participant PR as Prometheus Registry<br/>(runtime/src/metrics.rs)
-    participant S as /metrics Scraper<br/>(runtime/src/system_status_server.rs)
-
-    Note over P,IG: Setup Phase
-    P->>R: endpoint.metrics<br/>lib.rs:Endpoint::metrics
-    R-->>P: Metrics helper
-    P->>R: metrics.create_intgauge("name", "help")<br/>lib.rs:Metrics::create_intgauge()
-    R->>PR: create_intgauge("name", "help", [])<br/>metrics.rs:MetricsRegistry::create_intgauge()
-    PR-->>R: Prometheus IntGauge
-    R->>IG: IntGauge::new_internal("name")<br/>metrics.rs:IntGauge::new_internal()
-    R->>IG: set_gauge(prometheus_intgauge)<br/>metrics.rs:IntGauge::set_gauge()
-    IG-->>P: IntGauge object
-
-    P->>R: register_metrics_callback(update_fn)<br/>lib.rs:Endpoint::register_metrics_callback()
-    R-->>R: store callback<br/>distributed.rs:register_metrics_callback()
-
-    Note over P,IG: Update Phase
-    P->>IG: metric.set(1024)<br/>metrics.rs:IntGauge::set()
-    IG->>PR: gauge.set(1024)
-
-    Note over S,PR: Scrape Phase
-    S->>R: GET /metrics<br/>system_status_server.rs:metrics_handler()
-    R->>P: call update_fn()<br/>distributed.rs:execute_metrics_callbacks()
-    P->>IG: metric.set(new_value)
-    IG->>PR: gauge.set(new_value)
-    R->>PR: gather()<br/>metrics.rs:prometheus_metrics_fmt()
-    PR-->>S: Prometheus text format
+    PY -->|create_intgauge| PMU
+    PY -.->|register_update_callback| PMU
+    PMU -->|create via MetricsRegistry| MR
+    MR -->|create prometheus gauge| PROM
+    PMU -->|wrap in IntGauge| MT
+    MT -->|return| PY
+    PY -.->|set/get| MT
+    PMU -.->|register callback| DRT
+    DRT -.->|execute callbacks| EP
+    EP -.->|invoke| PY
+    SS -.->|execute callbacks| DRT
+    SS -->|gather metrics| PROM
 ```
 
 ## Comparison
@@ -376,7 +336,7 @@ sequenceDiagram
 | **Communication** | Indirect via NATS message broker | Direct Foreign Function Interface (callbacks from Rust to Python) |
 | **Update Pattern** | Serialize entire dict and publish | Type-safe methods (`.set()`, `.inc()`, `.observe()`) on individual metric objects |
 | **Serialization** | Serialize-Deserialize (JSON/MessagePack) to NATS | No serialization (direct FFI calls) |
-| **Type Safety** | No type safety (dict with arbitrary keys/values) | Full type safety with typed metric classes (IntGauge, Gauge, Counter, etc.) |
+| **Type Hints** | No type hints (dict with arbitrary keys/values) | Type hints via `.pyi` files for typed metric classes (IntGauge, Gauge, Counter, etc.) |
 | **Metric Types** | Limited to predefined struct fields | All Prometheus types: Gauge, IntGauge, Counter, IntCounter, Histogram, and Vec variants |
 | **Label Support** | Fixed labels in struct definition | Dynamic labels via Vec metrics (GaugeVec, CounterVec, etc.) |
 | **Overhead** | Medium (NATS network + serialization) | Lower (direct FFI, no serialization) |
@@ -387,9 +347,9 @@ sequenceDiagram
 | **Adding Metrics** | Modify 3-4 files (Rust structs + Python) | Single Python file only |
 | **Use Case** | Distributed workers publishing to aggregator | Single-process services with dynamic updates |
 
-## Running the Example
+## Running the Examples
 
-The `server.py` example demonstrates Method 2 (Dynamic Registration).
+The examples demonstrate Method 2 (Dynamic Registration) with two different update patterns.
 
 ### Prerequisites
 
@@ -404,16 +364,27 @@ The `server.py` example demonstrates Method 2 (Dynamic Registration).
    uv pip install uvloop
    ```
 
-### Run the Server
+### Run Example A: Background Thread Updates
 
 ```bash
 cd ~/dynamo/lib/bindings/python/examples/metrics
-DYN_SYSTEM_ENABLED=true DYN_SYSTEM_PORT=8081 python server.py
+DYN_SYSTEM_ENABLED=true DYN_SYSTEM_PORT=8081 ./server_with_loop.py
 ```
+
+### Run Example B: Callback-based Updates
+
+```bash
+cd ~/dynamo/lib/bindings/python/examples/metrics
+DYN_SYSTEM_ENABLED=true DYN_SYSTEM_PORT=8081 ./server_with_callback.py
+```
+
+**Note:** The environment variables are required:
+- `DYN_SYSTEM_ENABLED=true` - Enables the system status server
+- `DYN_SYSTEM_PORT=8081` - Sets the port for the metrics endpoint
 
 ### Check the Metrics
 
-The metrics are served via the system status server. Access them at:
+The metrics are served via the system status server at:
 
 ```bash
 curl http://localhost:8081/metrics

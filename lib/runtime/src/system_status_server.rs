@@ -185,8 +185,6 @@ async fn health_handler(state: Arc<SystemStatusState>) -> impl IntoResponse {
 /// Metrics handler with DistributedRuntime uptime
 #[tracing::instrument(skip_all, level = "trace")]
 async fn metrics_handler(state: Arc<SystemStatusState>) -> impl IntoResponse {
-    println!("[metrics_handler] /metrics endpoint called");
-
     // Update the uptime gauge with current value
     state
         .drt()
@@ -196,17 +194,13 @@ async fn metrics_handler(state: Arc<SystemStatusState>) -> impl IntoResponse {
         .update_uptime_gauge();
 
     // Execute all the callbacks for all registered hierarchies
-    println!("[metrics_handler] Executing callbacks for all hierarchies");
     let all_hierarchies: Vec<String> = {
         let registries = state.drt().hierarchy_to_metricsregistry.read().unwrap();
         registries.keys().cloned().collect()
     };
 
-    let mut total_callbacks = 0;
     for hierarchy in &all_hierarchies {
-        println!("[metrics_handler] Executing callbacks for hierarchy: '{}'", hierarchy);
         let callback_results = state.drt().execute_metrics_callbacks(hierarchy);
-        total_callbacks += callback_results.len();
         for result in callback_results {
             if let Err(e) = result {
                 tracing::error!("Error executing metrics callback for hierarchy '{}': {}", hierarchy, e);
@@ -214,13 +208,9 @@ async fn metrics_handler(state: Arc<SystemStatusState>) -> impl IntoResponse {
         }
     }
 
-    println!("[metrics_handler] Executed {} callbacks across {} hierarchies", total_callbacks, all_hierarchies.len());
-
     // Get all metrics from DistributedRuntime (top-level)
-    println!("[metrics_handler] Gathering Prometheus metrics");
     match state.drt().prometheus_metrics_fmt() {
         Ok(response) => {
-            println!("[metrics_handler] Successfully gathered metrics");
             (StatusCode::OK, response)
         }
         Err(e) => {

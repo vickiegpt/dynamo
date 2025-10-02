@@ -6,7 +6,7 @@
 # - lib/bindings/python/rust/metrics.rs (Rust implementations)
 # - lib/runtime/src/metrics.rs (MetricsRegistry trait and Prometheus types)
 
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 # Specific metric type classes
 class Counter:
@@ -257,7 +257,32 @@ class RuntimeMetrics:
 
     Provides factory methods to create various Prometheus metric types
     that are automatically registered with the endpoint's Prometheus registry.
+    Also provides utilities for registering metrics callbacks.
     """
+
+    def register_update_callback(self, callback: Callable[[], None]) -> None:
+        """
+        Register a Python callback to be invoked before metrics are scraped.
+
+        This allows you to update metric values dynamically when the /metrics endpoint
+        is accessed. The callback will be executed synchronously before serving metrics.
+
+        Args:
+            callback: A callable that takes no arguments and returns None.
+                     This function will be called each time metrics are scraped.
+
+        Example:
+            ```python
+            metrics = endpoint.metrics
+            counter = metrics.create_intcounter("request_count", "Total requests")
+
+            def update_metrics():
+                counter.inc()
+
+            metrics.register_update_callback(update_metrics)
+            ```
+        """
+        ...
 
     def create_counter(self, name: str, description: str, labels: Optional[List[Tuple[str, str]]] = None) -> Counter:
         """Create a Counter metric (float) with optional static labels"""

@@ -15,6 +15,8 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::rs;
+
 /// Base struct for common metric fields shared across all metric types
 #[derive(Clone)]
 struct MetricBase {
@@ -858,8 +860,277 @@ impl Histogram {
     }
 }
 
-/// Add metrics bindings to the Python module
-/// Container class for Prometheus metric types
+/// RuntimeMetrics provides factory methods for creating typed Prometheus metrics
+/// and utilities for registering metrics callbacks.
+/// Exposed as endpoint.metrics in Python.
+#[pyclass]
+#[derive(Clone)]
+pub struct RuntimeMetrics {
+    endpoint: dynamo_runtime::component::Endpoint,
+}
+
+impl RuntimeMetrics {
+    pub fn new(endpoint: dynamo_runtime::component::Endpoint) -> Self {
+        Self { endpoint }
+    }
+
+    /// Generic helper to register metrics callbacks for any type implementing MetricsRegistry
+    /// This allows Endpoint, Component, and Namespace to share the same callback registration logic
+    pub fn register_callback_for<T>(
+        registry_item: &T,
+        callback: PyObject,
+    ) -> PyResult<()>
+    where
+        T: rs::metrics::MetricsRegistry + rs::traits::DistributedRuntimeProvider,
+    {
+        use rs::metrics::MetricsRegistry;
+
+        let hierarchy = registry_item.hierarchy();
+
+        // Store the callback in the DRT's metrics callback registry using the registry_item's hierarchy
+        registry_item.drt().register_metrics_callback(
+            vec![hierarchy.clone()],
+            Arc::new(move || {
+                // Execute the Python callback in the Python event loop
+                Python::with_gil(|py| {
+                    if let Err(e) = callback.call0(py) {
+                        tracing::error!("Metrics callback failed: {}", e);
+                    }
+                });
+                Ok(())
+            }),
+        );
+
+        Ok(())
+    }
+}
+
+#[pymethods]
+impl RuntimeMetrics {
+    /// Register a Python callback to be invoked before metrics are scraped
+    /// This callback will be called for this endpoint's metrics hierarchy
+    fn register_update_callback(&self, callback: PyObject, _py: Python) -> PyResult<()> {
+        Self::register_callback_for(&self.endpoint, callback)
+    }
+
+    // NOTE: The order of create_* methods below matches lib/runtime/src/metrics.rs::MetricsRegistry trait
+    // Keep them synchronized when adding new metric types
+
+    /// Create a Counter metric
+    #[pyo3(signature = (name, description, labels=None))]
+    fn create_counter(
+        &self,
+        name: String,
+        description: String,
+        labels: Option<Vec<(String, String)>>,
+        py: Python,
+    ) -> PyResult<Py<Counter>> {
+        use dynamo_runtime::metrics::MetricsRegistry;
+
+        let labels_vec: Vec<(&str, &str)> = labels
+            .as_ref()
+            .map(|v| v.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+            .unwrap_or_default();
+
+        let counter = self
+            .endpoint
+            .create_counter(&name, &description, &labels_vec)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+        let metric = Counter::new_internal(name.clone());
+        metric.set_counter(counter);
+        Py::new(py, metric)
+    }
+
+    /// Create a CounterVec metric
+    fn create_countervec(
+        &self,
+        name: String,
+        description: String,
+        label_names: Vec<String>,
+        py: Python,
+    ) -> PyResult<Py<CounterVec>> {
+        use dynamo_runtime::metrics::MetricsRegistry;
+
+        let label_names_str: Vec<&str> = label_names.iter().map(|s| s.as_str()).collect();
+        let counter_vec = self
+            .endpoint
+            .create_countervec(&name, &description, &label_names_str, &[])
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+        let metric = CounterVec::new_internal(name.clone(), label_names);
+        metric.set_counter(counter_vec);
+        Py::new(py, metric)
+    }
+
+    /// Create a Gauge metric
+    #[pyo3(signature = (name, description, labels=None))]
+    fn create_gauge(
+        &self,
+        name: String,
+        description: String,
+        labels: Option<Vec<(String, String)>>,
+        py: Python,
+    ) -> PyResult<Py<Gauge>> {
+        use dynamo_runtime::metrics::MetricsRegistry;
+
+        let labels_vec: Vec<(&str, &str)> = labels
+            .as_ref()
+            .map(|v| v.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+            .unwrap_or_default();
+
+        let gauge = self
+            .endpoint
+            .create_gauge(&name, &description, &labels_vec)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+        let metric = Gauge::new_internal(name.clone());
+        metric.set_gauge(gauge);
+        Py::new(py, metric)
+    }
+
+    /// Create a Histogram metric
+    #[pyo3(signature = (name, description, labels=None))]
+    fn create_histogram(
+        &self,
+        name: String,
+        description: String,
+        labels: Option<Vec<(String, String)>>,
+        py: Python,
+    ) -> PyResult<Py<Histogram>> {
+        use dynamo_runtime::metrics::MetricsRegistry;
+
+        let labels_vec: Vec<(&str, &str)> = labels
+            .as_ref()
+            .map(|v| v.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+            .unwrap_or_default();
+
+        let histogram = self
+            .endpoint
+            .create_histogram(&name, &description, &labels_vec, None)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+        let metric = Histogram::new_internal(name.clone());
+        metric.set_histogram(histogram);
+        Py::new(py, metric)
+    }
+
+    /// Create an IntCounter metric
+    #[pyo3(signature = (name, description, labels=None))]
+    fn create_intcounter(
+        &self,
+        name: String,
+        description: String,
+        labels: Option<Vec<(String, String)>>,
+        py: Python,
+    ) -> PyResult<Py<IntCounter>> {
+        use dynamo_runtime::metrics::MetricsRegistry;
+
+        let labels_vec: Vec<(&str, &str)> = labels
+            .as_ref()
+            .map(|v| v.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+            .unwrap_or_default();
+
+        let counter = self
+            .endpoint
+            .create_intcounter(&name, &description, &labels_vec)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+        let metric = IntCounter::new_internal(name.clone());
+        metric.set_counter(counter);
+        Py::new(py, metric)
+    }
+
+    /// Create an IntCounterVec metric
+    fn create_intcountervec(
+        &self,
+        name: String,
+        description: String,
+        label_names: Vec<String>,
+        py: Python,
+    ) -> PyResult<Py<IntCounterVec>> {
+        use dynamo_runtime::metrics::MetricsRegistry;
+
+        let label_names_str: Vec<&str> = label_names.iter().map(|s| s.as_str()).collect();
+        let counter_vec = self
+            .endpoint
+            .create_intcountervec(&name, &description, &label_names_str, &[])
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+        let metric = IntCounterVec::new_internal(name.clone(), label_names);
+        metric.set_counter(counter_vec);
+        Py::new(py, metric)
+    }
+
+    /// Create an IntGauge metric
+    #[pyo3(signature = (name, description, labels=None))]
+    fn create_intgauge(
+        &self,
+        name: String,
+        description: String,
+        labels: Option<Vec<(String, String)>>,
+        py: Python,
+    ) -> PyResult<Py<IntGauge>> {
+        use dynamo_runtime::metrics::MetricsRegistry;
+
+        let labels_vec: Vec<(&str, &str)> = labels
+            .as_ref()
+            .map(|v| v.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+            .unwrap_or_default();
+
+        let gauge = self
+            .endpoint
+            .create_intgauge(&name, &description, &labels_vec)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+        let metric = IntGauge::new_internal(name.clone());
+        metric.set_gauge(gauge);
+        Py::new(py, metric)
+    }
+
+    /// Create a GaugeVec metric
+    fn create_gaugevec(
+        &self,
+        name: String,
+        description: String,
+        label_names: Vec<String>,
+        py: Python,
+    ) -> PyResult<Py<GaugeVec>> {
+        use dynamo_runtime::metrics::MetricsRegistry;
+
+        let label_names_str: Vec<&str> = label_names.iter().map(|s| s.as_str()).collect();
+        let gauge_vec = self
+            .endpoint
+            .create_gaugevec(&name, &description, &label_names_str, &[])
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+        let metric = GaugeVec::new_internal(name.clone(), label_names);
+        metric.set_gauge(gauge_vec);
+        Py::new(py, metric)
+    }
+
+    /// Create an IntGaugeVec metric
+    fn create_intgaugevec(
+        &self,
+        name: String,
+        description: String,
+        label_names: Vec<String>,
+        py: Python,
+    ) -> PyResult<Py<IntGaugeVec>> {
+        use dynamo_runtime::metrics::MetricsRegistry;
+
+        let label_names_str: Vec<&str> = label_names.iter().map(|s| s.as_str()).collect();
+        let gauge_vec = self
+            .endpoint
+            .create_intgaugevec(&name, &description, &label_names_str, &[])
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+        let metric = IntGaugeVec::new_internal(name.clone(), label_names);
+        metric.set_gauge(gauge_vec);
+        Py::new(py, metric)
+    }
+}
+
 pub fn add_to_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Add specific metric type classes
     m.add_class::<Counter>()?;

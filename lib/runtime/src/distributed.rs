@@ -300,21 +300,20 @@ impl DistributedRuntime {
     }
 
     /// Add a callback function to metrics registries for the given hierarchies
+    // TODO: Rename to register_metrics_update_callback for consistency with Python API.
+    //       Do this after we move the MetricsRegistry trait to composition pattern.
     pub fn register_metrics_callback(&self, hierarchies: Vec<String>, callback: RuntimeCallback) {
         let mut registries = self.hierarchy_to_metricsregistry.write().unwrap();
         for hierarchy in &hierarchies {
-            println!("[register_metrics_callback] Adding callback to hierarchy: '{}'", hierarchy);
             registries
                 .entry(hierarchy.clone())
                 .or_default()
                 .add_callback(callback.clone());
         }
-        println!("[register_metrics_callback] Registered callback for {} hierarchies", hierarchies.len());
     }
 
     /// Execute all callbacks for a given hierarchy key and return their results
     pub fn execute_metrics_callbacks(&self, hierarchy: &str) -> Vec<anyhow::Result<()>> {
-        println!("[execute_metrics_callbacks] Executing callbacks for hierarchy: '{}'", hierarchy);
         // Clone callbacks while holding read lock (fast operation)
         let callbacks = {
             let registries = self.hierarchy_to_metricsregistry.read().unwrap();

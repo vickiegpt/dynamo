@@ -159,27 +159,6 @@ class Endpoint:
         """
         ...
 
-    def register_metrics_callback(self, callback: Callable[[], None]) -> None:
-        """
-        Register a Python callback to be invoked before metrics are scraped.
-
-        This allows you to update metric values dynamically when the /metrics endpoint
-        is accessed. The callback will be executed synchronously before serving metrics.
-
-        Args:
-            callback: A callable that takes no arguments and returns None.
-                     This function should update metric values as needed.
-
-        Example:
-            ```python
-            def update_metrics():
-                gpu_cache_usage.set(get_current_cache_usage())
-                active_requests.set(get_active_request_count())
-
-            endpoint.register_metrics_callback(update_metrics)
-            ```
-        """
-        ...
 
 class Client:
     """
