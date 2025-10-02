@@ -7051,7 +7051,7 @@ dependencies = [
 
 [[package]]
 name = "rust-tracing-playground"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
