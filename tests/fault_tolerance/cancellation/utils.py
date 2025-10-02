@@ -233,6 +233,37 @@ def send_chat_completion_request(
     return cancellable_req
 
 
+def send_cancellable_request(
+    request_type: str = "completion",
+    use_long_prompt: bool = False,
+    max_tokens: int = 8000,
+) -> CancellableRequest:
+    """Send a request that can be manually cancelled.
+
+    Args:
+        request_type: Type of request - "completion", "chat_completion", or "chat_completion_stream"
+        use_long_prompt: Whether to use an extremely long prompt
+        max_tokens: Maximum tokens to generate
+
+    Returns:
+        A CancellableRequest object that can be explicitly cancelled
+    """
+    prompt = "Tell me a very long and detailed story about the history of artificial intelligence, including all major milestones, researchers, and breakthroughs?"
+    if use_long_prompt:
+        prompt += " Make sure it is" + " long" * 8000 + "!"
+
+    logger.info(f"Sending {request_type} request with max_tokens: {max_tokens}")
+
+    if request_type == "completion":
+        return send_completion_request(prompt, max_tokens)
+    elif request_type == "chat_completion":
+        return send_chat_completion_request(prompt, max_tokens, stream=False)
+    elif request_type == "chat_completion_stream":
+        return send_chat_completion_request(prompt, max_tokens, stream=True)
+    else:
+        raise ValueError(f"Unknown request type: {request_type}")
+
+
 def send_request_and_cancel(
     request_type: str = "completion",
     timeout: int | float = 1,
@@ -345,3 +376,78 @@ def strip_ansi_codes(text: str) -> str:
     """Remove ANSI color codes from text"""
     ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
     return ansi_escape.sub("", text)
+
+
+def poll_for_pattern(
+    process: ManagedProcess,
+    pattern: str,
+    log_offset: int = 0,
+    max_wait_ms: int = 500,
+    poll_interval_ms: int = 5,
+    match_type: str = "endswith",  # "contains" or "endswith"
+) -> tuple[str, int]:
+    """
+    Poll process log for a specific pattern.
+
+    Args:
+        process: The process to monitor logs from
+        pattern: The pattern to search for
+        log_offset: Offset in the log to start reading from
+        max_wait_ms: Maximum time to wait for the pattern in milliseconds
+        poll_interval_ms: Interval between polls in milliseconds
+        match_type: How to match the pattern - "contains" or "endswith"
+
+    Returns:
+        Tuple of (matched_content, new_log_offset) where matched_content is:
+        - For "contains": everything after the pattern on the same line
+        - For "endswith": empty string (since nothing follows)
+    """
+    max_iterations = max_wait_ms // poll_interval_ms
+    iteration = 0
+    current_offset = log_offset
+
+    logger.info(
+        f"Starting to poll for '{pattern}' pattern (max {max_iterations} iterations)..."
+    )
+
+    while iteration < max_iterations:
+        # Read the process log
+        log_content = read_log_content(process._log_path)
+        new_content = log_content[current_offset:]
+
+        # Look for the pattern
+        for line in new_content.split("\n"):
+            clean_line = strip_ansi_codes(line).strip()
+
+            matched = False
+            result = ""
+
+            if match_type == "contains" and pattern in clean_line:
+                # Find the pattern and return everything after it
+                idx = clean_line.rfind(pattern)  # Use rfind to get last occurrence
+                if idx != -1:
+                    result = clean_line[idx + len(pattern) :].strip()
+                    matched = True
+            elif match_type == "endswith" and clean_line.endswith(pattern):
+                # Pattern is at the end, nothing follows
+                result = ""
+                matched = True
+
+            if matched:
+                logger.info(f"Found pattern '{pattern}' at iteration {iteration}")
+                if match_type == "contains":
+                    logger.info(f"Content after pattern: '{result}'")
+                # Update offset to current position
+                current_offset = len(log_content)
+                return result, current_offset
+
+        # Update offset for next poll
+        current_offset = len(log_content)
+
+        # Wait before next poll
+        time.sleep(poll_interval_ms / 1000.0)
+        iteration += 1
+
+    pytest.fail(
+        f"Failed to find '{pattern}' pattern after {max_iterations} iterations ({max_wait_ms}ms)"
+    )

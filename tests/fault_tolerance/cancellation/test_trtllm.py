@@ -10,7 +10,9 @@ import pytest
 
 from tests.fault_tolerance.cancellation.utils import (
     DynamoFrontendProcess,
+    poll_for_pattern,
     read_log_content,
+    send_cancellable_request,
     send_request_and_cancel,
     strip_ansi_codes,
 )
@@ -251,7 +253,7 @@ def test_request_cancellation_trtllm_aggregated(
             # TODO: Why wait after worker ready fixes frontend 404 / 500 flakiness?
             time.sleep(2)
 
-            # Step 3: Test request cancellation
+            # Step 3: Test request cancellation with polling approach
             frontend_log_offset, worker_log_offset = 0, 0
 
             test_scenarios = [
@@ -263,19 +265,56 @@ def test_request_cancellation_trtllm_aggregated(
                 ),
             ]
 
-            for i, (request_type, description) in enumerate(test_scenarios, 1):
+            for request_type, description in test_scenarios:
                 logger.info(f"Testing {description.lower()}...")
-                send_request_and_cancel(request_type)
 
-                logger.info(
-                    "Checking for cancellation messages in worker and frontend logs..."
+                # Send the request (non-blocking)
+                cancellable_req = send_cancellable_request(request_type)
+
+                # Poll for "New Request ID" pattern
+                request_id, worker_log_offset = poll_for_pattern(
+                    process=worker,
+                    pattern="New Request ID: ",
+                    log_offset=worker_log_offset,
+                    match_type="contains",
                 )
-                time.sleep(0.05)  # time for cancellation to propagate
-                frontend_log_offset, worker_log_offset, _ = verify_request_cancelled(
-                    frontend,
-                    worker,
-                    frontend_log_offset=frontend_log_offset,
-                    worker_log_offset=worker_log_offset,
+
+                # For streaming, read 5 responses before cancelling
+                if request_type == "chat_completion_stream":
+                    response = cancellable_req.get_response()
+                    if not response or response.status_code != 200:
+                        pytest.fail(
+                            f"Failed to get streaming response: status_code={response.status_code if response else 'None'}"
+                        )
+                    response_count = 0
+                    for line in response.iter_lines():
+                        response_count += 1
+                        logger.info(
+                            f"Received streaming response {response_count}: {line.decode()[:100]}"
+                        )
+                        if response_count >= 5:
+                            break
+                    else:
+                        pytest.fail(
+                            f"Stream ended after only {response_count} lines - expected to read at least 5 before cancelling"
+                        )
+
+                # Now cancel the request
+                cancellable_req.cancel()
+                logger.info(f"Cancelled request ID: {request_id}")
+
+                # Poll for "Aborted Request ID" with matching ID
+                _, worker_log_offset = poll_for_pattern(
+                    process=worker,
+                    pattern=f"Aborted Request ID: {request_id}",
+                    log_offset=worker_log_offset,
+                )
+
+                # Verify frontend log has kill message
+                _, frontend_log_offset = poll_for_pattern(
+                    process=frontend,
+                    pattern="issued control message Kill to sender",
+                    log_offset=frontend_log_offset,
                 )
 
                 logger.info(f"{description} detected successfully")
