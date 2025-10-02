@@ -272,6 +272,7 @@ impl KvEventPublisher {
         lora_id: u64,
         parent_hash: Option<i64>,
     ) -> PyResult<()> {
+        let block_hashes_u64: Vec<u64> = block_hashes.iter().map(|&h| h as u64).collect();
         let event = KvCacheEvent {
             event_id,
             data: KvCacheEventData::Stored(KvCacheStoreData {
@@ -280,7 +281,7 @@ impl KvEventPublisher {
                     self.kv_block_size as u32,
                     &token_ids,
                     &num_block_tokens,
-                    &block_hashes,
+                    &block_hashes_u64,
                     lora_id,
                     &self.warning_count,
                 ),
@@ -292,8 +293,8 @@ impl KvEventPublisher {
 
     fn publish_removed(&self, _py: Python, event_id: u64, block_hashes: Vec<i64>) -> PyResult<()> {
         let block_hashes: Vec<ExternalSequenceBlockHash> = block_hashes
-            .iter()
-            .map(|&h| ExternalSequenceBlockHash::from(h))
+            .into_iter()
+            .map(ExternalSequenceBlockHash::from)
             .collect();
         let event = KvCacheEvent {
             event_id,
@@ -833,6 +834,38 @@ impl SpecDecodeStats {
     }
 }
 
+/// Helper function to create a KV router from an endpoint using the ModelManager
+/// to ensure proper etcd registration
+async fn create_kv_router_from_endpoint(
+    endpoint: &Endpoint,
+    block_size: usize,
+    kv_router_config: Option<llm_rs::kv_router::KvRouterConfig>,
+) -> Result<Arc<llm_rs::kv_router::KvRouter>, PyErr> {
+    // Get component from endpoint
+    let component = endpoint.inner.component();
+
+    // Verify we're not in static mode
+    if component.drt().primary_lease().is_none() {
+        return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            "Failed to get primary lease: Cannot KV route static workers",
+        ));
+    }
+
+    // Create ModelManager and use it to create KvRouter (ensures etcd registration)
+    let model_manager = Arc::new(llm_rs::discovery::ModelManager::new());
+    let kv_router = model_manager
+        .kv_chooser_for(
+            "dummy_name", // does not matter, never cached
+            component,
+            block_size as u32,
+            kv_router_config,
+        )
+        .await
+        .map_err(to_pyerr)?;
+
+    Ok(kv_router)
+}
+
 #[pyclass]
 pub(crate) struct KvRouter {
     inner: Arc<llm_rs::kv_router::KvRouter>,
@@ -841,40 +874,22 @@ pub(crate) struct KvRouter {
 #[pymethods]
 impl KvRouter {
     #[new]
-    #[pyo3(signature = (endpoint, block_size, kv_router_config=None, consumer_uuid=None))]
+    #[pyo3(signature = (endpoint, block_size, kv_router_config=None))]
     fn new(
         endpoint: &Endpoint,
         block_size: usize,
         kv_router_config: Option<&super::entrypoint::KvRouterConfig>,
-        consumer_uuid: Option<String>,
     ) -> PyResult<Self> {
         let runtime = pyo3_async_runtimes::tokio::get_runtime();
         runtime.block_on(async move {
-            // Get component from endpoint
-            let component = endpoint.inner.component();
-
-            // Verify we're not in static mode
-            if component.drt().primary_lease().is_none() {
-                return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    "Failed to get primary lease: Cannot KV route static workers",
-                ));
-            }
-
-            // Create KvRouter with provided or generated consumer UUID
-            let consumer_uuid = consumer_uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            let kv_router = llm_rs::kv_router::KvRouter::new(
-                component.clone(),
-                block_size as u32,
-                None, // default selector
+            let kv_router = create_kv_router_from_endpoint(
+                endpoint,
+                block_size,
                 kv_router_config.map(|c| c.inner()),
-                consumer_uuid,
             )
-            .await
-            .map_err(to_pyerr)?;
+            .await?;
 
-            Ok(Self {
-                inner: Arc::new(kv_router),
-            })
+            Ok(Self { inner: kv_router })
         })
     }
 
@@ -1039,31 +1054,16 @@ impl KvPushRouter {
             .await
             .map_err(to_pyerr)?;
 
-            // Get component from endpoint
-            let component = endpoint.inner.component();
-
-            // Verify we're not in static mode
-            if component.drt().primary_lease().is_none() {
-                return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    "Failed to get primary lease: Cannot KV route static workers",
-                ));
-            }
-
-            // Create KvRouter with a unique consumer UUID
-            let consumer_uuid = uuid::Uuid::new_v4().to_string();
-            let kv_router = llm_rs::kv_router::KvRouter::new(
-                component.clone(),
-                block_size as u32,
-                None, // default selector
+            // Create KvRouter using helper function (ensures etcd registration)
+            let kv_router = create_kv_router_from_endpoint(
+                endpoint,
+                block_size,
                 Some(kv_router_config.inner()),
-                consumer_uuid,
             )
-            .await
-            .map_err(to_pyerr)?;
+            .await?;
 
-            // Create KvPushRouter
-            let kv_push_router =
-                llm_rs::kv_router::KvPushRouter::new(push_router, Arc::new(kv_router));
+            // Create KvPushRouter (kv_router is already Arc<KvRouter>)
+            let kv_push_router = llm_rs::kv_router::KvPushRouter::new(push_router, kv_router);
 
             Ok(Self {
                 inner: Arc::new(kv_push_router),
