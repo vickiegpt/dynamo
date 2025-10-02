@@ -100,5 +100,3 @@ spec:
           gpu: "4"
         requests:
           gpu: "4"
-      sharedMemory:
-        size: 80Gi
