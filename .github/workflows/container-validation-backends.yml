@@ -55,7 +55,12 @@ jobs:
           sccache_s3_bucket: ${{ secrets.SCCACHE_S3_BUCKET }}
           aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      - name: Run tests
+      - name: Run unit tests
+        uses: ./.github/actions/pytest
+        with:
+          image_tag: ${{ steps.build-image.outputs.image_tag }}
+          pytest_marks: "unit and vllm and gpu_1"
+      - name: Run e2e tests
         uses: ./.github/actions/pytest
         with:
           image_tag: ${{ steps.build-image.outputs.image_tag }}
