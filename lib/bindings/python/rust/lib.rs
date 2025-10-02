@@ -644,6 +644,39 @@ impl Component {
 
 #[pymethods]
 impl Endpoint {
+    #[pyo3(signature = (endpoint_path))]
+    fn register_custom_endpoint<'p>(
+        &self,
+        py: Python<'p>,
+        endpoint_path: &str,
+    ) -> PyResult<Bound<'p, PyAny>> {
+        // validate that the endpoint path looks like "/<string>" and does not end with a slash
+        if !endpoint_path.starts_with("/") || endpoint_path.ends_with("/") {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "Endpoint path must start with a slash and not end with a slash",
+            ));
+        }
+
+        let endpoint_path = endpoint_path.to_string();
+
+        let drt = self.inner.drt();
+        let etcd_client = drt.etcd_client();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            if let Some(etcd_client) = etcd_client {
+                etcd_client
+                    .kv_create(
+                        endpoint_path.as_str(),
+                        serde_json::to_vec_pretty(&serde_json::Value::Null).unwrap(),
+                        None,
+                    )
+                    .await
+                    .map_err(to_pyerr)?;
+            }
+            Ok(())
+        })
+    }
+
     #[pyo3(signature = (generator, graceful_shutdown = true, metrics_labels = None, health_check_payload = None))]
     fn serve_endpoint<'p>(
         &self,

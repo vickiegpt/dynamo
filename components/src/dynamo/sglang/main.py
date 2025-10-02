@@ -128,6 +128,9 @@ async def init(runtime: DistributedRuntime, config: Config):
 
     health_check_payload = SglangHealthCheckPayload(engine).to_dict()
 
+    test_endpoint = component.endpoint("test")
+    test_endpoint.register_custom_endpoint("/test")
+
     try:
         # Start endpoint immediately and register model concurrently
         # Requests queue until ready_event is set
@@ -139,6 +142,12 @@ async def init(runtime: DistributedRuntime, config: Config):
                 health_check_payload=health_check_payload,
             ),
             register_model(),
+            test_endpoint.serve_endpoint(
+                handler.generate,
+                graceful_shutdown=True,
+                metrics_labels=metrics_labels,
+                health_check_payload=health_check_payload,
+            ),
         )
     except Exception as e:
         logging.error(f"Failed to serve endpoints: {e}")
