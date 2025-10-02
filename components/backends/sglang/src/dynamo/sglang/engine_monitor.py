@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 import sys
+import time
 
 import sglang as sgl
 
@@ -15,14 +16,19 @@ configure_dynamo_logging()
 logger = logging.getLogger(__name__)
 
 # Configuration constants
-HEALTH_CHECK_INTERVAL = int(os.getenv("SGLANG_HEALTH_CHECK_INTERVAL", "20"))
+HEALTH_CHECK_INTERVAL = int(os.getenv("SGLANG_HEALTH_CHECK_INTERVAL", "120"))
 MAX_FAILURES_BEFORE_SHUTDOWN = int(
     os.getenv("SGLANG_MAX_FAILURES_BEFORE_SHUTDOWN", "3")
 )
-HEALTH_CHECK_TIMEOUT = int(os.getenv("SGLANG_HEALTH_CHECK_TIMEOUT", "10"))
+HEALTH_CHECK_TIMEOUT = int(os.getenv("SGLANG_HEALTH_CHECK_TIMEOUT", "60"))
+STARTUP_WAIT_INTERVAL = int(os.getenv("SGLANG_STARTUP_WAIT_INTERVAL", "5"))
+MAX_STARTUP_WAIT_TIME = int(
+    os.getenv("SGLANG_MAX_STARTUP_WAIT_TIME", "600")
+)  # 10 minutes
 
 # SGLang server status values
-HEALTHY_STATUS = {"Up", "Starting"}
+HEALTHY_STATUS = {"Up"}
+STARTING_STATUS = {"Starting"}
 UNHEALTHY_STATUS = {"UnHealthy"}
 
 
@@ -54,11 +60,7 @@ class SglangEngineMonitor:
         self.endpoint_name = endpoint_name
         self.consecutive_failures = 0
         self.last_health_status = None  # Initialize to None so first update works
-        self._monitor_task = asyncio.create_task(self._check_engine_health())
-
-        # Mark endpoint as ready initially
-        self._update_health_status("Ready")
-
+        self._monitor_task = asyncio.create_task(self._start_monitoring())
         logger.info(
             f"{self.__class__.__name__} initialized for endpoint '{endpoint_name}' and health check task started."
         )
@@ -67,10 +69,23 @@ class SglangEngineMonitor:
         if hasattr(self, "_monitor_task") and self._monitor_task:
             self._monitor_task.cancel()
 
+    def _shutdown_unhealthy(self, reason: str):
+        """
+        Mark endpoint as unhealthy, shutdown runtime, and exit.
+        This is called when the engine is unresponsive or failed to start.
+
+        Args:
+            reason: Description of why shutdown is happening
+        """
+        self._update_health_status("NotReady")
+        logger.error(f"Shutting down: {reason}")
+        self.runtime.shutdown()
+        sys.exit(1)
+
     def _update_health_status(self, status: str):
         """Update the endpoint health status in the DistributedRuntime."""
         if status == self.last_health_status:
-            return  # No change needed
+            return
 
         try:
             logger.info(
@@ -81,7 +96,6 @@ class SglangEngineMonitor:
         except Exception as e:
             logger.error(f"Failed to update health status: {e}")
         finally:
-            # Always update internal state, even if runtime call fails
             self.last_health_status = status
 
     def _extract_server_status(self, server_info: dict) -> str:
@@ -111,24 +125,97 @@ class SglangEngineMonitor:
 
         return internal_states.get("status", "Up")
 
-    async def _check_engine_health(self):
-        """Periodically check if the SGLang engine is responsive."""
-        while True:
-            try:
-                # Use get_server_info() to check if engine is responsive
-                # This will raise an exception if the engine is dead
-                loop = asyncio.get_event_loop()
+    async def _wait_for_server_up(self) -> bool:
+        """
+        Wait for the server to report an 'Up' status before starting health checks.
 
-                # Add timeout to prevent indefinite blocking
-                server_info = await asyncio.wait_for(
-                    loop.run_in_executor(None, self.engine.get_server_info),
-                    timeout=HEALTH_CHECK_TIMEOUT,
+        Returns:
+            True if server is up, False if timeout reached
+        """
+        start_time = time.time()
+        loop = asyncio.get_running_loop()
+
+        logger.info(
+            f"Waiting for SGLang server to be ready (max wait: {MAX_STARTUP_WAIT_TIME}s)..."
+        )
+
+        while (time.time() - start_time) < MAX_STARTUP_WAIT_TIME:
+            try:
+                # Must use run_in_executor because get_server_info() internally
+                # uses run_until_complete() which can't be called from async context
+                server_info = await loop.run_in_executor(
+                    None, self.engine.get_server_info
                 )
 
-                # Extract server status using helper method
+                # Extract server status
                 server_status = self._extract_server_status(server_info)
 
-                # Check if server status indicates a problem
+                if server_status in HEALTHY_STATUS:
+                    logger.info(
+                        f"SGLang server is up and ready! Status: {server_status}"
+                    )
+                    return True
+                elif server_status in STARTING_STATUS:
+                    logger.debug(
+                        f"SGLang server still starting... Status: {server_status}"
+                    )
+                else:
+                    logger.warning(
+                        f"SGLang server reporting unexpected status during startup: {server_status}"
+                    )
+
+            except Exception as e:
+                logger.debug(f"Server not ready yet: {e}")
+
+            # Wait before retrying
+            await asyncio.sleep(STARTUP_WAIT_INTERVAL)
+
+        # Timeout reached
+        elapsed = int(time.time() - start_time)
+        logger.error(
+            f"SGLang server failed to become ready after {elapsed}s (timeout: {MAX_STARTUP_WAIT_TIME}s)"
+        )
+        return False
+
+    async def _start_monitoring(self):
+        """
+        Wait for the server to be up, then start the health check loop.
+        """
+        try:
+            server_is_up = await self._wait_for_server_up()
+
+            if not server_is_up:
+                self._shutdown_unhealthy("SGLang server failed to start")
+
+            self._update_health_status("Ready")
+            logger.info(
+                f"Starting health check monitoring for endpoint '{self.endpoint_name}' "
+                f"(interval: {HEALTH_CHECK_INTERVAL}s, timeout: {HEALTH_CHECK_TIMEOUT}s)"
+            )
+
+            # Start the regular health check loop
+            await self._check_engine_health()
+
+        except asyncio.CancelledError:
+            logger.debug("Monitoring task cancelled during startup")
+            raise
+        except Exception as e:
+            logger.exception(f"Unexpected error in monitoring task: {e}")
+            self._shutdown_unhealthy(f"Unexpected error in monitoring task: {e}")
+
+    async def _check_engine_health(self):
+        """Periodically check if the SGLang engine is responsive."""
+        loop = asyncio.get_running_loop()
+
+        while True:
+            try:
+                # Must use run_in_executor because get_server_info() internally
+                # uses run_until_complete() which can't be called from async context
+                server_info = await loop.run_in_executor(
+                    None, self.engine.get_server_info
+                )
+                server_status = self._extract_server_status(server_info)
+
                 if server_status in UNHEALTHY_STATUS:
                     logger.warning(
                         f"SGLang engine reporting unhealthy status: {server_status}"
@@ -138,6 +225,12 @@ class SglangEngineMonitor:
                 elif server_status in HEALTHY_STATUS:
                     self.consecutive_failures = 0
                     self._update_health_status("Ready")
+                elif server_status in STARTING_STATUS:
+                    # Server is still starting, don't count as failure but mark as not ready
+                    logger.info(
+                        f"SGLang engine is still starting... Status: {server_status}"
+                    )
+                    self._update_health_status("NotReady")
                 else:
                     # Unknown status - treat as unhealthy but log it
                     logger.warning(
@@ -150,12 +243,6 @@ class SglangEngineMonitor:
                 # This is expected when the monitor is being shut down
                 logger.debug("Health check loop cancelled, shutting down gracefully")
                 break
-            except asyncio.TimeoutError:
-                self.consecutive_failures += 1
-                logger.error(
-                    f"SGLang engine health check timed out after {HEALTH_CHECK_TIMEOUT}s (attempt {self.consecutive_failures})"
-                )
-                self._update_health_status("NotReady")
             except (ConnectionError, RuntimeError) as e:
                 # Expected communication/engine errors
                 self.consecutive_failures += 1
@@ -173,15 +260,16 @@ class SglangEngineMonitor:
 
             # Check if we should shutdown
             if self.consecutive_failures >= MAX_FAILURES_BEFORE_SHUTDOWN:
-                logger.warning(
+                self._shutdown_unhealthy(
                     f"SGLang engine unresponsive after {self.consecutive_failures} attempts"
                 )
-                logger.warning("Initiating Dynamo Runtime shutdown.")
-                self.runtime.shutdown()
-                sys.exit(1)  # More graceful than os._exit(1)
 
             # Wait before retrying
-            await asyncio.sleep(HEALTH_CHECK_INTERVAL)
+            try:
+                await asyncio.sleep(HEALTH_CHECK_INTERVAL)
+            except asyncio.CancelledError:
+                logger.debug("Health check loop cancelled during sleep")
+                break
 
     async def stop(self):
         """Stop the monitor gracefully."""
@@ -189,11 +277,14 @@ class SglangEngineMonitor:
 
         self._update_health_status("NotReady")
 
-        if self._monitor_task:
+        if hasattr(self, "_monitor_task") and self._monitor_task:
             self._monitor_task.cancel()
             try:
                 await self._monitor_task
             except asyncio.CancelledError:
                 logger.debug("Monitor task cancelled successfully")
                 pass
+        else:
+            logger.debug("No monitor task to stop")
+
         logger.info("SGLang engine monitor stopped")
