@@ -289,7 +289,8 @@ def test_request_cancellation_sglang_aggregated(
 
                 logger.info(f"{description} detected successfully")
 
-#skipping this test for now
+
+# skipping this test for now
 @pytest.mark.skip(reason="Skipping this test for now until clarity from SGLANG")
 @pytest.mark.e2e
 @pytest.mark.sglang
