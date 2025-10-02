@@ -4,14 +4,15 @@
 import logging
 import os
 import shutil
-import time
 
 import pytest
 
 from tests.fault_tolerance.cancellation.utils import (
     DynamoFrontendProcess,
+    poll_for_pattern,
     read_log_content,
-    send_request_and_cancel,
+    read_streaming_responses,
+    send_cancellable_request,
     strip_ansi_codes,
 )
 from tests.utils.constants import FAULT_TOLERANCE_MODEL_NAME
@@ -213,13 +214,15 @@ def verify_request_cancelled(
 @pytest.mark.gpu_1
 @pytest.mark.e2e
 @pytest.mark.model(FAULT_TOLERANCE_MODEL_NAME)
-def test_request_cancellation_vllm(request, runtime_services, predownload_models):
+def test_request_cancellation_vllm_aggregated(
+    request, runtime_services, predownload_models
+):
     """
-    End-to-end test for request cancellation functionality.
+    End-to-end test for request cancellation functionality in aggregated mode.
 
     This test verifies that when a request is cancelled by the client,
     the system properly handles the cancellation and cleans up resources
-    on the worker side. Tests three scenarios:
+    on the worker side in aggregated (single worker) mode. Tests three scenarios:
     1. Completion request
     2. Chat completion request (non-streaming)
     3. Chat completion request (streaming)
@@ -236,7 +239,7 @@ def test_request_cancellation_vllm(request, runtime_services, predownload_models
         with worker:
             logger.info(f"Worker PID: {worker.get_pid()}")
 
-            # Step 3: Test request cancellation
+            # Step 3: Test request cancellation with polling approach
             frontend_log_offset, worker_log_offset = 0, 0
 
             test_scenarios = [
@@ -248,19 +251,40 @@ def test_request_cancellation_vllm(request, runtime_services, predownload_models
                 ),
             ]
 
-            for i, (request_type, description) in enumerate(test_scenarios, 1):
+            for request_type, description in test_scenarios:
                 logger.info(f"Testing {description.lower()}...")
-                send_request_and_cancel(request_type)
 
-                logger.info(
-                    "Checking for cancellation messages in worker and frontend logs..."
+                # Send the request (non-blocking)
+                cancellable_req = send_cancellable_request(request_type)
+
+                # Poll for "New Request ID" pattern
+                request_id, worker_log_offset = poll_for_pattern(
+                    process=worker,
+                    pattern="New Request ID: ",
+                    log_offset=worker_log_offset,
+                    match_type="contains",
                 )
-                time.sleep(0.05)  # time for cancellation to propagate
-                frontend_log_offset, worker_log_offset = verify_request_cancelled(
-                    frontend,
-                    worker,
-                    frontend_log_offset=frontend_log_offset,
-                    worker_log_offset=worker_log_offset,
+
+                # For streaming, read 5 responses before cancelling
+                if request_type == "chat_completion_stream":
+                    read_streaming_responses(cancellable_req, expected_count=5)
+
+                # Now cancel the request
+                cancellable_req.cancel()
+                logger.info(f"Cancelled request ID: {request_id}")
+
+                # Poll for "Aborted Request ID" with matching ID
+                _, worker_log_offset = poll_for_pattern(
+                    process=worker,
+                    pattern=f"Aborted Request ID: {request_id}",
+                    log_offset=worker_log_offset,
+                )
+
+                # Verify frontend log has kill message
+                _, frontend_log_offset = poll_for_pattern(
+                    process=frontend,
+                    pattern="issued control message Kill to sender",
+                    log_offset=frontend_log_offset,
                 )
 
                 logger.info(f"{description} detected successfully")
@@ -270,13 +294,13 @@ def test_request_cancellation_vllm(request, runtime_services, predownload_models
 @pytest.mark.gpu_1
 @pytest.mark.e2e
 @pytest.mark.model(FAULT_TOLERANCE_MODEL_NAME)
-def test_request_cancellation_vllm_decode(
+def test_request_cancellation_vllm_decode_cancel(
     request, runtime_services, predownload_models
 ):
     """
-    End-to-end test for request cancellation functionality with remote prefill.
+    End-to-end test for request cancellation during decode phase.
 
-    This test verifies that when a request is cancelled by the client,
+    This test verifies that when a request is cancelled by the client during the decode phase,
     the system properly handles the cancellation and cleans up resources
     on the decode worker side in a disaggregated setup.
     """
@@ -299,38 +323,65 @@ def test_request_cancellation_vllm_decode(
             with decode_worker:
                 logger.info(f"Decode Worker PID: {decode_worker.get_pid()}")
 
-                # Step 4: Test request cancellation for completion scenario only
+                # Step 4: Test request cancellation for streaming scenario
                 logger.info(
-                    "Testing completion request cancellation in decode worker..."
+                    "Testing chat completion stream request cancellation in decode worker (decode phase)..."
                 )
-                send_request_and_cancel("completion")
+
+                # Send streaming request (non-blocking)
+                cancellable_req = send_cancellable_request("chat_completion_stream")
+
+                # Poll for "New Request ID" pattern in decode worker
+                request_id, decode_log_offset = poll_for_pattern(
+                    process=decode_worker,
+                    pattern="New Request ID: ",
+                    match_type="contains",
+                )
+
+                # Verify same request ID reached prefill worker (as "New Prefill Request ID")
+                _, prefill_log_offset = poll_for_pattern(
+                    process=prefill_worker,
+                    pattern=f"New Prefill Request ID: {request_id}",
+                )
+
+                # Read 5 streaming responses (decode phase)
+                read_streaming_responses(cancellable_req, expected_count=5)
+
+                # Now cancel the request
+                cancellable_req.cancel()
+                logger.info(f"Cancelled request ID: {request_id}")
+
+                # Poll for "Aborted Request ID" in decode worker
+                _, decode_log_offset = poll_for_pattern(
+                    process=decode_worker,
+                    pattern=f"Aborted Request ID: {request_id}",
+                    log_offset=decode_log_offset,
+                )
+
+                # Verify frontend log has kill message
+                _, frontend_log_offset = poll_for_pattern(
+                    process=frontend,
+                    pattern="issued control message Kill to sender",
+                )
 
                 logger.info(
-                    "Checking for cancellation messages in decode and prefill worker and frontend logs..."
+                    "Chat completion stream cancellation in decode phase detected successfully"
                 )
-                time.sleep(0.05)  # time for cancellation to propagate
-                verify_request_cancelled(frontend, decode_worker, prefill_worker)
 
 
 @pytest.mark.vllm
 @pytest.mark.gpu_1
 @pytest.mark.e2e
 @pytest.mark.model(FAULT_TOLERANCE_MODEL_NAME)
-@pytest.mark.xfail(
-    reason="Time-sensitive test: Relies on request timeout (0.1s) to cancel during prefill phase. "
-    "May fail if prefill completes too quickly or timeout triggers at a different phase.",
-    strict=False,
-)
-def test_request_cancellation_vllm_prefill(
+def test_request_cancellation_vllm_remote_prefill_cancel(
     request, runtime_services, predownload_models
 ):
     """
-    End-to-end test for request cancellation on remote prefill.
+    End-to-end test for request cancellation during remote prefill phase.
 
-    This test verifies that when a request is cancelled by the client during the
-    prefill phase, the system properly handles the cancellation and cleans up
-    resources on the prefill worker and decode worker sides in a disaggregated
-    setup.
+    This test verifies that when a request is cancelled by the client during the remote prefill phase,
+    the system properly handles the cancellation and cleans up resources
+    on both the decode and prefill workers in a disaggregated setup.
     """
 
     # Step 1: Start the frontend
@@ -351,19 +402,53 @@ def test_request_cancellation_vllm_prefill(
             with decode_worker:
                 logger.info(f"Decode Worker PID: {decode_worker.get_pid()}")
 
-                # Step 4: Test request cancellation for completion scenario only
+                # Step 4: Test request cancellation during remote prefill phase
                 logger.info(
-                    "Testing completion request cancellation in prefill worker..."
+                    "Testing completion request cancellation during remote prefill phase..."
                 )
-                send_request_and_cancel("completion", timeout=0.1, use_long_prompt=True)
+
+                # Send request with long prompt (non-blocking)
+                cancellable_req = send_cancellable_request(
+                    "completion", use_long_prompt=True
+                )
+
+                # Poll for "New Request ID" pattern in decode worker
+                request_id, decode_log_offset = poll_for_pattern(
+                    process=decode_worker,
+                    pattern="New Request ID: ",
+                    match_type="contains",
+                )
+
+                # Poll for same request ID in prefill worker (as "New Prefill Request ID")
+                _, prefill_log_offset = poll_for_pattern(
+                    process=prefill_worker,
+                    pattern=f"New Prefill Request ID: {request_id}",
+                )
+
+                # Cancel during prefill phase
+                cancellable_req.cancel()
+                logger.info(f"Cancelled request ID: {request_id} during remote prefill")
+
+                # Poll for "Aborted Prefill Request ID" in prefill worker first (where cancellation happens)
+                _, prefill_log_offset = poll_for_pattern(
+                    process=prefill_worker,
+                    pattern=f"Aborted Prefill Request ID: {request_id}",
+                    log_offset=prefill_log_offset,
+                )
+
+                # Then poll for "Aborted Remote Prefill Request ID" in decode worker
+                _, decode_log_offset = poll_for_pattern(
+                    process=decode_worker,
+                    pattern=f"Aborted Remote Prefill Request ID: {request_id}",
+                    log_offset=decode_log_offset,
+                )
+
+                # Verify frontend log has kill message
+                _, frontend_log_offset = poll_for_pattern(
+                    process=frontend,
+                    pattern="issued control message Kill to sender",
+                )
 
                 logger.info(
-                    "Checking for cancellation messages in decode and prefill worker and frontend logs..."
-                )
-                time.sleep(0.05)  # time for cancellation to propagate
-                verify_request_cancelled(
-                    frontend,
-                    decode_worker,
-                    prefill_worker,
-                    assert_cancel_at_prefill=True,
+                    "Completion request cancellation during remote prefill phase detected successfully"
                 )

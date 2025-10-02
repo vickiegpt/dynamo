@@ -236,14 +236,12 @@ def send_chat_completion_request(
 def send_cancellable_request(
     request_type: str = "completion",
     use_long_prompt: bool = False,
-    max_tokens: int = 8000,
 ) -> CancellableRequest:
     """Send a request that can be manually cancelled.
 
     Args:
         request_type: Type of request - "completion", "chat_completion", or "chat_completion_stream"
         use_long_prompt: Whether to use an extremely long prompt
-        max_tokens: Maximum tokens to generate
 
     Returns:
         A CancellableRequest object that can be explicitly cancelled
@@ -252,16 +250,49 @@ def send_cancellable_request(
     if use_long_prompt:
         prompt += " Make sure it is" + " long" * 8000 + "!"
 
-    logger.info(f"Sending {request_type} request with max_tokens: {max_tokens}")
-
     if request_type == "completion":
-        return send_completion_request(prompt, max_tokens)
+        return send_completion_request(prompt, 8192)
     elif request_type == "chat_completion":
-        return send_chat_completion_request(prompt, max_tokens, stream=False)
+        return send_chat_completion_request(prompt, 8192, stream=False)
     elif request_type == "chat_completion_stream":
-        return send_chat_completion_request(prompt, max_tokens, stream=True)
+        return send_chat_completion_request(prompt, 8192, stream=True)
     else:
         raise ValueError(f"Unknown request type: {request_type}")
+
+
+def read_streaming_responses(
+    cancellable_req: CancellableRequest,
+    expected_count: int = 5,
+) -> None:
+    """Read a specific number of responses from a streaming request.
+
+    Args:
+        cancellable_req: The CancellableRequest object with an active stream
+        expected_count: Number of responses to read before returning
+
+    Raises:
+        pytest.fail if stream ends before expected_count responses
+    """
+    response = cancellable_req.get_response()
+    if not response or response.status_code != 200:
+        pytest.fail(
+            f"Failed to get streaming response: status_code={response.status_code if response else 'None'}"
+        )
+
+    response_count = 0
+    for line in response.iter_lines():
+        response_count += 1
+        logger.info(
+            f"Received streaming response {response_count}: {line.decode()[:100]}"
+        )
+        if response_count >= expected_count:
+            logger.info(f"Successfully read {response_count} responses")
+            return
+
+    # If we get here, stream ended too early
+    pytest.fail(
+        f"Stream ended after only {response_count} lines - expected to read at least {expected_count}"
+    )
 
 
 def send_request_and_cancel(
