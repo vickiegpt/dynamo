@@ -159,6 +159,18 @@ jobs:
         run: |
           cd deploy/cloud/operator
           docker build -f Dockerfile -t dynamo-operator:latest .
+      - name: Docker Tag and Push
+        uses: ./.github/actions/docker-tag-push
+        with:
+          local_image: dynamo-operator:latest
+          push_tag: ai-dynamo/dynamo:${{ github.sha }}-operator-amd64
+          aws_push: 'true'
+          azure_push: 'true'
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_default_region: us-west-2
+          azure_acr_hostname: ${{ secrets.AZURE_ACR_HOSTNAME }}
+          azure_acr_user: ${{ secrets.AZURE_ACR_USER }}
+          azure_acr_password: ${{ secrets.AZURE_ACR_PASSWORD }}
 
   e2e-tests:
     runs-on: cpu-amd-m5-2xlarge
