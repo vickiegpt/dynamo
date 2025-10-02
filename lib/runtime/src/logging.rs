@@ -28,6 +28,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use figment::{
     Figment,
@@ -100,6 +101,9 @@ const CONFIG_PATH_ENV: &str = "DYN_LOGGING_CONFIG_PATH";
 
 /// Once instance to ensure the logger is only initialized once
 static INIT: Once = Once::new();
+
+/// Global flag to track if lazy OTEL initialization has been completed
+static LAZY_OTEL_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize, Deserialize, Debug)]
 struct LoggingConfig {
@@ -276,6 +280,9 @@ impl TraceParent {
 // as a first pass, we can potentially have a subroutine that intializes a traceparent as well, some of the fields are read from the headers and some are read from otel extension
 // we can later figure out how to ship all the details in the otel context
 pub fn make_request_span<B>(req: &Request<B>) -> Span {
+    // Attempt lazy OTEL initialization on first request
+    lazy_init_otel();
+    
     let method = req.method();
     let uri = req.uri();
     let version = format!("{:?}", req.version());
@@ -390,6 +397,9 @@ pub fn create_handle_payload_span_from_nats_headers(
     namespace: &str,
     instance_id: i64,
 ) -> Span {
+    // Attempt lazy OTEL initialization on NATS message handling
+    lazy_init_otel();
+    
     // Extract the trace context and individual IDs from headers
     let (otel_context, trace_id, parent_span_id) = extract_otel_context_from_nats_headers(headers);
     
@@ -754,15 +764,48 @@ pub fn get_distributed_tracing_context() -> Option<DistributedTraceContext> {
         .flatten()
 }
 
+/// Lazy initialize OTEL tracing when Tokio runtime is available
+/// This should be called from request processing functions
+pub fn lazy_init_otel() {
+    // Only attempt lazy init if JSONL logging is enabled and not already initialized
+    if !jsonl_logging_enabled() || LAZY_OTEL_INITIALIZED.load(Ordering::Relaxed) {
+        return;
+    }
+    
+    // Check if we have a Tokio runtime available
+    if tokio::runtime::Handle::try_current().is_err() {
+        return; // Still no runtime, skip for now
+    }
+    
+    // Use INIT to ensure we only initialize once
+    INIT.call_once(|| {
+        if let Err(e) = setup_logging() {
+            eprintln!("Failed to initialize OTEL logging: {}", e);
+            // Don't exit here since we're in request processing
+        } else {
+            LAZY_OTEL_INITIALIZED.store(true, Ordering::Relaxed);
+            tracing::info!("OTEL tracing initialized lazily");
+        }
+    });
+}
+
 /// Initialize the logger
 pub fn init() {
     println!("init called");
-    // INIT.call_once(setup_logging);
-    // TODO: Restore this to call_once
-    if let Err(e) = setup_logging() {
-        eprintln!("Failed to initialize logging: {}", e);
-        std::process::exit(1);
+    
+    if jsonl_logging_enabled() {
+        // For JSONL logging, defer initialization until Tokio runtime is available
+        println!("JSONL logging enabled - deferring initialization until runtime is available");
+        return;
     }
+    
+    // For non-JSONL logging, initialize immediately
+    INIT.call_once(|| {
+        if let Err(e) = setup_logging() {
+            eprintln!("Failed to initialize logging: {}", e);
+            std::process::exit(1);
+        }
+    });
 }
 
 #[cfg(feature = "tokio-console")]
