@@ -17,7 +17,10 @@ from tensorrt_llm.llmapi import (
     SchedulerConfig,
 )
 from tensorrt_llm.llmapi.llm import SamplingParams
-from tensorrt_llm.llmapi.llm_utils import update_llm_args_with_extra_options
+from tensorrt_llm.llmapi.llm_utils import (
+    ModelLoader,
+    update_llm_args_with_extra_options,
+)
 from tensorrt_llm.llmapi.tokenizer import tokenizer_factory
 from torch.cuda import device_count
 from transformers import AutoConfig
@@ -235,7 +238,9 @@ async def init(runtime: DistributedRuntime, config: Config):
     # Populate default sampling params from the model
     tokenizer = tokenizer_factory(arg_map["model"])
     default_sampling_params = SamplingParams()
-    default_sampling_params._setup(tokenizer)
+    hf_generation_config = ModelLoader.load_hf_generation_config(arg_map["model"])
+    hf_model_config = ModelLoader.load_hf_model_config(arg_map["model"])
+    default_sampling_params._setup(tokenizer, hf_model_config, hf_generation_config)
     default_sampling_params.stop = None
     model_input = ModelInput.Tokens
     model_type = ModelType.Chat | ModelType.Completions
