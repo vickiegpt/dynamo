@@ -49,7 +49,7 @@ PYTHON_PACKAGE_VERSION=${current_tag:-$latest_tag.dev+$commit_id}
 # dependencies are specified in the /container/deps folder and
 # installed within framework specific sections of the Dockerfile.
 
-declare -A FRAMEWORKS=(["VLLM"]=1 ["TRTLLM"]=2 ["NONE"]=3 ["SGLANG"]=4)
+declare -A FRAMEWORKS=(["VLLM"]=1 ["TRTLLM"]=2 ["NONE"]=3 ["SGLANG"]=4 ["OPERATOR"]=5)
 
 DEFAULT_FRAMEWORK=VLLM
 
@@ -114,6 +114,9 @@ NONE_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
 
 SGLANG_BASE_IMAGE="nvcr.io/nvidia/cuda-dl-base"
 SGLANG_BASE_IMAGE_TAG="25.01-cuda12.8-devel-ubuntu24.04"
+
+OPERATOR_BASE_IMAGE="golang"
+OPERATOR_BASE_IMAGE_TAG="1.24"
 
 NIXL_REF=0.4.1
 NIXL_UCX_REF=v1.19.0
@@ -393,9 +396,13 @@ get_options() {
     fi
 
     if [ -z "$TAG" ]; then
-        TAG="--tag dynamo:${VERSION}-${FRAMEWORK,,}"
-        if [ -n "${TARGET}" ] && [ "${TARGET}" != "local-dev" ]; then
-            TAG="${TAG}-${TARGET}"
+        if [[ $FRAMEWORK == "OPERATOR" ]]; then
+            TAG="--tag dynamo-operator:${VERSION}"
+        else
+            TAG="--tag dynamo:${VERSION}-${FRAMEWORK,,}"
+            if [ -n "${TARGET}" ] && [ "${TARGET}" != "local-dev" ]; then
+                TAG="${TAG}-${TARGET}"
+            fi
         fi
     fi
 
@@ -451,6 +458,7 @@ show_help() {
     echo "  [--base-image-tag base image tag]"
     echo "  [--platform platform for docker build]"
     echo "  [--framework framework one of ${!FRAMEWORKS[*]}]"
+    echo "    Note: OPERATOR builds the Kubernetes operator image"
     echo "  [--tensorrtllm-pip-wheel-dir path to tensorrtllm pip wheel directory]"
     echo "  [--tensorrtllm-commit tensorrtllm commit to use for building the trtllm wheel if the wheel is not provided]"
     echo "  [--use-default-experimental-tensorrtllm-commit] Use the default experimental commit (${DEFAULT_EXPERIMENTAL_TRTLLM_COMMIT}) to build TensorRT-LLM. This is a flag (no argument). Do not combine with --tensorrtllm-commit or --tensorrtllm-pip-wheel."
@@ -508,6 +516,9 @@ elif [[ $FRAMEWORK == "NONE" ]]; then
     DOCKERFILE=${SOURCE_DIR}/Dockerfile
 elif [[ $FRAMEWORK == "SGLANG" ]]; then
     DOCKERFILE=${SOURCE_DIR}/Dockerfile.sglang
+elif [[ $FRAMEWORK == "OPERATOR" ]]; then
+    DOCKERFILE=${BUILD_CONTEXT}/deploy/cloud/operator/Dockerfile
+    BUILD_CONTEXT=${BUILD_CONTEXT}/deploy/cloud/operator
 fi
 
 # Add NIXL_REF as a build argument
@@ -576,8 +587,11 @@ build_local_dev_with_header() {
 }
 
 
-# Handle local-dev target
+# Handle local-dev target (not supported for operator)
 if [[ $TARGET == "local-dev" ]]; then
+    if [[ $FRAMEWORK == "OPERATOR" ]]; then
+        error "ERROR: --target local-dev is not supported for OPERATOR framework"
+    fi
     LOCAL_DEV_BUILD=true
     TARGET_STR="--target dev"
 fi
@@ -716,9 +730,13 @@ if [ "$USE_SCCACHE" = true ]; then
     BUILD_ARGS+=" --secret id=aws-secret-id,env=AWS_SECRET_ACCESS_KEY"
 fi
 
-LATEST_TAG="--tag dynamo:latest-${FRAMEWORK,,}"
-if [ -n "${TARGET}" ] && [ "${TARGET}" != "local-dev" ]; then
-    LATEST_TAG="${LATEST_TAG}-${TARGET}"
+if [[ $FRAMEWORK == "OPERATOR" ]]; then
+    LATEST_TAG="--tag dynamo-operator:latest"
+else
+    LATEST_TAG="--tag dynamo:latest-${FRAMEWORK,,}"
+    if [ -n "${TARGET}" ] && [ "${TARGET}" != "local-dev" ]; then
+        LATEST_TAG="${LATEST_TAG}-${TARGET}"
+    fi
 fi
 
 show_image_options
@@ -730,8 +748,14 @@ fi
 
 # Skip Build 1 and Build 2 if DEV_IMAGE_INPUT is set (we'll handle it at the bottom)
 if [[ -z "${DEV_IMAGE_INPUT:-}" ]]; then
-    # Follow 2-step build process for all frameworks
-    if [[ $FRAMEWORK != "NONE" ]]; then
+    # Handle operator build separately (single-stage build)
+    if [[ $FRAMEWORK == "OPERATOR" ]]; then
+        echo "======================================"
+        echo "Building Operator Image"
+        echo "======================================"
+        $RUN_PREFIX docker build -f $DOCKERFILE $PLATFORM $BUILD_ARGS $CACHE_FROM $CACHE_TO $TAG $LATEST_TAG $BUILD_CONTEXT_ARG $BUILD_CONTEXT $NO_CACHE
+    # Follow 2-step build process for all other frameworks
+    elif [[ $FRAMEWORK != "NONE" ]]; then
         # Define base image tag before using it
         DYNAMO_BASE_IMAGE="dynamo-base:${VERSION}"
         # Start base image build
@@ -752,6 +776,10 @@ fi
 
 # Handle --dev-image option (build local-dev from existing dev image)
 if [[ -n "${DEV_IMAGE_INPUT:-}" ]]; then
+    if [[ $FRAMEWORK == "OPERATOR" ]]; then
+        error "ERROR: --dev-image is not supported for OPERATOR framework"
+    fi
+
     # Validate that the dev image is not already a local-dev image
     if [[ "$DEV_IMAGE_INPUT" == *"-local-dev" ]]; then
         echo "ERROR: Cannot use local-dev image as dev image input: '$DEV_IMAGE_INPUT'"

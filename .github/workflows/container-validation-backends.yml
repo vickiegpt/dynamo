@@ -147,6 +147,29 @@ jobs:
           image_tag: ${{ steps.build-image.outputs.image_tag }}
           pytest_marks: "e2e and trtllm_marker and gpu_1 and not slow"
 
+  operator:
+    runs-on: gpu-l40-amd64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
+      - name: Build Container
+        id: build-image
+        uses: ./.github/actions/docker-build
+        with:
+          framework: operator
+      - name: Docker Tag and Push
+        uses: ./.github/actions/docker-tag-push
+        with:
+          local_image: ${{ steps.build-image.outputs.image_tag }}
+          push_tag: ai-dynamo/dynamo:${{ github.sha }}-operator-amd64
+          aws_push: 'true'
+          azure_push: 'true'
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_default_region: us-west-2
+          azure_acr_hostname: ${{ secrets.AZURE_ACR_HOSTNAME }}
+          azure_acr_user: ${{ secrets.AZURE_ACR_USER }}
+          azure_acr_password: ${{ secrets.AZURE_ACR_PASSWORD }}
+
   e2e-tests:
     runs-on: cpu-amd-m5-2xlarge
     strategy:
