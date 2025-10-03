@@ -138,7 +138,9 @@ pytest tests/fault_tolerance/deploy/test_deployment.py -s -v --namespace ${NAMES
 
 ### Test Results Directory
 
-For each test scenario a directory of log files is created and post-processed to summarize the test.
+For each test scenario a directory of log files is created and post-processed to summarize the test. The directory structure differs based on which client type is used.
+
+#### AI-Perf Client Output Structure (Default)
 
 ```
 test_fault_scenario[sglang-agg-tp-1-dp-1-frontend]
@@ -163,7 +165,6 @@ test_fault_scenario[sglang-agg-tp-1-dp-1-frontend]
 ├── decode/                                # Or VllmDecodeWorker for vLLM backend
 │   └── [same structure as Frontend]
 └── test.log.txt
-
 ```
 
 | File/Directory Name                | Description                                                                                      |
@@ -177,6 +178,46 @@ test_fault_scenario[sglang-agg-tp-1-dp-1-frontend]
 | **{Service}/*.metrics.log**        | Prometheus metrics from `/metrics` endpoint                                                    |
 | **{Service}/*.yaml**               | Pod specification and status transitions                                                       |
 | **test.log.txt**                   | Primary test execution log (deployment timing, fault injection, recovery events)               |
+
+#### Legacy Client Output Structure (with `--client-type legacy`)
+
+```
+test_fault_scenario[sglang-agg-tp-1-dp-1-frontend]
+.
+├── client_0.log.txt                       # JSONL format: one request per line
+├── client_1.log.txt                       # Direct HTTP request/response logs
+├── client_2.log.txt
+├── client_3.log.txt
+├── client_4.log.txt
+├── client_5.log.txt
+├── client_6.log.txt
+├── client_7.log.txt
+├── client_8.log.txt
+├── client_9.log.txt
+├── Frontend/
+│   ├── fault-tolerance-test-frontend-576bd784dc-jv68q.log
+│   ├── fault-tolerance-test-frontend-576bd784dc-jv68q.metrics.log
+│   ├── fault-tolerance-test-frontend-576bd784dc-jv68q.previous.log  # Pre-restart logs
+│   └── fault-tolerance-test-frontend-576bd784dc-jv68q.yaml
+├── decode/                                # Or VllmDecodeWorker for vLLM backend
+│   └── [same structure as Frontend]
+└── test.log.txt
+```
+
+| File Name                      | Description                                                                                      |
+|--------------------------------|------------------------------------------------------------------------------------------------|
+| **client_N.log.txt**           | JSONL format logs with one request/response per line (per-request retry support)               |
+| **{Service}/*.log**            | Current container log for pod (Frontend, decode, etc.)                                         |
+| **{Service}/*.previous.log**   | Previous container log before restart (contains pre-fault logs)                                |
+| **{Service}/*.metrics.log**    | Prometheus metrics from `/metrics` endpoint                                                    |
+| **{Service}/*.yaml**           | Pod specification and status transitions                                                       |
+| **test.log.txt**               | Primary test execution log (deployment timing, fault injection, recovery events)               |
+
+**Example JSONL content in `client_N.log.txt`:**
+```json
+{"time": "2025-10-03T10:30:45", "results": [{"status": 200, "request_elapsed_time": 1.23, "url": "http://localhost:8000/v1/chat/completions", "pod": "frontend-pod"}], "total_time": 1.25}
+{"time": "2025-10-03T10:30:47", "results": [{"status": 200, "request_elapsed_time": 1.18, "url": "http://localhost:8000/v1/chat/completions", "pod": "frontend-pod"}], "total_time": 1.20}
+```
 
 ### Summary Results
 
