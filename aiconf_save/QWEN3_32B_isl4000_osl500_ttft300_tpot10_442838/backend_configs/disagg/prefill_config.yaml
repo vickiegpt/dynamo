@@ -1,11 +1,11 @@
 backend: pytorch
-tensor_parallel_size: 8
+tensor_parallel_size: 1
 pipeline_parallel_size: 1
 enable_attention_dp: false
 enable_chunked_prefill: false
-max_batch_size: 12
-max_num_tokens: 5512
+max_batch_size: 1
+max_num_tokens: 5500
 max_seq_len: 5500
 kv_cache_config:
-  enable_block_reuse: false
+  enable_block_reuse: true
   free_gpu_memory_fraction: 0.8

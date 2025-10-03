@@ -21,33 +21,38 @@ This guide demonstrates how to use AIConfigurator to optimize Dynamo deployments
 
 This benchmark compares two configurations:
 
-- **Baseline (A)**: Standard TensorRT-LLM aggregated deployment with default configuration
-- **AIConfigurator-Optimized (B)**: AIConfigurator-optimized aggregated deployment with tuned parameters
+- **Baseline (A)**: Standard TensorRT-LLM disaggregated deployment (1 prefill + 1 decode worker, 1 GPU each)
+- **AIConfigurator-Optimized (B)**: AIConfigurator-recommended deployment (aggregated or disaggregated) with optimized parameters
 
-**Goal**: Demonstrate the relative performance increase conferred by using AIConfigurator and validate the accuracy of AIConfigurator's projections versus benchmarked reality.
+**Goal**: Demonstrate the relative performance increase conferred by using AIConfigurator and validate the accuracy of AIConfigurator's projections versus benchmarked reality. AIConfigurator will automatically choose the best configuration type (aggregated vs disaggregated) and parameters for the given constraints.
 
 ## Test Configuration
 
 - **Model**: Qwen3-32B
 - **System**: H200 SXM
 - **Total GPUs**: 8
+- **Baseline Configuration**: Disaggregated (1P1D) - 1 prefill worker + 1 decode worker, 1 GPU each
+- **AIConfigurator Configuration**: Determined through running AIConfigurator CLI
 - **Input Sequence Length (ISL)**: 4000 tokens
 - **Output Sequence Length (OSL)**: 500 tokens
-- **SLA Target**: TTFT ≤ 500ms, TPOT ≤ 7ms
+- **SLA Target**: AIC defaults
 - **Kubernetes Namespace**: `hannahz`
 - **Docker Image**: `nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.5.0`
 
 ## AIConfigurator Predicted Results
 
-AIConfigurator analysis predicts:
-- **Baseline Aggregated**: 339.51 tokens/s/GPU (143.14 tokens/s/user) | TTFT: 189.94ms, TPOT: 6.99ms
-- **AIConfigurator Aggregated**: Optimized aggregated configuration with tuned parameters
-- **Expected Improvement**: Performance optimization through parameter tuning
+AIConfigurator will analyze the configuration space and provide:
+- **Baseline Performance**: Performance predictions for the disaggregated baseline (1P1D)
+- **Recommended Configuration**: Best configuration type (aggregated or disaggregated) with optimized parameters
+- **Expected Improvement**: Performance optimization through configuration and parameter tuning
 
-The AIConfigurator-optimized aggregated configuration uses:
-- 1 worker with 8 GPUs (TP=8)
-- Optimized batch size (12) and memory settings
-- Tuned engine parameters for better performance
+The AIConfigurator-recommended configuration will use:
+- Optimal deployment pattern (aggregated vs disaggregated)
+- Optimized GPU allocation and tensor parallelism
+- Tuned batch sizes and memory settings
+- Optimized engine parameters for the specific workload
+
+**Note**: The specific configuration details will be shown in the AIConfigurator output after running Step 2.
 
 ## Prerequisites
 
@@ -66,7 +71,7 @@ The AIConfigurator-optimized aggregated configuration uses:
 
 ```bash
 export NAMESPACE=hannahz
-export NAMESPACE_2=hannahz-2
+export NAMESPACE_2=hannahz-2 # note: if you set a different NAMESPACE_2, you'll need to modify the namespace in the benchmark job(s)
 ```
 
 **Note**: This guide assumes you have 2x8 H200 GPUs available to run both deployments simultaneously. If you only have 8 H200 GPUs, see the [Single GPU Setup](#single-gpu-setup) section for sequential deployment instructions.
@@ -111,7 +116,6 @@ aiconfigurator cli \
   --system h200_sxm \
   --total_gpus 8 \
   --isl 4000 --osl 500 \
-  --ttft 500 --tpot 7 \
   --save_dir ./aiconf_save \
   --model_path Qwen/Qwen3-32B \
   --served_model_name Qwen/Qwen3-32B \
@@ -119,23 +123,31 @@ aiconfigurator cli \
   --k8s_namespace $NAMESPACE_2 \
   --k8s_image nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.5.0 \
   --cache_transceiver_backend default
+
+# Set the AIConfigurator output directory (replace with your actual directory name)
+# The AIC logs will show something like "saving results to ./aiconf_save/QWEN3_32B_isl4000_osl500_ttft300_tpot10_442838"
+export AICONF_DIR=./aiconf_save/QWEN3_32B_XXXXXX
+
+# Check which configuration AIConfigurator recommended:
+# - Look for "Overall best system chosen: agg" or "Overall best system chosen: disagg" in the output
+# - Or check within $AICONF_DIR/aiconfigurator_result.json
 ```
 
 **Output**: AIConfigurator will analyze the configuration space and generate:
 - Performance predictions and Pareto frontier analysis
-- Kubernetes deployment YAML for aggregated configuration
+- Kubernetes deployment YAML for the recommended configuration (aggregated or disaggregated)
 - Engine configuration files with optimized parameters
 
 **Note**: If the generated deployment includes NIXL wheel installation commands that fail, manually remove the NIXL-related lines from the generated `k8s_deploy.yaml` file. The deployment should work with the default communication backend.
 
 The generated files will be located at:
 ```
-aiconf_save/QWEN3_32B_isl4000_osl500_ttft500_tpot7_*/
+aiconf_save/QWEN3_32B_isl4000_osl500_*/
 ├── aiconfigurator_config.yaml
 └── backend_configs/
-    └── agg/
+    └── {agg|disagg}/
         ├── k8s_deploy.yaml
-        └── agg_config.yaml
+        └── {agg|disagg}_config.yaml
 ```
 
 **Note**:
@@ -145,52 +157,33 @@ aiconf_save/QWEN3_32B_isl4000_osl500_ttft500_tpot7_*/
 
 ### Step 3: Deploy Baseline Configuration
 
-Deploy the standard aggregated TensorRT-LLM configuration:
+Deploy the standard disaggregated TensorRT-LLM configuration:
 
 ```bash
 # Deploy baseline configuration
-kubectl apply -f components/backends/trtllm/deploy/agg_baseline.yaml -n $NAMESPACE
+kubectl apply -f components/backends/trtllm/deploy/disagg_baseline.yaml -n $NAMESPACE
 
 # Wait for deployment to be ready
-kubectl wait --for=condition=ready pod -l dynamoNamespace=trtllm-agg-baseline -n $NAMESPACE --timeout=600s
+kubectl wait --for=condition=ready pod -l dynamoNamespace=trtllm-disagg-baseline -n $NAMESPACE --timeout=600s
 
 # Verify deployment
-kubectl get pods -n $NAMESPACE -l dynamoNamespace=trtllm-agg-baseline
+kubectl get pods -n $NAMESPACE -l dynamoNamespace=trtllm-disagg-baseline
 ```
 
 **Configuration Details**:
-- 8 workers, 1 GPU each
-- Aggregated mode (prefill and decode on same workers)
-- Model path: `/workspace/model_hub/qwen3-32b`
-- Service name: `trtllm-agg-baseline-frontend`
+- 1 prefill worker, 1 GPU
+- 1 decode worker, 1 GPU
+- Disaggregated mode (separate prefill and decode workers)
+- Model path: `Qwen/Qwen3-32B` (HuggingFace)
+- Service name: `trtllm-disagg-baseline-frontend`
 
-### Step 4: Benchmark Baseline Configuration
-
-Run the in-cluster benchmark for the baseline:
-
-```bash
-# Deploy benchmark job
-kubectl apply -f benchmarks/incluster/benchmark_baseline_job.yaml -n $NAMESPACE
-
-# Monitor the benchmark
-kubectl logs -f job/dynamo-benchmark-baseline -n $NAMESPACE
-
-# Wait for completion
-kubectl wait --for=condition=complete job/dynamo-benchmark-baseline -n $NAMESPACE --timeout=3600s
-```
-
-The benchmark will:
-- Test at various concurrency levels (1, 2, 5, 10, 50, 100, 250)
-- Measure TTFT, TPOT, throughput, and latency
-- Store results in `/data/results/qwen3-32b-trtllm-agg-baseline/`
-
-### Step 5: Deploy AIConfigurator Configuration (Parallel)
+### Step 4: Deploy AIConfigurator Configuration
 
 Deploy the AIConfigurator-optimized configuration in the second namespace:
 
+**If AIConfigurator recommended aggregated configuration:**
 ```bash
-# Create ConfigMap for AIConfigurator engine configs dynamically
-AICONF_DIR=$(ls -d aiconf_save/QWEN3_32B_isl4000_osl500_ttft500_tpot7_* | head -n1)
+# Create ConfigMap for aggregated engine config
 kubectl create configmap engine-configs \
   --from-file=agg_config.yaml=$AICONF_DIR/backend_configs/agg/agg_config.yaml \
   -n $NAMESPACE_2 \
@@ -200,41 +193,72 @@ kubectl create configmap engine-configs \
 kubectl apply -f $AICONF_DIR/backend_configs/agg/k8s_deploy.yaml -n $NAMESPACE_2
 
 # Wait for deployment to be ready
-kubectl wait --for=condition=ready pod -l dynamoNamespace=trtllm-agg-aic -n $NAMESPACE_2 --timeout=600s
+kubectl wait --for=condition=ready pod -l dynamoNamespace=trtllm-agg -n $NAMESPACE_2 --timeout=600s
 
 # Verify deployment
-kubectl get pods -n $NAMESPACE_2 -l dynamoNamespace=trtllm-agg-aic
+kubectl get pods -n $NAMESPACE_2 -l dynamoNamespace=trtllm-agg
+```
+
+**If AIConfigurator recommended disaggregated configuration:**
+```bash
+# Create ConfigMap for disaggregated engine config
+kubectl create configmap engine-configs \
+  --from-file=disagg_config.yaml=$AICONF_DIR/backend_configs/disagg/disagg_config.yaml \
+  -n $NAMESPACE_2 \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# Deploy AIConfigurator-optimized disaggregated configuration
+kubectl apply -f $AICONF_DIR/backend_configs/disagg/k8s_deploy.yaml -n $NAMESPACE_2
+
+# Wait for deployment to be ready
+kubectl wait --for=condition=ready pod -l dynamoNamespace=trtllm-disagg -n $NAMESPACE_2 --timeout=600s
+
+# Verify deployment
+kubectl get pods -n $NAMESPACE_2 -l dynamoNamespace=trtllm-disagg
 ```
 
 **Configuration Details**:
-- 1 worker with 8 GPUs (TP=8)
-- Optimized batch size (12) and memory settings
+- Configuration type (aggregated or disaggregated) determined by AIConfigurator
+- Optimized GPU allocation and tensor parallelism
+- Optimized batch sizes and memory settings
 - Tuned engine parameters for better performance
-- Service name: `trtllm-agg-aic-frontend`
+- Service names: `trtllm-agg-frontend` (if aggregated) or `trtllm-disagg-frontend` (if disaggregated)
 
-**Why ConfigMap is needed**: The AIConfigurator-optimized deployment uses a custom engine configuration file (`agg_config.yaml`) with tuned parameters, while the baseline uses the built-in `engine_configs/agg.yaml`. The ConfigMap is created dynamically from the generated `agg_config.yaml` file.
+**Why ConfigMap is needed**: The AIConfigurator-optimized deployment uses a custom engine configuration file with tuned parameters, while the baseline uses the built-in engine configs.
 
-### Step 6: Benchmark Both Configurations (Parallel)
+### Step 5: Benchmark Both Configurations (Parallel)
 
 Run the in-cluster benchmarks for both deployments simultaneously:
 
 ```bash
 # Deploy benchmark job for baseline
 kubectl apply -f benchmarks/incluster/benchmark_baseline_job.yaml -n $NAMESPACE
+```
 
-# Deploy benchmark job for AIConfigurator
+**If AIConfigurator recommended aggregated configuration:**
+```bash
+# Deploy AIConfigurator benchmark job for aggregated
 kubectl apply -f benchmarks/incluster/benchmark_aic_agg_job.yaml -n $NAMESPACE
+```
 
+**If AIConfigurator recommended disaggregated configuration:**
+```bash
+# Deploy AIConfigurator benchmark job for disaggregated
+kubectl apply -f benchmarks/incluster/benchmark_aic_disagg_job.yaml -n $NAMESPACE
+```
+
+**Monitor and wait for both benchmarks:**
+```bash
 # Monitor both benchmarks
 kubectl logs -f job/dynamo-benchmark-baseline -n $NAMESPACE &
-kubectl logs -f job/dynamo-benchmark-aic-agg -n $NAMESPACE &
+kubectl logs -f job/dynamo-benchmark-aic -n $NAMESPACE &
 
 # Wait for both to complete
 kubectl wait --for=condition=complete job/dynamo-benchmark-baseline -n $NAMESPACE --timeout=3600s
-kubectl wait --for=condition=complete job/dynamo-benchmark-aic-agg -n $NAMESPACE --timeout=3600s
+kubectl wait --for=condition=complete job/dynamo-benchmark-aic -n $NAMESPACE --timeout=3600s
 ```
 
-### Step 7: Retrieve and Analyze Results
+### Step 6: Retrieve and Analyze Results
 
 Download the benchmark results from the PVC:
 
@@ -242,22 +266,22 @@ Download the benchmark results from the PVC:
 # Download baseline results
 python3 -m deploy.utils.download_pvc_results \
   --namespace $NAMESPACE \
-  --output-dir ./benchmarks/results/qwen3-32b-trtllm-agg-baseline \
-  --folder /data/results/qwen3-32b-trtllm-agg-baseline \
+  --output-dir ./aiconf_save/benchmark_results/qwen3-32b-trtllm-baseline \
+  --folder /data/results/qwen3-32b-trtllm-baseline \
   --no-config
 
 # Download AIConfigurator results
 python3 -m deploy.utils.download_pvc_results \
   --namespace $NAMESPACE \
-  --output-dir ./benchmarks/results/qwen3-32b-trtllm-aic-agg \
-  --folder /data/results/qwen3-32b-trtllm-aic-agg \
+  --output-dir ./aiconf_save/benchmark_results/qwen3-32b-trtllm-aic \
+  --folder /data/results/qwen3-32b-trtllm-aic \
   --no-config
 
 # Generate comparison plots
 python3 -m benchmarks.utils.plot \
   --data-dir ./benchmarks/results \
-  --benchmark-name qwen3-32b-trtllm-agg-baseline \
-  --benchmark-name qwen3-32b-trtllm-aic-agg
+  --benchmark-name qwen3-32b-trtllm-baseline \
+  --benchmark-name qwen3-32b-trtllm-aic
 ```
 
 ### Step 8: Compare Results
@@ -276,19 +300,22 @@ benchmarks/results/plots/
 
 **Key Metrics to Compare**:
 
-1. **Throughput (tokens/s/GPU)**: Compare actual vs AIConfigurator prediction
-   - AIConfigurator predicted: 339.51 (baseline) vs optimized aggregated configuration
+1. **Throughput (tokens/s/GPU)**: Compare disaggregated baseline vs AIConfigurator-recommended configuration
+   - Baseline: 1P1D disaggregated performance
+   - AIConfigurator: Optimized configuration (aggregated or disaggregated) performance
 
 2. **User Throughput (tokens/s/user)**: End-to-end throughput from user perspective
-   - AIConfigurator predicted: 143.14 (baseline) vs optimized configuration
+   - Compare baseline disaggregated vs AIConfigurator-recommended configuration
 
 3. **TTFT (Time to First Token)**: Response latency
-   - AIConfigurator predicted: 189.94ms (baseline) vs optimized configuration
+   - Compare baseline vs AIConfigurator-optimized latency
 
 4. **TPOT (Time Per Output Token)**: Token generation latency
-   - AIConfigurator predicted: 6.99ms (baseline) vs optimized configuration
+   - Compare baseline vs AIConfigurator-optimized token generation speed
 
-5. **Accuracy of Predictions**: Compare AIConfigurator predictions vs actual benchmarked results
+5. **Configuration Efficiency**: Evaluate whether AIConfigurator chose aggregated or disaggregated and why
+
+6. **Accuracy of Predictions**: Compare AIConfigurator predictions vs actual benchmarked results
 
 ## Understanding the Results
 
@@ -296,40 +323,44 @@ benchmarks/results/plots/
 
 Based on AIConfigurator's analysis, we expect:
 
-1. **Optimized Performance**: The AIConfigurator-optimized aggregated configuration should achieve better performance due to:
+1. **Optimized Performance**: The AIConfigurator-recommended configuration should achieve better performance due to:
+   - Optimal choice between aggregated and disaggregated deployment patterns
    - Tuned batch sizes and memory settings
    - Optimized engine parameters for the specific workload
-   - Better resource utilization
+   - Better resource utilization and GPU allocation
 
-2. **SLA Compliance**: Both configurations should meet the SLA targets (TTFT ≤ 500ms, TPOT ≤ 7ms)
+2. **Performance Comparison**: Direct comparison of throughput and latency between baseline and optimized configurations
 
-3. **Improved Efficiency**: AIConfigurator should provide better tokens/s/GPU through parameter optimization
+3. **Improved Efficiency**: AIConfigurator should provide better tokens/s/GPU through configuration and parameter optimization
 
-4. **Validated Predictions**: The actual benchmark results should validate AIConfigurator's performance predictions
+4. **Configuration Insights**: AIConfigurator will demonstrate whether aggregated or disaggregated is better for this specific workload
+
+5. **Validated Predictions**: The actual benchmark results should validate AIConfigurator's performance predictions
 
 ### Validating AIConfigurator Accuracy
 
 Compare the actual benchmark results against AIConfigurator's predictions to evaluate:
 - Prediction accuracy for throughput metrics
-- Accuracy of SLA compliance (TTFT, TPOT)
+- Accuracy of latency predictions (TTFT, TPOT)
 - Real-world performance gain vs predicted improvement
 
 ## Configuration Files Reference
 
 ### Baseline Configuration
-- **Deployment**: `components/backends/trtllm/deploy/agg_baseline.yaml`
-- **Engine Config**: Built-in `engine_configs/agg.yaml`
-- **Workers**: 8x 1-GPU aggregated workers
+- **Deployment**: `components/backends/trtllm/deploy/disagg_baseline.yaml`
+- **Engine Config**: Built-in `engine_configs/prefill.yaml` and `engine_configs/decode.yaml`
+- **Workers**: 1 prefill worker (1 GPU) + 1 decode worker (1 GPU)
 
 ### AIConfigurator-Optimized Configuration
-- **Deployment**: `aiconf_save/QWEN3_32B_*/backend_configs/agg/k8s_deploy.yaml`
-- **ConfigMap**: Created dynamically from `agg_config.yaml`
-- **Engine Config**: `agg_config.yaml` (TP=8, batch_size=12, free_gpu_memory=0.8)
-- **Workers**: 1 worker (8 GPUs)
+- **Deployment**: `aiconf_save/QWEN3_32B_*/backend_configs/{agg|disagg}/k8s_deploy.yaml`
+- **ConfigMap**: Created dynamically from `{agg|disagg}_config.yaml`
+- **Engine Config**: Configuration file with optimized parameters
+- **Workers**: Determined by AIConfigurator (aggregated or disaggregated)
 
 ### Benchmark Jobs
 - **Baseline**: `benchmarks/incluster/benchmark_baseline_job.yaml`
-- **AIConfigurator**: `benchmarks/incluster/benchmark_aic_agg_job.yaml`
+- **AIConfigurator Aggregated**: `benchmarks/incluster/benchmark_aic_agg_job.yaml`
+- **AIConfigurator Disaggregated**: `benchmarks/incluster/benchmark_aic_disagg_job.yaml`
 - **Parameters**: ISL=4000, OSL=500, matching AIConfigurator input
 
 ### Cleanup
@@ -337,115 +368,46 @@ Compare the actual benchmark results against AIConfigurator's predictions to eva
 To clean up all resources:
 
 ```bash
-# Delete deployments
-kubectl delete -f components/backends/trtllm/deploy/agg_baseline.yaml -n $NAMESPACE
-AICONF_DIR=$(ls -d aiconf_save/QWEN3_32B_isl4000_osl500_ttft500_tpot7_* | head -n1)
-kubectl delete -f $AICONF_DIR/backend_configs/agg/k8s_deploy.yaml -n $NAMESPACE_2
+# Delete baseline deployment
+kubectl delete dynamographdeployment trtllm-disagg-baseline -n $NAMESPACE
+
+# Delete AIConfigurator deployment (choose based on what was deployed)
+kubectl delete dynamographdeployment trtllm-agg -n $NAMESPACE_2      # If aggregated
+kubectl delete dynamographdeployment trtllm-disagg -n $NAMESPACE_2   # If disaggregated
 
 # Delete ConfigMaps
 kubectl delete configmap engine-configs -n $NAMESPACE_2
 
 # Delete benchmark jobs
 kubectl delete job dynamo-benchmark-baseline -n $NAMESPACE
-kubectl delete job dynamo-benchmark-aic-agg -n $NAMESPACE_2
-```
-
-## Single GPU Setup
-
-If you only have 8 H200 GPUs available, you can run the benchmark sequentially by tearing down deployments between steps:
-
-### Sequential Deployment Steps
-
-1. **Deploy and benchmark baseline** (Steps 3-4)
-2. **Teardown baseline**:
-   ```bash
-   kubectl delete -f components/backends/trtllm/deploy/agg_baseline.yaml -n $NAMESPACE
-   kubectl wait --for=delete pod -l dynamoNamespace=trtllm-agg-baseline -n $NAMESPACE --timeout=300s
-   ```
-3. **Deploy and benchmark AIConfigurator** (Steps 5-6, but use `$NAMESPACE` instead of `$NAMESPACE_2`)
-4. **Teardown AIConfigurator**:
-   ```bash
-   AICONF_DIR=$(ls -d aiconf_save/QWEN3_32B_isl4000_osl500_ttft500_tpot7_* | head -n1)
-   kubectl delete -f $AICONF_DIR/backend_configs/agg/k8s_deploy.yaml -n $NAMESPACE
-   kubectl delete configmap engine-configs -n $NAMESPACE
-   ```
-
-### Modified Commands for Single GPU Setup
-
-Replace `$NAMESPACE_2` with `$NAMESPACE` in the AIConfigurator deployment commands:
-
-```bash
-# AIConfigurator command
-aiconfigurator cli \
-  --model QWEN3_32B \
-  --system h200_sxm \
-  --total_gpus 8 \
-  --isl 4000 --osl 500 \
-  --ttft 500 --tpot 7 \
-  --save_dir ./aiconf_save \
-  --model_path Qwen/Qwen3-32B \
-  --served_model_name Qwen/Qwen3-32B \
-  --k8s_use_model_cache false \
-  --k8s_namespace $NAMESPACE \
-  --k8s_image nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.5.0 \
-  --cache_transceiver_backend default
-
-# Deploy AIConfigurator configuration
-AICONF_DIR=$(ls -d aiconf_save/QWEN3_32B_isl4000_osl500_ttft500_tpot7_* | head -n1)
-kubectl create configmap engine-configs \
-  --from-file=agg_config.yaml=$AICONF_DIR/backend_configs/agg/agg_config.yaml \
-  -n $NAMESPACE
-kubectl apply -f $AICONF_DIR/backend_configs/agg/k8s_deploy.yaml -n $NAMESPACE
-
-# Benchmark AIConfigurator
-kubectl apply -f benchmarks/incluster/benchmark_aic_agg_job.yaml -n $NAMESPACE
+kubectl delete job dynamo-benchmark-aic -n $NAMESPACE
 ```
 
 ---
 
 ## Customizing the Benchmark
 
+This guide provides a template for benchmarking AIConfigurator with different models, hardware, and configurations. Here's how to adapt it:
+
 ### Different Models
 
 To benchmark different models, modify:
-1. AIConfigurator command: `--model` parameter
-2. Deployment YAMLs: `--model-path` and `--served-model-name`
-3. Benchmark jobs: `--model` parameter
+1. **AIConfigurator command**: `--model` parameter (e.g., `LLAMA2_70B`, `MIXTRAL_8X7B`)
+2. **Deployment YAMLs**: Update `--model-path` and `--served-model-name` in both baseline and AIConfigurator configs
+3. **Benchmark jobs**: Update `--model` parameter in benchmark job files
+4. **Baseline choice**: Consider whether 1P1D disaggregated is still the appropriate baseline for larger models
 
 ### Different Hardware
 
-For different GPU types (H100, A100):
-1. AIConfigurator command: `--system` parameter (e.g., `h100_sxm`)
-2. Adjust GPU counts and topology as needed
+For different GPU types:
+1. **AIConfigurator command**: `--system` parameter (e.g., `h100_sxm`, `a100_sxm`)
+2. **GPU allocation**: Adjust `--total_gpus` based on available hardware
+3. **Deployment configs**: Update GPU resource limits in YAML files
+4. **Baseline configuration**: May need different baseline (e.g., 2P2D for larger models)
 
-### Different SLA Targets
+### Different Workload Parameters
 
-Modify AIConfigurator parameters:
-- `--isl` and `--osl`: Input/output sequence lengths
-- `--ttft` and `--tpot`: Target latency constraints
-
-### Different Concurrency Levels
-
-Set the `CONCURRENCIES` environment variable in benchmark jobs:
-```yaml
-env:
-  - name: CONCURRENCIES
-    value: "1,2,5,10,25,50,100"
-```
-
-## Additional Resources
-
-- [Dynamo Benchmarking Guide](./benchmarking.md)
-- [AIConfigurator Documentation](https://github.com/ai-dynamo/aiconfigurator)
-- [TensorRT-LLM Backend Documentation](../../components/backends/trtllm/README.md)
-- [Deploy Utils README](../../deploy/utils/README.md)
-
-## Conclusion
-
-This benchmark demonstrates:
-1. How to use AIConfigurator to optimize Dynamo deployments
-2. How to validate AIConfigurator's predictions through real-world benchmarking
-3. The performance benefits of using AIConfigurator for deployment optimization
-4. A reproducible methodology for comparing different deployment configurations
-
-The results provide quantitative evidence of AIConfigurator's value in optimizing LLM serving deployments and validate its prediction accuracy for real-world workloads.
+Modify AIConfigurator parameters based on your use case:
+- `--isl` and `--osl`: Input/output sequence lengths for your workload
+- `--ttft` and `--tpot`: Optional latency constraints if you have SLA requirements
+- `--total_gpus`: Available GPU budget

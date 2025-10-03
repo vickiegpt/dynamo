@@ -1,0 +1,115 @@
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: trtllm-disagg
+  namespace: hannahz-2
+spec:
+  services:
+    Frontend:
+      dynamoNamespace: trtllm-disagg
+      componentType: frontend
+      replicas: 1
+      extraPodSpec:
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.5.0
+          imagePullPolicy: IfNotPresent
+    TRTLLMPrefillWorker:
+      dynamoNamespace: trtllm-disagg
+      envFromSecret: hf-token-secret
+      componentType: worker
+      replicas: 4
+      resources:
+        limits:
+          gpu: '1'
+      extraPodSpec:
+        volumes:
+        - name: engine-configs
+          configMap:
+            name: engine-configs
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 10Gi
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.5.0
+          imagePullPolicy: IfNotPresent
+          workingDir: /workspace/components/backends/trtllm
+          volumeMounts:
+          - name: engine-configs
+            mountPath: /workspace/engine_configs
+            readOnly: true
+          - name: tmp
+            mountPath: /tmp
+          resources:
+            requests:
+              cpu: '8'
+              memory: 64Gi
+              ephemeral-storage: 50Gi
+            limits:
+              cpu: '16'
+              memory: 96Gi
+              ephemeral-storage: 80Gi
+          command:
+          - /bin/bash
+          - -c
+          args:
+          - "set -euo pipefail\nexport NIXL_REF=\"0.4.1\"\nexport NIXL_SRC_DIR=\"\
+            /opt/nixl\"\nexport NIXL_PREFIX=\"/opt/nvidia/nvda_nixl\"\nexport ARCH_ALT=\"\
+            x86_64\"\nexport NIXL_LIB_DIR=\"$NIXL_PREFIX/lib/${ARCH_ALT}-linux-gnu\"\
+            \nexport NIXL_PLUGIN_DIR=\"$NIXL_LIB_DIR/plugins\"\nexport LD_LIBRARY_PATH=\"\
+            $NIXL_LIB_DIR:$NIXL_PLUGIN_DIR:${LD_LIBRARY_PATH:-}\"\n\npip install --break-system-packages\
+            \ /workspace/wheels/nixl/*.whl\n\nexport UCX_LOG_LEVEL=debug\n\ncd \"\
+            /workspace/components/backends/trtllm\"\nargs=( \n  --model-path \"Qwen/Qwen3-32B\"\
+            \n  --served-model-name \"Qwen/Qwen3-32B\"\n  --extra-engine-args \"/workspace/engine_configs/prefill_config.yaml\"\
+            \n  --disaggregation-mode prefill\n  --disaggregation-strategy \"prefill_first\"\
+            \n)\nexec python3 -m dynamo.trtllm \"${args[@]}\"\n"
+    TRTLLMDecodeWorker:
+      dynamoNamespace: trtllm-disagg
+      envFromSecret: hf-token-secret
+      componentType: worker
+      replicas: 1
+      resources:
+        limits:
+          gpu: '4'
+      extraPodSpec:
+        volumes:
+        - name: engine-configs
+          configMap:
+            name: engine-configs
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 10Gi
+        mainContainer:
+          image: nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.5.0
+          imagePullPolicy: IfNotPresent
+          workingDir: /workspace/components/backends/trtllm
+          volumeMounts:
+          - name: engine-configs
+            mountPath: /workspace/engine_configs
+            readOnly: true
+          - name: tmp
+            mountPath: /tmp
+          resources:
+            requests:
+              cpu: '8'
+              memory: 64Gi
+              ephemeral-storage: 50Gi
+            limits:
+              cpu: '16'
+              memory: 96Gi
+              ephemeral-storage: 80Gi
+          command:
+          - /bin/bash
+          - -c
+          args:
+          - "set -euo pipefail\nexport NIXL_REF=\"0.4.1\"\nexport NIXL_SRC_DIR=\"\
+            /opt/nixl\"\nexport NIXL_PREFIX=\"/opt/nvidia/nvda_nixl\"\nexport ARCH_ALT=\"\
+            x86_64\"\nexport NIXL_LIB_DIR=\"$NIXL_PREFIX/lib/${ARCH_ALT}-linux-gnu\"\
+            \nexport NIXL_PLUGIN_DIR=\"$NIXL_LIB_DIR/plugins\"\nexport LD_LIBRARY_PATH=\"\
+            $NIXL_LIB_DIR:$NIXL_PLUGIN_DIR:${LD_LIBRARY_PATH:-}\"\n\npip install --break-system-packages\
+            \ /workspace/wheels/nixl/*.whl\n\nexport UCX_LOG_LEVEL=debug\n\ncd \"\
+            /workspace/components/backends/trtllm\"\nargs=(\n  --model-path \"Qwen/Qwen3-32B\"\
+            \n  --served-model-name \"Qwen/Qwen3-32B\"\n  --extra-engine-args \"/workspace/engine_configs/decode_config.yaml\"\
+            \n  --disaggregation-mode decode\n  --disaggregation-strategy \"prefill_first\"\
+            \n)\nexec python3 -m dynamo.trtllm \"${args[@]}\"\n"

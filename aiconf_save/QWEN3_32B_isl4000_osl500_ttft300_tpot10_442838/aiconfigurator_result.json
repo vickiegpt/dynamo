@@ -1,0 +1,7 @@
+{
+    "chosen_system_type": "disagg",
+    "has_disagg_benefit": true,
+    "benefit_ratio": 2.1437504782359755,
+    "agg_actual_best_throughput": 378.997,
+    "disagg_actual_best_throughput": 812.475
+}

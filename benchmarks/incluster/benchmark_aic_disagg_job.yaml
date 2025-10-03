@@ -4,7 +4,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: dynamo-benchmark-baseline
+  name: dynamo-benchmark-aic
 spec:
   template:
     spec:
@@ -50,9 +50,9 @@ spec:
           - --output-dir
           - /data/results
           - --benchmark-name
-          - "qwen3-32b-trtllm-baseline"
+          - "qwen3-32b-trtllm-aic"
           - --endpoint-url
-          - "trtllm-disagg-baseline-frontend:8000"
+          - "trtllm-disagg-frontend.hannahz-2.svc.cluster.local:8000"
         volumeMounts:
           - name: data-volume
             mountPath: /data

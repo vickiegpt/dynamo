@@ -19,7 +19,7 @@ spec:
       envFromSecret: hf-token-secret
       dynamoNamespace: trtllm-agg-baseline
       componentType: worker
-      replicas: 8
+      replicas: 1
       resources:
         limits:
           gpu: "1"
