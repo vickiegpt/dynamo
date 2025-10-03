@@ -17,18 +17,19 @@ from tests.utils.managed_deployment import ManagedDeployment
 @pytest.fixture(params=scenarios.keys())
 def scenario(request, client_type):
     """Get scenario and optionally override client type from command line.
-    
+
     If --client-type is specified, it overrides the scenario's default client type.
     """
     scenario_obj = scenarios[request.param]
-    
+
     # Override client type if specified on command line
     if client_type is not None:
         # Create a copy of the load config with overridden client type
         import copy
+
         scenario_obj = copy.deepcopy(scenario_obj)
         scenario_obj.load.client_type = client_type
-        
+
         # Adjust retry settings based on client type
         if client_type == "legacy":
             # Legacy uses per-request retries
@@ -38,7 +39,7 @@ def scenario(request, client_type):
             # AI-Perf uses full test retries
             if scenario_obj.load.max_retries < 3:
                 scenario_obj.load.max_retries = 3
-    
+
     return scenario_obj
 
 
