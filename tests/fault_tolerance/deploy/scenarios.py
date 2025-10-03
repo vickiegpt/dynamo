@@ -301,13 +301,13 @@ def _create_backend_failures(backend, deploy_type="disagg"):
 
 def create_aiperf_load(**kwargs) -> Load:
     """Create a Load configuration for AI-Perf client.
-    
+
     Args:
         **kwargs: Override default Load parameters
-        
+
     Returns:
         Load instance configured for AI-Perf client
-        
+
     Example:
         >>> load = create_aiperf_load(clients=20, requests_per_client=200)
     """
@@ -321,13 +321,13 @@ def create_aiperf_load(**kwargs) -> Load:
 
 def create_legacy_load(**kwargs) -> Load:
     """Create a Load configuration for legacy custom client.
-    
+
     Args:
         **kwargs: Override default Load parameters
-        
+
     Returns:
         Load instance configured for legacy client
-        
+
     Example:
         >>> load = create_legacy_load(clients=10, max_request_rate=2.0)
     """

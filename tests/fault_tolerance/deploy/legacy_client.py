@@ -61,10 +61,10 @@ logging.basicConfig(
 
 def _get_random_prompt(length):
     """Generate a random prompt of specified token length.
-    
+
     Args:
         length: Approximate number of tokens to generate
-        
+
     Returns:
         String containing random words
     """
@@ -85,7 +85,7 @@ def _single_request(
     retry_delay=1,
 ):
     """Execute a single HTTP request with retry logic.
-    
+
     Args:
         url: Full URL to send request to
         pod: Pod name for logging
@@ -97,7 +97,7 @@ def _single_request(
         output_token_length: Number of output tokens
         timeout: Request timeout in seconds
         retry_delay: Delay between retries in seconds
-        
+
     Returns:
         Dictionary containing request results and timing
     """
@@ -185,11 +185,11 @@ def client(
     retry_delay=1,
 ):
     """Legacy custom client for fault tolerance testing.
-    
+
     This client sends individual HTTP requests with rate limiting and logs
     results in JSONL format. Each client runs independently and logs to
     its own file.
-    
+
     Args:
         deployment_spec: Deployment specification object
         namespace: Kubernetes namespace
@@ -214,7 +214,7 @@ def client(
     try:
         os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, f"client_{index}.log.txt")
-        
+
         with open(log_path, "w") as log:
             for i in range(requests_per_client):
                 # Get available pods
@@ -263,7 +263,7 @@ def client(
                     output_token_length=output_token_length,
                     retry_delay=retry_delay,
                 )
-                
+
                 # Log result
                 logger.info(
                     f"Request: {i} Pod {pod_name} Local Port {port} "
@@ -274,7 +274,7 @@ def client(
                 # Write to JSONL log file
                 log.write(json.dumps(result) + "\n")
                 log.flush()
-                
+
                 # Rate limiting
                 if result["total_time"] < min_elapsed_time:
                     time.sleep(min_elapsed_time - result["total_time"])
@@ -290,4 +290,3 @@ def client(
                 pass
 
     logger.info("Exiting")
-

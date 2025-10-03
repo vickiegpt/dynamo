@@ -192,11 +192,11 @@ def detect_result_type(log_dir):
     # Check for AI-Perf indicators
     if exists("client_N/attempt_M/profile_export_aiperf.json"):
         return "aiperf"
-    
+
     # Check for legacy indicators
     if exists("client_N.log.txt"):
         return "legacy"
-    
+
     # Mixed or unknown
     return None  # or prioritize AI-Perf
 ```
@@ -256,7 +256,7 @@ scenarios = {
         load=create_aiperf_load(clients=20, requests_per_client=200),
         ...
     ),
-    
+
     # Quick smoke test - use legacy
     "smoke-test": Scenario(
         load=create_legacy_load(clients=5, requests_per_client=50),
@@ -309,7 +309,7 @@ parse_test_results(log_dir=test_dir, force_parser="legacy")
 | `scenarios.py` | +45 | Added dual client support |
 | `test_deployment.py` | ~30 changes | Integrated factories |
 
-**Total New Code**: ~1,400 lines  
+**Total New Code**: ~1,400 lines
 **Modified Code**: ~75 lines
 
 ## References

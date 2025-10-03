@@ -20,15 +20,15 @@ from typing import Callable
 
 def get_client_function(client_type: str) -> Callable:
     """Get the appropriate client function based on client type.
-    
+
     This factory function returns the correct client implementation without
     requiring the caller to know the internal module structure.
-    
+
     Args:
         client_type: Type of client to use. Valid options:
             - "aiperf": Use AI-Perf for load generation (default)
             - "legacy": Use legacy custom HTTP client
-            
+
     Returns:
         Client function that matches the signature:
         client(
@@ -43,22 +43,24 @@ def get_client_function(client_type: str) -> Callable:
             max_retries,
             retry_delay_or_rate,  # Differs between implementations
         )
-        
+
     Raises:
         ValueError: If client_type is not recognized
-        
+
     Example:
         >>> client_func = get_client_function("aiperf")
         >>> client_func(deployment_spec, namespace, model, ...)
-        
+
         >>> legacy_func = get_client_function("legacy")
         >>> legacy_func(deployment_spec, namespace, model, ...)
     """
     if client_type == "aiperf":
         from tests.fault_tolerance.deploy.client import client as aiperf_client
+
         return aiperf_client
     elif client_type == "legacy":
         from tests.fault_tolerance.deploy.legacy_client import client as legacy_client
+
         return legacy_client
     else:
         raise ValueError(
@@ -69,7 +71,7 @@ def get_client_function(client_type: str) -> Callable:
 
 def get_supported_client_types() -> list[str]:
     """Get list of all supported client types.
-    
+
     Returns:
         List of valid client type strings
     """
@@ -78,10 +80,10 @@ def get_supported_client_types() -> list[str]:
 
 def validate_client_type(client_type: str) -> bool:
     """Validate that a client type is supported.
-    
+
     Args:
         client_type: Client type string to validate
-        
+
     Returns:
         True if valid, False otherwise
     """
@@ -90,13 +92,13 @@ def validate_client_type(client_type: str) -> bool:
 
 def get_client_description(client_type: str) -> str:
     """Get a human-readable description of a client type.
-    
+
     Args:
         client_type: Client type to describe
-        
+
     Returns:
         Description string
-        
+
     Raises:
         ValueError: If client_type is not recognized
     """
@@ -113,12 +115,11 @@ def get_client_description(client_type: str) -> str:
             "Includes rate limiting and round-robin pod selection."
         ),
     }
-    
+
     if client_type not in descriptions:
         raise ValueError(
             f"Unknown client type: '{client_type}'. "
             f"Valid options are: {', '.join(get_supported_client_types())}"
         )
-    
-    return descriptions[client_type]
 
+    return descriptions[client_type]

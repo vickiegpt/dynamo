@@ -29,10 +29,10 @@ from tabulate import tabulate
 
 def parse_test_log(file_path):
     """Parse test log for startup time and failure info.
-    
+
     Args:
         file_path: Path to test.log.txt
-        
+
     Returns:
         Tuple of (startup_time_seconds, fault_time_datetime, start_cmd)
     """
@@ -60,7 +60,7 @@ def parse_test_log(file_path):
                 fault_time = datetime.fromisoformat(
                     line.split(" ")[1].replace("T", " ")
                 )
-                
+
     startup_time = (
         (ready_time - start_time).total_seconds() if start_time and ready_time else None
     )
@@ -69,16 +69,16 @@ def parse_test_log(file_path):
 
 def parse_client_logs(test_dir, expected_length=100):
     """Parse JSONL client logs from legacy client output.
-    
+
     Args:
         test_dir: Directory containing client_N.log.txt files
         expected_length: Expected output length to validate success
-        
+
     Returns:
         pandas DataFrame with all client request results
     """
     all_logs = []
-    
+
     for file in os.listdir(test_dir):
         if file.startswith("client_") and file.endswith(".log.txt"):
             with open(os.path.join(test_dir, file), "r") as f:
@@ -89,7 +89,7 @@ def parse_client_logs(test_dir, expected_length=100):
                         data = json.loads(line.strip())
                     except json.JSONDecodeError:
                         continue
-                        
+
                     for result in data["results"]:
                         log_entry = {
                             "time": datetime.fromisoformat(
@@ -100,7 +100,7 @@ def parse_client_logs(test_dir, expected_length=100):
                             "request_number": request_number - 1,
                             "client": file.split("_")[1].split(".")[0],
                         }
-                        
+
                         # Check if request was successful
                         if (
                             "result" in result
@@ -109,7 +109,7 @@ def parse_client_logs(test_dir, expected_length=100):
                             and result["result"]["choices"]
                         ):
                             log_entry["success"] = True
-                            
+
                             # Extract content from response
                             if "content" in result["result"]["choices"][0]["message"]:
                                 content = result["result"]["choices"][0]["message"][
@@ -130,9 +130,9 @@ def parse_client_logs(test_dir, expected_length=100):
                                 log_entry["success"] = False
                         else:
                             log_entry["success"] = False
-                            
+
                         all_logs.append(log_entry)
-                        
+
     if len(all_logs):
         df = pd.DataFrame(all_logs)
         df.sort_values("time", inplace=True)
@@ -143,14 +143,14 @@ def parse_client_logs(test_dir, expected_length=100):
 
 def calculate_metrics(df, fault_time, sla=None):
     """Calculate metrics before and after fault injection.
-    
+
     Args:
         df: DataFrame with client request results
         fault_time: Datetime when fault was injected
         sla: Optional SLA threshold for latency violations
-        
+
     Returns:
-        Tuple of metrics (success_before, failure_before, success_after, 
+        Tuple of metrics (success_before, failure_before, success_after,
         failure_after, avg_before, std_before, avg_after, std_after,
         violations_before, violations_after)
     """
@@ -209,11 +209,11 @@ def calculate_metrics(df, fault_time, sla=None):
 
 def parse_process_log(log_dir, process_name):
     """Parse process logs to find ready times for recovery calculation.
-    
+
     Args:
         log_dir: Directory containing process log files
         process_name: Name of process to look for (Frontend, VllmDecodeWorker, etc.)
-        
+
     Returns:
         Dictionary mapping replica names to list of (timestamp, message, relative_time) tuples
     """
@@ -241,10 +241,10 @@ def parse_process_log(log_dir, process_name):
             r"TrtllmWorker for (?P<model_name>.*?) has been initialized|Model registration succeeded"
         ),
     }
-    
+
     if not os.path.isdir(log_dir):
         return {}
-        
+
     ready_times: Dict[str, List] = {}
 
     for entry in os.listdir(log_dir):
@@ -292,7 +292,7 @@ def parse_process_log(log_dir, process_name):
                             continue
 
                         log_message = " ".join(parts[1:])
-                        
+
                     if not process_start_time:
                         process_start_time = timestamp
 
@@ -314,12 +314,12 @@ def parse_process_log(log_dir, process_name):
 
 def calculate_recovery_time(test_dir, failure_type, fault_time):
     """Calculate recovery time after fault injection.
-    
+
     Args:
         test_dir: Directory containing test logs
         failure_type: Type of failure injected
         fault_time: Datetime when fault was injected
-        
+
     Returns:
         Recovery time in seconds or None if not applicable
     """
@@ -353,7 +353,7 @@ def calculate_recovery_time(test_dir, failure_type, fault_time):
                 recovery_time = (start_time - fault_time).total_seconds()
                 if recovery_time > last_recovery_time:
                     last_recovery_time = recovery_time
-                    
+
     if last_recovery_time == 0:
         return None
     return last_recovery_time
@@ -361,17 +361,17 @@ def calculate_recovery_time(test_dir, failure_type, fault_time):
 
 def process_test_directory(test_dir, sla):
     """Process a single test directory with legacy client results.
-    
+
     Args:
         test_dir: Path to test directory
         sla: Optional SLA threshold for latency
-        
+
     Returns:
         Dictionary with test results or None if invalid
     """
     if "test_fault_scenario" not in test_dir:
         return {}
-        
+
     test_name = test_dir.split("test_fault_scenario[", 1)[1].rstrip("]")
     failure_type = test_name.split("-")[-1]
     test_prefix = "-".join(test_name.split("-")[:-1])
@@ -383,7 +383,7 @@ def process_test_directory(test_dir, sla):
 
     if df is None or df.empty:
         return None
-        
+
     (
         success_before,
         failure_before,
@@ -420,7 +420,7 @@ def process_test_directory(test_dir, sla):
 
 def main(logs_dir, tablefmt, log_paths=None, sla=None):
     """Main entry point for parsing legacy client results.
-    
+
     Args:
         logs_dir: Base directory containing test results
         tablefmt: Table format for output (e.g., "fancy_grid")
@@ -483,7 +483,7 @@ def main(logs_dir, tablefmt, log_paths=None, sla=None):
                 if failure == res["failure"]:
                     new_group.append(res)
         group = new_group
-        
+
         # Define table headers
         if sla:
             headers = [
@@ -511,7 +511,7 @@ def main(logs_dir, tablefmt, log_paths=None, sla=None):
                 "Latency\nAfter",
                 "Recovery",
             ]
-            
+
         rows = []
         for res in group:
             if sla:
@@ -566,7 +566,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--format", choices=["fancy", "markdown"], default="fancy", help="Table format"
     )
-    parser.add_argument("--sla", type=float, default=None, help="SLA threshold for latency")
+    parser.add_argument(
+        "--sla", type=float, default=None, help="SLA threshold for latency"
+    )
 
     args = parser.parse_args()
 
@@ -574,4 +576,3 @@ if __name__ == "__main__":
     tablefmt = "fancy_grid" if args.format == "fancy" else "pipe"
 
     main(args.log_dir, tablefmt, args.sla)
-
