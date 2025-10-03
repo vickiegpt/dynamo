@@ -29,7 +29,7 @@ jobs:
 
   backend-status-check:
     runs-on: ubuntu-latest
-    needs: [vllm, sglang, trtllm]
+    needs: [vllm, sglang, trtllm, vllm-e2e,] # trtllm-e2e, sglang-e2e]
     if: always()
     steps:
       - name: "Check all dependent jobs"
@@ -147,7 +147,7 @@ jobs:
           image_tag: ${{ steps.build-image.outputs.image_tag }}
           pytest_marks: "e2e and trtllm_marker and gpu_1 and not slow"
 
-  operator:
+  build-operator:
     runs-on: gpu-l40-amd64
     steps:
       - name: Checkout code
@@ -172,19 +172,19 @@ jobs:
           azure_acr_user: ${{ secrets.AZURE_ACR_USER }}
           azure_acr_password: ${{ secrets.AZURE_ACR_PASSWORD }}
 
-  e2e-tests:
+  deploy-operator:
     runs-on: cpu-amd-m5-2xlarge
-    strategy:
-      matrix: { FRAMEWORK: ['vllm', 'trtllm', 'sglang'] }
-      fail-fast: false
+    needs: [build-operator]
     env:
-      NAMESPACE: gh-job-id-${{ github.run_id }}-${{ matrix.FRAMEWORK }}
+      NAMESPACE: gh-job-id-${{ github.run_id }}
       DYNAMO_INGRESS_SUFFIX: dev.aire.nvidia.com
+    outputs:
+      namespace: ${{ env.NAMESPACE }}
     permissions:
       contents: read
     steps:
     - uses: actions/checkout@v4
-    - name: Before Script
+    - name: Deploy Operator
       run: |
         set -x
         # Install dependencies
@@ -271,14 +271,75 @@ jobs:
         # Install platform
         helm upgrade --install dynamo-platform . --namespace ${NAMESPACE} --set dynamo-operator.namespaceRestriction.enabled=true --set dynamo-operator.controllerManager.manager.image.repository=${{ secrets.AZURE_ACR_HOSTNAME }}/ai-dynamo/dynamo --set dynamo-operator.controllerManager.manager.image.tag=${{ github.sha }}-operator-amd64 --set dynamo-operator.imagePullSecrets[0].name=docker-imagepullsecret
         # Wait for all deployments to be ready
-        timeout 600s kubectl rollout status deployment -n $NAMESPACE --watch
+        timeout 300s kubectl rollout status deployment -n $NAMESPACE --watch
         cd -
 
+  vllm-e2e:
+    runs-on: cpu-amd-m5-2xlarge
+    needs: [deploy-operator, vllm]
+    env:
+      NAMESPACE: ${{ needs.deploy-operator.outputs.namespace }}
+      DEPLOYMENT_FILE: "deploy/agg.yaml"
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v4
+    - name: Run e2e Tests
+      run: |
+        set -x
+        cd components/backends/vllm
+        export FRAMEWORK_RUNTIME_IMAGE="${{ secrets.AZURE_ACR_HOSTNAME }}/ai-dynamo/dynamo:${{ github.sha }}-vllm-amd64"
+        export KUBE_NS=$NAMESPACE
+        export GRAPH_NAME=$(yq e '.metadata.name' $DEPLOYMENT_FILE)
+        yq '.spec.services.[].extraPodSpec.mainContainer.image = env(FRAMEWORK_RUNTIME_IMAGE)' $DEPLOYMENT_FILE | kubectl apply -n $KUBE_NS -f -
+        # --- Wait for the frontend pod to be ready ---
+        sleep 20
+        export POD_NAME=$(kubectl get pods -n ${KUBE_NS} | grep "${GRAPH_NAME}" | grep "worker" | sort -k1 | tail -n1 | awk '{print $1}')
+        kubectl wait --for=condition=ready pod/$POD_NAME --timeout=1000s
+        kubectl get all -n $KUBE_NS
+  
 
+  # trtllm-e2e:
+  #   runs-on: cpu-amd-m5-2xlarge
+  #   needs: [deploy-operator, trtllm]
+  #   env:
+  #     NAMESPACE: ${{ needs.deploy-operator.outputs.namespace }}
+  #   permissions:
+  #     contents: read
+  #   steps:
+  #   - uses: actions/checkout@v4
+  #   - name: Run TRT-LLM Tests
+  #     uses: ./.github/actions/pytest
+  #     with:
+  #       image_tag: ai-dynamo/dynamo:${{ github.sha }}-trtllm-amd64
+  #       pytest_marks: "e2e and trtllm_marker and gpu_1 and not slow"
 
+  # sglang-e2e:
+  #   runs-on: cpu-amd-m5-2xlarge
+  #   needs: [deploy-operator, sglang]
+  #   env:
+  #     NAMESPACE: ${{ needs.deploy-operator.outputs.namespace }}
+  #   permissions:
+  #     contents: read
+  #   steps:
+  #   - uses: actions/checkout@v4
+  #   - name: Run SGLang Tests
+  #     uses: ./.github/actions/pytest
+  #     with:
+  #       image_tag: ai-dynamo/dynamo:${{ github.sha }}-sglang-amd64
+  #       pytest_marks: "e2e and sglang and gpu_1"
 
-    - name: After Script
-      if: always()
+  cleanup-operator:
+    runs-on: cpu-amd-m5-2xlarge
+    needs: [deploy-operator, vllm-e2e,] # trtllm-e2e, sglang-e2e]
+    if: always()
+    env:
+      NAMESPACE: ${{ needs.deploy-operator.outputs.namespace }}
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v4
+    - name: Cleanup Operator
       timeout-minutes: 10
       run: |
         echo "${{ secrets.AZURE_AKS_CI_KUBECONFIG_B64 }}" | base64 -d > .kubeconfig
