@@ -13,21 +13,18 @@ spec:
       replicas: 1
       extraPodSpec:
         mainContainer:
-          image: gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/dynamo:etcdless-2
+          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:my-tag
     VllmDecodeWorker:
       envFromSecret: hf-token-secret
       dynamoNamespace: vllm-agg
       componentType: worker
       replicas: 1
-      envs:
-        - name: RUST_LOG
-          value: "debug"
       resources:
         limits:
           gpu: "1"
       extraPodSpec:
         mainContainer:
-          image: gitlab-master.nvidia.com:5005/dl/ai-dynamo/dynamo/dynamo:etcdless-2
+          image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:my-tag
           workingDir: /workspace/components/backends/vllm
           command:
           - python3
