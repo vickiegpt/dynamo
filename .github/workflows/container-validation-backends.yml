@@ -172,35 +172,22 @@ jobs:
           azure_acr_user: ${{ secrets.AZURE_ACR_USER }}
           azure_acr_password: ${{ secrets.AZURE_ACR_PASSWORD }}
 
-  deploy-operator:
+  deploy-test:
     runs-on: cpu-amd-m5-2xlarge
     needs: [build-operator]
     env:
       NAMESPACE: gh-job-id-${{ github.run_id }}
       DYNAMO_INGRESS_SUFFIX: dev.aire.nvidia.com
-    outputs:
-      namespace: ${{ env.NAMESPACE }}
+      DEPLOYMENT_FILE: "deploy/agg.yaml"
     permissions:
       contents: read
     steps:
     - uses: actions/checkout@v4
-    - name: Deploy Operator
+    - name: Install dependencies
       run: |
         set -x
         # Install dependencies
         sudo apt-get update && sudo apt-get install -y curl bash openssl gettext git jq
-
-        # # TODO:
-        # set -x
-        # git clone -b $DYNAMO_REPO_BRANCH --depth=1 --single-branch https://dynamo-ai/dynamo dynamo
-        # # use nvidia internal bitnami charts to avoid rate limiting
-        # find dynamo -type f -exec sed -i 's|https://charts.bitnami.com/bitnami|oci://dockerhub.nvidia.com/bitnamicharts|g' {} +
-        # echo $DYNAMO_REPO_CI_COMMIT_SHA | tee -a build.env
-
-        # WE MOST LIKELY DON'T NEED uv
-        # curl -LsSf https://astral.sh/uv/install.sh | sh
-        # export PATH="/root/.local/bin:/opt/dynamo/venv/bin:$PATH"
-        # uv sync
 
         # Install yq
         echo "Installing yq..."
@@ -217,12 +204,16 @@ jobs:
         sudo chmod 755 kubectl
         sudo mv kubectl /usr/local/bin/
 
-        # Make sure the right context is used
+        # Setup kubeconfig
         echo "${{ secrets.AZURE_AKS_CI_KUBECONFIG_B64 }}" | base64 -d > .kubeconfig
         chmod 600 .kubeconfig
         export KUBECONFIG=$(pwd)/.kubeconfig
         kubectl config set-context --current --namespace=$NAMESPACE --kubeconfig "${KUBECONFIG}"
         kubectl config current-context
+    - name: Deploy Operator
+      run: |
+        set -x
+        export KUBECONFIG=$(pwd)/.kubeconfig
 
         # Create a namespace for this job
         echo "Creating an ephemeral namespace..."
@@ -234,17 +225,12 @@ jobs:
         # Set the namespace as default
         kubectl config set-context --current --namespace=$NAMESPACE
 
-        # Get helm repo for platform helm chart
-        # helm repo add --username gitlab-ci-token --password ${CI_JOB_TOKEN} ${CI_PROJECT_NAME} ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/helm/dev
-        # helm repo update
-
         # Check if Istio is installed
         kubectl get pods -n istio-system
         # Check if default storage class exists
         kubectl get storageclass
 
         # Install Helm chart
-        # cat build.env
         export IMAGE_TAG=$(cat build.env)
         echo $IMAGE_TAG
         export VIRTUAL_ENV=/opt/dynamo/venv
@@ -253,15 +239,9 @@ jobs:
         export ISTIO_GATEWAY=istio-system/ingress-alb
         export VIRTUAL_SERVICE_SUPPORTS_HTTPS=true
         export DYNAMO_CLOUD=https://${NAMESPACE}.${DYNAMO_INGRESS_SUFFIX}
-        # export DOCKER_SERVER=$CI_REGISTRY_IMAGE
-        # export DOCKER_USERNAME=gitlab-ci-token
-        # export DOCKER_PASSWORD=${CI_JOB_TOKEN}
-        kubectl config current-context
 
         # Install dynamo env secrets
         kubectl create secret generic hf-token-secret --from-literal=HF_TOKEN=$HF_TOKEN -n $KUBE_NS || true
-        # Install CRDs
-        # helm upgrade --install dynamo-crds ./deploy/cloud/helm/crds/ --namespace default --wait --atomic
         # Create docker pull secret for operator image
         kubectl create secret docker-registry docker-imagepullsecret --docker-server=${{ secrets.AZURE_ACR_HOSTNAME }} --docker-username=${{ secrets.AZURE_ACR_USER }} --docker-password=${{ secrets.AZURE_ACR_PASSWORD }} --namespace=${NAMESPACE}
         # Install helm dependencies
@@ -273,47 +253,11 @@ jobs:
         # Wait for all deployments to be ready
         timeout 300s kubectl rollout status deployment -n $NAMESPACE --watch
         cd -
-
-  vllm-e2e:
-    runs-on: cpu-amd-m5-2xlarge
-    needs: [deploy-operator]
-    env:
-      NAMESPACE: ${{ needs.deploy-operator.outputs.namespace }}
-      DEPLOYMENT_FILE: "deploy/agg.yaml"
-    permissions:
-      contents: read
-    steps:
-    - uses: actions/checkout@v4
-    - name: Install dependencies
+    - name: Run VLLM E2E Tests
       run: |
         set -x
-        # Install yq
-        echo "Installing yq..."
-        curl -L https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o yq
-        sudo chmod 755 yq
-        sudo mv yq /usr/local/bin/
-        # Install kubectl
-        echo "Installing kubectl..."
-        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-        sudo chmod 755 kubectl
-        sudo mv kubectl /usr/local/bin/
-    - name: Setup kubeconfig
-      run: |
-        set -x
-        # Setup kubeconfig
-        echo "${{ secrets.AZURE_AKS_CI_KUBECONFIG_B64 }}" | base64 -d > .kubeconfig
-        chmod 600 .kubeconfig
         export KUBECONFIG=$(pwd)/.kubeconfig
-        kubectl config set-context --current --namespace=$NAMESPACE --kubeconfig "${KUBECONFIG}"
-        kubectl config current-context
-    - name: Run e2e Tests
-      run: |
-        set -x
-        # Setup kubeconfig for this step
-        echo "${{ secrets.AZURE_AKS_CI_KUBECONFIG_B64 }}" | base64 -d > .kubeconfig
-        chmod 600 .kubeconfig
-        export KUBECONFIG=$(pwd)/.kubeconfig
-        kubectl config set-context --current --namespace=$NAMESPACE --kubeconfig "${KUBECONFIG}"
+        kubectl config set-context --current --namespace=$NAMESPACE
 
         cd components/backends/vllm
         export FRAMEWORK_RUNTIME_IMAGE="${{ secrets.AZURE_ACR_HOSTNAME }}/ai-dynamo/dynamo:cb6e511109e95d63eeb348107e5c1d0be8d5346b-vllm-amd64"
@@ -325,55 +269,14 @@ jobs:
         export POD_NAME=$(kubectl get pods -n ${KUBE_NS} | grep "${GRAPH_NAME}" | grep "worker" | sort -k1 | tail -n1 | awk '{print $1}')
         kubectl wait --for=condition=ready pod/$POD_NAME --timeout=1000s
         kubectl get all -n $KUBE_NS
-  
-
-  # trtllm-e2e:
-  #   runs-on: cpu-amd-m5-2xlarge
-  #   needs: [deploy-operator, trtllm]
-  #   env:
-  #     NAMESPACE: ${{ needs.deploy-operator.outputs.namespace }}
-  #   permissions:
-  #     contents: read
-  #   steps:
-  #   - uses: actions/checkout@v4
-  #   - name: Run TRT-LLM Tests
-  #     uses: ./.github/actions/pytest
-  #     with:
-  #       image_tag: ai-dynamo/dynamo:${{ github.sha }}-trtllm-amd64
-  #       pytest_marks: "e2e and trtllm_marker and gpu_1 and not slow"
-
-  # sglang-e2e:
-  #   runs-on: cpu-amd-m5-2xlarge
-  #   needs: [deploy-operator, sglang]
-  #   env:
-  #     NAMESPACE: ${{ needs.deploy-operator.outputs.namespace }}
-  #   permissions:
-  #     contents: read
-  #   steps:
-  #   - uses: actions/checkout@v4
-  #   - name: Run SGLang Tests
-  #     uses: ./.github/actions/pytest
-  #     with:
-  #       image_tag: ai-dynamo/dynamo:${{ github.sha }}-sglang-amd64
-  #       pytest_marks: "e2e and sglang and gpu_1"
-
-  cleanup-operator:
-    runs-on: cpu-amd-m5-2xlarge
-    needs: [deploy-operator, vllm-e2e,] # trtllm-e2e, sglang-e2e]
-    if: always()
-    env:
-      NAMESPACE: ${{ needs.deploy-operator.outputs.namespace }}
-    permissions:
-      contents: read
-    steps:
-    - uses: actions/checkout@v4
-    - name: Cleanup Operator
+        cd -
+    - name: Cleanup
+      if: always()
       timeout-minutes: 10
       run: |
-        echo "${{ secrets.AZURE_AKS_CI_KUBECONFIG_B64 }}" | base64 -d > .kubeconfig
-        chmod 600 .kubeconfig
+        set -x
         export KUBECONFIG=$(pwd)/.kubeconfig
-        kubectl config set-context --current --namespace=$NAMESPACE --kubeconfig "${KUBECONFIG}"
+        kubectl config set-context --current --namespace=$NAMESPACE
 
         # For debugging purposes, list all the resources before we uninstall
         kubectl get all
