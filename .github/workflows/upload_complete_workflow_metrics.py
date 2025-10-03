@@ -32,12 +32,12 @@ SERVICE_NAME = os.getenv('OTEL_SERVICE_NAME', "Dynamo Metrics")
 SERVICE_ID = os.getenv('SERVICE_ID')  # Replace with your Service Registry ID
 
 # FILTERING CONFIGURATION - Only upload data for specific workflow/job combinations
-TARGET_WORKFLOW_NAME = "Docker Build and Test"
+TARGET_WORKFLOW_NAMES = ["Docker Build and Test", "Docs link check"]
 TARGET_JOB_NAMES = [
     "vllm",
     "sglang", 
     "trtllm",
-    "broken-links-check"
+    "Check for broken markdown links"
 ]
 
 # STANDARDIZED FIELD SCHEMA
@@ -569,8 +569,8 @@ class WorkflowMetricsUploader:
             # FILTER: Only upload data for specific workflow and job
             workflow_name = workflow_data.get('name', '')
             
-            if workflow_name != TARGET_WORKFLOW_NAME:
-                print(f"❌ Skipping upload - Workflow '{workflow_name}' does not match target '{TARGET_WORKFLOW_NAME}'")
+            if workflow_name not in TARGET_WORKFLOW_NAMES:
+                print(f"❌ Skipping upload - Workflow '{workflow_name}' does not match target '{TARGET_WORKFLOW_NAMES}'")
                 return
             
             # Check if any target jobs exist in this workflow
