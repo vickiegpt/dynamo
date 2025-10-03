@@ -644,46 +644,7 @@ impl Component {
 
 #[pymethods]
 impl Endpoint {
-    #[pyo3(signature = (endpoint_path))]
-    fn register_custom_endpoint<'p>(
-        &self,
-        py: Python<'p>,
-        endpoint_path: &str,
-    ) -> PyResult<Bound<'p, PyAny>> {
-        // validate that the endpoint path looks like "/<string>" and does not end with a slash
-        if !endpoint_path.starts_with("/") || endpoint_path.ends_with("/") {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Endpoint path must start with a slash and not end with a slash",
-            ));
-        }
-
-        let endpoint_path = endpoint_path.to_string();
-
-        let drt = self.inner.drt();
-        let etcd_client = drt.etcd_client();
-
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            if let Some(etcd_client) = etcd_client {
-                let key = format!(
-                    "{}/{}",
-                    dynamo_llm::http::service::dynamic_endpoint::DYNAMIC_ENDPOINT_PATH,
-                    endpoint_path.trim_start_matches('/')
-                );
-                etcd_client
-                    .kv_create(
-                        &key,
-                        serde_json::to_vec_pretty(&serde_json::Value::String(endpoint_path))
-                            .unwrap(),
-                        None,
-                    )
-                    .await
-                    .map_err(to_pyerr)?;
-            }
-            Ok(())
-        })
-    }
-
-    #[pyo3(signature = (generator, graceful_shutdown = true, metrics_labels = None, health_check_payload = None))]
+    #[pyo3(signature = (generator, graceful_shutdown = true, metrics_labels = None, health_check_payload = None, http_endpoint_path = None))]
     fn serve_endpoint<'p>(
         &self,
         py: Python<'p>,
@@ -691,6 +652,7 @@ impl Endpoint {
         graceful_shutdown: Option<bool>,
         metrics_labels: Option<Vec<(String, String)>>,
         health_check_payload: Option<&Bound<'p, PyDict>>,
+        http_endpoint_path: Option<&str>,
     ) -> PyResult<Bound<'p, PyAny>> {
         let engine = Arc::new(engine::PythonAsyncEngine::new(
             generator,
@@ -726,6 +688,10 @@ impl Endpoint {
 
         if let Some(payload) = health_payload_json {
             builder = builder.health_check_payload(payload);
+        }
+
+        if let Some(http_endpoint_path) = http_endpoint_path {
+            builder = builder.http_endpoint_path(http_endpoint_path);
         }
 
         let graceful_shutdown = graceful_shutdown.unwrap_or(true);

@@ -8,6 +8,7 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
+use dynamo_runtime::instances::list_all_instances;
 use std::sync::Arc;
 
 pub const DYNAMIC_ENDPOINT_PATH: &str = "dynamic_endpoint";
@@ -31,8 +32,6 @@ pub fn dynamic_endpoint_router(
 async fn dynamic_endpoint_handler(
     axum::extract::State(state): axum::extract::State<Arc<service_v2::State>>,
 ) -> impl IntoResponse {
-    let mut dynamic_endpoints: Vec<String> = Vec::new();
-
     let Some(etcd_client) = state.etcd_client() else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -42,34 +41,22 @@ async fn dynamic_endpoint_handler(
         );
     };
 
-    let kvs = match etcd_client
-        .kv_get_prefix(format!("{}/", DYNAMIC_ENDPOINT_PATH))
-        .await
-    {
-        Ok(kvs) => kvs,
+    let instances = match list_all_instances(etcd_client).await {
+        Ok(instances) => instances,
         Err(_) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
-                    "message": "Failed to get dynamic endpoints"
+                    "message": "Failed to get instances"
                 })),
             );
         }
     };
 
-    for kv in kvs {
-        match serde_json::from_slice::<String>(kv.value()) {
-            Ok(path) => dynamic_endpoints.push(path),
-            Err(_) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({
-                        "message": "Failed to parse dynamic endpoint"
-                    })),
-                );
-            }
-        }
-    }
+    let dynamic_endpoints = instances
+        .iter()
+        .filter_map(|instance| instance.http_endpoint_path.clone())
+        .collect::<Vec<String>>();
 
     return (
         StatusCode::OK,

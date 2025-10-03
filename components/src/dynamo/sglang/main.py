@@ -129,7 +129,6 @@ async def init(runtime: DistributedRuntime, config: Config):
     health_check_payload = SglangHealthCheckPayload(engine).to_dict()
 
     test_endpoint = component.endpoint("test")
-    test_endpoint.register_custom_endpoint("/test")
 
     try:
         # Start endpoint immediately and register model concurrently
@@ -147,6 +146,7 @@ async def init(runtime: DistributedRuntime, config: Config):
                 graceful_shutdown=True,
                 metrics_labels=metrics_labels,
                 health_check_payload=health_check_payload,
+                http_endpoint_path="/test",
             ),
         )
     except Exception as e:

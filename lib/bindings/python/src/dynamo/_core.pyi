@@ -115,13 +115,7 @@ class Endpoint:
 
     ...
 
-    def register_custom_endpoint(self, endpoint_path: str) -> None:
-        """
-        Register a custom endpoint path to our discovery plane by dynamo ingress
-        """
-        ...
-
-    async def serve_endpoint(self, handler: RequestHandler, graceful_shutdown: bool = True, metrics_labels: Optional[List[Tuple[str, str]]] = None, health_check_payload: Optional[Dict[str, Any]] = None) -> None:
+    async def serve_endpoint(self, handler: RequestHandler, graceful_shutdown: bool = True, metrics_labels: Optional[List[Tuple[str, str]]] = None, health_check_payload: Optional[Dict[str, Any]] = None, http_endpoint_path: Optional[str] = None) -> None:
         """
         Serve an endpoint discoverable by all connected clients at
         `{{ namespace }}/components/{{ component_name }}/endpoints/{{ endpoint_name }}`
