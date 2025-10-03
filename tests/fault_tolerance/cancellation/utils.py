@@ -8,6 +8,7 @@ import shutil
 import socket
 import threading
 import time
+from typing import Any, Callable, Dict
 
 import pytest
 import requests
@@ -56,8 +57,10 @@ class CancellableRequest:
 
     # Class-level tracking for thread-safe socket monitoring
     _socket_tracking_lock = threading.Lock()
-    _socket_trackers = {}  # Maps thread ID to CancellableRequest instance
-    _original_socket = socket.socket
+    _socket_trackers: Dict[
+        Any, Any
+    ] = {}  # Maps thread ID to CancellableRequest instance
+    _original_socket: Callable[..., Any] = socket.socket
 
     @classmethod
     def _global_tracked_socket(
@@ -95,7 +98,7 @@ class CancellableRequest:
                 self.__class__._socket_trackers[thread_id] = self
                 # Install global monkey-patch if not already installed
                 if socket.socket != self.__class__._global_tracked_socket:
-                    socket.socket = self.__class__._global_tracked_socket
+                    socket.socket = self.__class__._global_tracked_socket  # type: ignore[assignment,misc]
 
             try:
                 self.response = self.session.post(*args, **kwargs)
@@ -110,7 +113,7 @@ class CancellableRequest:
                         not self.__class__._socket_trackers
                         and socket.socket == self.__class__._global_tracked_socket
                     ):
-                        socket.socket = self.__class__._original_socket
+                        socket.socket = self.__class__._original_socket  # type: ignore[assignment,misc]
 
         with self._lock:
             if self._request_thread is not None:
