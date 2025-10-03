@@ -284,9 +284,37 @@ jobs:
       contents: read
     steps:
     - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        set -x
+        # Install yq
+        echo "Installing yq..."
+        curl -L https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o yq
+        sudo chmod 755 yq
+        sudo mv yq /usr/local/bin/
+        # Install kubectl
+        echo "Installing kubectl..."
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        sudo chmod 755 kubectl
+        sudo mv kubectl /usr/local/bin/
+    - name: Setup kubeconfig
+      run: |
+        set -x
+        # Setup kubeconfig
+        echo "${{ secrets.AZURE_AKS_CI_KUBECONFIG_B64 }}" | base64 -d > .kubeconfig
+        chmod 600 .kubeconfig
+        export KUBECONFIG=$(pwd)/.kubeconfig
+        kubectl config set-context --current --namespace=$NAMESPACE --kubeconfig "${KUBECONFIG}"
+        kubectl config current-context
     - name: Run e2e Tests
       run: |
         set -x
+        # Setup kubeconfig for this step
+        echo "${{ secrets.AZURE_AKS_CI_KUBECONFIG_B64 }}" | base64 -d > .kubeconfig
+        chmod 600 .kubeconfig
+        export KUBECONFIG=$(pwd)/.kubeconfig
+        kubectl config set-context --current --namespace=$NAMESPACE --kubeconfig "${KUBECONFIG}"
+
         cd components/backends/vllm
         export FRAMEWORK_RUNTIME_IMAGE="${{ secrets.AZURE_ACR_HOSTNAME }}/ai-dynamo/dynamo:cb6e511109e95d63eeb348107e5c1d0be8d5346b-vllm-amd64"
         export KUBE_NS=$NAMESPACE
