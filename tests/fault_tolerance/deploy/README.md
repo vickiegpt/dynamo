@@ -458,3 +458,100 @@ curl -sL https://aka.ms/InstallAzureCLIDeb
 az aks install-cli
 az login
 ```
+## Dual Client Implementation for Fault Tolerance Tests
+
+### Overview
+
+This document describes the implementation of dual client support for fault tolerance tests, allowing tests to use either the **AI-Perf** client or the **legacy custom client**.
+
+### Motivation
+
+A requirement to support both clients simultaneously for:
+- Comparing performance and results between implementations
+- Gradual migration path from legacy to AI-Perf
+- Supporting different use cases (AI-Perf for comprehensive metrics, legacy for simple testing)
+
+### Architecture
+
+The implementation uses a **factory pattern** to cleanly separate client implementations and parsers while providing a unified interface.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    test_deployment.py                        │
+│                     (Test Runner)                            │
+└──────────────────────┬──────────────────────┬────────────────┘
+                       │                      │
+                       ├──────────────────────┤
+                       │                      │
+          ┌────────────▼─────────┐ ┌─────────▼──────────┐
+          │  client_factory.py   │ │ parse_factory.py   │
+          │  (Client Selection)  │ │ (Parser Selection) │
+          └──────┬───────┬───────┘ └──────┬──────┬──────┘
+                 │       │                │      │
+         ┌───────▼───┐ ┌─▼──────────┐ ┌──▼──────▼───────────┐
+         │ client.py │ │legacy_     │ │parse_   │legacy_    │
+         │ (AI-Perf) │ │client.py   │ │results  │parse_     │
+         └───────────┘ └────────────┘ │.py      │results.py │
+                                      └─────────┴───────────┘
+```
+
+### Usage
+
+#### Running Tests with Command-Line Option
+
+The client type can be dynamically selected using the `--client-type` pytest argument:
+
+##### **Using AI-Perf Client (Default)**
+```bash
+# Default - no flag needed
+pytest tests/fault_tolerance/deploy/test_deployment.py -s -v \
+  --namespace ${NAMESPACE} \
+  --image ${IMAGE}
+
+# Or explicitly specify
+pytest tests/fault_tolerance/deploy/test_deployment.py -s -v \
+  --namespace ${NAMESPACE} \
+  --image ${IMAGE} \
+  --client-type aiperf
+```
+
+##### **Using Legacy Client**
+```bash
+pytest tests/fault_tolerance/deploy/test_deployment.py -s -v \
+  --namespace ${NAMESPACE} \
+  --image ${IMAGE} \
+  --client-type legacy
+```
+
+##### **Single Test with Legacy Client**
+```bash
+pytest tests/fault_tolerance/deploy/test_deployment.py::test_fault_scenario[vllm-agg-tp-1-dp-1-none] -s -v \
+  --namespace test-ft \
+  --image your-image:tag \
+  --client-type legacy
+```
+Legacy Output Format
+
+```bash
+PASSED[TEST] 2025-10-03T21:02:21 INFO root: Using legacy parser for results
+
+Test Group: vllm-agg-tp-1-dp-2
+╒═══════════════════╤═══════════╤═══════════╤══════════╤═══════════╤══════════╤═══════════╤═══════════╤════════════╕
+│      Failure      │   Startup │   Success │   Failed │   Success │   Failed │   Latency │   Latency │   Recovery │
+│                   │           │    Before │   Before │     After │    After │    Before │     After │            │
+╞═══════════════════╪═══════════╪═══════════╪══════════╪═══════════╪══════════╪═══════════╪═══════════╪════════════╡
+│ decode_worker_pod │    178.00 │    149.00 │     0.00 │   1349.00 │     2.00 │      1.19 │      1.19 │     163.90 │
+╘═══════════════════╧═══════════╧═══════════╧══════════╧═══════════╧══════════╧═══════════╧═══════════╧════════════╛
+
+================================================================================
+[TEST] 2025-10-03T21:02:22 INFO root: Using legacy parser for results
+
+Test Group: vllm-agg-tp-1-dp-2
+╒═══════════════════╤═══════════╤═══════════╤══════════╤═══════════╤══════════╤═══════════╤═══════════╤════════════╕
+│      Failure      │   Startup │   Success │   Failed │   Success │   Failed │   Latency │   Latency │   Recovery │
+│                   │           │    Before │   Before │     After │    After │    Before │     After │            │
+╞═══════════════════╪═══════════╪═══════════╪══════════╪═══════════╪══════════╪═══════════╪═══════════╪════════════╡
+│ decode_worker_pod │    178.00 │    149.00 │     0.00 │   1349.00 │     2.00 │      1.19 │      1.19 │     163.90 │
+╘═══════════════════╧═══════════╧═══════════╧══════════╧═══════════╧══════════╧═══════════╧═══════════╧════════════╛
+
+```
