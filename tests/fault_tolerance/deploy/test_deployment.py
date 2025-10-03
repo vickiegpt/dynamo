@@ -10,13 +10,36 @@ import pytest
 
 from tests.fault_tolerance.deploy.client_factory import get_client_function
 from tests.fault_tolerance.deploy.parse_factory import parse_test_results
-from tests.fault_tolerance.deploy.scenarios import scenarios, Load
+from tests.fault_tolerance.deploy.scenarios import Load, scenarios
 from tests.utils.managed_deployment import ManagedDeployment
 
 
 @pytest.fixture(params=scenarios.keys())
-def scenario(request):
-    return scenarios[request.param]
+def scenario(request, client_type):
+    """Get scenario and optionally override client type from command line.
+    
+    If --client-type is specified, it overrides the scenario's default client type.
+    """
+    scenario_obj = scenarios[request.param]
+    
+    # Override client type if specified on command line
+    if client_type is not None:
+        # Create a copy of the load config with overridden client type
+        import copy
+        scenario_obj = copy.deepcopy(scenario_obj)
+        scenario_obj.load.client_type = client_type
+        
+        # Adjust retry settings based on client type
+        if client_type == "legacy":
+            # Legacy uses per-request retries
+            if scenario_obj.load.max_retries > 1:
+                scenario_obj.load.max_retries = 1
+        elif client_type == "aiperf":
+            # AI-Perf uses full test retries
+            if scenario_obj.load.max_retries < 3:
+                scenario_obj.load.max_retries = 3
+    
+    return scenario_obj
 
 
 @contextmanager
@@ -29,7 +52,7 @@ def _clients(
     load_config: Load,
 ):
     """Start client processes using factory pattern for client selection.
-    
+
     Args:
         logger: Logger instance
         request: Pytest request fixture
@@ -40,12 +63,14 @@ def _clients(
     """
     # Get appropriate client function based on configuration
     client_func = get_client_function(load_config.client_type)
-    
-    logger.info(f"Starting {load_config.clients} clients using '{load_config.client_type}' client")
-    
+
+    logger.info(
+        f"Starting {load_config.clients} clients using '{load_config.client_type}' client"
+    )
+
     procs = []
     ctx = multiprocessing.get_context("spawn")
-    
+
     # Determine retry_delay_or_rate based on client type
     if load_config.client_type == "legacy":
         # Legacy client uses max_request_rate for rate limiting
@@ -53,7 +78,7 @@ def _clients(
     else:
         # AI-Perf client uses retry_delay between attempts (default 5s)
         retry_delay_or_rate = 5
-    
+
     for i in range(load_config.clients):
         procs.append(
             ctx.Process(
@@ -74,7 +99,7 @@ def _clients(
         )
         procs[-1].start()
         logger.debug(f"Started client {i} (PID: {procs[-1].pid})")
-    
+
     yield procs
 
     for proc in procs:
@@ -123,12 +148,12 @@ global_result_list = []
 @pytest.fixture(autouse=True)
 def results_table(request, scenario):  # noqa: F811
     """Parse and display results for individual test using factory pattern.
-    
+
     Automatically detects result type (AI-Perf or legacy) and uses
     the appropriate parser.
     """
     yield
-    
+
     # Use factory to auto-detect and parse results
     try:
         parse_test_results(
@@ -141,22 +166,22 @@ def results_table(request, scenario):  # noqa: F811
         )
     except Exception as e:
         logging.error(f"Failed to parse results for {request.node.name}: {e}")
-    
+
     global_result_list.append(request.node.name)
 
 
 @pytest.fixture(autouse=True, scope="session")
 def results_summary():
     """Parse and display combined results for all tests in session.
-    
+
     Automatically detects result types and uses appropriate parsers.
     """
     yield
-    
+
     if not global_result_list:
         logging.info("No test results to summarize")
         return
-    
+
     # Use factory to auto-detect and parse combined results
     try:
         parse_test_results(
