@@ -295,11 +295,9 @@ graph TD
     end
 
     subgraph PyO3["Python/Rust Interface - PyO3"]
-        PMU[PrometheusMetricsUtils<br/>bindings/python/rust/prometheus_metrics.rs]
-        MT["Metric Types: IntGauge, Gauge, etc.<br/>bindings/python/rust/prometheus_metrics.rs"]
+        PM[Prometheus Metrics<br/>PrometheusMetricsUtils + Metric Types<br/>bindings/python/rust/prometheus_metrics.rs]
         EP[Endpoint Bindings<br/>bindings/python/rust/lib.rs]
-        style PMU fill:#f4a261,color:#000
-        style MT fill:#f4a261,color:#000
+        style PM fill:#f4a261,color:#000
         style EP fill:#f4a261,color:#000
     end
 
@@ -314,18 +312,23 @@ graph TD
         style SS fill:#ce422b,color:#fff
     end
 
-    PY -->|create_intgauge| PMU
-    PY -.->|register_update_callback| PMU
-    PMU -->|create via MetricsRegistry| MR
+    PY -->|create_intgauge| PM
+    PY -.->|register_update_callback| PM
+    PM -->|create via MetricsRegistry| MR
     MR -->|create prometheus gauge| PROM
-    PMU -->|wrap in IntGauge| MT
-    MT -->|return| PY
-    PY -.->|set/get| MT
-    PMU -.->|register callback| DRT
+    PM -->|return IntGauge/Gauge/etc.| PY
+    PY -.->|set/get| PM
+    PM -.->|register callback| DRT
     DRT -.->|execute callbacks| EP
     EP -.->|invoke| PY
-    SS -.->|execute callbacks| DRT
+    SS ==>|execute callbacks| DRT
     SS -->|gather metrics| PROM
+
+    linkStyle 1 stroke:#ff6b6b,stroke-width:2px
+    linkStyle 6 stroke:#ff6b6b,stroke-width:2px
+    linkStyle 7 stroke:#ff6b6b,stroke-width:2px
+    linkStyle 8 stroke:#ff6b6b,stroke-width:2px
+    linkStyle 9 stroke:#ff6b6b,stroke-width:2px
 ```
 
 ## Comparison
