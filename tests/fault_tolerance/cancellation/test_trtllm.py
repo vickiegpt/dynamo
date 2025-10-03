@@ -11,10 +11,8 @@ import pytest
 from tests.fault_tolerance.cancellation.utils import (
     DynamoFrontendProcess,
     poll_for_pattern,
-    read_log_content,
     read_streaming_responses,
     send_cancellable_request,
-    strip_ansi_codes,
 )
 from tests.utils.constants import FAULT_TOLERANCE_MODEL_NAME
 from tests.utils.engine_process import FRONTEND_PORT
@@ -128,102 +126,6 @@ class DynamoWorkerProcess(ManagedProcess):
         return False
 
 
-def verify_request_cancelled(
-    frontend_process: DynamoFrontendProcess,
-    worker_process: DynamoWorkerProcess,
-    remote_worker_process: DynamoWorkerProcess | None = None,
-    frontend_log_offset: int = 0,
-    worker_log_offset: int = 0,
-    remote_worker_log_offset: int = 0,
-    assert_request_reach_remote_worker: bool = False,
-    assert_cancel_at_remote_worker: bool = False,
-) -> tuple[int, int, int]:
-    """Verify the logs contain expected cancellation messages"""
-
-    # Check worker log for cancellation pattern
-    worker_log_content = read_log_content(worker_process._log_path)
-    new_worker_content = worker_log_content[worker_log_offset:]
-
-    # Find the LAST occurrence of "New Request ID: <id>" line (health checks may log earlier ones)
-    request_id = None
-    for line in reversed(new_worker_content.split("\n")):
-        # Strip ANSI codes and whitespace for pattern matching
-        clean_line = strip_ansi_codes(line).strip()
-        if "New Request ID: " in clean_line:
-            # Extract ID from the last delimiter occurrence on the line
-            parts = clean_line.rsplit("New Request ID: ", 1)
-            if len(parts) > 1:
-                request_id = parts[-1].strip()
-                break
-    if request_id is None:
-        pytest.fail("Could not find 'New Request ID: <id>' pattern in worker log")
-
-    has_worker_cancellation = False
-    cancellation_pattern = f"Aborted {'Remote ' if assert_cancel_at_remote_worker else ''}Request ID: {request_id}"
-    for line in new_worker_content.split("\n"):
-        # Strip ANSI codes and whitespace for pattern matching
-        clean_line = strip_ansi_codes(line).strip()
-        if clean_line.endswith(cancellation_pattern):
-            has_worker_cancellation = True
-            break
-    if not has_worker_cancellation:
-        pytest.fail(f"Could not find '{cancellation_pattern}' pattern in worker log")
-
-    # Check remote worker log if provided
-    if remote_worker_process is not None:
-        remote_worker_log_content = read_log_content(remote_worker_process._log_path)
-        new_remote_worker_content = remote_worker_log_content[remote_worker_log_offset:]
-
-        # Check if the same request ID reached remote worker
-        if assert_request_reach_remote_worker:
-            has_reach_remote = False
-            remote_reach_pattern = f"New Request ID: {request_id}"
-            for line in new_remote_worker_content.split("\n"):
-                clean_line = strip_ansi_codes(line).strip()
-                if clean_line.endswith(remote_reach_pattern):
-                    has_reach_remote = True
-                    break
-            if not has_reach_remote:
-                pytest.fail(
-                    f"Could not find '{remote_reach_pattern}' pattern in remote worker log"
-                )
-
-        # Check if the same request ID was cancelled at remote worker
-        if assert_cancel_at_remote_worker:
-            has_remote_cancel = False
-            remote_cancel_pattern = f"Aborted Request ID: {request_id}"
-            for line in remote_worker_log_content.split("\n"):
-                clean_line = strip_ansi_codes(line).strip()
-                if clean_line.endswith(remote_cancel_pattern):
-                    has_remote_cancel = True
-                    break
-            if not has_remote_cancel:
-                pytest.fail(
-                    f"Could not find '{remote_cancel_pattern}' pattern in remote worker log"
-                )
-
-    # Check frontend log for cancellation issued pattern
-    frontend_log_content = read_log_content(frontend_process._log_path)
-    new_frontend_content = frontend_log_content[frontend_log_offset:]
-
-    has_kill_message = False
-    kill_message = "issued control message Kill to sender"
-    for line in new_frontend_content.split("\n"):
-        # Strip ANSI codes and whitespace for pattern matching
-        clean_line = strip_ansi_codes(line).strip()
-        if clean_line.endswith(kill_message):
-            has_kill_message = True
-            break
-    if not has_kill_message:
-        pytest.fail("Could not find cancellation issued in frontend log")
-
-    return (
-        len(frontend_log_content),
-        len(worker_log_content),
-        (0 if remote_worker_process is None else len(remote_worker_log_content)),
-    )
-
-
 @pytest.mark.trtllm_marker
 @pytest.mark.gpu_1
 @pytest.mark.e2e
@@ -244,10 +146,7 @@ def test_request_cancellation_trtllm_aggregated(
         logger.info("Frontend started successfully")
 
         # Step 2: Start an aggregated worker
-        logger.info("Starting aggregated worker...")
-        worker = DynamoWorkerProcess(request, mode="prefill_and_decode")
-
-        with worker:
+        with DynamoWorkerProcess(request, mode="prefill_and_decode") as worker:
             logger.info(f"Aggregated Worker PID: {worker.get_pid()}")
 
             # TODO: Why wait after worker ready fixes frontend 404 / 500 flakiness?
@@ -324,21 +223,15 @@ def test_request_cancellation_trtllm_decode_first_decode_cancel(
         logger.info("Frontend started successfully")
 
         # Step 2: Start the prefill worker
-        logger.info("Starting prefill worker...")
-        prefill_worker = DynamoWorkerProcess(
+        with DynamoWorkerProcess(
             request, mode="prefill", strategy="decode_first"
-        )
-
-        with prefill_worker:
+        ) as prefill_worker:
             logger.info(f"Prefill Worker PID: {prefill_worker.get_pid()}")
 
             # Step 3: Start the decode worker
-            logger.info("Starting decode worker...")
-            decode_worker = DynamoWorkerProcess(
+            with DynamoWorkerProcess(
                 request, mode="decode", strategy="decode_first"
-            )
-
-            with decode_worker:
+            ) as decode_worker:
                 logger.info(f"Decode Worker PID: {decode_worker.get_pid()}")
 
                 # TODO: Why wait after worker ready fixes frontend 404 / 500 flakiness?
@@ -410,21 +303,15 @@ def test_request_cancellation_trtllm_decode_first_remote_prefill_cancel(
         logger.info("Frontend started successfully")
 
         # Step 2: Start the prefill worker
-        logger.info("Starting prefill worker...")
-        prefill_worker = DynamoWorkerProcess(
+        with DynamoWorkerProcess(
             request, mode="prefill", strategy="decode_first"
-        )
-
-        with prefill_worker:
+        ) as prefill_worker:
             logger.info(f"Prefill Worker PID: {prefill_worker.get_pid()}")
 
             # Step 3: Start the decode worker
-            logger.info("Starting decode worker...")
-            decode_worker = DynamoWorkerProcess(
+            with DynamoWorkerProcess(
                 request, mode="decode", strategy="decode_first"
-            )
-
-            with decode_worker:
+            ) as decode_worker:
                 logger.info(f"Decode Worker PID: {decode_worker.get_pid()}")
 
                 # TODO: Why wait after worker ready fixes frontend 404 / 500 flakiness?
@@ -502,21 +389,15 @@ def test_request_cancellation_trtllm_prefill_first_prefill_cancel(
         logger.info("Frontend started successfully")
 
         # Step 2: Start the decode worker
-        logger.info("Starting decode worker...")
-        decode_worker = DynamoWorkerProcess(
+        with DynamoWorkerProcess(
             request, mode="decode", strategy="prefill_first"
-        )
-
-        with decode_worker:
+        ) as decode_worker:
             logger.info(f"Decode Worker PID: {decode_worker.get_pid()}")
 
             # Step 3: Start the prefill worker
-            logger.info("Starting prefill worker...")
-            prefill_worker = DynamoWorkerProcess(
+            with DynamoWorkerProcess(
                 request, mode="prefill", strategy="prefill_first"
-            )
-
-            with prefill_worker:
+            ) as prefill_worker:
                 logger.info(f"Prefill Worker PID: {prefill_worker.get_pid()}")
 
                 # TODO: Why wait after worker ready fixes frontend 404 / 500 flakiness?
@@ -581,21 +462,15 @@ def test_request_cancellation_trtllm_prefill_first_remote_decode_cancel(
         logger.info("Frontend started successfully")
 
         # Step 2: Start the decode worker
-        logger.info("Starting decode worker...")
-        decode_worker = DynamoWorkerProcess(
+        with DynamoWorkerProcess(
             request, mode="decode", strategy="prefill_first"
-        )
-
-        with decode_worker:
+        ) as decode_worker:
             logger.info(f"Decode Worker PID: {decode_worker.get_pid()}")
 
             # Step 3: Start the prefill worker
-            logger.info("Starting prefill worker...")
-            prefill_worker = DynamoWorkerProcess(
+            with DynamoWorkerProcess(
                 request, mode="prefill", strategy="prefill_first"
-            )
-
-            with prefill_worker:
+            ) as prefill_worker:
                 logger.info(f"Prefill Worker PID: {prefill_worker.get_pid()}")
 
                 # TODO: Why wait after worker ready fixes frontend 404 / 500 flakiness?
