@@ -142,8 +142,9 @@ def extract_timestamp_from_log(
             if from_end:
                 # Read last few lines for last timestamp
                 lines = f.readlines()
-                lines_to_check = reversed(
-                    lines[-max_lines:] if len(lines) > max_lines else lines
+                # Convert reversed to list to fix mypy type issues
+                lines_to_check = list(
+                    reversed(lines[-max_lines:] if len(lines) > max_lines else lines)
                 )
             else:
                 # Read first few lines for first timestamp
