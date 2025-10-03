@@ -285,8 +285,6 @@ class WorkflowMetricsUploader:
         status_numeric = status_to_numeric(data.get(FIELD_STATUS, "unknown"))
         self.workflow_status_counter.add(status_numeric, labels)
         
-        # Force flush using the working client
-        self.client.flush()
         print(f"Successfully recorded workflow metrics for: {data.get('_id', 'unknown')}")
     
     def record_job_metrics(self, data: Dict[str, Any]) -> None:
@@ -317,8 +315,6 @@ class WorkflowMetricsUploader:
         status_numeric = status_to_numeric(data.get(FIELD_STATUS, "unknown"))
         self.job_status_counter.add(status_numeric, labels)
         
-        # Force flush using the working client
-        self.client.flush()
         print(f"Successfully recorded job metrics for: {data.get(FIELD_JOB_NAME, 'unknown')}")
     
     def record_step_metrics(self, data: Dict[str, Any]) -> None:
@@ -345,8 +341,6 @@ class WorkflowMetricsUploader:
         status_numeric = status_to_numeric(data.get(FIELD_STATUS, "unknown"))
         self.step_status_counter.add(status_numeric, labels)
         
-        # Force flush using the working client
-        self.client.flush()
         print(f"Successfully recorded step metrics for: {data.get(FIELD_NAME, 'unknown')}")
     
     def record_runner_queue_metrics(self, data: Dict[str, Any]) -> None:
@@ -375,8 +369,6 @@ class WorkflowMetricsUploader:
         # Record runner queue time
         self.runner_queue_time_histogram.record(queue_time, labels)
         
-        # Force flush using the working client
-        self.client.flush()
         print(f"Successfully recorded runner queue metrics for: {runner_prefix} (queue_time={queue_time}s)")
 
     def get_github_api_data(self, endpoint: str) -> Optional[Dict[str, Any]]:
