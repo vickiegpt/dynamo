@@ -750,6 +750,9 @@ class WorkflowMetricsUploader:
         step_name = step_data.get('name', f'step_{step_index}')
         step_number = step_data.get('number', step_index + 1)
         
+        # Generate step ID from available data (steps don't always have IDs in GitHub API)
+        step_id = step_data.get('id') or f"{job_id}-step-{step_number}"
+        
         # Schema-compliant fields
         db_data[FIELD_STEP_ID] = str(step_id)
         db_data[FIELD_JOB_ID] = str(job_id)
