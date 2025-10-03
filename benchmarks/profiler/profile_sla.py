@@ -22,9 +22,19 @@ import os
 import numpy as np
 import yaml
 
-from benchmarks.profiler.utils.config import CONFIG_MODIFIERS, WORKER_COMPONENT_NAMES
+from benchmarks.profiler.utils.config import (
+    CONFIG_MODIFIERS,
+    DEFAULT_DGD_PLANNER_SERVICE_CONFIG,
+    WORKER_COMPONENT_NAMES,
+    Config,
+    SubComponentType,
+)
 from benchmarks.profiler.utils.estimate_perf import AIConfiguratorPerfEstimator
 from benchmarks.profiler.utils.genai_perf import benchmark_decode, benchmark_prefill
+from benchmarks.profiler.utils.planner_utils import (
+    add_planner_arguments_to_parser,
+    build_planner_args_from_namespace,
+)
 from benchmarks.profiler.utils.plot import (
     plot_decode_performance,
     plot_prefill_performance,
@@ -141,11 +151,11 @@ async def run_profile(args):
             ai_configurator_perf_estimator = AIConfiguratorPerfEstimator(
                 args.aic_model_name,
                 args.aic_system.lower(),
-                args.backend,
-                args.backend_version,
+                args.aic_backend,
+                args.aic_backend_version,
             )
         else:
-            if args.aic_system or args.aic_model_name or args.backend_version:
+            if args.aic_system or args.aic_model_name or args.aic_backend_version:
                 logger.warning(
                     "Will ignore --aic-system, --aic-model-name, and/or --backend-version "
                     "when not using --use-ai-configurator."
@@ -709,6 +719,76 @@ async def run_profile(args):
         with open(args.config, "r") as f:
             config = yaml.safe_load(f)
 
+        if not args.is_moe_model:
+            # dense model, use TP for both prefill and decode
+            config = config_modifier.set_config_tp_size(
+                config, best_prefill_gpus, SubComponentType.PREFILL
+            )
+            config = config_modifier.set_config_tp_size(
+                config, best_decode_gpus, SubComponentType.DECODE
+            )
+        else:
+            # MoE model, use TEP for prefill and DEP for decode
+            config = config_modifier.set_config_tep_size(
+                config,
+                best_prefill_gpus,
+                args.num_gpus_per_node,
+                SubComponentType.PREFILL,
+            )
+            config = config_modifier.set_config_dep_size(
+                config,
+                best_decode_gpus,
+                args.num_gpus_per_node,
+                SubComponentType.DECODE,
+            )
+        # add the planner service
+        config = Config.model_validate(config)
+        planner_config = DEFAULT_DGD_PLANNER_SERVICE_CONFIG
+        planner_config.dynamoNamespace = config.spec.services[
+            "Frontend"
+        ].dynamoNamespace
+        planner_config.extraPodSpec.mainContainer.image = config.spec.services[
+            "Frontend"
+        ].extraPodSpec.mainContainer.image
+
+        # Build planner args dynamically from parsed arguments
+        # This includes shared args (ttft, itl, backend, namespace) from profile_sla
+        # and planner-specific args (with planner_ prefix)
+        planner_args = build_planner_args_from_namespace(args, prefix="planner_")
+
+        # Override profiling-specific arguments with results from profiling
+        # Remove and re-add to ensure correct values from profiling context
+        planner_args = [
+            arg
+            for arg in planner_args
+            if not any(
+                arg.startswith(f"--{key}=")
+                for key in [
+                    "namespace",
+                    "prefill-engine-num-gpu",
+                    "decode-engine-num-gpu",
+                    "profile-results-dir",
+                ]
+            )
+        ]
+
+        # Add arguments determined by profiling results
+        planner_args.extend(
+            [
+                f"--namespace={config.spec.services['Frontend'].dynamoNamespace}",
+                f"--prefill-engine-num-gpu={best_prefill_gpus}",
+                f"--decode-engine-num-gpu={best_decode_gpus}",
+                f"--profile-results-dir={args.output_dir}",
+            ]
+        )
+
+        planner_config.extraPodSpec.mainContainer.args.extend(planner_args)
+        config.spec.services["Planner"] = planner_config
+        config = config.model_dump()
+        # save DGD config with planner
+        with open(f"{args.output_dir}/config_with_planner.yaml", "w") as f:
+            yaml.dump(config, f)
+
     except Exception as e:
         logger.error(f"Profile job failed with error: {e}")
         raise
@@ -717,6 +797,19 @@ async def run_profile(args):
         logger.info("Performing final cleanup of any remaining deployments...")
         await cleanup_remaining_deployments(deployment_clients, args.namespace)
         logger.info("Final cleanup completed.")
+
+    # deploy the optimized DGD with planner
+    if args.deploy_after_profile and not args.dry_run:
+        logger.info("Deploying the optimized DGD with planner...")
+        client = DynamoDeploymentClient(
+            namespace=args.namespace,
+            base_log_dir=f"{args.output_dir}/final_deployment",
+            model_name=model_name,
+            service_name=args.service_name,
+            frontend_port=frontend_port,
+            deployment_name=config["metadata"]["name"],
+        )
+        await client.create_deployment(f"{args.output_dir}/config_with_planner.yaml")
 
 
 if __name__ == "__main__":
@@ -782,7 +875,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--itl", type=int, default=10, help="target Inter Token Latency in ms"
     )
-    # below are arguments used for interpolating TTFT and ITL under different ISL/OSL
+
+    # arguments used for interpolating TTFT and ITL under different ISL/OSL
     parser.add_argument(
         "--max-context-length",
         type=int,
@@ -824,6 +918,17 @@ if __name__ == "__main__":
         default=8,
         help="Number of GPUs per node for MoE models - this will be the granularity when searching for the best TEP/DEP size",
     )
+
+    # arguments for dgd config generation and deployment
+    parser.add_argument(
+        "--deploy-after-profile",
+        action="store_true",
+        help="deploy the optimized DGD with planner",
+    )
+    # Dynamically add all planner arguments from planner_argparse.py
+    add_planner_arguments_to_parser(parser, prefix="planner-")
+
+    # arguments if using aiconfigurator
     parser.add_argument(
         "--use-ai-configurator",
         action="store_true",
@@ -840,10 +945,19 @@ if __name__ == "__main__":
         help="aiconfigurator name of the target model (e.g. QWEN3_32B, DEEPSEEK_V3)",
     )
     parser.add_argument(
-        "--backend-version",
+        "--aic-backend",
+        type=str,
+        default="",
+        help="aiconfigurator backend of the target model, if not provided, will use args.backend",
+    )
+    parser.add_argument(
+        "--aic-backend-version",
         type=str,
         help="Specify backend version when using aiconfigurator to estimate perf.",
     )
     args = parser.parse_args()
+
+    if not args.aic_backend:
+        args.aic_backend = args.backend
 
     asyncio.run(run_profile(args))

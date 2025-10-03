@@ -39,6 +39,11 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 
+class VolumeMount(BaseModel):
+    name: str = "dynamo-pvc"
+    mountPoint: str = "/data"
+
+
 class Container(BaseModel):
     args: Optional[list[str]] = None
     model_config = {"extra": "allow"}
@@ -83,6 +88,27 @@ class Config(BaseModel):
 
 class MultinodeConfig(BaseModel):
     nodeCount: int
+
+
+class DgdPlannerServiceConfig(BaseModel):
+    dynamoNamespace: str = "dynamo"  # placeholder
+    componentType: str = "planner"
+    replicas: int = 1
+    volumeMounts: list[VolumeMount] = [VolumeMount()]
+    extraPodSpec: PodSpec = PodSpec(
+        mainContainer=Container(
+            **{
+                "image": "my-registry/dynamo-runtime:my-tag",  # placeholder
+                "workingDir": "/workspace/components/planner/src/dynamo/planner",
+                "command": ["python3", "-m", "planner_sla"],
+                "args": [],
+            }
+        )
+    )
+    model_config = {"extra": "allow"}
+
+
+DEFAULT_DGD_PLANNER_SERVICE_CONFIG = DgdPlannerServiceConfig()
 
 
 def break_arguments(args: list[str] | None) -> list[str]:
@@ -473,9 +499,16 @@ class VllmV1ConfigModifier:
         return cfg.model_dump()
 
     @classmethod
-    def set_config_tp_size(cls, config: dict, tp_size: int):
+    def set_config_tp_size(
+        cls,
+        config: dict,
+        tp_size: int,
+        component_type: SubComponentType = SubComponentType.DECODE,
+    ):
         cfg = Config.model_validate(config)
-        worker_service = get_worker_service_from_config(config, backend="vllm")
+        worker_service = get_worker_service_from_config(
+            config, backend="vllm", sub_component_type=component_type
+        )
 
         # Set up resources
         setup_worker_service_resources(worker_service, tp_size)
@@ -495,13 +528,25 @@ class VllmV1ConfigModifier:
         return cfg.model_dump()
 
     @classmethod
-    def set_config_tep_size(cls, config: dict, tep_size: int, num_gpus_per_node: int):
+    def set_config_tep_size(
+        cls,
+        config: dict,
+        tep_size: int,
+        num_gpus_per_node: int,
+        component_type: SubComponentType = SubComponentType.DECODE,
+    ):
         raise NotImplementedError(
             "TEP (Tensor Expert Parallelism) is not implemented for VLLM backend"
         )
 
     @classmethod
-    def set_config_dep_size(cls, config: dict, dep_size: int, num_gpus_per_node: int):
+    def set_config_dep_size(
+        cls,
+        config: dict,
+        dep_size: int,
+        num_gpus_per_node: int,
+        component_type: SubComponentType = SubComponentType.DECODE,
+    ):
         raise NotImplementedError(
             "DEP (Data Expert Parallelism) is not implemented for VLLM backend"
         )
@@ -692,9 +737,16 @@ class SGLangConfigModifier:
         return cfg.model_dump()
 
     @classmethod
-    def set_config_tp_size(cls, config: dict, tp_size: int):
+    def set_config_tp_size(
+        cls,
+        config: dict,
+        tp_size: int,
+        component_type: SubComponentType = SubComponentType.DECODE,
+    ):
         cfg = Config.model_validate(config)
-        worker_service = get_worker_service_from_config(config, backend="sglang")
+        worker_service = get_worker_service_from_config(
+            config, backend="sglang", sub_component_type=component_type
+        )
 
         # Set up resources
         setup_worker_service_resources(worker_service, tp_size)
@@ -709,9 +761,17 @@ class SGLangConfigModifier:
         return cfg.model_dump()
 
     @classmethod
-    def set_config_tep_size(cls, config: dict, tep_size: int, num_gpus_per_node: int):
+    def set_config_tep_size(
+        cls,
+        config: dict,
+        tep_size: int,
+        num_gpus_per_node: int,
+        component_type: SubComponentType = SubComponentType.DECODE,
+    ):
         cfg = Config.model_validate(config)
-        worker_service = get_worker_service_from_config(config, backend="sglang")
+        worker_service = get_worker_service_from_config(
+            config, backend="sglang", sub_component_type=component_type
+        )
 
         # Set up resources with multinode configuration
         setup_worker_service_resources(worker_service, tep_size, num_gpus_per_node)
@@ -736,9 +796,17 @@ class SGLangConfigModifier:
         return cfg.model_dump()
 
     @classmethod
-    def set_config_dep_size(cls, config: dict, dep_size: int, num_gpus_per_node: int):
+    def set_config_dep_size(
+        cls,
+        config: dict,
+        dep_size: int,
+        num_gpus_per_node: int,
+        component_type: SubComponentType = SubComponentType.DECODE,
+    ):
         cfg = Config.model_validate(config)
-        worker_service = get_worker_service_from_config(config, backend="sglang")
+        worker_service = get_worker_service_from_config(
+            config, backend="sglang", sub_component_type=component_type
+        )
 
         # Set up resources with multinode configuration
         setup_worker_service_resources(worker_service, dep_size, num_gpus_per_node)
@@ -966,12 +1034,19 @@ class TrtllmConfigModifier:
         return cfg.model_dump()
 
     @classmethod
-    def set_config_tp_size(cls, config: dict, tp_size: int):
+    def set_config_tp_size(
+        cls,
+        config: dict,
+        tp_size: int,
+        component_type: SubComponentType = SubComponentType.DECODE,
+    ):
         cfg = Config.model_validate(config)
 
         # Get the worker service using helper function
         # This assumes convert_config has been called, so the service is named decode_worker_k8s_name
-        worker_service = get_worker_service_from_config(config, backend="trtllm")
+        worker_service = get_worker_service_from_config(
+            config, backend="trtllm", sub_component_type=component_type
+        )
 
         # Set up resources
         setup_worker_service_resources(worker_service, tp_size)
@@ -996,13 +1071,25 @@ class TrtllmConfigModifier:
         return cfg.model_dump()
 
     @classmethod
-    def set_config_tep_size(cls, config: dict, tep_size: int, num_gpus_per_node: int):
+    def set_config_tep_size(
+        cls,
+        config: dict,
+        tep_size: int,
+        num_gpus_per_node: int,
+        component_type: SubComponentType = SubComponentType.DECODE,
+    ):
         raise NotImplementedError(
             "TEP (Tensor Expert Parallelism) is not implemented for TrtLLM backend"
         )
 
     @classmethod
-    def set_config_dep_size(cls, config: dict, dep_size: int, num_gpus_per_node: int):
+    def set_config_dep_size(
+        cls,
+        config: dict,
+        dep_size: int,
+        num_gpus_per_node: int,
+        component_type: SubComponentType = SubComponentType.DECODE,
+    ):
         raise NotImplementedError(
             "DEP (Data Expert Parallelism) is not implemented for TrtLLM backend"
         )
