@@ -110,6 +110,111 @@ pub struct StreamRecordingEntry {
     pub response_data: Annotated<NvCreateChatCompletionStreamResponse>,
 }
 
+/// Combined stream content for structured JSON output
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CombinedStreamContent {
+    /// Request ID for correlation
+    pub request_id: String,
+    /// Combined normal content from all stream chunks
+    pub normal_content: String,
+    /// Combined reasoning content from all stream chunks
+    pub reasoning_content: String,
+    /// Tool calls extracted from the stream
+    pub tool_calls: Vec<serde_json::Value>,
+    /// Raw stream data chunks for detailed analysis
+    pub data: Vec<Annotated<NvCreateChatCompletionStreamResponse>>,
+}
+
+impl CombinedStreamContent {
+    /// Combine stream items into structured content
+    pub fn from_stream_items(
+        request_id: String,
+        items: &[Annotated<NvCreateChatCompletionStreamResponse>],
+    ) -> Self {
+        let mut normal_content = String::new();
+        let mut reasoning_content = String::new();
+        let mut tool_calls = Vec::new();
+
+        for item in items {
+            if let Some(ref response) = item.data {
+                for choice in &response.choices {
+                    // Combine normal content
+                    if let Some(ref content) = choice.delta.content {
+                        normal_content.push_str(content);
+                    }
+
+                    // Combine reasoning content
+                    if let Some(ref reasoning) = choice.delta.reasoning_content {
+                        reasoning_content.push_str(reasoning);
+                    }
+
+                    // Extract tool calls
+                    if let Some(ref calls) = choice.delta.tool_calls {
+                        for call in calls {
+                            if let Ok(call_json) = serde_json::to_value(call) {
+                                tool_calls.push(call_json);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Self {
+            request_id,
+            normal_content,
+            reasoning_content,
+            tool_calls,
+            data: items.to_vec(),
+        }
+    }
+
+    /// Create combined content with both raw chunks and processed chunks
+    pub fn from_raw_and_processed_items(
+        request_id: String,
+        raw_chunks: &[Annotated<NvCreateChatCompletionStreamResponse>],
+        processed_items: &[Annotated<NvCreateChatCompletionStreamResponse>],
+    ) -> Self {
+        let mut normal_content = String::new();
+        let mut reasoning_content = String::new();
+        let mut tool_calls = Vec::new();
+
+        // Extract combined content from processed items (after jail processing)
+        for item in processed_items {
+            if let Some(ref response) = item.data {
+                for choice in &response.choices {
+                    // Combine normal content
+                    if let Some(ref content) = choice.delta.content {
+                        normal_content.push_str(content);
+                    }
+
+                    // Combine reasoning content
+                    if let Some(ref reasoning) = choice.delta.reasoning_content {
+                        reasoning_content.push_str(reasoning);
+                    }
+
+                    // Extract tool calls
+                    if let Some(ref calls) = choice.delta.tool_calls {
+                        for call in calls {
+                            if let Ok(call_json) = serde_json::to_value(call) {
+                                tool_calls.push(call_json);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Self {
+            request_id,
+            normal_content,
+            reasoning_content,
+            tool_calls,
+            data: raw_chunks.to_vec(), // Use raw chunks for the data field
+        }
+    }
+}
+
 // Reasoning State for reasoning parsing transformation step
 struct ReasoningState {
     stream: Pin<Box<dyn Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send>>,
@@ -830,57 +935,17 @@ impl
             context.clone(),
         );
 
-        // Stream Recording: Set up recording if enabled
-        let stream: Pin<Box<dyn Stream<Item = _> + Send>> = if self.stream_recording_enabled {
-            let request_id_clone = request_id.clone();
-            let base_path = self.stream_recording_path.clone();
-            let start_time = std::time::Instant::now();
-            
-            // Collect all items from the stream and write to file
+        // Collect raw chunks after transform_postprocessor_stream for recording
+        let (stream, raw_chunks): (
+            Pin<Box<dyn Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send>>,
+            Option<Vec<Annotated<NvCreateChatCompletionStreamResponse>>>,
+        ) = if self.stream_recording_enabled {
             use futures::stream::StreamExt;
             let items: Vec<_> = stream.collect().await;
-            
-            // Write to file
-            let mut entries = Vec::new();
-            for (sequence, item) in items.iter().enumerate() {
-                let entry = StreamRecordingEntry {
-                    request_id: request_id_clone.clone(),
-                    sequence,
-                    elapsed_ms: start_time.elapsed().as_millis() as u64,
-                    response_data: item.clone(),
-                };
-                entries.push(entry);
-            }
-            
-            // Write to JSON file
-            if !entries.is_empty() {
-                let file_path = format!("{}/chat_completion_stream_{}.json", base_path, request_id_clone);
-                
-                match tokio::fs::create_dir_all(&base_path).await {
-                    Ok(_) => {
-                        match serde_json::to_string_pretty(&entries) {
-                            Ok(json_content) => {
-                                if let Err(e) = tokio::fs::write(&file_path, json_content).await {
-                                    tracing::error!("Failed to write stream recording to {}: {}", file_path, e);
-                                } else {
-                                    tracing::info!("Wrote {} stream items to {}", entries.len(), file_path);
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to serialize stream recording for request {}: {}", request_id_clone, e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to create recording directory {}: {}", base_path, e);
-                    }
-                }
-            }
-            
-            // Return the collected items as a new stream
-            Box::pin(futures::stream::iter(items))
+            let raw_chunks = items.clone();
+            (Box::pin(futures::stream::iter(items)), Some(raw_chunks))
         } else {
-            Box::pin(stream)
+            (Box::pin(stream), None)
         };
 
         // Try to parse reasoning content only if parser is configured
@@ -893,13 +958,13 @@ impl
         // Future Solution:
         // To address the limitation if needed in future: move this step before transform_postprocessor_stream and add new field of reasoning_content to the backend output
         // Use backend_output.reasoning_content field to fill out the deltas.
-        let stream: Pin<Box<dyn Stream<Item = _> + Send>> = if should_parse_reasoning {
+        let stream = if should_parse_reasoning {
             Box::pin(Self::parse_reasoning_content_from_stream(
                 stream,
                 self.runtime_config.reasoning_parser.clone().unwrap(), // Safety: We already checked that parser is some, so gtg
-            ))
+            )) as Pin<Box<dyn Stream<Item = _> + Send>>
         } else {
-            stream
+            Box::pin(stream) as Pin<Box<dyn Stream<Item = _> + Send>>
         };
 
         // Check if tools are present and if we should apply jail
@@ -922,6 +987,75 @@ impl
             }
         } else {
             Box::pin(stream)
+        };
+
+        // Stream Recording: Set up recording if enabled (after jail processing where tool calls are parsed)
+        let transformed_stream: Pin<Box<dyn Stream<Item = _> + Send>> = if self
+            .stream_recording_enabled
+        {
+            let request_id_clone = request_id.clone();
+            let base_path = self.stream_recording_path.clone();
+
+            // Collect all items from the processed stream and write to file
+            use futures::stream::StreamExt;
+            let processed_items: Vec<_> = transformed_stream.collect().await;
+
+            // Create combined content structure using both raw chunks and processed items
+            let combined_content = if let Some(raw_chunks) = &raw_chunks {
+                CombinedStreamContent::from_raw_and_processed_items(
+                    request_id_clone.clone(),
+                    raw_chunks,
+                    &processed_items,
+                )
+            } else {
+                // Fallback if raw chunks not available
+                CombinedStreamContent::from_stream_items(request_id_clone.clone(), &processed_items)
+            };
+
+            // Write combined content to JSON file
+            if !processed_items.is_empty()
+                || raw_chunks.as_ref().is_some_and(|chunks| !chunks.is_empty())
+            {
+                let file_path = format!(
+                    "{}/chat_completion_stream_{}.json",
+                    base_path, request_id_clone
+                );
+
+                match tokio::fs::create_dir_all(&base_path).await {
+                    Ok(_) => match serde_json::to_string_pretty(&combined_content) {
+                        Ok(json_content) => {
+                            if let Err(e) = tokio::fs::write(&file_path, json_content).await {
+                                tracing::error!(
+                                    "Failed to write stream recording to {}: {}",
+                                    file_path,
+                                    e
+                                );
+                            } else {
+                                tracing::info!("Wrote combined stream content to {}", file_path);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to serialize combined stream content for request {}: {}",
+                                request_id_clone,
+                                e
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to create recording directory {}: {}",
+                            base_path,
+                            e
+                        );
+                    }
+                }
+            }
+
+            // Return the collected items as a new stream
+            Box::pin(futures::stream::iter(processed_items))
+        } else {
+            transformed_stream
         };
 
         // Step 4: Apply audit aggregation strategy
