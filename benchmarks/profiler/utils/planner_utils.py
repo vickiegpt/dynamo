@@ -18,129 +18,138 @@ import argparse
 from dynamo.planner.utils.planner_argparse import create_sla_planner_parser
 
 
-def add_planner_arguments_to_parser(parser: argparse.ArgumentParser, prefix: str = "planner-"):
+def add_planner_arguments_to_parser(
+    parser: argparse.ArgumentParser, prefix: str = "planner-"
+):
     """
     Dynamically add planner arguments from create_sla_planner_parser() to the given parser.
     Only adds arguments that don't already exist in the parser (without prefix).
-    
+
     Args:
         parser: The ArgumentParser to add arguments to
         prefix: Prefix to add to planner argument names to avoid conflicts
     """
     # Create a temporary planner parser to extract its arguments
     planner_parser = create_sla_planner_parser()
-    
+
     # Get existing argument names in the parser (without dashes)
     existing_dests = {action.dest for action in parser._actions}
-    
+
     # Add a group for planner arguments
     planner_group = parser.add_argument_group(
-        'planner arguments',
-        'Arguments that will be passed to the planner service (only showing args not already in profile_sla)'
+        "planner arguments",
+        "Arguments that will be passed to the planner service (only showing args not already in profile_sla)",
     )
-    
+
     # Iterate through planner parser actions and add them with prefix
     for action in planner_parser._actions:
         # Skip help and positional arguments
-        if action.dest in ['help'] or not action.option_strings:
+        if action.dest in ["help"] or not action.option_strings:
             continue
-        
+
         # Skip if this argument already exists in the main parser (without prefix)
         if action.dest in existing_dests:
             continue
-        
+
         # Create new option strings with prefix
-        new_option_strings = [f"--{prefix}{opt.lstrip('-')}" for opt in action.option_strings]
-        
+        new_option_strings = [
+            f"--{prefix}{opt.lstrip('-')}" for opt in action.option_strings
+        ]
+
         # Determine the action type from the class name
         action_class_name = type(action).__name__
         action_type = None
-        if action_class_name == '_StoreTrueAction':
-            action_type = 'store_true'
-        elif action_class_name == '_StoreFalseAction':
-            action_type = 'store_false'
-        elif action_class_name == '_StoreConstAction':
-            action_type = 'store_const'
+        if action_class_name == "_StoreTrueAction":
+            action_type = "store_true"
+        elif action_class_name == "_StoreFalseAction":
+            action_type = "store_false"
+        elif action_class_name == "_StoreConstAction":
+            action_type = "store_const"
         # For _StoreAction and others, we leave action_type as None (default)
-        
+
         # Build kwargs based on action type
         kwargs = {
-            'dest': f"{prefix.replace('-', '_')}{action.dest}",
-            'default': action.default,
-            'help': action.help,
+            "dest": f"{prefix.replace('-', '_')}{action.dest}",
+            "default": action.default,
+            "help": action.help,
         }
-        
+
         # Add action type if specified
         if action_type is not None:
-            kwargs['action'] = action_type
-        
+            kwargs["action"] = action_type
+
         # For store_true/store_false, don't add type, nargs, metavar, const
         # For other actions, add them if they're set
-        if action_type not in ['store_true', 'store_false']:
+        if action_type not in ["store_true", "store_false"]:
             if action.type is not None:
-                kwargs['type'] = action.type
+                kwargs["type"] = action.type
             if action.nargs is not None:
-                kwargs['nargs'] = action.nargs
+                kwargs["nargs"] = action.nargs
             if action.metavar is not None:
-                kwargs['metavar'] = action.metavar
+                kwargs["metavar"] = action.metavar
             if action.choices is not None:
-                kwargs['choices'] = action.choices
-            if action_type == 'store_const' and action.const is not None:
-                kwargs['const'] = action.const
-            
+                kwargs["choices"] = action.choices
+            if action_type == "store_const" and action.const is not None:
+                kwargs["const"] = action.const
+
         planner_group.add_argument(*new_option_strings, **kwargs)
 
 
-def build_planner_args_from_namespace(args: argparse.Namespace, prefix: str = "planner_") -> list[str]:
+def build_planner_args_from_namespace(
+    args: argparse.Namespace, prefix: str = "planner_"
+) -> list[str]:
     """
     Build planner command-line arguments from parsed args namespace.
     Automatically detects shared arguments between profile_sla and planner,
     and uses profile_sla values for those.
-    
+
     Args:
         args: Parsed arguments namespace
         prefix: Prefix used for planner arguments
-        
+
     Returns:
         List of planner command-line arguments
     """
     planner_args = []
-    
+
     # Auto-detect shared arguments by comparing planner parser with args namespace
     planner_parser = create_sla_planner_parser()
-    planner_arg_dests = {action.dest for action in planner_parser._actions 
-                         if action.dest != 'help' and action.option_strings}
-    
+    planner_arg_dests = {
+        action.dest
+        for action in planner_parser._actions
+        if action.dest != "help" and action.option_strings
+    }
+
     # Find arguments in args namespace that match planner arguments (not prefixed)
     # These are shared arguments that should come from profile_sla
     shared_arg_dests = {dest for dest in planner_arg_dests if hasattr(args, dest)}
-    
+
     # Add shared arguments from profile_sla (without prefix)
     for arg_dest in sorted(shared_arg_dests):  # sorted for consistent ordering
         value = getattr(args, arg_dest)
         if value is None:
             continue
-        
+
         # Convert dest to command-line argument name
-        arg_name = arg_dest.replace('_', '-')
-        
+        arg_name = arg_dest.replace("_", "-")
+
         if isinstance(value, bool):
             if value:
                 planner_args.append(f"--{arg_name}")
         else:
             planner_args.append(f"--{arg_name}={value}")
-    
+
     # Get all planner-prefixed attributes from args (planner-specific only)
     for attr_name in sorted(dir(args)):  # sorted for consistent ordering
         if attr_name.startswith(prefix):
             value = getattr(args, attr_name)
             # Convert attribute name back to command-line argument
-            arg_name = attr_name[len(prefix):].replace('_', '-')
-            
+            arg_name = attr_name[len(prefix) :].replace("_", "-")
+
             # Skip None values
             if value is None:
                 continue
-            
+
             # Handle different argument types
             if isinstance(value, bool):
                 # For boolean flags (action='store_true')
@@ -149,6 +158,5 @@ def build_planner_args_from_namespace(args: argparse.Namespace, prefix: str = "p
             else:
                 # For valued arguments
                 planner_args.append(f"--{arg_name}={value}")
-    
-    return planner_args
 
+    return planner_args

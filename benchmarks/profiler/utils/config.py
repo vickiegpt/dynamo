@@ -83,6 +83,7 @@ class Spec(BaseModel):
     pvcs: Optional[list[PVCConfig]] = None
     model_config = {"extra": "allow"}
 
+
 class Metadata(BaseModel):
     name: str
     model_config = {"extra": "allow"}
@@ -109,10 +110,12 @@ class DgdPlannerServiceConfig(BaseModel):
                 "image": "my-registry/dynamo-runtime:my-tag",  # placeholder
                 "workingDir": "/workspace/components/src/dynamo/planner",
                 "command": ["python3", "-m", "planner_sla"],
-                "volumeMounts": [{
-                    "name": "dynamo-pvc",
-                    "mountPoint": "/data",
-                }],
+                "volumeMounts": [
+                    {
+                        "name": "dynamo-pvc",
+                        "mountPoint": "/data",
+                    }
+                ],
                 "args": [],
             }
         )

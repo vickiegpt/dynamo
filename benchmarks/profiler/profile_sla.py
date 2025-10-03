@@ -24,10 +24,10 @@ import yaml
 
 from benchmarks.profiler.utils.config import (
     CONFIG_MODIFIERS,
-    DgdPlannerServiceConfig,
-    PVCConfig,
     WORKER_COMPONENT_NAMES,
     Config,
+    DgdPlannerServiceConfig,
+    PVCConfig,
     SubComponentType,
 )
 from benchmarks.profiler.utils.estimate_perf import AIConfiguratorPerfEstimator
