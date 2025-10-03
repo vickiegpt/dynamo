@@ -45,8 +45,21 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SGLANG_BACKEND_DIR="$SCRIPT_DIR/src"
 
+# Setup cleanup trap
+cleanup() {
+    echo "Cleaning up background processes..."
+    kill $DYNAMO_PID $PREFILL_PID 2>/dev/null || true
+    wait $DYNAMO_PID $PREFILL_PID 2>/dev/null || true
+    echo "Cleanup complete."
+}
+trap cleanup EXIT INT TERM
+
+# run clear_namespace
+python3 -m dynamo.sglang.utils.clear_namespace --namespace dynamo
+
 # run ingress
-python -m dynamo.frontend --http-port=8000 &
+python3 -m dynamo.frontend --http-port=8000 &
+DYNAMO_PID=$!
 
 # run SGLang multimodal processor
 python3 -m dynamo.sglang --multimodal-processor --model-path "$MODEL_NAME" --chat-template "$CHAT_TEMPLATE" &
@@ -63,6 +76,8 @@ CUDA_VISIBLE_DEVICES=1 python3 -m dynamo.sglang \
   --trust-remote-code \
   --skip-tokenizer-init \
   --disaggregation-mode prefill \
+  --disaggregation-bootstrap-port 12345 \
+  --host 0.0.0.0 \
   --disaggregation-transfer-backend nixl &
 
 # run SGLang multimodal decode worker
@@ -74,6 +89,8 @@ CUDA_VISIBLE_DEVICES=2 python3 -m dynamo.sglang \
   --trust-remote-code \
   --skip-tokenizer-init \
   --disaggregation-mode decode \
+  --disaggregation-bootstrap-port 12345 \
+  --host 0.0.0.0 \
   --disaggregation-transfer-backend nixl &
 
 # Wait for all background processes to complete
