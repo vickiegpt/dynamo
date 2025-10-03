@@ -262,36 +262,21 @@ jobs:
         export FRAMEWORK_RUNTIME_IMAGE="${{ secrets.AZURE_ACR_HOSTNAME }}/ai-dynamo/dynamo:cb6e511109e95d63eeb348107e5c1d0be8d5346b-vllm-amd64"
         export KUBE_NS=$NAMESPACE
         export GRAPH_NAME=$(yq e '.metadata.name' $DEPLOYMENT_FILE)
-        
-        # Debug: Show original deployment file
-        echo "=== ORIGINAL DEPLOYMENT FILE ==="
-        echo "Original image in deployment file:"
-        yq '.spec.services.[].extraPodSpec.mainContainer.image' $DEPLOYMENT_FILE
-        
         # Update the deployment file in-place
-        echo "=== UPDATING DEPLOYMENT FILE ==="
-        echo "FRAMEWORK_RUNTIME_IMAGE: $FRAMEWORK_RUNTIME_IMAGE"
         yq -i '.spec.services.[].extraPodSpec.mainContainer.image = env(FRAMEWORK_RUNTIME_IMAGE)' $DEPLOYMENT_FILE
         
         # Debug: Show updated deployment file
         echo "=== UPDATED DEPLOYMENT FILE ==="
-        echo "Updated image in deployment file:"
-        yq '.spec.services.[].extraPodSpec.mainContainer.image' $DEPLOYMENT_FILE
         cat $DEPLOYMENT_FILE
         
         # Apply the updated file
         kubectl apply -n $KUBE_NS -f $DEPLOYMENT_FILE
         
-        # Debug: Check events for image pulling
-        echo "=== CHECKING EVENTS FOR IMAGE PULLS ==="
-        kubectl get events -n $KUBE_NS --field-selector reason=Pulling --sort-by='.lastTimestamp' || true
-        kubectl get events -n $KUBE_NS --field-selector reason=Pulled --sort-by='.lastTimestamp' || true
-        kubectl get events -n $KUBE_NS --field-selector reason=Failed --sort-by='.lastTimestamp' || true
         # --- Wait for the frontend pod to be ready ---
         sleep 20
-        export POD_NAME=$(kubectl get pods -n ${KUBE_NS} | grep "${GRAPH_NAME}" | grep "worker" | sort -k1 | tail -n1 | awk '{print $1}')
         
         # Debug: Show pod details before waiting
+        export POD_NAME=$(kubectl get pods -n ${KUBE_NS} | grep "${GRAPH_NAME}" | grep -i "frontend" | sort -k1 | tail -n1 | awk '{print $1}')
         echo "=== POD DEBUG INFO ==="
         echo "POD_NAME: $POD_NAME"
         if [ ! -z "$POD_NAME" ]; then
