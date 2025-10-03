@@ -178,7 +178,8 @@ jobs:
     env:
       NAMESPACE: gh-job-id-${{ github.run_id }}
       DYNAMO_INGRESS_SUFFIX: dev.aire.nvidia.com
-      DEPLOYMENT_FILE: "deploy/agg.yaml"
+      DEPLOYMENT_FILE: "deploy/disagg.yaml"
+      MODEL_NAME: "Qwen/Qwen3-0.6B"
     permissions:
       contents: read
     steps:
@@ -267,7 +268,69 @@ jobs:
         export POD_NAME=$(kubectl get pods -n ${KUBE_NS} | grep "${GRAPH_NAME}" | grep "worker" | sort -k1 | tail -n1 | awk '{print $1}')
         kubectl wait --for=condition=ready pod/$POD_NAME --timeout=1000s
         kubectl get all -n $KUBE_NS
-        cd -
+        export FRONTEND_POD=$(kubectl get pods -n ${KUBE_NS} | grep "frontend" | sort -k1 | tail -n1 | awk '{print $1}')
+        export CONTAINER_PORT=$(kubectl get pod $FRONTEND_POD -n ${KUBE_NS} -o jsonpath='{.spec.containers[0].ports[?(@.name=="http")].containerPort}')
+        echo "Container port is ${CONTAINER_PORT}"
+        kubectl port-forward pod/$FRONTEND_POD 8000:${CONTAINER_PORT} -n ${KUBE_NS} &
+        export LLM_URL="http://localhost:8000"
+        sleep 10  # Give port-forward time to establish the connection
+        echo "LLM URL: ${LLM_URL}"
+        echo "MODEL NAME: ${MODEL_NAME}"
+        # Wait until the model is available in the /v1/models response
+        MAX_ATTEMPTS=30
+        ATTEMPT=1
+        while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+          MODELS_RESPONSE=$(curl -s --retry 5 --retry-delay 2 --retry-connrefused "${LLM_URL}/v1/models")
+          if echo "$MODELS_RESPONSE" | jq -e --arg MODEL_NAME "$MODEL_NAME" '.data[]?.id == $MODEL_NAME' >/dev/null 2>&1; then
+            echo "Model $MODEL_NAME is available in /v1/models"
+            break
+          fi
+          echo "Waiting for model $MODEL_NAME to be available in /v1/models... (attempt $ATTEMPT/$MAX_ATTEMPTS)"
+          sleep 5
+          ATTEMPT=$((ATTEMPT + 1))
+        done
+        if [ $ATTEMPT -gt $MAX_ATTEMPTS ]; then
+          echo "Model $MODEL_NAME not found in /v1/models after $MAX_ATTEMPTS attempts"
+          echo "Last response: $MODELS_RESPONSE"
+          exit 1
+        fi
+        RESPONSE=$(curl -s -N --no-buffer --retry 10 --retry-delay 5 --retry-connrefused -X POST "${LLM_URL}/v1/chat/completions" \
+          -H 'accept: text/event-stream' \
+          -H 'Content-Type: application/json' \
+          -d '{
+            "model": "'"${MODEL_NAME:-Qwen/Qwen3-0.6B}"'",
+            "messages": [
+            {
+                "role": "user",
+                "content": "In the heart of Eldoria, an ancient land of boundless magic and mysterious creatures, lies the long-forgotten city of Aeloria. Once a beacon of knowledge and power, Aeloria was buried beneath the shifting sands of time, lost to the world for centuries. You are an intrepid explorer, known for your unparalleled curiosity and courage, who has stumbled upon an ancient map hinting at ests that Aeloria holds a secret so profound that it has the potential to reshape the very fabric of reality. Your journey will take you through treacherous deserts, enchanted forests, and across perilous mountain ranges. Your Task: Character Background: Develop a detailed background for your character. Describe their motivations for seeking out Aeloria, their skills and weaknesses, and any personal connections to the ancient city or its legends. Are they driven by a quest for knowledge, a search for lost familt clue is hidden."
+            }
+            ],
+            "stream":false,
+            "max_tokens": 30,
+            "temperature": 0.0
+          }' 2>&1)
+        echo "Response: $RESPONSE"
+        TEST_RESULT=0
+        if ! echo "$RESPONSE" | jq -e . >/dev/null 2>&1; then
+          echo "Test failed: Response is not valid JSON"
+          echo "Got: $RESPONSE"
+          TEST_RESULT=1
+        elif ! echo "$RESPONSE" | jq -e '.choices[0].message.role == "assistant"' >/dev/null 2>&1; then
+          echo "Test failed: Message role is not 'assistant'"
+          echo "Got: $(echo "$RESPONSE" | jq '.choices[0].message.role')"
+          TEST_RESULT=1
+        elif ! echo "$RESPONSE" | jq -e '.model == "'"${MODEL_NAME}"'"' >/dev/null 2>&1; then
+          echo "Test failed: Model name is incorrect"
+          echo "Got: $(echo "$RESPONSE" | jq '.model')"
+          TEST_RESULT=1
+        elif ! echo "$RESPONSE" | jq -e '.choices[0].message.content | length > 100' >/dev/null 2>&1; then
+          echo "Test failed: Response content length is not greater than 100 characters"
+          echo "Got length: $(echo "$RESPONSE" | jq '.choices[0].message.content | length')"
+          TEST_RESULT=1
+        else
+          echo "Test passed: Response matches expected format and content"
+        fi
+        exit $TEST_RESULT
     - name: Cleanup
       if: always()
       timeout-minutes: 10
