@@ -575,4 +575,4 @@ if __name__ == "__main__":
     # Map format choices to tabulate formats
     tablefmt = "fancy_grid" if args.format == "fancy" else "pipe"
 
-    main(args.log_dir, tablefmt, args.sla)
+    main(args.log_dir, tablefmt, sla=args.sla)

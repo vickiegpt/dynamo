@@ -46,6 +46,8 @@ def _single_request(
     start_time = time.time()
     results = []
 
+    retry_attempts = max(1, retry_attempts)
+
     while retry_attempts:
         start_request_time = time.time()
 
