@@ -138,7 +138,9 @@ export AICONF_DIR=./aiconf_save/QWEN3_32B_XXXXXX
 - Kubernetes deployment YAML for the recommended configuration (aggregated or disaggregated)
 - Engine configuration files with optimized parameters
 
-**Note**: If the generated deployment includes NIXL wheel installation commands that fail, manually remove the NIXL-related lines from the generated `k8s_deploy.yaml` file. The deployment should work with the default communication backend.
+⚠️ **IMPORTANT**: If the generated deployment includes NIXL wheel installation commands that fail, you MUST manually remove the NIXL-related lines from the generated `k8s_deploy.yaml` file before deploying. The deployment should work with the default communication backend.
+
+🔧 **Quick Fix**: Look for and delete any lines containing `NIXL` or wheel installation commands in your `$AICONF_DIR/backend_configs/{agg|disagg}/k8s_deploy.yaml` file.
 
 The generated files will be located at:
 ```
