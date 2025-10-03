@@ -16,6 +16,7 @@ JINJA_TEMPLATE_PATH = "/workspace/tests/serve/fixtures/custom_template.jinja"
 @pytest.mark.unit
 @pytest.mark.vllm
 @pytest.mark.gpu_1
+@pytest.mark.premerge
 def test_custom_jinja_template_invalid_path(monkeypatch):
     """Test that invalid file path raises FileNotFoundError."""
     invalid_path = "/nonexistent/path/to/template.jinja"
@@ -41,6 +42,7 @@ def test_custom_jinja_template_invalid_path(monkeypatch):
 @pytest.mark.unit
 @pytest.mark.vllm
 @pytest.mark.gpu_1
+@pytest.mark.premerge
 def test_custom_jinja_template_valid_path(monkeypatch):
     """Test that valid absolute path is stored correctly."""
     monkeypatch.setattr(
@@ -63,6 +65,7 @@ def test_custom_jinja_template_valid_path(monkeypatch):
 @pytest.mark.unit
 @pytest.mark.vllm
 @pytest.mark.gpu_1
+@pytest.mark.premerge
 def test_custom_jinja_template_env_var_expansion(monkeypatch):
     """Test that environment variables in paths are expanded by Python code."""
     jinja_dir = "/workspace/tests/serve/fixtures"
