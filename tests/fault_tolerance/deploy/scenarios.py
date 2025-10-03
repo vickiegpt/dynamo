@@ -100,6 +100,8 @@ class Load:
     output_token_length: int = 100
     max_retries: int = 3  # Increased for fault tolerance
     sla: Optional[float] = None
+    client_type: str = "aiperf"  # "aiperf" or "legacy"
+    max_request_rate: float = 1.0  # Rate limiting for legacy client (requests/sec)
 
 
 @dataclass
@@ -297,6 +299,49 @@ def _create_backend_failures(backend, deploy_type="disagg"):
     return failures
 
 
+def create_aiperf_load(**kwargs) -> Load:
+    """Create a Load configuration for AI-Perf client.
+    
+    Args:
+        **kwargs: Override default Load parameters
+        
+    Returns:
+        Load instance configured for AI-Perf client
+        
+    Example:
+        >>> load = create_aiperf_load(clients=20, requests_per_client=200)
+    """
+    defaults = {
+        "client_type": "aiperf",
+        "max_retries": 3,  # AI-Perf retries entire test
+    }
+    defaults.update(kwargs)
+    return Load(**defaults)
+
+
+def create_legacy_load(**kwargs) -> Load:
+    """Create a Load configuration for legacy custom client.
+    
+    Args:
+        **kwargs: Override default Load parameters
+        
+    Returns:
+        Load instance configured for legacy client
+        
+    Example:
+        >>> load = create_legacy_load(clients=10, max_request_rate=2.0)
+    """
+    defaults = {
+        "client_type": "legacy",
+        "max_retries": 1,  # Legacy retries per request
+        "max_request_rate": 1.0,  # Rate limiting
+        "requests_per_client": 100,  # Typically fewer for legacy
+    }
+    defaults.update(kwargs)
+    return Load(**defaults)
+
+
+# Default load configuration (using AI-Perf)
 load = Load()
 
 # model = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
