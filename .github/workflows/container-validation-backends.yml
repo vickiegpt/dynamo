@@ -249,8 +249,13 @@ jobs:
         helm repo add bitnami https://charts.bitnami.com/bitnami
         cd deploy/cloud/helm/platform/
         helm dep build .
-        # Install platform
-        helm upgrade --install dynamo-platform . --namespace ${NAMESPACE} --set dynamo-operator.namespaceRestriction.enabled=true --set dynamo-operator.controllerManager.manager.image.repository=${{ secrets.AZURE_ACR_HOSTNAME }}/ai-dynamo/dynamo --set dynamo-operator.controllerManager.manager.image.tag=${{ github.sha }}-operator-amd64 --set dynamo-operator.imagePullSecrets[0].name=docker-imagepullsecret
+        # Install platform with namespace restriction for single profile testing
+        helm upgrade --install dynamo-platform . --namespace ${NAMESPACE} \
+          --set dynamo-operator.namespaceRestriction.enabled=true \
+          --set dynamo-operator.namespaceRestriction.allowedNamespaces[0]=${NAMESPACE} \
+          --set dynamo-operator.controllerManager.manager.image.repository=${{ secrets.AZURE_ACR_HOSTNAME }}/ai-dynamo/dynamo \
+          --set dynamo-operator.controllerManager.manager.image.tag=${{ github.sha }}-operator-amd64 \
+          --set dynamo-operator.imagePullSecrets[0].name=docker-imagepullsecret
         # Wait for all deployments to be ready
         timeout 300s kubectl rollout status deployment -n $NAMESPACE --watch
         cd -
@@ -274,21 +279,8 @@ jobs:
         
         # --- Wait for the frontend pod to be ready ---
         sleep 20
-        
-        # Debug: Show pod details before waiting
-        export POD_NAME=$(kubectl get pods -n ${KUBE_NS} | grep "${GRAPH_NAME}" | grep -i "frontend" | sort -k1 | tail -n1 | awk '{print $1}')
-        echo "=== POD DEBUG INFO ==="
-        echo "POD_NAME: $POD_NAME"
-        if [ ! -z "$POD_NAME" ]; then
-          echo "Pod image info:"
-          kubectl get pod $POD_NAME -n $KUBE_NS -o jsonpath='{.spec.containers[*].image}' || true
-          echo ""
-          echo "Pod status:"
-          kubectl get pod $POD_NAME -n $KUBE_NS -o wide || true
-          echo "Pod events:"
-          kubectl describe pod $POD_NAME -n $KUBE_NS | grep -A 20 "Events:" || true
-        fi
-        
+        export POD_NAME=$(kubectl get pods -n ${KUBE_NS} | grep "frontend" | sort -k1 | tail -n1 | awk '{print $1}')
+        echo "Waiting for pod: $POD_NAME"
         kubectl wait --for=condition=ready pod/$POD_NAME --timeout=1000s
         
         # Debug: Show final pod status
