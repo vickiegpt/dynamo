@@ -142,6 +142,14 @@ export AICONF_DIR=./aiconf_save/QWEN3_32B_XXXXXX
 
 🔧 **Quick Fix**: Look for and delete any lines containing `NIXL` or wheel installation commands in your `$AICONF_DIR/backend_configs/{agg|disagg}/k8s_deploy.yaml` file.
 
+Another quick fix needed is to add
+
+```
+cache_transceiver_config:
+  backend: default
+```
+to the `*_config.yaml` files within `$AICONF_DIR/backend_configs/{agg|disagg}`.
+
 The generated files will be located at:
 ```
 aiconf_save/QWEN3_32B_isl4000_osl500_*/

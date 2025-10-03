@@ -9,3 +9,5 @@ max_seq_len: 5500
 kv_cache_config:
   enable_block_reuse: true
   free_gpu_memory_fraction: 0.8
+cache_transceiver_config:
+  backend: default
