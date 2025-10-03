@@ -1,8 +1,15 @@
 #!/bin/bash
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-set -e
-trap 'echo Cleaning up...; kill 0' EXIT
+
+# Setup cleanup trap
+cleanup() {
+    echo "Cleaning up background processes..."
+    kill $DYNAMO_PID $PREFILL_PID 2>/dev/null || true
+    wait $DYNAMO_PID $PREFILL_PID 2>/dev/null || true
+    echo "Cleanup complete."
+}
+trap cleanup EXIT INT TERM
 
 # Default values
 MODEL_NAME="Qwen/Qwen2.5-VL-7B-Instruct"
@@ -44,15 +51,6 @@ fi
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SGLANG_BACKEND_DIR="$SCRIPT_DIR/src"
-
-# Setup cleanup trap
-cleanup() {
-    echo "Cleaning up background processes..."
-    kill $DYNAMO_PID $PREFILL_PID 2>/dev/null || true
-    wait $DYNAMO_PID $PREFILL_PID 2>/dev/null || true
-    echo "Cleanup complete."
-}
-trap cleanup EXIT INT TERM
 
 # run clear_namespace
 python3 -m dynamo.sglang.utils.clear_namespace --namespace dynamo
