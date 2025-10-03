@@ -24,7 +24,8 @@ import yaml
 
 from benchmarks.profiler.utils.config import (
     CONFIG_MODIFIERS,
-    DEFAULT_DGD_PLANNER_SERVICE_CONFIG,
+    DgdPlannerServiceConfig,
+    PVCConfig,
     WORKER_COMPONENT_NAMES,
     Config,
     SubComponentType,
@@ -142,7 +143,7 @@ async def run_profile(args):
                 raise ValueError(
                     "Must provide --aic-model-name when using --use-ai-configurator."
                 )
-            if not args.backend_version:
+            if not args.aic_backend_version:
                 raise ValueError(
                     "Must provide --backend-version when using --use-ai-configurator."
                 )
@@ -741,9 +742,14 @@ async def run_profile(args):
                 args.num_gpus_per_node,
                 SubComponentType.DECODE,
             )
-        # add the planner service
         config = Config.model_validate(config)
-        planner_config = DEFAULT_DGD_PLANNER_SERVICE_CONFIG
+
+        # add PVC config if not present
+        if not config.spec.pvcs:
+            config.spec.pvcs = [PVCConfig()]
+
+        # add the planner service
+        planner_config = DgdPlannerServiceConfig()
         planner_config.dynamoNamespace = config.spec.services[
             "Frontend"
         ].dynamoNamespace
@@ -785,6 +791,8 @@ async def run_profile(args):
         planner_config.extraPodSpec.mainContainer.args.extend(planner_args)
         config.spec.services["Planner"] = planner_config
         config = config.model_dump()
+        logger.info(f"Final DGD config with planner: {config}")
+
         # save DGD config with planner
         with open(f"{args.output_dir}/config_with_planner.yaml", "w") as f:
             yaml.dump(config, f)

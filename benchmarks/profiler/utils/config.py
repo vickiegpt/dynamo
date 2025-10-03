@@ -72,12 +72,20 @@ class Services(BaseModel):
     model_config = {"extra": "allow"}
 
 
+class PVCConfig(BaseModel):
+    name: str = "dynamo-pvc"
+    create: Optional[bool] = False
+    model_config = {"extra": "allow"}
+
+
 class Spec(BaseModel):
     services: dict[str, Service]
-
+    pvcs: Optional[list[PVCConfig]] = None
+    model_config = {"extra": "allow"}
 
 class Metadata(BaseModel):
     name: str
+    model_config = {"extra": "allow"}
 
 
 class Config(BaseModel):
@@ -99,16 +107,17 @@ class DgdPlannerServiceConfig(BaseModel):
         mainContainer=Container(
             **{
                 "image": "my-registry/dynamo-runtime:my-tag",  # placeholder
-                "workingDir": "/workspace/components/planner/src/dynamo/planner",
+                "workingDir": "/workspace/components/src/dynamo/planner",
                 "command": ["python3", "-m", "planner_sla"],
+                "volumeMounts": [{
+                    "name": "dynamo-pvc",
+                    "mountPoint": "/data",
+                }],
                 "args": [],
             }
         )
     )
     model_config = {"extra": "allow"}
-
-
-DEFAULT_DGD_PLANNER_SERVICE_CONFIG = DgdPlannerServiceConfig()
 
 
 def break_arguments(args: list[str] | None) -> list[str]:
