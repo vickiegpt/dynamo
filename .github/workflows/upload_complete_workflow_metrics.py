@@ -36,7 +36,8 @@ TARGET_WORKFLOW_NAME = "Docker Build and Test"
 TARGET_JOB_NAMES = [
     "vllm",
     "sglang", 
-    "trtllm"
+    "trtllm",
+    "broken-links-check"
 ]
 
 # STANDARDIZED FIELD SCHEMA
