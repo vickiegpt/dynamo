@@ -16,17 +16,17 @@
 eppAware:
   enabled: true
   eppImage: nvcr.io/nvstaging/ai-dynamo/gaie-epp-dynamo:v0.6.0-1
+  dynamoNamespace: vllm-agg
+  dynamoComponent: backend
+  dynamoKvBlockSize: "16"
 
 imagePullSecrets:
   - docker-imagepullsecret
+
+platformReleaseName: dynamo-platform
+platformNamespace: "my-model"
 
 epp:
   extraEnv:
     - name: USE_STREAMING
       value: "true"
-    - name: DYNAMO_NAMESPACE
-      value: vllm-agg
-    - name: DYNAMO_COMPONENT
-      value: "backend"
-    - name: DYNAMO_KV_BLOCK_SIZE
-      value: 16

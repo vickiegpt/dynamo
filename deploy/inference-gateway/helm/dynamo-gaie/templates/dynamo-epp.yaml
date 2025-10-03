@@ -72,12 +72,23 @@ spec:
         {{- end }}
         env:
         {{- if .Values.eppAware.enabled }}
+          {{- $platformNs := default .Release.Namespace .Values.platformNamespace -}}
+          {{- $platformName := default "dynamo-platform" .Values.platformReleaseName -}}
           - name: ETCD_ENDPOINTS
-            value: "dynamo-platform-etcd.{{ .Release.Namespace }}:2379"  # Dynamic namespace from Helm
+            value: "{{$platformName}}-etcd.{{$platformNs}}:2379" # match the dynamo platform's release name by default
           - name: NATS_SERVER
-            value: "nats://dynamo-platform-nats.{{ .Release.Namespace }}:4222"  # Dynamic namespace from Helm
-          - name: DYNAMO_NAMESPACE
-            value: "{{ .Values.dynamoNamespace }}"  # Reference from model file i.e. vllm_agg_qwen.yaml
+            value: "nats://{{$platformName}}-nats.{{$platformNs}}:4222" # match the dynamo platform's release name by default
+
+            {{- $ns := required "set eppAware.dynamoNamespace via values" .Values.eppAware.dynamoNamespace }}
+            {{- $comp := default "backend" .Values.eppAware.dynamoComponent }}
+            {{- $kv := default "16" .Values.eppAware.dynamoKvBlockSize }}
+            - name: DYNAMO_NAMESPACE
+              value: "{{$ns}}"
+            - name: DYNAMO_COMPONENT
+              value: "{{$comp}}"
+            - name: DYNAMO_KV_BLOCK_SIZE
+              value: "{{$kv}}"
+
         {{- end }}
         {{- range .Values.epp.extraEnv }}
           - name: {{ .name }}

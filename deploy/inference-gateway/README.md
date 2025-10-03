@@ -218,6 +218,7 @@ Key configurations include:
 - A service for the inference gateway
 - Required RBAC roles and bindings
 - RBAC permissions
+- values-epp-aware.yaml sets eppAware.dynamoNamespace=vllm-agg for the bundled example. Point it at your actual Dynamo namespace by editing that file or adding --set eppAware.dynamoNamespace=<namespace> (and likewise for dynamoComponent, dynamoKvBlockSize if they differ).
 
 ### 5. Verify Installation ###
 

@@ -57,13 +57,7 @@ imagePullSecrets: []     # e.g. ["docker-imagepullsecret"]
 epp:
   imagePullPolicy: IfNotPresent
   # Add env in name/value pairs
-  extraEnv:
-  - name: DYNAMO_NAMESPACE
-    value: "vllm-agg"  # Match your DGD deployment
-  - name: DYNAMO_COMPONENT
-    value: "backend"  # Match actual DGD service name
-  - name: DYNAMO_KV_BLOCK_SIZE
-    value: "16"    # Check your model card
+  extraEnv: []           # e.g. [{name: USE_STREAMING, value: "true"}]
   # If you ever want to completely override args, supply a list here.
   # When empty, chart will render sane defaults
   argsOverride: []
@@ -73,4 +67,6 @@ eppAware:
   enabled: false
   # Optional: override EPP image when epp-aware=true
   eppImage: nvcr.io/nvstaging/ai-dynamo/gaie-epp-dynamo:v0.6.0-1
-
+  dynamoNamespace: ""
+  dynamoComponent: ""
+  dynamoKvBlockSize: ""
