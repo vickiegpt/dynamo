@@ -9,6 +9,7 @@ use axum::{
     routing::post,
 };
 use dynamo_runtime::instances::list_all_instances;
+use dynamo_runtime::{pipeline::PushRouter, stream::StreamExt};
 use std::sync::Arc;
 
 pub const DYNAMIC_ENDPOINT_PATH: &str = "dynamic_endpoint";
@@ -31,6 +32,7 @@ pub fn dynamic_endpoint_router(
 
 async fn dynamic_endpoint_handler(
     axum::extract::State(state): axum::extract::State<Arc<service_v2::State>>,
+    axum::extract::Path(path): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     let Some(etcd_client) = state.etcd_client() else {
         return (
@@ -58,10 +60,20 @@ async fn dynamic_endpoint_handler(
         .filter_map(|instance| instance.http_endpoint_path.clone())
         .collect::<Vec<String>>();
 
-    return (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "dynamic_endpoints": dynamic_endpoints
-        })),
-    );
+    let path = format!("/{}", &path);
+    if dynamic_endpoints.contains(&path) {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "message": "Dynamic endpoint found"
+            })),
+        );
+    } else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "message": "Dynamic endpoint not found"
+            })),
+        );
+    }
 }
