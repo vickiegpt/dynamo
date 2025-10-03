@@ -113,7 +113,7 @@ def _single_request(
     results = []
 
     retry_attempts = max(1, retry_attempts)
-    
+
     while retry_attempts:
         start_request_time = time.time()
         response = None
