@@ -265,11 +265,14 @@ class WorkflowMetricsUploader:
         return f"Error during {operation}: {error_msg}"
 
     def record_workflow_metrics(self, data: Dict[str, Any]) -> None:
-        """Record workflow metrics using OpenTelemetry"""
+        """Record workflow metrics using OpenTelemetry with annotations"""
         print(f"Recording workflow metrics via OpenTelemetry: {data.get('_id', 'unknown')}")
         
-        # Get common labels
+        # Get clean labels for aggregation
         labels = self.get_common_labels(data)
+        
+        # Add detailed information as annotation
+        labels["details"] = self.get_detailed_annotations(data)
         
         # Record duration
         duration = data.get(FIELD_DURATION_SEC, 0)
@@ -288,18 +291,33 @@ class WorkflowMetricsUploader:
         print(f"Successfully recorded workflow metrics for: {data.get('_id', 'unknown')}")
     
     def record_job_metrics(self, data: Dict[str, Any]) -> None:
-        """Record job metrics using OpenTelemetry"""
+        """Record job metrics using OpenTelemetry with annotations"""
         print(f"Recording job metrics via OpenTelemetry: {data.get('_id', 'unknown')}")
         
-        # Get common labels and add job-specific ones
-        labels = self.get_common_labels(data)
-        labels.update({
-            FIELD_JOB_ID: data.get(FIELD_JOB_ID, ""),
+        # Use only most relevant labels for job metrics: job_name, branch, status
+        labels = {
             FIELD_JOB_NAME: data.get(FIELD_JOB_NAME, ""),
-            FIELD_RUNNER_ID: data.get(FIELD_RUNNER_ID, ""),
-            FIELD_RUNNER_NAME: data.get(FIELD_RUNNER_NAME, ""),
-            FIELD_RUNNER_PREFIX: data.get(FIELD_RUNNER_PREFIX, extract_runner_prefix(data.get(FIELD_RUNNER_NAME, "")))
+            FIELD_BRANCH: data.get(FIELD_BRANCH, ""),
+            FIELD_STATUS: data.get(FIELD_STATUS, "unknown")
+        }
+        
+        # Add detailed information as annotation (everything else)
+        job_annotations = self.get_detailed_annotations(data)
+        # Parse and add job-specific details
+        import json
+        annotations = json.loads(job_annotations)
+        annotations.update({
+            "job_id": data.get(FIELD_JOB_ID, ""),
+            "runner_id": data.get(FIELD_RUNNER_ID, ""),
+            "runner_name": data.get(FIELD_RUNNER_NAME, ""),
+            "runner_prefix": data.get(FIELD_RUNNER_PREFIX, extract_runner_prefix(data.get(FIELD_RUNNER_NAME, ""))),
+            # Move common fields to annotations too
+            "repo": data.get(FIELD_REPO, self.repo),
+            "workflow_name": data.get(FIELD_WORKFLOW_NAME, self.workflow_name),
+            "github_event": data.get(FIELD_GITHUB_EVENT, self.event_name),
+            "user_alias": data.get(FIELD_USER_ALIAS, self.actor)
         })
+        labels["details"] = json.dumps(annotations, separators=(',', ':'))
         
         # Record duration
         duration = data.get(FIELD_DURATION_SEC, 0)
@@ -318,19 +336,34 @@ class WorkflowMetricsUploader:
         print(f"Successfully recorded job metrics for: {data.get(FIELD_JOB_NAME, 'unknown')}")
     
     def record_step_metrics(self, data: Dict[str, Any]) -> None:
-        """Record step metrics using OpenTelemetry"""
+        """Record step metrics using OpenTelemetry with annotations"""
         print(f"Recording step metrics via OpenTelemetry: {data.get('_id', 'unknown')}")
         
-        # Get common labels and add step-specific ones
-        labels = self.get_common_labels(data)
-        labels.update({
-            FIELD_JOB_ID: data.get(FIELD_JOB_ID, ""),
+        # Use only most relevant labels for step metrics: job_name, step_name, branch, status
+        labels = {
             FIELD_JOB_NAME: data.get(FIELD_JOB_NAME, ""),
-            FIELD_STEP_ID: data.get(FIELD_STEP_ID, ""),
-            FIELD_NAME: data.get(FIELD_NAME, ""),
-            FIELD_STEP_NUMBER: data.get(FIELD_STEP_NUMBER, 0),
-            FIELD_COMMAND: data.get(FIELD_COMMAND, "")
+            FIELD_NAME: data.get(FIELD_NAME, ""),  # step_name
+            FIELD_BRANCH: data.get(FIELD_BRANCH, ""),
+            FIELD_STATUS: data.get(FIELD_STATUS, "unknown")
+        }
+        
+        # Add detailed information as annotation (everything else)
+        step_annotations = self.get_detailed_annotations(data)
+        # Parse and add step-specific details
+        import json
+        annotations = json.loads(step_annotations)
+        annotations.update({
+            "job_id": data.get(FIELD_JOB_ID, ""),
+            "step_id": data.get(FIELD_STEP_ID, ""),
+            "step_number": data.get(FIELD_STEP_NUMBER, 0),
+            "command": data.get(FIELD_COMMAND, "")[:500],  # Truncate long commands
+            # Move common fields to annotations too
+            "repo": data.get(FIELD_REPO, self.repo),
+            "workflow_name": data.get(FIELD_WORKFLOW_NAME, self.workflow_name),
+            "github_event": data.get(FIELD_GITHUB_EVENT, self.event_name),
+            "user_alias": data.get(FIELD_USER_ALIAS, self.actor)
         })
+        labels["details"] = json.dumps(annotations, separators=(',', ':'))
         
         # Record duration
         duration = data.get(FIELD_DURATION_SEC, 0)
@@ -344,7 +377,7 @@ class WorkflowMetricsUploader:
         print(f"Successfully recorded step metrics for: {data.get(FIELD_NAME, 'unknown')}")
     
     def record_runner_queue_metrics(self, data: Dict[str, Any]) -> None:
-        """Record runner queue time metrics using OpenTelemetry"""
+        """Record runner queue time metrics using OpenTelemetry with annotations"""
         runner_name = data.get(FIELD_RUNNER_NAME, "")
         queue_time = data.get(FIELD_QUEUE_TIME, 0)
         
@@ -356,15 +389,31 @@ class WorkflowMetricsUploader:
         # Extract runner prefix
         runner_prefix = extract_runner_prefix(runner_name)
         
-        # Get common labels and add runner-specific ones
-        labels = self.get_common_labels(data)
-        labels.update({
-            FIELD_JOB_ID: data.get(FIELD_JOB_ID, ""),
-            FIELD_JOB_NAME: data.get(FIELD_JOB_NAME, ""),
-            FIELD_RUNNER_ID: data.get(FIELD_RUNNER_ID, ""),
-            FIELD_RUNNER_NAME: runner_name,
+        # Use only most relevant label for runner metrics: runner_prefix
+        labels = {
             FIELD_RUNNER_PREFIX: runner_prefix
+        }
+        
+        # Add detailed information as annotation (everything else)
+        runner_annotations = self.get_detailed_annotations(data)
+        # Parse and add runner-specific details
+        import json
+        annotations = json.loads(runner_annotations)
+        annotations.update({
+            "job_id": data.get(FIELD_JOB_ID, ""),
+            "job_name": data.get(FIELD_JOB_NAME, ""),
+            "runner_id": data.get(FIELD_RUNNER_ID, ""),
+            "runner_name": runner_name,
+            "queue_time_sec": queue_time,
+            # Move common fields to annotations too
+            "repo": data.get(FIELD_REPO, self.repo),
+            "workflow_name": data.get(FIELD_WORKFLOW_NAME, self.workflow_name),
+            "github_event": data.get(FIELD_GITHUB_EVENT, self.event_name),
+            "user_alias": data.get(FIELD_USER_ALIAS, self.actor),
+            "branch": data.get(FIELD_BRANCH, ""),
+            "status": data.get(FIELD_STATUS, "unknown")
         })
+        labels["details"] = json.dumps(annotations, separators=(',', ':'))
         
         # Record runner queue time
         self.runner_queue_time_histogram.record(queue_time, labels)
@@ -492,18 +541,46 @@ class WorkflowMetricsUploader:
             db_data[FIELD_PR_FILES_LIST] = "N/A"
 
     def get_common_labels(self, data: Dict[str, Any]) -> Dict[str, str]:
-        """Get common labels used across all metrics"""
+        """Get clean common labels for aggregation (minimal cardinality)"""
         return {
             FIELD_REPO: data.get(FIELD_REPO, self.repo),
             FIELD_WORKFLOW_NAME: data.get(FIELD_WORKFLOW_NAME, self.workflow_name),
-            FIELD_WORKFLOW_ID: data.get(FIELD_WORKFLOW_ID, str(self.run_id)),
-            FIELD_BRANCH: data.get(FIELD_BRANCH, ""),
-            FIELD_GITHUB_EVENT: data.get(FIELD_GITHUB_EVENT, self.event_name),
             FIELD_STATUS: data.get(FIELD_STATUS, "unknown"),
-            FIELD_USER_ALIAS: data.get(FIELD_USER_ALIAS, self.actor),
-            FIELD_COMMIT_SHA: data.get(FIELD_COMMIT_SHA, ""),
-            FIELD_PR_ID: data.get(FIELD_PR_ID, "N/A")
+            FIELD_GITHUB_EVENT: data.get(FIELD_GITHUB_EVENT, self.event_name),
+            FIELD_USER_ALIAS: data.get(FIELD_USER_ALIAS, self.actor)
+            # Removed high-cardinality fields: workflow_id, commit_sha, pr_id, branch
         }
+    
+    def get_detailed_annotations(self, data: Dict[str, Any]) -> str:
+        """Get detailed information as JSON annotation for debugging"""
+        import json
+        import time
+        
+        annotations = {
+            # Unique identifiers (moved from labels)
+            "workflow_id": data.get(FIELD_WORKFLOW_ID, str(self.run_id)),
+            "commit_sha": data.get(FIELD_COMMIT_SHA, "")[:12],  # Short SHA
+            "branch": data.get(FIELD_BRANCH, ""),
+            "pr_id": data.get(FIELD_PR_ID, "N/A"),
+            "pr_title": data.get(FIELD_PR_TITLE, "N/A")[:100],  # Truncated
+            "pr_files_changed": data.get(FIELD_PR_FILES_CHANGED, 0),
+            "pr_files_list": data.get(FIELD_PR_FILES_LIST, "N/A")[:200],  # Truncated
+            
+            # Timing information
+            "creation_time": data.get(FIELD_CREATION_TIME, ""),
+            "start_time": data.get(FIELD_START_TIME, ""),
+            "end_time": data.get(FIELD_END_TIME, ""),
+            "duration_sec": data.get(FIELD_DURATION_SEC, 0),
+            "queue_time_sec": data.get(FIELD_QUEUE_TIME, 0),
+            
+            # Metadata
+            "recorded_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        }
+        
+        # Remove empty/null values to keep annotation compact
+        annotations = {k: v for k, v in annotations.items() if v and v != "N/A" and v != ""}
+        
+        return json.dumps(annotations, separators=(',', ':'))
 
     def add_standardized_timing_fields(self, db_data: Dict[str, Any], creation_time: str, start_time: str, end_time: str, 
                                      metric_type: str = "workflow") -> None:
