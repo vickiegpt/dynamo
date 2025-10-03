@@ -100,3 +100,4 @@ TensorRT-LLM
 
 # Benchmarks
 benchmarks/results
+profiling_results*
