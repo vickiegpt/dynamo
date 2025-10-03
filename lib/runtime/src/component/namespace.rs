@@ -7,7 +7,7 @@ use futures::stream::StreamExt;
 use futures::{Stream, TryStreamExt};
 
 use super::*;
-use crate::metrics::MetricsRegistry;
+use crate::metrics::drt_registry::DistributedRuntimeMetricsRegistry;
 use crate::traits::events::{EventPublisher, EventSubscriber};
 
 #[async_trait]
@@ -66,7 +66,7 @@ impl EventSubscriber for Namespace {
     }
 }
 
-impl MetricsRegistry for Namespace {
+impl DistributedRuntimeMetricsRegistry for Namespace {
     fn basename(&self) -> String {
         self.name.clone()
     }

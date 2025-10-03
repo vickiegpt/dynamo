@@ -25,6 +25,7 @@ use tokio::sync::mpsc;
 use crate::component;
 use crate::config::HealthStatus;
 use crate::metrics::prometheus_names::distributed_runtime;
+use crate::metrics::MetricsCreateExt;
 
 /// Health check target containing instance info and payload
 #[derive(Clone, Debug)]
@@ -242,7 +243,7 @@ impl SystemHealth {
     }
 
     /// Initialize the uptime gauge using the provided metrics registry
-    pub fn initialize_uptime_gauge<T: crate::metrics::MetricsRegistry>(
+    pub fn initialize_uptime_gauge<T: crate::metrics::drt_registry::DistributedRuntimeMetricsRegistry>(
         &self,
         registry: &T,
     ) -> anyhow::Result<()> {

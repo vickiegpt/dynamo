@@ -11,7 +11,7 @@ use crate::{
     DistributedRuntime, Result,
     component::Component,
     error,
-    metrics::{MetricsRegistry, prometheus_names, prometheus_names::nats_service},
+    metrics::{drt_registry::DistributedRuntimeMetricsRegistry, MetricsCreateExt, prometheus_names, prometheus_names::nats_service},
     traits::*,
     transports::nats,
     utils::stream,

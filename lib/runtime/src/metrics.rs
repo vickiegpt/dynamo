@@ -18,6 +18,8 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use std::any::Any;
 use std::collections::HashMap;
+pub mod standalone_registry;
+pub mod drt_registry;
 
 // Import commonly used items to avoid verbose prefixes
 use prometheus_names::{
@@ -177,83 +179,19 @@ impl PrometheusMetric for prometheus::CounterVec {
     }
 }
 
-/// Private helper function to create metrics - not accessible to trait implementors
-fn create_metric<T: PrometheusMetric, R: MetricsRegistry + ?Sized>(
-    registry: &R,
+
+/// PROMETHEUS-ONLY builder:
+/// - `metric_name`: already sanitized name
+/// - `labels`: final, merged, validated labels
+/// - returns the collector; no registration, no hierarchy, no callbacks
+fn build_prometheus_metric<T: PrometheusMetric>(
     metric_name: &str,
     metric_desc: &str,
-    labels: &[(&str, &str)],
+    labels: Vec<(String, String)>,
     buckets: Option<Vec<f64>>,
     const_labels: Option<&[&str]>,
 ) -> anyhow::Result<T> {
-    // Validate that user-provided labels don't have duplicate keys
-    validate_no_duplicate_label_keys(labels)?;
-    // Note: stored labels functionality has been removed
-
-    let basename = registry.basename();
-    let parent_hierarchy = registry.parent_hierarchy();
-
-    // Build hierarchy: parent_hierarchy + [basename]
-    let hierarchy = [parent_hierarchy.clone(), vec![basename.clone()]].concat();
-
-    let metric_name = build_component_metric_name(metric_name);
-
-    // Build updated_labels: auto-labels first, then `labels` + stored labels
-    let mut updated_labels: Vec<(String, String)> = Vec::new();
-
-    if USE_AUTO_LABELS {
-        // Validate that user-provided labels don't conflict with auto-generated labels
-        for (key, _) in labels {
-            if *key == labels::NAMESPACE || *key == labels::COMPONENT || *key == labels::ENDPOINT {
-                return Err(anyhow::anyhow!(
-                    "Label '{}' is automatically added by auto_label feature and cannot be manually set",
-                    key
-                ));
-            }
-        }
-
-        // Add auto-generated labels with sanitized values
-        if hierarchy.len() > 1 {
-            let namespace = &hierarchy[1];
-            if !namespace.is_empty() {
-                let valid_namespace = sanitize_prometheus_label(namespace)?;
-                if !valid_namespace.is_empty() {
-                    updated_labels.push((labels::NAMESPACE.to_string(), valid_namespace));
-                }
-            }
-        }
-        if hierarchy.len() > 2 {
-            let component = &hierarchy[2];
-            if !component.is_empty() {
-                let valid_component = sanitize_prometheus_label(component)?;
-                if !valid_component.is_empty() {
-                    updated_labels.push((labels::COMPONENT.to_string(), valid_component));
-                }
-            }
-        }
-        if hierarchy.len() > 3 {
-            let endpoint = &hierarchy[3];
-            if !endpoint.is_empty() {
-                let valid_endpoint = sanitize_prometheus_label(endpoint)?;
-                if !valid_endpoint.is_empty() {
-                    updated_labels.push((labels::ENDPOINT.to_string(), valid_endpoint));
-                }
-            }
-        }
-    }
-
-    // Add user labels
-    updated_labels.extend(
-        labels
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), (*v).to_string())),
-    );
-    // Note: stored labels functionality has been removed
-
-    // Handle different metric types
-    let prometheus_metric = if std::any::TypeId::of::<T>()
-        == std::any::TypeId::of::<prometheus::Histogram>()
-    {
+    if std::any::TypeId::of::<T>() == std::any::TypeId::of::<prometheus::Histogram>() {
         // Special handling for Histogram with custom buckets
         // buckets parameter is valid for Histogram, const_labels is not used
         if const_labels.is_some() {
@@ -261,11 +199,11 @@ fn create_metric<T: PrometheusMetric, R: MetricsRegistry + ?Sized>(
                 "const_labels parameter is not valid for Histogram"
             ));
         }
-        let mut opts = prometheus::HistogramOpts::new(&metric_name, metric_desc);
-        for (key, value) in &updated_labels {
+        let mut opts = prometheus::HistogramOpts::new(metric_name, metric_desc);
+        for (key, value) in labels {
             opts = opts.const_label(key.clone(), value.clone());
         }
-        T::with_histogram_opts_and_buckets(opts, buckets)?
+        Ok(T::with_histogram_opts_and_buckets(opts, buckets)?)
     } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<prometheus::CounterVec>() {
         // Special handling for CounterVec with label names
         // const_labels parameter is required for CounterVec
@@ -274,13 +212,13 @@ fn create_metric<T: PrometheusMetric, R: MetricsRegistry + ?Sized>(
                 "buckets parameter is not valid for CounterVec"
             ));
         }
-        let mut opts = prometheus::Opts::new(&metric_name, metric_desc);
-        for (key, value) in &updated_labels {
+        let mut opts = prometheus::Opts::new(metric_name, metric_desc);
+        for (key, value) in labels {
             opts = opts.const_label(key.clone(), value.clone());
         }
         let label_names = const_labels
             .ok_or_else(|| anyhow::anyhow!("CounterVec requires const_labels parameter"))?;
-        T::with_opts_and_label_names(opts, label_names)?
+        Ok(T::with_opts_and_label_names(opts, label_names)?)
     } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<prometheus::IntGaugeVec>() {
         // Special handling for IntGaugeVec with label names
         // const_labels parameter is required for IntGaugeVec
@@ -289,13 +227,13 @@ fn create_metric<T: PrometheusMetric, R: MetricsRegistry + ?Sized>(
                 "buckets parameter is not valid for IntGaugeVec"
             ));
         }
-        let mut opts = prometheus::Opts::new(&metric_name, metric_desc);
-        for (key, value) in &updated_labels {
+        let mut opts = prometheus::Opts::new(metric_name, metric_desc);
+        for (key, value) in labels {
             opts = opts.const_label(key.clone(), value.clone());
         }
         let label_names = const_labels
             .ok_or_else(|| anyhow::anyhow!("IntGaugeVec requires const_labels parameter"))?;
-        T::with_opts_and_label_names(opts, label_names)?
+        Ok(T::with_opts_and_label_names(opts, label_names)?)
     } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<prometheus::IntCounterVec>() {
         // Special handling for IntCounterVec with label names
         // const_labels parameter is required for IntCounterVec
@@ -304,15 +242,15 @@ fn create_metric<T: PrometheusMetric, R: MetricsRegistry + ?Sized>(
                 "buckets parameter is not valid for IntCounterVec"
             ));
         }
-        let mut opts = prometheus::Opts::new(&metric_name, metric_desc);
-        for (key, value) in &updated_labels {
+        let mut opts = prometheus::Opts::new(metric_name, metric_desc);
+        for (key, value) in labels {
             opts = opts.const_label(key.clone(), value.clone());
         }
         let label_names = const_labels
             .ok_or_else(|| anyhow::anyhow!("IntCounterVec requires const_labels parameter"))?;
-        T::with_opts_and_label_names(opts, label_names)?
+        Ok(T::with_opts_and_label_names(opts, label_names)?)
     } else {
-        // Standard handling for Counter, IntCounter, Gauge, IntGauge
+       // Standard handling for Counter, IntCounter, Gauge, IntGauge
         // buckets and const_labels parameters are not valid for these types
         if buckets.is_some() {
             return Err(anyhow::anyhow!(
@@ -324,212 +262,166 @@ fn create_metric<T: PrometheusMetric, R: MetricsRegistry + ?Sized>(
                 "const_labels parameter is not valid for Counter, IntCounter, Gauge, or IntGauge"
             ));
         }
-        let mut opts = prometheus::Opts::new(&metric_name, metric_desc);
-        for (key, value) in &updated_labels {
+        let mut opts = prometheus::Opts::new(metric_name, metric_desc);
+        for (key, value) in labels {
             opts = opts.const_label(key.clone(), value.clone());
         }
-        T::with_opts(opts)?
-    };
-
-    // Iterate over the DRT's registry and register this metric across all hierarchical levels.
-    // The accumulated hierarchy is structured as: ["", "testnamespace", "testnamespace_testcomponent", "testnamespace_testcomponent_testendpoint"]
-    // This accumulation is essential to differentiate between the names of children and grandchildren.
-    // Build accumulated hierarchy and register metrics in a single loop
-    // current_prefix accumulates the hierarchical path as we iterate through hierarchy
-    // For example, if hierarchy = ["", "testnamespace", "testcomponent"], then:
-    // - Iteration 1: current_prefix = "" (empty string from DRT)
-    // - Iteration 2: current_prefix = "testnamespace"
-    // - Iteration 3: current_prefix = "testnamespace_testcomponent"
-    let mut current_hierarchy = String::new();
-    for name in &hierarchy {
-        if !current_hierarchy.is_empty() && !name.is_empty() {
-            current_hierarchy.push('_');
-        }
-        current_hierarchy.push_str(name);
-
-        // Register metric at this hierarchical level using the new helper function
-        let collector: Box<dyn prometheus::core::Collector> = Box::new(prometheus_metric.clone());
-        registry
-            .drt()
-            .add_prometheus_metric(&current_hierarchy, collector)?;
+        Ok(T::with_opts(opts)?)
     }
-
-    Ok(prometheus_metric)
 }
 
-/// This trait should be implemented by all metric registries, including Prometheus, Envy, OpenTelemetry, and others.
-/// It offers a unified interface for creating and managing metrics, organizing sub-registries, and
-/// generating output in Prometheus text format.
-use crate::traits::DistributedRuntimeProvider;
 
-pub trait MetricsRegistry: Send + Sync + DistributedRuntimeProvider {
-    // Get the name of this registry (without any hierarchy prefix)
-    fn basename(&self) -> String;
+/// Unifying trait so helpers can be written once for both registry flavors.
+pub trait MetricFactory {
+    fn create_metric<M: PrometheusMetric>(
+        &self,
+        name: &str,
+        description: &str,
+        user_labels: &[(&str, &str)],
+        buckets: Option<Vec<f64>>,
+        vec_label_names: Option<&[&str]>,
+    ) -> anyhow::Result<M>;
 
-    /// Retrieve the complete hierarchy and basename for this registry. Currently, the hierarchy for drt is an empty string,
-    /// so we must account for the leading underscore. The existing code remains unchanged to accommodate any future
-    /// scenarios where drt's prefix might be assigned a value.
-    fn hierarchy(&self) -> String {
-        [self.parent_hierarchy(), vec![self.basename()]]
-            .concat()
-            .join("_")
-            .trim_start_matches('_')
-            .to_string()
+    fn prometheus_metrics_fmt(&self) -> anyhow::Result<String>;
+}
+
+impl<T: MetricFactory + ?Sized> MetricFactory for &T {
+    fn create_metric<M: PrometheusMetric>(
+        &self,
+        name: &str,
+        description: &str,
+        user_labels: &[(&str, &str)],
+        buckets: Option<Vec<f64>>,
+        vec_label_names: Option<&[&str]>,
+    ) -> anyhow::Result<M> {
+        (*self).create_metric(name, description, user_labels, buckets, vec_label_names)
     }
 
-    // Get the parent hierarchy for this registry (just the base names, NOT the flattened hierarchy key)
-    fn parent_hierarchy(&self) -> Vec<String>;
+    fn prometheus_metrics_fmt(&self) -> anyhow::Result<String> {
+        (*self).prometheus_metrics_fmt()
+    }
+}
 
-    // TODO: Add support for additional Prometheus metric types:
-    // - Counter: ✅ IMPLEMENTED - create_counter()
-    // - CounterVec: ✅ IMPLEMENTED - create_countervec()
-    // - Gauge: ✅ IMPLEMENTED - create_gauge()
-    // - GaugeHistogram: create_gauge_histogram() - for gauge histograms
-    // - Histogram: ✅ IMPLEMENTED - create_histogram()
-    // - HistogramVec with custom buckets: create_histogram_with_buckets()
-    // - Info: create_info() - for info metrics with labels
-    // - IntCounter: ✅ IMPLEMENTED - create_intcounter()
-    // - IntCounterVec: ✅ IMPLEMENTED - create_intcountervec()
-    // - IntGauge: ✅ IMPLEMENTED - create_intgauge()
-    // - IntGaugeVec: ✅ IMPLEMENTED - create_intgaugevec()
-    // - Stateset: create_stateset() - for state-based metrics
-    // - Summary: create_summary() - for quantiles and sum/count metrics
-    // - SummaryVec: create_summary_vec() - for labeled summaries
-    // - Untyped: create_untyped() - for untyped metrics
-
-    /// Create a Counter metric
+/// High-level convenience constructors — defined once for both flavors.
+pub trait MetricsCreateExt {
     fn create_counter(
         &self,
         name: &str,
         description: &str,
         labels: &[(&str, &str)],
-    ) -> anyhow::Result<prometheus::Counter> {
-        create_metric(self, name, description, labels, None, None)
-    }
+    ) -> anyhow::Result<prometheus::Counter>;
 
-    /// Create a CounterVec metric with label names (for dynamic labels)
     fn create_countervec(
         &self,
         name: &str,
         description: &str,
-        const_labels: &[&str],
+        label_names: &[&str],
         const_label_values: &[(&str, &str)],
-    ) -> anyhow::Result<prometheus::CounterVec> {
-        create_metric(
-            self,
-            name,
-            description,
-            const_label_values,
-            None,
-            Some(const_labels),
-        )
-    }
+    ) -> anyhow::Result<prometheus::CounterVec>;
 
-    /// Create a Gauge metric
     fn create_gauge(
         &self,
         name: &str,
         description: &str,
         labels: &[(&str, &str)],
-    ) -> anyhow::Result<prometheus::Gauge> {
-        create_metric(self, name, description, labels, None, None)
-    }
+    ) -> anyhow::Result<prometheus::Gauge>;
 
-    /// Create a Histogram metric with custom buckets
     fn create_histogram(
         &self,
         name: &str,
         description: &str,
         labels: &[(&str, &str)],
         buckets: Option<Vec<f64>>,
-    ) -> anyhow::Result<prometheus::Histogram> {
-        create_metric(self, name, description, labels, buckets, None)
-    }
+    ) -> anyhow::Result<prometheus::Histogram>;
 
-    /// Create an IntCounter metric
     fn create_intcounter(
         &self,
         name: &str,
         description: &str,
         labels: &[(&str, &str)],
-    ) -> anyhow::Result<prometheus::IntCounter> {
-        create_metric(self, name, description, labels, None, None)
-    }
+    ) -> anyhow::Result<prometheus::IntCounter>;
 
-    /// Create an IntCounterVec metric with label names (for dynamic labels)
     fn create_intcountervec(
         &self,
         name: &str,
         description: &str,
-        const_labels: &[&str],
+        label_names: &[&str],
         const_label_values: &[(&str, &str)],
-    ) -> anyhow::Result<prometheus::IntCounterVec> {
-        create_metric(
-            self,
-            name,
-            description,
-            const_label_values,
-            None,
-            Some(const_labels),
-        )
-    }
+    ) -> anyhow::Result<prometheus::IntCounterVec>;
 
-    /// Create an IntGauge metric
     fn create_intgauge(
         &self,
         name: &str,
         description: &str,
         labels: &[(&str, &str)],
-    ) -> anyhow::Result<prometheus::IntGauge> {
-        create_metric(self, name, description, labels, None, None)
-    }
+    ) -> anyhow::Result<prometheus::IntGauge>;
 
-    /// Create an IntGaugeVec metric with label names (for dynamic labels)
     fn create_intgaugevec(
         &self,
         name: &str,
         description: &str,
-        const_labels: &[&str],
+        label_names: &[&str],
         const_label_values: &[(&str, &str)],
-    ) -> anyhow::Result<prometheus::IntGaugeVec> {
-        create_metric(
-            self,
-            name,
-            description,
-            const_label_values,
-            None,
-            Some(const_labels),
+    ) -> anyhow::Result<prometheus::IntGaugeVec>;
+}
+
+
+impl<T: MetricFactory> MetricsCreateExt for T {
+    fn create_counter(
+        &self, name: &str, description: &str, labels: &[(&str, &str)],
+    ) -> anyhow::Result<prometheus::Counter> {
+        self.create_metric::<prometheus::Counter>(name, description, labels, None, None)
+    }
+
+    fn create_countervec(
+        &self, name: &str, description: &str, label_names: &[&str], const_label_values: &[(&str, &str)],
+    ) -> anyhow::Result<prometheus::CounterVec> {
+        self.create_metric::<prometheus::CounterVec>(
+            name, description, const_label_values, None, Some(label_names)
         )
     }
 
-    /// Get metrics in Prometheus text format
-    fn prometheus_metrics_fmt(&self) -> anyhow::Result<String> {
-        // Execute callbacks first to ensure any new metrics are added to the registry
-        let callback_results = self.drt().execute_metrics_callbacks(&self.hierarchy());
+    fn create_gauge(
+        &self, name: &str, description: &str, labels: &[(&str, &str)],
+    ) -> anyhow::Result<prometheus::Gauge> {
+        self.create_metric::<prometheus::Gauge>(name, description, labels, None, None)
+    }
 
-        // Log any callback errors but continue
-        for result in callback_results {
-            if let Err(e) = result {
-                tracing::error!("Error executing metrics callback: {}", e);
-            }
-        }
+    fn create_histogram(
+        &self, name: &str, description: &str, labels: &[(&str, &str)], buckets: Option<Vec<f64>>,
+    ) -> anyhow::Result<prometheus::Histogram> {
+        self.create_metric::<prometheus::Histogram>(name, description, labels, buckets, None)
+    }
 
-        // Get the Prometheus registry for this hierarchy
-        let prometheus_registry = {
-            let mut registry_entry = self.drt().hierarchy_to_metricsregistry.write().unwrap();
-            registry_entry
-                .entry(self.hierarchy())
-                .or_default()
-                .prometheus_registry
-                .clone()
-        };
-        let metric_families = prometheus_registry.gather();
-        let encoder = prometheus::TextEncoder::new();
-        let mut buffer = Vec::new();
-        encoder.encode(&metric_families, &mut buffer)?;
-        Ok(String::from_utf8(buffer)?)
+    fn create_intcounter(
+        &self, name: &str, description: &str, labels: &[(&str, &str)],
+    ) -> anyhow::Result<prometheus::IntCounter> {
+        self.create_metric::<prometheus::IntCounter>(name, description, labels, None, None)
+    }
+
+    fn create_intcountervec(
+        &self, name: &str, description: &str, label_names: &[&str], const_label_values: &[(&str, &str)],
+    ) -> anyhow::Result<prometheus::IntCounterVec> {
+        self.create_metric::<prometheus::IntCounterVec>(
+            name, description, const_label_values, None, Some(label_names)
+        )
+    }
+
+    fn create_intgauge(
+        &self, name: &str, description: &str, labels: &[(&str, &str)],
+    ) -> anyhow::Result<prometheus::IntGauge> {
+        self.create_metric::<prometheus::IntGauge>(name, description, labels, None, None)
+    }
+
+    fn create_intgaugevec(
+        &self, name: &str, description: &str, label_names: &[&str], const_label_values: &[(&str, &str)],
+    ) -> anyhow::Result<prometheus::IntGaugeVec> {
+        self.create_metric::<prometheus::IntGaugeVec>(
+            name, description, const_label_values, None, Some(label_names)
+        )
     }
 }
+
 
 #[cfg(test)]
 mod test_helpers {

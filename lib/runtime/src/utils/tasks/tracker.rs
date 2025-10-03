@@ -357,9 +357,9 @@
 //!
 //! ```rust
 //! use dynamo_runtime::utils::tasks::tracker::{TaskTracker, SemaphoreScheduler, LogOnlyPolicy};
-//! use dynamo_runtime::metrics::MetricsRegistry;
+//! use dynamo_runtime::metrics::drt_registry::DistributedRuntimeMetricsRegistry;
 //!
-//! # async fn example(registry: &dyn MetricsRegistry) -> anyhow::Result<()> {
+//! # async fn example(registry: &dyn DistributedRuntimeMetricsRegistry) -> anyhow::Result<()> {
 //! // Root tracker with Prometheus metrics
 //! let tracker = TaskTracker::new_with_prometheus(
 //!     SemaphoreScheduler::with_permits(10),
@@ -383,7 +383,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::metrics::MetricsRegistry;
+use crate::metrics::drt_registry::DistributedRuntimeMetricsRegistry;
+use crate::metrics::MetricsCreateExt;
 use crate::metrics::prometheus_names::task_tracker;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -1541,6 +1542,7 @@ impl HierarchicalTaskMetrics for TaskMetrics {
     }
 }
 
+
 /// Root tracker metrics with Prometheus integration
 ///
 /// This implementation maintains local counters and exposes them as Prometheus metrics
@@ -1567,13 +1569,13 @@ impl PrometheusTaskMetrics {
     /// ```rust
     /// # use std::sync::Arc;
     /// # use dynamo_runtime::utils::tasks::tracker::PrometheusTaskMetrics;
-    /// # use dynamo_runtime::metrics::MetricsRegistry;
-    /// # fn example(registry: Arc<dyn MetricsRegistry>) -> anyhow::Result<()> {
+    /// # use dynamo_runtime::metrics::drt_registry::DistributedRuntimeMetricsRegistry;
+    /// # fn example(registry: Arc<dyn DistributedRuntimeMetricsRegistry>) -> anyhow::Result<()> {
     /// let metrics = PrometheusTaskMetrics::new(registry.as_ref(), "main_tracker")?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new<R: MetricsRegistry + ?Sized>(
+    pub fn new<R: DistributedRuntimeMetricsRegistry + ?Sized>(
         registry: &R,
         component_name: &str,
     ) -> anyhow::Result<Self> {
@@ -2070,8 +2072,8 @@ impl TaskTracker {
     /// # use std::sync::Arc;
     /// # use tokio::sync::Semaphore;
     /// # use dynamo_runtime::utils::tasks::tracker::{TaskTracker, SemaphoreScheduler, LogOnlyPolicy};
-    /// # use dynamo_runtime::metrics::MetricsRegistry;
-    /// # fn example(registry: Arc<dyn MetricsRegistry>) -> anyhow::Result<()> {
+    /// # use dynamo_runtime::metrics::drt_registry::DistributedRuntimeMetricsRegistry;
+    /// # fn example(registry: Arc<dyn DistributedRuntimeMetricsRegistry>) -> anyhow::Result<()> {
     /// let scheduler = SemaphoreScheduler::with_permits(10);
     /// let error_policy = LogOnlyPolicy::new();
     /// let tracker = TaskTracker::new_with_prometheus(
@@ -2083,7 +2085,7 @@ impl TaskTracker {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new_with_prometheus<R: MetricsRegistry + ?Sized>(
+    pub fn new_with_prometheus<R: DistributedRuntimeMetricsRegistry + ?Sized>(
         scheduler: Arc<dyn TaskScheduler>,
         error_policy: Arc<dyn OnErrorPolicy>,
         registry: &R,

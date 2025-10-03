@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::metrics::prometheus_names::work_handler;
+use crate::metrics::MetricsCreateExt;
 use crate::protocols::maybe_error::MaybeError;
 use prometheus::{Histogram, IntCounter, IntCounterVec, IntGauge};
 use serde::{Deserialize, Serialize};

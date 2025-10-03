@@ -32,7 +32,7 @@
 use crate::{
     config::HealthStatus,
     discovery::Lease,
-    metrics::{MetricsRegistry, prometheus_names},
+    metrics::{drt_registry::DistributedRuntimeMetricsRegistry, prometheus_names},
     service::ServiceSet,
     transports::etcd::EtcdPath,
 };
@@ -185,7 +185,7 @@ impl RuntimeProvider for Component {
     }
 }
 
-impl MetricsRegistry for Component {
+impl DistributedRuntimeMetricsRegistry for Component {
     fn basename(&self) -> String {
         self.name.clone()
     }
@@ -405,7 +405,7 @@ impl RuntimeProvider for Endpoint {
     }
 }
 
-impl MetricsRegistry for Endpoint {
+impl DistributedRuntimeMetricsRegistry for Endpoint {
     fn basename(&self) -> String {
         self.name.clone()
     }

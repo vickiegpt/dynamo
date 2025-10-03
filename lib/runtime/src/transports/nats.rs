@@ -17,7 +17,7 @@
 //!
 //! Note: `NATS_AUTH_USERNAME` and `NATS_AUTH_PASSWORD` must be used together.
 use crate::traits::events::EventPublisher;
-use crate::{Result, metrics::MetricsRegistry};
+use crate::{Result, metrics::drt_registry::DistributedRuntimeMetricsRegistry, metrics::MetricsCreateExt};
 
 use async_nats::connection::State;
 use async_nats::{Subscriber, client, jetstream};

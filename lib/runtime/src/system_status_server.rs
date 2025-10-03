@@ -3,7 +3,7 @@
 
 use crate::config::HealthStatus;
 use crate::logging::make_request_span;
-use crate::metrics::MetricsRegistry;
+use crate::metrics::drt_registry::DistributedRuntimeMetricsRegistry;
 use crate::metrics::prometheus_names::{nats_client, nats_service};
 use crate::traits::DistributedRuntimeProvider;
 use axum::{Router, http::StatusCode, response::IntoResponse, routing::get};
@@ -259,7 +259,7 @@ mod tests {
 mod integration_tests {
     use super::*;
     use crate::distributed::distributed_test_utils::create_test_drt_async;
-    use crate::metrics::MetricsRegistry;
+    use crate::metrics::drt_registry::DistributedRuntimeMetricsRegistry;
     use anyhow::Result;
     use rstest::rstest;
     use std::sync::Arc;

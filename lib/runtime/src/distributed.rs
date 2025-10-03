@@ -7,7 +7,7 @@ use crate::{
     ErrorContext, RuntimeCallback,
     component::{self, ComponentBuilder, Endpoint, InstanceSource, Namespace},
     discovery::DiscoveryClient,
-    metrics::MetricsRegistry,
+    metrics::drt_registry::DistributedRuntimeMetricsRegistry,
     service::ServiceClient,
     transports::{etcd, nats, tcp},
 };
@@ -18,11 +18,12 @@ use std::sync::OnceLock;
 
 use derive_getters::Dissolve;
 use figment::error;
+use prometheus::proto::MetricFamily;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-impl MetricsRegistry for DistributedRuntime {
+impl DistributedRuntimeMetricsRegistry for DistributedRuntime {
     fn basename(&self) -> String {
         "".to_string() // drt has no basename. Basename only begins with the Namespace.
     }
