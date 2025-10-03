@@ -143,7 +143,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OTEL_AUTH_TOKEN: ${{ secrets.NVAUTH_TOKEN }}
           OTEL_SERVICE_NAME: "Dynamo Metrics"
-          OTLP_ENDPOINT: ${{ secrets.OTEL_ENDPOINT }}
+          OTLP_ENDPOINT: ${{ secrets.OTLP_ENDPOINT }}
         run: |
           # Run the enhanced metrics upload script
           python3 .github/workflows/upload_complete_workflow_metrics.py
