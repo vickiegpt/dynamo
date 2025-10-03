@@ -5,18 +5,21 @@
 
 import re
 import sys
+from pathlib import Path
 
 import pytest
 
 from dynamo.vllm.args import parse_args
 
-JINJA_TEMPLATE_PATH = "/workspace/tests/serve/fixtures/custom_template.jinja"
+# Get path relative to this test file
+TEST_DIR = Path(__file__).parent.parent
+JINJA_TEMPLATE_PATH = str(TEST_DIR / "serve" / "fixtures" / "custom_template.jinja")
 
 
 @pytest.mark.unit
 @pytest.mark.vllm
 @pytest.mark.gpu_1
-@pytest.mark.premerge
+@pytest.mark.pre_merge
 def test_custom_jinja_template_invalid_path(monkeypatch):
     """Test that invalid file path raises FileNotFoundError."""
     invalid_path = "/nonexistent/path/to/template.jinja"
@@ -42,7 +45,7 @@ def test_custom_jinja_template_invalid_path(monkeypatch):
 @pytest.mark.unit
 @pytest.mark.vllm
 @pytest.mark.gpu_1
-@pytest.mark.premerge
+@pytest.mark.pre_merge
 def test_custom_jinja_template_valid_path(monkeypatch):
     """Test that valid absolute path is stored correctly."""
     monkeypatch.setattr(
@@ -65,10 +68,10 @@ def test_custom_jinja_template_valid_path(monkeypatch):
 @pytest.mark.unit
 @pytest.mark.vllm
 @pytest.mark.gpu_1
-@pytest.mark.premerge
+@pytest.mark.pre_merge
 def test_custom_jinja_template_env_var_expansion(monkeypatch):
     """Test that environment variables in paths are expanded by Python code."""
-    jinja_dir = "/workspace/tests/serve/fixtures"
+    jinja_dir = str(TEST_DIR / "serve" / "fixtures")
     monkeypatch.setenv("JINJA_DIR", jinja_dir)
 
     cli_path = "$JINJA_DIR/custom_template.jinja"
