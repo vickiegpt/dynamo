@@ -145,9 +145,13 @@ The generated files will be located at:
 aiconf_save/QWEN3_32B_isl4000_osl500_*/
 ├── aiconfigurator_config.yaml
 └── backend_configs/
-    └── {agg|disagg}/
+    ├── agg/                    # If aggregated was chosen
+    │   ├── k8s_deploy.yaml
+    │   └── agg_config.yaml
+    └── disagg/                 # If disaggregated was chosen
         ├── k8s_deploy.yaml
-        └── {agg|disagg}_config.yaml
+        ├── prefill_config.yaml
+        └── decode_config.yaml
 ```
 
 **Note**:
@@ -201,9 +205,10 @@ kubectl get pods -n $NAMESPACE_2 -l dynamoNamespace=trtllm-agg
 
 **If AIConfigurator recommended disaggregated configuration:**
 ```bash
-# Create ConfigMap for disaggregated engine config
+# Create ConfigMap for disaggregated engine configs (prefill and decode)
 kubectl create configmap engine-configs \
-  --from-file=disagg_config.yaml=$AICONF_DIR/backend_configs/disagg/disagg_config.yaml \
+  --from-file=prefill_config.yaml=$AICONF_DIR/backend_configs/disagg/prefill_config.yaml \
+  --from-file=decode_config.yaml=$AICONF_DIR/backend_configs/disagg/decode_config.yaml \
   -n $NAMESPACE_2 \
   --dry-run=client -o yaml | kubectl apply -f -
 
@@ -353,8 +358,10 @@ Compare the actual benchmark results against AIConfigurator's predictions to eva
 
 ### AIConfigurator-Optimized Configuration
 - **Deployment**: `aiconf_save/QWEN3_32B_*/backend_configs/{agg|disagg}/k8s_deploy.yaml`
-- **ConfigMap**: Created dynamically from `{agg|disagg}_config.yaml`
-- **Engine Config**: Configuration file with optimized parameters
+- **ConfigMap**: Created dynamically from:
+  - `agg_config.yaml` (if aggregated)
+  - `prefill_config.yaml` + `decode_config.yaml` (if disaggregated)
+- **Engine Config**: Configuration files with optimized parameters
 - **Workers**: Determined by AIConfigurator (aggregated or disaggregated)
 
 ### Benchmark Jobs
