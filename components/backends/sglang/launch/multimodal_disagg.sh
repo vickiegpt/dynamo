@@ -68,6 +68,8 @@ python3 -m dynamo.sglang --multimodal-processor --model-path "$MODEL_NAME" --cha
 CUDA_VISIBLE_DEVICES=0 python3 -m dynamo.sglang --multimodal-encode-worker --model-path "$MODEL_NAME" --chat-template "$CHAT_TEMPLATE" &
 
 # run SGLang multimodal prefill worker
+# TODO: Remove disable-radix-cache once the issue is fixed.
+# See https://github.com/sgl-project/sglang/pull/11203.
 CUDA_VISIBLE_DEVICES=1 python3 -m dynamo.sglang \
   --multimodal-worker \
   --model-path "$MODEL_NAME" \
@@ -78,6 +80,7 @@ CUDA_VISIBLE_DEVICES=1 python3 -m dynamo.sglang \
   --disaggregation-mode prefill \
   --disaggregation-bootstrap-port 12345 \
   --host 0.0.0.0 \
+  --disable-radix-cache \
   --disaggregation-transfer-backend nixl &
 
 # run SGLang multimodal decode worker
