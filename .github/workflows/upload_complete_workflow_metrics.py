@@ -669,9 +669,8 @@ class WorkflowMetricsUploader:
                 jobs_processed += 1
                 
                 # Upload step metrics for this job
-                if self.steps_index:
-                    step_count = self._upload_job_step_metrics(job)
-                    steps_processed += step_count
+                step_count = self._upload_job_step_metrics(job)
+                steps_processed += step_count
                     
             except Exception as e:
                 print(f"Error uploading metrics for job {job.get('name', 'unknown')}: {e}")
