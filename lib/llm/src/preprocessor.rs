@@ -23,6 +23,9 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::{collections::HashMap, pin::Pin, sync::Arc};
 use tracing;
 
+// Stream recording imports
+use serde::{Deserialize, Serialize};
+
 use crate::model_card::{ModelDeploymentCard, ModelInfo};
 use crate::preprocessor::prompt::OAIChatLikeRequest;
 use crate::protocols::common::preprocessor::PreprocessedRequestBuilder;
@@ -94,12 +97,26 @@ impl LLMMetricAnnotation {
     }
 }
 
+/// Stream recording entry for archiving postprocessor stream data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamRecordingEntry {
+    /// Request ID for correlation
+    pub request_id: String,
+    /// Sequence number in the stream
+    pub sequence: usize,
+    /// Elapsed time from stream start in milliseconds
+    pub elapsed_ms: u64,
+    /// The actual stream response data
+    pub response_data: Annotated<NvCreateChatCompletionStreamResponse>,
+}
+
 // Reasoning State for reasoning parsing transformation step
 struct ReasoningState {
     stream: Pin<Box<dyn Stream<Item = Annotated<NvCreateChatCompletionStreamResponse>> + Send>>,
     reasoning_parser: Option<Box<dyn ReasoningParser>>,
 }
 
+#[derive(Clone)]
 pub struct OpenAIPreprocessor {
     mdcsum: String,
     formatter: Arc<dyn OAIPromptFormatter>,
@@ -108,6 +125,9 @@ pub struct OpenAIPreprocessor {
     /// Per-model runtime configuration propagated to response generator (e.g., reasoning/tool parser)
     runtime_config: crate::local_model::runtime_config::ModelRuntimeConfig,
     tool_call_parser: Option<String>,
+    /// Stream recording configuration
+    stream_recording_enabled: bool,
+    stream_recording_path: String,
 }
 
 impl OpenAIPreprocessor {
@@ -137,6 +157,14 @@ impl OpenAIPreprocessor {
         // // Initialize runtime config from the ModelDeploymentCard
         let runtime_config = mdc.runtime_config.clone();
 
+        // Stream recording configuration - enable by default
+        let stream_recording_enabled = std::env::var("DYNAMO_STREAM_RECORDING_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse()
+            .unwrap_or(true);
+        let stream_recording_path = std::env::var("DYNAMO_STREAM_RECORDING_PATH")
+            .unwrap_or_else(|_| "./stream_recordings".to_string());
+
         Ok(Arc::new(Self {
             formatter,
             tokenizer,
@@ -144,6 +172,8 @@ impl OpenAIPreprocessor {
             mdcsum,
             runtime_config,
             tool_call_parser,
+            stream_recording_enabled,
+            stream_recording_path,
         }))
     }
     /// Encode a string to it's tokens
@@ -800,6 +830,59 @@ impl
             context.clone(),
         );
 
+        // Stream Recording: Set up recording if enabled
+        let stream: Pin<Box<dyn Stream<Item = _> + Send>> = if self.stream_recording_enabled {
+            let request_id_clone = request_id.clone();
+            let base_path = self.stream_recording_path.clone();
+            let start_time = std::time::Instant::now();
+            
+            // Collect all items from the stream and write to file
+            use futures::stream::StreamExt;
+            let items: Vec<_> = stream.collect().await;
+            
+            // Write to file
+            let mut entries = Vec::new();
+            for (sequence, item) in items.iter().enumerate() {
+                let entry = StreamRecordingEntry {
+                    request_id: request_id_clone.clone(),
+                    sequence,
+                    elapsed_ms: start_time.elapsed().as_millis() as u64,
+                    response_data: item.clone(),
+                };
+                entries.push(entry);
+            }
+            
+            // Write to JSON file
+            if !entries.is_empty() {
+                let file_path = format!("{}/chat_completion_stream_{}.json", base_path, request_id_clone);
+                
+                match tokio::fs::create_dir_all(&base_path).await {
+                    Ok(_) => {
+                        match serde_json::to_string_pretty(&entries) {
+                            Ok(json_content) => {
+                                if let Err(e) = tokio::fs::write(&file_path, json_content).await {
+                                    tracing::error!("Failed to write stream recording to {}: {}", file_path, e);
+                                } else {
+                                    tracing::info!("Wrote {} stream items to {}", entries.len(), file_path);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to serialize stream recording for request {}: {}", request_id_clone, e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to create recording directory {}: {}", base_path, e);
+                    }
+                }
+            }
+            
+            // Return the collected items as a new stream
+            Box::pin(futures::stream::iter(items))
+        } else {
+            Box::pin(stream)
+        };
+
         // Try to parse reasoning content only if parser is configured
         let should_parse_reasoning = self.runtime_config.reasoning_parser.is_some();
 
@@ -816,7 +899,7 @@ impl
                 self.runtime_config.reasoning_parser.clone().unwrap(), // Safety: We already checked that parser is some, so gtg
             ))
         } else {
-            Box::pin(stream)
+            stream
         };
 
         // Check if tools are present and if we should apply jail
