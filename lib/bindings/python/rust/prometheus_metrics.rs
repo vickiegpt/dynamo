@@ -883,8 +883,6 @@ impl RuntimeMetrics {
     where
         T: rs::metrics::MetricsRegistry + rs::traits::DistributedRuntimeProvider,
     {
-        use rs::metrics::MetricsRegistry;
-
         let hierarchy = registry_item.hierarchy();
 
         // Store the callback in the DRT's metrics callback registry using the registry_item's hierarchy
