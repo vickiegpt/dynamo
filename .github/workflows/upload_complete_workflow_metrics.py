@@ -625,9 +625,7 @@ class WorkflowMetricsUploader:
 
     def _upload_workflow_metrics(self, workflow_data: Dict[str, Any], jobs_data: Dict[str, Any]) -> None:
         """Internal method to upload workflow metrics"""
-        db_data = {}
-        db_data[FIELD_ID] = f"github-workflow-{self.run_id}"
-        
+        db_data = {}        
         
         # Schema fields
         # Use conclusion for completed workflows, fallback to status
@@ -686,9 +684,7 @@ class WorkflowMetricsUploader:
         db_data = {}
         job_id = job_data['id']
         job_name = job_data['name']
-        
-        db_data[FIELD_ID] = f"github-job-{job_id}"
-        
+                
         # Schema fields
         db_data[FIELD_JOB_ID] = str(job_id)
         # Handle job status - prefer conclusion for completed jobs, fallback to status
@@ -753,10 +749,6 @@ class WorkflowMetricsUploader:
         job_name = job_data['name']
         step_name = step_data.get('name', f'step_{step_index}')
         step_number = step_data.get('number', step_index + 1)
-        
-        # Create unique step ID and use standardized ID generation
-        step_id = f"{job_id}_{step_number}"
-        db_data[FIELD_ID] = f"github-step-{step_id}"
         
         # Schema-compliant fields
         db_data[FIELD_STEP_ID] = str(step_id)
