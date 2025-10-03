@@ -11,8 +11,7 @@ import pytest
 
 from dynamo.vllm.args import parse_args
 
-# Get path relative to this test file
-TEST_DIR = Path(__file__).parent.parent
+TEST_DIR = Path(__file__).parents[5] / "tests"
 JINJA_TEMPLATE_PATH = str(TEST_DIR / "serve" / "fixtures" / "custom_template.jinja")
 
 
