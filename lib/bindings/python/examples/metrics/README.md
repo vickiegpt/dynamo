@@ -295,40 +295,40 @@ graph TD
     end
 
     subgraph PyO3["Python/Rust Interface - PyO3"]
-        PM[Prometheus Metrics<br/>PrometheusMetricsUtils + Metric Types<br/>bindings/python/rust/prometheus_metrics.rs]
-        EP[Endpoint Bindings<br/>bindings/python/rust/lib.rs]
+        PM[PrometheusMetricsUtils<br/>endpoint.metrics<br/>prometheus_metrics.rs]
+        MT[Metric Type Objects<br/>IntGauge/Gauge/Counter/etc.<br/>prometheus_metrics.rs]
         style PM fill:#f4a261,color:#000
-        style EP fill:#f4a261,color:#000
+        style MT fill:#f4a261,color:#000
     end
 
     subgraph Rust["Rust Core"]
-        MR[MetricsRegistry Trait<br/>runtime/src/metrics.rs]
-        DRT[DistributedRuntime<br/>runtime/src/distributed.rs]
-        PROM["Prometheus Crate<br/>prometheus::Gauge/IntGauge"]
-        SS[System Status Server<br/>runtime/src/system_status_server.rs]
-        style MR fill:#ce422b,color:#fff
+        EP[Endpoint<br/>component/endpoint.rs]
+        DRT[DistributedRuntime<br/>distributed.rs]
+        PROM["Prometheus Registry<br/>prometheus::IntGauge/Gauge/etc."]
+        SS[System Status Server<br/>system_status_server.rs]
+        style EP fill:#ce422b,color:#fff
         style DRT fill:#ce422b,color:#fff
         style PROM fill:#ce422b,color:#fff
-        style SS fill:#ce422b,color:#fff
+        style SS fill:#6c757d,color:#fff
     end
 
-    PY -->|create_intgauge| PM
-    PY -.->|register_update_callback| PM
-    PM -->|create via MetricsRegistry| MR
-    MR -->|create prometheus gauge| PROM
-    PM -->|return IntGauge/Gauge/etc.| PY
-    PY -.->|set/get| PM
-    PM -.->|register callback| DRT
-    DRT -.->|execute callbacks| EP
-    EP -.->|invoke| PY
-    SS ==>|execute callbacks| DRT
-    SS -->|gather metrics| PROM
+    PY -->|endpoint.metrics.create_intgauge| PM
+    PM -->|endpoint.create_intgauge| EP
+    EP -->|create & register| PROM
+    PM -->|wrap & return| MT
+    MT -->|return to Python| PY
+    PY -->|metric.set/get| MT
+    MT -->|direct FFI call| PROM
+    PY -.->|endpoint.metrics.register_update_callback| PM
+    PM -.->|drt.register_metrics_callback| DRT
+    SS ==>|execute_metrics_callbacks| DRT
+    DRT -.->|invoke Python callback| PY
+    SS -->|gather| PROM
 
-    linkStyle 1 stroke:#ff6b6b,stroke-width:2px
-    linkStyle 6 stroke:#ff6b6b,stroke-width:2px
     linkStyle 7 stroke:#ff6b6b,stroke-width:2px
     linkStyle 8 stroke:#ff6b6b,stroke-width:2px
     linkStyle 9 stroke:#ff6b6b,stroke-width:2px
+    linkStyle 10 stroke:#ff6b6b,stroke-width:2px
 ```
 
 ## Comparison
