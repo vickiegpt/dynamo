@@ -253,9 +253,6 @@ jobs:
         # Wait for all deployments to be ready
         timeout 300s kubectl rollout status deployment -n $NAMESPACE --watch
         cd -
-    - name: Run VLLM E2E Tests
-      run: |
-        set -x
         export KUBECONFIG=$(pwd)/.kubeconfig
         kubectl config set-context --current --namespace=$NAMESPACE
 
