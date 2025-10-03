@@ -664,10 +664,16 @@ impl Endpoint {
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             if let Some(etcd_client) = etcd_client {
+                let key = format!(
+                    "{}/{}",
+                    dynamo_llm::http::service::dynamic_endpoint::DYNAMIC_ENDPOINT_PATH,
+                    endpoint_path.trim_start_matches('/')
+                );
                 etcd_client
                     .kv_create(
-                        endpoint_path.as_str(),
-                        serde_json::to_vec_pretty(&serde_json::Value::Null).unwrap(),
+                        &key,
+                        serde_json::to_vec_pretty(&serde_json::Value::String(endpoint_path))
+                            .unwrap(),
                         None,
                     )
                     .await
