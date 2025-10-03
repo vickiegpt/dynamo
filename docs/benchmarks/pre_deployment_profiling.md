@@ -167,6 +167,9 @@ envsubst < benchmarks/profiler/deploy/profile_sla_job.yaml | kubectl apply -f -
 
 # for MoE models
 envsubst < benchmarks/profiler/deploy/profile_sla_moe_job.yaml | kubectl apply -f -
+
+# using aiconfigurator instead of real sweeping (see below for more details)
+envsubst < benchmarks/profiler/deploy/profile_sla_aic_job.yaml | kubectl apply -f -
 ```
 
 **Step 5: Wait for profiling to complete**
@@ -310,8 +313,8 @@ In addition to passing the `--use-ai-configurator` flag, you must also provide t
 
 Example command:
 ```bash
-python3 profile_sla.py \
-   --config ../../components/backends/trtllm/deploy/disagg.yaml \
+python3 -m benchmarks.profiler.profile_sla \
+   --config ./components/backends/trtllm/deploy/disagg.yaml \
    --use-ai-configurator \
    --aic-system h200_sxm \
    --aic-model-name QWEN3_32B \
