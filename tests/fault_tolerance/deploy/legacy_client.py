@@ -114,7 +114,7 @@ def _single_request(
 
     # Convert retries to total attempts (1 initial attempt + N retries)
     attempts_remaining = 1 + max(0, retry_attempts)
-    
+
     while attempts_remaining:
         start_request_time = time.time()
         response = None
@@ -164,7 +164,7 @@ def _single_request(
                     "pod": pod,
                 }
             )
-            
+
             # Exception - retry if we have attempts left
             attempts_remaining -= 1
             if attempts_remaining == 0:

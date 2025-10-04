@@ -93,7 +93,7 @@ def _single_request(
                     "request_elapsed_time": time.time() - start_request_time,
                 }
             )
-            
+
             # Exception - retry if we have attempts left
             attempts_remaining -= 1
             if attempts_remaining == 0:
