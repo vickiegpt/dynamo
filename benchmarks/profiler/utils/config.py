@@ -110,12 +110,6 @@ class DgdPlannerServiceConfig(BaseModel):
                 "image": "my-registry/dynamo-runtime:my-tag",  # placeholder
                 "workingDir": "/workspace/components/src/dynamo/planner",
                 "command": ["python3", "-m", "planner_sla"],
-                "volumeMounts": [
-                    {
-                        "name": "dynamo-pvc",
-                        "mountPoint": "/data",
-                    }
-                ],
                 "args": [],
             }
         )
