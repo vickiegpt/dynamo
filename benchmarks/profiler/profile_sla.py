@@ -789,8 +789,8 @@ async def run_profile(args):
         )
 
         planner_config.extraPodSpec.mainContainer.args.extend(planner_args)
-        config.spec.services["Planner"] = planner_config
-        config = config.model_dump()
+        config.spec.services["Planner"] = planner_config.model_dump(exclude_unset=False)
+        config = config.model_dump(exclude_unset=False)
         logger.info(f"Final DGD config with planner: {config}")
 
         # save DGD config with planner
