@@ -14,12 +14,14 @@ import pytest
 import requests
 
 from tests.fault_tolerance.test_request_migration import DynamoFrontendProcess
+from tests.utils.constants import GPT_OSS
 from tests.utils.managed_process import ManagedProcess
 from tests.utils.payloads import check_models_api
-from tests.utils.constants import GPT_OSS
+
 logger = logging.getLogger(__name__)
 
 REASONING_TEST_MODEL = GPT_OSS
+
 
 class GPTOSSWorkerProcess(ManagedProcess):
     """Worker process for GPT-OSS model."""
@@ -99,7 +101,6 @@ def _send_chat_request(
             }
         ],
         "max_tokens": 2000,
-        "temperature": 1.0,
         "chat_template_args": {"reasoning_effort": reasoning_effort},
     }
 
@@ -156,9 +157,7 @@ def _validate_chat_response(response: requests.Response) -> Dict[str, Any]:
 @pytest.mark.gpu_1
 @pytest.mark.e2e
 @pytest.mark.model(REASONING_TEST_MODEL)
-def test_reasoning_effort(
-    request, runtime_services, predownload_models
-) -> None:
+def test_reasoning_effort(request, runtime_services, predownload_models) -> None:
     """High reasoning effort should yield more detailed reasoning than low effort."""
 
     prompt = (
@@ -190,13 +189,8 @@ def test_reasoning_effort(
                 high_reasoning_tokens,
             )
 
-            if (
-                low_reasoning_tokens is not None
-                and high_reasoning_tokens is not None
-            ):
-                assert (
-                    high_reasoning_tokens >= low_reasoning_tokens
-                ), (
+            if low_reasoning_tokens is not None and high_reasoning_tokens is not None:
+                assert high_reasoning_tokens >= low_reasoning_tokens, (
                     "Expected high reasoning effort to use at least as many reasoning tokens "
                     f"as low effort (low={low_reasoning_tokens}, high={high_reasoning_tokens})"
                 )
