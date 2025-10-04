@@ -74,7 +74,7 @@ async fn dynamic_endpoint_handler(
 
     let rt = match Runtime::from_current() {
         Ok(rt) => rt,
-        Err(e) => {
+        Err(_) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
@@ -85,7 +85,7 @@ async fn dynamic_endpoint_handler(
     };
     let drt = match DistributedRuntime::from_settings(rt).await {
         Ok(drt) => drt,
-        Err(e) => {
+        Err(_) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
@@ -117,7 +117,7 @@ async fn dynamic_endpoint_handler(
         };
         let c = match ns.component(instance.component.clone()) {
             Ok(c) => c,
-            Err(e) => {
+            Err(_) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({
