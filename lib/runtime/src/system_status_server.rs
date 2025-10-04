@@ -203,16 +203,18 @@ async fn metrics_handler(state: Arc<SystemStatusState>) -> impl IntoResponse {
         let callback_results = state.drt().execute_metrics_callbacks(hierarchy);
         for result in callback_results {
             if let Err(e) = result {
-                tracing::error!("Error executing metrics callback for hierarchy '{}': {}", hierarchy, e);
+                tracing::error!(
+                    "Error executing metrics callback for hierarchy '{}': {}",
+                    hierarchy,
+                    e
+                );
             }
         }
     }
 
     // Get all metrics from DistributedRuntime (top-level)
     match state.drt().prometheus_metrics_fmt() {
-        Ok(response) => {
-            (StatusCode::OK, response)
-        }
+        Ok(response) => (StatusCode::OK, response),
         Err(e) => {
             tracing::error!("Failed to get metrics from registry: {}", e);
             (

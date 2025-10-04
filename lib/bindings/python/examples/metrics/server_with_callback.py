@@ -63,10 +63,10 @@ async def init(runtime: DistributedRuntime):
     print(f"[python] Created Gauge: {gpu_cache_usage_perc.name}")
     print(f"[python] Created IntGaugeVec: {worker_active_requests.name}")
     print(f"[python] Created IntCounter with constant labels: {update_count.name}")
-    print(f"[python]   Label values: {update_count.label_values}")
+    print(f"[python]   Const labels: {update_count.const_labels}")
     print("[python] Metrics automatically registered with endpoint!")
 
-    # Step 2: Register a callback to update metrics dynamically
+    # Step 2: Register a callback to update metrics on-demand
     print("[python] Registering metrics callback...")
 
     def update_metrics():

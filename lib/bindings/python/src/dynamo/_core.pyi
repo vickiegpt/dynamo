@@ -97,6 +97,16 @@ class Namespace:
         """
         ...
 
+    @property
+    def metrics(self) -> RuntimeMetrics:
+        """
+        Get a RuntimeMetrics helper for creating Prometheus metrics.
+
+        Returns:
+            A RuntimeMetrics object that provides create_* methods for different metric types
+        """
+        ...
+
 class Component:
     """
     A component is a collection of endpoints
@@ -113,6 +123,16 @@ class Component:
     def endpoint(self, name: str) -> Endpoint:
         """
         Create an endpoint
+        """
+        ...
+
+    @property
+    def metrics(self) -> RuntimeMetrics:
+        """
+        Get a RuntimeMetrics helper for creating Prometheus metrics.
+
+        Returns:
+            A RuntimeMetrics object that provides create_* methods for different metric types
         """
         ...
 
@@ -152,10 +172,10 @@ class Endpoint:
     @property
     def metrics(self) -> RuntimeMetrics:
         """
-        Get a Metrics helper for creating Prometheus metrics.
+        Get a RuntimeMetrics helper for creating Prometheus metrics.
 
         Returns:
-            A Metrics object that provides create_* methods for different metric types
+            A RuntimeMetrics object that provides create_* methods for different metric types
         """
         ...
 

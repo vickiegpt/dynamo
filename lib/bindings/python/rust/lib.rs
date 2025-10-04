@@ -188,7 +188,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     parsers::add_to_module(m)?;
     prometheus_names::add_to_module(m)?;
 
-    m.add_class::<prometheus_metrics::RuntimeMetrics>()?;
+    m.add_class::<prometheus_metrics::PyRuntimeMetrics>()?;
     let prometheus_metrics = PyModule::new(m.py(), "prometheus_metrics")?;
     prometheus_metrics::add_to_module(&prometheus_metrics)?;
     m.add_submodule(&prometheus_metrics)?;
@@ -646,6 +646,12 @@ impl Component {
             Ok(())
         })
     }
+
+    /// Get a RuntimeMetrics helper for creating Prometheus metrics
+    #[getter]
+    fn metrics(&self) -> prometheus_metrics::PyRuntimeMetrics {
+        prometheus_metrics::PyRuntimeMetrics::from_component(self.inner.clone())
+    }
 }
 
 #[pymethods]
@@ -732,8 +738,8 @@ impl Endpoint {
 
     /// Get a RuntimeMetrics helper for creating Prometheus metrics
     #[getter]
-    fn metrics(&self) -> prometheus_metrics::RuntimeMetrics {
-        prometheus_metrics::RuntimeMetrics::new(self.inner.clone())
+    fn metrics(&self) -> prometheus_metrics::PyRuntimeMetrics {
+        prometheus_metrics::PyRuntimeMetrics::from_endpoint(self.inner.clone())
     }
 }
 
@@ -746,6 +752,12 @@ impl Namespace {
             inner,
             event_loop: self.event_loop.clone(),
         })
+    }
+
+    /// Get a RuntimeMetrics helper for creating Prometheus metrics
+    #[getter]
+    fn metrics(&self) -> prometheus_metrics::PyRuntimeMetrics {
+        prometheus_metrics::PyRuntimeMetrics::from_namespace(self.inner.clone())
     }
 }
 

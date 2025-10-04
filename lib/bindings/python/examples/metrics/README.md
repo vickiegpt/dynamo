@@ -1,11 +1,47 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Python-Rust Metrics Integration
+# Dynamo MetricsRegistry for Python
+
+Python MetricsRegistry allows you to create and manage Prometheus metrics from Python:
+
+- **Metric Types**: Counter, IntCounter, Gauge, IntGauge, Histogram, and their Vec variants (CounterVec, IntCounterVec, GaugeVec, IntGaugeVec)
+- **Metric Introspection**: Access metric names, constant labels, and variable label names
+- **Automatic Registration**: Metrics are automatically registered with the component hierarchy (namespace/component/endpoint) and available on the HTTP system status server
+- **Optional Callback Support**: Register Python callbacks to update metrics before scraping
+
+Example:
+```python
+from dynamo.runtime import DistributedRuntime
+
+async def main():
+    drt = DistributedRuntime()
+    endpoint = drt.namespace("ns").component("comp").endpoint("ep")
+
+    # Create metrics
+    counter = endpoint.metrics.create_intcounter("requests_total", "Total requests")
+    gauge_vec = endpoint.metrics.create_intgaugevec(
+        "active_connections",
+        "Active connections by status",
+        ["status"],  # variable labels
+        [("region", "us-west")]  # constant labels
+    )
+
+    # Introspect metrics
+    print(counter.name())           # "ns_comp_ep_requests_total"
+    print(counter.const_labels())   # {"dynamo_namespace": "ns", ...}
+    print(gauge_vec.variable_labels())  # ["status"]
+
+    # Use metrics
+    counter.inc()
+    gauge_vec.set(5, {"status": "active"})
+```
+
+## Python-Rust Metrics Integration
 
 This directory demonstrates two methods for passing metrics between Python and Rust in the Dynamo runtime.
 
-## Method 1: ForwardPassMetrics Pub/Sub via NATS (Legacy method for passing metrics)
+### Method 1: ForwardPassMetrics Pub/Sub via NATS (Legacy method for passing metrics)
 
 Python maintains its own metrics dictionary, serializes it, and publishes to NATS. Rust subscribes to NATS, deserializes the metrics, and updates Prometheus gauges.
 
@@ -92,7 +128,7 @@ When you need to add or modify metrics in Method 1 (ForwardPassMetrics Pub/Sub v
 
 **Result**: Changes require touching 3-4 files across Rust and Python codebases.
 
-## Method 2: Dynamic Registration (New method for passing metrics)
+### Method 2: Dynamo MetricsRegistry in Python
 
 Python creates typed metric objects using `endpoint.metrics.create_*()` methods, which automatically register with the endpoint. Python updates values through these objects with methods that have type hints (via `.pyi` files). Rust creates the underlying Prometheus metrics and calls Python callbacks before scraping.
 
@@ -102,7 +138,7 @@ Python creates typed metric objects using `endpoint.metrics.create_*()` methods,
 
 This method supports two update patterns:
 
-### Example A: Background Thread Updates (server_with_loop.py)
+#### Example A: Background Thread Updates (server_with_loop.py)
 
 Update metrics continuously from a background thread, independent of scraping:
 
@@ -131,7 +167,7 @@ updater = threading.Thread(target=update_metrics_in_loop, daemon=True)
 updater.start()
 ```
 
-### Example B: Callback-based Updates (server_with_callback.py)
+#### Example B: Callback-based Updates (server_with_callback.py)
 
 Register a callback that updates metrics on-demand when Prometheus scrapes the `/metrics` endpoint:
 
@@ -170,7 +206,7 @@ worker_requests.set(5, {"worker_id": "worker_1", "model": "llama-3"})
 worker_requests.set(3, {"worker_id": "worker_2", "model": "llama-3"})
 ```
 
-### Available Metric Types
+#### Available Metric Types
 
 Method 2 supports all standard Prometheus metric types:
 
@@ -182,7 +218,7 @@ Method 2 supports all standard Prometheus metric types:
 
 All metrics are imported from `dynamo._prometheus_metrics`.
 
-### Adding/Changing Metrics in Method 2
+#### Adding/Changing Metrics in Method 2
 
 When you need to add or modify metrics in Method 2 (Dynamic Registration), you only update **Python code**:
 
@@ -214,7 +250,7 @@ When you need to add or modify metrics in Method 2 (Dynamic Registration), you o
 
 **Result**: Changes only require modifying Python code. No Rust changes needed. Metrics are automatically created and registered with Prometheus by the Rust runtime when you call `create_*()`.
 
-### Type-Hinted Methods
+#### Type-Hinted Methods
 
 Dynamic Registration provides type hints (via `.pyi` stub files) for typed metric classes:
 
@@ -223,11 +259,11 @@ Dynamic Registration provides type hints (via `.pyi` stub files) for typed metri
 - **Histograms** use `.observe()`
 - **Vec metrics** take a `labels: Dict[str, str]` parameter for operations
 
-## Architecture Diagrams
+### Architecture Diagrams
 
-### Component Architecture
+#### Component Architecture
 
-#### Method 1: ForwardPassMetrics Pub/Sub via NATS - Component View
+##### Method 1: ForwardPassMetrics Pub/Sub via NATS - Component View
 
 ```mermaid
 graph TB
@@ -285,7 +321,7 @@ graph TB
     SS -->|"Aggregator: scrape_stats()"| AGG
 ```
 
-#### Method 2: Dynamic Registration - Component View
+##### Method 2: Dynamic Registration - Component View
 
 ```mermaid
 graph TD
@@ -331,30 +367,11 @@ graph TD
     linkStyle 10 stroke:#ff6b6b,stroke-width:2px
 ```
 
-## Comparison
+### Running the Examples
 
-| Aspect | Method 1: ForwardPassMetrics Pub/Sub | Method 2: Dynamic Registration |
-|--------|----------------------|------------------------|
-| **Ownership** | Python owns metrics dict, Rust owns Prometheus objects | Python holds typed metric objects, Rust holds Prometheus objects |
-| **Communication** | Indirect via NATS message broker | Direct Foreign Function Interface (callbacks from Rust to Python) |
-| **Update Pattern** | Serialize entire dict and publish | Type-safe methods (`.set()`, `.inc()`, `.observe()`) on individual metric objects |
-| **Serialization** | Serialize-Deserialize (JSON/MessagePack) to NATS | No serialization (direct FFI calls) |
-| **Type Hints** | No type hints (dict with arbitrary keys/values) | Type hints via `.pyi` files for typed metric classes (IntGauge, Gauge, Counter, etc.) |
-| **Metric Types** | Limited to predefined struct fields | All Prometheus types: Gauge, IntGauge, Counter, IntCounter, Histogram, and Vec variants |
-| **Label Support** | Fixed labels in struct definition | Dynamic labels via Vec metrics (GaugeVec, CounterVec, etc.) |
-| **Overhead** | Medium (NATS network + serialization) | Lower (direct FFI, no serialization) |
-| **Decoupling** | Loosely coupled (can run in different processes) | Tightly coupled (Python and Rust in same process) |
-| **Scalability** | Multiple workers publish to same topic | Single worker only |
-| **Flexibility** | Push-based, may have stale values | Callback ensures fresh values before scrape |
-| **Complexity** | High (NATS setup, struct changes, Rust+Python) | Low (Python-only, simple API) |
-| **Adding Metrics** | Modify 3-4 files (Rust structs + Python) | Single Python file only |
-| **Use Case** | Distributed workers publishing to aggregator | Single-process services with dynamic updates |
+The examples demonstrate Method 2 (Dynamo MetricsRegistry in Python) with two different update patterns.
 
-## Running the Examples
-
-The examples demonstrate Method 2 (Dynamic Registration) with two different update patterns.
-
-### Prerequisites
+#### Prerequisites
 
 1. Build Python bindings:
    ```bash
@@ -367,14 +384,14 @@ The examples demonstrate Method 2 (Dynamic Registration) with two different upda
    uv pip install uvloop
    ```
 
-### Run Example A: Background Thread Updates
+#### Run Example A: Background Thread Updates
 
 ```bash
 cd ~/dynamo/lib/bindings/python/examples/metrics
 DYN_SYSTEM_ENABLED=true DYN_SYSTEM_PORT=8081 ./server_with_loop.py
 ```
 
-### Run Example B: Callback-based Updates
+#### Run Example B: Callback-based Updates
 
 ```bash
 cd ~/dynamo/lib/bindings/python/examples/metrics
@@ -385,7 +402,7 @@ DYN_SYSTEM_ENABLED=true DYN_SYSTEM_PORT=8081 ./server_with_callback.py
 - `DYN_SYSTEM_ENABLED=true` - Enables the system status server
 - `DYN_SYSTEM_PORT=8081` - Sets the port for the metrics endpoint
 
-### Check the Metrics
+#### Check the Metrics
 
 The metrics are served via the system status server at:
 
