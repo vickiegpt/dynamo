@@ -19,8 +19,20 @@ use std::sync::Arc;
 use crate::rs;
 
 // Python wrappers for Prometheus metric types.
-// These wrappers are plain wrappers needed because the raw Prometheus types cannot be directly
-// exposed to Python - they don't implement PyO3's required traits for Python interop.
+//
+// These wrapper structs are necessary because Prometheus types from the external `prometheus` crate
+// cannot be directly exposed to Python via PyO3's #[pyclass] attribute. This is due to:
+//
+// 1. **Orphan Rule**: PyO3 requires implementing traits on types, but Rust's orphan rule prevents
+//    implementing foreign traits (like PyClass) on foreign types (prometheus::Counter, etc.).
+//
+// 2. **Ownership**: #[pyclass] can only be applied to structs defined in your crate, not external types.
+//
+// 3. **PyO3 Requirements**: Types exposed to Python must satisfy specific trait bounds (Send, Sync)
+//    and implement PyO3's internal traits, which we cannot add to external crate types.
+//
+// The solution is the newtype wrapper pattern: wrap each Prometheus type in our own struct,
+// apply #[pyclass] to our wrapper, and delegate method calls to the inner Prometheus type.
 
 /// Python wrapper for Counter metric
 #[pyclass]
@@ -269,10 +281,6 @@ impl IntCounterVec {
         Self { counter }
     }
 }
-
-// ============================================================================
-// Gauge implementations
-// ============================================================================
 
 #[pymethods]
 impl Gauge {
@@ -553,10 +561,6 @@ impl IntGaugeVec {
         Self { gauge }
     }
 }
-
-// ============================================================================
-// Histogram implementation
-// ============================================================================
 
 #[pymethods]
 impl Histogram {

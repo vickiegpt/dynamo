@@ -1,13 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# =============================================================================
-# ORGANIZATION NOTE:
-# =============================================================================
-# This file contains the core Dynamo runtime types and functions.
-# For better organization, related functionality is split into separate modules.
-# =============================================================================
-
 from typing import (
     Any,
     AsyncGenerator,
