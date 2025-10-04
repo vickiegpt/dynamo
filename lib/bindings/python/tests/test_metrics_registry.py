@@ -23,7 +23,6 @@ async def metrics_runtime(runtime):
 
 
 @pytest.mark.forked
-@pytest.mark.forked
 @pytest.mark.asyncio
 async def test_counter_introspection(metrics_runtime):
     """Test Counter metric introspection methods."""

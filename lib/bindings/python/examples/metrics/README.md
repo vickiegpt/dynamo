@@ -373,16 +373,11 @@ The examples demonstrate Method 2 (Dynamo MetricsRegistry in Python) with two di
 
 #### Prerequisites
 
-1. Build Python bindings:
-   ```bash
-   cd ~/dynamo/lib/bindings/python
-   maturin develop
-   ```
-
-2. Install Python dependencies:
-   ```bash
-   uv pip install uvloop
-   ```
+Update Python bindings if needed:
+```bash
+cd ~/dynamo/lib/bindings/python
+maturin develop
+```
 
 #### Run Example A: Background Thread Updates
 

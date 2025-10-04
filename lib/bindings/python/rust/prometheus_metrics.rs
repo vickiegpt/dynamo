@@ -89,7 +89,7 @@ pub struct Histogram {
 }
 
 // ============================================================================
-// Counter implementations
+// Various PyMethod implementations below.
 // ============================================================================
 
 #[pymethods]
