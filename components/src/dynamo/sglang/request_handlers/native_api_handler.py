@@ -15,7 +15,7 @@ from dynamo._core import Component
 
 
 class NativeApiHandler:
-    """Mixin to add sglang native API endpoints to worker handlers"""
+    """Handler to add sglang native API endpoints to workers"""
 
     def __init__(
         self,
