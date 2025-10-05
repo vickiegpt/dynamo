@@ -5,7 +5,7 @@ pub mod recorder;
 pub mod slot;
 
 use super::*;
-use dynamo_llm::block_manager::metrics_kvbm::KvbmMetrics;
+use dynamo_llm::block_manager::metrics_kvbm::{KvbmMetrics, KvbmMetricsRegistry};
 use dynamo_runtime::DistributedRuntime;
 use slot::{ConnectorSlotManager, SlotError, SlotManager, SlotState};
 
@@ -103,11 +103,16 @@ impl KvConnectorLeader {
         let drt = drt.inner().clone();
         let handle: Handle = drt.runtime().primary();
 
-        let ns = drt
-            .namespace(kvbm_connector::KVBM_CONNECTOR_LEADER)
-            .unwrap();
+        // let ns = drt
+        //     .namespace(kvbm_connector::KVBM_CONNECTOR_LEADER)
+        //     .unwrap();
 
-        let kvbm_metrics = KvbmMetrics::new(&ns);
+        // let kvbm_metrics = KvbmMetrics::new(&ns);
+        // let kvbm_metrics_clone = kvbm_metrics.clone();
+        let kvbm_metrics = KvbmMetrics::new_with_standalone(
+            &KvbmMetricsRegistry::default(),
+            parse_dyn_kvbm_metrics_port(),
+        );
         let kvbm_metrics_clone = kvbm_metrics.clone();
 
         let slot_manager_cell = Arc::new(OnceLock::new());
@@ -613,5 +618,21 @@ impl PyKvConnectorLeader {
         self.connector_leader
             .create_slot(request, tokens)
             .map_err(to_pyerr)
+    }
+}
+
+pub fn parse_dyn_kvbm_metrics_port() -> u16 {
+    match std::env::var("DYN_KVBM_METRICS_PORT") {
+        Ok(val) => match val.trim().parse::<u16>() {
+            Ok(port) => port,
+            Err(_) => {
+                eprintln!(
+                    "[kvbm] Invalid DYN_KVBM_METRICS_PORT='{}', falling back to 9090",
+                    val
+                );
+                9090
+            }
+        },
+        Err(_) => 9090,
     }
 }

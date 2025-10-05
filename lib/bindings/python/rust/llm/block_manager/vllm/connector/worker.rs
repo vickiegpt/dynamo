@@ -75,8 +75,6 @@ pub struct KvConnectorWorker {
 
     /// cuda events created by the python side
     layer_events: Vec<u64>,
-
-    kvbm_metrics: KvbmMetrics,
 }
 
 impl KvConnectorWorker {
@@ -97,11 +95,6 @@ impl KvConnectorWorker {
         )?
         .detach();
 
-        let kvbm_metrics = KvbmMetrics::new(
-            &drt.namespace(kvbm_connector::KVBM_CONNECTOR_WORKER)
-                .unwrap(),
-        );
-
         tracing::info!(
             "KvConnectorWorker initialized with worker_id: {}",
             vllm_worker_id
@@ -120,7 +113,6 @@ impl KvConnectorWorker {
             layers_complete: 0,
             kv_cache_layers: Vec::new(),
             layer_events: Vec::new(),
-            kvbm_metrics,
         })
     }
 }
@@ -324,7 +316,6 @@ impl Worker for KvConnectorWorker {
                 self.connector.enqueue_request(operation);
             }
         }
-        self.kvbm_metrics.save_kv_layer_requests.inc();
         Ok(())
     }
 
