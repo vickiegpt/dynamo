@@ -25,6 +25,7 @@ mod tests {
             .map(|i| KvCacheStoredBlockData {
                 tokens_hash: LocalBlockHash(*i),
                 block_hash: ExternalSequenceBlockHash(*i * 100),
+                moe_metadata: None,
             })
             .collect()
     }

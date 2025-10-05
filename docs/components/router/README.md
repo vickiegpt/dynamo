@@ -94,6 +94,13 @@ The `kv-overlap-score-weight` parameter (default: 1.0) controls the balance betw
   - Optimizes for Inter-Token Latency (ITL)
   - Best for workloads with long generation sequences
 
+### MoE-aware Overrides
+
+Set `RouterConfigOverride.moe_query` on a per-request basis to bias routing toward
+workers that already host the requested experts. When backends emit MoE metadata
+with their KV events, the router boosts overlap scores for matching workers and
+can enforce strict expert locality by disabling `fallback_to_unlabeled`.
+
 ## KV Events vs. Approximation Mode
 
 The router uses KV events from workers by default to maintain an accurate global view of cached blocks. You can disable this with the `--no-kv-events` flag:

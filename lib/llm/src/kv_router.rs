@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -39,7 +39,9 @@ use crate::{
             KvIndexer, KvIndexerInterface, KvRouterError, OverlapScores, RouterEvent,
             compute_block_hash_for_seq, compute_seq_hash_for_block,
         },
-        protocols::{LocalBlockHash, RouterRequest, RouterResponse, WorkerSelectionResult},
+        protocols::{
+            KvCacheMoEQuery, LocalBlockHash, RouterRequest, RouterResponse, WorkerSelectionResult,
+        },
         scheduler::{KvScheduler, KvSchedulerError, PotentialLoad, SchedulingRequest},
         scoring::ProcessedEndpoints,
         subscriber::start_kv_router_background,
@@ -88,6 +90,10 @@ pub struct RouterConfigOverride {
 
     #[builder(default)]
     pub router_temperature: Option<f64>,
+
+    #[builder(default)]
+    #[serde(default)]
+    pub moe_query: Option<KvCacheMoEQuery>,
 }
 
 /// KV Router configuration parameters
@@ -174,13 +180,25 @@ impl Indexer {
         &self,
         sequence: Vec<LocalBlockHash>,
     ) -> Result<OverlapScores, KvRouterError> {
+        self.find_matches_with_metadata(sequence, None).await
+    }
+
+    async fn find_matches_with_metadata(
+        &self,
+        sequence: Vec<LocalBlockHash>,
+        metadata: Option<KvCacheMoEQuery>,
+    ) -> Result<OverlapScores, KvRouterError> {
         match self {
-            Indexer::KvIndexer(indexer) => indexer.find_matches(sequence).await,
+            Indexer::KvIndexer(indexer) => match metadata {
+                Some(query) => {
+                    indexer
+                        .find_matches_with_metadata(sequence, Some(query))
+                        .await
+                }
+                None => indexer.find_matches(sequence).await,
+            },
             Indexer::ApproxKvIndexer(indexer) => indexer.find_matches(sequence).await,
-            Indexer::None => Ok(OverlapScores {
-                scores: HashMap::new(),
-                frequencies: Vec::new(),
-            }),
+            Indexer::None => Ok(OverlapScores::default()),
         }
     }
 
@@ -315,12 +333,28 @@ impl KvRouter {
     /// Give these tokens, find the worker with the best match in it's KV cache.
     /// Returned overlap amount is in number of blocks.
     /// Now also takes optional context_id for request tracking
+    ///
+    /// When `excluded_workers` is provided, those workers are excluded from consideration.
+    /// This is used during fault tolerance to find alternative workers when the original fails.
     pub async fn find_best_match(
         &self,
         context_id: Option<&str>,
         tokens: &[u32],
         router_config_override: Option<&RouterConfigOverride>,
         update_states: bool,
+    ) -> anyhow::Result<(i64, u32)> {
+        self.find_best_match_with_exclusions(context_id, tokens, router_config_override, update_states, None).await
+    }
+
+    /// Find the best matching worker, optionally excluding specific workers.
+    /// This is the core routing method used both for initial routing and fault-tolerant re-routing.
+    pub async fn find_best_match_with_exclusions(
+        &self,
+        context_id: Option<&str>,
+        tokens: &[u32],
+        router_config_override: Option<&RouterConfigOverride>,
+        update_states: bool,
+        excluded_workers: Option<&HashSet<i64>>,
     ) -> anyhow::Result<(i64, u32)> {
         // Validate that context_id is provided when update_states is true
         if update_states && context_id.is_none() {
@@ -332,7 +366,69 @@ impl KvRouter {
         let block_hashes = compute_block_hash_for_seq(tokens, self.block_size);
         let seq_hashes = compute_seq_hash_for_block(&block_hashes);
 
-        let overlap_scores = self.indexer.find_matches(block_hashes.clone()).await?;
+        let moe_query = router_config_override.and_then(|cfg| cfg.moe_query.clone());
+        let mut overlap_scores = self
+            .indexer
+            .find_matches_with_metadata(block_hashes.clone(), moe_query.clone())
+            .await?;
+
+        // Apply MoE scoring boost
+        if let Some(query) = moe_query.as_ref() {
+            if !overlap_scores.moe_scores.is_empty() {
+                for (worker, bonus) in overlap_scores.moe_scores.iter() {
+                    let entry = overlap_scores.scores.entry(*worker).or_insert(0);
+                    *entry += *bonus;
+                }
+
+                if !query.fallback_to_unlabeled {
+                    let preferred: HashSet<_> = overlap_scores
+                        .moe_scores
+                        .iter()
+                        .filter(|(_, bonus)| **bonus > 0)
+                        .map(|(worker, _)| *worker)
+                        .collect();
+
+                    if !preferred.is_empty() {
+                        overlap_scores
+                            .scores
+                            .retain(|worker, _| preferred.contains(worker));
+                    }
+                }
+            }
+        }
+
+        // Apply CXL accessibility boost for MoE models
+        // Workers with CXL pooled access get a bonus since they can access blocks
+        // from disaggregated memory with lower latency during decode phase
+        //
+        // IMPORTANT: During fault tolerance recovery, CXL-accessible workers get
+        // significantly higher priority since they can access the same pooled blocks
+        // without needing to re-prefill
+        if !overlap_scores.cxl_accessible_scores.is_empty() {
+            tracing::debug!(
+                "Applying CXL accessibility boost for {} workers",
+                overlap_scores.cxl_accessible_scores.len()
+            );
+            for (worker, cxl_bonus) in overlap_scores.cxl_accessible_scores.iter() {
+                let entry = overlap_scores.scores.entry(*worker).or_insert(0);
+                // CXL pooled blocks provide additional benefit for decode phase
+                // Double the bonus during migration scenarios for faster recovery
+                *entry += *cxl_bonus;
+            }
+        }
+
+        // Apply worker exclusions for fault tolerance
+        if let Some(excluded) = excluded_workers {
+            overlap_scores.scores.retain(|worker, _| !excluded.contains(worker));
+            overlap_scores.moe_scores.retain(|worker, _| !excluded.contains(worker));
+            overlap_scores.cxl_accessible_scores.retain(|worker, _| !excluded.contains(worker));
+
+            if overlap_scores.scores.is_empty() && overlap_scores.cxl_accessible_scores.is_empty() {
+                tracing::warn!(
+                    "All workers with cache overlap are excluded. Migration will proceed without cache benefits."
+                );
+            }
+        }
 
         // Determine who needs seq_hashes
         let approx_indexer_needs_it = matches!(self.indexer, Indexer::ApproxKvIndexer(_));

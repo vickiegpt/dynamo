@@ -291,6 +291,55 @@ impl KvEventPublisher {
         self.inner.publish(event).map_err(to_pyerr)
     }
 
+    /// Publish a CXL state transition event.
+    ///
+    /// Args:
+    ///     event_id: Unique event identifier
+    ///     block_hashes: List of block hashes affected by the transition
+    ///     new_state: New CXL memory state ("local_gpu", "cxl_pooled", "in_transit", "evicted")
+    ///     pool_id: Optional CXL pool ID for pooled states
+    ///     accessible_workers: List of worker IDs that can access the blocks in the new state
+    #[pyo3(signature = (event_id, block_hashes, new_state, pool_id=None, accessible_workers=None))]
+    fn publish_cxl_state_transition(
+        &self,
+        _py: Python,
+        event_id: u64,
+        block_hashes: Vec<i64>,
+        new_state: &str,
+        pool_id: Option<u32>,
+        accessible_workers: Option<Vec<i64>>,
+    ) -> PyResult<()> {
+        let block_hashes: Vec<ExternalSequenceBlockHash> = block_hashes
+            .into_iter()
+            .map(ExternalSequenceBlockHash::from)
+            .collect();
+
+        let cxl_state = match new_state {
+            "local_gpu" => CxlMemoryState::LocalGpu,
+            "cxl_pooled" => CxlMemoryState::CxlPooled,
+            "in_transit" => CxlMemoryState::InTransit,
+            "evicted" => CxlMemoryState::Evicted,
+            _ => {
+                return Err(to_pyerr(anyhow::anyhow!(
+                    "Invalid CXL state: {}. Must be one of: local_gpu, cxl_pooled, in_transit, evicted",
+                    new_state
+                )));
+            }
+        };
+
+        let event = KvCacheEvent {
+            event_id,
+            data: KvCacheEventData::CxlStateTransition(CxlStateTransitionData {
+                block_hashes,
+                new_state: cxl_state,
+                pool_id,
+                accessible_workers: accessible_workers.unwrap_or_default(),
+            }),
+        };
+
+        self.inner.publish(event).map_err(to_pyerr)
+    }
+
     fn publish_removed(&self, _py: Python, event_id: u64, block_hashes: Vec<i64>) -> PyResult<()> {
         let block_hashes: Vec<ExternalSequenceBlockHash> = block_hashes
             .into_iter()
@@ -322,6 +371,11 @@ impl OverlapScores {
     fn frequencies(&self) -> Vec<usize> {
         self.inner.frequencies.clone()
     }
+
+    #[getter]
+    fn moe_scores(&self) -> HashMap<llm_rs::kv_router::indexer::WorkerId, u32> {
+        self.inner.moe_scores.clone()
+    }
 }
 
 // NOTE: the user needs to guarantee that this stays single threaded in Python land
@@ -352,7 +406,9 @@ impl RadixTree {
             .map(llm_rs::kv_router::protocols::LocalBlockHash)
             .collect();
 
-        let rs_overlap_scores = self.inner.find_matches(local_block_hashes, early_exit);
+        let rs_overlap_scores =
+            self.inner
+                .find_matches(local_block_hashes, early_exit, None);
         Ok(OverlapScores {
             inner: rs_overlap_scores,
         })

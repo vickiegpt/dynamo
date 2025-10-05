@@ -225,6 +225,8 @@ impl ApproxKvIndexer {
                                 blocks: hashes.map(|(local_hash, sequence_hash)| KvCacheStoredBlockData {
                                     tokens_hash: *local_hash,
                                     block_hash: ExternalSequenceBlockHash(*sequence_hash),
+                                    moe_metadata: None,
+                                    cxl_metadata: None,
                                 }).collect(),
                             });
                             event_id += 1;

@@ -204,6 +204,11 @@ struct RadixBlock {
     workers: HashSet<WorkerId>,
     /// A buffer of times that this block was last traversed
     recent_uses: VecDeque<Instant>,
+    /// Optional MoE metadata attached to this block.
+    moe_metadata: Option<KvCacheBlockMoEMetadata>,
+    /// CXL memory state per worker for disaggregated memory management.
+    /// Maps worker_id -> CxlMemoryMetadata to track different states per worker.
+    cxl_states: HashMap<WorkerId, CxlMemoryMetadata>,
 }
 
 impl RadixBlock {
@@ -217,6 +222,113 @@ impl RadixBlock {
             children: HashMap::new(),
             workers: HashSet::new(),
             recent_uses: VecDeque::new(),
+            moe_metadata: None,
+            cxl_states: HashMap::new(),
+        }
+    }
+
+    fn apply_moe_metadata(&mut self, metadata: KvCacheBlockMoEMetadata) {
+        match &self.moe_metadata {
+            Some(existing) if existing != &metadata => {
+                tracing::debug!(
+                    "Overwriting differing MoE metadata for block; existing={:?}, new={:?}",
+                    existing,
+                    metadata
+                );
+                self.moe_metadata = Some(metadata);
+            }
+            Some(_) => {}
+            None => {
+                self.moe_metadata = Some(metadata);
+            }
+        }
+    }
+
+    fn apply_cxl_metadata(&mut self, worker_id: WorkerId, metadata: CxlMemoryMetadata) {
+        match self.cxl_states.get(&worker_id) {
+            Some(existing) if existing.state != metadata.state => {
+                tracing::debug!(
+                    "CXL state transition for worker {}: {:?} -> {:?}",
+                    worker_id,
+                    existing.state,
+                    metadata.state
+                );
+                self.cxl_states.insert(worker_id, metadata);
+            }
+            Some(_) => {
+                // Same state, update metadata in case accessible_workers changed
+                self.cxl_states.insert(worker_id, metadata);
+            }
+            None => {
+                self.cxl_states.insert(worker_id, metadata);
+            }
+        }
+    }
+
+    /// Transition CXL state from prefill to decode for a worker
+    fn transition_cxl_prefill_to_decode(
+        &mut self,
+        worker_id: WorkerId,
+        pool_id: CxlPoolId,
+        accessible_workers: Vec<i64>,
+    ) {
+        if let Some(metadata) = self.cxl_states.get_mut(&worker_id) {
+            metadata.transition_prefill_to_decode(pool_id, accessible_workers);
+            tracing::debug!(
+                "Transitioned CXL state for worker {} to InTransit for pooling",
+                worker_id
+            );
+        } else {
+            // Create new metadata in InTransit state
+            let mut metadata = CxlMemoryMetadata::new_in_transit(Some(pool_id));
+            metadata.accessible_workers = accessible_workers;
+            self.cxl_states.insert(worker_id, metadata);
+        }
+    }
+
+    /// Complete CXL transition to pooled state
+    fn complete_cxl_transition(&mut self, worker_id: WorkerId) {
+        if let Some(metadata) = self.cxl_states.get_mut(&worker_id) {
+            metadata.complete_transition_to_pooled();
+            tracing::debug!(
+                "Completed CXL transition for worker {} to CxlPooled",
+                worker_id
+            );
+        }
+    }
+
+    /// Get workers that have CXL pooled access to this block
+    fn get_cxl_accessible_workers(&self) -> HashSet<WorkerId> {
+        let mut accessible = HashSet::new();
+        for (worker_id, metadata) in &self.cxl_states {
+            if metadata.state == CxlMemoryState::CxlPooled {
+                accessible.extend(metadata.accessible_workers.iter().copied());
+                accessible.insert(*worker_id);
+            }
+        }
+        accessible
+    }
+
+    fn matches_moe(&self, query: &KvCacheMoEQuery) -> bool {
+        match &self.moe_metadata {
+            Some(metadata) => {
+                if metadata.layer_id != query.layer_id {
+                    return false;
+                }
+
+                if !query.expert_ids.is_empty()
+                    && !query.expert_ids.iter().any(|id| *id == metadata.expert_id)
+                {
+                    return false;
+                }
+
+                if let Some(group) = query.expert_group {
+                    return metadata.expert_group == Some(group);
+                }
+
+                true
+            }
+            None => query.fallback_to_unlabeled,
         }
     }
 }
@@ -273,7 +385,12 @@ impl RadixTree {
     /// ### Returns
     ///
     /// An `OverlapScores` representing the match scores.
-    pub fn find_matches(&self, sequence: Vec<LocalBlockHash>, early_exit: bool) -> OverlapScores {
+    pub fn find_matches_with_metadata(
+        &self,
+        sequence: Vec<LocalBlockHash>,
+        early_exit: bool,
+        metadata_filter: Option<&KvCacheMoEQuery>,
+    ) -> OverlapScores {
         let mut scores = OverlapScores::new();
         let mut current = self.root.clone();
         let now = Instant::now();
@@ -289,23 +406,41 @@ impl RadixTree {
                 current_borrow.children.get(block_hash).cloned()
             };
             if let Some(block) = next_block {
-                scores.update_scores(&block.borrow().workers);
+                let metadata_match;
+                let worker_count;
+                {
+                    let mut block_guard = block.borrow_mut();
+                    metadata_match = metadata_filter
+                        .map(|query| block_guard.matches_moe(query))
+                        .unwrap_or(false);
 
-                if let Some(expiration_duration) = self.expiration_duration {
-                    let mut block_mut = block.borrow_mut();
-
-                    while let Some(access_time) = block_mut.recent_uses.front() {
-                        if now.duration_since(*access_time) > expiration_duration {
-                            block_mut.recent_uses.pop_front();
-                        } else {
-                            break;
-                        }
+                    scores.update_scores(&block_guard.workers);
+                    if metadata_match {
+                        scores.update_metadata_scores(&block_guard.workers);
                     }
-                    scores.add_frequency(block_mut.recent_uses.len());
-                    block_mut.recent_uses.push_back(now);
+
+                    // Track CXL accessible workers for this block
+                    let cxl_accessible = block_guard.get_cxl_accessible_workers();
+                    if !cxl_accessible.is_empty() {
+                        scores.update_cxl_accessible_scores(&cxl_accessible);
+                    }
+
+                    if let Some(expiration_duration) = self.expiration_duration {
+                        while let Some(access_time) = block_guard.recent_uses.front() {
+                            if now.duration_since(*access_time) > expiration_duration {
+                                block_guard.recent_uses.pop_front();
+                            } else {
+                                break;
+                            }
+                        }
+                        scores.add_frequency(block_guard.recent_uses.len());
+                        block_guard.recent_uses.push_back(now);
+                    }
+
+                    worker_count = block_guard.workers.len();
                 }
 
-                if early_exit && block.borrow().workers.len() == 1 {
+                if early_exit && worker_count == 1 {
                     break;
                 }
 
@@ -323,6 +458,10 @@ impl RadixTree {
         tracing::trace!("RadixTree::find_matches: final scores={:?}", scores.scores);
 
         scores
+    }
+
+    pub fn find_matches(&self, sequence: Vec<LocalBlockHash>, early_exit: bool) -> OverlapScores {
+        self.find_matches_with_metadata(sequence, early_exit, None)
     }
 
     /// Apply a [`RouterEvent`] to the radix tree.
@@ -380,8 +519,19 @@ impl RadixTree {
                         }
                     };
 
-                    // add our worker_id to the block
-                    block.borrow_mut().workers.insert(worker_id);
+                    let moe_metadata = block_id.moe_metadata.clone();
+                    let cxl_metadata = block_id.cxl_metadata.clone();
+                    {
+                        let mut guard = block.borrow_mut();
+                        // add our worker_id to the block
+                        guard.workers.insert(worker_id);
+                        if let Some(metadata) = moe_metadata {
+                            guard.apply_moe_metadata(metadata);
+                        }
+                        if let Some(metadata) = cxl_metadata {
+                            guard.apply_cxl_metadata(worker_id, metadata);
+                        }
+                    }
 
                     // add the block to the worker_id lookup table
                     worker_lookup.insert(block_id.block_hash, block.clone());
@@ -427,6 +577,49 @@ impl RadixTree {
             }
             KvCacheEventData::Cleared => {
                 self.clear_all_blocks(worker_id);
+                Ok(())
+            }
+            KvCacheEventData::CxlStateTransition(transition) => {
+                for block_hash in &transition.block_hashes {
+                    let entry = match worker_lookup.get(block_hash) {
+                        Some(entry) => entry.clone(),
+                        None => {
+                            tracing::warn!(
+                                worker_id = worker_id.to_string(),
+                                id,
+                                "Failed to find block for CXL state transition; skipping"
+                            );
+                            continue;
+                        }
+                    };
+
+                    let mut guard = entry.borrow_mut();
+                    match transition.new_state {
+                        CxlMemoryState::InTransit => {
+                            if let Some(pool_id) = transition.pool_id {
+                                guard.transition_cxl_prefill_to_decode(
+                                    worker_id,
+                                    pool_id,
+                                    transition.accessible_workers.clone(),
+                                );
+                            }
+                        }
+                        CxlMemoryState::CxlPooled => {
+                            guard.complete_cxl_transition(worker_id);
+                        }
+                        CxlMemoryState::LocalGpu => {
+                            guard.apply_cxl_metadata(
+                                worker_id,
+                                CxlMemoryMetadata::new_local_gpu(),
+                            );
+                        }
+                        CxlMemoryState::Evicted => {
+                            if let Some(metadata) = guard.cxl_states.get_mut(&worker_id) {
+                                metadata.transition_to(CxlMemoryState::Evicted);
+                            }
+                        }
+                    }
+                }
                 Ok(())
             }
         }
@@ -503,6 +696,8 @@ impl RadixTree {
                                 blocks: vec![KvCacheStoredBlockData {
                                     block_hash,
                                     tokens_hash,
+                                    moe_metadata: current_borrow.moe_metadata.clone(),
+                                    cxl_metadata: None,
                                 }],
                             }),
                         },
@@ -598,6 +793,7 @@ impl KvIndexerMetrics {
             KvCacheEventData::Stored(_) => METRIC_EVENT_STORED,
             KvCacheEventData::Removed(_) => METRIC_EVENT_REMOVED,
             KvCacheEventData::Cleared => METRIC_EVENT_CLEARED,
+            KvCacheEventData::CxlStateTransition(_) => "cxl_transition",
         }
     }
 
@@ -632,6 +828,11 @@ pub struct OverlapScores {
     pub scores: HashMap<WorkerId, u32>,
     // List of frequencies that the blocks have been accessed. Entries with value 0 are omitted.
     pub frequencies: Vec<usize>,
+    /// Tracks matches that satisfy the supplied MoE metadata filter.
+    pub moe_scores: HashMap<WorkerId, u32>,
+    /// Tracks workers with CXL pooled access to matched blocks.
+    /// These workers can access blocks from CXL memory with lower latency.
+    pub cxl_accessible_scores: HashMap<WorkerId, u32>,
 }
 
 impl Default for OverlapScores {
@@ -650,6 +851,19 @@ impl OverlapScores {
         Self {
             scores: HashMap::new(),
             frequencies: Vec::with_capacity(32),
+            moe_scores: HashMap::new(),
+            cxl_accessible_scores: HashMap::new(),
+        }
+    }
+
+    /// Update CXL accessible scores with a set of workers.
+    ///
+    /// ### Arguments
+    ///
+    /// * `workers` - A reference to a HashSet of worker IDs.
+    pub fn update_cxl_accessible_scores(&mut self, workers: &HashSet<WorkerId>) {
+        for worker_id in workers {
+            *self.cxl_accessible_scores.entry(*worker_id).or_insert(0) += 1;
         }
     }
 
@@ -661,6 +875,14 @@ impl OverlapScores {
     pub fn update_scores(&mut self, workers: &HashSet<WorkerId>) {
         for worker in workers {
             let score = self.scores.entry(*worker).or_insert(0);
+            *score += 1;
+        }
+    }
+
+    /// Update metadata-aware scores for the provided workers.
+    pub fn update_metadata_scores(&mut self, workers: &HashSet<WorkerId>) {
+        for worker in workers {
+            let score = self.moe_scores.entry(*worker).or_insert(0);
             *score += 1;
         }
     }
@@ -682,6 +904,8 @@ pub struct MatchRequest {
     sequence: Vec<LocalBlockHash>,
     /// A boolean indicating whether to exit early if a single match is found.
     early_exit: bool,
+    /// Optional MoE metadata used to bias scoring.
+    metadata: Option<KvCacheMoEQuery>,
     /// A channel sender to send the `OverlapScores` response.
     resp: oneshot::Sender<OverlapScores>,
 }
@@ -708,6 +932,16 @@ pub trait KvIndexerInterface {
         sequence: Vec<LocalBlockHash>,
     ) -> Result<OverlapScores, KvRouterError>;
 
+    /// Variant of `find_matches` that allows callers to supply optional MoE routing context.
+    async fn find_matches_with_metadata(
+        &self,
+        sequence: Vec<LocalBlockHash>,
+        metadata: Option<KvCacheMoEQuery>,
+    ) -> Result<OverlapScores, KvRouterError> {
+        let _ = metadata;
+        self.find_matches(sequence).await
+    }
+
     /// Find matches for a given sequence of tokens.
     ///
     /// ### Arguments
@@ -721,6 +955,16 @@ pub trait KvIndexerInterface {
         &self,
         tokens: &[u32],
     ) -> Result<OverlapScores, KvRouterError>;
+
+    /// Variant of `find_matches_for_request` that accepts MoE routing context.
+    async fn find_matches_for_request_with_metadata(
+        &self,
+        tokens: &[u32],
+        metadata: Option<KvCacheMoEQuery>,
+    ) -> Result<OverlapScores, KvRouterError> {
+        let _ = metadata;
+        self.find_matches_for_request(tokens).await
+    }
 
     /// Apply a `RouterEvent` to the KV store.
     ///
@@ -831,7 +1075,11 @@ impl KvIndexer {
                             }
 
                             Some(req) = match_rx.recv() => {
-                                let matches = trie.find_matches(req.sequence, req.early_exit);
+                                let matches = trie.find_matches_with_metadata(
+                                    req.sequence,
+                                    req.early_exit,
+                                    req.metadata.as_ref(),
+                                );
                                 let _ = req.resp.send(matches);
                             }
                         }
@@ -896,18 +1144,18 @@ impl KvIndexer {
     pub fn remove_worker_sender(&self) -> mpsc::Sender<WorkerId> {
         self.remove_worker_tx.clone()
     }
-}
 
-#[async_trait]
-impl KvIndexerInterface for KvIndexer {
-    async fn find_matches(
+    async fn submit_match_request(
         &self,
         sequence: Vec<LocalBlockHash>,
+        early_exit: bool,
+        metadata: Option<KvCacheMoEQuery>,
     ) -> Result<OverlapScores, KvRouterError> {
         let (resp_tx, resp_rx) = oneshot::channel();
         let req = MatchRequest {
             sequence,
-            early_exit: false,
+            early_exit,
+            metadata,
             resp: resp_tx,
         };
 
@@ -923,6 +1171,24 @@ impl KvIndexerInterface for KvIndexer {
             .await
             .map_err(|_| KvRouterError::IndexerDroppedRequest)
     }
+}
+
+#[async_trait]
+impl KvIndexerInterface for KvIndexer {
+    async fn find_matches(
+        &self,
+        sequence: Vec<LocalBlockHash>,
+    ) -> Result<OverlapScores, KvRouterError> {
+        self.submit_match_request(sequence, false, None).await
+    }
+
+    async fn find_matches_with_metadata(
+        &self,
+        sequence: Vec<LocalBlockHash>,
+        metadata: Option<KvCacheMoEQuery>,
+    ) -> Result<OverlapScores, KvRouterError> {
+        self.submit_match_request(sequence, false, metadata).await
+    }
 
     async fn find_matches_for_request(
         &self,
@@ -935,7 +1201,16 @@ impl KvIndexerInterface for KvIndexer {
         );
         let sequence = compute_block_hash_for_seq(tokens, self.kv_block_size);
         tracing::debug!("Computed sequence: {:?}", sequence);
-        self.find_matches(sequence).await
+        self.submit_match_request(sequence, false, None).await
+    }
+
+    async fn find_matches_for_request_with_metadata(
+        &self,
+        tokens: &[u32],
+        metadata: Option<KvCacheMoEQuery>,
+    ) -> Result<OverlapScores, KvRouterError> {
+        let sequence = compute_block_hash_for_seq(tokens, self.kv_block_size);
+        self.submit_match_request(sequence, false, metadata).await
     }
 
     async fn apply_event(&mut self, event: RouterEvent) {
@@ -972,6 +1247,7 @@ impl KvIndexerInterface for KvIndexer {
 pub struct ShardedMatchRequest {
     sequence: Vec<LocalBlockHash>,
     early_exit: bool,
+    metadata: Option<KvCacheMoEQuery>,
     resp: mpsc::Sender<OverlapScores>,
 }
 
@@ -1083,7 +1359,11 @@ impl KvIndexerSharded {
                                 }
 
                                 Ok(req) = shard_broadcast_rx.recv() => {
-                                    let matches = trie.find_matches(req.sequence, req.early_exit);
+                                    let matches = trie.find_matches_with_metadata(
+                                        req.sequence,
+                                        req.early_exit,
+                                        req.metadata.as_ref(),
+                                    );
                                     if let Err(e) = req.resp.send(matches).await {
                                         tracing::trace!("Failed to send match response: {:?}", e);
                                     }
@@ -1124,6 +1404,76 @@ impl KvIndexerSharded {
     ) -> Self {
         Self::new_with_frequency(token, num_shards, None, kv_block_size, metrics)
     }
+
+    async fn broadcast_match_request(
+        &self,
+        sequence: Vec<LocalBlockHash>,
+        metadata: Option<KvCacheMoEQuery>,
+    ) -> Result<OverlapScores, KvRouterError> {
+        'match_loop: loop {
+            let (match_tx, mut match_rx) = mpsc::channel(self.event_tx.len());
+            self.request_broadcast_tx
+                .send(ShardedMatchRequest {
+                    sequence: sequence.clone(),
+                    early_exit: false,
+                    metadata: metadata.clone(),
+                    resp: match_tx,
+                })
+                .map_err(|_| KvRouterError::IndexerOffline)?;
+
+            let mut aggregated = OverlapScores::new();
+
+            for response_num in 0..self.event_tx.len() {
+                match match_rx.recv().await {
+                    Some(response) => {
+                        let OverlapScores {
+                            scores: resp_scores,
+                            frequencies: mut resp_freq,
+                            moe_scores: resp_moe_scores,
+                            cxl_accessible_scores: resp_cxl_scores,
+                        } = response;
+
+                        aggregated.scores.extend(resp_scores);
+                        aggregated.moe_scores.extend(resp_moe_scores);
+                        aggregated.cxl_accessible_scores.extend(resp_cxl_scores);
+
+                        if response_num == 0 {
+                            aggregated.frequencies = resp_freq;
+                        } else {
+                            let diff = resp_freq.len() as i64 - aggregated.frequencies.len() as i64;
+
+                            if diff > 0 {
+                                aggregated
+                                    .frequencies
+                                    .extend(iter::repeat_n(0, diff as usize));
+                            }
+
+                            if diff < 0 {
+                                let expand = (-diff) as usize;
+                                resp_freq.extend(iter::repeat_n(0, expand));
+                            }
+
+                            aggregated
+                                .frequencies
+                                .iter_mut()
+                                .zip(resp_freq.iter())
+                                .for_each(|(score, resp)| *score += *resp);
+                        }
+                    }
+                    None => {
+                        tracing::warn!(
+                            "Shard {}/{} dropped match response, retrying broadcast",
+                            response_num + 1,
+                            self.event_tx.len()
+                        );
+                        continue 'match_loop;
+                    }
+                }
+            }
+
+            return Ok(aggregated);
+        }
+    }
 }
 
 #[async_trait]
@@ -1132,47 +1482,15 @@ impl KvIndexerInterface for KvIndexerSharded {
         &self,
         sequence: Vec<LocalBlockHash>,
     ) -> Result<OverlapScores, KvRouterError> {
-        'match_loop: loop {
-            let (match_tx, mut match_rx) = mpsc::channel(self.event_tx.len());
-            self.request_broadcast_tx
-                .send(ShardedMatchRequest {
-                    sequence: sequence.clone(),
-                    early_exit: false,
-                    resp: match_tx,
-                })
-                .map_err(|_| KvRouterError::IndexerOffline)?;
+        self.broadcast_match_request(sequence, None).await
+    }
 
-            let mut scores = OverlapScores::new();
-
-            for response_num in 0..self.event_tx.len() {
-                match match_rx.recv().await {
-                    Some(response) => {
-                        scores.scores.extend(response.scores);
-
-                        if response_num == 0 {
-                            scores.frequencies = response.frequencies;
-                        } else {
-                            let diff = (response.frequencies.len() as i64)
-                                - (scores.frequencies.len() as i64);
-
-                            if diff > 0 {
-                                scores.frequencies.extend(iter::repeat_n(0, diff as usize));
-                            }
-
-                            for i in 0..response.frequencies.len() {
-                                scores.frequencies[i] += response.frequencies[i];
-                            }
-                        }
-                    }
-                    None => {
-                        // This can only happen if the broadcast channel overflows.
-                        // In this case, we don't want to recursively call find_matches again. Otherwise, we could overflow the stack.
-                        continue 'match_loop;
-                    }
-                }
-            }
-            return Ok(scores);
-        }
+    async fn find_matches_with_metadata(
+        &self,
+        sequence: Vec<LocalBlockHash>,
+        metadata: Option<KvCacheMoEQuery>,
+    ) -> Result<OverlapScores, KvRouterError> {
+        self.broadcast_match_request(sequence, metadata).await
     }
 
     async fn find_matches_for_request(
@@ -1180,7 +1498,16 @@ impl KvIndexerInterface for KvIndexerSharded {
         tokens: &[u32],
     ) -> Result<OverlapScores, KvRouterError> {
         let sequence = compute_block_hash_for_seq(tokens, self.kv_block_size);
-        self.find_matches(sequence).await
+        self.broadcast_match_request(sequence, None).await
+    }
+
+    async fn find_matches_for_request_with_metadata(
+        &self,
+        tokens: &[u32],
+        metadata: Option<KvCacheMoEQuery>,
+    ) -> Result<OverlapScores, KvRouterError> {
+        let sequence = compute_block_hash_for_seq(tokens, self.kv_block_size);
+        self.broadcast_match_request(sequence, metadata).await
     }
 
     async fn apply_event(&mut self, event: RouterEvent) {
@@ -1270,6 +1597,7 @@ mod tests {
             .map(|i| KvCacheStoredBlockData {
                 tokens_hash: LocalBlockHash(*i),
                 block_hash: ExternalSequenceBlockHash(*i * 100),
+                moe_metadata: None,
             })
             .collect()
     }
@@ -1282,6 +1610,54 @@ mod tests {
             parent_hash,
             blocks: make_blocks(hashes),
         })
+    }
+
+    #[test]
+    fn test_find_matches_with_moe_metadata() {
+        setup();
+        let mut trie = RadixTree::new();
+
+        let metadata = KvCacheBlockMoEMetadata::new(2, 7, Some(3));
+        let tokens_hash = LocalBlockHash(11);
+        let block_hash = ExternalSequenceBlockHash(42);
+
+        let store_event = RouterEvent::new(
+            1,
+            KvCacheEvent {
+                event_id: 1,
+                data: KvCacheEventData::Stored(KvCacheStoreData {
+                    parent_hash: None,
+                    blocks: vec![KvCacheStoredBlockData {
+                        block_hash,
+                        tokens_hash,
+                        moe_metadata: Some(metadata.clone()),
+                    }],
+                }),
+            },
+        );
+
+        trie.apply_event(store_event).unwrap();
+
+        let sequence = vec![tokens_hash];
+        let query = KvCacheMoEQuery {
+            layer_id: 2,
+            expert_ids: vec![7],
+            expert_group: Some(3),
+            fallback_to_unlabeled: false,
+        };
+
+        let overlaps = trie.find_matches_with_metadata(sequence.clone(), false, Some(&query));
+        assert_eq!(overlaps.scores.get(&1), Some(&1));
+        assert_eq!(overlaps.moe_scores.get(&1), Some(&1));
+
+        let miss_query = KvCacheMoEQuery {
+            layer_id: 2,
+            expert_ids: vec![99],
+            expert_group: Some(3),
+            fallback_to_unlabeled: false,
+        };
+        let miss = trie.find_matches_with_metadata(sequence, false, Some(&miss_query));
+        assert!(miss.moe_scores.is_empty());
     }
 
     fn create_store_event(
@@ -1917,6 +2293,7 @@ mod tests {
                 blocks: vec![KvCacheStoredBlockData {
                     block_hash: ExternalSequenceBlockHash(0),
                     tokens_hash: LocalBlockHash(13226331709069118873),
+                    moe_metadata: None,
                 }],
             }),
         };

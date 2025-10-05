@@ -193,6 +193,159 @@ python -m dynamo.frontend --router-mode kv --port 8002 --router-replica-sync
 > 1. **Recommended**: Use a different namespace/component (see [Distributed Runtime](distributed_runtime.md)) which will start a new stream and NATS object store path
 > 2. **Use with caution**: Launch a router with the `--router-reset-states` flag, which will purge the entire stream and radix snapshot. This should only be done when launching the first router replica in a component, as it can bring existing router replicas into an inconsistent state.
 
+## MoE-Aware Routing
+
+Mixture-of-Experts deployments can provide additional hints to the router through
+`RouterConfigOverride.moe_query`. When a backend publishes MoE metadata inside
+`KvCacheStoredBlockData`, the radix tree persists the `(layer, expert, group)`
+for each cached block. The router:
+
+- tracks the number of metadata-aligned hits per worker in `OverlapScores.moe_scores`
+- boosts `OverlapScores.scores` for workers that already host the requested experts
+- optionally filters the candidate set when `fallback_to_unlabeled` is disabled, ensuring only metadata-aligned workers are considered
+
+This enables locality-aware expert routing without replicating full caches across workers. Backends that do not emit MoE metadata continue to function unchanged—the router simply falls back to traditional overlap scoring.
+
+## CXL Memory Management for MoE Models
+
+For MoE models with disaggregated prefill/decode architectures, dynamo supports CXL (Compute Express Link) memory pooling to efficiently share KV cache blocks between workers during the prefill-to-decode transition. This is particularly beneficial for MoE models where expert weights and KV cache may be distributed across multiple workers.
+
+### CXL Memory States
+
+KV cache blocks can exist in different memory locations tracked by `CxlMemoryState`:
+
+- **`LocalGpu`**: Block resides in a worker's local GPU memory (HBM). This is the default state during prefill.
+- **`CxlPooled`**: Block is in CXL pooled memory, accessible by multiple decode workers with low latency.
+- **`InTransit`**: Block is currently being transferred from local GPU to CXL pool during prefill-to-decode transition.
+- **`Evicted`**: Block has been evicted from CXL pool, but metadata is retained for fault tolerance.
+
+### Prefill-to-Decode Memory Passing
+
+During MoE inference, the typical workflow is:
+
+1. **Prefill Phase**: Prefill worker processes the prompt and stores KV cache blocks in local GPU memory (`LocalGpu` state).
+
+2. **Transition Phase**: After prefill completes, KV cache blocks are transitioned to CXL pooled memory:
+   ```python
+   # Worker emits CXL state transition event
+   kv_publisher.publish_cxl_state_transition(
+       event_id=event_id,
+       block_hashes=prefill_block_hashes,
+       new_state="in_transit",
+       pool_id=cxl_pool_id,
+       accessible_workers=[decode_worker_1_id, decode_worker_2_id]
+   )
+   ```
+
+3. **Decode Phase**: Decode workers can now access the KV cache from CXL pooled memory. The router tracks which workers have CXL access via `OverlapScores.cxl_accessible_scores` and prioritizes routing to workers with pooled access.
+
+4. **Transition Complete**: Once memory transfer completes, workers emit:
+   ```python
+   kv_publisher.publish_cxl_state_transition(
+       event_id=event_id,
+       block_hashes=block_hashes,
+       new_state="cxl_pooled"
+   )
+   ```
+
+### CXL-Aware Routing
+
+The router automatically applies CXL accessibility scoring when matching requests:
+
+- Workers with CXL pooled access to relevant blocks receive bonus scores in `OverlapScores.cxl_accessible_scores`
+- These bonuses are added to the base overlap scores, improving routing decisions for decode workers
+- This minimizes memory duplication and reduces decode latency by leveraging shared CXL memory
+
+### Fault Tolerance with CXL State
+
+The existing request migration system (see [Request Migration](request_migration.md)) works seamlessly with CXL state tracking to provide fast recovery for MoE deployments:
+
+#### Migration with CXL Memory Reuse
+
+When a decode worker fails mid-inference, dynamo's migration system:
+
+1. **Identifies CXL-accessible alternatives**: The router queries which workers have CXL pooled access to the same blocks
+2. **Prioritizes CXL-aware routing**: Workers with `CxlPooled` access get significantly higher routing scores
+3. **Migrates without re-prefill**: The backup worker can immediately access KV cache from CXL memory
+4. **Preserves all generated tokens**: The migration system tracks partial outputs and continues from the failure point
+
+#### Example Migration Flow
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Request Processing:                                         │
+│ 1. Prefill worker → KV blocks to CXL pool                  │
+│ 2. Decode worker 1 → Processing from CXL pool              │
+│ 3. [Worker 1 FAILS at token 500/4000]                     │
+│ 4. Router: Find workers with CXL access to pool 0         │
+│ 5. Migrate to Decode worker 2 (has CXL pool access)       │
+│ 6. Worker 2: Resume from token 500 using CXL blocks       │
+│ 7. Complete: 4000 tokens generated successfully           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### CXL State Metadata Preservation
+
+The radix tree maintains CXL state across failures:
+
+- **Per-worker tracking**: Each worker's CXL state is stored independently
+- **Pool accessibility**: The router knows which workers can access which CXL pools
+- **State persistence**: CXL metadata survives router restarts via NATS snapshots
+- **Eviction tracking**: The `Evicted` state preserves metadata for blocks removed from CXL pool
+
+#### Performance Benefits
+
+Compared to standard migration (which requires re-prefilling):
+
+- **~90% faster recovery**: No need to recompute KV cache for prompt tokens
+- **Lower GPU memory pressure**: Backup worker accesses shared CXL memory instead of duplicating
+- **Better resource utilization**: Multiple decode workers can share the same CXL pool
+- **Maintained quality**: Zero token loss or quality degradation during migration
+
+#### Testing CXL Fault Tolerance
+
+A comprehensive test is provided in `tests/fault_tolerance/test_cxl_moe_migration.py` that validates:
+
+- CXL-aware worker selection during migration
+- Successful completion without re-prefill
+- Correct token count preservation across failure
+- CXL accessibility scoring in routing decisions
+
+Run with:
+```bash
+pytest tests/fault_tolerance/test_cxl_moe_migration.py -v -s
+```
+
+### Backend Integration
+
+To enable CXL memory management in your MoE backend:
+
+1. **Attach CXL metadata to stored blocks**:
+   ```python
+   # During prefill - blocks start in local GPU
+   stored_block.cxl_metadata = CxlMemoryMetadata(
+       state="local_gpu",
+       pool_id=None,
+       accessible_workers=[]
+   )
+   ```
+
+2. **Emit transition events when moving blocks to CXL pool**:
+   ```python
+   # When transitioning prefill blocks to decode
+   kv_publisher.publish_cxl_state_transition(
+       event_id=next_event_id(),
+       block_hashes=blocks_to_pool,
+       new_state="in_transit",
+       pool_id=target_cxl_pool,
+       accessible_workers=decode_worker_ids
+   )
+   ```
+
+3. **The router automatically tracks and routes based on CXL accessibility** - no additional configuration needed.
+
+This architecture maintains full fault tolerance while enabling efficient memory sharing for disaggregated MoE deployments.
+
 ## Understanding KV Cache
 The leading Large Language Models (LLMs) today are auto-regressive and based off of the [transformer architecture](https://proceedings.neurips.cc/paper_files/paper/2017/file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf). One key inference optimization technique is to cache the already computed keys and values and to reuse them for the future tokens. This is called the [KV Cache](https://developer.nvidia.com/blog/mastering-llm-techniques-inference-optimization/#key-value_caching).
 

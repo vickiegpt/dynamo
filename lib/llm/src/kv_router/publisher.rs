@@ -426,6 +426,8 @@ pub fn create_stored_block_from_parts(
     KvCacheStoredBlockData {
         block_hash: ExternalSequenceBlockHash::from(block_hash),
         tokens_hash,
+        moe_metadata: None,
+        cxl_metadata: None,
     }
 }
 

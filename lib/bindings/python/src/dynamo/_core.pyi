@@ -399,6 +399,16 @@ class OverlapScores:
         """
         ...
 
+    @property
+    def moe_scores(self) -> Dict[int, int]:
+        """
+        Metadata-aware overlap counts keyed by worker ID.
+
+        Returns:
+            Dictionary mapping worker IDs to matches that satisfied MoE routing hints.
+        """
+        ...
+
 class RadixTree:
     """
     A RadixTree that tracks KV cache blocks and can find prefix matches for sequences.
@@ -653,6 +663,26 @@ class KvEventPublisher:
     ) -> None:
         """
         Publish a KV stored event.
+        """
+        ...
+
+    def publish_cxl_state_transition(
+        self,
+        event_id: int,
+        block_hashes: List[int],
+        new_state: str,
+        pool_id: Optional[int] = None,
+        accessible_workers: Optional[List[int]] = None,
+    ) -> None:
+        """
+        Publish a CXL state transition event for disaggregated memory management.
+
+        Args:
+            event_id: Unique event identifier
+            block_hashes: List of block hashes affected by the transition
+            new_state: New CXL memory state ("local_gpu", "cxl_pooled", "in_transit", "evicted")
+            pool_id: Optional CXL pool ID for pooled states
+            accessible_workers: List of worker IDs that can access the blocks in the new state
         """
         ...
 
@@ -1275,4 +1305,3 @@ class VirtualConnectorClient:
     async def wait(self) -> None:
         """Blocks until there is a new decision to fetch using 'get'"""
         ...
-

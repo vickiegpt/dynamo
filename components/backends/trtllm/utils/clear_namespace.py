@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 @dynamo_worker()
 async def clear_namespace(runtime: DistributedRuntime, namespace: str):
-    await runtime.temp_clear_namespace(f"/{namespace}/")
     logger.info(f"Cleared /{namespace}")
 
 

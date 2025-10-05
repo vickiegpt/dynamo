@@ -250,6 +250,8 @@ pub fn block_response_to_kv_event(
                     .map(|(global_hash, local_hash)| KvCacheStoredBlockData {
                         block_hash: ExternalSequenceBlockHash(global_hash),
                         tokens_hash: LocalBlockHash(*local_hash),
+                        moe_metadata: None,
+                        cxl_metadata: None,
                     })
                     .collect(),
             })

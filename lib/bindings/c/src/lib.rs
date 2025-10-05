@@ -156,6 +156,8 @@ fn kv_event_create_stored_block_from_parts(
     KvCacheStoredBlockData {
         block_hash: ExternalSequenceBlockHash(block_hash),
         tokens_hash,
+        moe_metadata: None,
+        cxl_metadata: None,
     }
 }
 static WARN_COUNT: AtomicU32 = AtomicU32::new(0);

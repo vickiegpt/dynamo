@@ -151,6 +151,7 @@ async fn progress_engine(state: NatsEventsManagerState) {
                     blocks: vec![KvCacheStoredBlockData {
                         block_hash: event.sequence_hash,
                         tokens_hash: event.block_hash,
+                        moe_metadata: None,
                     }],
                     parent_hash: event.parent_hash,
                 };
@@ -169,6 +170,7 @@ async fn progress_engine(state: NatsEventsManagerState) {
                         .map(|(local_hash, external_hash)| KvCacheStoredBlockData {
                             block_hash: *external_hash,
                             tokens_hash: *local_hash,
+                            moe_metadata: None,
                         })
                         .collect(),
                     parent_hash: event.parent_hash,

@@ -203,13 +203,14 @@ pub struct KvCacheEvent {
 
 /// Represents the data associated with a cache event.
 ///
-/// Data is either stored or removed.
+/// Data is either stored, removed, cleared, or CXL state transitioned.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum KvCacheEventData {
     Stored(KvCacheStoreData),
     Removed(KvCacheRemoveData),
     Cleared,
+    CxlStateTransition(CxlStateTransitionData),
 }
 
 /// Represents the data associated with a stored cache event.
@@ -221,6 +222,129 @@ pub struct KvCacheStoreData {
     pub blocks: Vec<KvCacheStoredBlockData>,
 }
 
+/// CXL (Compute Express Link) memory location state for pooled/disaggregated memory.
+///
+/// Tracks where a KV cache block resides in the memory hierarchy for efficient
+/// memory sharing across workers in MoE deployments.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum CxlMemoryState {
+    /// Block is in worker's local GPU memory (HBM)
+    LocalGpu,
+    /// Block is in CXL pooled memory, accessible by multiple workers
+    CxlPooled,
+    /// Block is currently being transferred between local GPU and CXL pool
+    InTransit,
+    /// Block has been evicted from CXL pool but metadata is retained
+    Evicted,
+}
+
+impl Default for CxlMemoryState {
+    fn default() -> Self {
+        Self::LocalGpu
+    }
+}
+
+/// CXL pool identifier for routing blocks to specific memory pools
+pub type CxlPoolId = u32;
+
+/// CXL memory metadata for tracking pooled/disaggregated memory state
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CxlMemoryMetadata {
+    /// Current memory location state
+    pub state: CxlMemoryState,
+    /// CXL pool identifier where the block resides (if in CxlPooled state)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool_id: Option<CxlPoolId>,
+    /// Worker IDs that have fast access to this CXL pool
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accessible_workers: Vec<i64>,
+}
+
+impl CxlMemoryMetadata {
+    pub fn new_local_gpu() -> Self {
+        Self {
+            state: CxlMemoryState::LocalGpu,
+            pool_id: None,
+            accessible_workers: Vec::new(),
+        }
+    }
+
+    pub fn new_cxl_pooled(pool_id: CxlPoolId, accessible_workers: Vec<i64>) -> Self {
+        Self {
+            state: CxlMemoryState::CxlPooled,
+            pool_id: Some(pool_id),
+            accessible_workers,
+        }
+    }
+
+    pub fn new_in_transit(pool_id: Option<CxlPoolId>) -> Self {
+        Self {
+            state: CxlMemoryState::InTransit,
+            pool_id,
+            accessible_workers: Vec::new(),
+        }
+    }
+
+    pub fn transition_to(&mut self, new_state: CxlMemoryState) {
+        self.state = new_state;
+        if new_state == CxlMemoryState::Evicted {
+            self.pool_id = None;
+            self.accessible_workers.clear();
+        }
+    }
+
+    /// Transition from prefill (LocalGpu) to decode (CxlPooled) state
+    pub fn transition_prefill_to_decode(&mut self, pool_id: CxlPoolId, accessible_workers: Vec<i64>) {
+        self.state = CxlMemoryState::InTransit;
+        self.pool_id = Some(pool_id);
+        self.accessible_workers = accessible_workers;
+    }
+
+    /// Complete the transition to pooled state after transfer
+    pub fn complete_transition_to_pooled(&mut self) {
+        if self.state == CxlMemoryState::InTransit {
+            self.state = CxlMemoryState::CxlPooled;
+        }
+    }
+
+    /// Check if this block is accessible from a given worker
+    pub fn is_accessible_from(&self, worker_id: i64) -> bool {
+        match self.state {
+            CxlMemoryState::LocalGpu => false,
+            CxlMemoryState::CxlPooled | CxlMemoryState::InTransit => {
+                self.accessible_workers.contains(&worker_id)
+            }
+            CxlMemoryState::Evicted => false,
+        }
+    }
+}
+
+/// Additional metadata emitted for MoE-aware KV cache bookkeeping.
+///
+/// Not all backends populate this information – callers should treat it as
+/// best-effort and gracefully fall back when it is absent.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct KvCacheBlockMoEMetadata {
+    /// Layer identifier within the transformer stack.
+    pub layer_id: u32,
+    /// Expert identifier selected by the router for this block.
+    pub expert_id: u32,
+    /// Optional expert-group identifier (e.g. group-limited routing buckets).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expert_group: Option<u32>,
+}
+
+impl KvCacheBlockMoEMetadata {
+    pub fn new(layer_id: u32, expert_id: u32, expert_group: Option<u32>) -> Self {
+        Self {
+            layer_id,
+            expert_id,
+            expert_group,
+        }
+    }
+}
+
 /// Represents data for a stored block.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct KvCacheStoredBlockData {
@@ -228,6 +352,54 @@ pub struct KvCacheStoredBlockData {
     pub block_hash: ExternalSequenceBlockHash,
     /// The hash of the tokens in the block.
     pub tokens_hash: LocalBlockHash,
+    /// Optional metadata capturing MoE-aware placement information.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moe_metadata: Option<KvCacheBlockMoEMetadata>,
+    /// Optional CXL memory metadata for disaggregated memory management.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cxl_metadata: Option<CxlMemoryMetadata>,
+}
+
+impl KvCacheStoredBlockData {
+    pub fn with_moe_metadata(mut self, metadata: KvCacheBlockMoEMetadata) -> Self {
+        self.moe_metadata = Some(metadata);
+        self
+    }
+
+    pub fn with_cxl_metadata(mut self, metadata: CxlMemoryMetadata) -> Self {
+        self.cxl_metadata = Some(metadata);
+        self
+    }
+}
+
+/// Query parameters supplied by MoE-aware schedulers when searching for KV reuse.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KvCacheMoEQuery {
+    /// Layer whose KV cache we want to reuse.
+    pub layer_id: u32,
+    /// Candidate experts (e.g. top-`k`) for the current token.
+    pub expert_ids: Vec<u32>,
+    /// Optional expert-group identifier to preserve routing locality.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expert_group: Option<u32>,
+    /// Whether we should fall back to blocks without explicit MoE metadata.
+    #[serde(default = "KvCacheMoEQuery::default_fallback")]
+    pub fallback_to_unlabeled: bool,
+}
+
+impl KvCacheMoEQuery {
+    pub fn new(layer_id: u32, expert_ids: Vec<u32>, expert_group: Option<u32>) -> Self {
+        Self {
+            layer_id,
+            expert_ids,
+            expert_group,
+            fallback_to_unlabeled: true,
+        }
+    }
+
+    const fn default_fallback() -> bool {
+        true
+    }
 }
 
 /// Represents the data associated with a removed cache event.
@@ -235,6 +407,48 @@ pub struct KvCacheStoredBlockData {
 pub struct KvCacheRemoveData {
     /// A list of block hashes to remove.
     pub block_hashes: Vec<ExternalSequenceBlockHash>,
+}
+
+/// CXL state transition event data for tracking memory state changes.
+///
+/// This event is emitted when KV cache blocks transition between memory states,
+/// particularly during prefill-to-decode transitions in MoE deployments.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CxlStateTransitionData {
+    /// Block hashes affected by this transition
+    pub block_hashes: Vec<ExternalSequenceBlockHash>,
+    /// New CXL memory state
+    pub new_state: CxlMemoryState,
+    /// CXL pool ID if transitioning to/from pooled state
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool_id: Option<CxlPoolId>,
+    /// Workers that will have access to this block in the new state
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accessible_workers: Vec<i64>,
+}
+
+impl CxlStateTransitionData {
+    pub fn new_prefill_to_decode_transition(
+        block_hashes: Vec<ExternalSequenceBlockHash>,
+        pool_id: CxlPoolId,
+        accessible_workers: Vec<i64>,
+    ) -> Self {
+        Self {
+            block_hashes,
+            new_state: CxlMemoryState::InTransit,
+            pool_id: Some(pool_id),
+            accessible_workers,
+        }
+    }
+
+    pub fn new_transition_complete(block_hashes: Vec<ExternalSequenceBlockHash>) -> Self {
+        Self {
+            block_hashes,
+            new_state: CxlMemoryState::CxlPooled,
+            pool_id: None,
+            accessible_workers: Vec::new(),
+        }
+    }
 }
 
 impl Serialize for LocalBlockHash {
@@ -307,6 +521,8 @@ mod tests {
             blocks: vec![KvCacheStoredBlockData {
                 block_hash: ExternalSequenceBlockHash(2),
                 tokens_hash: LocalBlockHash(3),
+                moe_metadata: None,
+                cxl_metadata: None,
             }],
         });
 

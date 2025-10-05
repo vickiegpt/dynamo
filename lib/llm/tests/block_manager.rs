@@ -285,6 +285,7 @@ pub mod llm_kvbm {
                                 KvCacheStoredBlockData {
                                     block_hash: ExternalSequenceBlockHash(*sequence_hash),
                                     tokens_hash: LocalBlockHash(*block_hash),
+                                    moe_metadata: None,
                                 }
                             })
                             .collect(),
@@ -570,6 +571,7 @@ mod tests {
                     blocks: vec![KvCacheStoredBlockData {
                         block_hash: ExternalSequenceBlockHash(1),
                         tokens_hash: LocalBlockHash(1),
+                        moe_metadata: None,
                     }],
                     parent_hash: None,
                 }),
@@ -584,6 +586,7 @@ mod tests {
                     blocks: vec![KvCacheStoredBlockData {
                         block_hash: ExternalSequenceBlockHash(2),
                         tokens_hash: LocalBlockHash(2),
+                        moe_metadata: None,
                     }],
                     parent_hash: None,
                 }),
@@ -627,6 +630,7 @@ mod tests {
                     blocks: vec![KvCacheStoredBlockData {
                         block_hash: ExternalSequenceBlockHash(3),
                         tokens_hash: LocalBlockHash(3),
+                        moe_metadata: None,
                     }],
                     parent_hash: None,
                 }),
