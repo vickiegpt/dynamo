@@ -30,6 +30,8 @@ class NativeApiHandler:
         """
         logging.info("Initializing native SGLang API endpoints")
         
+        self.tm = self.engine.tokenizer_manager
+
         tasks = []
         
         model_info_ep = self.component.endpoint("get_model_info")
@@ -47,15 +49,11 @@ class NativeApiHandler:
         return tasks
     
     async def get_model_info(self, request: dict):
-        """Native API: Get model information"""
-        
-        tokenizer_manager = self.engine.tokenizer_manager
-
         result = {
-            "model_path": tokenizer_manager.server_args.model_path,
-            "tokenizer_path": tokenizer_manager.server_args.tokenizer_path,
-            "preferred_sampling_params": tokenizer_manager.server_args.preferred_sampling_params,
-            "weight_version": tokenizer_manager.server_args.weight_version,
+            "model_path": self.tm.server_args.model_path,
+            "tokenizer_path": self.tm.server_args.tokenizer_path,
+            "preferred_sampling_params": self.tm.server_args.preferred_sampling_params,
+            "weight_version": self.tm.server_args.weight_version,
         }
         
         yield {"data": [result]}
