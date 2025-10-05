@@ -4,3 +4,4 @@
 [build]
 # tokio-console needs this
 rustflags = ["--cfg", "tokio_unstable"]
+rustc-wrapper = "sccache"

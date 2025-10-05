@@ -34,9 +34,7 @@ async fn inner_dynamic_endpoint_handler(
     state: Arc<service_v2::State>,
     path: String,
 ) -> Result<impl IntoResponse, &'static str> {
-    let etcd_client = state
-        .etcd_client()
-        .ok_or_else(|| "Failed to get etcd client")?;
+    let etcd_client = state.etcd_client().ok_or("Failed to get etcd client")?;
 
     let instances = list_all_instances(etcd_client)
         .await

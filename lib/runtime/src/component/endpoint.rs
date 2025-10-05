@@ -237,7 +237,7 @@ impl EndpointConfigBuilder {
             namespace: namespace_name,
             instance_id: lease_id,
             transport: TransportType::NatsTcp(subject),
-            http_endpoint_path: http_endpoint_path,
+            http_endpoint_path,
         };
 
         let info = serde_json::to_vec_pretty(&info)?;
