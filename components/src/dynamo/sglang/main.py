@@ -27,8 +27,8 @@ from dynamo.sglang.request_handlers import (
     MultimodalPrefillWorkerHandler,
     MultimodalProcessorHandler,
     MultimodalWorkerHandler,
-    PrefillWorkerHandler,
     NativeApiHandler,
+    PrefillWorkerHandler,
 )
 
 configure_dynamo_logging()

@@ -13,8 +13,8 @@ from .multimodal_worker_handler import (
     MultimodalPrefillWorkerHandler,
     MultimodalWorkerHandler,
 )
-from .prefill_handler import PrefillWorkerHandler
 from .native_api_handler import NativeApiHandler
+from .prefill_handler import PrefillWorkerHandler
 
 __all__ = [
     "BaseWorkerHandler",
