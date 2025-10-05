@@ -28,6 +28,7 @@ from dynamo.sglang.request_handlers import (
     MultimodalProcessorHandler,
     MultimodalWorkerHandler,
     PrefillWorkerHandler,
+    NativeApiHandler,
 )
 
 configure_dynamo_logging()
@@ -73,8 +74,6 @@ async def init(runtime: DistributedRuntime, config: Config):
 
     generate_endpoint = component.endpoint(dynamo_args.endpoint)
 
-    # TODO: think about implementing DisaggregationStrategy for P->D
-    # TODO: implement a `next` field in the config to dynamically set the next client
     prefill_client = None
     if config.serving_mode == DisaggregationMode.DECODE:
         logging.info("Initializing prefill client")
@@ -108,6 +107,10 @@ async def init(runtime: DistributedRuntime, config: Config):
         component, engine, config, publisher, kv_publisher, prefill_client
     )
 
+    native_api_handler = NativeApiHandler(component, engine, metrics_labels)
+
+    native_api_tasks = await native_api_handler.init_native_apis()
+
     async def register_model():
         """Register the model and signal readiness"""
         registration_success = await register_llm_with_runtime_config(
@@ -128,10 +131,7 @@ async def init(runtime: DistributedRuntime, config: Config):
 
     health_check_payload = SglangHealthCheckPayload(engine).to_dict()
 
-    test_endpoint = component.endpoint("test")
-
     try:
-        # Start endpoint immediately and register model concurrently
         # Requests queue until ready_event is set
         await asyncio.gather(
             generate_endpoint.serve_endpoint(
@@ -141,13 +141,7 @@ async def init(runtime: DistributedRuntime, config: Config):
                 health_check_payload=health_check_payload,
             ),
             register_model(),
-            test_endpoint.serve_endpoint(
-                handler.test,
-                graceful_shutdown=True,
-                metrics_labels=metrics_labels,
-                health_check_payload=health_check_payload,
-                http_endpoint_path="/test",
-            ),
+            *native_api_tasks,
         )
     except Exception as e:
         logging.error(f"Failed to serve endpoints: {e}")

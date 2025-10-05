@@ -14,6 +14,7 @@ from .multimodal_worker_handler import (
     MultimodalWorkerHandler,
 )
 from .prefill_handler import PrefillWorkerHandler
+from .native_api_handler import NativeApiHandler
 
 __all__ = [
     "BaseWorkerHandler",
@@ -23,4 +24,5 @@ __all__ = [
     "MultimodalEncodeWorkerHandler",
     "MultimodalWorkerHandler",
     "MultimodalPrefillWorkerHandler",
+    "NativeApiHandler",
 ]
