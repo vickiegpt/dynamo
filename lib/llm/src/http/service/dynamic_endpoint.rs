@@ -14,8 +14,6 @@ use dynamo_runtime::{DistributedRuntime, Runtime, component::Client};
 use dynamo_runtime::{pipeline::PushRouter, stream::StreamExt};
 use std::sync::Arc;
 
-pub const DYNAMIC_ENDPOINT_PATH: &str = "dynamic_endpoint";
-
 pub fn dynamic_endpoint_router(
     state: Arc<service_v2::State>,
     path: Option<String>,
@@ -32,30 +30,17 @@ pub fn dynamic_endpoint_router(
     (docs, router)
 }
 
-async fn dynamic_endpoint_handler(
-    axum::extract::State(state): axum::extract::State<Arc<service_v2::State>>,
-    axum::extract::Path(path): axum::extract::Path<String>,
-) -> impl IntoResponse {
-    let Some(etcd_client) = state.etcd_client() else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "message": "Failed to get etcd client"
-            })),
-        );
-    };
+async fn inner_dynamic_endpoint_handler(
+    state: Arc<service_v2::State>,
+    path: String,
+) -> Result<impl IntoResponse, &'static str> {
+    let etcd_client = state
+        .etcd_client()
+        .ok_or_else(|| "Failed to get etcd client")?;
 
-    let instances = match list_all_instances(etcd_client).await {
-        Ok(instances) => instances,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "message": "Failed to get instances"
-                })),
-            );
-        }
-    };
+    let instances = list_all_instances(etcd_client)
+        .await
+        .map_err(|_| "Failed to get instances")?;
 
     let dynamic_endpoints = instances
         .iter()
@@ -64,120 +49,66 @@ async fn dynamic_endpoint_handler(
 
     let fmt_path = format!("/{}", &path);
     if !dynamic_endpoints.contains(&fmt_path) {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "message": "Dynamic endpoint not found"
-            })),
-        );
+        return Err("Dynamic endpoint not found");
     }
 
-    let rt = match Runtime::from_current() {
-        Ok(rt) => rt,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "message": "Failed to get runtime"
-                })),
-            );
-        }
-    };
-    let drt = match DistributedRuntime::from_settings(rt).await {
-        Ok(drt) => drt,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "message": "Failed to get distributed runtime"
-                })),
-            );
-        }
-    };
+    let rt = Runtime::from_current().map_err(|_| "Failed to get runtime")?;
+    let drt = DistributedRuntime::from_settings(rt)
+        .await
+        .map_err(|_| "Failed to get distributed runtime")?;
 
-    // grab all instances that expose this endpoint
     let target_instances = instances
         .iter()
         .filter(|instance| instance.http_endpoint_path == Some(fmt_path.clone()))
         .collect::<Vec<_>>();
 
-    // use pushrouter .direct to forward the request to the filtered instances sequentially
     let mut target_clients: Vec<Client> = Vec::new();
     for instance in target_instances {
-        let ns = match drt.namespace(instance.namespace.clone()) {
-            Ok(ns) => ns,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({
-                        "message": "Failed to get namespace"
-                    })),
-                );
-            }
-        };
-        let c = match ns.component(instance.component.clone()) {
-            Ok(c) => c,
-            Err(_) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({
-                        "message": "Failed to get component"
-                    })),
-                );
-            }
-        };
+        let ns = drt
+            .namespace(instance.namespace.clone())
+            .map_err(|_| "Failed to get namespace")?;
+        let c = ns
+            .component(instance.component.clone())
+            .map_err(|_| "Failed to get component")?;
         let ep = c.endpoint(path.clone());
-        let c = match ep.client().await {
-            Ok(c) => c,
-            Err(_) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({
-                        "message": "Failed to get client"
-                    })),
-                );
-            }
-        };
-        target_clients.push(c.clone());
+        let client = ep.client().await.map_err(|_| "Failed to get client")?;
+        target_clients.push(client);
     }
 
     let mut all_responses = Vec::new();
     for client in target_clients {
-        let router = match PushRouter::<(), Annotated<serde_json::Value>>::from_client(
-            client,
-            Default::default(),
-        )
-        .await
-        {
-            Ok(router) => router,
-            Err(_) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({
-                        "message": "Failed to get router"
-                    })),
-                );
-            }
-        };
-        let mut stream = match router.round_robin(().into()).await {
-            Ok(s) => s,
-            Err(_) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"message": "Failed to route"})),
-                );
-            }
-        };
+        let router =
+            PushRouter::<(), Annotated<serde_json::Value>>::from_client(client, Default::default())
+                .await
+                .map_err(|_| "Failed to get router")?;
+
+        let mut stream = router
+            .round_robin(().into())
+            .await
+            .map_err(|_| "Failed to route")?;
 
         while let Some(resp) = stream.next().await {
             all_responses.push(resp);
         }
     }
 
-    return (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "responses": all_responses
-        })),
-    );
+    Ok(Json(serde_json::json!({
+        "responses": all_responses
+    })))
+}
+
+async fn dynamic_endpoint_handler(
+    axum::extract::State(state): axum::extract::State<Arc<service_v2::State>>,
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    inner_dynamic_endpoint_handler(state, path)
+        .await
+        .map_err(|err_string| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "message": err_string
+                })),
+            )
+        })
 }
