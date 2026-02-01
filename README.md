@@ -324,3 +324,6 @@ Remember that nats and etcd must be running (see earlier).
 Set the environment variable `DYN_LOG` to adjust the logging level; for example, `export DYN_LOG=debug`. It has the same syntax as `RUST_LOG`.
 
 If you use vscode or cursor, we have a .devcontainer folder built on [Microsofts Extension](https://code.visualstudio.com/docs/devcontainers/containers). For instructions see the [ReadMe](.devcontainer/README.md) for more details.
+
+
+python -m sglang.launch_server     --host 0.0.0.0     --port 8000     --model /home/victoryang00/Qwen3-30B-A3B     --kt-weight-path /mnt/disk2/models/Qwen3-30B-A3B-INT8/     --kt-method AMXINT8     --kt-cpuinfer 96     --kt-threadpool-count 3 --kt-num-gpu-experts 1     --kt-max-deferred-experts-per-token 1     --trust-remote-code     --mem-fraction-static 0.94     --served-model-name DeepSeek-V3.2-Speciale     --enable-mixed-chunk     --tensor-parallel-size 1     --enable-p2p-check     --disable-shared-experts-fusion     --chunked-prefill-size 65536     --max-total-tokens 65536     --attention-backend flashinfer

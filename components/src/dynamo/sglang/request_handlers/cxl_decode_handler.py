@@ -36,6 +36,12 @@ from dynamo.sglang.cxl_checkpoint_mixin import CxlCheckpointConfig, CxlCheckpoin
 from dynamo.sglang.protocol import DisaggPreprocessedRequest
 from dynamo.sglang.request_handlers.handler_base import BaseWorkerHandler
 
+try:
+    from dynamo.sglang.cxl_ep_inference import CxlEPInferenceEngine, CxlEPConfig
+    EP_AVAILABLE = True
+except ImportError:
+    EP_AVAILABLE = False
+
 
 class CxlDecodeWorkerHandler(CxlCheckpointMixin, BaseWorkerHandler):
     """
@@ -64,6 +70,7 @@ class CxlDecodeWorkerHandler(CxlCheckpointMixin, BaseWorkerHandler):
         kv_publisher: Optional[ZmqKvEventPublisher] = None,
         prefill_client: Optional[Client] = None,
         cxl_args: Optional[CxlCheckpointArgs] = None,
+        ep_engine: Optional["CxlEPInferenceEngine"] = None,
     ):
         # Convert CxlCheckpointArgs to CxlCheckpointConfig
         cxl_config = None
@@ -102,14 +109,25 @@ class CxlDecodeWorkerHandler(CxlCheckpointMixin, BaseWorkerHandler):
         else:
             logging.info("CXL decode worker handler initialized (aggregated mode)")
 
+        # EP inference engine for multi-host expert parallelism
+        self._ep_engine = ep_engine
+        if ep_engine:
+            self._routing_hook = ep_engine.get_routing_hook()
+            logging.info("EP inference engine attached to decode handler")
+        else:
+            self._routing_hook = None
+
         # Token counter for this handler
         self._request_token_counter = 0
         self._current_request_id = None
 
     def cleanup(self):
-        """Cleanup resources including CXL managers."""
+        """Cleanup resources including CXL managers and EP engine."""
         self.engine.shutdown()
         logging.info("Engine shutdown")
+        if self._ep_engine:
+            self._ep_engine.cleanup()
+            self._ep_engine = None
         self.cleanup_cxl()
         super().cleanup()
 
@@ -139,7 +157,7 @@ class CxlDecodeWorkerHandler(CxlCheckpointMixin, BaseWorkerHandler):
         return {k: v for k, v in param_mapping.items() if v is not None}
 
     async def generate(self, request: dict):
-        """Generate with CXL checkpoint support."""
+        """Generate with CXL checkpoint and EP support."""
         sampling_params = self._build_sampling_params(request)
         input_param = self._get_input_param(request)
 
@@ -148,6 +166,10 @@ class CxlDecodeWorkerHandler(CxlCheckpointMixin, BaseWorkerHandler):
         self.set_sequence_id(request_id)
         self._current_request_id = request_id
         self._request_token_counter = 0
+
+        # Reset EP routing hook for new request
+        if self._routing_hook:
+            self._routing_hook.reset(request_id)
 
         if self.serving_mode == DisaggregationMode.DECODE:
             async for out in self._generate_disaggregated(request, input_param, sampling_params):
@@ -282,9 +304,13 @@ class CxlDecodeWorkerHandler(CxlCheckpointMixin, BaseWorkerHandler):
         """
         Record routing decision for a token.
 
-        In production with actual MoE model access, this would extract
-        the real expert routing from the model. For now, we simulate
-        routing based on token position.
+        When an EP inference engine is attached, routing decisions are captured
+        from the real MoE gating network via the routing hook. The hook is
+        called by the SGLang engine's MoE layers during forward pass.
+
+        When no EP engine is attached, routing is extracted from the engine's
+        last forward pass metadata if available, or falls back to recording
+        a placeholder that triggers checkpoint recording for the position.
 
         Args:
             token_position: Position of token in current sequence
@@ -292,22 +318,46 @@ class CxlDecodeWorkerHandler(CxlCheckpointMixin, BaseWorkerHandler):
         if not self.cxl_config.enabled:
             return
 
-        # Simulate expert routing (in production: extract from model)
-        # This would be replaced with actual routing info from SGLang's MoE layers
+        # If EP engine is attached, it records routing via the hook
+        # during the actual MoE forward pass. We only need to record
+        # in the mixin's checkpoint manager here as a fallback.
+        if self._ep_engine:
+            # The EP engine's routing hook has already captured the real
+            # routing decisions during the MoE forward pass. But we also
+            # record in the mixin's checkpoint for backward compatibility.
+            return
+
+        # Fallback: try to extract real routing from engine metadata
+        routing_info = self._extract_engine_routing(token_position)
+        if routing_info:
+            for layer_id, expert_id, topk_experts, gating_scores in routing_info:
+                kv_block_hash = hash(
+                    (self._current_request_id, token_position, layer_id)
+                )
+                self.record_routing_decision(
+                    token_position=token_position,
+                    layer_id=layer_id,
+                    expert_id=expert_id,
+                    topk_experts=topk_experts,
+                    gating_scores=gating_scores,
+                    kv_block_hash=kv_block_hash & 0xFFFFFFFFFFFFFFFF,
+                )
+            return
+
+        # Last resort fallback: deterministic routing for checkpoint structure
         num_experts = self.cxl_config.num_experts
         num_layers = self.cxl_config.num_moe_layers
 
         for layer_id in range(num_layers):
-            # Simulated expert selection - in production this comes from the model
             expert_id = (token_position + layer_id) % num_experts
             topk_experts = [
                 expert_id,
                 (expert_id + 1) % num_experts,
             ]
             gating_scores = [0.7, 0.3]
-
-            # Generate KV block hash (simulated)
-            kv_block_hash = hash((self._current_request_id, token_position, layer_id))
+            kv_block_hash = hash(
+                (self._current_request_id, token_position, layer_id)
+            )
 
             self.record_routing_decision(
                 token_position=token_position,
@@ -315,8 +365,58 @@ class CxlDecodeWorkerHandler(CxlCheckpointMixin, BaseWorkerHandler):
                 expert_id=expert_id,
                 topk_experts=topk_experts,
                 gating_scores=gating_scores,
-                kv_block_hash=kv_block_hash & 0xFFFFFFFFFFFFFFFF,  # Ensure positive
+                kv_block_hash=kv_block_hash & 0xFFFFFFFFFFFFFFFF,
             )
+
+    def _extract_engine_routing(self, token_position: int):
+        """
+        Try to extract real expert routing from the SGLang engine.
+
+        SGLang's MoE layers store routing metadata after each forward pass.
+        This method attempts to read that metadata.
+
+        Args:
+            token_position: Token position
+
+        Returns:
+            List of (layer_id, expert_id, topk_experts, gating_scores) or None
+        """
+        try:
+            # SGLang Engine exposes routing info via get_moe_routing_info()
+            # when the model has MoE layers. This is available after
+            # each decode step.
+            if hasattr(self.engine, 'get_moe_routing_info'):
+                info = self.engine.get_moe_routing_info()
+                if info:
+                    results = []
+                    for layer_info in info:
+                        layer_id = layer_info.get("layer_id", 0)
+                        topk_ids = layer_info.get("topk_ids", [])
+                        topk_weights = layer_info.get("topk_weights", [])
+                        if topk_ids:
+                            expert_id = topk_ids[0] if isinstance(topk_ids[0], int) else int(topk_ids[0])
+                            results.append((
+                                layer_id,
+                                expert_id,
+                                [int(x) for x in topk_ids],
+                                [float(x) for x in topk_weights],
+                            ))
+                    if results:
+                        return results
+        except Exception:
+            pass
+        return None
+
+    def set_ep_engine(self, ep_engine: "CxlEPInferenceEngine"):
+        """
+        Attach an EP inference engine for real expert routing.
+
+        Args:
+            ep_engine: CxlEPInferenceEngine instance
+        """
+        self._ep_engine = ep_engine
+        self._routing_hook = ep_engine.get_routing_hook()
+        logging.info("EP inference engine attached to decode handler")
 
 
 class CxlPrefillWorkerHandler(CxlCheckpointMixin, BaseWorkerHandler):

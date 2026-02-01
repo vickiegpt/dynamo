@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 pub mod approx;
 pub mod cxl_checkpoint;
 pub mod cxl_expert_manager;
+pub mod cxl_multi_host_expert_manager;
 pub mod cxl_p2p;
 pub mod indexer;
 pub mod metrics_aggregator;

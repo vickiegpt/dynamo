@@ -31,6 +31,16 @@ except ImportError:
     CXL_AVAILABLE = False
     logging.warning("CXL bindings not available, using simulation mode")
 
+try:
+    from dynamo._core import (
+        ExpertPartitionStrategy,
+        MultiHostExpertManager,
+        MultiHostExpertManagerConfig,
+    )
+    MULTI_HOST_CXL_AVAILABLE = True
+except ImportError:
+    MULTI_HOST_CXL_AVAILABLE = False
+
 
 @dataclass
 class CxlCheckpointConfig:

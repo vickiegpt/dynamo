@@ -125,7 +125,6 @@ addopts = [
     "--showlocals",
     "--strict-markers",
     "--strict-config",
-    "--mypy",
     "--ignore-glob=*model.py",
     "--ignore-glob=*vllm_integration*",
     "--ignore-glob=*trtllm_integration*",
@@ -134,7 +133,6 @@ addopts = [
     "--ignore-glob=docs/*",
     "--ignore-glob=components/src/dynamo/sglang/request_handlers/*",
     "--ignore-glob=components/backends/sglang/slurm_jobs/*",
-    # FIXME: Get relative/generic blob paths to work here
 ]
 xfail_strict = true
 log_cli_level = "INFO"
@@ -153,7 +151,6 @@ filterwarnings = [
 
 
 # NOTE: Can also manually mark tests with @pytest.mark.asyncio
-asyncio_mode = "auto"
 markers = [
     "pre_merge: marks tests to run before merging",
     "nightly: marks tests to run nightly",

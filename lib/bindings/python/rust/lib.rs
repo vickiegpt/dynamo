@@ -184,6 +184,11 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::cxl_expert::PyCxlExpertManager>()?;
     m.add_class::<llm::cxl_expert::PyCxlCheckpointManager>()?;
 
+    // CXL Multi-Host Expert Manager classes
+    m.add_class::<llm::cxl_expert::PyExpertPartitionStrategy>()?;
+    m.add_class::<llm::cxl_expert::PyMultiHostExpertManagerConfig>()?;
+    m.add_class::<llm::cxl_expert::PyMultiHostExpertManager>()?;
+
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<planner::VirtualConnectorCoordinator>()?;
     m.add_class::<planner::VirtualConnectorClient>()?;

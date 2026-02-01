@@ -90,6 +90,106 @@ DYNAMO_ARGS: Dict[str, Dict[str, Any]] = {
         "default": True,
         "help": "Commit checkpoint on sequence end (default: True)",
     },
+    # KT-Kernel configuration for CPU MoE inference
+    "kt-weight-path": {
+        "flags": ["--kt-weight-path"],
+        "type": str,
+        "default": None,
+        "help": "Path to kt-kernel quantized weights (INT4/INT8)",
+    },
+    "kt-cpuinfer": {
+        "flags": ["--kt-cpuinfer"],
+        "type": int,
+        "default": 64,
+        "help": "Number of CPU inference threads for kt-kernel (default: 64)",
+    },
+    "kt-threadpool-count": {
+        "flags": ["--kt-threadpool-count"],
+        "type": int,
+        "default": 2,
+        "help": "Number of NUMA thread pools for kt-kernel (default: 2)",
+    },
+    "kt-num-gpu-experts": {
+        "flags": ["--kt-num-gpu-experts"],
+        "type": int,
+        "default": 1,
+        "help": "Number of experts to run on GPU per layer (default: 1)",
+    },
+    "kt-method": {
+        "flags": ["--kt-method"],
+        "type": str,
+        "default": "AMXINT4",
+        "choices": ["AMXINT4", "AMXINT8", "MOE_INT4", "MOE_INT8", "RAWINT4", "LLAMAFILE"],
+        "help": "KT-Kernel quantization method (default: AMXINT4)",
+    },
+    "kt-async-depth": {
+        "flags": ["--kt-async-depth"],
+        "type": int,
+        "default": 4,
+        "help": "Async depth for GPU-CPU pipelining (default: 4)",
+    },
+    "kt-subpool-weight-ratios": {
+        "flags": ["--kt-subpool-weight-ratios"],
+        "type": str,
+        "default": None,
+        "help": "NUMA weight ratios for CXL tiering, e.g., '1:1:4' for 3 NUMA nodes with CXL",
+    },
+    "kt-max-deferred-experts": {
+        "flags": ["--kt-max-deferred-experts"],
+        "type": int,
+        "default": 0,
+        "help": "Max experts per token to defer to CPU (default: 0)",
+    },
+    # CXL 3.0 Multi-Host Expert Parallelism configuration
+    "cxl-multi-host": {
+        "flags": ["--cxl-multi-host"],
+        "action": "store_true",
+        "default": False,
+        "help": "Enable CXL 3.0 multi-host expert parallelism",
+    },
+    "cxl-host-id": {
+        "flags": ["--cxl-host-id"],
+        "type": int,
+        "default": 0,
+        "help": "Host ID in the CXL fabric (default: 0)",
+    },
+    "cxl-num-hosts": {
+        "flags": ["--cxl-num-hosts"],
+        "type": int,
+        "default": 1,
+        "help": "Total number of hosts in the CXL fabric (default: 1)",
+    },
+    "cxl-partition-strategy": {
+        "flags": ["--cxl-partition-strategy"],
+        "type": str,
+        "default": "round_robin",
+        "choices": ["round_robin", "layer_partition", "dynamic"],
+        "help": "Expert partition strategy across hosts (default: round_robin)",
+    },
+    "cxl-enable-replication": {
+        "flags": ["--cxl-enable-replication"],
+        "action": "store_true",
+        "default": False,
+        "help": "Enable hot expert replication across hosts",
+    },
+    "cxl-max-replicas": {
+        "flags": ["--cxl-max-replicas"],
+        "type": int,
+        "default": 2,
+        "help": "Maximum replicas per expert (default: 2)",
+    },
+    "cxl-shared-pool-size-gb": {
+        "flags": ["--cxl-shared-pool-size-gb"],
+        "type": int,
+        "default": 256,
+        "help": "Shared GFAM pool size in GB (default: 256)",
+    },
+    "cxl-coordinator": {
+        "flags": ["--cxl-coordinator"],
+        "action": "store_true",
+        "default": False,
+        "help": "This host is the multi-host coordinator",
+    },
     "migration-limit": {
         "flags": ["--migration-limit"],
         "type": int,
@@ -160,6 +260,35 @@ class CxlCheckpointArgs:
 
 
 @dataclass
+class MultiHostCxlArgs:
+    """CXL 3.0 multi-host expert parallelism configuration."""
+
+    enabled: bool = False
+    host_id: int = 0
+    num_hosts: int = 1
+    partition_strategy: str = "round_robin"
+    enable_replication: bool = False
+    max_replicas: int = 2
+    shared_pool_size_gb: int = 256
+    is_coordinator: bool = False
+
+
+@dataclass
+class KtKernelArgs:
+    """KT-Kernel configuration for CPU MoE inference with CXL tiering."""
+
+    enabled: bool = False
+    weight_path: str = ""
+    cpuinfer_threads: int = 64
+    threadpool_count: int = 2
+    num_gpu_experts: int = 1
+    method: str = "AMXINT4"
+    async_depth: int = 4
+    subpool_weight_ratios: Optional[List[int]] = None
+    max_deferred_experts_per_token: int = 0
+
+
+@dataclass
 class DynamoArgs:
     namespace: str
     component: str
@@ -181,6 +310,12 @@ class DynamoArgs:
 
     # CXL checkpoint options
     cxl_checkpoint: Optional[CxlCheckpointArgs] = None
+
+    # CXL 3.0 multi-host expert parallelism options
+    multi_host_cxl: Optional[MultiHostCxlArgs] = None
+
+    # KT-Kernel options for CPU MoE inference
+    kt_kernel: Optional[KtKernelArgs] = None
 
 
 class DisaggregationMode(Enum):
@@ -358,6 +493,56 @@ def parse_args(args: list[str]) -> Config:
             f"window size {cxl_checkpoint_args.window_size}"
         )
 
+    # Parse CXL 3.0 multi-host configuration
+    multi_host_cxl_args = None
+    if getattr(parsed_args, "cxl_multi_host", False):
+        multi_host_cxl_args = MultiHostCxlArgs(
+            enabled=True,
+            host_id=getattr(parsed_args, "cxl_host_id", 0),
+            num_hosts=getattr(parsed_args, "cxl_num_hosts", 1),
+            partition_strategy=getattr(parsed_args, "cxl_partition_strategy", "round_robin"),
+            enable_replication=getattr(parsed_args, "cxl_enable_replication", False),
+            max_replicas=getattr(parsed_args, "cxl_max_replicas", 2),
+            shared_pool_size_gb=getattr(parsed_args, "cxl_shared_pool_size_gb", 256),
+            is_coordinator=getattr(parsed_args, "cxl_coordinator", False),
+        )
+        logging.info(
+            f"CXL 3.0 multi-host enabled: host_id={multi_host_cxl_args.host_id}, "
+            f"num_hosts={multi_host_cxl_args.num_hosts}, "
+            f"strategy={multi_host_cxl_args.partition_strategy}, "
+            f"coordinator={multi_host_cxl_args.is_coordinator}"
+        )
+
+    # Parse KT-Kernel configuration
+    kt_kernel_args = None
+    kt_weight_path = getattr(parsed_args, "kt_weight_path", None)
+    if kt_weight_path:
+        # Parse subpool weight ratios if provided
+        subpool_ratios = None
+        ratios_str = getattr(parsed_args, "kt_subpool_weight_ratios", None)
+        if ratios_str:
+            subpool_ratios = [int(x) for x in ratios_str.split(":")]
+
+        kt_kernel_args = KtKernelArgs(
+            enabled=True,
+            weight_path=kt_weight_path,
+            cpuinfer_threads=getattr(parsed_args, "kt_cpuinfer", 64),
+            threadpool_count=getattr(parsed_args, "kt_threadpool_count", 2),
+            num_gpu_experts=getattr(parsed_args, "kt_num_gpu_experts", 1),
+            method=getattr(parsed_args, "kt_method", "AMXINT4"),
+            async_depth=getattr(parsed_args, "kt_async_depth", 4),
+            subpool_weight_ratios=subpool_ratios,
+            max_deferred_experts_per_token=getattr(parsed_args, "kt_max_deferred_experts", 0),
+        )
+        logging.info(
+            f"KT-Kernel enabled: method={kt_kernel_args.method}, "
+            f"threads={kt_kernel_args.cpuinfer_threads}, "
+            f"pools={kt_kernel_args.threadpool_count}, "
+            f"gpu_experts={kt_kernel_args.num_gpu_experts}"
+        )
+        if subpool_ratios:
+            logging.info(f"KT-Kernel CXL tiering: NUMA weight ratios = {':'.join(map(str, subpool_ratios))}")
+
     dynamo_args = DynamoArgs(
         namespace=parsed_namespace,
         component=parsed_component_name,
@@ -371,6 +556,8 @@ def parse_args(args: list[str]) -> Config:
         multimodal_encode_worker=parsed_args.multimodal_encode_worker,
         multimodal_worker=parsed_args.multimodal_worker,
         cxl_checkpoint=cxl_checkpoint_args,
+        multi_host_cxl=multi_host_cxl_args,
+        kt_kernel=kt_kernel_args,
     )
     logging.debug(f"Dynamo args: {dynamo_args}")
 

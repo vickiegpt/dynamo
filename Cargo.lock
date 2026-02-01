@@ -2175,6 +2175,7 @@ dependencies = [
  "itertools 0.14.0",
  "json-five",
  "lazy_static",
+ "libc",
  "memmap2",
  "minijinja",
  "minijinja-contrib",

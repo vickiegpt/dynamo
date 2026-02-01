@@ -248,6 +248,132 @@ impl Default for CxlMemoryState {
 /// CXL pool identifier for routing blocks to specific memory pools
 pub type CxlPoolId = u32;
 
+/// CXL 3.0 host identifier within the fabric
+pub type CxlHostId = u32;
+
+/// CXL 3.0 fabric-level shared pool identifier (GFAM)
+pub type CxlFabricPoolId = u64;
+
+/// Transfer path for expert data between memory tiers
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CxlTransferPath {
+    /// Local P2P DMA (GPU <-> local CXL, single host)
+    LocalP2p,
+    /// Shared GFAM pool (hardware cache-coherent, lowest fabric latency)
+    SharedPool,
+    /// Cross-host fabric DMA (remote host's CXL via CXL 3.0 fabric)
+    CrossHostFabric,
+}
+
+/// Expert placement information for multi-host expert parallelism
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExpertPlacement {
+    /// Host where this expert currently resides
+    pub host_id: CxlHostId,
+    /// Memory tier: 0=GPU HBM, 1=local CXL, 2=shared GFAM pool
+    pub memory_tier: u8,
+    /// Fabric pool ID if stored in shared GFAM
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fabric_pool_id: Option<CxlFabricPoolId>,
+    /// Hosts that can access this expert (for shared pool placements)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accessible_hosts: Vec<CxlHostId>,
+    /// Whether this is a replica (vs. primary copy)
+    #[serde(default)]
+    pub is_replica: bool,
+}
+
+/// CXL 3.0 fabric topology describing the multi-host configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CxlFabricTopology {
+    /// All hosts in the fabric
+    pub hosts: Vec<CxlHostInfo>,
+    /// Shared GFAM pools
+    pub shared_pools: Vec<CxlSharedPoolInfo>,
+    /// Latency matrix: latency_ns[src_host][dst_host]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub latency_matrix_ns: Vec<Vec<u64>>,
+    /// Bandwidth matrix: bandwidth_gbps[src_host][dst_host]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bandwidth_matrix_gbps: Vec<Vec<f64>>,
+}
+
+/// Information about a single host in the CXL fabric
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CxlHostInfo {
+    /// Unique host ID
+    pub host_id: CxlHostId,
+    /// Hostname for display/debugging
+    pub hostname: String,
+    /// Number of GPUs on this host
+    pub gpu_count: u32,
+    /// Local CXL memory capacity in bytes
+    pub local_cxl_capacity: u64,
+    /// Worker IDs running on this host
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worker_ids: Vec<i64>,
+}
+
+/// Information about a shared GFAM pool in the fabric
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CxlSharedPoolInfo {
+    /// Unique pool ID
+    pub pool_id: CxlFabricPoolId,
+    /// Pool capacity in bytes
+    pub capacity: u64,
+    /// Hosts connected to this pool
+    pub connected_hosts: Vec<CxlHostId>,
+    /// Aggregate bandwidth in GB/s
+    pub bandwidth_gbps: f64,
+}
+
+/// Event types for expert placement changes published via NATS
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpertPlacementEventType {
+    /// Expert moved from one location to another
+    ExpertMoved {
+        layer_id: u32,
+        expert_id: u32,
+        from_host: CxlHostId,
+        to_host: CxlHostId,
+    },
+    /// Expert replicated to additional host
+    ExpertReplicated {
+        layer_id: u32,
+        expert_id: u32,
+        source_host: CxlHostId,
+        replica_host: CxlHostId,
+    },
+    /// Host joined the fabric
+    HostJoined {
+        host_info: CxlHostInfo,
+    },
+    /// Host left the fabric (graceful or failure)
+    HostLeft {
+        host_id: CxlHostId,
+        graceful: bool,
+    },
+    /// Placement table updated (full refresh)
+    PlacementRefresh {
+        version: u64,
+    },
+}
+
+/// Expert placement event published via NATS
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpertPlacementEvent {
+    /// Event type
+    pub event_type: ExpertPlacementEventType,
+    /// Monotonic version counter for ordering
+    pub version: u64,
+    /// Source host that generated the event
+    pub source_host: CxlHostId,
+    /// Timestamp in microseconds since epoch
+    pub timestamp_us: u64,
+}
+
 /// CXL memory metadata for tracking pooled/disaggregated memory state
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CxlMemoryMetadata {
@@ -259,6 +385,12 @@ pub struct CxlMemoryMetadata {
     /// Worker IDs that have fast access to this CXL pool
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub accessible_workers: Vec<i64>,
+    /// Host ID where this block resides (CXL 3.0 multi-host)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<CxlHostId>,
+    /// Fabric pool ID if stored in shared GFAM (CXL 3.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fabric_pool_id: Option<CxlFabricPoolId>,
 }
 
 impl CxlMemoryMetadata {
@@ -267,6 +399,8 @@ impl CxlMemoryMetadata {
             state: CxlMemoryState::LocalGpu,
             pool_id: None,
             accessible_workers: Vec::new(),
+            host_id: None,
+            fabric_pool_id: None,
         }
     }
 
@@ -275,6 +409,8 @@ impl CxlMemoryMetadata {
             state: CxlMemoryState::CxlPooled,
             pool_id: Some(pool_id),
             accessible_workers,
+            host_id: None,
+            fabric_pool_id: None,
         }
     }
 
@@ -283,6 +419,23 @@ impl CxlMemoryMetadata {
             state: CxlMemoryState::InTransit,
             pool_id,
             accessible_workers: Vec::new(),
+            host_id: None,
+            fabric_pool_id: None,
+        }
+    }
+
+    /// Create metadata for a block in a shared GFAM pool (CXL 3.0)
+    pub fn new_fabric_pooled(
+        fabric_pool_id: CxlFabricPoolId,
+        host_id: CxlHostId,
+        accessible_workers: Vec<i64>,
+    ) -> Self {
+        Self {
+            state: CxlMemoryState::CxlPooled,
+            pool_id: None,
+            accessible_workers,
+            host_id: Some(host_id),
+            fabric_pool_id: Some(fabric_pool_id),
         }
     }
 
@@ -291,6 +444,7 @@ impl CxlMemoryMetadata {
         if new_state == CxlMemoryState::Evicted {
             self.pool_id = None;
             self.accessible_workers.clear();
+            self.fabric_pool_id = None;
         }
     }
 
@@ -564,5 +718,91 @@ mod tests {
         assert_eq!(deserialized.block_hashes.len(), 2);
         assert_eq!(deserialized.block_hashes[0].0, 4);
         assert_eq!(deserialized.block_hashes[1].0, 5);
+    }
+
+    #[test]
+    fn test_cxl_transfer_path_serialization() {
+        let path = CxlTransferPath::SharedPool;
+        let serialized = serde_json::to_string(&path).unwrap();
+        let deserialized: CxlTransferPath = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, CxlTransferPath::SharedPool);
+    }
+
+    #[test]
+    fn test_expert_placement_serialization() {
+        let placement = ExpertPlacement {
+            host_id: 0,
+            memory_tier: 2,
+            fabric_pool_id: Some(42),
+            accessible_hosts: vec![0, 1, 2],
+            is_replica: false,
+        };
+        let serialized = serde_json::to_string(&placement).unwrap();
+        let deserialized: ExpertPlacement = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.host_id, 0);
+        assert_eq!(deserialized.memory_tier, 2);
+        assert_eq!(deserialized.fabric_pool_id, Some(42));
+        assert_eq!(deserialized.accessible_hosts, vec![0, 1, 2]);
+        assert!(!deserialized.is_replica);
+    }
+
+    #[test]
+    fn test_expert_placement_event_serialization() {
+        let event = ExpertPlacementEvent {
+            event_type: ExpertPlacementEventType::ExpertMoved {
+                layer_id: 5,
+                expert_id: 10,
+                from_host: 0,
+                to_host: 1,
+            },
+            version: 42,
+            source_host: 0,
+            timestamp_us: 1234567890,
+        };
+        let serialized = serde_json::to_string(&event).unwrap();
+        let deserialized: ExpertPlacementEvent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.version, 42);
+        assert_eq!(deserialized.source_host, 0);
+    }
+
+    #[test]
+    fn test_cxl_memory_metadata_with_fabric() {
+        let meta = CxlMemoryMetadata::new_fabric_pooled(100, 0, vec![1, 2]);
+        assert_eq!(meta.state, CxlMemoryState::CxlPooled);
+        assert_eq!(meta.host_id, Some(0));
+        assert_eq!(meta.fabric_pool_id, Some(100));
+        assert_eq!(meta.accessible_workers, vec![1, 2]);
+
+        // Test serialization roundtrip
+        let serialized = serde_json::to_string(&meta).unwrap();
+        let deserialized: CxlMemoryMetadata = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.host_id, Some(0));
+        assert_eq!(deserialized.fabric_pool_id, Some(100));
+    }
+
+    #[test]
+    fn test_fabric_topology_serialization() {
+        let topology = CxlFabricTopology {
+            hosts: vec![CxlHostInfo {
+                host_id: 0,
+                hostname: "host0".into(),
+                gpu_count: 8,
+                local_cxl_capacity: 512 * 1024 * 1024 * 1024,
+                worker_ids: vec![1, 2],
+            }],
+            shared_pools: vec![CxlSharedPoolInfo {
+                pool_id: 1,
+                capacity: 1024 * 1024 * 1024 * 1024,
+                connected_hosts: vec![0, 1],
+                bandwidth_gbps: 128.0,
+            }],
+            latency_matrix_ns: vec![vec![0, 200], vec![200, 0]],
+            bandwidth_matrix_gbps: vec![vec![0.0, 64.0], vec![64.0, 0.0]],
+        };
+        let serialized = serde_json::to_string(&topology).unwrap();
+        let deserialized: CxlFabricTopology = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.hosts.len(), 1);
+        assert_eq!(deserialized.shared_pools.len(), 1);
+        assert_eq!(deserialized.hosts[0].hostname, "host0");
     }
 }
